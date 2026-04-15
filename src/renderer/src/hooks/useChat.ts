@@ -38,9 +38,48 @@ export function useDeleteChat() {
     mutationFn: (chatId: string) => window.api.chat.delete(chatId),
     onSuccess: (_data, chatId) => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['trash'] })
       if (activeChatId === chatId) {
         setActiveChatId(null)
       }
+    }
+  })
+}
+
+export function useTrashList() {
+  return useQuery({
+    queryKey: ['trash'],
+    queryFn: () => window.api.chat.trashList()
+  })
+}
+
+export function useRestoreChat() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (chatId: string) => window.api.chat.restore(chatId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['trash'] })
+    }
+  })
+}
+
+export function usePermanentDeleteChat() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (chatId: string) => window.api.chat.permanentDelete(chatId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trash'] })
+    }
+  })
+}
+
+export function useEmptyTrash() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => window.api.chat.emptyTrash(),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['trash'] })
     }
   })
 }

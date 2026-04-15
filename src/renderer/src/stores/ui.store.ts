@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 
 export type ActiveView = 'chat' | 'settings'
-export type SettingsTab = 'llm' | 'mcp'
+export type SettingsTab = 'llm' | 'mcp' | 'trash'
 export type Theme = 'dark' | 'light'
 
 interface UIStore {

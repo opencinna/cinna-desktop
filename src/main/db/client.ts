@@ -115,6 +115,18 @@ function runMigrations(): void {
   if (hasToolProvider.cnt === 0) {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN tool_provider TEXT`)
   }
+
+  // Migration: add deleted_at column to chats (soft delete / trash)
+  const hasDeletedAt = sqlite
+    .prepare("SELECT COUNT(*) as cnt FROM pragma_table_info('chats') WHERE name='deleted_at'")
+    .get() as { cnt: number }
+  if (hasDeletedAt.cnt === 0) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN deleted_at INTEGER`)
+  }
+
+  // Cleanup: permanently delete chats that have been in trash for over 30 days
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
+  sqlite.exec(`DELETE FROM chats WHERE deleted_at IS NOT NULL AND deleted_at < ${thirtyDaysAgo}`)
 }
 
 export function getDb(): BetterSQLite3Database<typeof schema> {

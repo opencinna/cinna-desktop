@@ -1,4 +1,4 @@
-import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import type { SettingsTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -6,7 +6,8 @@ import { ChatList } from '../chat/ChatList'
 
 const settingsMenuItems: { id: SettingsTab; label: string; icon: typeof Brain }[] = [
   { id: 'llm', label: 'LLM Providers', icon: Brain },
-  { id: 'mcp', label: 'MCP Providers', icon: Plug }
+  { id: 'mcp', label: 'MCP Providers', icon: Plug },
+  { id: 'trash', label: 'Trash', icon: Trash2 }
 ]
 
 export function Sidebar(): React.JSX.Element {

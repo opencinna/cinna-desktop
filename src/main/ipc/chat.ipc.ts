@@ -1,13 +1,13 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq, desc } from 'drizzle-orm'
+import { eq, desc, isNull, isNotNull } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { chats, messages } from '../db/schema'
 
 export function registerChatHandlers(): void {
   ipcMain.handle('chat:list', async () => {
     const db = getDb()
-    return db.select().from(chats).orderBy(desc(chats.updatedAt))
+    return db.select().from(chats).where(isNull(chats.deletedAt)).orderBy(desc(chats.updatedAt))
   })
 
   ipcMain.handle('chat:get', async (_event, chatId: string) => {
@@ -41,9 +41,43 @@ export function registerChatHandlers(): void {
     return chat
   })
 
+  // Soft delete — move to trash
   ipcMain.handle('chat:delete', async (_event, chatId: string) => {
     const db = getDb()
+    db.update(chats)
+      .set({ deletedAt: new Date() })
+      .where(eq(chats.id, chatId))
+      .run()
+    return { success: true }
+  })
+
+  // Trash: list soft-deleted chats
+  ipcMain.handle('chat:trash-list', async () => {
+    const db = getDb()
+    return db.select().from(chats).where(isNotNull(chats.deletedAt)).orderBy(desc(chats.deletedAt))
+  })
+
+  // Trash: restore a chat
+  ipcMain.handle('chat:restore', async (_event, chatId: string) => {
+    const db = getDb()
+    db.update(chats)
+      .set({ deletedAt: null })
+      .where(eq(chats.id, chatId))
+      .run()
+    return { success: true }
+  })
+
+  // Trash: permanently delete a single chat
+  ipcMain.handle('chat:permanent-delete', async (_event, chatId: string) => {
+    const db = getDb()
     db.delete(chats).where(eq(chats.id, chatId)).run()
+    return { success: true }
+  })
+
+  // Trash: empty all trashed chats
+  ipcMain.handle('chat:empty-trash', async () => {
+    const db = getDb()
+    db.delete(chats).where(isNotNull(chats.deletedAt)).run()
     return { success: true }
   })
 

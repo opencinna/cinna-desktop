@@ -5,6 +5,7 @@ export interface ChatData {
   title: string
   modelId: string | null
   providerId: string | null
+  deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
 }
@@ -64,6 +65,12 @@ const api = {
     create: (): Promise<ChatData> => ipcRenderer.invoke('chat:create'),
     delete: (chatId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:delete', chatId),
+    trashList: (): Promise<ChatData[]> => ipcRenderer.invoke('chat:trash-list'),
+    restore: (chatId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:restore', chatId),
+    permanentDelete: (chatId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:permanent-delete', chatId),
+    emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
     update: (
       chatId: string,
       updates: { title?: string; modelId?: string; providerId?: string }

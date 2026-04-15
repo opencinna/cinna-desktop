@@ -34,6 +34,7 @@ export const chats = sqliteTable('chats', {
   title: text('title').notNull().default('New Chat'),
   modelId: text('model_id'),
   providerId: text('provider_id'),
+  deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date()),
