@@ -76,7 +76,7 @@ export function MainArea(): React.JSX.Element {
 
         // If an agent is selected, use agent messaging
         if (selectedAgent) {
-          await updateChat.mutateAsync({ chatId: chat.id, updates: { title } })
+          await updateChat.mutateAsync({ chatId: chat.id, updates: { title, agentId: selectedAgent.id } })
           useChatStore.getState().setActiveChatId(chat.id)
 
           window.api.agents.sendMessage(selectedAgent.id, chat.id, message, (event) => {

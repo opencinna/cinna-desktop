@@ -9,6 +9,7 @@ import { migrateChats } from './migrations/chats'
 import { migrateMessages } from './migrations/messages'
 import { migrateChatModes } from './migrations/chat-modes'
 import { migrateAgents } from './migrations/agents'
+import { migrateA2aSessions } from './migrations/a2a-sessions'
 
 let db: BetterSQLite3Database<typeof schema>
 let sqlite: Database.Database
@@ -33,6 +34,7 @@ function runMigrations(): void {
   migrateMessages(sqlite)
   migrateChatModes(sqlite)
   migrateAgents(sqlite)
+  migrateA2aSessions(sqlite)
 }
 
 export function getDb(): BetterSQLite3Database<typeof schema> {

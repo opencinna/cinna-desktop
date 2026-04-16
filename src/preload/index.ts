@@ -5,6 +5,7 @@ export interface ChatData {
   title: string
   modelId: string | null
   providerId: string | null
+  agentId: string | null
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -99,7 +100,7 @@ const api = {
     emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
     update: (
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string; agentId?: string }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
       chatId: string,
@@ -213,7 +214,17 @@ const api = {
       ipcRenderer.postMessage('agent:send-message', [agentId, chatId, content], [channel.port2])
     },
     cancelMessage: (requestId: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('agent:cancel-message', requestId)
+      ipcRenderer.invoke('agent:cancel-message', requestId),
+    getSession: (
+      chatId: string
+    ): Promise<{
+      id: string
+      chatId: string
+      agentId: string
+      contextId: string | null
+      taskId: string | null
+      taskState: string | null
+    } | null> => ipcRenderer.invoke('agent:get-session', chatId)
   },
 
   mcp: {

@@ -35,6 +35,7 @@ export const chats = sqliteTable('chats', {
   modelId: text('model_id'),
   providerId: text('provider_id'),
   modeId: text('mode_id'),
+  agentId: text('agent_id'),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -83,6 +84,25 @@ export const agents = sqliteTable('agents', {
   skills: text('skills', { mode: 'json' }).$type<Array<{ id: string; name: string; description?: string }>>(),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+export const a2aSessions = sqliteTable('a2a_sessions', {
+  id: text('id').primaryKey(),
+  chatId: text('chat_id')
+    .notNull()
+    .references(() => chats.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id')
+    .notNull()
+    .references(() => agents.id, { onDelete: 'cascade' }),
+  contextId: text('context_id'), // server-assigned context for conversation continuity
+  taskId: text('task_id'), // server-assigned task id for the current/last task
+  taskState: text('task_state'), // last known task state (working, completed, etc.)
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
 })

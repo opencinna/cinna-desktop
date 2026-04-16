@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useMemo, useImperativeHandle, forwardRef, type ReactNode } from 'react'
-import { SendHorizontal, Square } from 'lucide-react'
-import { useSendMessage } from '../../hooks/useChat'
+import { SendHorizontal, Square, Bot } from 'lucide-react'
+import { useSendMessage, useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
@@ -50,6 +50,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 ) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const { data: chatData } = useChatDetail(chatId)
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus()
@@ -67,6 +68,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const enabledAgents = useMemo(
     () => (agents ?? []).filter((a) => a.enabled),
     [agents]
+  )
+
+  // Resolve the bound agent for active A2A sessions
+  const boundAgent = useMemo(
+    () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
+    [chatData?.agentId, agents]
   )
 
   // Filtered agents for the popup (used for keyboard nav bounds)
@@ -121,6 +128,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const handleCancel = useCallback(() => {
     if (activeRequestId) {
       window.api.llm.cancel(activeRequestId)
+      window.api.agents.cancelMessage(activeRequestId)
     }
   }, [activeRequestId])
 
@@ -217,7 +225,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       <div className="flex items-center justify-between px-1 pt-2">
         <div className="flex items-center gap-1.5">
           {leftSlot}
-          {chatId && <ChatControls chatId={chatId} inline />}
+          {chatId && boundAgent ? (
+            <div
+              className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border
+                text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10"
+            >
+              <Bot size={14} className="shrink-0" />
+              <span className="text-[11px] font-medium whitespace-nowrap">
+                {boundAgent.name}
+              </span>
+            </div>
+          ) : chatId ? (
+            <ChatControls chatId={chatId} inline />
+          ) : null}
         </div>
 
         <div className="flex items-center gap-1.5">

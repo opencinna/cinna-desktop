@@ -92,7 +92,7 @@ export function useUpdateChat() {
       updates
     }: {
       chatId: string
-      updates: { title?: string; modelId?: string; providerId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string }
     }) => window.api.chat.update(chatId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
@@ -106,10 +106,41 @@ export function useSendMessage() {
     useChatStore()
 
   const send = useCallback(
-    (content: string) => {
+    async (content: string) => {
       if (!activeChatId) return
 
       const chatId = activeChatId
+
+      // Check if this chat has an A2A session — route to agent API instead of LLM
+      const session = await window.api.agents.getSession(chatId)
+      if (session) {
+        window.api.agents.sendMessage(session.agentId, chatId, content, (event) => {
+          switch (event.type) {
+            case 'request-id':
+              startStreaming(event.requestId ?? '')
+              break
+            case 'delta':
+              appendDelta(event.text!)
+              break
+            case 'done':
+              stopStreaming()
+              queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+              queryClient.invalidateQueries({ queryKey: ['chats'] })
+              break
+            case 'error':
+              console.error('Agent error:', event.error)
+              useChatStore.getState().stopStreaming()
+              queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+              break
+          }
+        })
+
+        setTimeout(() => {
+          queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+        }, 300)
+        return
+      }
+
       window.api.llm.sendMessage(chatId, content, (event) => {
         switch (event.type) {
           case 'request-id':

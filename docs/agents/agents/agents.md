@@ -15,6 +15,9 @@ Universal agent integration that lets users chat with external AI agents through
 | **Supported Interface** | An entry in the agent card's `supportedInterfaces` array, pairing a URL with a protocol version and transport binding |
 | **Skill** | A named capability advertised by an A2A agent (e.g. "Weather Lookup", "Code Review") |
 | **Access Token** | Optional bearer token for authenticating with a secured agent; encrypted at rest via safeStorage |
+| **A2A Session** | A persistent record linking a chat to an A2A agent's remote session — stores the server-assigned `contextId` and `taskId` for conversation continuity across messages |
+| **Context ID** | Server-assigned identifier grouping related interactions into a single conversation context (A2A protocol concept) |
+| **Task ID** | Server-assigned identifier for a task created by the agent in response to user messages; may change across interactions within the same context |
 
 ## User Stories / Flows
 
@@ -70,6 +73,15 @@ There are two ways to select an agent for a new chat:
 - App creates a new chat, routes the message through the A2A protocol
 - Response streams in real-time (if agent supports streaming) or arrives as a single response
 - Both user and assistant messages are saved to the chat history
+- An A2A session is created/updated after each exchange, storing the server's `contextId` and `taskId`
+
+### Continuing an Agent Chat
+
+1. User opens an existing agent chat — the controls row below the input shows a read-only agent badge (Bot icon + agent name) instead of the usual model/MCP selectors
+2. User types a follow-up message
+3. The system detects this is an agent chat by looking up the A2A session for this chat
+4. The stored `contextId` and `taskId` are sent with the new message so the remote agent maintains conversation context
+5. The agent responds within the same context — the session is updated with any new task/context IDs from the response
 
 ## Business Rules
 
@@ -79,7 +91,9 @@ There are two ways to select an agent for a new chat:
   3. If neither found → error with a clear message listing what versions the agent supports
 - **Protocol interface persistence** — The resolved `protocolInterfaceUrl` and `protocolInterfaceVersion` are stored on the agent record, avoiding re-negotiation on every message
 - **Protocol extensibility** — The `protocol` field on agents is a discriminator; only `'a2a'` is handled today, but the schema and UI are designed for additional protocols
-- **Agent selection is per-chat** — Selecting an agent applies only to the new chat being created; subsequent messages in that chat also go through the agent
+- **Agent selection is per-chat** — Selecting an agent applies only to the new chat being created; the agent binding is persisted on the chat (`agentId`) and in the `a2a_sessions` table so subsequent messages route through the agent automatically
+- **Session continuity** — Each agent chat has an associated A2A session that stores the remote server's `contextId` and `taskId`. These are sent with every subsequent message so the remote agent maintains full conversation context. The session is created on the first successful message exchange and updated after each response.
+- **Session lookup for routing** — When a user sends a message in an existing chat, the system looks up the `a2a_sessions` table. If a session exists, the message is routed through the A2A agent channel; otherwise it goes through the LLM channel. This is the source of truth for distinguishing agent chats from LLM chats.
 - **Agent vs Chat Mode** — These are independent: user can select a chat mode OR an agent (or neither); when an agent is selected, the LLM provider/model from chat modes is bypassed
 - **Single agent selection** — Only one agent can be active at a time; selecting a new agent replaces the previous selection
 - **@-mention trigger** — The `@` character triggers the mention popup only when it appears at the start of input or immediately after whitespace; `@` inside a word (e.g. `email@`) does not trigger it
@@ -89,6 +103,7 @@ There are two ways to select an agent for a new chat:
 - **Card caching** — Agent card JSON is cached in the DB to avoid re-fetching on every operation; refreshed on "Test Connection"
 - **Streaming detection** — The A2A client checks `card.capabilities.streaming` to decide between SSE streaming and single-response fallback
 - **Cancellation** — In-flight agent requests can be cancelled via the same stop button used for LLM streaming
+- **Bound agent badge** — When viewing an active agent chat, the controls row shows a read-only agent badge (Bot icon + agent name) styled like the AgentSelector's expanded state. The badge has no dismiss button and no dropdown — the agent is permanently bound to the session. Model and MCP selectors are hidden since they don't apply to agent chats
 
 ## Architecture Overview
 
@@ -101,17 +116,26 @@ Protocol Negotiation (on fetch-card / test):
   fetchRawCard(url) → raw JSON → resolveProtocol(card) → { url, version }
     → patch card.url for SDK → A2AClient(patchedCard)
 
-Chat Flow (agent selection via Bot icon or @-mention):
+Chat Flow — First Message (agent selection via Bot icon or @-mention):
   ChatInput (@-mention popup) ─┐
   AgentSelector (Bot icon)     ─┤→ selectedAgent → MainArea.handleNewChat()
+                                └→ chat:create + chat:update(agentId)
                                 └→ window.api.agents.sendMessage() → IPC (MessagePort)
                                    → agent_a2a.ipc.ts → createA2AClient() → External Agent
                                    → Deltas streamed back via MessagePort → chat.store → UI
+                                   → a2a_sessions row created (contextId, taskId from response)
+
+Chat Flow — Subsequent Messages:
+  ChatInput → useSendMessage() → agents.getSession(chatId)
+    → session found → window.api.agents.sendMessage(session.agentId, ...)
+      → agent_a2a.ipc.ts loads session → buildSendParams(content, contextId, taskId)
+        → External Agent (receives conversation context)
+        → a2a_sessions row updated with latest contextId/taskId
 ```
 
 ## Integration Points
 
-- **Chat system** — Agent messages are saved to the same `messages` table as LLM messages, using the same `role` values (`user`, `assistant`)
+- **Chat system** — Agent messages are saved to the same `messages` table as LLM messages, using the same `role` values (`user`, `assistant`). The chat row stores `agentId` for display/identification, while `a2a_sessions` stores the remote session state for protocol-level continuity
 - **Streaming infrastructure** — Reuses the `MessagePort` streaming pattern from [Messaging](../../chat/messaging/messaging.md), including `chat.store` streaming state (`startStreaming`, `appendDelta`, `stopStreaming`)
 - **Security** — Token encryption uses the same `encryptApiKey`/`decryptApiKey` from [safeStorage keystore](../../llm/adapters/adapters.md) as LLM API keys
 - **Settings UI** — Follows the same card/form pattern as [LLM Provider settings](../../ui/settings/settings.md)
