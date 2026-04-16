@@ -34,6 +34,7 @@ export const chats = sqliteTable('chats', {
   title: text('title').notNull().default('New Chat'),
   modelId: text('model_id'),
   providerId: text('provider_id'),
+  modeId: text('mode_id'),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -55,6 +56,18 @@ export const chatMcpProviders = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.chatId, table.mcpProviderId] })]
 )
+
+export const chatModes = sqliteTable('chat_modes', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  providerId: text('provider_id'),
+  modelId: text('model_id'),
+  mcpProviderIds: text('mcp_provider_ids', { mode: 'json' }).$type<string[]>().default([]),
+  colorPreset: text('color_preset').notNull().default('slate'),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
 
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),

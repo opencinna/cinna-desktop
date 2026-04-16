@@ -9,6 +9,8 @@ import { useCreateChat, useUpdateChat } from '../../hooks/useChat'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
+import { getPreset } from '../../constants/chatModeColors'
+import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -30,33 +32,29 @@ export function MainArea(): React.JSX.Element {
   const { data: allModels } = useModels()
   const queryClient = useQueryClient()
   const { data: mcpProviders } = useMcpProviders()
-  const [selectedProviderId, setSelectedProviderId] = useState<string | null>(null)
-  const [activeMcpIds, setActiveMcpIds] = useState<Set<string>>(new Set())
+  const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
   const mcpDefaultsApplied = useRef(false)
+  const [defaultMcpIds, setDefaultMcpIds] = useState<Set<string>>(new Set())
 
-  // Initialize activeMcpIds with enabled MCP providers on first load
+  // Initialize default MCP ids with enabled MCP providers on first load
   useEffect(() => {
     if (mcpDefaultsApplied.current || !mcpProviders) return
     const enabledIds = mcpProviders.filter((p) => p.enabled).map((p) => p.id)
     if (enabledIds.length > 0) {
-      setActiveMcpIds(new Set(enabledIds))
+      setDefaultMcpIds(new Set(enabledIds))
       mcpDefaultsApplied.current = true
     }
   }, [mcpProviders])
 
-  // Resolve which provider to use: explicit selection > default
-  const effectiveProviderId = selectedProviderId ?? defaultProviderId
+  // Resolve effective provider: mode > default
+  const effectiveProviderId = activeMode?.providerId ?? defaultProviderId
+  // Resolve effective MCPs: mode > defaults
+  const effectiveMcpIds = activeMode?.mcpProviderIds?.length
+    ? new Set(activeMode.mcpProviderIds)
+    : defaultMcpIds
 
-  const handleToggleMcp = useCallback((mcpId: string) => {
-    setActiveMcpIds((prev) => {
-      const next = new Set(prev)
-      if (next.has(mcpId)) {
-        next.delete(mcpId)
-      } else {
-        next.add(mcpId)
-      }
-      return next
-    })
+  const handleSelectMode = useCallback((mode: ChatModeData | null) => {
+    setActiveMode(mode)
   }, [])
 
   const handleNewChat = useCallback(
@@ -64,32 +62,36 @@ export function MainArea(): React.JSX.Element {
       try {
         const chat = await createChat.mutateAsync()
 
-        // Use the provider's configured default model, or fall back to first available
-        const providerData = (providers ?? []).find((p) => p.id === effectiveProviderId)
+        // Resolve model: mode > provider default > first available
+        const resolvedProviderId = effectiveProviderId
+        const providerData = (providers ?? []).find((p) => p.id === resolvedProviderId)
         const providerModels = (allModels ?? []).filter(
-          (m) => m.providerId === effectiveProviderId
+          (m) => m.providerId === resolvedProviderId
         )
-        const defaultModelId =
-          (providerData?.defaultModelId && providerModels.some((m) => m.id === providerData.defaultModelId)
-            ? providerData.defaultModelId
-            : null) ?? providerModels[0]?.id
+
+        let resolvedModelId = activeMode?.modelId ?? null
+        if (!resolvedModelId || !providerModels.some((m) => m.id === resolvedModelId)) {
+          resolvedModelId =
+            (providerData?.defaultModelId && providerModels.some((m) => m.id === providerData.defaultModelId)
+              ? providerData.defaultModelId
+              : null) ?? providerModels[0]?.id ?? null
+        }
 
         // Set title to first user message (truncated)
         const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
-        if (effectiveProviderId && defaultModelId) {
-          await updateChat.mutateAsync({
-            chatId: chat.id,
-            updates: { providerId: effectiveProviderId, modelId: defaultModelId, title }
-          })
-        } else {
-          await updateChat.mutateAsync({
-            chatId: chat.id,
-            updates: { title }
-          })
+        const updates: { providerId?: string; modelId?: string; title: string; modeId?: string } = { title }
+        if (resolvedProviderId && resolvedModelId) {
+          updates.providerId = resolvedProviderId
+          updates.modelId = resolvedModelId
+        }
+        if (activeMode) {
+          updates.modeId = activeMode.id
         }
 
-        const mcpSnapshot = Array.from(activeMcpIds)
+        await updateChat.mutateAsync({ chatId: chat.id, updates })
+
+        const mcpSnapshot = Array.from(effectiveMcpIds)
         if (mcpSnapshot.length > 0) {
           await window.api.chat.setMcpProviders(chat.id, mcpSnapshot)
         }
@@ -135,6 +137,9 @@ export function MainArea(): React.JSX.Element {
           }
         })
 
+        // Reset mode after starting chat
+        setActiveMode(null)
+
         // Invalidate after a short delay so the user message (saved by main process) appears
         setTimeout(() => {
           queryClient.invalidateQueries({ queryKey: ['chat', chat.id] })
@@ -143,12 +148,14 @@ export function MainArea(): React.JSX.Element {
         console.error('Failed to create chat:', err)
       }
     },
-    [createChat, updateChat, effectiveProviderId, providers, allModels, activeMcpIds, queryClient]
+    [createChat, updateChat, effectiveProviderId, providers, allModels, effectiveMcpIds, activeMode, queryClient]
   )
 
   if (activeView === 'settings') {
     return <SettingsPage />
   }
+
+  const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null
 
   // Default / New Chat screen
   if (!activeChatId) {
@@ -161,12 +168,11 @@ export function MainArea(): React.JSX.Element {
         <ChatInput
           chatId={null}
           onNewChat={handleNewChat}
+          modeColor={modeColorPreset}
           leftSlot={
             <ChatConfigMenu
-              selectedProviderId={effectiveProviderId}
-              onSelectProvider={setSelectedProviderId}
-              activeMcpIds={activeMcpIds}
-              onToggleMcp={handleToggleMcp}
+              activeMode={activeMode}
+              onSelectMode={handleSelectMode}
             />
           }
         />

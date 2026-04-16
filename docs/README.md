@@ -7,6 +7,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | Term | Definition |
 |------|-----------|
 | **Chat** | A conversation with an LLM, persisted in SQLite with messages and model/provider binding |
+| **Chat Mode** | A named preset bundling an LLM provider/model, MCP servers, and a color — used to quickly start configured chats |
 | **Provider** | An LLM service (Anthropic, OpenAI, Gemini) configured with an encrypted API key |
 | **Adapter** | Implementation of the `LLMAdapter` interface that translates between our chat system and a provider's SDK |
 | **MCP Server** | A Model Context Protocol server (local stdio or remote HTTP) that exposes tools to the LLM |
@@ -30,6 +31,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 ### Chat
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop
 - [Conversation UI](chat/conversation_ui/conversation_ui.md) — Message rendering: user bubbles, assistant plain text, tool blocks, system errors
+- [Chat Modes](chat/chat_modes/chat_modes.md) — Named presets bundling LLM provider/model, MCP servers, and color scheme for one-click chat setup
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

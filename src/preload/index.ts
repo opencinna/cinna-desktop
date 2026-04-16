@@ -42,6 +42,16 @@ export interface ModelData {
   providerType: string
 }
 
+export interface ChatModeData {
+  id: string
+  name: string
+  providerId: string | null
+  modelId: string | null
+  mcpProviderIds: string[]
+  colorPreset: string
+  createdAt: Date
+}
+
 export interface McpProviderData {
   id: string
   name: string
@@ -73,7 +83,7 @@ const api = {
     emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
     update: (
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
       chatId: string,
@@ -119,6 +129,20 @@ const api = {
     }): Promise<{ success: boolean; models?: ModelData[]; error?: string }> =>
       ipcRenderer.invoke('provider:test-key', data),
     listModels: (): Promise<ModelData[]> => ipcRenderer.invoke('provider:list-models')
+  },
+
+  chatModes: {
+    list: (): Promise<ChatModeData[]> => ipcRenderer.invoke('chatmode:list'),
+    get: (id: string): Promise<ChatModeData | null> => ipcRenderer.invoke('chatmode:get', id),
+    upsert: (data: {
+      id?: string
+      name: string
+      providerId?: string | null
+      modelId?: string | null
+      mcpProviderIds?: string[]
+      colorPreset?: string
+    }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('chatmode:upsert', data),
+    delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
   },
 
   mcp: {

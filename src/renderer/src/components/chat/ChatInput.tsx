@@ -3,14 +3,16 @@ import { SendHorizontal, Square } from 'lucide-react'
 import { useSendMessage } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
+import type { ColorPreset } from '../../constants/chatModeColors'
 
 interface ChatInputProps {
   chatId: string | null
   onNewChat?: (message: string) => void
   leftSlot?: ReactNode
+  modeColor?: ColorPreset | null
 }
 
-export function ChatInput({ chatId, onNewChat, leftSlot }: ChatInputProps): React.JSX.Element {
+export function ChatInput({ chatId, onNewChat, leftSlot, modeColor }: ChatInputProps): React.JSX.Element {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const sendMessage = useSendMessage()
@@ -56,7 +58,13 @@ export function ChatInput({ chatId, onNewChat, leftSlot }: ChatInputProps): Reac
   return (
     <div className="w-full max-w-3xl mx-auto px-4">
       {/* Message box — textarea only */}
-      <div className="rounded-2xl bg-[var(--color-bg-input)] border border-[var(--color-border)] overflow-hidden">
+      <div
+        className="rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        style={{
+          borderColor: modeColor ? modeColor.border : 'var(--color-border)',
+          backgroundColor: modeColor ? modeColor.bg : undefined
+        }}
+      >
         <textarea
           ref={textareaRef}
           value={input}

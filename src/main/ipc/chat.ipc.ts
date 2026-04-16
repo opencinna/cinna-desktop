@@ -86,7 +86,7 @@ export function registerChatHandlers(): void {
     async (
       _event,
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string }
     ) => {
       const db = getDb()
       db.update(chats)

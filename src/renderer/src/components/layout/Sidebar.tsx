@@ -1,16 +1,17 @@
-import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2 } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
-import type { SettingsTab } from '../../stores/ui.store'
+import type { SettingsMenu } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatList } from '../chat/ChatList'
 
-const settingsMenuItems: { id: SettingsTab; label: string; icon: typeof Brain }[] = [
+const settingsMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
+  { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'llm', label: 'LLM Providers', icon: Brain },
   { id: 'mcp', label: 'MCP Providers', icon: Plug }
 ]
 
 export function Sidebar(): React.JSX.Element {
-  const { sidebarOpen, setActiveView, activeView, settingsTab, setSettingsTab, theme, toggleTheme } = useUIStore()
+  const { sidebarOpen, setActiveView, activeView, settingsTab, setSettingsMenu, theme, toggleTheme } = useUIStore()
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
   const handleNewChat = (): void => {
@@ -51,7 +52,7 @@ export function Sidebar(): React.JSX.Element {
                 return (
                   <button
                     key={item.id}
-                    onClick={() => setSettingsTab(item.id)}
+                    onClick={() => setSettingsMenu(item.id)}
                     className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-colors ${
                       active
                         ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
@@ -67,7 +68,7 @@ export function Sidebar(): React.JSX.Element {
               {/* Trash with delimiter */}
               <div className="mx-2.5 border-t border-[var(--color-border)]" />
               <button
-                onClick={() => setSettingsTab('trash')}
+                onClick={() => setSettingsMenu('trash')}
                 className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-colors ${
                   settingsTab === 'trash'
                     ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'

@@ -1,27 +1,27 @@
 import { create } from 'zustand'
 
 export type ActiveView = 'chat' | 'settings'
-export type SettingsTab = 'llm' | 'mcp' | 'trash'
+export type SettingsMenu = 'chats' | 'llm' | 'mcp' | 'trash'
 export type Theme = 'dark' | 'light'
 
 interface UIStore {
   activeView: ActiveView
-  settingsTab: SettingsTab
+  settingsTab: SettingsMenu
   sidebarOpen: boolean
   theme: Theme
   setActiveView: (view: ActiveView) => void
-  setSettingsTab: (tab: SettingsTab) => void
+  setSettingsMenu: (tab: SettingsMenu) => void
   toggleSidebar: () => void
   toggleTheme: () => void
 }
 
 export const useUIStore = create<UIStore>((set) => ({
   activeView: 'chat',
-  settingsTab: 'llm',
+  settingsTab: 'chats',
   sidebarOpen: true,
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   setActiveView: (view) => set({ activeView: view }),
-  setSettingsTab: (tab) => set({ settingsTab: tab }),
+  setSettingsMenu: (tab) => set({ settingsTab: tab }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   toggleTheme: () =>
     set((state) => {
