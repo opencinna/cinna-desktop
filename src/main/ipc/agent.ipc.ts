@@ -1,15 +1,19 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { agents } from '../db/schema'
 import { encryptApiKey } from '../security/keystore'
 import { registerA2AHandlers } from './agent_a2a.ipc'
+import { getCurrentUserId } from '../auth/session'
+import { userActivation } from '../auth/activation'
 
 export function registerAgentHandlers(): void {
   ipcMain.handle('agent:list', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    const all = db.select().from(agents).all()
+    const userId = getCurrentUserId()
+    const all = db.select().from(agents).where(eq(agents.userId, userId)).all()
     return all.map((a) => ({
       id: a.id,
       name: a.name,
@@ -46,6 +50,7 @@ export function registerAgentHandlers(): void {
         enabled?: boolean
       }
     ) => {
+      userActivation.requireActivated()
       const db = getDb()
       const id = data.id || nanoid()
 
@@ -56,6 +61,8 @@ export function registerAgentHandlers(): void {
       const tokenEnc = data.accessToken
         ? encryptApiKey(data.accessToken)
         : existing?.accessTokenEncrypted ?? null
+
+      const userId = getCurrentUserId()
 
       if (existing) {
         db.update(agents)
@@ -72,12 +79,13 @@ export function registerAgentHandlers(): void {
             skills: data.skills ?? existing.skills,
             enabled: data.enabled ?? existing.enabled
           })
-          .where(eq(agents.id, id))
+          .where(and(eq(agents.id, id), eq(agents.userId, userId)))
           .run()
       } else {
         db.insert(agents)
           .values({
             id,
+            userId,
             name: data.name,
             description: data.description ?? null,
             protocol: data.protocol,
@@ -99,8 +107,10 @@ export function registerAgentHandlers(): void {
   )
 
   ipcMain.handle('agent:delete', async (_event, agentId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
-    db.delete(agents).where(eq(agents.id, agentId)).run()
+    const userId = getCurrentUserId()
+    db.delete(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).run()
     return { success: true }
   })
 

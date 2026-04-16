@@ -1,7 +1,20 @@
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
 
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  type: text('type').notNull().default('local_user'), // 'local_user' | 'cinna_user' (future)
+  username: text('username').notNull().unique(),
+  displayName: text('display_name').notNull(),
+  passwordHash: text('password_hash'),
+  salt: text('salt'),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
 export const llmProviders = sqliteTable('llm_providers', {
   id: text('id').primaryKey(),
+  userId: text('user_id').notNull().default('__default__'),
   type: text('type').notNull(), // 'anthropic' | 'openai' | 'gemini'
   name: text('name').notNull(),
   apiKeyEncrypted: blob('api_key_enc', { mode: 'buffer' }),
@@ -15,6 +28,7 @@ export const llmProviders = sqliteTable('llm_providers', {
 
 export const mcpProviders = sqliteTable('mcp_providers', {
   id: text('id').primaryKey(),
+  userId: text('user_id').notNull().default('__default__'),
   name: text('name').notNull(),
   transportType: text('transport_type').notNull(), // 'stdio' | 'sse' | 'streamable-http'
   command: text('command'),
@@ -31,6 +45,7 @@ export const mcpProviders = sqliteTable('mcp_providers', {
 
 export const chats = sqliteTable('chats', {
   id: text('id').primaryKey(),
+  userId: text('user_id').notNull().default('__default__'),
   title: text('title').notNull().default('New Chat'),
   modelId: text('model_id'),
   providerId: text('provider_id'),
@@ -60,6 +75,7 @@ export const chatMcpProviders = sqliteTable(
 
 export const chatModes = sqliteTable('chat_modes', {
   id: text('id').primaryKey(),
+  userId: text('user_id').notNull().default('__default__'),
   name: text('name').notNull(),
   providerId: text('provider_id'),
   modelId: text('model_id'),
@@ -72,6 +88,7 @@ export const chatModes = sqliteTable('chat_modes', {
 
 export const agents = sqliteTable('agents', {
   id: text('id').primaryKey(),
+  userId: text('user_id').notNull().default('__default__'),
   name: text('name').notNull(),
   description: text('description'),
   protocol: text('protocol').notNull(), // 'a2a' (extensible: more protocols later)

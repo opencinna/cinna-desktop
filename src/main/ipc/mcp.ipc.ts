@@ -4,6 +4,8 @@ import { eq } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { mcpProviders, chatMcpProviders } from '../db/schema'
 import { mcpManager } from '../mcp/manager'
+import { getCurrentUserId } from '../auth/session'
+import { userActivation } from '../auth/activation'
 
 function buildConfig(provider: typeof mcpProviders.$inferSelect) {
   return {
@@ -22,8 +24,10 @@ function buildConfig(provider: typeof mcpProviders.$inferSelect) {
 
 export function registerMcpHandlers(): void {
   ipcMain.handle('mcp:list', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    const providers = db.select().from(mcpProviders).all()
+    const userId = getCurrentUserId()
+    const providers = db.select().from(mcpProviders).where(eq(mcpProviders.userId, userId)).all()
     return providers.map((p) => {
       const conn = mcpManager.getConnection(p.id)
       return {
@@ -53,6 +57,7 @@ export function registerMcpHandlers(): void {
         enabled?: boolean
       }
     ) => {
+      userActivation.requireActivated()
       const db = getDb()
       const id = data.id || nanoid()
 
@@ -77,6 +82,7 @@ export function registerMcpHandlers(): void {
         db.insert(mcpProviders)
           .values({
             id,
+            userId: getCurrentUserId(),
             name: data.name,
             transportType: data.transportType,
             command: data.command ?? null,
@@ -102,6 +108,7 @@ export function registerMcpHandlers(): void {
   )
 
   ipcMain.handle('mcp:delete', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     await mcpManager.disconnect(providerId)
     db.delete(mcpProviders).where(eq(mcpProviders.id, providerId)).run()
@@ -109,6 +116,7 @@ export function registerMcpHandlers(): void {
   })
 
   ipcMain.handle('mcp:connect', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     const provider = db.select().from(mcpProviders).where(eq(mcpProviders.id, providerId)).get()
     if (!provider) return { success: false, error: 'Provider not found' }
@@ -122,11 +130,13 @@ export function registerMcpHandlers(): void {
   })
 
   ipcMain.handle('mcp:disconnect', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     await mcpManager.disconnect(providerId)
     return { success: true }
   })
 
   ipcMain.handle('mcp:list-tools', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     const conn = mcpManager.getConnection(providerId)
     return conn?.tools ?? []
   })
@@ -134,6 +144,7 @@ export function registerMcpHandlers(): void {
   ipcMain.handle(
     'chat:set-mcp-providers',
     async (_event, chatId: string, mcpProviderIds: string[]) => {
+      userActivation.requireActivated()
       const db = getDb()
       // Clear existing
       db.delete(chatMcpProviders)
@@ -148,6 +159,7 @@ export function registerMcpHandlers(): void {
   )
 
   ipcMain.handle('chat:get-mcp-providers', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     return db
       .select()

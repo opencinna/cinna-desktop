@@ -10,6 +10,10 @@ export function unregisterAdapter(providerId: string): void {
   adapters.delete(providerId)
 }
 
+export function clearAllAdapters(): void {
+  adapters.clear()
+}
+
 export function getAdapter(providerId: string): LLMAdapter | undefined {
   return adapters.get(providerId)
 }

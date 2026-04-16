@@ -1,5 +1,6 @@
 import { PanelLeft } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
+import { UserMenu } from '../auth/UserMenu'
 
 export function TitleBar(): React.JSX.Element {
   const { toggleSidebar } = useUIStore()
@@ -18,7 +19,9 @@ export function TitleBar(): React.JSX.Element {
 
       <span className="text-xs font-medium text-[var(--color-text-muted)]">Cinna</span>
 
-      <div className="w-[100px]" />
+      <div className="flex items-center justify-end w-[100px]">
+        <UserMenu />
+      </div>
     </div>
   )
 }

@@ -3,13 +3,9 @@ import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerAllIpcHandlers } from './ipc'
-import { initDatabase, getDb } from './db/client'
-import { llmProviders } from './db/schema'
-import { registerAdapter } from './llm/registry'
-import { createAdapter } from './ipc/llm.ipc'
-import { decryptApiKey } from './security/keystore'
-import { mcpProviders } from './db/schema'
+import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
+import { initSession } from './auth/session'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -74,9 +70,9 @@ app.whenReady().then(() => {
   })
 
   initDatabase()
+  initSession()
   registerAllIpcHandlers()
-  initLLMProviders()
-  initMcpProviders()
+  // Providers are activated through auth flow (auth:get-startup / auth:login)
 
   createWindow()
 
@@ -94,47 +90,6 @@ app.on('window-all-closed', () => {
 app.on('will-quit', async () => {
   await mcpManager.disconnectAll()
 })
-
-function initLLMProviders(): void {
-  const db = getDb()
-  const providers = db.select().from(llmProviders).all()
-  for (const provider of providers) {
-    if (provider.enabled && provider.apiKeyEncrypted) {
-      try {
-        const apiKey = decryptApiKey(provider.apiKeyEncrypted)
-        const adapter = createAdapter(provider.type, apiKey, provider.id)
-        if (adapter) {
-          registerAdapter(provider.id, adapter)
-        }
-      } catch (err) {
-        console.error(`Failed to init provider ${provider.name}:`, err)
-      }
-    }
-  }
-}
-
-function initMcpProviders(): void {
-  const db = getDb()
-  const providers = db.select().from(mcpProviders).all()
-  for (const provider of providers) {
-    if (provider.enabled) {
-      mcpManager
-        .connect({
-          id: provider.id,
-          name: provider.name,
-          transportType: provider.transportType as 'stdio' | 'sse' | 'streamable-http',
-          command: provider.command ?? undefined,
-          args: (provider.args as string[]) ?? undefined,
-          url: provider.url ?? undefined,
-          env: (provider.env as Record<string, string>) ?? undefined,
-          enabled: true,
-          authTokensEncrypted: provider.authTokensEncrypted ?? undefined,
-          clientInfo: (provider.clientInfo as Record<string, unknown>) ?? undefined
-        })
-        .catch((err) => console.error(`Failed to init MCP ${provider.name}:`, err))
-    }
-  }
-}
 
 export function getMainWindow(): BrowserWindow | null {
   return mainWindow

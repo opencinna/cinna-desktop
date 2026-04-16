@@ -12,6 +12,7 @@ import {
   extractTextFromResult,
   type ProtocolResolution
 } from '../agents/a2a-client'
+import { userActivation } from '../auth/activation'
 
 const activeAbortControllers = new Map<string, AbortController>()
 
@@ -28,6 +29,7 @@ export function registerA2AHandlers(): void {
       protocol?: ProtocolResolution
       error?: string
     }> => {
+      userActivation.requireActivated()
       try {
         const { card, protocol } = await fetchAgentCard(data.cardUrl, data.accessToken)
         return { success: true, card: card as unknown as Record<string, unknown>, protocol }
@@ -48,6 +50,7 @@ export function registerA2AHandlers(): void {
       card?: Record<string, unknown>
       error?: string
     }> => {
+      userActivation.requireActivated()
       const db = getDb()
       const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
       if (!agent) {
@@ -90,6 +93,7 @@ export function registerA2AHandlers(): void {
 
   // Look up the A2A session for a chat (used by renderer to detect agent chats)
   ipcMain.handle('agent:get-session', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     return db.select().from(a2aSessions).where(eq(a2aSessions.chatId, chatId)).get() ?? null
   })
@@ -99,6 +103,14 @@ export function registerA2AHandlers(): void {
     const [agentId, chatId, userContent] = message
     const port = event.ports?.[0]
     if (!port) return
+
+    if (!userActivation.isActivated()) {
+      port.start()
+      port.postMessage({ type: 'error', error: 'Session not activated — user must authenticate first' })
+      port.close()
+      return
+    }
+
     port.start()
 
     const db = getDb()

@@ -1,16 +1,24 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq } from 'drizzle-orm'
+import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { llmProviders } from '../db/schema'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { registerAdapter, unregisterAdapter, getAllModels } from '../llm/registry'
 import { createAdapter } from './llm.ipc'
+import { getCurrentUserId } from '../auth/session'
+import { userActivation } from '../auth/activation'
 
 export function registerProviderHandlers(): void {
   ipcMain.handle('provider:list', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    const providers = db.select().from(llmProviders).all()
+    const userId = getCurrentUserId()
+    const providers = db
+      .select()
+      .from(llmProviders)
+      .where(eq(llmProviders.userId, userId))
+      .all()
     // Never send encrypted keys to renderer - send masked version
     return providers.map((p) => ({
       id: p.id,
@@ -38,6 +46,7 @@ export function registerProviderHandlers(): void {
         defaultModelId?: string | null
       }
     ) => {
+      userActivation.requireActivated()
       const db = getDb()
       const id = data.id || nanoid()
 
@@ -49,9 +58,13 @@ export function registerProviderHandlers(): void {
         ? encryptApiKey(data.apiKey)
         : existing?.apiKeyEncrypted ?? null
 
-      // If setting as default, clear other defaults first
+      // If setting as default, clear other defaults for this user
+      const userId = getCurrentUserId()
       if (data.isDefault) {
-        db.update(llmProviders).set({ isDefault: false }).run()
+        db.update(llmProviders)
+          .set({ isDefault: false })
+          .where(eq(llmProviders.userId, userId))
+          .run()
       }
 
       if (existing) {
@@ -71,6 +84,7 @@ export function registerProviderHandlers(): void {
         db.insert(llmProviders)
           .values({
             id,
+            userId,
             type: data.type,
             name: data.name,
             apiKeyEncrypted: apiKeyEnc,
@@ -99,6 +113,7 @@ export function registerProviderHandlers(): void {
   )
 
   ipcMain.handle('provider:delete', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     unregisterAdapter(providerId)
     db.delete(llmProviders).where(eq(llmProviders.id, providerId)).run()
@@ -106,6 +121,7 @@ export function registerProviderHandlers(): void {
   })
 
   ipcMain.handle('provider:test', async (_event, providerId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
     const provider = db
       .select()
@@ -150,6 +166,7 @@ export function registerProviderHandlers(): void {
   )
 
   ipcMain.handle('provider:list-models', async () => {
+    userActivation.requireActivated()
     return getAllModels()
   })
 }

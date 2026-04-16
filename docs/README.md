@@ -19,11 +19,15 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | **A2A** | Agent-to-Agent Protocol v1.0 — open standard for AI agent interoperability (discovery, messaging, streaming) |
 | **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
 | **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
+| **User Account** | A local profile (username + password) that scopes all data — chats, providers, agents, settings |
+| **Default User** | Built-in guest account (`__default__`) with no password, always present |
 
 ## Domain Map
 
 | Domain | Description |
 |--------|-------------|
+| [Core](core/resource_activation/resource_activation.md) | Cross-cutting architecture: account-scoped resources, activation gate |
+| [Auth](auth/user_accounts/user_accounts.md) | Local user accounts, login/registration, user-scoped data |
 | [Chat](chat/messaging/messaging.md) | Conversation CRUD, message streaming, tool-call loop |
 | [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
@@ -32,6 +36,12 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | [Development](development/setup/setup.md) | Dev environment, commands, gotchas |
 
 ## Feature Registry
+
+### Core
+- [Resource Activation](core/resource_activation/resource_activation.md) — Account-scoped resource lifecycle: services only run after user authentication
+
+### Auth
+- [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with password auth, user-scoped data isolation, session management
 
 ### Chat
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop
@@ -60,6 +70,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 |                 MAIN PROCESS                   |
 |                                                |
 |  SQLite (Drizzle)  LLM SDKs  MCP Clients  A2A |
+|  User accounts (PBKDF2)  Session management    |
 |  API keys & tokens encrypted via safeStorage   |
 |                                                |
 |  IPC Handlers (ipcMain.handle / .on)           |
@@ -70,9 +81,9 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 |              RENDERER (sandboxed)              |
 |  contextIsolation: true, nodeIntegration: false|
 |  React + Zustand + TanStack Query              |
-|  window.api.chat.* / .providers.* / .agents.*   |
-|  window.api.mcp.* / .llm.*                     |
+|  window.api.auth.* / .chat.* / .providers.*    |
+|  window.api.agents.* / .mcp.* / .llm.*        |
 +------------------------------------------------+
 ```
 
-**Security model**: API keys and OAuth tokens are encrypted at rest using Electron's `safeStorage` (OS keychain) and stored as blobs in SQLite. They are decrypted only in the main process. The renderer is fully sandboxed — it can only access the typed `window.api.*` methods exposed via contextBridge.
+**Security model**: API keys and OAuth tokens are encrypted at rest using Electron's `safeStorage` (OS keychain) and stored as blobs in SQLite. They are decrypted only in the main process. User passwords are hashed with PBKDF2-SHA512 (100k iterations). All data is user-scoped — every IPC query filters by the active user ID. The renderer is fully sandboxed — it can only access the typed `window.api.*` methods exposed via contextBridge.

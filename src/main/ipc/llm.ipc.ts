@@ -10,6 +10,7 @@ import { LLMAdapter, ChatMessage, ToolDefinition, ToolCallInfo } from '../llm/ty
 import { AnthropicAdapter } from '../llm/anthropic'
 import { OpenAIAdapter } from '../llm/openai'
 import { GeminiAdapter } from '../llm/gemini'
+import { userActivation } from '../auth/activation'
 
 const MAX_TOOL_ROUNDS = 10
 
@@ -40,6 +41,13 @@ export function registerLlmHandlers(): void {
     const port = event.ports?.[0]
     if (!port) {
       console.error('No MessagePort received for llm:send-message')
+      return
+    }
+
+    if (!userActivation.isActivated()) {
+      port.start()
+      port.postMessage({ type: 'error', error: 'Session not activated — user must authenticate first' })
+      port.close()
       return
     }
 

@@ -69,6 +69,15 @@ export interface AgentData {
   createdAt: Date
 }
 
+export interface UserData {
+  id: string
+  type: string // 'local_user' | 'cinna_user'
+  username: string
+  displayName: string
+  hasPassword: boolean
+  createdAt: Date
+}
+
 export interface McpProviderData {
   id: string
   name: string
@@ -85,6 +94,33 @@ export interface McpProviderData {
 }
 
 const api = {
+  auth: {
+    listUsers: (): Promise<UserData[]> => ipcRenderer.invoke('auth:list-users'),
+    getCurrent: (): Promise<UserData | null> => ipcRenderer.invoke('auth:get-current'),
+    getStartup: (): Promise<{
+      needsLogin: boolean
+      user?: UserData
+      pendingUser?: UserData
+    }> => ipcRenderer.invoke('auth:get-startup'),
+    register: (data: {
+      username: string
+      displayName: string
+      password: string
+    }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
+      ipcRenderer.invoke('auth:register', data),
+    login: (data: {
+      userId: string
+      password?: string
+      skipPassword?: boolean
+    }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
+      ipcRenderer.invoke('auth:login', data),
+    logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('auth:logout'),
+    deleteUser: (
+      userId: string
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:delete-user', userId)
+  },
+
   chat: {
     list: (): Promise<ChatData[]> => ipcRenderer.invoke('chat:list'),
     get: (chatId: string): Promise<(ChatData & { messages: MessageData[] }) | null> =>

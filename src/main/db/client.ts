@@ -10,6 +10,7 @@ import { migrateMessages } from './migrations/messages'
 import { migrateChatModes } from './migrations/chat-modes'
 import { migrateAgents } from './migrations/agents'
 import { migrateA2aSessions } from './migrations/a2a-sessions'
+import { migrateUsers } from './migrations/users'
 
 let db: BetterSQLite3Database<typeof schema>
 let sqlite: Database.Database
@@ -27,6 +28,8 @@ export function initDatabase(): void {
 }
 
 function runMigrations(): void {
+  // Users table first (referenced by all data tables)
+  migrateUsers(sqlite)
   // Order matters: providers & mcp first (referenced by chats), then chats, messages, chat-modes
   migrateProviders(sqlite)
   migrateMcp(sqlite)

@@ -1,18 +1,32 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq, desc, isNull, isNotNull } from 'drizzle-orm'
+import { eq, desc, isNull, isNotNull, and } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { chats, messages } from '../db/schema'
+import { getCurrentUserId } from '../auth/session'
+import { userActivation } from '../auth/activation'
 
 export function registerChatHandlers(): void {
   ipcMain.handle('chat:list', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    return db.select().from(chats).where(isNull(chats.deletedAt)).orderBy(desc(chats.updatedAt))
+    const userId = getCurrentUserId()
+    return db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.userId, userId), isNull(chats.deletedAt)))
+      .orderBy(desc(chats.updatedAt))
   })
 
   ipcMain.handle('chat:get', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
-    const chat = db.select().from(chats).where(eq(chats.id, chatId)).get()
+    const userId = getCurrentUserId()
+    const chat = db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .get()
     if (!chat) return null
 
     const msgs = db
@@ -26,11 +40,13 @@ export function registerChatHandlers(): void {
   })
 
   ipcMain.handle('chat:create', async () => {
+    userActivation.requireActivated()
     const db = getDb()
     const id = nanoid()
     const now = new Date()
     const chat = {
       id,
+      userId: getCurrentUserId(),
       title: 'New Chat',
       modelId: null,
       providerId: null,
@@ -43,41 +59,55 @@ export function registerChatHandlers(): void {
 
   // Soft delete — move to trash
   ipcMain.handle('chat:delete', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
+    const userId = getCurrentUserId()
     db.update(chats)
       .set({ deletedAt: new Date() })
-      .where(eq(chats.id, chatId))
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return { success: true }
   })
 
   // Trash: list soft-deleted chats
   ipcMain.handle('chat:trash-list', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    return db.select().from(chats).where(isNotNull(chats.deletedAt)).orderBy(desc(chats.deletedAt))
+    const userId = getCurrentUserId()
+    return db
+      .select()
+      .from(chats)
+      .where(and(eq(chats.userId, userId), isNotNull(chats.deletedAt)))
+      .orderBy(desc(chats.deletedAt))
   })
 
   // Trash: restore a chat
   ipcMain.handle('chat:restore', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
+    const userId = getCurrentUserId()
     db.update(chats)
       .set({ deletedAt: null })
-      .where(eq(chats.id, chatId))
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return { success: true }
   })
 
   // Trash: permanently delete a single chat
   ipcMain.handle('chat:permanent-delete', async (_event, chatId: string) => {
+    userActivation.requireActivated()
     const db = getDb()
-    db.delete(chats).where(eq(chats.id, chatId)).run()
+    const userId = getCurrentUserId()
+    db.delete(chats).where(and(eq(chats.id, chatId), eq(chats.userId, userId))).run()
     return { success: true }
   })
 
   // Trash: empty all trashed chats
   ipcMain.handle('chat:empty-trash', async () => {
+    userActivation.requireActivated()
     const db = getDb()
-    db.delete(chats).where(isNotNull(chats.deletedAt)).run()
+    const userId = getCurrentUserId()
+    db.delete(chats).where(and(eq(chats.userId, userId), isNotNull(chats.deletedAt))).run()
     return { success: true }
   })
 
@@ -88,6 +118,7 @@ export function registerChatHandlers(): void {
       chatId: string,
       updates: { title?: string; modelId?: string; providerId?: string; modeId?: string; agentId?: string }
     ) => {
+      userActivation.requireActivated()
       const db = getDb()
       db.update(chats)
         .set({ ...updates, updatedAt: new Date() })
@@ -110,6 +141,7 @@ export function registerChatHandlers(): void {
         toolInput?: Record<string, unknown>
       }
     ) => {
+      userActivation.requireActivated()
       const db = getDb()
 
       // Get next sort order
