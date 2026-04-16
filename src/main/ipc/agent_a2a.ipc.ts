@@ -1,8 +1,9 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq, desc } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { getDb } from '../db/client'
-import { agents, chats, messages } from '../db/schema'
+import { agents, chats } from '../db/schema'
+import { messageRepo } from '../db/messages'
 import { decryptApiKey } from '../security/keystore'
 import {
   fetchAgentCard,
@@ -97,14 +98,18 @@ export function registerA2AHandlers(): void {
     const db = getDb()
     const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
     if (!agent || !agent.cardUrl) {
-      port.postMessage({ type: 'error', error: 'Agent not found or not configured' })
+      const err = 'Agent not found or not configured'
+      port.postMessage({ type: 'error', error: err })
+      messageRepo.saveError({ chatId, short: err })
       port.close()
       return
     }
 
     const endpointUrl = agent.protocolInterfaceUrl ?? agent.endpointUrl
     if (!endpointUrl) {
-      port.postMessage({ type: 'error', error: 'No compatible protocol endpoint resolved. Test the agent connection first.' })
+      const err = 'No compatible protocol endpoint resolved. Test the agent connection first.'
+      port.postMessage({ type: 'error', error: err })
+      messageRepo.saveError({ chatId, short: err })
       port.close()
       return
     }
@@ -115,27 +120,7 @@ export function registerA2AHandlers(): void {
     port.postMessage({ type: 'request-id', requestId })
 
     // Save user message
-    const nextSort = (): number => {
-      const last = db
-        .select({ sortOrder: messages.sortOrder })
-        .from(messages)
-        .where(eq(messages.chatId, chatId))
-        .orderBy(desc(messages.sortOrder))
-        .limit(1)
-        .get()
-      return last ? last.sortOrder + 1 : 0
-    }
-
-    db.insert(messages)
-      .values({
-        id: nanoid(),
-        chatId,
-        role: 'user',
-        content: userContent,
-        sortOrder: nextSort(),
-        createdAt: new Date()
-      })
-      .run()
+    messageRepo.saveUser({ chatId, content: userContent })
 
     try {
       const accessToken = agent.accessTokenEncrypted
@@ -180,16 +165,7 @@ export function registerA2AHandlers(): void {
 
         // Save assistant message
         if (fullText) {
-          db.insert(messages)
-            .values({
-              id: nanoid(),
-              chatId,
-              role: 'assistant',
-              content: fullText,
-              sortOrder: nextSort(),
-              createdAt: new Date()
-            })
-            .run()
+          messageRepo.saveAssistant({ chatId, content: fullText })
         }
       } else {
         // Non-streaming fallback
@@ -214,28 +190,18 @@ export function registerA2AHandlers(): void {
 
         if (fullText) {
           port.postMessage({ type: 'delta', text: fullText })
-          db.insert(messages)
-            .values({
-              id: nanoid(),
-              chatId,
-              role: 'assistant',
-              content: fullText,
-              sortOrder: nextSort(),
-              createdAt: new Date()
-            })
-            .run()
+          messageRepo.saveAssistant({ chatId, content: fullText })
         }
       }
 
-      db.update(chats)
-        .set({ updatedAt: new Date() })
-        .where(eq(chats.id, chatId))
-        .run()
+      messageRepo.touchChat(chatId)
 
       port.postMessage({ type: 'done' })
     } catch (err) {
       if (!abortController.signal.aborted) {
-        port.postMessage({ type: 'error', error: String(err) })
+        const errorStr = String(err)
+        port.postMessage({ type: 'error', error: errorStr })
+        messageRepo.saveError({ chatId, short: errorStr })
       }
     } finally {
       port.close()

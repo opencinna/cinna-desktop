@@ -42,7 +42,7 @@ function SystemMessage({ message, detail }: { message: string; detail?: string }
 
 export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
-  const { streamingBlocks, streamError, isStreaming } = useChatStore()
+  const { streamingBlocks, isStreaming } = useChatStore()
   const bottomRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -62,6 +62,14 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
         )}
 
         {messages.map((msg) => {
+          if (msg.role === 'error') {
+            try {
+              const err = JSON.parse(msg.content) as { short: string; detail?: string }
+              return <SystemMessage key={msg.id} message={err.short} detail={err.detail} />
+            } catch {
+              return <SystemMessage key={msg.id} message={msg.content} />
+            }
+          }
           if (msg.role === 'tool_call') {
             return (
               <ToolCallBlock
@@ -120,10 +128,6 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
             />
           )
         })}
-
-        {streamError && (
-          <SystemMessage message={streamError.short} detail={streamError.detail} />
-        )}
 
         <div ref={bottomRef} />
       </div>

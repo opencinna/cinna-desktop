@@ -1,8 +1,9 @@
 import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
-import { eq, desc } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { chats, messages, chatMcpProviders } from '../db/schema'
+import { messageRepo } from '../db/messages'
 import { getAdapter } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { LLMAdapter, ChatMessage, ToolDefinition, ToolCallInfo } from '../llm/types'
@@ -31,18 +32,6 @@ export function createAdapter(
 
 const activeAbortControllers = new Map<string, AbortController>()
 
-function getNextSortOrder(chatId: string): number {
-  const db = getDb()
-  const last = db
-    .select({ sortOrder: messages.sortOrder })
-    .from(messages)
-    .where(eq(messages.chatId, chatId))
-    .orderBy(desc(messages.sortOrder))
-    .limit(1)
-    .get()
-  return last ? last.sortOrder + 1 : 0
-}
-
 export function registerLlmHandlers(): void {
   // Handle streaming message via MessagePort
   // ipcRenderer.postMessage passes message as 2nd arg, ports on event.ports
@@ -59,29 +48,24 @@ export function registerLlmHandlers(): void {
     const db = getDb()
     const chat = db.select().from(chats).where(eq(chats.id, chatId)).get()
     if (!chat || !chat.providerId || !chat.modelId) {
-      port.postMessage({ type: 'error', error: 'Chat has no model/provider configured' })
+      const err = 'Chat has no model/provider configured'
+      port.postMessage({ type: 'error', error: err })
+      messageRepo.saveError({ chatId, short: err })
       port.close()
       return
     }
 
     const adapter = getAdapter(chat.providerId)
     if (!adapter) {
-      port.postMessage({ type: 'error', error: 'Provider adapter not available' })
+      const err = 'Provider adapter not available'
+      port.postMessage({ type: 'error', error: err })
+      messageRepo.saveError({ chatId, short: err })
       port.close()
       return
     }
 
     // Save user message to DB
-    db.insert(messages)
-      .values({
-        id: nanoid(),
-        chatId,
-        role: 'user',
-        content: userContent,
-        sortOrder: getNextSortOrder(chatId),
-        createdAt: new Date()
-      })
-      .run()
+    messageRepo.saveUser({ chatId, content: userContent })
 
     // Get active MCP tools for this chat
     const activeMcpLinks = db
@@ -120,15 +104,17 @@ export function registerLlmHandlers(): void {
         .orderBy(messages.sortOrder)
         .all()
 
-      const currentMessages: ChatMessage[] = dbMessages.map((m) => ({
-        role: m.role as ChatMessage['role'],
-        content: m.content,
-        toolCalls: (m.toolCalls as ToolCallInfo[] | null) ?? undefined,
-        toolCallId: m.toolCallId ?? undefined,
-        toolName: m.toolName ?? undefined,
-        toolInput: (m.toolInput as Record<string, unknown>) ?? undefined,
-        toolError: m.toolError ?? undefined
-      }))
+      const currentMessages: ChatMessage[] = dbMessages
+        .filter((m) => m.role !== 'error')
+        .map((m) => ({
+          role: m.role as ChatMessage['role'],
+          content: m.content,
+          toolCalls: (m.toolCalls as ToolCallInfo[] | null) ?? undefined,
+          toolCallId: m.toolCallId ?? undefined,
+          toolName: m.toolName ?? undefined,
+          toolInput: (m.toolInput as Record<string, unknown>) ?? undefined,
+          toolError: m.toolError ?? undefined
+        }))
 
       // Tool-call loop
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
@@ -151,17 +137,11 @@ export function registerLlmHandlers(): void {
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : undefined
         }
 
-        db.insert(messages)
-          .values({
-            id: nanoid(),
-            chatId,
-            role: 'assistant',
-            content: result.content,
-            toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null,
-            sortOrder: getNextSortOrder(chatId),
-            createdAt: new Date()
-          })
-          .run()
+        messageRepo.saveAssistant({
+          chatId,
+          content: result.content,
+          toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null
+        })
 
         currentMessages.push(assistantMsg)
 
@@ -208,21 +188,15 @@ export function registerLlmHandlers(): void {
             toolError
           }
 
-          db.insert(messages)
-            .values({
-              id: nanoid(),
-              chatId,
-              role: 'tool_call',
-              content: toolContent,
-              toolCallId: tc.id,
-              toolName: tc.name,
-              toolInput: tc.input,
-              toolError,
-              toolProvider: mcpProviderName || null,
-              sortOrder: getNextSortOrder(chatId),
-              createdAt: new Date()
-            })
-            .run()
+          messageRepo.saveToolCall({
+            chatId,
+            content: toolContent,
+            toolCallId: tc.id,
+            toolName: tc.name,
+            toolInput: tc.input,
+            toolError,
+            toolProvider: mcpProviderName || undefined
+          })
 
           currentMessages.push(toolMsg)
         }
@@ -231,10 +205,7 @@ export function registerLlmHandlers(): void {
         if (abortController.signal.aborted) break
       }
 
-      db.update(chats)
-        .set({ updatedAt: new Date() })
-        .where(eq(chats.id, chatId))
-        .run()
+      messageRepo.touchChat(chatId)
 
       port.postMessage({ type: 'done' })
     } catch (err) {
@@ -242,6 +213,7 @@ export function registerLlmHandlers(): void {
         const error = err instanceof Error ? err : new Error(String(err))
         const parsed = adapter.parseError(error)
         port.postMessage({ type: 'error', error: parsed.short, errorDetail: parsed.detail })
+        messageRepo.saveError({ chatId, short: parsed.short, detail: parsed.detail })
       }
     } finally {
       port.close()

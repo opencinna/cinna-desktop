@@ -18,22 +18,15 @@ interface TextBlock {
 
 export type StreamBlock = TextBlock | ToolCallBlock
 
-export interface StreamError {
-  short: string
-  detail: string
-}
-
 interface ChatStore {
   activeChatId: string | null
   streamingBlocks: StreamBlock[]
-  streamError: StreamError | null
   isStreaming: boolean
   activeRequestId: string | null
 
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
   appendDelta: (text: string) => void
-  setStreamError: (error: string, detail?: string) => void
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
@@ -45,15 +38,14 @@ interface ChatStore {
 export const useChatStore = create<ChatStore>((set) => ({
   activeChatId: null,
   streamingBlocks: [],
-  streamError: null,
   isStreaming: false,
   activeRequestId: null,
 
   setActiveChatId: (id) =>
-    set({ activeChatId: id, streamingBlocks: [], streamError: null, isStreaming: false }),
+    set({ activeChatId: id, streamingBlocks: [], isStreaming: false }),
 
   startStreaming: (requestId) =>
-    set({ isStreaming: true, streamingBlocks: [], streamError: null, activeRequestId: requestId }),
+    set({ isStreaming: true, streamingBlocks: [], activeRequestId: requestId }),
 
   appendDelta: (text) =>
     set((state) => {
@@ -65,13 +57,6 @@ export const useChatStore = create<ChatStore>((set) => ({
         blocks.push({ type: 'text', content: text })
       }
       return { streamingBlocks: blocks }
-    }),
-
-  setStreamError: (error, detail) =>
-    set({
-      streamError: { short: error, detail: detail ?? error },
-      isStreaming: false,
-      activeRequestId: null
     }),
 
   addToolCall: (tc) =>
@@ -103,7 +88,6 @@ export const useChatStore = create<ChatStore>((set) => ({
     set({
       activeChatId: null,
       streamingBlocks: [],
-      streamError: null,
       isStreaming: false,
       activeRequestId: null
     })

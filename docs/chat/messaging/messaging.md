@@ -7,7 +7,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ## Core Concepts
 
 - **Chat** — A persisted conversation bound to a specific LLM provider + model, with optional MCP servers enabled
-- **Message** — A single turn in a conversation (roles: user, assistant, tool_call)
+- **Message** — A single turn in a conversation (roles: user, assistant, tool_call, error)
 - **Streaming** — LLM responses arrive as incremental deltas via MessagePort, not as a single IPC response
 - **Tool-call loop** — Centralized in the IPC handler (not in adapters). When the LLM emits tool calls, the IPC handler executes them via MCP and feeds results back to the LLM for continuation. Every message (assistant + tool_call) is saved to DB incrementally as it happens.
 
@@ -52,7 +52,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - Messages are ordered by `sort_order` within a chat
 - Chat title defaults to the first user message, truncated to 50 chars
 - The default provider is the one marked `is_default`; the default model is the provider's `default_model_id` (or first available)
-- Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages
+- Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages, then persisted to DB as `role: 'error'` messages so they survive navigation
 - Tool calls are only available when MCP servers are connected and enabled for the chat
 
 ## Architecture Overview

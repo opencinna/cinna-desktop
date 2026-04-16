@@ -15,7 +15,7 @@
 
 | File | Role |
 |------|------|
-| `src/renderer/src/stores/chat.store.ts` | Zustand store holding `streamingBlocks`, `streamError`, `isStreaming` |
+| `src/renderer/src/stores/chat.store.ts` | Zustand store holding `streamingBlocks`, `isStreaming` |
 | `src/renderer/src/hooks/useChat.ts` | TanStack Query hook `useChatDetail(chatId)` — provides persisted messages |
 
 ## Renderer Components
@@ -38,6 +38,7 @@
 ### SystemMessage (inline in MessageStream)
 
 - `src/renderer/src/components/chat/MessageStream.tsx:SystemMessage` <!-- nocheck -->
+- Rendered from DB-persisted `role: 'error'` messages (JSON content `{short, detail}`). Errors survive navigation — no transient state involved.
 - Centered flex container with `border-[var(--color-danger)]/30` and `bg-[var(--color-danger)]/8`.
 - `AlertTriangle` icon + short error text.
 - Expandable detail section toggled by a `ChevronRight` button; detail renders in a `pre` block with max height and scroll.

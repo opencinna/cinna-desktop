@@ -94,7 +94,8 @@ export function MainArea(): React.JSX.Element {
                 break
               case 'error':
                 console.error('Agent error:', event.error)
-                useChatStore.getState().setStreamError(event.error ?? 'Unknown error')
+                useChatStore.getState().stopStreaming()
+                queryClient.invalidateQueries({ queryKey: ['chat', chat.id] })
                 break
             }
           })
@@ -170,10 +171,8 @@ export function MainArea(): React.JSX.Element {
               break
             case 'error':
               console.error('LLM error:', event.error)
-              useChatStore.getState().setStreamError(
-                event.error ?? 'Unknown error',
-                event.errorDetail
-              )
+              useChatStore.getState().stopStreaming()
+              queryClient.invalidateQueries({ queryKey: ['chat', chat.id] })
               break
           }
         })

@@ -87,7 +87,7 @@
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
 - `registerA2AHandlers()` — Registers A2A protocol-specific IPC channels (fetch-card, test, send-message, cancel-message).
-- `agent:send-message` handler — Uses `protocolInterfaceUrl` (falling back to `endpointUrl`) to create A2A client, detects streaming capability, saves user message, streams or fetches response, saves assistant message, updates chat timestamp. Uses `AbortController` for cancellation tracked by `activeAbortControllers` map.
+- `agent:send-message` handler — Uses `protocolInterfaceUrl` (falling back to `endpointUrl`) to create A2A client, detects streaming capability, delegates message persistence to `messageRepo` (user, assistant, and error messages), updates chat timestamp. Uses `AbortController` for cancellation tracked by `activeAbortControllers` map.
 - `agent:test` handler — Fetches card with protocol negotiation, updates cached `cardData`, `endpointUrl`, `protocolInterfaceUrl`, `protocolInterfaceVersion`, and `skills` in DB.
 
 ## Renderer Components

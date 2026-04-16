@@ -5,14 +5,15 @@
 ### Main Process
 - `src/main/db/schema.ts` — `chats`, `messages`, `chatMcpProviders` table definitions
 - `src/main/db/client.ts` — SQLite init, Drizzle instance, inline migrations for chat/message tables
+- `src/main/db/messages.ts` — `messageRepo` — centralized message persistence (user, assistant, tool_call, error messages + chat timestamp updates)
 - `src/main/ipc/chat.ipc.ts` — Chat CRUD handlers: list, get, create, delete, update, add-message, set/get-mcp-providers
-- `src/main/ipc/llm.ipc.ts` — Streaming handler, centralized tool-call loop (up to 10 rounds), incremental DB saves, adapter factory (`createAdapter()`)
+- `src/main/ipc/llm.ipc.ts` — Streaming handler, centralized tool-call loop (up to 10 rounds), delegates message persistence to `messageRepo`, adapter factory (`createAdapter()`)
 
 ### Preload
 - `src/preload/index.ts` — Exposes `window.api.chat.*` methods via contextBridge
 
 ### Renderer
-- `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop), streamError, isStreaming
+- `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop), isStreaming
 - `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useSendMessage (streaming handler with provider field)
 - `src/renderer/src/components/layout/MainArea.tsx` — Default-screen send handler (creates chat + sends first message); has its own streaming event handler that must mirror `useSendMessage` (including `provider` in `addToolCall`); auto-enables all active MCP providers on mount
 - `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row
@@ -29,7 +30,7 @@
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
 | `chats` | Conversations | id, title, model_id, provider_id, created_at, updated_at |
-| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, sort_order |
+| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, sort_order |
 | `chat_mcp_providers` | Junction: MCP servers active per chat | chat_id, mcp_provider_id (composite PK) |
 
 DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-desktop/cinna.db` on macOS).
@@ -51,9 +52,9 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 ## Services & Key Methods
 
-- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, saves user message, loads history, gathers tools, runs centralized tool-call loop, saves each message incrementally to DB
+- `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()`, `saveToolCall()`, `saveError()`, `touchChat()`. Single source of truth for all message writes.
+- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, delegates message persistence to `messageRepo`, loads history (filtering out `role: 'error'`), gathers tools, runs centralized tool-call loop. On error, persists via `messageRepo.saveError()`.
 - `src/main/ipc/llm.ipc.ts:createAdapter()` — Factory that instantiates the correct LLM adapter based on provider type
-- `src/main/ipc/llm.ipc.ts:getNextSortOrder()` — Helper to get the next sort_order for a chat's messages
 - `src/main/ipc/chat.ipc.ts` — All `ipcMain.handle('chat:*')` handlers for CRUD operations
 
 ## Streaming Protocol
@@ -66,7 +67,7 @@ Events sent through the MessagePort from main to renderer:
 4. `{ type: 'tool_result', id, result }` — Tool call completed successfully
 5. `{ type: 'tool_error', id, error }` — Tool call failed
 6. `{ type: 'done' }` — Stream finished
-7. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail)
+7. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. Renderer handles by calling `stopStreaming()` and invalidating the chat query.
 
 ## Renderer Components
 

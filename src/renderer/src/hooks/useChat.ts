@@ -139,10 +139,8 @@ export function useSendMessage() {
             break
           case 'error':
             console.error('LLM error:', event.error)
-            useChatStore.getState().setStreamError(
-              event.error ?? 'Unknown error',
-              event.errorDetail
-            )
+            useChatStore.getState().stopStreaming()
+            queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
             break
         }
       })
