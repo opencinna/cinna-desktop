@@ -69,6 +69,24 @@ export const chatModes = sqliteTable('chat_modes', {
     .$defaultFn(() => new Date())
 })
 
+export const agents = sqliteTable('agents', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  description: text('description'),
+  protocol: text('protocol').notNull(), // 'a2a' (extensible: more protocols later)
+  cardUrl: text('card_url'), // A2A: well-known agent card URL
+  endpointUrl: text('endpoint_url'), // resolved endpoint from agent card
+  protocolInterfaceUrl: text('protocol_interface_url'), // resolved 0.3.x-compatible endpoint URL
+  protocolInterfaceVersion: text('protocol_interface_version'), // matched protocol version (e.g. "0.3.0")
+  accessTokenEncrypted: blob('access_token_enc', { mode: 'buffer' }),
+  cardData: text('card_data', { mode: 'json' }).$type<Record<string, unknown>>(), // cached agent card JSON
+  skills: text('skills', { mode: 'json' }).$type<Array<{ id: string; name: string; description?: string }>>(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
 export const messages = sqliteTable('messages', {
   id: text('id').primaryKey(),
   chatId: text('chat_id')

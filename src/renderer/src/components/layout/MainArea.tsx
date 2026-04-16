@@ -2,15 +2,18 @@ import { useState, useCallback, useEffect, useRef } from 'react'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { MessageStream } from '../chat/MessageStream'
-import { ChatInput } from '../chat/ChatInput'
+import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { SettingsPage } from '../settings/SettingsPage'
 import { ChatConfigMenu } from '../chat/ChatConfigMenu'
+import { AgentSelector } from '../chat/AgentSelector'
 import { useCreateChat, useUpdateChat } from '../../hooks/useChat'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
+
+type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 import { Sparkles } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -33,6 +36,8 @@ export function MainArea(): React.JSX.Element {
   const queryClient = useQueryClient()
   const { data: mcpProviders } = useMcpProviders()
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
+  const [selectedAgent, setSelectedAgent] = useState<AgentData | null>(null)
+  const chatInputRef = useRef<ChatInputHandle>(null)
   const mcpDefaultsApplied = useRef(false)
   const [defaultMcpIds, setDefaultMcpIds] = useState<Set<string>>(new Set())
 
@@ -57,10 +62,49 @@ export function MainArea(): React.JSX.Element {
     setActiveMode(mode)
   }, [])
 
+  const focusChatInput = useCallback(() => {
+    chatInputRef.current?.focus()
+  }, [])
+
   const handleNewChat = useCallback(
     async (message: string) => {
       try {
         const chat = await createChat.mutateAsync()
+
+        // Set title to first user message (truncated)
+        const title = message.length > 50 ? message.slice(0, 50) + '…' : message
+
+        // If an agent is selected, use agent messaging
+        if (selectedAgent) {
+          await updateChat.mutateAsync({ chatId: chat.id, updates: { title } })
+          useChatStore.getState().setActiveChatId(chat.id)
+
+          window.api.agents.sendMessage(selectedAgent.id, chat.id, message, (event) => {
+            switch (event.type) {
+              case 'request-id':
+                useChatStore.getState().startStreaming(event.requestId ?? '')
+                break
+              case 'delta':
+                useChatStore.getState().appendDelta(event.text!)
+                break
+              case 'done':
+                useChatStore.getState().stopStreaming()
+                queryClient.invalidateQueries({ queryKey: ['chat', chat.id] })
+                queryClient.invalidateQueries({ queryKey: ['chats'] })
+                break
+              case 'error':
+                console.error('Agent error:', event.error)
+                useChatStore.getState().setStreamError(event.error ?? 'Unknown error')
+                break
+            }
+          })
+
+          setSelectedAgent(null)
+          setTimeout(() => {
+            queryClient.invalidateQueries({ queryKey: ['chat', chat.id] })
+          }, 300)
+          return
+        }
 
         // Resolve model: mode > provider default > first available
         const resolvedProviderId = effectiveProviderId
@@ -76,9 +120,6 @@ export function MainArea(): React.JSX.Element {
               ? providerData.defaultModelId
               : null) ?? providerModels[0]?.id ?? null
         }
-
-        // Set title to first user message (truncated)
-        const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
         const updates: { providerId?: string; modelId?: string; title: string; modeId?: string } = { title }
         if (resolvedProviderId && resolvedModelId) {
@@ -148,7 +189,7 @@ export function MainArea(): React.JSX.Element {
         console.error('Failed to create chat:', err)
       }
     },
-    [createChat, updateChat, effectiveProviderId, providers, allModels, effectiveMcpIds, activeMode, queryClient]
+    [createChat, updateChat, effectiveProviderId, providers, allModels, effectiveMcpIds, activeMode, selectedAgent, queryClient]
   )
 
   if (activeView === 'settings') {
@@ -166,14 +207,23 @@ export function MainArea(): React.JSX.Element {
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
         </div>
         <ChatInput
+          ref={chatInputRef}
           chatId={null}
           onNewChat={handleNewChat}
           modeColor={modeColorPreset}
+          onSelectAgent={setSelectedAgent}
           leftSlot={
-            <ChatConfigMenu
-              activeMode={activeMode}
-              onSelectMode={handleSelectMode}
-            />
+            <>
+              <ChatConfigMenu
+                activeMode={activeMode}
+                onSelectMode={handleSelectMode}
+              />
+              <AgentSelector
+                selectedAgent={selectedAgent}
+                onSelectAgent={setSelectedAgent}
+                onCollapsed={focusChatInput}
+              />
+            </>
           }
         />
       </div>

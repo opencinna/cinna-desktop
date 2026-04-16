@@ -177,4 +177,26 @@
     0% { transform: translateX(-100%); }
     100% { transform: translateX(400%); }
   }
+
+  @keyframes expand-in {
+    from {
+      max-width: 0;
+      opacity: 0;
+    }
+    to {
+      max-width: 10rem;
+      opacity: 1;
+    }
+  }
+
+  @keyframes shrink-out {
+    from {
+      max-width: 10rem;
+      opacity: 1;
+    }
+    to {
+      max-width: 0;
+      opacity: 0;
+    }
+  }
 }

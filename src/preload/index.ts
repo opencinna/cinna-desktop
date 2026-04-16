@@ -52,6 +52,22 @@ export interface ChatModeData {
   createdAt: Date
 }
 
+export interface AgentData {
+  id: string
+  name: string
+  description: string | null
+  protocol: string
+  cardUrl: string | null
+  endpointUrl: string | null
+  protocolInterfaceUrl: string | null
+  protocolInterfaceVersion: string | null
+  hasAccessToken: boolean
+  cardData: Record<string, unknown> | null
+  skills: Array<{ id: string; name: string; description?: string }> | null
+  enabled: boolean
+  createdAt: Date
+}
+
 export interface McpProviderData {
   id: string
   name: string
@@ -143,6 +159,61 @@ const api = {
       colorPreset?: string
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('chatmode:upsert', data),
     delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
+  },
+
+  agents: {
+    list: (): Promise<AgentData[]> => ipcRenderer.invoke('agent:list'),
+    upsert: (data: {
+      id?: string
+      name: string
+      description?: string
+      protocol: string
+      cardUrl?: string
+      endpointUrl?: string
+      protocolInterfaceUrl?: string
+      protocolInterfaceVersion?: string
+      accessToken?: string
+      cardData?: Record<string, unknown>
+      skills?: Array<{ id: string; name: string; description?: string }>
+      enabled?: boolean
+    }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('agent:upsert', data),
+    delete: (agentId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agent:delete', agentId),
+    fetchCard: (data: {
+      cardUrl: string
+      accessToken?: string
+    }): Promise<{
+      success: boolean
+      card?: Record<string, unknown>
+      protocol?: { url: string; version: string }
+      error?: string
+    }> => ipcRenderer.invoke('agent:fetch-card', data),
+    test: (
+      agentId: string
+    ): Promise<{ success: boolean; card?: Record<string, unknown>; error?: string }> =>
+      ipcRenderer.invoke('agent:test', agentId),
+    sendMessage: (
+      agentId: string,
+      chatId: string,
+      content: string,
+      onEvent: (event: {
+        type: string
+        text?: string
+        requestId?: string
+        taskId?: string
+        contextId?: string
+        state?: string
+        error?: string
+      }) => void
+    ): void => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = (event) => {
+        onEvent(event.data)
+      }
+      ipcRenderer.postMessage('agent:send-message', [agentId, chatId, content], [channel.port2])
+    },
+    cancelMessage: (requestId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('agent:cancel-message', requestId)
   },
 
   mcp: {

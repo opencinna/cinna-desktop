@@ -1,12 +1,14 @@
 import { useUIStore } from '../../stores/ui.store'
 import { LLMSettingsSection } from './LLMSettingsSection'
 import { MCPSettingsSection } from './MCPSettingsSection'
+import { AgentsSettingsSection } from './AgentsSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
 
 const sectionTitles = {
   chats: 'Chat Modes',
   llm: 'LLM Providers',
+  agents: 'Agents',
   mcp: 'MCP Providers',
   trash: 'Trash'
 } as const
@@ -20,6 +22,7 @@ export function SettingsPage(): React.JSX.Element {
         <h1 className="text-base font-semibold mb-4">{sectionTitles[settingsTab]}</h1>
         {settingsTab === 'chats' && <ChatModesSection key="chats" />}
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
+        {settingsTab === 'agents' && <AgentsSettingsSection key="agents" />}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
         {settingsTab === 'trash' && <TrashSection key="trash" />}
       </div>

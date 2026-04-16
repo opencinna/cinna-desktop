@@ -1,6 +1,6 @@
 # Cinna Desktop
 
-Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP connector support.
+Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP connector support and A2A agent integration.
 
 ## Glossary
 
@@ -15,12 +15,17 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | **Tool Call** | LLM requests a tool -> main process calls MCP server -> result fed back to LLM |
 | **MessagePort** | Electron's streaming channel used to send LLM response chunks from main to renderer |
 | **safeStorage** | Electron's OS-keychain encryption used for API keys and OAuth tokens at rest |
+| **Agent** | An external AI service (e.g. A2A agent) registered by the user, communicating via a standardized protocol |
+| **A2A** | Agent-to-Agent Protocol v1.0 — open standard for AI agent interoperability (discovery, messaging, streaming) |
+| **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
+| **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
 
 ## Domain Map
 
 | Domain | Description |
 |--------|-------------|
 | [Chat](chat/messaging/messaging.md) | Conversation CRUD, message streaming, tool-call loop |
+| [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
 | [UI](ui/settings/settings.md) | Settings screen, sidebar navigation, theming |
@@ -32,6 +37,9 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop
 - [Conversation UI](chat/conversation_ui/conversation_ui.md) — Message rendering: user bubbles, assistant plain text, tool blocks, system errors
 - [Chat Modes](chat/chat_modes/chat_modes.md) — Named presets bundling LLM provider/model, MCP servers, and color scheme for one-click chat setup
+
+### Agents
+- [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters
@@ -51,8 +59,8 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 +------------------------------------------------+
 |                 MAIN PROCESS                   |
 |                                                |
-|  SQLite (Drizzle)  LLM SDKs    MCP Clients    |
-|  API keys encrypted via safeStorage            |
+|  SQLite (Drizzle)  LLM SDKs  MCP Clients  A2A |
+|  API keys & tokens encrypted via safeStorage   |
 |                                                |
 |  IPC Handlers (ipcMain.handle / .on)           |
 |  + MessagePort for streaming                   |
@@ -62,7 +70,8 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 |              RENDERER (sandboxed)              |
 |  contextIsolation: true, nodeIntegration: false|
 |  React + Zustand + TanStack Query              |
-|  window.api.chat.* / .providers.* / .mcp.*     |
+|  window.api.chat.* / .providers.* / .agents.*   |
+|  window.api.mcp.* / .llm.*                     |
 +------------------------------------------------+
 ```
 
