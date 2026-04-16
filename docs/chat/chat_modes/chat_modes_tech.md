@@ -58,8 +58,8 @@
 
 ### Chat
 - `ChatConfigMenu` — Popup anchored to `+` button; renders mode cards with `getPreset()` for colors; hover state tracked via `hoveredId`; selecting a mode calls `onSelectMode` and closes popup
-- `ChatInput` — Accepts optional `modeColor: ColorPreset | null`; when set, overrides the input wrapper's `borderColor` and `backgroundColor` via inline style
-- `MainArea` — Holds `activeMode` state; passes it to `ChatConfigMenu` and derives `modeColorPreset` for `ChatInput`; on `handleNewChat`, writes `modeId` to chat updates and applies mode's provider/model/MCPs
+- `ChatInput` — Accepts optional `modeColor: ColorPreset | null`; when set, overrides the input wrapper's `borderColor` and `backgroundColor` via inline style. When `leftSlot` is provided for an active chat, renders it instead of `ChatControls`
+- `MainArea` — Holds `activeMode` state for new-chat screen; for active chats, resolves `activeChatMode` from `chatData.modeId` via `useChatDetail` + `useChatModes`. Passes `ChatConfigMenu` as `leftSlot` to `ChatInput` for mode-created chats. `handleActiveChatModeChange` updates the chat's provider/model/MCP/modeId when switching modes on an active chat
 
 ## Configuration
 

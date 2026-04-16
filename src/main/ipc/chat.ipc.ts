@@ -116,7 +116,7 @@ export function registerChatHandlers(): void {
     async (
       _event,
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string; agentId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string | null; agentId?: string }
     ) => {
       userActivation.requireActivated()
       const db = getDb()

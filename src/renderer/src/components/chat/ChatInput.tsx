@@ -235,7 +235,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 {boundAgent.name}
               </span>
             </div>
-          ) : chatId ? (
+          ) : chatId && !leftSlot ? (
             <ChatControls chatId={chatId} inline />
           ) : null}
         </div>

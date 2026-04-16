@@ -6,7 +6,8 @@ import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { SettingsPage } from '../settings/SettingsPage'
 import { ChatConfigMenu } from '../chat/ChatConfigMenu'
 import { AgentSelector } from '../chat/AgentSelector'
-import { useCreateChat, useUpdateChat } from '../../hooks/useChat'
+import { useCreateChat, useUpdateChat, useChatDetail } from '../../hooks/useChat'
+import { useChatModes } from '../../hooks/useChatModes'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
@@ -191,6 +192,56 @@ export function MainArea(): React.JSX.Element {
     [createChat, updateChat, effectiveProviderId, providers, allModels, effectiveMcpIds, activeMode, selectedAgent, queryClient]
   )
 
+  // Active chat: resolve current mode from chatData.modeId
+  const { data: activeChatData } = useChatDetail(activeChatId)
+  const { data: chatModes } = useChatModes()
+
+  const activeChatMode = activeChatData?.modeId
+    ? (chatModes ?? []).find((m) => m.id === activeChatData.modeId) ?? null
+    : null
+
+  const handleActiveChatModeChange = useCallback(
+    async (mode: ChatModeData | null) => {
+      if (!activeChatId) return
+
+      if (!mode) {
+        // Deselect mode — clear modeId, keep current provider/model/MCP
+        await updateChat.mutateAsync({ chatId: activeChatId, updates: { modeId: null } })
+        queryClient.invalidateQueries({ queryKey: ['chat', activeChatId] })
+        return
+      }
+
+      // Resolve provider and model from the selected mode
+      const resolvedProviderId = mode.providerId ?? defaultProviderId
+      const providerData = (providers ?? []).find((p) => p.id === resolvedProviderId)
+      const providerModels = (allModels ?? []).filter((m) => m.providerId === resolvedProviderId)
+
+      let resolvedModelId = mode.modelId ?? null
+      if (!resolvedModelId || !providerModels.some((m) => m.id === resolvedModelId)) {
+        resolvedModelId =
+          (providerData?.defaultModelId && providerModels.some((m) => m.id === providerData.defaultModelId)
+            ? providerData.defaultModelId
+            : null) ?? providerModels[0]?.id ?? null
+      }
+
+      const updates: { modeId: string; providerId?: string; modelId?: string } = { modeId: mode.id }
+      if (resolvedProviderId && resolvedModelId) {
+        updates.providerId = resolvedProviderId
+        updates.modelId = resolvedModelId
+      }
+      await updateChat.mutateAsync({ chatId: activeChatId, updates })
+
+      // Update MCP providers
+      const mcpIds = mode.mcpProviderIds?.length
+        ? mode.mcpProviderIds
+        : Array.from(defaultMcpIds)
+      await window.api.chat.setMcpProviders(activeChatId, mcpIds)
+
+      queryClient.invalidateQueries({ queryKey: ['chat', activeChatId] })
+    },
+    [activeChatId, updateChat, defaultProviderId, providers, allModels, defaultMcpIds, queryClient]
+  )
+
   if (activeView === 'settings') {
     return <SettingsPage />
   }
@@ -230,11 +281,24 @@ export function MainArea(): React.JSX.Element {
   }
 
   // Active chat
+  const activeChatModeColor = activeChatMode ? getPreset(activeChatMode.colorPreset) : null
+
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <MessageStream chatId={activeChatId} />
       <div className="py-3 bg-[var(--color-bg)]">
-        <ChatInput chatId={activeChatId} />
+        <ChatInput
+          chatId={activeChatId}
+          modeColor={activeChatModeColor}
+          leftSlot={
+            activeChatMode ? (
+              <ChatConfigMenu
+                activeMode={activeChatMode}
+                onSelectMode={handleActiveChatModeChange}
+              />
+            ) : undefined
+          }
+        />
       </div>
     </div>
   )

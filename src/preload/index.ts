@@ -5,6 +5,7 @@ export interface ChatData {
   title: string
   modelId: string | null
   providerId: string | null
+  modeId: string | null
   agentId: string | null
   deletedAt: Date | null
   createdAt: Date
@@ -136,7 +137,7 @@ const api = {
     emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
     update: (
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string; agentId?: string }
+      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string | null; agentId?: string }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
       chatId: string,

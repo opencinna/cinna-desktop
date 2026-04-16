@@ -8,7 +8,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 - **Chat Mode** — A saved configuration preset with a name, optional LLM provider/model, a set of MCP providers, and a color from 10 presets
 - **Color Preset** — One of 10 named color themes (slate, indigo, violet, rose, amber, emerald, cyan, sky, orange, fuchsia) that visually distinguish modes in the UI
-- **Mode Selection** — Choosing a mode from the `+` popup below the chat input on the new-chat screen; this pre-configures the chat's provider, model, and MCP servers
+- **Mode Selection** — Choosing a mode from the `+` popup below the chat input; available on both the new-chat screen and active chats that were created with a mode
 
 ## User Stories / Flows
 
@@ -33,15 +33,30 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 6. User types a message and sends — chat is created with the mode's provider, model, and MCP configuration
 7. Mode resets after the chat is created
 
-### Deselecting a mode
+### Deselecting a mode (new-chat screen)
 1. User clicks the `+` button again and clicks the already-selected mode
 2. Mode deselects — input returns to default styling, chat will use the default provider and all enabled MCPs
+
+### Switching mode on an active chat
+1. User is in a chat that was created with a mode — the input border/background shows the mode's color, and the `+` button appears below the input
+2. User clicks the `+` button and selects a different mode
+3. The chat's provider, model, and MCP configuration update to match the new mode
+4. Input styling changes to the new mode's color
+5. Subsequent messages use the new mode's configuration
+
+### Deselecting a mode on an active chat
+1. User clicks the `+` button and clicks the currently active mode
+2. Mode clears — `modeId` is removed from the chat, input returns to default styling
+3. The chat falls back to standard ChatControls (model picker + MCP toggles) for manual configuration
 
 ## Business Rules
 
 - A chat mode's provider and model are optional — if not set, the default provider and its default model are used
 - A chat mode's MCP list can be empty — if so, the app falls back to all enabled MCP providers
-- Mode selection only applies to new chats (the new-chat screen); active chats keep their original configuration
+- Mode selection is available on the new-chat screen and on active chats that were created with a mode
+- Active chats with a `mode_id` show the mode selector instead of separate model/MCP controls
+- Switching modes on an active chat updates its provider, model, and MCP configuration immediately
+- Deselecting a mode on an active chat clears `modeId` and reverts to manual model/MCP controls
 - The `mode_id` is persisted on the chat record so the app knows which mode was used to create it
 - Color presets are fixed (10 options) — they are not user-definable
 - Mode name must be non-empty
@@ -60,6 +75,12 @@ New Chat Screen (MainArea + ChatConfigMenu popup)
   -> Mode's provider/model/MCPs are applied to the new chat
   -> Chat input border/bg tint to mode color
   -> On send: chat created with mode_id, provider, model, MCPs
+
+Active Chat (MainArea + ChatConfigMenu popup)
+  -> Chat has mode_id -> ChatConfigMenu shown instead of ChatControls
+  -> User switches mode -> chat's provider/model/MCPs updated
+  -> Chat input border/bg tint to active mode color
+  -> Deselecting mode -> modeId cleared, falls back to ChatControls
 ```
 
 ## Integration Points
