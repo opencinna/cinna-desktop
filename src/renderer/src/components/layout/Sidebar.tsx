@@ -6,8 +6,7 @@ import { ChatList } from '../chat/ChatList'
 
 const settingsMenuItems: { id: SettingsTab; label: string; icon: typeof Brain }[] = [
   { id: 'llm', label: 'LLM Providers', icon: Brain },
-  { id: 'mcp', label: 'MCP Providers', icon: Plug },
-  { id: 'trash', label: 'Trash', icon: Trash2 }
+  { id: 'mcp', label: 'MCP Providers', icon: Plug }
 ]
 
 export function Sidebar(): React.JSX.Element {
@@ -64,17 +63,30 @@ export function Sidebar(): React.JSX.Element {
                   </button>
                 )
               })}
+
+              {/* Trash with delimiter */}
+              <div className="mx-2.5 border-t border-[var(--color-border)]" />
+              <button
+                onClick={() => setSettingsTab('trash')}
+                className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-colors ${
+                  settingsTab === 'trash'
+                    ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                <Trash2 size={14} />
+                Trash
+              </button>
             </div>
           </>
         ) : (
           <>
             {/* New Chat button */}
-            <div className="px-2 pt-2 pb-1">
+            <div className="px-2 pt-2 pb-1 mx-4 border-b border-[var(--color-border)]">
               <button
                 onClick={handleNewChat}
                 className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium
-                  text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors
-                  border border-[var(--color-border)]"
+                  text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors"
               >
                 <Plus size={14} />
                 New Chat
@@ -89,16 +101,17 @@ export function Sidebar(): React.JSX.Element {
 
         {/* Bottom bar: settings + theme */}
         <div className="border-t border-[var(--color-border)] px-2 py-2 flex items-center gap-1">
-          {!isSettings && (
-            <button
-              onClick={() => setActiveView('settings')}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-colors
-                text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]"
-            >
-              <Settings size={14} />
-              Settings
-            </button>
-          )}
+          <button
+            onClick={() => setActiveView(isSettings ? 'chat' : 'settings')}
+            className={`p-1.5 rounded-md transition-colors ${
+              isSettings
+                ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
+            }`}
+            title="Settings"
+          >
+            <Settings size={14} />
+          </button>
           <div className="flex-1" />
           <button
             onClick={toggleTheme}
