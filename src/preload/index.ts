@@ -77,6 +77,9 @@ export interface UserData {
   displayName: string
   hasPassword: boolean
   createdAt: Date
+  cinnaHostingType?: 'cloud' | 'self_hosted'
+  cinnaServerUrl?: string
+  hasCinnaTokens?: boolean
 }
 
 export interface McpProviderData {
@@ -104,9 +107,12 @@ const api = {
       pendingUser?: UserData
     }> => ipcRenderer.invoke('auth:get-startup'),
     register: (data: {
-      username: string
-      displayName: string
-      password: string
+      username?: string
+      displayName?: string
+      password?: string
+      accountType: 'local' | 'cinna'
+      cinnaHostingType?: 'cloud' | 'self_hosted'
+      cinnaServerUrl?: string
     }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
       ipcRenderer.invoke('auth:register', data),
     login: (data: {
@@ -116,10 +122,20 @@ const api = {
     }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
       ipcRenderer.invoke('auth:login', data),
     logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('auth:logout'),
-    deleteUser: (
+    cinnaOAuthAbort: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('auth:cinna-oauth-abort'),
+    updateUser: (data: {
       userId: string
-    ): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke('auth:delete-user', userId)
+      displayName?: string
+      password?: string
+      removePassword?: boolean
+    }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
+      ipcRenderer.invoke('auth:update-user', data),
+    deleteUser: (data: {
+      userId: string
+      password?: string
+    }): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('auth:delete-user', data)
   },
 
   chat: {

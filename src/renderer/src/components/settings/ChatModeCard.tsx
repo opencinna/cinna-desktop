@@ -1,12 +1,13 @@
 import { useCallback } from 'react'
 import { useState } from 'react'
-import { Trash2, ChevronDown, ChevronUp, Check } from 'lucide-react'
+import { Trash2, ChevronDown, Check } from 'lucide-react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpsertChatMode, useDeleteChatMode } from '../../hooks/useChatModes'
 import { COLOR_PRESETS, getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
+import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 interface ChatModeCardProps {
   mode: ChatModeData
@@ -53,7 +54,10 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
         <div
           className="w-3 h-3 rounded-full shrink-0"
           style={{ backgroundColor: preset.border }}
@@ -64,21 +68,18 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
         <button
           type="button"
-          onClick={() => deleteMutation.mutate(mode.id)}
+          onClick={(e) => { e.stopPropagation(); deleteMutation.mutate(mode.id) }}
           className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
         >
           <Trash2 size={12} />
         </button>
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+
+        <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <ChevronDown size={12} />
+        </div>
       </div>
 
-      {expanded && (
+      <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-3">
           {/* Name */}
           <div>
@@ -183,7 +184,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
             </div>
           )}
         </div>
-      )}
+      </AnimatedCollapse>
     </div>
   )
 }

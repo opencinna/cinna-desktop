@@ -17,7 +17,7 @@ export function TitleBar(): React.JSX.Element {
         </button>
       </div>
 
-      <span className="text-xs font-medium text-[var(--color-text-muted)]">Cinna</span>
+      <span className="text-xs font-medium text-[var(--color-text-muted)]">Cinna Desktop</span>
 
       <div className="flex items-center justify-end w-[100px]">
         <UserMenu />

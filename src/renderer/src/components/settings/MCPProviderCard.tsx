@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Trash2, ChevronDown, ChevronUp, Wrench, Circle, Shield } from 'lucide-react'
+import { Trash2, ChevronDown, Wrench, Circle, Shield } from 'lucide-react'
 import { useUpsertMcpProvider, useDeleteMcpProvider, useConnectMcp, useDisconnectMcp } from '../../hooks/useMcp'
+import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 interface MCPProviderCardProps {
   provider: {
@@ -100,7 +101,10 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
         <Circle size={6} className={`fill-current ${statusColor}`} />
         <span className="flex-1 font-medium text-xs">{provider.name}</span>
 
@@ -109,7 +113,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         )}
 
         <button
-          onClick={handleToggle}
+          onClick={(e) => { e.stopPropagation(); handleToggle() }}
           className={`relative w-9 h-5 rounded-full transition-colors ${
             provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
           }`}
@@ -122,21 +126,18 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         </button>
 
         <button
-          onClick={() => deleteMcp.mutate(provider.id)}
+          onClick={(e) => { e.stopPropagation(); deleteMcp.mutate(provider.id) }}
           className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
         >
           <Trash2 size={12} />
         </button>
 
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+        <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <ChevronDown size={12} />
+        </div>
       </div>
 
-      {expanded && (
+      <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           <div>
             <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Name</label>
@@ -181,14 +182,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             />
           </div>
 
-          <div className="flex gap-2">
-            <button
-              onClick={handleSave}
-              className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
-            >
-              Save
-            </button>
-
+          <div className="flex justify-end gap-2">
             {provider.status === 'connected' ? (
               <button
                 onClick={handleDisconnect}
@@ -205,6 +199,13 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
                 {connectMcp.isPending ? 'Connecting...' : 'Reconnect'}
               </button>
             ) : null}
+
+            <button
+              onClick={handleSave}
+              className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
+            >
+              Save
+            </button>
           </div>
 
           {statusLabel && (
@@ -231,7 +232,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             </div>
           )}
         </div>
-      )}
+      </AnimatedCollapse>
     </div>
   )
 }

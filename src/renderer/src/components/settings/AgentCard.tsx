@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   Trash2,
   ChevronDown,
-  ChevronUp,
   Circle,
   CheckCircle,
   XCircle,
@@ -11,6 +10,7 @@ import {
   EyeOff
 } from 'lucide-react'
 import { useUpsertAgent, useDeleteAgent, useTestAgent } from '../../hooks/useAgents'
+import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -86,7 +86,10 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
         <Circle size={6} className={`fill-current ${statusColor}`} />
         <div className="flex-1 min-w-0">
           <span className="font-medium text-xs">{agent.name}</span>
@@ -98,7 +101,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
 
         <button
           type="button"
-          onClick={handleToggle}
+          onClick={(e) => { e.stopPropagation(); handleToggle() }}
           className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
             agent.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
           }`}
@@ -112,22 +115,18 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
 
         <button
           type="button"
-          onClick={() => deleteAgent.mutate(agent.id)}
+          onClick={(e) => { e.stopPropagation(); deleteAgent.mutate(agent.id) }}
           className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
         >
           <Trash2 size={12} />
         </button>
 
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+        <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <ChevronDown size={12} />
+        </div>
       </div>
 
-      {expanded && (
+      <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           {/* Agent details */}
           {agent.description && (
@@ -285,7 +284,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
             )}
           </div>
         </div>
-      )}
+      </AnimatedCollapse>
     </div>
   )
 }

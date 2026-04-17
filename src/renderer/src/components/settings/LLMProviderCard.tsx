@@ -2,7 +2,6 @@ import { useState } from 'react'
 import {
   Trash2,
   ChevronDown,
-  ChevronUp,
   Eye,
   EyeOff,
   CheckCircle,
@@ -17,6 +16,7 @@ import {
   useTestProvider,
   useTestProviderKey
 } from '../../hooks/useProviders'
+import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
@@ -129,7 +129,10 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
-      <div className="flex items-center gap-2 px-4 py-2.5">
+      <div
+        className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
+        onClick={() => setExpanded(!expanded)}
+      >
         <Circle size={6} className={`fill-current ${statusColor}`} />
         <div className="flex-1 min-w-0">
           <span className="font-medium text-xs">{provider.name}</span>
@@ -140,7 +143,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
         <button
           type="button"
-          onClick={handleToggleDefault}
+          onClick={(e) => { e.stopPropagation(); handleToggleDefault() }}
           disabled={!provider.enabled}
           className={`p-1 rounded transition-colors ${
             provider.isDefault
@@ -154,7 +157,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
         <button
           type="button"
-          onClick={handleToggle}
+          onClick={(e) => { e.stopPropagation(); handleToggle() }}
           className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
             provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
           }`}
@@ -168,22 +171,18 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
         <button
           type="button"
-          onClick={() => deleteProvider.mutate(provider.id)}
+          onClick={(e) => { e.stopPropagation(); deleteProvider.mutate(provider.id) }}
           className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
         >
           <Trash2 size={12} />
         </button>
 
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-        </button>
+        <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
+          <ChevronDown size={12} />
+        </div>
       </div>
 
-      {expanded && (
+      <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           <div>
             <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
@@ -350,7 +349,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
             </div>
           )}
         </div>
-      )}
+      </AnimatedCollapse>
     </div>
   )
 }

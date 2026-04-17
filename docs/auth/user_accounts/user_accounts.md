@@ -2,15 +2,16 @@
 
 ## Purpose
 
-Local user accounts for the desktop app, similar to OS-level login. Users can create password-protected profiles; all data (chats, providers, agents, settings) is scoped to the active user. Switching users changes the entire app context.
+Local user accounts for the desktop app, similar to OS-level login. Users can create password-protected profiles; all data (chats, providers, agents, settings) is scoped to the active user. Switching users changes the entire app context. Accounts can be managed (edited, deleted) from the Settings screen.
 
 ## Core Concepts
 
 | Term | Definition |
 |------|-----------|
-| **Default User** | Built-in guest account (`id: __default__`) with no password — always present, cannot be deleted. Gets a random [cyberpunk alias](guest_aliases.md) on each app restart |
+| **Default User** | Built-in guest account (`id: __default__`) with no password — always present, cannot be deleted or edited. Shown with a "Guest" badge in all UI surfaces |
 | **Local User** | A user-created account with username, display name, and password (`type: local_user`) |
-| **User Type** | Extensible discriminator field (`local_user` now, `cinna_user` planned for future cloud accounts) |
+| **Cinna User** | A user account linked to a remote Cinna server via OAuth (`type: cinna_user`) — see [Cinna Accounts](../cinna_accounts/cinna_accounts.md) |
+| **User Type** | Discriminator field: `local_user` for local accounts, `cinna_user` for Cinna server-linked accounts |
 | **Session** | In-memory record of the active user ID in the main process; persisted to disk as `session.json` |
 | **Unlocked User** | A password-protected user who has authenticated in the current window session — won't be asked for password again until app restart |
 
@@ -23,15 +24,17 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 
 ### Create Account
 1. User clicks the user menu dropdown in the title bar
-2. Clicks "Add Account"
-3. Fills in username, display name (optional), and password
-4. Account is created and app immediately switches to the new user
-5. All data queries refetch — the new user starts with a clean slate
+2. Clicks "Add Account" — centered modal opens (wider layout, `w-96`)
+3. Chooses account type via **horizontal cards**: "Local Account" or "Cinna Account" (see [Cinna Accounts](../cinna_accounts/cinna_accounts.md))
+4. For local: fills in username, display name (optional), and optional password — fields have labels above them
+5. Account is created and app immediately switches to the new user
+6. All data queries refetch — the new user starts with a clean slate
 
 ### Switch User (No Password / Already Unlocked)
 1. User opens the user menu dropdown — all profiles shown in a stable list, active profile highlighted with accent color
-2. Clicks another user's name
-3. App switches immediately — chats, providers, agents all reload for that user; list order stays the same, only the highlight moves
+2. Default user always shows a "Guest" badge next to the name
+3. Clicks another user's name
+4. App switches immediately — chats, providers, agents all reload for that user; list order stays the same, only the highlight moves
 
 ### Switch User (Password Required)
 1. User opens the user menu dropdown — all profiles shown in a stable list, active profile highlighted
@@ -52,19 +55,35 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 3. Session switches to default user
 4. All data refetches for the default user's context
 
-### Delete Account
-1. Account deleted via IPC call
-2. All user's data cascade-deleted (chats, providers, agents, modes)
-3. If deleting the current user, session falls back to default
+### Manage Accounts (Settings)
+1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers)
+2. All accounts listed as expandable cards — default user shows "Guest" badge, not expandable
+3. Click a card to expand and see/edit account details
+
+### Edit Account (Settings)
+1. User expands an account card in Settings → User Accounts
+2. **Local users**: can change display name and set/change/remove password
+3. **Cinna users**: profile fields are read-only (username/email from OAuth), but read-only details are shown — host, hosting type (Cloud/Self-Hosted), connection status. User can set a local password for session lock
+4. Click "Save Changes" to apply
+
+### Delete Account (Settings)
+1. User clicks the trash icon on an expanded account card
+2. Red confirmation panel appears with warning: all user data (chats, providers, agents, settings) will be permanently deleted
+3. If the account has a password set, the user must enter it to confirm deletion
+4. Cinna accounts note: cloud data is not affected, only local data is removed
+5. On deletion: all user-scoped data cascade-deleted, session falls back to default user if deleting the active account
 
 ## Business Rules
 
-- The `__default__` user always exists and cannot be deleted
+- The `__default__` user always exists and cannot be deleted or edited
 - Usernames must be unique (case-sensitive)
-- Passwords are required for local user creation (default user has no password)
+- Passwords are optional for all account types — used only to lock the local session
+- Password is required to delete a password-protected account (security confirmation)
+- Cinna account profile fields (username, display name) come from OAuth and cannot be edited locally — only local password can be set/changed
 - Every data table (chats, providers, agents, modes, MCP) is filtered by `userId` — users cannot see each other's data
 - Messages and chat-MCP links inherit user scope through their chat foreign key
 - On user switch: LLM adapters are cleared and re-initialized, MCP connections are disconnected and reconnected for the new user's providers (see [Resource Activation](../../core/resource_activation/resource_activation.md))
+- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all data tables → delete user row → re-activate as default user
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
 - Per-session unlock tracking resets on app restart or sign-out (password required again)
@@ -87,6 +106,10 @@ User Switch:
                  ←── { success, user }
                      queryClient.resetQueries()
                      All data refetches for new user
+
+Account Management (Settings):
+  UserAccountsSection ──→ auth:update-user ──→ update display name / password
+                      ──→ auth:delete-user ──→ verify password → cascade delete → activate __default__
 ```
 
 ## Integration Points
@@ -94,5 +117,5 @@ User Switch:
 - **All IPC handlers** filter queries by `getCurrentUserId()` — see [Messaging](../../chat/messaging/messaging.md), [Adapters](../../llm/adapters/adapters.md), [Connections](../../mcp/connections/connections.md), [Agents](../../agents/agents/agents.md), [Chat Modes](../../chat/chat_modes/chat_modes.md)
 - **LLM Registry** — `clearAllAdapters()` + re-init on user switch (see [Adapters](../../llm/adapters/adapters.md))
 - **MCP Manager** — `disconnectAll()` + reconnect on user switch (see [Connections](../../mcp/connections/connections.md))
-- **Settings** — providers, modes, MCP servers, agents are all user-scoped via `userId` column
+- **Settings** — providers, modes, MCP servers, agents are all user-scoped via `userId` column; "User Accounts" is a settings section (see [Settings](../../ui/settings/settings.md))
 - **Theme** — stored in `localStorage` (browser-level), not user-scoped (shared across all users on the same machine)

@@ -6,6 +6,9 @@ export interface AuthUser {
   username: string
   displayName: string
   hasPassword: boolean
+  cinnaHostingType?: 'cloud' | 'self_hosted'
+  cinnaServerUrl?: string
+  hasCinnaTokens?: boolean
 }
 
 interface AuthStore {

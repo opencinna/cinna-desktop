@@ -49,19 +49,19 @@ function AddRemoteMcpForm({ onClose }: { onClose: () => void }): React.JSX.Eleme
       <p className="text-[10px] text-[var(--color-text-muted)]">
         If the server requires authentication, you will be redirected to authorize in your browser.
       </p>
-      <div className="flex gap-2">
+      <div className="flex justify-end gap-2">
+        <button
+          onClick={onClose}
+          className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+        >
+          Cancel
+        </button>
         <button
           onClick={handleConnect}
           disabled={!name.trim() || !url.trim() || upsertMcp.isPending}
           className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
         >
           {upsertMcp.isPending ? 'Connecting...' : 'Connect'}
-        </button>
-        <button
-          onClick={onClose}
-          className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-        >
-          Cancel
         </button>
       </div>
     </div>

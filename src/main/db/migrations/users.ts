@@ -43,4 +43,19 @@ export function migrateUsers(sqlite: Database.Database): void {
       )
     }
   }
+
+  // Cinna account columns
+  const cinnaColumns: [string, string][] = [
+    ['cinna_server_url', 'TEXT'],
+    ['cinna_hosting_type', 'TEXT'],
+    ['cinna_client_id', 'TEXT'],
+    ['cinna_access_token_enc', 'BLOB'],
+    ['cinna_refresh_token_enc', 'BLOB'],
+    ['cinna_token_expires_at', 'INTEGER']
+  ]
+  for (const [col, type] of cinnaColumns) {
+    if (!hasColumn(sqlite, 'users', col)) {
+      sqlite.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`)
+    }
+  }
 }

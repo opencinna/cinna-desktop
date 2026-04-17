@@ -19,8 +19,10 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | **A2A** | Agent-to-Agent Protocol v1.0 — open standard for AI agent interoperability (discovery, messaging, streaming) |
 | **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
 | **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
-| **User Account** | A local profile (username + password) that scopes all data — chats, providers, agents, settings |
+| **User Account** | A local profile (username + optional password) that scopes all data — chats, providers, agents, settings |
 | **Default User** | Built-in guest account (`__default__`) with no password, always present |
+| **Cinna Account** | A user account linked to a remote Cinna server (cloud or self-hosted) via OAuth 2.0 + PKCE |
+| **Cinna Server** | Remote service (cloud at `opencinna.io` or self-hosted) providing agent orchestration and future features |
 
 ## Domain Map
 
@@ -41,7 +43,8 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 - [Resource Activation](core/resource_activation/resource_activation.md) — Account-scoped resource lifecycle: services only run after user authentication
 
 ### Auth
-- [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with password auth, user-scoped data isolation, session management
+- [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with optional password auth, user-scoped data isolation, session management
+- [Cinna Accounts](auth/cinna_accounts/cinna_accounts.md) — OAuth 2.0 + PKCE connection to remote Cinna servers (cloud or self-hosted), token rotation
 
 ### Chat
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop
@@ -62,6 +65,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 
 ### Development
 - [Setup](development/setup/setup.md) — Dev commands, tech stack, gotchas, project status
+- [UI Guidelines](development/ui_guidelines/ui_guidelines_llm.md) — Color system, expandable card pattern, button layout rules, form conventions (LLM reference)
 
 ## Architecture
 

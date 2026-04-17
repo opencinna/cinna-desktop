@@ -16,6 +16,8 @@ const ERROR_HTML = (msg: string): string => `<!DOCTYPE html>
 export interface OAuthCallbackResult {
   code: string
   state?: string
+  /** All query parameters from the callback URL (for extracting extra data like client_id) */
+  params: Record<string, string>
 }
 
 /**
@@ -65,10 +67,15 @@ export function waitForOAuthCallback(port: number, timeoutMs = 120_000): {
       return
     }
 
+    const params: Record<string, string> = {}
+    for (const [k, v] of url.searchParams.entries()) {
+      params[k] = v
+    }
+
     res.writeHead(200, { 'Content-Type': 'text/html' })
     res.end(SUCCESS_HTML)
     cleanup()
-    resolve({ code, state })
+    resolve({ code, state, params })
   })
 
   const timeout = setTimeout(() => {

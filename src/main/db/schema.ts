@@ -2,11 +2,17 @@ import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
-  type: text('type').notNull().default('local_user'), // 'local_user' | 'cinna_user' (future)
+  type: text('type').notNull().default('local_user'), // 'local_user' | 'cinna_user'
   username: text('username').notNull().unique(),
   displayName: text('display_name').notNull(),
   passwordHash: text('password_hash'),
   salt: text('salt'),
+  cinnaServerUrl: text('cinna_server_url'),
+  cinnaHostingType: text('cinna_hosting_type'), // 'cloud' | 'self_hosted'
+  cinnaClientId: text('cinna_client_id'),
+  cinnaAccessTokenEnc: blob('cinna_access_token_enc', { mode: 'buffer' }),
+  cinnaRefreshTokenEnc: blob('cinna_refresh_token_enc', { mode: 'buffer' }),
+  cinnaTokenExpiresAt: integer('cinna_token_expires_at'),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

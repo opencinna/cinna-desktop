@@ -170,16 +170,26 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
           </div>
         )}
 
-        {/* Create button */}
-        <button
-          type="button"
-          onClick={handleCreate}
-          disabled={!name.trim() || upsert.isPending}
-          className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
-            text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-        >
-          Create Mode
-        </button>
+        {/* Buttons */}
+        <div className="flex justify-end gap-2 pt-1">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
+              hover:text-[var(--color-text-secondary)] transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={!name.trim() || upsert.isPending}
+            className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+              text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+          >
+            Create Mode
+          </button>
+        </div>
       </div>
     </div>
   )

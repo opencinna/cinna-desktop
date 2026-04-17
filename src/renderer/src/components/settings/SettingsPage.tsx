@@ -4,12 +4,14 @@ import { MCPSettingsSection } from './MCPSettingsSection'
 import { AgentsSettingsSection } from './AgentsSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
+import { UserAccountsSection } from './UserAccountsSection'
 
 const sectionTitles = {
   chats: 'Chat Modes',
   llm: 'LLM Providers',
   agents: 'Agents',
   mcp: 'MCP Providers',
+  accounts: 'User Accounts',
   trash: 'Trash'
 } as const
 
@@ -24,6 +26,7 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
         {settingsTab === 'agents' && <AgentsSettingsSection key="agents" />}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
+        {settingsTab === 'accounts' && <UserAccountsSection key="accounts" />}
         {settingsTab === 'trash' && <TrashSection key="trash" />}
       </div>
     </div>
