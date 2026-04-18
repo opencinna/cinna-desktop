@@ -73,6 +73,45 @@ function buildAuthFetch(accessToken: string): typeof fetch {
 }
 
 /**
+ * Convert a low-level fetch/SDK error into a user-facing message.
+ *
+ * The Node undici client throws `TypeError: terminated` when a keep-alive
+ * socket closes mid-request (remote crash, idle/LB timeout, network drop).
+ * That message tells the user nothing — so we translate the common network
+ * patterns into something actionable and fall back to the raw message.
+ */
+export function humanizeA2AError(err: unknown): string {
+  if (err == null) return 'Unknown error'
+  const message = err instanceof Error ? err.message : String(err)
+  const cause = err instanceof Error && err.cause && typeof err.cause === 'object'
+    ? (err.cause as { code?: string; message?: string })
+    : undefined
+  const code = cause?.code
+  const haystack = `${message} ${cause?.message ?? ''}`.toLowerCase()
+
+  if (haystack.includes('terminated') || haystack.includes('socket hang up')) {
+    return 'Agent connection closed unexpectedly (server disconnected mid-response).'
+  }
+  if (code === 'ECONNREFUSED' || haystack.includes('econnrefused')) {
+    return 'Could not reach agent (connection refused).'
+  }
+  if (code === 'ENOTFOUND' || haystack.includes('enotfound')) {
+    return 'Could not reach agent (host not found).'
+  }
+  if (code === 'ETIMEDOUT' || haystack.includes('etimedout')) {
+    return 'Agent connection timed out.'
+  }
+  if (code === 'ECONNRESET' || haystack.includes('econnreset')) {
+    return 'Agent connection was reset.'
+  }
+  if (code === 'UND_ERR_SOCKET' || haystack.includes('other side closed')) {
+    return 'Agent connection closed by server.'
+  }
+
+  return message
+}
+
+/**
  * Wrap a fetch implementation to log every A2A HTTP request and response
  * at DEBUG level. For SSE responses (content-type: text/event-stream), the
  * body is tee'd so that each chunk is logged as it arrives without
@@ -131,7 +170,10 @@ function buildLoggingFetch(base: typeof fetch): typeof fetch {
             logger.debug(`SSE chunk #${chunkIndex++} | ${url}`, { chunk })
           }
         } catch (err) {
-          logger.warn(`SSE log-stream error | ${url}`, { error: String(err) })
+          logger.warn(`SSE stream ended with error after ${chunkIndex} chunk(s) | ${url}`, {
+            error: String(err),
+            reason: humanizeA2AError(err)
+          })
         }
       })()
       return new Response(forConsumer, {

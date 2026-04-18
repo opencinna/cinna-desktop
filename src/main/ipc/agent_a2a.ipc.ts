@@ -6,6 +6,7 @@ import { a2aSessionRepo, agentRepo } from '../db/agents'
 import {
   createA2AClient,
   buildSendParams,
+  humanizeA2AError,
   type ProtocolResolution,
   type TaskStatusUpdateEvent,
   type TaskArtifactUpdateEvent,
@@ -333,15 +334,17 @@ export function registerA2AHandlers(): void {
       port.postMessage({ type: 'done' })
     } catch (err) {
       if (!abortController.signal.aborted) {
-        const errorStr = String(err)
+        const rawError = String(err)
+        const humanized = humanizeA2AError(err)
         logger.error('send-message failed', {
           agentId,
           chatId,
-          error: errorStr,
+          error: rawError,
+          humanized,
           stack: err instanceof Error ? err.stack : undefined
         })
-        port.postMessage({ type: 'error', error: errorStr })
-        messageRepo.saveError({ chatId, short: errorStr })
+        port.postMessage({ type: 'error', error: humanized })
+        messageRepo.saveError({ chatId, short: humanized, detail: rawError })
       }
     } finally {
       port.close()
