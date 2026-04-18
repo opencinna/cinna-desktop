@@ -14,6 +14,7 @@ interface MessageBubbleProps {
   isStreaming?: boolean
   meta?: MessageMeta
   animate?: boolean
+  animateDelay?: number
 }
 
 function MetaPopup({ meta, onClose }: { meta: MessageMeta; onClose: () => void }): React.JSX.Element {
@@ -47,7 +48,7 @@ function MetaPopup({ meta, onClose }: { meta: MessageMeta; onClose: () => void }
   )
 }
 
-export function MessageBubble({ role, content, isStreaming, meta, animate }: MessageBubbleProps): React.JSX.Element {
+export function MessageBubble({ role, content, isStreaming, meta, animate, animateDelay }: MessageBubbleProps): React.JSX.Element {
   const isUser = role === 'user'
   const [showMeta, setShowMeta] = useState(false)
   const hasMeta = meta && Object.keys(meta).length > 0
@@ -74,6 +75,7 @@ export function MessageBubble({ role, content, isStreaming, meta, animate }: Mes
     <div className="relative group">
       <div
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
+        style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >
         <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
           {content}

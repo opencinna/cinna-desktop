@@ -238,23 +238,24 @@
     animation: user-bubble-content-in 300ms ease-out both;
   }
 
-  /* Newly-rendered assistant block softly fades in as a whole — markdown/HTML
-     stays intact (no per-paragraph splitting). Theme-agnostic: only
-     opacity/blur change, colors come from the inherited text styles. */
-  @keyframes assistant-bubble-in {
-    0% {
-      opacity: 0;
-      filter: blur(4px);
+  /* Newly-rendered assistant block reveals top-to-bottom using a gradient mask.
+     A soft 40px trailing edge gives the impression of content "un-blurring" as
+     a line sweeps downward.  Much cheaper than filter:blur() because the GPU
+     only composites a static gradient — no per-frame rasterisation of the
+     subtree.  Theme-agnostic: colours come from inherited text styles. */
+  @keyframes assistant-reveal {
+    from {
+      mask-size: 100% 0%;
     }
-    100% {
-      opacity: 1;
-      filter: blur(0);
+    to {
+      mask-size: 100% calc(100% + 40px);
     }
   }
 
   .anim-assistant-bubble {
-    animation: assistant-bubble-in 1000ms cubic-bezier(0.2, 0.7, 0.4, 1) both;
-    will-change: opacity, filter;
+    mask-image: linear-gradient(to bottom, black calc(100% - 40px), transparent 100%);
+    mask-repeat: no-repeat;
+    animation: assistant-reveal 700ms cubic-bezier(0.16, 0.7, 0.3, 1) both;
   }
 
   @keyframes expand-in {

@@ -38,7 +38,7 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, stopStreaming } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming } =
     useChatStore()
 
   const handleLlm = useCallback(
@@ -65,9 +65,13 @@ export function useChatStream(): {
           failToolCall(event.id!, event.error!)
           break
         case 'done':
-          stopStreaming()
-          queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-          queryClient.invalidateQueries({ queryKey: ['chats'] })
+          // Keep streaming blocks visible (cursor already hidden via isStreaming=false)
+          // until the DB message is fetched, then remove them — no visual gap.
+          finishStreaming()
+          Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
+            queryClient.invalidateQueries({ queryKey: ['chats'] })
+          ]).then(() => clearStreamingBlocks())
           break
         case 'error':
           console.error('LLM error:', event.error)
@@ -76,7 +80,7 @@ export function useChatStream(): {
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, stopStreaming, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
   )
 
   const handleAgent = useCallback(
@@ -89,9 +93,11 @@ export function useChatStream(): {
           appendDelta(event.text!, event.kind ?? 'text', event.toolName)
           break
         case 'done':
-          stopStreaming()
-          queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-          queryClient.invalidateQueries({ queryKey: ['chats'] })
+          finishStreaming()
+          Promise.all([
+            queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
+            queryClient.invalidateQueries({ queryKey: ['chats'] })
+          ]).then(() => clearStreamingBlocks())
           break
         case 'error':
           console.error('Agent error:', event.error)
@@ -100,7 +106,7 @@ export function useChatStream(): {
           break
       }
     },
-    [startStreaming, appendDelta, stopStreaming, queryClient]
+    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
   )
 
   const startLlm = useCallback(

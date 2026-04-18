@@ -112,20 +112,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           // thinking + text via `cinna.content_kind` metadata) — render each
           // part in order using the appropriate block.
           const parts = msg.parts
+          const shouldAnimate = msg.id === newMessageId
           if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
             return (
               <div key={msg.id} className="space-y-2">
                 {parts.map((p, idx) => {
                   const k = `${msg.id}-${idx}`
                   if (p.kind === 'thinking') {
-                    return <ThinkingBlock key={k} content={p.text} />
+                    return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                   }
                   if (p.kind === 'tool') {
                     return (
-                      <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} />
+                      <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} animate={shouldAnimate} animateDelay={idx * 80} />
                     )
                   }
-                  return <MessageBubble key={k} role="assistant" content={p.text} />
+                  return <MessageBubble key={k} role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                 })}
               </div>
             )
@@ -135,7 +136,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               key={msg.id}
               role={msg.role as 'user' | 'assistant'}
               content={msg.content}
-              animate={msg.role === 'user' && msg.id === newMessageId}
+              animate={shouldAnimate}
             />
           )
         })}

@@ -7,12 +7,16 @@ interface ThinkingBlockProps {
   content: string
   isStreaming?: boolean
   defaultExpanded?: boolean
+  animate?: boolean
+  animateDelay?: number
 }
 
 export function ThinkingBlock({
   content,
   isStreaming,
-  defaultExpanded
+  defaultExpanded,
+  animate,
+  animateDelay
 }: ThinkingBlockProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded ?? !!isStreaming)
 
@@ -22,7 +26,8 @@ export function ThinkingBlock({
         expanded
           ? 'border-[var(--color-border)]/60 bg-[var(--color-bg-secondary)]/40'
           : 'border-transparent bg-transparent'
-      }`}
+      } ${animate ? 'anim-assistant-bubble' : ''}`}
+      style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
     >
       <button
         onClick={() => setExpanded(!expanded)}

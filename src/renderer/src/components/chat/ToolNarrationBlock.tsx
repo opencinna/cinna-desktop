@@ -8,13 +8,17 @@ interface ToolNarrationBlockProps {
   toolName?: string
   isStreaming?: boolean
   defaultExpanded?: boolean
+  animate?: boolean
+  animateDelay?: number
 }
 
 export function ToolNarrationBlock({
   content,
   toolName,
   isStreaming,
-  defaultExpanded
+  defaultExpanded,
+  animate,
+  animateDelay
 }: ToolNarrationBlockProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(defaultExpanded ?? !!isStreaming)
 
@@ -24,7 +28,8 @@ export function ToolNarrationBlock({
         expanded
           ? 'border-[var(--color-border)]/60 bg-[var(--color-bg-secondary)]/40'
           : 'border-transparent bg-transparent'
-      }`}
+      } ${animate ? 'anim-assistant-bubble' : ''}`}
+      style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
     >
       <button
         onClick={() => setExpanded(!expanded)}

@@ -35,6 +35,8 @@ interface ChatStore {
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
+  finishStreaming: () => void
+  clearStreamingBlocks: () => void
   stopStreaming: () => void
   reset: () => void
 }
@@ -89,6 +91,12 @@ export const useChatStore = create<ChatStore>((set) => ({
         b.type === 'tool_call' && b.id === id ? { ...b, error, status: 'error' as const } : b
       )
     })),
+
+  finishStreaming: () =>
+    set({ isStreaming: false }),
+
+  clearStreamingBlocks: () =>
+    set({ streamingBlocks: [], activeRequestId: null }),
 
   stopStreaming: () =>
     set({ isStreaming: false, streamingBlocks: [], activeRequestId: null }),
