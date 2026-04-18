@@ -1,27 +1,26 @@
 import { useEffect, useRef, type RefObject } from 'react'
-import { Bot } from 'lucide-react'
+import { Hash } from 'lucide-react'
+import type { ExamplePrompt } from '../../utils/examplePrompts'
 
-type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
-
-interface AgentMentionPopupProps {
+interface ExamplePromptPopupProps {
   /** Already-filtered list — ChatInput owns the filter predicate. */
-  items: AgentData[]
+  items: ExamplePrompt[]
   selectedIndex: number
-  onSelect: (agent: AgentData) => void
+  onSelect: (prompt: ExamplePrompt) => void
   onClose: () => void
   listboxId: string
   /** Input that owns the popup — clicks inside it are treated as "inside". */
   anchorRef?: RefObject<HTMLElement | null>
 }
 
-export function AgentMentionPopup({
+export function ExamplePromptPopup({
   items,
   selectedIndex,
   onSelect,
   onClose,
   listboxId,
   anchorRef
-}: AgentMentionPopupProps): React.JSX.Element | null {
+}: ExamplePromptPopupProps): React.JSX.Element | null {
   const ref = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
 
@@ -45,27 +44,26 @@ export function AgentMentionPopup({
   return (
     <div
       ref={ref}
-      className="absolute bottom-full mb-1 left-0 w-72 bg-[var(--color-bg-secondary)]
+      className="absolute bottom-full mb-1 left-0 w-80 bg-[var(--color-bg-secondary)]
         border border-[var(--color-border)] rounded-lg shadow-xl z-50 overflow-hidden"
     >
       <div className="px-2.5 pt-2 pb-1">
         <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">
-          Agents
+          Example Prompts
         </div>
       </div>
 
       <ul
         id={listboxId}
         role="listbox"
-        aria-label="Agents"
+        aria-label="Example prompts"
         className="px-1.5 pb-1.5 space-y-0.5 max-h-72 overflow-y-auto list-none m-0"
       >
-        {items.map((agent, i) => {
+        {items.map((prompt, i) => {
           const isActive = i === selectedIndex
           const optionId = `${listboxId}-opt-${i}`
-
           return (
-            <li key={agent.id} role="presentation">
+            <li key={`${prompt.label}-${i}`} role="presentation">
               <button
                 id={optionId}
                 role="option"
@@ -74,7 +72,7 @@ export function AgentMentionPopup({
                 ref={(el) => {
                   itemRefs.current[i] = el
                 }}
-                onClick={() => onSelect(agent)}
+                onClick={() => onSelect(prompt)}
                 className={`w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer ${
                   isActive
                     ? 'bg-[var(--color-accent)]/10 border-l-2 border-[var(--color-accent)]'
@@ -82,7 +80,7 @@ export function AgentMentionPopup({
                 }`}
               >
                 <div className="flex items-center gap-1.5">
-                  <Bot
+                  <Hash
                     size={12}
                     className={
                       isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
@@ -91,17 +89,12 @@ export function AgentMentionPopup({
                   <span
                     className={`text-xs font-medium ${isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}
                   >
-                    {agent.name}
-                  </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
-                    {agent.protocol.toUpperCase()}
+                    {prompt.label}
                   </span>
                 </div>
-                {agent.description && (
-                  <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] truncate">
-                    {agent.description}
-                  </div>
-                )}
+                <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] line-clamp-2">
+                  {prompt.full}
+                </div>
               </button>
             </li>
           )

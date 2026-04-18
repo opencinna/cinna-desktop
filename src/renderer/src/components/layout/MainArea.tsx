@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { MessageStream } from '../chat/MessageStream'
@@ -6,6 +6,8 @@ import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { SettingsPage } from '../settings/SettingsPage'
 import { ChatConfigMenu } from '../chat/ChatConfigMenu'
 import { AgentSelector } from '../chat/AgentSelector'
+import { ExamplePromptTags } from '../chat/ExamplePromptTags'
+import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { useUpdateChat, useChatDetail } from '../../hooks/useChat'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useProviders } from '../../hooks/useProviders'
@@ -31,6 +33,7 @@ export function MainArea(): React.JSX.Element {
   const { startNewChat } = useNewChatFlow()
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
   const [selectedAgent, setSelectedAgent] = useState<AgentData | null>(null)
+  const examplePrompts = useMemo(() => extractExamplePrompts(selectedAgent), [selectedAgent])
   const chatInputRef = useRef<ChatInputHandle>(null)
   const inputWrapperRef = useRef<HTMLDivElement>(null)
   const [inputHeight, setInputHeight] = useState(0)
@@ -138,12 +141,18 @@ export function MainArea(): React.JSX.Element {
           <Sparkles size={32} className="mx-auto mb-3 text-[var(--color-accent)] opacity-60" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
         </div>
+        <ExamplePromptTags
+          prompts={examplePrompts}
+          animationKey={selectedAgent?.id ?? 'none'}
+          onSelect={(p) => handleNewChat(p.full)}
+        />
         <ChatInput
           ref={chatInputRef}
           chatId={null}
           onNewChat={handleNewChat}
           modeColor={modeColorPreset}
           onSelectAgent={setSelectedAgent}
+          selectedAgent={selectedAgent}
           leftSlot={
             <>
               <ChatConfigMenu

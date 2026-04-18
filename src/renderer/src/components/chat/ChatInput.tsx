@@ -1,14 +1,17 @@
-import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, forwardRef, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type ReactNode } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useSendMessage, useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
+import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { useAgents } from '../../hooks/useAgents'
+import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset } from '../../constants/chatModeColors'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
+type TriggerChar = '@' | '#'
 
 interface ChatInputProps {
   chatId: string | null
@@ -16,25 +19,24 @@ interface ChatInputProps {
   leftSlot?: ReactNode
   modeColor?: ColorPreset | null
   onSelectAgent?: (agent: AgentData | null) => void
+  /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
+  selectedAgent?: AgentData | null
 }
 
-/** Find the @mention token at the cursor position. Returns { start, filter } or null. */
-function findMentionToken(
+/** Find a trigger token (@ or #) at the cursor position. */
+function findTriggerToken(
   value: string,
   cursorPos: number
-): { start: number; filter: string } | null {
-  // Walk backwards from cursor to find '@'
+): { char: TriggerChar; start: number; filter: string } | null {
   let i = cursorPos - 1
   while (i >= 0) {
     const ch = value[i]
-    if (ch === '@') {
-      // '@' must be at start of input or preceded by whitespace
+    if (ch === '@' || ch === '#') {
       if (i === 0 || /\s/.test(value[i - 1])) {
-        return { start: i, filter: value.slice(i + 1, cursorPos) }
+        return { char: ch, start: i, filter: value.slice(i + 1, cursorPos) }
       }
       return null
     }
-    // Stop at whitespace — no multi-word @mention
     if (/\s/.test(ch)) return null
     i--
   }
@@ -46,20 +48,18 @@ export interface ChatInputHandle {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { chatId, onNewChat, leftSlot, modeColor, onSelectAgent },
+  { chatId, onNewChat, leftSlot, modeColor, onSelectAgent, selectedAgent },
   ref
 ) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const { data: chatData } = useChatDetail(chatId)
+  const listboxId = useId()
 
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus()
   }))
 
-  // Auto-focus on mount and when the bound chat changes — so opening a chat
-  // (e.g. after sending the first message from the default screen) lands the
-  // caret in the input without an extra click.
   useEffect(() => {
     textareaRef.current?.focus()
   }, [chatId])
@@ -67,11 +67,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming, activeRequestId } = useChatStore()
 
-  // @-mention state
-  const [mentionOpen, setMentionOpen] = useState(false)
-  const [mentionFilter, setMentionFilter] = useState('')
-  const [mentionStart, setMentionStart] = useState(0)
-  const [mentionIndex, setMentionIndex] = useState(0)
+  // Trigger popup state — shared between @ (agents) and # (example prompts)
+  const [triggerChar, setTriggerChar] = useState<TriggerChar | null>(null)
+  const [triggerFilter, setTriggerFilter] = useState('')
+  const [triggerStart, setTriggerStart] = useState(0)
+  const [triggerIndex, setTriggerIndex] = useState(0)
 
   const { data: agents } = useAgents()
   const enabledAgents = useMemo(
@@ -79,42 +79,75 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [agents]
   )
 
-  // Resolve the bound agent for active A2A sessions
   const boundAgent = useMemo(
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
     [chatData?.agentId, agents]
   )
 
-  // Filtered agents for the popup (used for keyboard nav bounds)
+  /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
+  const promptSourceAgent = boundAgent ?? selectedAgent ?? null
+  const examplePrompts = useMemo(
+    () => extractExamplePrompts(promptSourceAgent),
+    [promptSourceAgent]
+  )
+
   const filteredAgents = useMemo(
     () =>
       enabledAgents.filter(
         (a) =>
-          a.name.toLowerCase().includes(mentionFilter.toLowerCase()) ||
-          a.protocol.toLowerCase().includes(mentionFilter.toLowerCase())
+          a.name.toLowerCase().includes(triggerFilter.toLowerCase()) ||
+          a.protocol.toLowerCase().includes(triggerFilter.toLowerCase())
       ),
-    [enabledAgents, mentionFilter]
+    [enabledAgents, triggerFilter]
   )
 
-  const closeMention = useCallback(() => {
-    setMentionOpen(false)
-    setMentionFilter('')
-    setMentionIndex(0)
+  const filteredPrompts = useMemo(() => {
+    const q = triggerFilter.toLowerCase()
+    return examplePrompts.filter(
+      (p) => p.label.toLowerCase().includes(q) || p.full.toLowerCase().includes(q)
+    )
+  }, [examplePrompts, triggerFilter])
+
+  const agentPopupOpen = triggerChar === '@' && !chatId && !!onSelectAgent
+  const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
+
+  const closeTrigger = useCallback(() => {
+    setTriggerChar(null)
+    setTriggerFilter('')
+    setTriggerIndex(0)
   }, [])
+
+  const replaceTriggerToken = useCallback(
+    (replacement: string): void => {
+      const before = input.slice(0, triggerStart)
+      const afterCursor = input.slice(triggerStart + 1 + triggerFilter.length)
+      setInput(before + replacement + afterCursor)
+      closeTrigger()
+      setTimeout(() => {
+        const el = textareaRef.current
+        if (!el) return
+        el.focus()
+        el.style.height = 'auto'
+        el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+      }, 0)
+    },
+    [input, triggerStart, triggerFilter, closeTrigger]
+  )
 
   const selectAgent = useCallback(
     (agent: AgentData) => {
-      // Remove the @... token from input
-      const before = input.slice(0, mentionStart)
-      const afterCursor = input.slice(mentionStart + 1 + mentionFilter.length)
-      setInput(before + afterCursor)
-      closeMention()
+      // Drop the @token entirely; agent binding happens via callback.
+      replaceTriggerToken('')
       onSelectAgent?.(agent)
-
-      // Re-focus textarea
-      setTimeout(() => textareaRef.current?.focus(), 0)
     },
-    [input, mentionStart, mentionFilter, closeMention, onSelectAgent]
+    [replaceTriggerToken, onSelectAgent]
+  )
+
+  const selectPrompt = useCallback(
+    (prompt: ExamplePrompt) => {
+      replaceTriggerToken(prompt.full)
+    },
+    [replaceTriggerToken]
   )
 
   const handleSend = useCallback(() => {
@@ -138,27 +171,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (activeRequestId) cancelStream(activeRequestId)
   }, [activeRequestId, cancelStream])
 
+  const activeListLength = agentPopupOpen
+    ? filteredAgents.length
+    : promptPopupOpen
+      ? filteredPrompts.length
+      : 0
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
-    // When mention popup is open, intercept navigation keys
-    if (mentionOpen && filteredAgents.length > 0) {
+    if (triggerChar && activeListLength > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
-        setMentionIndex((prev) => (prev + 1) % filteredAgents.length)
+        setTriggerIndex((prev) => (prev + 1) % activeListLength)
         return
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
-        setMentionIndex((prev) => (prev - 1 + filteredAgents.length) % filteredAgents.length)
+        setTriggerIndex((prev) => (prev - 1 + activeListLength) % activeListLength)
         return
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
-        selectAgent(filteredAgents[mentionIndex])
+        if (agentPopupOpen) selectAgent(filteredAgents[triggerIndex])
+        else if (promptPopupOpen) selectPrompt(filteredPrompts[triggerIndex])
         return
       }
       if (e.key === 'Escape') {
         e.preventDefault()
-        closeMention()
+        closeTrigger()
         return
       }
     }
@@ -177,37 +216,52 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
 
-    // Check for @-mention trigger (only on new-chat screen with agents available)
-    if (!chatId && onSelectAgent && enabledAgents.length > 0) {
-      const cursorPos = el.selectionStart
-      const token = findMentionToken(value, cursorPos)
+    const cursorPos = el.selectionStart
+    const token = findTriggerToken(value, cursorPos)
 
-      if (token) {
-        setMentionOpen(true)
-        setMentionFilter(token.filter)
-        setMentionStart(token.start)
-        // Reset index when filter changes
-        setMentionIndex(0)
-      } else {
-        if (mentionOpen) closeMention()
-      }
+    if (!token) {
+      if (triggerChar) closeTrigger()
+      return
     }
+
+    // Gate each trigger by context.
+    const agentGate = token.char === '@' && !chatId && onSelectAgent && enabledAgents.length > 0
+    const promptGate = token.char === '#' && examplePrompts.length > 0
+    if (!agentGate && !promptGate) {
+      if (triggerChar) closeTrigger()
+      return
+    }
+
+    setTriggerChar(token.char)
+    setTriggerFilter(token.filter)
+    setTriggerStart(token.start)
+    setTriggerIndex(0)
   }
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
-      {/* @-mention popup — positioned above the input box */}
-      {mentionOpen && !chatId && (
+      {agentPopupOpen && (
         <AgentMentionPopup
-          agents={enabledAgents}
-          filter={mentionFilter}
-          selectedIndex={mentionIndex}
+          items={filteredAgents}
+          selectedIndex={triggerIndex}
           onSelect={selectAgent}
-          onClose={closeMention}
+          onClose={closeTrigger}
+          listboxId={listboxId}
+          anchorRef={textareaRef}
         />
       )}
 
-      {/* Message box — textarea only */}
+      {promptPopupOpen && (
+        <ExamplePromptPopup
+          items={filteredPrompts}
+          selectedIndex={triggerIndex}
+          onSelect={selectPrompt}
+          onClose={closeTrigger}
+          listboxId={listboxId}
+          anchorRef={textareaRef}
+        />
+      )}
+
       <div
         className="rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         style={{
@@ -222,12 +276,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           onKeyDown={handleKeyDown}
           placeholder="Type a message..."
           rows={1}
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={agentPopupOpen || promptPopupOpen}
+          aria-controls={agentPopupOpen || promptPopupOpen ? listboxId : undefined}
+          aria-activedescendant={
+            (agentPopupOpen && filteredAgents.length > 0) ||
+            (promptPopupOpen && filteredPrompts.length > 0)
+              ? `${listboxId}-opt-${triggerIndex}`
+              : undefined
+          }
           className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
       </div>
 
-      {/* Controls row — below the message box */}
       <div className="flex items-center justify-between px-1 pt-2">
         <div className="flex items-center gap-1.5">
           {leftSlot}

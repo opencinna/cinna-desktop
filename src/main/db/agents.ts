@@ -2,6 +2,7 @@ import { and, eq } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { agents, a2aSessions } from './schema'
+import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 export type AgentRow = typeof agents.$inferSelect
 export type A2ASessionRow = typeof a2aSessions.$inferSelect
@@ -42,7 +43,7 @@ export interface RemoteTarget {
   description: string | null
   cardUrl: string
   skills: Array<{ id: string; name: string; description?: string }> | null
-  metadata: Record<string, unknown>
+  metadata: RemoteAgentMetadata
 }
 
 export interface SyncRemoteResult {

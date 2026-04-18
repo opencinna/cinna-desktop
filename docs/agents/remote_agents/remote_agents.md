@@ -112,6 +112,7 @@ Agent Selector (categorized):
 ## Integration Points
 
 - **[Agents](../agents/agents.md)** — Remote agents are stored in the same `agents` table and reuse the same A2A client, IPC handlers, session management, and UI components as local agents
+- **[Example Prompts](../../chat/example_prompts/example_prompts.md)** — Consumes `remoteMetadata.example_prompts` to drive the new-chat tag cloud and the `#` picker in the chat input
 - **[Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)** — JWT obtained via `getCinnaAccessToken()` which handles token refresh and rotation. Sync triggers on Cinna user activation
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — Remote sync starts on `activate()` and stops on `deactivate()`, following the same resource lifecycle gate as LLM/MCP providers
 - **External Agent Access API** — Backend surface at `/api/v1/external/` providing agent discovery (`GET /agents`) and per-target A2A endpoints (`/a2a/{target_type}/{target_id}/`)

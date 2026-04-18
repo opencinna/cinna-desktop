@@ -297,4 +297,70 @@
       opacity: 0;
     }
   }
+
+  /* Example-prompt tags: the 28x28 circle-badge fades in over 400ms, then
+     expands into a full pill. Fade-in and expand run as two separate
+     animations (not one keyframe) so each phase has its own duration. Per-tag
+     stagger is driven by the inline `--tag-delay` custom property. */
+  @keyframes example-prompt-tag-fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  @keyframes example-prompt-tag-expand {
+    from {
+      max-width: 1.75rem;
+      padding-left: 0.5rem;
+      padding-right: 0.5rem;
+    }
+    to {
+      max-width: 18rem;
+      padding-left: 0.625rem;
+      padding-right: 0.625rem;
+    }
+  }
+
+  .example-prompt-tag {
+    max-width: 1.75rem;
+    padding-left: 0.5rem;
+    padding-right: 0.5rem;
+    opacity: 0;
+    animation:
+      example-prompt-tag-fade-in 400ms ease-out both,
+      example-prompt-tag-expand 450ms cubic-bezier(0.2, 0.85, 0.3, 1) both;
+    animation-delay: var(--tag-delay, 0ms), calc(var(--tag-delay, 0ms) + 400ms);
+    will-change: max-width, padding, opacity;
+  }
+
+  /* Label text fades in alongside the expand phase — starts when the pill
+     begins widening (i.e. 400ms after tag mount) and completes before it
+     reaches full width, so the label is fully legible. */
+  @keyframes example-prompt-tag-text-fade {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+  .example-prompt-tag-text {
+    opacity: 0;
+    animation: example-prompt-tag-text-fade 340ms ease-out both;
+    animation-delay: calc(var(--tag-delay, 0ms) + 400ms);
+  }
+
+  /* Leaving: replace all entry animations with a single 400ms opacity fade,
+     and pin the pill at its expanded dimensions so it doesn't collapse back
+     to a circle while it disappears. Two-class specificity beats the base
+     `.example-prompt-tag` rule. */
+  @keyframes example-prompt-tag-fade-out {
+    from { opacity: 1; }
+    to { opacity: 0; }
+  }
+  .example-prompt-tag.is-leaving {
+    max-width: 18rem;
+    padding-left: 0.625rem;
+    padding-right: 0.625rem;
+    animation: example-prompt-tag-fade-out 400ms ease both;
+    animation-delay: 0ms;
+  }
+  .example-prompt-tag.is-leaving .example-prompt-tag-text {
+    opacity: 1;
+    animation: none;
+  }
 }

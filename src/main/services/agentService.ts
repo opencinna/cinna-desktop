@@ -12,6 +12,7 @@ import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 import type { AgentCard } from '../agents/a2a-client'
+import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 const logger = createLogger('agents')
 
@@ -36,7 +37,7 @@ export interface AgentDto {
   source: string
   remoteTargetType: string | null
   remoteTargetId: string | null
-  remoteMetadata: Record<string, unknown> | null
+  remoteMetadata: RemoteAgentMetadata | null
   createdAt: Date
 }
 

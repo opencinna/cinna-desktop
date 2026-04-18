@@ -1,5 +1,6 @@
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
 import type { MessagePart } from '../../shared/messageParts'
+import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -111,7 +112,7 @@ export const agents = sqliteTable('agents', {
   source: text('source').notNull().default('local'), // 'local' | 'remote'
   remoteTargetType: text('remote_target_type'), // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: text('remote_target_id'), // UUID from Cinna backend
-  remoteMetadata: text('remote_metadata', { mode: 'json' }).$type<Record<string, unknown>>(), // entrypoint_prompt, example_prompts, etc.
+  remoteMetadata: text('remote_metadata', { mode: 'json' }).$type<RemoteAgentMetadata>(), // entrypoint_prompt, example_prompts, etc.
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

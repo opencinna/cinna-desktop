@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
+import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 
 export interface ChatData {
   id: string
@@ -72,7 +73,7 @@ export interface AgentData {
   source: string // 'local' | 'remote'
   remoteTargetType: string | null // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: string | null
-  remoteMetadata: Record<string, unknown> | null
+  remoteMetadata: RemoteAgentMetadata | null
   createdAt: Date
 }
 
