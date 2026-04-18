@@ -1,8 +1,9 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState } from 'react'
 import { Info } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
+import { MetaPopup } from './MetaPopup'
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -15,37 +16,6 @@ interface MessageBubbleProps {
   meta?: MessageMeta
   animate?: boolean
   animateDelay?: number
-}
-
-function MetaPopup({ meta, onClose }: { meta: MessageMeta; onClose: () => void }): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handler = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose])
-
-  return (
-    <div
-      ref={ref}
-      className="absolute bottom-6 right-0 w-72 max-h-48 overflow-y-auto
-        bg-[var(--color-bg-secondary)] border border-[var(--color-border)]
-        rounded-lg shadow-xl z-50 p-2.5 text-[11px] text-[var(--color-text-secondary)]
-        font-mono leading-relaxed"
-    >
-      {Object.entries(meta).map(([key, value]) => (
-        <div key={key} className="mb-1 last:mb-0">
-          <span className="text-[var(--color-text-muted)]">{key}: </span>
-          <span className="text-[var(--color-text)] break-all whitespace-pre-wrap">
-            {typeof value === 'string' ? value : JSON.stringify(value, null, 2)}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
 }
 
 export function MessageBubble({ role, content, isStreaming, meta, animate, animateDelay }: MessageBubbleProps): React.JSX.Element {

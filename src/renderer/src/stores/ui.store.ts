@@ -12,6 +12,7 @@ export type SettingsMenu =
 export type Theme = 'dark' | 'light'
 
 const LOGGER_KEY = 'cinna-logger-enabled'
+const VERBOSE_KEY = 'cinna-verbose-mode'
 
 interface UIStore {
   activeView: ActiveView
@@ -20,12 +21,14 @@ interface UIStore {
   theme: Theme
   loggerEnabled: boolean
   logsOpen: boolean
+  verboseMode: boolean
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
   toggleSidebar: () => void
   toggleTheme: () => void
   setLoggerEnabled: (enabled: boolean) => void
   setLogsOpen: (open: boolean) => void
+  toggleVerboseMode: () => void
 }
 
 export const useUIStore = create<UIStore>((set) => ({
@@ -35,6 +38,7 @@ export const useUIStore = create<UIStore>((set) => ({
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   loggerEnabled: localStorage.getItem(LOGGER_KEY) === '1',
   logsOpen: false,
+  verboseMode: localStorage.getItem(VERBOSE_KEY) === '1',
   setActiveView: (view) => set({ activeView: view }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
@@ -49,7 +53,13 @@ export const useUIStore = create<UIStore>((set) => ({
     localStorage.setItem(LOGGER_KEY, enabled ? '1' : '0')
     set((state) => ({ loggerEnabled: enabled, logsOpen: enabled ? state.logsOpen : false }))
   },
-  setLogsOpen: (open) => set({ logsOpen: open })
+  setLogsOpen: (open) => set({ logsOpen: open }),
+  toggleVerboseMode: () =>
+    set((state) => {
+      const next = !state.verboseMode
+      localStorage.setItem(VERBOSE_KEY, next ? '1' : '0')
+      return { verboseMode: next }
+    })
 }))
 
 // Apply theme on load

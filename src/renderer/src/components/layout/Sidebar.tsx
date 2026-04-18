@@ -1,4 +1,4 @@
-import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare, Bot, Users, Wrench, Terminal } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare, Bot, Users, Wrench, Terminal, Eye, EyeOff } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import type { SettingsMenu } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -24,7 +24,9 @@ export function Sidebar(): React.JSX.Element {
     toggleTheme,
     loggerEnabled,
     logsOpen,
-    setLogsOpen
+    setLogsOpen,
+    verboseMode,
+    toggleVerboseMode
   } = useUIStore()
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
@@ -141,6 +143,17 @@ export function Sidebar(): React.JSX.Element {
               <Terminal size={14} />
             </button>
           )}
+          <button
+            onClick={toggleVerboseMode}
+            className={`p-1.5 rounded-md transition-colors ${
+              verboseMode
+                ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
+                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
+            }`}
+            title={verboseMode ? 'Switch to compact mode' : 'Switch to verbose mode'}
+          >
+            {verboseMode ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
           <button
             onClick={toggleTheme}
             className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)] transition-colors"

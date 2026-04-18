@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
+import { useUIStore } from '../../stores/ui.store'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
+import { MessageMetaFooter } from './MessageMetaFooter'
 
 interface MessageStreamProps {
   chatId: string
@@ -46,6 +48,7 @@ function SystemMessage({ message, detail }: { message: string; detail?: string }
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
   const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId } = useChatStore()
+  const verboseMode = useUIStore((s) => s.verboseMode)
   const bottomRef = useRef<HTMLDivElement>(null)
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
     chatId: null,
@@ -84,25 +87,37 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
         )}
 
         {messages.map((msg) => {
+          const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
+          const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
+
           if (msg.role === 'error') {
+            let node: React.JSX.Element
             try {
               const err = JSON.parse(msg.content) as { short: string; detail?: string }
-              return <SystemMessage key={msg.id} message={err.short} detail={err.detail} />
+              node = <SystemMessage message={err.short} detail={err.detail} />
             } catch {
-              return <SystemMessage key={msg.id} message={msg.content} />
+              node = <SystemMessage message={msg.content} />
             }
+            return (
+              <div key={msg.id}>
+                {node}
+                {footer}
+              </div>
+            )
           }
           if (msg.role === 'tool_call') {
             return (
-              <ToolCallBlock
-                key={msg.id}
-                name={msg.toolName ?? 'unknown'}
-                input={msg.toolInput as Record<string, unknown>}
-                result={msg.content}
-                error={msg.toolError ? msg.content : undefined}
-                status={msg.toolError ? 'error' : 'done'}
-                provider={msg.toolProvider}
-              />
+              <div key={msg.id}>
+                <ToolCallBlock
+                  name={msg.toolName ?? 'unknown'}
+                  input={msg.toolInput as Record<string, unknown>}
+                  result={msg.content}
+                  error={msg.toolError ? msg.content : undefined}
+                  status={msg.toolError ? 'error' : 'done'}
+                  provider={msg.toolProvider}
+                />
+                {footer}
+              </div>
             )
           }
           if (msg.role === 'assistant' && !msg.content) {
@@ -134,16 +149,19 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   }
                   return <MessageBubble key={k} role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                 })}
+                {footer}
               </div>
             )
           }
           return (
-            <MessageBubble
-              key={msg.id}
-              role={msg.role as 'user' | 'assistant'}
-              content={msg.content}
-              animate={shouldAnimate}
-            />
+            <div key={msg.id}>
+              <MessageBubble
+                role={msg.role as 'user' | 'assistant'}
+                content={msg.content}
+                animate={shouldAnimate}
+              />
+              {footer}
+            </div>
           )
         })}
 
@@ -171,6 +189,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   key={`stream-think-${i}`}
                   content={block.content}
                   isStreaming={isStreaming && isLastBlock}
+                  defaultExpanded={verboseMode ? undefined : false}
                 />
               )
             }
@@ -181,6 +200,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   content={block.content}
                   toolName={block.toolName}
                   isStreaming={isStreaming && isLastBlock}
+                  defaultExpanded={verboseMode ? undefined : false}
                 />
               )
             }
