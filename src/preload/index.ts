@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 
 export interface ChatData {
   id: string
@@ -67,6 +67,10 @@ export interface AgentData {
   cardData: Record<string, unknown> | null
   skills: Array<{ id: string; name: string; description?: string }> | null
   enabled: boolean
+  source: string // 'local' | 'remote'
+  remoteTargetType: string | null // 'agent' | 'app_mcp_route' | 'identity'
+  remoteTargetId: string | null
+  remoteMetadata: Record<string, unknown> | null
   createdAt: Date
 }
 
@@ -80,6 +84,18 @@ export interface UserData {
   cinnaHostingType?: 'cloud' | 'self_hosted'
   cinnaServerUrl?: string
   hasCinnaTokens?: boolean
+}
+
+export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
+
+export interface LogEntry {
+  id: number
+  timestamp: number
+  level: LogLevel
+  scope: string
+  source: 'main' | 'renderer'
+  message: string
+  data?: unknown
 }
 
 export interface McpProviderData {
@@ -231,8 +247,10 @@ const api = {
       skills?: Array<{ id: string; name: string; description?: string }>
       enabled?: boolean
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('agent:upsert', data),
-    delete: (agentId: string): Promise<{ success: boolean }> =>
+    delete: (agentId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:delete', agentId),
+    syncRemote: (): Promise<{ success: boolean; synced?: number; removed?: number; error?: string }> =>
+      ipcRenderer.invoke('agent:sync-remote'),
     fetchCard: (data: {
       cardUrl: string
       accessToken?: string
@@ -277,7 +295,12 @@ const api = {
       contextId: string | null
       taskId: string | null
       taskState: string | null
-    } | null> => ipcRenderer.invoke('agent:get-session', chatId)
+    } | null> => ipcRenderer.invoke('agent:get-session', chatId),
+    onRemoteSyncComplete: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on('agents:remote-sync-complete', listener)
+      return () => ipcRenderer.off('agents:remote-sync-complete', listener)
+    }
   },
 
   mcp: {
@@ -302,6 +325,27 @@ const api = {
       ipcRenderer.invoke('mcp:disconnect', providerId),
     listTools: (providerId: string): Promise<unknown[]> =>
       ipcRenderer.invoke('mcp:list-tools', providerId)
+  },
+
+  logger: {
+    getAll: (): Promise<LogEntry[]> => ipcRenderer.invoke('logger:get-all'),
+    clear: (): Promise<{ success: boolean }> => ipcRenderer.invoke('logger:clear'),
+    log: (payload: {
+      level: LogLevel
+      scope: string
+      message: string
+      data?: unknown
+    }): Promise<{ success: boolean }> => ipcRenderer.invoke('logger:log', payload),
+    onEntry: (handler: (entry: LogEntry) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, entry: LogEntry): void => handler(entry)
+      ipcRenderer.on('logger:entry', listener)
+      return () => ipcRenderer.off('logger:entry', listener)
+    },
+    onToggleOverlay: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on('logger:toggle-overlay', listener)
+      return () => ipcRenderer.off('logger:toggle-overlay', listener)
+    }
   },
 
   llm: {

@@ -31,4 +31,16 @@ export function migrateAgents(sqlite: Database.Database): void {
   if (!colNames.has('protocol_interface_version')) {
     sqlite.exec('ALTER TABLE agents ADD COLUMN protocol_interface_version TEXT')
   }
+  if (!colNames.has('source')) {
+    sqlite.exec("ALTER TABLE agents ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
+  }
+  if (!colNames.has('remote_target_type')) {
+    sqlite.exec('ALTER TABLE agents ADD COLUMN remote_target_type TEXT')
+  }
+  if (!colNames.has('remote_target_id')) {
+    sqlite.exec('ALTER TABLE agents ADD COLUMN remote_target_id TEXT')
+  }
+  if (!colNames.has('remote_metadata')) {
+    sqlite.exec('ALTER TABLE agents ADD COLUMN remote_metadata TEXT')
+  }
 }

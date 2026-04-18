@@ -64,6 +64,8 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
     testAgent.mutate(agent.id)
   }
 
+  const isRemote = agent.source === 'remote'
+
   const statusColor =
     agent.enabled
       ? 'text-[var(--color-success)]'
@@ -97,6 +99,11 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
             {PROTOCOL_LABELS[agent.protocol] ?? agent.protocol}
             {agent.protocolInterfaceVersion && ` v${agent.protocolInterfaceVersion}`}
           </span>
+          {isRemote && (
+            <span className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium">
+              Remote
+            </span>
+          )}
         </div>
 
         <button
@@ -113,13 +120,15 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
           />
         </button>
 
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); deleteAgent.mutate(agent.id) }}
-          className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
-        >
-          <Trash2 size={12} />
-        </button>
+        {!isRemote && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); deleteAgent.mutate(agent.id) }}
+            className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors"
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
 
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />
@@ -202,50 +211,54 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
             </div>
           )}
 
-          {/* Access token update */}
-          <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
-              Access Token{' '}
-              {agent.hasAccessToken && (
-                <span className="text-[var(--color-success)]">(saved)</span>
-              )}
-            </label>
-            <div className="flex gap-1.5">
-              <div className="flex-1 relative">
-                <input
-                  type={showToken ? 'text' : 'password'}
-                  value={accessToken}
-                  onChange={(e) => setAccessToken(e.target.value)}
-                  placeholder={agent.hasAccessToken ? 'Enter new token to replace' : 'Enter access token'}
-                  className={`${inputClass} pr-8`}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowToken(!showToken)}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
-                >
-                  {showToken ? <EyeOff size={12} /> : <Eye size={12} />}
-                </button>
+          {/* Access token update — hidden for remote agents (they use Cinna JWT) */}
+          {!isRemote && (
+            <>
+              <div>
+                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+                  Access Token{' '}
+                  {agent.hasAccessToken && (
+                    <span className="text-[var(--color-success)]">(saved)</span>
+                  )}
+                </label>
+                <div className="flex gap-1.5">
+                  <div className="flex-1 relative">
+                    <input
+                      type={showToken ? 'text' : 'password'}
+                      value={accessToken}
+                      onChange={(e) => setAccessToken(e.target.value)}
+                      placeholder={agent.hasAccessToken ? 'Enter new token to replace' : 'Enter access token'}
+                      className={`${inputClass} pr-8`}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowToken(!showToken)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+                    >
+                      {showToken ? <EyeOff size={12} /> : <Eye size={12} />}
+                    </button>
+                  </div>
+                  {accessToken && (
+                    <button
+                      type="button"
+                      onClick={handleSaveToken}
+                      disabled={upsert.isPending}
+                      className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+                        text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Save
+                    </button>
+                  )}
+                </div>
               </div>
-              {accessToken && (
-                <button
-                  type="button"
-                  onClick={handleSaveToken}
-                  disabled={upsert.isPending}
-                  className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
-                    text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                >
-                  Save
-                </button>
-              )}
-            </div>
-          </div>
 
-          {saveError && (
-            <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
-              <XCircle size={10} />
-              <span>{saveError}</span>
-            </div>
+              {saveError && (
+                <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
+                  <XCircle size={10} />
+                  <span>{saveError}</span>
+                </div>
+              )}
+            </>
           )}
 
           {/* Test connection */}

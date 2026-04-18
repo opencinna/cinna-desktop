@@ -47,6 +47,13 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.cinna.desktop')
 
+  const toggleLogsOverlay = (): void => {
+    const win = getMainWindow()
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('logger:toggle-overlay')
+    }
+  }
+
   const menu = Menu.buildFromTemplate([
     { role: 'appMenu' },
     {
@@ -59,6 +66,23 @@ app.whenReady().then(() => {
         { role: 'copy' },
         { role: 'paste' },
         { role: 'selectAll' }
+      ]
+    },
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Toggle App Logs',
+          accelerator: 'CommandOrControl+`',
+          click: toggleLogsOverlay
+        },
+        {
+          label: 'Toggle App Logs (alt)',
+          accelerator: 'CommandOrControl+Shift+`',
+          visible: false,
+          acceleratorWorksWhenHidden: true,
+          click: toggleLogsOverlay
+        }
       ]
     },
     { role: 'windowMenu' }

@@ -5,8 +5,10 @@ import { registerLlmHandlers } from './llm.ipc'
 import { registerChatModeHandlers } from './chatmode.ipc'
 import { registerAgentHandlers } from './agent.ipc'
 import { registerAuthHandlers } from './auth.ipc'
+import { registerLoggerHandlers } from './logger.ipc'
 
 export function registerAllIpcHandlers(): void {
+  registerLoggerHandlers()
   registerAuthHandlers()
   registerChatHandlers()
   registerProviderHandlers()

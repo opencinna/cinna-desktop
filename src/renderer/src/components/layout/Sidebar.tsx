@@ -1,4 +1,4 @@
-import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare, Bot, Users } from 'lucide-react'
+import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare, Bot, Users, Wrench, Terminal } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import type { SettingsMenu } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -9,11 +9,23 @@ const settingsMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'llm', label: 'LLM Providers', icon: Brain },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
-  { id: 'accounts', label: 'User Accounts', icon: Users }
+  { id: 'accounts', label: 'User Accounts', icon: Users },
+  { id: 'development', label: 'Development', icon: Wrench }
 ]
 
 export function Sidebar(): React.JSX.Element {
-  const { sidebarOpen, setActiveView, activeView, settingsTab, setSettingsMenu, theme, toggleTheme } = useUIStore()
+  const {
+    sidebarOpen,
+    setActiveView,
+    activeView,
+    settingsTab,
+    setSettingsMenu,
+    theme,
+    toggleTheme,
+    loggerEnabled,
+    logsOpen,
+    setLogsOpen
+  } = useUIStore()
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
   const handleNewChat = (): void => {
@@ -25,7 +37,7 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <div
-      className="h-full shrink-0 overflow-hidden transition-[width] duration-250 ease-in-out border-r border-[var(--color-border)] bg-[var(--color-bg-secondary)]"
+      className="app-sidebar h-full shrink-0 overflow-hidden transition-[width] duration-250 ease-in-out border-r border-[var(--color-border)]"
       style={{ width: sidebarOpen ? 240 : 0, borderRightWidth: sidebarOpen ? 1 : 0 }}
     >
       <div className="w-[240px] h-full flex flex-col">
@@ -116,6 +128,19 @@ export function Sidebar(): React.JSX.Element {
             <Settings size={14} />
           </button>
           <div className="flex-1" />
+          {loggerEnabled && (
+            <button
+              onClick={() => setLogsOpen(!logsOpen)}
+              className={`p-1.5 rounded-md transition-colors ${
+                logsOpen
+                  ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
+                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
+              }`}
+              title="App logs (⌘`)"
+            >
+              <Terminal size={14} />
+            </button>
+          )}
           <button
             onClick={toggleTheme}
             className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)] transition-colors"

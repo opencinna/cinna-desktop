@@ -12,6 +12,9 @@ import {
 import { userActivation } from '../auth/activation'
 import { CINNA_CLOUD_URL, startCinnaOAuthFlow, abortCinnaOAuthFlow } from '../auth/cinna-oauth'
 import { storeCinnaTokens, clearCinnaTokens, hasCinnaTokens } from '../auth/cinna-tokens'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('auth')
 
 export interface UserInfo {
   id: string
@@ -107,7 +110,13 @@ export function registerAuthHandlers(): void {
             ? CINNA_CLOUD_URL
             : data.cinnaServerUrl
 
+        logger.info(`Register Cinna account`, {
+          hosting: data.cinnaHostingType,
+          serverUrl
+        })
+
         if (!serverUrl) {
+          logger.error('Register aborted: missing server URL for self-hosted account')
           return { success: false, error: 'Server URL is required for self-hosted accounts' }
         }
 
@@ -116,10 +125,13 @@ export function registerAuthHandlers(): void {
         try {
           tokens = await startCinnaOAuthFlow(serverUrl)
         } catch (err) {
-          return {
-            success: false,
-            error: err instanceof Error ? err.message : 'OAuth authentication failed'
-          }
+          const message = err instanceof Error ? err.message : 'OAuth authentication failed'
+          logger.error('Cinna OAuth failed', {
+            serverUrl,
+            message,
+            stack: err instanceof Error ? err.stack : undefined
+          })
+          return { success: false, error: message }
         }
 
         // Use OAuth email as username, check uniqueness
@@ -130,8 +142,10 @@ export function registerAuthHandlers(): void {
           .where(eq(users.username, username))
           .get()
         if (existing) {
+          logger.warn(`Register rejected: account already exists for ${username}`)
           return { success: false, error: `Account already exists for ${username}` }
         }
+        logger.info(`Cinna account registered: ${username}`)
 
         // Create user row with profile from OAuth
         db.insert(users)

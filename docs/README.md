@@ -53,6 +53,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
+- [Remote Agents](agents/remote_agents/remote_agents.md) — Auto-sync agents from Cinna backend, categorized display, JWT-based A2A communication
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters
@@ -66,6 +67,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 ### Development
 - [Setup](development/setup/setup.md) — Dev commands, tech stack, gotchas, project status
 - [UI Guidelines](development/ui_guidelines/ui_guidelines_llm.md) — Color system, expandable card pattern, button layout rules, form conventions (LLM reference)
+- [Logger](development/logger/logger.md) — In-app debug logger with full-window overlay, scoped loggers for main/renderer, ⌘` keyboard shortcut
 
 ## Architecture
 

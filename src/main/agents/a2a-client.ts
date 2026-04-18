@@ -23,6 +23,9 @@ import type {
 } from '@a2a-js/sdk'
 import { AGENT_CARD_PATH } from '@a2a-js/sdk'
 import { nanoid } from 'nanoid'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('a2a-client')
 
 export type {
   AgentCard,
@@ -81,11 +84,22 @@ async function fetchRawCard(
   accessToken?: string
 ): Promise<Record<string, unknown>> {
   const resolvedUrl = resolveCardUrl(cardUrl)
+  logger.debug(`GET ${resolvedUrl}`, { authenticated: !!accessToken })
   const fetchImpl = accessToken ? buildAuthFetch(accessToken) : fetch
-  const response = await fetchImpl(resolvedUrl, {
-    headers: { Accept: 'application/json' }
-  })
+  let response: Response
+  try {
+    response = await fetchImpl(resolvedUrl, {
+      headers: { Accept: 'application/json' }
+    })
+  } catch (err) {
+    logger.error(`Network error fetching ${resolvedUrl}`, { error: String(err) })
+    throw err
+  }
   if (!response.ok) {
+    const body = await response.text().catch(() => '')
+    logger.error(`HTTP ${response.status} ${response.statusText} from ${resolvedUrl}`, {
+      body: body.slice(0, 2000)
+    })
     throw new Error(
       `Failed to fetch Agent Card from ${resolvedUrl}: ${response.status} ${response.statusText}`
     )
@@ -151,6 +165,11 @@ export function resolveProtocol(card: Record<string, unknown>): ProtocolResoluti
   const versions = Array.isArray(card.protocolVersions)
     ? (card.protocolVersions as string[]).join(', ')
     : 'unknown'
+  logger.error(`No compatible protocol in agent card`, {
+    supportedVersions: versions,
+    supportedInterfaces: card.supportedInterfaces,
+    topLevelUrl: card.url ?? null
+  })
   throw new Error(
     `Agent does not support A2A protocol v0.3.x (our SDK version). ` +
     `Agent supports: ${versions}. ` +

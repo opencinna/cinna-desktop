@@ -9,6 +9,9 @@ import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { getDb } from '../db/client'
 import { mcpProviders } from '../db/schema'
 import { eq } from 'drizzle-orm'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('MCP')
 
 type AnyTransport = StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
 
@@ -98,11 +101,11 @@ class MCPManager {
           // OAuth flow initiated — browser was opened for user to authorize
           connection.status = 'awaiting-auth'
           this.connections.set(config.id, connection)
-          console.log(`MCP ${config.name}: awaiting OAuth authorization...`)
+          logger.info(`${config.name}: awaiting OAuth authorization...`)
 
           // Wait for the callback in the background
           this.handleOAuthCallback(config.id).catch((authErr) => {
-            console.error(`MCP OAuth failed for ${config.name}:`, authErr)
+            logger.error(`OAuth failed for ${config.name}`, authErr)
             connection.status = 'error'
             connection.error = `OAuth failed: ${String(authErr)}`
             this.connections.set(config.id, connection)
@@ -123,7 +126,7 @@ class MCPManager {
       }
 
       this.connections.set(config.id, connection)
-      console.log(`MCP connected: ${config.name} (${tools.length} tools)`)
+      logger.info(`Connected: ${config.name} (${tools.length} tools)`)
       return this.toPublic(connection)
     } catch (err) {
       connection.status = 'error'
@@ -132,7 +135,7 @@ class MCPManager {
         connection.oauthProvider.cleanup()
       }
       this.connections.set(config.id, connection)
-      console.error(`MCP connect failed for ${config.name}:`, err)
+      logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
     }
   }
@@ -170,7 +173,7 @@ class MCPManager {
 
     conn.oauthProvider.cleanup()
     this.connections.set(providerId, conn)
-    console.log(`MCP connected after OAuth: ${conn.config.name} (${tools.length} tools)`)
+    logger.info(`Connected after OAuth: ${conn.config.name} (${tools.length} tools)`)
   }
 
   private async listToolsFromClient(client: Client, providerId: string): Promise<McpTool[]> {

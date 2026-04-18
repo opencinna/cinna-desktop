@@ -7,6 +7,7 @@ import { encryptApiKey } from '../security/keystore'
 import { registerA2AHandlers } from './agent_a2a.ipc'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { syncRemoteAgents } from '../agents/remote-sync'
 
 export function registerAgentHandlers(): void {
   ipcMain.handle('agent:list', async () => {
@@ -27,6 +28,10 @@ export function registerAgentHandlers(): void {
       cardData: a.cardData,
       skills: a.skills,
       enabled: a.enabled,
+      source: a.source,
+      remoteTargetType: a.remoteTargetType,
+      remoteTargetId: a.remoteTargetId,
+      remoteMetadata: a.remoteMetadata,
       createdAt: a.createdAt
     }))
   })
@@ -110,8 +115,25 @@ export function registerAgentHandlers(): void {
     userActivation.requireActivated()
     const db = getDb()
     const userId = getCurrentUserId()
+    // Prevent deleting remote agents — they are managed by sync
+    const agent = db.select().from(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).get()
+    if (agent?.source === 'remote') {
+      return { success: false, error: 'Remote agents cannot be deleted — they are managed by Cinna sync' }
+    }
     db.delete(agents).where(and(eq(agents.id, agentId), eq(agents.userId, userId))).run()
     return { success: true }
+  })
+
+  // Sync remote agents from Cinna backend
+  ipcMain.handle('agent:sync-remote', async () => {
+    userActivation.requireActivated()
+    const userId = getCurrentUserId()
+    try {
+      const result = await syncRemoteAgents(userId)
+      return { success: true, ...result }
+    } catch (err) {
+      return { success: false, error: String(err) }
+    }
   })
 
   // A2A protocol-specific handlers

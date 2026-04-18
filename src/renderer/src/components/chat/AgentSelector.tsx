@@ -46,6 +46,29 @@ export function AgentSelector({
 
   const enabledAgents = (agents ?? []).filter((a) => a.enabled)
 
+  // Group agents into sections for the dropdown
+  const sections: Array<{ label: string; agents: AgentData[] }> = []
+  const remoteByType: Record<string, AgentData[]> = {}
+  const localAgents: AgentData[] = []
+  for (const a of enabledAgents) {
+    if (a.source === 'remote') {
+      const key = a.remoteTargetType ?? 'agent'
+      ;(remoteByType[key] ??= []).push(a)
+    } else {
+      localAgents.push(a)
+    }
+  }
+  const sectionOrder = [
+    { key: 'agent', label: 'My Agents' },
+    { key: 'app_mcp_route', label: 'Shared with Me' },
+    { key: 'identity', label: 'People' }
+  ]
+  for (const { key, label } of sectionOrder) {
+    if (remoteByType[key]?.length) sections.push({ label, agents: remoteByType[key] })
+  }
+  if (localAgents.length) sections.push({ label: 'Local', agents: localAgents })
+  const hasMultipleSections = sections.length > 1
+
   // Close on outside click
   useEffect(() => {
     if (!open) return
@@ -120,36 +143,45 @@ export function AgentSelector({
           </div>
 
           <div className="px-1.5 pb-1.5 space-y-0.5 max-h-72 overflow-y-auto">
-            {enabledAgents.map((agent) => {
-              const isActive = selectedAgent?.id === agent.id
-
-              return (
-                <button
-                  key={agent.id}
-                  onClick={() => handleSelect(agent)}
-                  className={`w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer ${
-                    isActive
-                      ? 'bg-[var(--color-accent)]/10 border-l-2 border-[var(--color-accent)]'
-                      : 'hover:bg-[var(--color-bg-hover)] border-l-2 border-transparent'
-                  }`}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <Bot size={12} className={isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'} />
-                    <span className={`text-xs font-medium ${isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
-                      {agent.name}
-                    </span>
-                    <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
-                      {agent.protocol.toUpperCase()}
-                    </span>
+            {sections.map((section) => (
+              <div key={section.label}>
+                {hasMultipleSections && (
+                  <div className="text-[9px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider px-2.5 pt-1.5 pb-0.5">
+                    {section.label}
                   </div>
-                  {agent.description && (
-                    <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] truncate">
-                      {agent.description}
-                    </div>
-                  )}
-                </button>
-              )
-            })}
+                )}
+                {section.agents.map((agent) => {
+                  const isActive = selectedAgent?.id === agent.id
+
+                  return (
+                    <button
+                      key={agent.id}
+                      onClick={() => handleSelect(agent)}
+                      className={`w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer ${
+                        isActive
+                          ? 'bg-[var(--color-accent)]/10 border-l-2 border-[var(--color-accent)]'
+                          : 'hover:bg-[var(--color-bg-hover)] border-l-2 border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5">
+                        <Bot size={12} className={isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'} />
+                        <span className={`text-xs font-medium ${isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
+                          {agent.name}
+                        </span>
+                        <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
+                          {agent.protocol.toUpperCase()}
+                        </span>
+                      </div>
+                      {agent.description && (
+                        <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] truncate">
+                          {agent.description}
+                        </div>
+                      )}
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
           </div>
         </div>
       )}

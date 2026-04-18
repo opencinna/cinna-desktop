@@ -13,8 +13,31 @@ import {
   type ProtocolResolution
 } from '../agents/a2a-client'
 import { userActivation } from '../auth/activation'
+import { getCurrentUserId } from '../auth/session'
+import { getCinnaAccessToken } from '../auth/cinna-tokens'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('A2A')
 
 const activeAbortControllers = new Map<string, AbortController>()
+
+/**
+ * Resolve the access token for an agent.
+ * Remote agents use the user's Cinna JWT; local agents use their stored token.
+ */
+async function resolveAgentAccessToken(
+  agent: { source: string; accessTokenEncrypted: Buffer | null }
+): Promise<string | undefined> {
+  if (agent.source === 'remote') {
+    const userId = getCurrentUserId()
+    try {
+      return await getCinnaAccessToken(userId)
+    } catch {
+      throw new Error('Cinna session expired — please re-authenticate')
+    }
+  }
+  return agent.accessTokenEncrypted ? decryptApiKey(agent.accessTokenEncrypted) : undefined
+}
 
 export function registerA2AHandlers(): void {
   // Fetch agent card from URL (for testing / adding a new agent)
@@ -30,10 +53,16 @@ export function registerA2AHandlers(): void {
       error?: string
     }> => {
       userActivation.requireActivated()
+      logger.debug(`Fetching card from ${data.cardUrl}`)
       try {
         const { card, protocol } = await fetchAgentCard(data.cardUrl, data.accessToken)
+        logger.info(`Card fetched, protocol ${protocol.version} at ${protocol.url}`)
         return { success: true, card: card as unknown as Record<string, unknown>, protocol }
       } catch (err) {
+        logger.error(`Card fetch failed for ${data.cardUrl}`, {
+          error: String(err),
+          stack: err instanceof Error ? err.stack : undefined
+        })
         return { success: false, error: String(err) }
       }
     }
@@ -54,18 +83,23 @@ export function registerA2AHandlers(): void {
       const db = getDb()
       const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
       if (!agent) {
+        logger.warn(`Test failed: agent ${agentId} not found`)
         return { success: false, error: 'Agent not found' }
       }
 
+      logger.info(`Testing agent "${agent.name}" (${agent.protocol})`)
+
       if (agent.protocol === 'a2a') {
         if (!agent.cardUrl) {
+          logger.error(`Test failed: no card URL for agent "${agent.name}"`)
           return { success: false, error: 'No card URL configured' }
         }
         try {
-          const accessToken = agent.accessTokenEncrypted
-            ? decryptApiKey(agent.accessTokenEncrypted)
-            : undefined
+          const accessToken = await resolveAgentAccessToken(agent)
           const { card, protocol } = await fetchAgentCard(agent.cardUrl, accessToken)
+          logger.info(
+            `Agent "${agent.name}" resolved protocol ${protocol.version} at ${protocol.url}`
+          )
           // Update cached card data + resolved protocol interface
           db.update(agents)
             .set({
@@ -83,10 +117,16 @@ export function registerA2AHandlers(): void {
             .run()
           return { success: true, card: card as unknown as Record<string, unknown> }
         } catch (err) {
+          logger.error(`Test failed for agent "${agent.name}"`, {
+            cardUrl: agent.cardUrl,
+            error: String(err),
+            stack: err instanceof Error ? err.stack : undefined
+          })
           return { success: false, error: String(err) }
         }
       }
 
+      logger.error(`Unsupported protocol: ${agent.protocol}`)
       return { success: false, error: `Unsupported protocol: ${agent.protocol}` }
     }
   )
@@ -105,6 +145,7 @@ export function registerA2AHandlers(): void {
     if (!port) return
 
     if (!userActivation.isActivated()) {
+      logger.error('send-message rejected: session not activated', { agentId, chatId })
       port.start()
       port.postMessage({ type: 'error', error: 'Session not activated — user must authenticate first' })
       port.close()
@@ -117,15 +158,51 @@ export function registerA2AHandlers(): void {
     const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
     if (!agent || !agent.cardUrl) {
       const err = 'Agent not found or not configured'
+      logger.error(err, { agentId, chatId, hasAgent: !!agent, cardUrl: agent?.cardUrl })
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
       port.close()
       return
     }
 
-    const endpointUrl = agent.protocolInterfaceUrl ?? agent.endpointUrl
+    let endpointUrl = agent.protocolInterfaceUrl ?? agent.endpointUrl
+
+    // Auto-resolve endpoint for remote agents that haven't been tested yet
+    if (!endpointUrl && agent.cardUrl && agent.source === 'remote') {
+      try {
+        const accessToken = await resolveAgentAccessToken(agent)
+        const { protocol } = await fetchAgentCard(agent.cardUrl, accessToken)
+        endpointUrl = protocol.url
+        // Cache resolved endpoint so subsequent messages skip this step
+        db.update(agents)
+          .set({
+            endpointUrl: protocol.url,
+            protocolInterfaceUrl: protocol.url,
+            protocolInterfaceVersion: protocol.version
+          })
+          .where(eq(agents.id, agentId))
+          .run()
+        logger.info(`Auto-resolved endpoint for "${agent.name}": ${protocol.url}`)
+      } catch (err) {
+        const errMsg = `Failed to resolve agent endpoint: ${String(err)}`
+        logger.error(errMsg, { agentId, cardUrl: agent.cardUrl })
+        port.postMessage({ type: 'error', error: errMsg })
+        messageRepo.saveError({ chatId, short: errMsg })
+        port.close()
+        return
+      }
+    }
+
     if (!endpointUrl) {
       const err = 'No compatible protocol endpoint resolved. Test the agent connection first.'
+      logger.error(err, {
+        agentId,
+        agentName: agent.name,
+        source: agent.source,
+        cardUrl: agent.cardUrl,
+        protocolInterfaceUrl: agent.protocolInterfaceUrl,
+        endpointUrl: agent.endpointUrl
+      })
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
       port.close()
@@ -141,16 +218,15 @@ export function registerA2AHandlers(): void {
     messageRepo.saveUser({ chatId, content: userContent })
 
     try {
-      const accessToken = agent.accessTokenEncrypted
-        ? decryptApiKey(agent.accessTokenEncrypted)
-        : undefined
+      const accessToken = await resolveAgentAccessToken(agent)
 
       const client = await createA2AClient(endpointUrl, agent.cardUrl, accessToken)
       const card = await client.getAgentCard()
       const supportsStreaming = card.capabilities?.streaming === true
 
-      console.log('[A2A] Agent:', agent.name, '| endpoint:', endpointUrl)
-      console.log('[A2A] Streaming supported:', supportsStreaming)
+      logger.info(`Agent "${agent.name}" | endpoint: ${endpointUrl}`, {
+        streaming: supportsStreaming
+      })
 
       // Load existing session for conversation continuity
       const session = db
@@ -162,7 +238,10 @@ export function registerA2AHandlers(): void {
       const sessionContextId = session?.contextId ?? undefined
       const sessionTaskId = session?.taskId ?? undefined
 
-      console.log('[A2A] Session:', session ? `contextId=${sessionContextId}, taskId=${sessionTaskId}` : 'new')
+      logger.debug(
+        session ? 'Resumed session' : 'New session',
+        session ? { contextId: sessionContextId, taskId: sessionTaskId } : undefined
+      )
 
       // Track the latest contextId/taskId from the response
       let latestContextId = sessionContextId
@@ -171,7 +250,7 @@ export function registerA2AHandlers(): void {
 
       if (supportsStreaming) {
         const params = buildSendParams(userContent, sessionContextId, sessionTaskId)
-        console.log('[A2A] Sending streaming message, params:', JSON.stringify(params, null, 2))
+        logger.debug('Sending streaming message', params)
         let fullText = ''
 
         for await (const event of client.sendMessageStream(params)) {
@@ -284,8 +363,11 @@ export function registerA2AHandlers(): void {
           })
           .run()
       }
-      console.log('[A2A] Session saved: contextId=%s, taskId=%s, state=%s',
-        latestContextId, latestTaskId, latestTaskState)
+      logger.debug('Session saved', {
+        contextId: latestContextId,
+        taskId: latestTaskId,
+        state: latestTaskState
+      })
 
       messageRepo.touchChat(chatId)
 

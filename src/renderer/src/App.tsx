@@ -4,6 +4,7 @@ import { TitleBar } from './components/layout/TitleBar'
 import { Sidebar } from './components/layout/Sidebar'
 import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
+import { LogsOverlay } from './components/logger/LogsOverlay'
 import { useAuthStore } from './stores/auth.store'
 
 const queryClient = new QueryClient({
@@ -64,6 +65,7 @@ function App(): React.JSX.Element {
             <MainArea />
           </div>
         </div>
+        <LogsOverlay />
       </AuthGate>
     </QueryClientProvider>
   )

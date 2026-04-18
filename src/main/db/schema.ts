@@ -106,6 +106,10 @@ export const agents = sqliteTable('agents', {
   cardData: text('card_data', { mode: 'json' }).$type<Record<string, unknown>>(), // cached agent card JSON
   skills: text('skills', { mode: 'json' }).$type<Array<{ id: string; name: string; description?: string }>>(),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  source: text('source').notNull().default('local'), // 'local' | 'remote'
+  remoteTargetType: text('remote_target_type'), // 'agent' | 'app_mcp_route' | 'identity'
+  remoteTargetId: text('remote_target_id'), // UUID from Cinna backend
+  remoteMetadata: text('remote_metadata', { mode: 'json' }).$type<Record<string, unknown>>(), // entrypoint_prompt, example_prompts, etc.
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
