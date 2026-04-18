@@ -9,10 +9,14 @@
 | Schema | `src/main/db/schema.ts` | `users` table + `userId` column on all data tables |
 | Migration | `src/main/db/migrations/users.ts` | Creates users table, default user, adds userId columns |
 | DB Client | `src/main/db/client.ts` | Runs `migrateUsers()` first in migration order |
+| DB Repo | `src/main/db/users.ts` | `userRepo` — CRUD, password set/clear, Cinna token columns, `deleteWithCascade()` |
+| Service | `src/main/services/authService.ts` | `authService` — registration, login, update, delete, startup; `UserDto` shape |
 | Session | `src/main/auth/session.ts` | In-memory session, password hashing, disk persistence |
-| Activation | `src/main/auth/activation.ts` | `UserActivation` singleton — gates all user-scoped operations |
+| Activation | `src/main/auth/activation.ts` | `UserActivation` singleton — gates all user-scoped operations; tracks per-session unlocks |
 | Reload | `src/main/auth/reload.ts` | `reloadUserProviders()` — clears and re-inits LLM/MCP for active user |
-| IPC | `src/main/ipc/auth.ipc.ts` | Auth handlers: startup, login, register, logout, update, delete |
+| Errors | `src/main/errors.ts` | `AuthError` + `AuthErrorCode` union (typed codes crossing IPC) |
+| IPC | `src/main/ipc/auth.ipc.ts` | Thin handlers — delegate to `authService`, wrap with `ipcHandle` |
+| IPC wrap | `src/main/ipc/_wrap.ts` | `ipcHandle()` — uniform error logging + DomainError serialization |
 | IPC Index | `src/main/ipc/index.ts` | Registers auth handlers (first in order) |
 | Entry | `src/main/index.ts` | Calls `initSession()` — no eager provider init (activation via auth flow) |
 | Registry | `src/main/llm/registry.ts` | `clearAllAdapters()` used during activation/deactivation |
@@ -31,8 +35,9 @@
 | Hook | `src/renderer/src/hooks/useAuth.ts` | React Query mutations/queries: useUsers, useCurrentUser, useLogin, useRegister, useLogout, useUpdateUser, useDeleteUser, useCinnaOAuthAbort |
 | AuthGate | `src/renderer/src/App.tsx` | Startup auth check, wraps app with login gate |
 | UserMenu | `src/renderer/src/components/auth/UserMenu.tsx` | Title bar dropdown — "Guest" badge on default user |
-| LoginScreen | `src/renderer/src/components/auth/LoginScreen.tsx` | Full-screen password prompt on restart |
-| LoginPrompt | `src/renderer/src/components/auth/LoginPrompt.tsx` | Full-screen login overlay for user switching (OS-style centered avatar + password) |
+| LoginScreen | `src/renderer/src/components/auth/LoginScreen.tsx` | Full-screen password prompt on restart — wraps `PasswordUnlockForm` |
+| LoginPrompt | `src/renderer/src/components/auth/LoginPrompt.tsx` | Full-screen login overlay for user switching — wraps `PasswordUnlockForm` |
+| PasswordUnlockForm | `src/renderer/src/components/auth/PasswordUnlockForm.tsx` | Shared OS-style centered avatar + password form (used by both LoginScreen and LoginPrompt) |
 | RegisterForm | `src/renderer/src/components/auth/RegisterForm.tsx` | Multi-step account creation modal with horizontal type-selection cards (local + Cinna) — see [Cinna Accounts Tech](../cinna_accounts/cinna_accounts_tech.md) |
 | TitleBar | `src/renderer/src/components/layout/TitleBar.tsx` | Hosts UserMenu in top-right slot |
 | Settings | `src/renderer/src/components/settings/UserAccountsSection.tsx` | User Accounts settings page — list, edit, delete accounts |
@@ -86,6 +91,20 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 
 ## Services & Key Methods
 
+### `src/main/services/authService.ts`
+- `authService.listUsers()` — returns `UserDto[]` (id, type, username, displayName, hasPassword, Cinna fields)
+- `authService.register(input)` — local account creation; validates uniqueness + password strength, hashes via `hashPassword()`
+- `authService.registerCinna(input)` — runs OAuth flow via `startCinnaOAuthFlow()`, inserts user, stores tokens, activates; rolls back user row if token store fails
+- `authService.login(input)` — verifies password (only if user is locked), `markUnlocked()` + `activate()`
+- `authService.logout()` — `clearUnlocks()` + `activate('__default__')`
+- `authService.updateUser(input)` — display name + password set/change/remove (rejects `__default__`)
+- `authService.deleteAccount(input)` — verifies password, deactivates if current, clears Cinna tokens, `userRepo.deleteWithCascade()`, re-activates `__default__` if was current
+- `authService.getStartup(lastUserId)` — resolves "needs login vs auto-activate" based on user existence + password
+
+### `src/main/db/users.ts`
+- `userRepo` exposes `list/get/getByUsername/insert/updateProfile/setPassword/clearPassword/setCinnaTokens/clearCinnaTokens/getCinnaTokenState/deleteWithCascade/rotateGuestAlias`
+- `deleteWithCascade(id)` runs in a single transaction across `chats`, `llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `users`
+
 ### `src/main/auth/session.ts`
 - `getCurrentUserId()` — returns in-memory active user ID
 - `setCurrentUser(userId)` — sets active user + persists to `session.json`
@@ -103,17 +122,16 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 ### `src/main/auth/reload.ts`
 - `reloadUserProviders()` — clears LLM registry, disconnects all MCP, re-inits both for `getCurrentUserId()`
 
-### `src/main/ipc/auth.ipc.ts` — Update & Delete handlers
-- `auth:update-user` — validates user exists, not default; applies display name change and/or password set/change/remove via `hashPassword()`; returns updated `UserInfo`
-- `auth:delete-user` — verifies password if user has one set; deactivates session if deleting current user; clears Cinna tokens; cascade-deletes from all data tables (`chats`, `llmProviders`, `mcpProviders`, `chatModes`, `agents`); re-activates as `__default__` if was current user
+### `src/main/ipc/auth.ipc.ts`
+Thin handlers — each one calls `ipcHandle('auth:*', ...)` and delegates to `authService`. Auth-flow handlers (`register`, `login`, `update-user`, `delete-user`) catch `DomainError`/other errors and return a discriminated `{ success, error? }` shape so login/register forms render inline validation errors instead of entering a React Query error state.
 
-### Modified IPC handlers (userId filtering + activation gate)
-Every list/get/create/update/delete handler in these files now calls `getCurrentUserId()` and adds `eq(table.userId, userId)` to queries:
-- `src/main/ipc/chat.ipc.ts` — all chat CRUD + trash operations
-- `src/main/ipc/provider.ipc.ts` — provider list/upsert/delete, default-clearing scoped to user
-- `src/main/ipc/chatmode.ipc.ts` — mode list/get/upsert/delete
-- `src/main/ipc/agent.ipc.ts` — agent list/upsert/delete
-- `src/main/ipc/mcp.ipc.ts` — MCP list/upsert, insert includes userId
+### Activation gate on user-scoped IPC
+Every list/get/create/update/delete handler in these IPC files calls `userActivation.requireActivated()` first, then delegates to its service (which receives `getCurrentUserId()` and applies `eq(table.userId, userId)` filtering inside the per-table repo):
+- `src/main/ipc/chat.ipc.ts` → `chatService` (all chat CRUD + trash + chat-MCP links)
+- `src/main/ipc/provider.ipc.ts` → `providerService` (provider list/upsert/delete/test)
+- `src/main/ipc/chatmode.ipc.ts` → `chatModeService` (mode list/get/upsert/delete)
+- `src/main/ipc/agent.ipc.ts` → `agentService` (agent list/upsert/delete/sync-remote)
+- `src/main/ipc/mcp.ipc.ts` → `mcpService` (MCP list/upsert/delete/connect/disconnect)
 
 ## Renderer Components
 

@@ -31,8 +31,8 @@ Unified abstraction layer over multiple LLM provider SDKs (Anthropic, OpenAI, Ge
 - Only one provider can be marked as default at a time (setting one clears others)
 - Each provider can have a default model; used when creating new chats
 - Adapters are single-turn streamers: they translate ChatMessage[] to native format, stream text deltas via `onDelta`, collect tool calls, and return a `StreamResult` (`{content, toolCalls}`)
-- Adapters do NOT own the tool-call loop — the IPC handler runs the loop, executes tools, and calls the adapter again for each round
-- Shared concerns (tool execution, MCP aggregation, message persistence, tool loop orchestration) live in the IPC handler
+- Adapters do NOT own the tool-call loop — `chatStreamingService` runs the loop, executes tools, and calls the adapter again for each round
+- Shared concerns (tool execution, MCP aggregation, message persistence, tool loop orchestration) live in `chatStreamingService`
 
 ## Why a Custom Abstraction Over a Framework
 
@@ -44,11 +44,14 @@ Unified abstraction layer over multiple LLM provider SDKs (Anthropic, OpenAI, Ge
 ## Architecture Overview
 
 ```
-Chat IPC Handler -> createAdapter(providerType)
+chatStreamingService -> getAdapter(providerId) [from registry]
   -> AnthropicAdapter / OpenAIAdapter / GeminiAdapter
   -> adapter.stream(params) -> streams deltas via onDelta, returns StreamResult {content, toolCalls}
-  -> IPC handler owns the tool-call loop: executes tools, saves to DB, calls adapter again
+  -> chatStreamingService owns the tool-call loop: executes tools, saves to DB, calls adapter again
   -> Results streamed back via MessagePort
+
+providerService -> createAdapter(type, apiKey, providerId) [llm/factory.ts]
+  -> register/unregister in the registry on upsert/delete
 ```
 
 ## Current Adapters
@@ -64,7 +67,7 @@ Chat IPC Handler -> createAdapter(providerType)
 3. Implement `listModels()` (fetch dynamically or hardcode)
 4. Implement `stream()` as a single-turn streamer: stream deltas via `onDelta`, return `StreamResult` — no tool-call loop needed
 5. Implement `parseError()` to map SDK errors to `{ short, detail }`
-6. Register in `createAdapter()` in `src/main/ipc/llm.ipc.ts`
+6. Register in `createAdapter()` in `src/main/llm/factory.ts` (and add to the `ProviderType` union + `isProviderType` predicate)
 
 ## Integration Points
 

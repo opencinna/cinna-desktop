@@ -8,9 +8,12 @@
 |-------|------|---------|
 | Schema | `src/main/db/schema.ts` | 6 Cinna columns on `users` table |
 | Migration | `src/main/db/migrations/users.ts` | ALTER TABLE for Cinna columns with `hasColumn` guards |
+| DB Repo | `src/main/db/users.ts` | `userRepo.setCinnaTokens/clearCinnaTokens/getCinnaTokenState` for the 6 Cinna columns |
 | OAuth | `src/main/auth/cinna-oauth.ts` | Discovery, PKCE flow, token exchange, refresh, abort |
-| Tokens | `src/main/auth/cinna-tokens.ts` | Encrypted token storage, auto-refresh, rotation handling |
-| IPC | `src/main/ipc/auth.ipc.ts` | Modified `auth:register`, new `auth:cinna-oauth-abort`, updated `UserInfo` |
+| Tokens | `src/main/auth/cinna-tokens.ts` | Encrypted token storage (delegates to `userRepo`), auto-refresh, rotation handling |
+| Service | `src/main/services/authService.ts` | `authService.registerCinna()` — orchestrates OAuth + user insert + token store + activation, with rollback on failure |
+| IPC | `src/main/ipc/auth.ipc.ts` | Thin `auth:register` handler delegates to `authService.registerCinna()`; `auth:cinna-oauth-abort` calls `abortCinnaOAuthFlow()` |
+| Errors | `src/main/errors.ts` | `AuthError` with codes including `oauth_failed`, `missing_server_url` |
 | Keystore | `src/main/security/keystore.ts` | `encryptApiKey`/`decryptApiKey` — reused for Cinna tokens |
 | Callback | `src/main/mcp/oauth-callback.ts` | Reused `findAvailablePort()` + `waitForOAuthCallback()` — extended with `params` map |
 
@@ -79,10 +82,15 @@ All columns are nullable — NULL for `local_user` accounts. Migration uses `has
 - `clearCinnaTokens(userId)` — Nulls all Cinna token/client columns
 - `hasCinnaTokens(userId)` — Boolean check
 
+### `src/main/services/authService.ts`
+
+- `toDto(row)` — Internal helper that builds `UserDto` including Cinna fields (`cinnaHostingType`, `cinnaServerUrl`, `hasCinnaTokens`) for `cinna_user` type
+- `authService.registerCinna({ hostingType, serverUrl })` — Validates server URL → runs `startCinnaOAuthFlow()` → throws `AuthError('oauth_failed', ...)` on failure → checks for existing username → inserts user row → `storeCinnaTokens()` (rolls back via `userRepo.deleteWithCascade()` if token store fails) → `userActivation.activate()` → returns `UserDto`
+
 ### `src/main/ipc/auth.ipc.ts`
 
-- `toUserInfo(userRow)` — Helper that builds `UserInfo` including Cinna fields for `cinna_user` type
-- `auth:register` handler — Branches on `accountType`: local creates user directly; cinna creates user → runs OAuth → stores tokens on success, deletes user on failure
+- `auth:register` handler — Thin: branches on `accountType`, delegates to `authService.register()` (local) or `authService.registerCinna()` (cinna). Catches errors via `errorResponse()` to return `{ success: false, error }` for inline form display.
+- `auth:cinna-oauth-abort` handler — Calls `abortCinnaOAuthFlow()`.
 
 ## Renderer Components
 

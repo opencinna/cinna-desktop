@@ -4,13 +4,16 @@
 
 ### Main Process
 - `src/main/mcp/types.ts` — `McpProviderConfig`, `McpTool`, `McpConnection` types
-- `src/main/mcp/manager.ts` — `MCPManager` singleton: connect, disconnect, callTool, getTools, OAuth flow
+- `src/main/mcp/manager.ts` — `MCPManager` singleton: connect, disconnect, callTool, getTools, OAuth flow. Persists OAuth tokens via `mcpProviderRepo.setAuthTokens()` / `setClientInfo()`.
 - `src/main/mcp/oauth-provider.ts` — `ElectronOAuthProvider` class (DCR metadata, token/client-info storage, PKCE, browser redirect)
 - `src/main/mcp/oauth-callback.ts` — `waitForOAuthCallback()` (temp HTTP server) + `findAvailablePort()`
-- `src/main/ipc/mcp.ipc.ts` — MCP CRUD + chat-MCP junction handlers
+- `src/main/db/mcpProviders.ts` — `mcpProviderRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`. `setAuthTokens()` and `setClientInfo()` are called from the manager during OAuth (no ownership check — manager already holds the provider handle).
+- `src/main/services/mcpService.ts` — `mcpService` — DTO mapping (`hasAuth`, live `status`, `tools`, `error`), transport validation, calls `mcpManager.connect()/disconnect()` after every upsert/delete based on `enabled`
+- `src/main/ipc/mcp.ipc.ts` — Thin `mcp:*` handlers wrapped by `ipcHandle()`, gated by `requireActivated()`, delegate to `mcpService`. `mcp:connect` returns `{ success: false, error }` for inline display in the settings UI.
+- `src/main/errors.ts` — `McpError` + `McpErrorCode` (`not_found`, `not_activated`, `invalid_transport`, `connect_failed`)
 - `src/main/db/schema.ts` — `mcpProviders`, `chatMcpProviders` table definitions
 - `src/main/db/client.ts` — Migrations for MCP tables
-- `src/main/index.ts` — `initMcpProviders()`: connects all enabled MCP providers on startup
+- `src/main/index.ts` — `initMcpProviders()`: connects all enabled MCP providers on startup (called by activation, not eagerly)
 - `src/main/security/keystore.ts` — Encrypt/decrypt for OAuth tokens
 
 ### Preload
@@ -41,6 +44,11 @@
 
 ## Services & Key Methods
 
+- `src/main/services/mcpService.ts:list(userId)` — Returns `McpProviderDto[]` joining repo rows with live connection status/tools/errors from the manager.
+- `src/main/services/mcpService.ts:upsert(userId, input)` — Validates transport, persists via `mcpProviderRepo.upsert()`, then connects (if enabled) or disconnects (if disabled).
+- `src/main/services/mcpService.ts:delete(userId, id)` — Disconnects then removes the row.
+- `src/main/services/mcpService.ts` — `connect()`, `disconnect()`, `listTools()` — look up the owned row, then forward to the manager.
+- `src/main/db/mcpProviders.ts:setAuthTokens(id, encrypted)` / `setClientInfo(id, info)` — Called from the manager during OAuth callback, intentionally without an ownership check (the manager already holds the provider handle).
 - `src/main/mcp/manager.ts:connect(config)` — Creates transport, creates MCP Client, calls `client.connect()` + `client.listTools()`, caches tools
 - `src/main/mcp/manager.ts:disconnect(id)` — Calls `client.close()`, cleans up OAuth state, removes from map
 - `src/main/mcp/manager.ts:callTool(providerId, toolName, input)` — Calls `client.callTool()` on the connected client

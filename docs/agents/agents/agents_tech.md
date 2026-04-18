@@ -7,8 +7,13 @@
 | Purpose | File |
 |---------|------|
 | A2A client wrapper | `src/main/agents/a2a-client.ts` |
-| IPC handlers (CRUD) | `src/main/ipc/agent.ipc.ts` |
-| IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` |
+| Agent service | `src/main/services/agentService.ts` — CRUD, card preview, test, endpoint resolution, access-token resolution, remote sync |
+| DB Repo (agents) | `src/main/db/agents.ts` — `agentRepo` (CRUD, `updateCardCache`, `updateResolvedEndpoint`, transactional `syncRemote`) |
+| DB Repo (sessions) | `src/main/db/agents.ts` — `a2aSessionRepo` (`getByChat`, `getByChatAndAgent`, `upsert`) |
+| Errors | `src/main/errors.ts` — `AgentError` + `AgentErrorCode` (`not_found`, `unsupported_protocol`, `no_card_url`, `no_endpoint`, `remote_immutable`, `invalid_id`, `sync_reauth_required`, `sync_failed`) |
+| IPC handlers (CRUD) | `src/main/ipc/agent.ipc.ts` — thin handlers delegating to `agentService` |
+| IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` — fetch-card, test, send-message (MessagePort), cancel-message, get-session |
+| IPC wrap | `src/main/ipc/_wrap.ts` — `ipcHandle()` used by all `agent:*` channels |
 | IPC registration | `src/main/ipc/index.ts` — `registerAgentHandlers()` |
 | DB schema (agents) | `src/main/db/schema.ts` — `agents` table |
 | DB schema (sessions) | `src/main/db/schema.ts` — `a2aSessions` table |
@@ -98,16 +103,28 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - `buildSendParams(content, contextId?, taskId?)` — Constructs `MessageSendParams` with nanoid message ID, `role: 'user'`, text part.
 - `extractTextFromResult(result)` — Extracts concatenated text from any A2A response type (`message`, `task`, `status-update`, `artifact-update`). Prioritizes artifact parts, then status message parts.
 
+### Agent Service — `src/main/services/agentService.ts`
+
+- `agentService.list(userId)` — Returns `AgentDto[]` (token masked as `hasAccessToken`).
+- `agentService.upsert(userId, input)` — Rejects renderer-supplied IDs starting with `remote:` (sync owns those). For updates, requires existing owned row; throws `AgentError('not_found', ...)` otherwise. Encrypts access token via `encryptApiKey()` if provided.
+- `agentService.delete(userId, agentId)` — Throws `AgentError('remote_immutable', ...)` for `source='remote'` rows.
+- `agentService.fetchCardPreview({ cardUrl, accessToken? })` — User-id-less card fetch, used by the "add agent" form.
+- `agentService.testAgent(userId, agentId)` — Resolves access token, fetches card with protocol negotiation, calls `agentRepo.updateCardCache()` to cache `cardData`, `skills`, `endpointUrl`, `protocolInterfaceUrl`, `protocolInterfaceVersion`.
+- `agentService.resolveEndpointIfNeeded(userId, agent)` — Returns cached `protocolInterfaceUrl ?? endpointUrl`; for remote agents with no endpoint, fetches the card to resolve and caches via `agentRepo.updateResolvedEndpoint()`. Local agents must be tested first.
+- `agentService.resolveAccessToken(userId, agent)` — Remote → `getCinnaAccessToken(userId)`; local → `decryptApiKey(agent.accessTokenEncrypted)`.
+- `agentService.syncRemoteAgents(userId)` — See [Remote Agents Tech](../remote_agents/remote_agents_tech.md).
+
 ### IPC Agent Handler — `src/main/ipc/agent.ipc.ts`
 
-- `registerAgentHandlers()` — Registers CRUD `agent:*` IPC channels (list, upsert, delete) and delegates to `registerA2AHandlers()`.
+- `registerAgentHandlers()` — Registers CRUD + sync `agent:*` channels using `ipcHandle()`. All handlers `requireActivated()` then delegate to `agentService`. `agent:upsert`, `agent:delete`, `agent:sync-remote` catch errors via `ipcErrorShape()` and return `{ success: false, error }` for inline display in the settings UI. Delegates to `registerA2AHandlers()`.
 
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
-- `registerA2AHandlers()` — Registers A2A protocol-specific IPC channels (fetch-card, test, send-message, cancel-message).
-- `agent:send-message` handler — Loads existing `a2a_sessions` row for the chat/agent pair, passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Uses `protocolInterfaceUrl` (falling back to `endpointUrl`) to create A2A client, detects streaming capability. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange (creates on first message, updates on subsequent). Delegates message persistence to `messageRepo`, updates chat timestamp. Uses `AbortController` for cancellation tracked by `activeAbortControllers` map.
-- `agent:test` handler — Fetches card with protocol negotiation, updates cached `cardData`, `endpointUrl`, `protocolInterfaceUrl`, `protocolInterfaceVersion`, and `skills` in DB.
-- `agent:get-session` handler — Looks up the `a2a_sessions` row for a given `chatId`. Used by the renderer to detect whether a chat is an agent chat and resolve the `agentId` for routing.
+- `registerA2AHandlers()` — Registers A2A protocol-specific channels (fetch-card, test, send-message, cancel-message, get-session).
+- `agent:send-message` handler — Streaming via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Loads existing `a2a_sessions` row for the chat/agent pair, passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange. Delegates message persistence to `messageRepo`. Uses `AbortController` tracked by `activeAbortControllers` map.
+- `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
+- `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.
+- `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `a2aSessionRepo.getByChat(chatId) ?? null`. Used by the renderer to detect agent chats and resolve the `agentId` for routing.
 
 ## Renderer Components
 

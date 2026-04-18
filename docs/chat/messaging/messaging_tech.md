@@ -5,17 +5,27 @@
 ### Main Process
 - `src/main/db/schema.ts` — `chats`, `messages`, `chatMcpProviders` table definitions
 - `src/main/db/client.ts` — SQLite init, Drizzle instance, inline migrations for chat/message tables
+- `src/main/db/chats.ts` — `chatRepo` — chat CRUD, soft-delete/trash, message history loading, all scoped by `userId`
 - `src/main/db/messages.ts` — `messageRepo` — centralized message persistence (user, assistant, tool_call, error messages + chat timestamp updates)
-- `src/main/ipc/chat.ipc.ts` — Chat CRUD handlers: list, get, create, delete, update, add-message, set/get-mcp-providers
-- `src/main/ipc/llm.ipc.ts` — Streaming handler, centralized tool-call loop (up to 10 rounds), delegates message persistence to `messageRepo`, adapter factory (`createAdapter()`)
+- `src/main/db/chatMcp.ts` — `chatMcpRepo` — chat-MCP junction table (`replaceForChat()` runs in a transaction)
+- `src/main/services/chatService.ts` — `chatService` — chat CRUD orchestration, throws `ChatError` for missing rows
+- `src/main/services/chatStreamingService.ts` — Streaming orchestration: ownership check, MCP tool aggregation, centralized tool-call loop (up to 10 rounds), message persistence via `messageRepo`, MessagePort fan-out
+- `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId)` + `isProviderType()` (extracted from `llm.ipc.ts`)
+- `src/main/ipc/chat.ipc.ts` — Thin `chat:*` handlers, all wrapped with `ipcHandle()` and gated by `userActivation.requireActivated()`, delegate to `chatService`
+- `src/main/ipc/llm.ipc.ts` — `llm:send-message` (`ipcMain.on` + MessagePort) — checks activation, delegates to `chatStreamingService.stream()`. `llm:cancel` invokes `chatStreamingService.cancel(requestId)`.
+- `src/main/errors.ts` — `ChatError` + `ChatErrorCode` (`not_found`, `not_configured`, `adapter_unavailable`, `not_activated`)
 
 ### Preload
 - `src/preload/index.ts` — Exposes `window.api.chat.*` methods via contextBridge
 
 ### Renderer
 - `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop), isStreaming
-- `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useSendMessage (streaming handler with provider field)
-- `src/renderer/src/components/layout/MainArea.tsx` — Default-screen send handler (creates chat + sends first message); has its own streaming event handler that must mirror `useSendMessage` (including `provider` in `addToolCall`); auto-enables all active MCP providers on mount
+- `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, trash hooks, `useSendMessage` (looks up A2A session via `agents.getSession`, routes to LLM or agent stream)
+- `src/renderer/src/hooks/useChatStream.ts` — `useChatStream()` — owns the LLM + agent MessagePort event handlers (`startLlm`, `startAgent`, `cancel`); single source of truth for stream-event-to-store fan-out
+- `src/renderer/src/hooks/useNewChatFlow.ts` — `useNewChatFlow()` — orchestrates "create chat → set provider/model/MCPs (or agent) → send first message"; exports `resolveModel()` helper for picking a model that exists for a provider
+- `src/renderer/src/hooks/useDefaultProvider.ts` — `useDefaultProviderId()` — picks the user's default LLM provider (enabled + has API key, prefers `isDefault`)
+- `src/renderer/src/hooks/useMcp.ts` — `useChatMcpProviders()`, `useSetChatMcpProviders()` — chat-MCP junction queries/mutations
+- `src/renderer/src/components/layout/MainArea.tsx` — Composes `useNewChatFlow` (new-chat send), `useChatDetail` + `useChatModes` (active chat mode resolution), and renders the new-chat / active-chat layouts. No longer owns streaming event handling — that lives in `useChatStream`.
 - `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row
 - `src/renderer/src/components/chat/ChatControls.tsx` — Model dropdown + MCP toggle pills; active MCP IDs re-fetched when provider list changes (prevents stale FK references after provider deletion)
 - `src/renderer/src/components/chat/ChatConfigMenu.tsx` — [+] button with LLM/MCP provider submenus
@@ -52,10 +62,14 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 ## Services & Key Methods
 
-- `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()`, `saveToolCall()`, `saveError()`, `touchChat()`. Single source of truth for all message writes.
-- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, delegates message persistence to `messageRepo`, loads history (filtering out `role: 'error'`), gathers tools, runs centralized tool-call loop. On error, persists via `messageRepo.saveError()`.
-- `src/main/ipc/llm.ipc.ts:createAdapter()` — Factory that instantiates the correct LLM adapter based on provider type
-- `src/main/ipc/chat.ipc.ts` — All `ipcMain.handle('chat:*')` handlers for CRUD operations
+- `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()`, `saveToolCall()`, `saveError()`, `touchChat()`, `insertRaw()`, `getById()`. Single source of truth for all message writes.
+- `src/main/db/chats.ts` — `chatRepo`: `getOwned()`, `list()`, `listMessages()`, `listTrash()`, `create()`, `softDelete()`, `restore()`, `permanentDelete()`, `emptyTrash()`, `update()`. All writes scoped by `userId`.
+- `src/main/db/chatMcp.ts` — `chatMcpRepo`: `list()`, `listProviderIds()`, `replaceForChat()` (transactional).
+- `src/main/services/chatService.ts` — `chatService.list/get/create/delete/listTrash/restore/permanentDelete/emptyTrash/update/addMessage/setMcpProviders/getMcpProviders`. Throws `ChatError('not_found', ...)` for missing/unowned rows.
+- `src/main/services/chatStreamingService.ts` — `chatStreamingService.stream({ userId, chatId, userContent, port })`: validates ownership and configuration (throws `ChatError`), aggregates MCP tools, registers the `AbortController` in `activeAbortControllers`, fires the tool-call loop in the background (caller is not awaited), closes the port on completion. `chatStreamingService.cancel(requestId)` aborts the controller.
+- `src/main/llm/factory.ts:createAdapter(type, apiKey, providerId)` — Factory that instantiates the correct LLM adapter based on provider type. Used by `chatStreamingService` (via the registry) and `providerService` (for `test`/`testKey`).
+- `src/main/ipc/chat.ipc.ts` — Thin handlers: each `ipcHandle('chat:*', ...)` calls `userActivation.requireActivated()` then delegates to `chatService` with `getCurrentUserId()`.
+- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, checks `userActivation.isActivated()` (sends error to port if not), delegates the entire stream to `chatStreamingService.stream()`. `llm:cancel` is wrapped with `ipcHandle()`.
 
 ## Streaming Protocol
 

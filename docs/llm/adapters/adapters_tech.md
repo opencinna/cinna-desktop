@@ -4,12 +4,17 @@
 
 ### Main Process
 - `src/main/llm/types.ts` — `LLMAdapter` interface, `ModelInfo`, `ChatMessage`, `ToolCallInfo`, `StreamResult`, `StreamParams`, `LLMError` types
-- `src/main/llm/registry.ts` — In-memory `Map<providerId, LLMAdapter>`, `getAllModels()`
+- `src/main/llm/registry.ts` — In-memory `Map<providerId, LLMAdapter>`, `registerAdapter()`, `unregisterAdapter()`, `getAdapter()`, `clearAllAdapters()`, `getAllModels()`
+- `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId)` + `isProviderType(type)` (extracted from `llm.ipc.ts`)
 - `src/main/llm/anthropic.ts` — `AnthropicAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/openai.ts` — `OpenAIAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/gemini.ts` — `GeminiAdapter` (single-turn streamer, returns `StreamResult`)
-- `src/main/ipc/llm.ipc.ts` — Streaming handler, centralized tool-call loop, `createAdapter()` factory
-- `src/main/ipc/provider.ipc.ts` — Provider CRUD: list, upsert, delete, test, test-key, list-models
+- `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`. `upsert()` runs in a transaction and clears other defaults when `isDefault` is set, all scoped by `userId`.
+- `src/main/services/providerService.ts` — `providerService` — DTO mapping (`hasApiKey: boolean`), encryption via `encryptApiKey()`, registry sync on upsert/delete, `test()` and `testKey()` helpers, `listModels()` aggregator
+- `src/main/services/chatStreamingService.ts` — Drives the centralized tool-call loop via `getAdapter()` from the registry
+- `src/main/ipc/llm.ipc.ts` — `llm:send-message` (MessagePort) delegates to `chatStreamingService.stream()`; `llm:cancel` delegates to `chatStreamingService.cancel()`
+- `src/main/ipc/provider.ipc.ts` — Thin `provider:*` handlers wrapped by `ipcHandle()`, gated by `requireActivated()`, delegate to `providerService`. `provider:test` and `provider:test-key` catch errors and return `{ success: false, error }` for inline form display.
+- `src/main/errors.ts` — `ProviderError` + `ProviderErrorCode` (`not_found`, `unsupported_type`, `missing_api_key`, `not_activated`)
 - `src/main/db/schema.ts` — `llmProviders` table definition
 - `src/main/db/client.ts` — Migration for `llm_providers` table
 - `src/main/security/keystore.ts` — `safeStorage` encrypt/decrypt wrapper for API keys
@@ -44,9 +49,12 @@
 
 ## Services & Key Methods
 
-- `src/main/ipc/llm.ipc.ts:createAdapter()` — Factory: instantiates the correct adapter based on provider type
-- `src/main/llm/registry.ts` — `registerAdapter(providerId, adapter)`, `getAdapter(providerId)`, `getAllModels()`
-- `src/main/index.ts:initLLMProviders()` — On app start: loads all enabled providers from DB, decrypts keys, creates adapters, registers them
+- `src/main/llm/factory.ts:createAdapter(type, apiKey, providerId)` — Factory: instantiates the correct adapter based on provider type. `isProviderType(type)` narrows to the supported union.
+- `src/main/llm/registry.ts` — `registerAdapter(providerId, adapter)`, `unregisterAdapter(providerId)`, `getAdapter(providerId)`, `clearAllAdapters()`, `getAllModels()`
+- `src/main/services/providerService.ts:upsert()` — Validates type, encrypts API key, calls `llmProviderRepo.upsert()` (which clears other defaults transactionally), then either registers or unregisters the adapter based on `enabled` + `hasApiKey`.
+- `src/main/services/providerService.ts:test()` — Looks up owned provider, decrypts key, instantiates adapter via factory, calls `adapter.listModels()`.
+- `src/main/services/providerService.ts:testKey(type, apiKey)` — Probe with a temporary `__probe__` provider id; not registered.
+- `src/main/index.ts:initLLMProviders()` — On user activation: loads all enabled providers from DB, decrypts keys, creates adapters via factory, registers them.
 - `src/main/security/keystore.ts` — `encrypt(plaintext)`, `decrypt(blob)` using `safeStorage`
 
 ## Renderer Components

@@ -6,7 +6,9 @@
 - `src/main/db/schema.ts` — `chatModes` table schema, `chats.modeId` column
 - `src/main/db/migrations/chat-modes.ts` — `chat_modes` table creation migration
 - `src/main/db/migrations/chats.ts` — `mode_id` column migration on `chats`
-- `src/main/ipc/chatmode.ipc.ts` — CRUD IPC handlers for chat modes
+- `src/main/db/chatModes.ts` — `chatModeRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`
+- `src/main/services/chatModeService.ts` — `chatModeService` — thin wrapper over `chatModeRepo` adding logging
+- `src/main/ipc/chatmode.ipc.ts` — CRUD IPC handlers for chat modes (wrapped with `ipcHandle()`, gated by `requireActivated()`, delegate to `chatModeService`)
 - `src/main/ipc/index.ts` — `registerChatModeHandlers()` registration
 
 ### Preload
@@ -45,7 +47,9 @@
 
 ## Services & Key Methods
 
-- `src/main/ipc/chatmode.ipc.ts:registerChatModeHandlers()` — Registers all four IPC handlers using Drizzle ORM against `chatModes` schema
+- `src/main/db/chatModes.ts` — `chatModeRepo`: `list(userId)`, `getOwned(userId, id)`, `upsert(userId, input)`, `delete(userId, id)`
+- `src/main/services/chatModeService.ts` — `chatModeService`: `list/get/upsert/delete` — wraps repo, emits structured logs (`chat mode created/updated/deleted`)
+- `src/main/ipc/chatmode.ipc.ts:registerChatModeHandlers()` — Registers all four `chatmode:*` IPC handlers via `ipcHandle()`; each calls `requireActivated()` then delegates to `chatModeService`
 - `src/main/db/migrations/chat-modes.ts:migrateChatModes()` — Checks `hasTable('chat_modes')` and creates if absent
 - `src/main/db/migrations/chats.ts:migrateChats()` — Adds `mode_id` column via `hasColumn` check
 

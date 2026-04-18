@@ -6,7 +6,9 @@
 
 | Purpose | File |
 |---------|------|
-| Remote sync service | `src/main/agents/remote-sync.ts` |
+| Periodic sync runner | `src/main/agents/remote-sync.ts` — owns the 5-minute timer + `runSyncOnce()`; delegates fetch + DB work to `agentService` |
+| Sync logic (fetch + transactional upsert/prune) | `src/main/services/agentService.ts` — `agentService.syncRemoteAgents()` |
+| Transactional remote upsert/prune | `src/main/db/agents.ts` — `agentRepo.syncRemote(userId, targets)` |
 | A2A client (shared) | `src/main/agents/a2a-client.ts` |
 | IPC handlers (CRUD + sync) | `src/main/ipc/agent.ipc.ts` |
 | IPC handlers (A2A + JWT routing) | `src/main/ipc/agent_a2a.ipc.ts` |
@@ -60,22 +62,30 @@ Existing channels (`agent:send-message`, `agent:test`, `agent:fetch-card`) work 
 
 ## Services & Key Methods
 
-### Remote Sync — `src/main/agents/remote-sync.ts`
+### Sync Logic — `src/main/services/agentService.ts`
 
-- `syncRemoteAgents(userId)` — Fetches `GET {cinnaServerUrl}/api/v1/external/agents` with JWT. Upserts each target into local `agents` table. Deletes local remote agents no longer in the response. Returns `{ synced, removed }`.
-- `startPeriodicSync(userId)` — Starts a 5-minute interval that calls `syncRemoteAgents()`. Stops any existing interval first. Each periodic sync broadcasts `agents:remote-sync-complete` to the renderer on completion.
+- `agentService.syncRemoteAgents(userId)` — Returns `{ synced: 0, removed: 0 }` for non-Cinna users. Otherwise: fetches a fresh JWT via `getCinnaAccessToken(userId)`, GETs `{cinnaServerUrl}/api/v1/external/agents`, validates each target's `target_type` (one of `agent`, `app_mcp_route`, `identity`) and `target_id` (UUID v1–v5), then delegates the transactional upsert/prune to `agentRepo.syncRemote()`. Re-throws `CinnaReauthRequired` so the periodic loop can stop on revoked tokens.
+
+### Transactional Repo — `src/main/db/agents.ts`
+
+- `agentRepo.syncRemote(userId, targets)` — Single Drizzle transaction that upserts each target (using deterministic ID `remote:{target_type}:{target_id}`) and deletes any local rows with `source='remote'` not in the incoming set. Returns `{ synced, removed }`.
+
+### Periodic Runner — `src/main/agents/remote-sync.ts`
+
+- `runSyncOnce(userId)` — Calls `agentService.syncRemoteAgents()`, then notifies the renderer via `agents:remote-sync-complete`. On `CinnaReauthRequired`, stops the periodic timer and notifies with `{ error: 'reauth_required' }`. On other errors, notifies with `{ error: 'sync_failed' }` but keeps the timer running.
+- `startPeriodicSync(userId)` — Starts a 5-minute interval that calls `runSyncOnce()`. Stops any existing interval first.
 - `stopPeriodicSync()` — Clears the periodic sync interval.
 
-### JWT Resolution — `src/main/ipc/agent_a2a.ipc.ts`
+### JWT Resolution — `src/main/services/agentService.ts`
 
-- `resolveAgentAccessToken(agent)` — For `source='remote'`: calls `getCinnaAccessToken(getCurrentUserId())` to get a fresh JWT. For `source='local'`: decrypts `agent.accessTokenEncrypted`. Used by both `agent:send-message` and `agent:test` handlers.
-- Endpoint auto-resolution in `agent:send-message` — When a remote agent has no cached `endpointUrl`, the handler calls `fetchAgentCard(cardUrl, jwt)` to resolve the protocol endpoint, then caches `endpointUrl`, `protocolInterfaceUrl`, and `protocolInterfaceVersion` in the agents table. Subsequent messages use the cached endpoint.
+- `agentService.resolveAccessToken(userId, agent)` — For `source='remote'`: calls `getCinnaAccessToken(userId)` to get a fresh JWT. For `source='local'`: decrypts `agent.accessTokenEncrypted`. Used by both `agent:send-message` and `agent:test` IPC handlers.
+- `agentService.resolveEndpointIfNeeded(userId, agent)` — When a remote agent has no cached `endpointUrl`, fetches the card to resolve the protocol endpoint, then caches `endpointUrl`, `protocolInterfaceUrl`, and `protocolInterfaceVersion` via `agentRepo.updateResolvedEndpoint()`. Subsequent messages use the cached endpoint.
 
 ### Activation — `src/main/auth/activation.ts`
 
-- `activate(userId)` — Extended to call `_startRemoteSync()` after providers are loaded.
-- `_startRemoteSync(userId)` — Checks if user is `cinna_user` with `cinnaServerUrl`, then fires initial `syncRemoteAgents()` (non-blocking) and `startPeriodicSync()`. On sync completion, broadcasts `agents:remote-sync-complete` to the renderer via `getMainWindow().webContents.send()`.
-- `deactivate()` — Extended to call `stopPeriodicSync()` before clearing providers.
+- `activate(userId)` — Calls `_startRemoteSync()` after providers are loaded.
+- `_startRemoteSync(userId)` — Checks if user is `cinna_user` with `cinnaServerUrl`, then fires `runSyncOnce(userId)` (non-blocking) and `startPeriodicSync(userId)`. The runner is responsible for broadcasting `agents:remote-sync-complete`.
+- `deactivate()` — Calls `stopPeriodicSync()` before clearing providers.
 
 ## Renderer Components
 

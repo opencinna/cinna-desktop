@@ -9,7 +9,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - **Chat** — A persisted conversation bound to a specific LLM provider + model, with optional MCP servers enabled
 - **Message** — A single turn in a conversation (roles: user, assistant, tool_call, error)
 - **Streaming** — LLM responses arrive as incremental deltas via MessagePort, not as a single IPC response
-- **Tool-call loop** — Centralized in the IPC handler (not in adapters). When the LLM emits tool calls, the IPC handler executes them via MCP and feeds results back to the LLM for continuation. Every message (assistant + tool_call) is saved to DB incrementally as it happens.
+- **Tool-call loop** — Centralized in `chatStreamingService` (not in adapters). When the LLM emits tool calls, the service executes them via MCP and feeds results back to the LLM for continuation. Every message (assistant + tool_call) is saved to DB incrementally as it happens.
 
 ## User Stories / Flows
 
@@ -22,20 +22,21 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ### Sending a message in an existing chat
 1. User types in the input box and presses Send
 2. Renderer creates a MessageChannel, sends port2 + payload to main via `postMessage`
-3. Main saves user message to DB, loads full chat history, gathers MCP tools for the chat
-4. IPC handler enters the tool-call loop (up to 10 rounds):
+3. `llm:send-message` IPC handler delegates to `chatStreamingService.stream()`
+4. The service saves user message to DB, loads full chat history, gathers MCP tools for the chat
+5. The service enters the tool-call loop (up to 10 rounds):
    - Calls the LLM adapter's `stream()` — adapter returns a `StreamResult` (content + tool calls)
    - Saves assistant message to DB (with `toolCalls` if any)
    - If no tool calls, loop ends
    - Otherwise, executes each tool call via MCP, saves each `tool_call` message to DB
    - Appends messages to history, continues the loop
-5. Deltas stream back through the port: `request-id` -> `delta` -> `tool_use` -> `tool_result` -> `done`
+6. Deltas stream back through the port: `request-id` -> `delta` -> `tool_use` -> `tool_result` -> `done`
 
 ### Tool-call flow
 1. LLM adapter returns tool calls in the `StreamResult`
-2. IPC handler notifies renderer via port (`tool_use` event with tool name, input, and MCP provider name)
+2. `chatStreamingService` notifies renderer via port (`tool_use` event with tool name, input, and MCP provider name)
 3. Renderer immediately shows an animated tool call block: provider badge, shimmer progress bar, pending spinner
-4. IPC handler calls `mcpManager.callTool()` with the tool name and input
+4. `chatStreamingService` calls `mcpManager.callTool()` with the tool name and input
 5. Tool result (or error) is saved as a `tool_call` message in DB and sent back through the port
 6. Tool results are appended to the message history and fed back to the LLM for continuation
 7. On reload, the full tool-call history renders from DB — no data is lost
@@ -58,18 +59,20 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ## Architecture Overview
 
 ```
-User -> ChatInput (renderer) -> MessageChannel -> ipcMain.on('llm:send-message')
-  -> Save user message to DB
-  -> Load full chat history from DB
-  -> Gather MCP tools for chat
-  -> Tool-call loop (in IPC handler, up to 10 rounds):
-     -> LLM Adapter .stream() -> returns StreamResult {content, toolCalls}
-     -> Save assistant message to DB (with toolCalls)
-     -> If toolCalls: execute via MCPManager.callTool()
-        -> Save each tool_call message to DB
-        -> Notify renderer via port (tool_use, tool_result/tool_error)
-     -> Continue loop until no tool calls
-  -> Stream deltas back via MessagePort throughout
+User -> ChatInput (renderer) -> useChatStream.startLlm()
+  -> MessageChannel -> ipcMain.on('llm:send-message')
+  -> chatStreamingService.stream({ userId, chatId, userContent, port })
+     -> chatRepo.getOwned() (verify ownership + provider config)
+     -> messageRepo.saveUser()
+     -> chatRepo.listMessages() + chatMcpRepo.listProviderIds() + mcpManager.getToolsForProviders()
+     -> Tool-call loop (up to 10 rounds):
+        -> LLM Adapter .stream() -> returns StreamResult {content, toolCalls}
+        -> messageRepo.saveAssistant() (with toolCalls)
+        -> If toolCalls: mcpManager.callTool() per call
+           -> messageRepo.saveToolCall()
+           -> Notify renderer via port (tool_use, tool_result/tool_error)
+        -> Continue loop until no tool calls
+     -> Stream deltas back via MessagePort throughout
 ```
 
 ## Integration Points
