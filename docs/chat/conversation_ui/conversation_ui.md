@@ -14,7 +14,8 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - **System message** — A centered, danger-tinted box used for streaming errors. Contains a short message, an alert icon, and an expandable details section.
 - **Loading indicator** — Three bouncing dots shown inline (no avatar, no bubble) while waiting for the first streaming chunk.
 - **Entry animation (user)** — A newly sent user message appears first as a small rounded shape on the right and expands left and down into the full bubble while the text fades in.
-- **Entry animation (assistant)** — A streaming assistant message softly fades in as a single block (opacity + slight blur) over ~1s. The animation runs on the streaming bubble only; saved messages render statically to avoid a flicker on the streaming → saved transition.
+- **Entry animation (assistant, streaming)** — Each streamed text delta fades in as its own span (opacity + slight blur) over ~1s, so the assistant response reveals chunk-by-chunk rather than as a single block. Previously-rendered chunks stay static while new ones animate in. Applies to plain assistant text only — streaming thinking/tool narration blocks still use the block-level entry animation.
+- **Entry animation (assistant, full block)** — When a saved assistant message appears without having streamed (e.g., one-shot non-streaming response or A2A message parts), the entire block softly fades in (opacity + blur) over ~1s using the assistant-reveal mask. When the saved message replaces streaming blocks for the same chat, the block-level animation is suppressed so the swap is silent (the chunks already animated individually).
 
 ## Visual Hierarchy
 
@@ -36,7 +37,7 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - Streaming cursor: a small pulsing accent-coloured bar appended after the last text delta
 - Errors render as a `SystemMessage` — centered box with `--color-danger` border/background at 30%/8% opacity, expandable detail section
 - All colours use CSS variables (`var(--color-*)`) — never hardcoded values
-- Entry animations run only on first appearance: the user-bubble pop fires when the messages array grows by exactly one (i.e. the user just sent something), so initial loads, chat switches, and bulk re-fetches do not animate. The assistant fade fires only on the streaming bubble — never on saved messages — so the streaming → saved swap is seamless
+- Entry animations run only on first appearance: the user-bubble pop fires when the messages array grows by exactly one (i.e. the user just sent something), so initial loads, chat switches, and bulk re-fetches do not animate. For assistant messages, each streaming text delta fades in as its own chunk, and the block-level reveal on the DB-saved message is suppressed when that chat just streamed (tracked per-chat via `streamedIncrementallyChatId`) — so the streaming → saved swap is seamless without a second animation
 - Animations are theme-agnostic: only opacity / `filter: blur` / `transform` are animated, never colours
 
 ## Architecture Overview

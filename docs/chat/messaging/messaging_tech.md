@@ -22,14 +22,14 @@
 - `src/preload/index.ts` — Exposes `window.api.chat.*` methods via contextBridge
 
 ### Renderer
-- `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop), isStreaming
+- `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop; text blocks include a `segments: string[]` per-delta array for chunk-level animation), isStreaming, streamedIncrementallyChatId (per-chat flag used by MessageStream to skip the block-level reveal on the DB-saved assistant message when its chunks already animated during streaming)
 - `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, trash hooks, `useSendMessage` (looks up A2A session via `agents.getSession`, routes to LLM or agent stream)
 - `src/renderer/src/hooks/useChatStream.ts` — `useChatStream()` — owns the LLM + agent MessagePort event handlers (`startLlm`, `startAgent`, `cancel`); single source of truth for stream-event-to-store fan-out
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `useNewChatFlow()` — orchestrates "create chat → set provider/model/MCPs (or agent) → send first message"; exports `resolveModel()` helper for picking a model that exists for a provider
 - `src/renderer/src/hooks/useDefaultProvider.ts` — `useDefaultProviderId()` — picks the user's default LLM provider (enabled + has API key, prefers `isDefault`)
 - `src/renderer/src/hooks/useMcp.ts` — `useChatMcpProviders()`, `useSetChatMcpProviders()` — chat-MCP junction queries/mutations
 - `src/renderer/src/components/layout/MainArea.tsx` — Composes `useNewChatFlow` (new-chat send), `useChatDetail` + `useChatModes` (active chat mode resolution), and renders the new-chat / active-chat layouts. No longer owns streaming event handling — that lives in `useChatStream`.
-- `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row
+- `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row; auto-focuses the textarea on mount and whenever `chatId` changes, so navigating to a chat (including after the first-message send from the default screen) lands the caret in the input
 - `src/renderer/src/components/chat/ChatControls.tsx` — Model dropdown + MCP toggle pills; active MCP IDs re-fetched when provider list changes (prevents stale FK references after provider deletion)
 - `src/renderer/src/components/chat/ChatConfigMenu.tsx` — [+] button with LLM/MCP provider submenus
 - `src/renderer/src/components/chat/MessageStream.tsx` — Scrollable message list with auto-scroll

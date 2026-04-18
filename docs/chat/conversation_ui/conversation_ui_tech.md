@@ -11,13 +11,13 @@
 | `src/renderer/src/components/chat/ThinkingBlock.tsx` | Collapsible dimmed card for `thinking`-kind parts. Brain icon header, italic markdown body. `isStreaming` prop adds a pulsing accent dot in the header and defaults the card to expanded; persisted thinking parts default to collapsed. |
 | `src/renderer/src/components/chat/ToolNarrationBlock.tsx` | Collapsible dimmed card for `tool`-kind parts. Wrench icon header, `Tool: <toolName>` label (toolName comes from `cinna.tool_name` metadata), markdown body. Same expand/streaming behaviour as ThinkingBlock. |
 | `src/renderer/src/components/chat/ToolCallBlock.tsx` | Collapsible MCP tool-call row (distinct from ToolNarrationBlock). Borderless when collapsed, bordered on hover/expand. Parses MCP content-block arrays and JSON for structured result display. |
-| `src/renderer/src/assets/main.css` | CSS variable definitions (`--color-user-bubble`, `--color-border`, `--color-danger`, etc.) and entry-animation keyframes (`user-bubble-pop`, `user-bubble-content-in`, `assistant-bubble-in`). |
+| `src/renderer/src/assets/main.css` | CSS variable definitions (`--color-user-bubble`, `--color-border`, `--color-danger`, etc.) and entry-animation keyframes: `user-bubble-pop`, `user-bubble-content-in`, `assistant-reveal` (mask-based block reveal used by `.anim-assistant-bubble`), and `chunk-reveal` (opacity + blur fade used by `.anim-chunk` for per-delta streaming spans). |
 
 ### State
 
 | File | Role |
 |------|------|
-| `src/renderer/src/stores/chat.store.ts` | Zustand store holding `streamingBlocks` (text blocks now carry `kind` and optional `toolName`), `isStreaming`. `appendDelta(text, kind?, toolName?)` merges into the last block only when `kind` AND `toolName` match — otherwise pushes a new block |
+| `src/renderer/src/stores/chat.store.ts` | Zustand store holding `streamingBlocks` (text blocks carry `kind`, optional `toolName`, joined `content`, and a `segments: string[]` array of per-delta chunks used for chunk-level animation), `isStreaming`, and `streamedIncrementallyChatId` (chat ID of the most recent stream that produced gradual deltas — consumed by MessageStream to suppress block-level re-animation on DB arrival). `appendDelta(text, kind?, toolName?)` merges into the last block only when `kind` AND `toolName` match — otherwise pushes a new block, and each call appends a new entry to `segments`. `addToolCall` and `appendDelta` both set `streamedIncrementallyChatId` to the current `activeChatId`; it is reset to `null` on `startStreaming`, `setActiveChatId`, `stopStreaming`, and `reset`. |
 | `src/renderer/src/hooks/useChat.ts` | TanStack Query hook `useChatDetail(chatId)` — provides persisted messages (each may carry `parts[]` for structured rendering) |
 | `src/renderer/src/hooks/useChatStream.ts` | `handleAgent` reads `event.kind` and `event.toolName` from the delta payload and forwards them to `appendDelta` |
 | `src/shared/messageParts.ts` | Shared `ContentKind` and `MessagePart` types — single source of truth for both store and rendering |
@@ -28,14 +28,15 @@
 
 - `src/renderer/src/components/chat/MessageBubble.tsx`
 - **User path**: wraps content in a right-aligned `rounded-xl` div with `bg-[var(--color-user-bubble)]`, max 80% width. No icon. When the `animate` prop is true, the bubble div gets `anim-user-bubble-pop` (scale + border-radius from a small circle to the full bubble, `transform-origin: top right`) and an inner div wrapping the Markdown gets `anim-user-bubble-content` (delayed opacity fade so the bubble appears before the text).
-- **Assistant path**: renders Markdown directly in a full-width div, no background. Appends a pulsing accent cursor when `isStreaming` is true. When the `animate` prop is true, the wrapping div gets `anim-assistant-bubble` (1s opacity + `filter: blur` fade applied to the whole block — markdown/HTML is never split).
+- **Assistant path**: renders Markdown directly in a full-width div, no background. Appends a pulsing accent cursor when `isStreaming` is true. When the `animate` prop is true, the wrapping div gets `anim-assistant-bubble` (700ms `mask-image` reveal from top to bottom — markdown/HTML is never split). Note: MessageStream does not use this path for streaming plain text anymore; see the Entry-animation triggering section below.
 - **Meta popup**: optional `MetaPopup` shown on hover (info icon) for assistant messages with metadata.
 
 ### Entry-animation triggering (in MessageStream)
 
 - `prevRef` holds `{ chatId, messageIds }` from the previous render. A message is considered "new" only when `chatId` matches the previous render AND `messages.length === prev.messageIds.length + 1` AND the last message's id wasn't in the previous set. This skips initial loads, chat switches, and bulk re-fetches.
-- For the messages list, `animate` is passed only when `msg.role === 'user' && msg.id === newMessageId` — saved assistant bubbles never animate, which prevents a flicker when the streaming bubble unmounts and the saved bubble mounts in its place.
-- For streaming text blocks (rendered from `streamingBlocks`), `animate` is hard-coded to `true` so the assistant fade plays once when the streaming bubble mounts. Subsequent text deltas don't re-trigger the animation (CSS animations only run on mount unless the animation property changes).
+- For the messages list, `shouldAnimate` is computed as `msg.id === newMessageId && !suppressStreamReanimation`, where `suppressStreamReanimation = msg.role === 'assistant' && streamedIncrementallyChatId === chatId`. This means a saved assistant message for the chat that just streamed will NOT re-animate (chunks already animated individually), while a saved assistant message that did not come from incremental streaming — or a new user message — animates normally.
+- For streaming plain-text blocks (`kind: 'text'` in `streamingBlocks`), MessageStream no longer uses `MessageBubble`. Each entry in `block.segments` is rendered as a `<span className="anim-chunk">` inside a `whitespace-pre-wrap` container. CSS animations run once on mount, so only the newest segment animates while previous ones stay static. Trade-off: Markdown is not parsed during streaming for plain text — it is re-applied when the DB-persisted message renders via `MessageBubble` (silently, thanks to the suppression above).
+- Streaming `thinking` and `tool` kinds still use `ThinkingBlock` / `ToolNarrationBlock` with their joined `content` (Markdown-rendered, block-level fade).
 
 ### ThinkingBlock + ToolNarrationBlock
 

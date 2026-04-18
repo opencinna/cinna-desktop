@@ -45,7 +45,7 @@ function SystemMessage({ message, detail }: { message: string; detail?: string }
 
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
-  const { streamingBlocks, isStreaming } = useChatStore()
+  const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId } = useChatStore()
   const bottomRef = useRef<HTMLDivElement>(null)
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
     chatId: null,
@@ -112,7 +112,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           // thinking + text via `cinna.content_kind` metadata) — render each
           // part in order using the appropriate block.
           const parts = msg.parts
-          const shouldAnimate = msg.id === newMessageId
+          // Skip the fade-in when an assistant message replaces streaming blocks
+          // that already animated piece-by-piece — otherwise the content blinks
+          // as it re-animates on DB arrival. Scoped to the exact chat whose
+          // stream just finished so out-of-band arrivals elsewhere still animate.
+          const suppressStreamReanimation =
+            msg.role === 'assistant' && streamedIncrementallyChatId === chatId
+          const shouldAnimate = msg.id === newMessageId && !suppressStreamReanimation
           if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
             return (
               <div key={msg.id} className="space-y-2">
@@ -140,6 +146,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             />
           )
         })}
+
+        {/* Optimistic user bubble — shown immediately while the DB round-trip
+             is in flight so the dots always appear BELOW the user message. */}
+        {pendingUserMessage && !messages.some((m) => m.role === 'user' && m.content === pendingUserMessage) && (
+          <MessageBubble role="user" content={pendingUserMessage} animate />
+        )}
 
         {isStreaming && !hasStreamingContent && (
           <div className="flex gap-1 py-1">
@@ -173,13 +185,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               )
             }
             return (
-              <MessageBubble
-                key={`stream-text-${i}`}
-                role="assistant"
-                content={block.content}
-                isStreaming={isStreaming && isLastBlock}
-                animate
-              />
+              <div key={`stream-text-${i}`} className="text-sm leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">
+                {block.segments.map((seg, si) => (
+                  <span key={si} className="anim-chunk">
+                    {seg}
+                  </span>
+                ))}
+                {isStreaming && isLastBlock && (
+                  <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm align-middle" />
+                )}
+              </div>
             )
           }
           return (
@@ -194,6 +209,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             />
           )
         })}
+
+        {/* Persistent streaming indicator — stays at the bottom of all blocks
+            while the stream is active so the user always sees progress. */}
+        {isStreaming && hasStreamingContent && (
+          <div className="flex gap-1 py-1">
+            <span className="w-1 h-1 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '0ms' }} />
+            <span className="w-1 h-1 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '150ms' }} />
+            <span className="w-1 h-1 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
+          </div>
+        )}
 
         <div ref={bottomRef} />
       </div>

@@ -12,6 +12,7 @@ import {
   type Message,
   type Task
 } from '../agents/a2a-client'
+import type { A2AClient } from '@a2a-js/sdk/client'
 import {
   StreamPartsAccumulator,
   type MessageLike,
@@ -26,7 +27,15 @@ import { ipcHandle } from './_wrap'
 
 const logger = createLogger('A2A')
 
-const activeAbortControllers = new Map<string, AbortController>()
+interface ActiveRequest {
+  controller: AbortController
+  client?: A2AClient
+  taskId?: string
+}
+
+// Mutable context per in-flight request so the cancel handler can reach the A2A
+// client and task ID that become known during streaming.
+const activeRequests = new Map<string, ActiveRequest>()
 
 export function registerA2AHandlers(): void {
   // Fetch agent card from URL (for testing / adding a new agent)
@@ -145,7 +154,8 @@ export function registerA2AHandlers(): void {
 
     const abortController = new AbortController()
     const requestId = nanoid()
-    activeAbortControllers.set(requestId, abortController)
+    const activeRequest: ActiveRequest = { controller: abortController }
+    activeRequests.set(requestId, activeRequest)
     port.postMessage({ type: 'request-id', requestId })
 
     messageRepo.saveUser({ chatId, content: userContent })
@@ -154,6 +164,7 @@ export function registerA2AHandlers(): void {
       const accessToken = await agentService.resolveAccessToken(userId, agent)
 
       const client = await createA2AClient(endpointUrl, agent.cardUrl, accessToken)
+      activeRequest.client = client
       const card = await client.getAgentCard()
       const supportsStreaming = card.capabilities?.streaming === true
 
@@ -173,6 +184,14 @@ export function registerA2AHandlers(): void {
       let latestContextId = sessionContextId
       let latestTaskId = sessionTaskId
       let latestTaskState: string | undefined
+
+      const setTaskId = (id: string | undefined): void => {
+        if (!id) return
+        latestTaskId = id
+        activeRequest.taskId = id
+      }
+      // Seed from session if resuming.
+      if (sessionTaskId) activeRequest.taskId = sessionTaskId
 
       if (supportsStreaming) {
         const params = buildSendParams(userContent, sessionContextId, sessionTaskId)
@@ -194,7 +213,7 @@ export function registerA2AHandlers(): void {
                 accumulator.ingestMessage(su.status.message, port)
               }
               latestContextId = su.contextId
-              latestTaskId = su.taskId
+              setTaskId(su.taskId)
               latestTaskState = su.status.state
               port.postMessage({
                 type: 'status',
@@ -212,11 +231,11 @@ export function registerA2AHandlers(): void {
               const m = event as Message
               accumulator.ingestMessage(m, port)
               if (m.contextId) latestContextId = m.contextId
-              if (m.taskId) latestTaskId = m.taskId
+              if (m.taskId) setTaskId(m.taskId)
             } else if (event.kind === 'task') {
               const t = event as Task
               latestContextId = t.contextId
-              latestTaskId = t.id
+              setTaskId(t.id)
               if (t.status?.state) latestTaskState = t.status.state
               if (t.status?.message) {
                 accumulator.ingestMessage(t.status.message, port)
@@ -258,7 +277,7 @@ export function registerA2AHandlers(): void {
           artifacts?: ArtifactLike[]
         }): void => {
           if (task.contextId) latestContextId = task.contextId
-          if (task.id) latestTaskId = task.id
+          if (task.id) setTaskId(task.id)
           if (task.status?.state) latestTaskState = task.status.state
           if (task.status?.message) accumulator.ingestMessage(task.status.message, port)
           task.artifacts?.forEach((a) => accumulator.ingestArtifact(a, port))
@@ -269,14 +288,14 @@ export function registerA2AHandlers(): void {
         } else if (rpcResult.message) {
           const msg = rpcResult.message as MessageLike & { contextId?: string; taskId?: string }
           if (msg.contextId) latestContextId = msg.contextId
-          if (msg.taskId) latestTaskId = msg.taskId
+          if (msg.taskId) setTaskId(msg.taskId)
           accumulator.ingestMessage(msg, port)
         } else if (rpcResult.kind === 'task') {
           ingestTaskShape(rpcResult as Parameters<typeof ingestTaskShape>[0])
         } else if (rpcResult.kind === 'message') {
           const msg = rpcResult as unknown as MessageLike & { contextId?: string; taskId?: string }
           if (msg.contextId) latestContextId = msg.contextId
-          if (msg.taskId) latestTaskId = msg.taskId
+          if (msg.taskId) setTaskId(msg.taskId)
           accumulator.ingestMessage(msg, port)
         }
 
@@ -326,15 +345,25 @@ export function registerA2AHandlers(): void {
       }
     } finally {
       port.close()
-      activeAbortControllers.delete(requestId)
+      activeRequests.delete(requestId)
     }
   })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {
-    const controller = activeAbortControllers.get(requestId)
-    if (controller) {
-      controller.abort()
-      activeAbortControllers.delete(requestId)
+    const request = activeRequests.get(requestId)
+    if (!request) return { success: true }
+
+    // Abort locally first so the user sees immediate feedback.
+    request.controller.abort()
+    activeRequests.delete(requestId)
+
+    // Fire-and-forget: notify the remote agent but don't block the UI.
+    if (request.client && request.taskId) {
+      const taskId = request.taskId
+      logger.info('Sending cancelTask to agent', { taskId })
+      request.client.cancelTask({ id: taskId }).catch((err) =>
+        logger.warn('cancelTask failed', { taskId, error: String(err) })
+      )
     }
     return { success: true }
   })

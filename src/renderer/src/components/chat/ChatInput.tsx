@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useMemo, useImperativeHandle, forwardRef, type ReactNode } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, forwardRef, type ReactNode } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useSendMessage, useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
@@ -56,6 +56,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   useImperativeHandle(ref, () => ({
     focus: () => textareaRef.current?.focus()
   }))
+
+  // Auto-focus on mount and when the bound chat changes — so opening a chat
+  // (e.g. after sending the first message from the default screen) lands the
+  // caret in the input without an extra click.
+  useEffect(() => {
+    textareaRef.current?.focus()
+  }, [chatId])
   const sendMessage = useSendMessage()
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming, activeRequestId } = useChatStore()

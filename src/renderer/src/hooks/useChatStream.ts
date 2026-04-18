@@ -38,7 +38,7 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
     useChatStore()
 
   const handleLlm = useCallback(
@@ -71,7 +71,7 @@ export function useChatStream(): {
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
             queryClient.invalidateQueries({ queryKey: ['chats'] })
-          ]).then(() => clearStreamingBlocks())
+          ]).finally(() => clearStreamingBlocks())
           break
         case 'error':
           console.error('LLM error:', event.error)
@@ -97,7 +97,7 @@ export function useChatStream(): {
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
             queryClient.invalidateQueries({ queryKey: ['chats'] })
-          ]).then(() => clearStreamingBlocks())
+          ]).finally(() => clearStreamingBlocks())
           break
         case 'error':
           console.error('Agent error:', event.error)
@@ -111,23 +111,35 @@ export function useChatStream(): {
 
   const startLlm = useCallback(
     (chatId: string, content: string): void => {
-      window.api.llm.sendMessage(chatId, content, (event) => handleLlm(chatId, event))
+      setPendingUserMessage(content)
+      try {
+        window.api.llm.sendMessage(chatId, content, (event) => handleLlm(chatId, event))
+      } catch {
+        stopStreaming()
+        return
+      }
       // User message is saved by main before streaming begins — refetch once it settles
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleLlm, queryClient]
+    [handleLlm, queryClient, setPendingUserMessage, stopStreaming]
   )
 
   const startAgent = useCallback(
     (agentId: string, chatId: string, content: string): void => {
-      window.api.agents.sendMessage(agentId, chatId, content, (event) => handleAgent(chatId, event))
+      setPendingUserMessage(content)
+      try {
+        window.api.agents.sendMessage(agentId, chatId, content, (event) => handleAgent(chatId, event))
+      } catch {
+        stopStreaming()
+        return
+      }
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleAgent, queryClient]
+    [handleAgent, queryClient, setPendingUserMessage, stopStreaming]
   )
 
   const cancel = useCallback((requestId: string): void => {
