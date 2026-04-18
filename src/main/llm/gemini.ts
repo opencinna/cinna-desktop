@@ -1,7 +1,14 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { nanoid } from 'nanoid'
 import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
-import type { Content, Part, FunctionCallPart, FunctionResponsePart } from '@google/generative-ai'
+import type {
+  Content,
+  Part,
+  FunctionCallPart,
+  FunctionResponsePart,
+  FunctionDeclaration,
+  FunctionDeclarationSchema
+} from '@google/generative-ai'
 
 export class GeminiAdapter implements LLMAdapter {
   readonly providerType = 'gemini'
@@ -185,13 +192,14 @@ export class GeminiAdapter implements LLMAdapter {
     return { history, lastMessage }
   }
 
-  private convertTools(
-    tools: ToolDefinition[]
-  ): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+  private convertTools(tools: ToolDefinition[]): FunctionDeclaration[] {
+    // MCP tool inputSchemas are JSON Schema objects (`{ type: 'object', properties: {...} }`)
+    // which match Gemini's FunctionDeclarationSchema shape at runtime; we cast to satisfy
+    // the stricter compile-time interface.
     return tools.map((t) => ({
       name: t.name,
       description: t.description,
-      parameters: t.inputSchema
+      parameters: t.inputSchema as unknown as FunctionDeclarationSchema
     }))
   }
 }

@@ -2,6 +2,9 @@ import { nanoid } from 'nanoid'
 import { eq, desc } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
+import type { MessagePart } from '../../shared/messageParts'
+
+export type { MessagePart }
 
 export interface SaveUserMessage {
   chatId: string
@@ -12,6 +15,7 @@ export interface SaveAssistantMessage {
   chatId: string
   content: string
   toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }> | null
+  parts?: MessagePart[] | null
 }
 
 export interface SaveToolCallMessage {
@@ -78,6 +82,7 @@ export const messageRepo = {
         role: 'assistant',
         content: msg.content,
         toolCalls: msg.toolCalls ?? null,
+        parts: msg.parts ?? null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })

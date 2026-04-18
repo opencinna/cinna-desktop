@@ -1,4 +1,5 @@
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
+import type { MessagePart } from '../../shared/messageParts'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -149,6 +150,7 @@ export const messages = sqliteTable('messages', {
   >(),
   toolError: integer('tool_error', { mode: 'boolean' }),
   toolProvider: text('tool_provider'),
+  parts: text('parts', { mode: 'json' }).$type<MessagePart[]>(),
   sortOrder: integer('sort_order').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

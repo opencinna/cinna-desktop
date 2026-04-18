@@ -2,8 +2,11 @@
 
 ## File Locations
 
+### Shared (cross-process types)
+- `src/shared/messageParts.ts` — `ContentKind` and `MessagePart` types used by main (DB schema, repo, A2A accumulator) and renderer (store, hook, MessageStream, ThinkingBlock, ToolNarrationBlock). Type-only module; included by both `tsconfig.node.json` and `tsconfig.web.json`
+
 ### Main Process
-- `src/main/db/schema.ts` — `chats`, `messages`, `chatMcpProviders` table definitions
+- `src/main/db/schema.ts` — `chats`, `messages`, `chatMcpProviders` table definitions (`messages.parts` typed as `MessagePart[]`)
 - `src/main/db/client.ts` — SQLite init, Drizzle instance, inline migrations for chat/message tables
 - `src/main/db/chats.ts` — `chatRepo` — chat CRUD, soft-delete/trash, message history loading, all scoped by `userId`
 - `src/main/db/messages.ts` — `messageRepo` — centralized message persistence (user, assistant, tool_call, error messages + chat timestamp updates)
@@ -40,7 +43,7 @@
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
 | `chats` | Conversations | id, title, model_id, provider_id, created_at, updated_at |
-| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, sort_order |
+| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, parts (json — `MessagePart[]`, optional, set by A2A agents with `cinna.content_kind`-tagged parts), sort_order |
 | `chat_mcp_providers` | Junction: MCP servers active per chat | chat_id, mcp_provider_id (composite PK) |
 
 DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-desktop/cinna.db` on macOS).
@@ -62,7 +65,7 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 ## Services & Key Methods
 
-- `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()`, `saveToolCall()`, `saveError()`, `touchChat()`, `insertRaw()`, `getById()`. Single source of truth for all message writes.
+- `src/main/db/messages.ts` — `messageRepo`: centralized message persistence: `saveUser()`, `saveAssistant()` (accepts optional `parts: MessagePart[]` for A2A structured messages), `saveToolCall()`, `saveError()`, `touchChat()`, `insertRaw()`, `getById()`. Re-exports `MessagePart` from `src/shared/messageParts.ts`. Single source of truth for all message writes.
 - `src/main/db/chats.ts` — `chatRepo`: `getOwned()`, `list()`, `listMessages()`, `listTrash()`, `create()`, `softDelete()`, `restore()`, `permanentDelete()`, `emptyTrash()`, `update()`. All writes scoped by `userId`.
 - `src/main/db/chatMcp.ts` — `chatMcpRepo`: `list()`, `listProviderIds()`, `replaceForChat()` (transactional).
 - `src/main/services/chatService.ts` — `chatService.list/get/create/delete/listTrash/restore/permanentDelete/emptyTrash/update/addMessage/setMcpProviders/getMcpProviders`. Throws `ChatError('not_found', ...)` for missing/unowned rows.

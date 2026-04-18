@@ -156,7 +156,7 @@ export function MainArea(): React.JSX.Element {
   return (
     <div className="flex-1 flex flex-col min-w-0">
       <MessageStream chatId={activeChatId} />
-      <div className="py-3 bg-[var(--color-bg)]">
+      <div className="py-3">
         <ChatInput
           chatId={activeChatId}
           modeColor={activeChatModeColor}

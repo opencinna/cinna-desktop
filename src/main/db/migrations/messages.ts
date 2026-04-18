@@ -28,4 +28,8 @@ export function migrateMessages(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'messages', 'tool_provider')) {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN tool_provider TEXT`)
   }
+
+  if (!hasColumn(sqlite, 'messages', 'parts')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN parts TEXT`)
+  }
 }

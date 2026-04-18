@@ -8,9 +8,7 @@
  */
 import {
   A2AClient,
-  type A2AClientOptions,
-  type A2AStreamEventData,
-  type SendMessageResult
+  type A2AClientOptions
 } from '@a2a-js/sdk/client'
 import type {
   AgentCard,
@@ -33,9 +31,7 @@ export type {
   Message,
   Task,
   TaskStatusUpdateEvent,
-  TaskArtifactUpdateEvent,
-  A2AStreamEventData,
-  SendMessageResult
+  TaskArtifactUpdateEvent
 }
 
 /** The protocol version family our SDK supports. */
@@ -77,6 +73,92 @@ function buildAuthFetch(accessToken: string): typeof fetch {
 }
 
 /**
+ * Wrap a fetch implementation to log every A2A HTTP request and response
+ * at DEBUG level. For SSE responses (content-type: text/event-stream), the
+ * body is tee'd so that each chunk is logged as it arrives without
+ * disturbing the consumer's stream.
+ *
+ * This is the source of truth for "what did the server send" — it sits
+ * below the SDK's parsing layer, so missing data here = server-side issue.
+ */
+function buildLoggingFetch(base: typeof fetch): typeof fetch {
+  return async (input, init) => {
+    const url =
+      typeof input === 'string'
+        ? input
+        : input instanceof URL
+          ? input.toString()
+          : input.url
+    const method = (init?.method ?? 'GET').toUpperCase()
+
+    let reqBody: unknown = undefined
+    if (typeof init?.body === 'string') {
+      try {
+        reqBody = JSON.parse(init.body)
+      } catch {
+        reqBody = init.body
+      }
+    }
+    logger.debug(`HTTP → ${method} ${url}`, { body: reqBody })
+
+    let response: Response
+    try {
+      response = await base(input, init)
+    } catch (err) {
+      logger.error(`HTTP ✗ ${method} ${url}`, { error: String(err) })
+      throw err
+    }
+
+    const contentType = response.headers.get('content-type') ?? ''
+
+    if (contentType.includes('text/event-stream') && response.body) {
+      logger.debug(`HTTP ← ${response.status} ${url} (SSE stream opened)`, {
+        contentType
+      })
+      const [forLog, forConsumer] = response.body.tee()
+      void (async () => {
+        const reader = forLog.getReader()
+        const decoder = new TextDecoder()
+        let chunkIndex = 0
+        try {
+          while (true) {
+            const { value, done } = await reader.read()
+            if (done) {
+              logger.debug(`SSE stream closed after ${chunkIndex} chunk(s) | ${url}`)
+              return
+            }
+            const chunk = decoder.decode(value, { stream: true })
+            logger.debug(`SSE chunk #${chunkIndex++} | ${url}`, { chunk })
+          }
+        } catch (err) {
+          logger.warn(`SSE log-stream error | ${url}`, { error: String(err) })
+        }
+      })()
+      return new Response(forConsumer, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers
+      })
+    }
+
+    const clone = response.clone()
+    let resBody: unknown = undefined
+    try {
+      const text = await clone.text()
+      try {
+        resBody = JSON.parse(text)
+      } catch {
+        resBody = text
+      }
+    } catch (err) {
+      resBody = { readError: String(err) }
+    }
+    logger.debug(`HTTP ← ${response.status} ${url}`, { body: resBody })
+    return response
+  }
+}
+
+/**
  * Fetch the raw agent card JSON from a URL.
  */
 async function fetchRawCard(
@@ -85,7 +167,7 @@ async function fetchRawCard(
 ): Promise<Record<string, unknown>> {
   const resolvedUrl = resolveCardUrl(cardUrl)
   logger.debug(`GET ${resolvedUrl}`, { authenticated: !!accessToken })
-  const fetchImpl = accessToken ? buildAuthFetch(accessToken) : fetch
+  const fetchImpl = buildLoggingFetch(accessToken ? buildAuthFetch(accessToken) : fetch)
   let response: Response
   try {
     response = await fetchImpl(resolvedUrl, {
@@ -215,9 +297,8 @@ export async function createA2AClient(
   cardUrl: string,
   accessToken?: string
 ): Promise<A2AClient> {
-  const opts: A2AClientOptions = {}
-  if (accessToken) {
-    opts.fetchImpl = buildAuthFetch(accessToken)
+  const opts: A2AClientOptions = {
+    fetchImpl: buildLoggingFetch(accessToken ? buildAuthFetch(accessToken) : fetch)
   }
 
   // Fetch the raw card and patch it with the resolved endpoint URL
@@ -256,43 +337,3 @@ export function buildSendParams(
   }
 }
 
-/**
- * Extract text content from a task or message result.
- */
-export function extractTextFromResult(result: SendMessageResult | A2AStreamEventData): string {
-  if ('kind' in result) {
-    if (result.kind === 'message') {
-      return extractTextFromParts((result as Message).parts)
-    }
-    if (result.kind === 'task') {
-      const task = result as Task
-      // Try artifacts first, then status message
-      if (task.artifacts?.length) {
-        return task.artifacts.map((a) => extractTextFromParts(a.parts)).join('\n')
-      }
-      if (task.status?.message) {
-        return extractTextFromParts(task.status.message.parts)
-      }
-      return ''
-    }
-    if (result.kind === 'status-update') {
-      const su = result as TaskStatusUpdateEvent
-      if (su.status?.message) {
-        return extractTextFromParts(su.status.message.parts)
-      }
-      return ''
-    }
-    if (result.kind === 'artifact-update') {
-      const au = result as TaskArtifactUpdateEvent
-      return extractTextFromParts(au.artifact.parts)
-    }
-  }
-  return ''
-}
-
-function extractTextFromParts(parts: Array<{ kind: string; text?: string }>): string {
-  return parts
-    .filter((p) => p.kind === 'text' && p.text)
-    .map((p) => p.text!)
-    .join('')
-}

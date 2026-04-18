@@ -7,6 +7,8 @@
 | Purpose | File |
 |---------|------|
 | A2A client wrapper | `src/main/agents/a2a-client.ts` |
+| A2A stream parts accumulator | `src/main/agents/streamPartsAccumulator.ts` — per-part delta tracking, `cinna.content_kind` / `cinna.tool_name` metadata interpretation, structured `parts[]` build-up |
+| Shared part types | `src/shared/messageParts.ts` — `ContentKind`, `MessagePart` (cross-process type contract) |
 | Agent service | `src/main/services/agentService.ts` — CRUD, card preview, test, endpoint resolution, access-token resolution, remote sync |
 | DB Repo (agents) | `src/main/db/agents.ts` — `agentRepo` (CRUD, `updateCardCache`, `updateResolvedEndpoint`, transactional `syncRemote`) |
 | DB Repo (sessions) | `src/main/db/agents.ts` — `a2aSessionRepo` (`getByChat`, `getByChatAndAgent`, `upsert`) |
@@ -89,7 +91,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 | `agent:delete` | handle | `agentId: string` | `{ success }` |
 | `agent:fetch-card` | handle | `{ cardUrl, accessToken? }` | `{ success, card?, protocol?: { url, version }, error? }` |
 | `agent:test` | handle | `agentId: string` | `{ success, card?, error? }` — also updates DB cached metadata + protocol interface |
-| `agent:send-message` | on (MessagePort) | `[agentId, chatId, content]` | Events via port: `request-id`, `delta`, `status`, `done`, `error` |
+| `agent:send-message` | on (MessagePort) | `[agentId, chatId, content]` | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
 | `agent:cancel-message` | handle | `requestId: string` | `{ success }` |
 | `agent:get-session` | handle | `chatId: string` | `{ id, chatId, agentId, contextId, taskId, taskState } \| null` |
 
@@ -101,7 +103,12 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - `resolveProtocol(card)` — Protocol version negotiation logic. Checks for top-level `url` (v0.3 style), then scans `supportedInterfaces` for a `0.3.x` entry. Throws with a descriptive error if no compatible version found.
 - `createA2AClient(endpointUrl, cardUrl, accessToken?)` — Fetches the raw card, patches `url` with the pre-resolved `endpointUrl`, then instantiates `A2AClient` from `@a2a-js/sdk` with the patched card object.
 - `buildSendParams(content, contextId?, taskId?)` — Constructs `MessageSendParams` with nanoid message ID, `role: 'user'`, text part.
-- `extractTextFromResult(result)` — Extracts concatenated text from any A2A response type (`message`, `task`, `status-update`, `artifact-update`). Prioritizes artifact parts, then status message parts.
+
+### Stream Parts Accumulator — `src/main/agents/streamPartsAccumulator.ts`
+
+- `StreamPartsAccumulator` — Stateful per-stream object. `ingestMessage(message, port)` and `ingestArtifact(artifact, port)` walk each `TextPart`, compute the delta vs the prior text seen for that `(messageId, partIndex)` key, classify the part via `cinna.content_kind` metadata, post a `{ type: 'delta', kind, text, toolName? }` event to the port, and merge the delta into the running structured `parts[]` list (consecutive parts collapse only when both `kind` and `toolName` match). `snapshotParts()` returns the structured list for persistence; `answerText()` returns the concat of `text`-kind parts only — used as the `messages.content` fallback.
+- `partKindOf(part)` / `partToolNameOf(part)` — Read `metadata['cinna.content_kind']` and `metadata['cinna.tool_name']` respectively, with safe defaults.
+- `KIND_METADATA_KEY`, `TOOL_NAME_METADATA_KEY` — Exported constants documenting the Cinna-backend contract (counterpart: `a2a_event_mapper.py`).
 
 ### Agent Service — `src/main/services/agentService.ts`
 
@@ -121,7 +128,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
 - `registerA2AHandlers()` — Registers A2A protocol-specific channels (fetch-card, test, send-message, cancel-message, get-session).
-- `agent:send-message` handler — Streaming via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Loads existing `a2a_sessions` row for the chat/agent pair, passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange. Delegates message persistence to `messageRepo`. Uses `AbortController` tracked by `activeAbortControllers` map.
+- `agent:send-message` handler — Streaming via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Loads existing `a2a_sessions` row for the chat/agent pair, passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Constructs a `StreamPartsAccumulator` and forwards each event's message/artifacts to it (`ingestMessage`, `ingestArtifact`) — the accumulator handles delta computation, kind routing, and structured-parts build-up. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange. On stream completion, persists `messages.content = accumulator.answerText()` and `messages.parts = accumulator.snapshotParts()` via `messageRepo.saveAssistant()`. Same accumulator pattern is used for the non-streaming branch (single response). Uses `AbortController` tracked by `activeAbortControllers` map.
 - `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
 - `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.
 - `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `a2aSessionRepo.getByChat(chatId) ?? null`. Used by the renderer to detect agent chats and resolve the `agentId` for routing.

@@ -18,6 +18,8 @@ Universal agent integration that lets users chat with external AI agents through
 | **A2A Session** | A persistent record linking a chat to an A2A agent's remote session — stores the server-assigned `contextId` and `taskId` for conversation continuity across messages |
 | **Context ID** | Server-assigned identifier grouping related interactions into a single conversation context (A2A protocol concept) |
 | **Task ID** | Server-assigned identifier for a task created by the agent in response to user messages; may change across interactions within the same context |
+| **Message Part** | A typed segment of an assistant message — `kind: 'text' \| 'thinking' \| 'tool'`. A2A messages may stream multiple parts that get persisted as a structured `parts[]` list alongside the flat `content` fallback |
+| **Content Kind** | A2A `TextPart.metadata['cinna.content_kind']` value (`text`, `thinking`, `tool`) that tells the client how to route/render the part. Cinna-backend convention — see [Streaming Pipeline](streaming_pipeline.md) |
 
 ## User Stories / Flows
 
@@ -102,6 +104,8 @@ There are two ways to select an agent for a new chat:
 - **Token security** — Access tokens never leave the main process; renderer only sees `hasAccessToken: boolean`
 - **Card caching** — Agent card JSON is cached in the DB to avoid re-fetching on every operation; refreshed on "Test Connection"
 - **Streaming detection** — The A2A client checks `card.capabilities.streaming` to decide between SSE streaming and single-response fallback
+- **Per-part delta routing** — Each A2A `TextPart` can carry `metadata['cinna.content_kind']`; the client routes each fragment to a distinct rendering block (assistant text, thinking, tool narration). When metadata is absent, parts default to `text` — keeps backward compatibility with non-Cinna A2A servers. Full pipeline detailed in [Streaming Pipeline](streaming_pipeline.md)
+- **Structured parts persisted** — Assistant messages from A2A agents store a `parts[]` JSON list on the message row in addition to the concatenated `content` text used for previews/search. Renderer prefers `parts[]` when present, falls back to `content` otherwise (LLM messages, legacy agent rows)
 - **Cancellation** — In-flight agent requests can be cancelled via the same stop button used for LLM streaming
 - **Bound agent badge** — When viewing an active agent chat, the controls row shows a read-only agent badge (Bot icon + agent name) styled like the AgentSelector's expanded state. The badge has no dismiss button and no dropdown — the agent is permanently bound to the session. Model and MCP selectors are hidden since they don't apply to agent chats
 
@@ -122,8 +126,10 @@ Chat Flow — First Message (agent selection via Bot icon or @-mention):
                                 └→ chat:create + chat:update(agentId)
                                 └→ window.api.agents.sendMessage() → IPC (MessagePort)
                                    → agent_a2a.ipc.ts → createA2AClient() → External Agent
+                                   → SSE events → StreamPartsAccumulator (per-part deltas, kind+toolName)
                                    → Deltas streamed back via MessagePort → chat.store → UI
                                    → a2a_sessions row created (contextId, taskId from response)
+                                   → On done: messageRepo.saveAssistant({ content, parts })
 
 Chat Flow — Subsequent Messages:
   ChatInput → useSendMessage() → agents.getSession(chatId)
@@ -136,7 +142,8 @@ Chat Flow — Subsequent Messages:
 ## Integration Points
 
 - **Chat system** — Agent messages are saved to the same `messages` table as LLM messages, using the same `role` values (`user`, `assistant`). The chat row stores `agentId` for display/identification, while `a2a_sessions` stores the remote session state for protocol-level continuity
-- **Streaming infrastructure** — Reuses the `MessagePort` streaming pattern from [Messaging](../../chat/messaging/messaging.md), including `chat.store` streaming state (`startStreaming`, `appendDelta`, `stopStreaming`)
+- **Streaming infrastructure** — Reuses the `MessagePort` streaming pattern from [Messaging](../../chat/messaging/messaging.md), including `chat.store` streaming state (`startStreaming`, `appendDelta`, `stopStreaming`). Agent deltas extend the protocol with `kind` and `toolName` fields — see [Streaming Pipeline](streaming_pipeline.md)
+- **Conversation rendering** — `thinking` and `tool` parts render via dedicated collapsible blocks (`ThinkingBlock`, `ToolNarrationBlock`) — see [Conversation UI](../../chat/conversation_ui/conversation_ui.md)
 - **Security** — Token encryption uses the same `encryptApiKey`/`decryptApiKey` from [safeStorage keystore](../../llm/adapters/adapters.md) as LLM API keys
 - **Settings UI** — Follows the same card/form pattern as [LLM Provider settings](../../ui/settings/settings.md)
 - **Sidebar navigation** — "Agents" tab appears between "Chats" and "LLM Providers" in the settings sidebar

@@ -61,6 +61,35 @@ border-t border-[var(--color-border)] px-4 py-3 space-y-2.5
 ```
 (or `space-y-3` for forms with more sections)
 
+## Chat Collapsible Block Pattern
+
+Used for expandable blocks inside the chat conversation (ThinkingBlock, ToolNarrationBlock) — distinct from the settings Expandable Card Pattern. Optimised for a lightweight, uncluttered chat interface.
+
+### Key difference from settings cards
+Settings cards always show border + background. Chat collapsible blocks are **visually flat when collapsed** — no border, no background — only a small header row. The card appearance fades in on expand and fades out on collapse.
+
+### Outer container
+```
+rounded-lg border transition-colors duration-200
+  collapsed: border-transparent bg-transparent
+  expanded:  border-[var(--color-border)]/60 bg-[var(--color-bg-secondary)]/40
+```
+
+### Header (always visible)
+- Button: `w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[11px]`
+- Text: `text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]`
+- Chevron: `ChevronRight` size 11, `transition-transform duration-150`, `rotate-90` when expanded
+- Streaming indicator: pulsing `w-1 h-1` accent dot
+
+### Body (conditional render)
+- Content appears/disappears via `{expanded && (...)}` (not AnimatedCollapse — chat blocks use simple conditional render for minimal overhead)
+- Markdown body at `opacity-80` (thinking) or `opacity-90` (tool narration)
+
+### When to use
+- Chat conversation blocks that should recede when not actively viewed
+- Any expandable element in the message stream where visual noise should be minimised
+- Do NOT use for settings cards — those use the Expandable Card Pattern with AnimatedCollapse
+
 ## Form Input Pattern
 
 Standard input class used across all settings forms:

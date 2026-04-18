@@ -1,4 +1,7 @@
 import { create } from 'zustand'
+import type { ContentKind } from '../../../shared/messageParts'
+
+export type { ContentKind }
 
 export interface ToolCallBlock {
   type: 'tool_call'
@@ -13,7 +16,9 @@ export interface ToolCallBlock {
 
 interface TextBlock {
   type: 'text'
+  kind: ContentKind
   content: string
+  toolName?: string
 }
 
 export type StreamBlock = TextBlock | ToolCallBlock
@@ -26,7 +31,7 @@ interface ChatStore {
 
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
-  appendDelta: (text: string) => void
+  appendDelta: (text: string, kind?: ContentKind, toolName?: string) => void
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
@@ -47,14 +52,18 @@ export const useChatStore = create<ChatStore>((set) => ({
   startStreaming: (requestId) =>
     set({ isStreaming: true, streamingBlocks: [], activeRequestId: requestId }),
 
-  appendDelta: (text) =>
+  appendDelta: (text, kind = 'text', toolName) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
-      if (last?.type === 'text') {
+      if (last?.type === 'text' && last.kind === kind && last.toolName === toolName) {
         blocks[blocks.length - 1] = { ...last, content: last.content + text }
       } else {
-        blocks.push({ type: 'text', content: text })
+        blocks.push(
+          toolName
+            ? { type: 'text', kind, content: text, toolName }
+            : { type: 'text', kind, content: text }
+        )
       }
       return { streamingBlocks: blocks }
     }),

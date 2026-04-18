@@ -18,6 +18,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | **Agent** | An external AI service (e.g. A2A agent) registered by the user, communicating via a standardized protocol |
 | **A2A** | Agent-to-Agent Protocol v1.0 — open standard for AI agent interoperability (discovery, messaging, streaming) |
 | **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
+| **Message Part** | A typed segment of an assistant message (`kind: 'text' \| 'thinking' \| 'tool'`) — A2A messages may persist a structured `parts[]` list driven by the Cinna `cinna.content_kind` metadata convention |
 | **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
 | **User Account** | A local profile (username + optional password) that scopes all data — chats, providers, agents, settings |
 | **Default User** | Built-in guest account (`__default__`) with no password, always present |
@@ -53,6 +54,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
+- [A2A Streaming Pipeline](agents/agents/streaming_pipeline.md) — Per-part delta computation, `cinna.content_kind` / `cinna.tool_name` metadata contract, structured `parts[]` persistence
 - [Remote Agents](agents/remote_agents/remote_agents.md) — Auto-sync agents from Cinna backend, categorized display, JWT-based A2A communication
 
 ### LLM

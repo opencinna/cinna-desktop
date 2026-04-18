@@ -6,9 +6,17 @@ import { a2aSessionRepo, agentRepo } from '../db/agents'
 import {
   createA2AClient,
   buildSendParams,
-  extractTextFromResult,
-  type ProtocolResolution
+  type ProtocolResolution,
+  type TaskStatusUpdateEvent,
+  type TaskArtifactUpdateEvent,
+  type Message,
+  type Task
 } from '../agents/a2a-client'
+import {
+  StreamPartsAccumulator,
+  type MessageLike,
+  type ArtifactLike
+} from '../agents/streamPartsAccumulator'
 import { agentService } from '../services/agentService'
 import { userActivation } from '../auth/activation'
 import { getCurrentUserId } from '../auth/session'
@@ -168,24 +176,23 @@ export function registerA2AHandlers(): void {
 
       if (supportsStreaming) {
         const params = buildSendParams(userContent, sessionContextId, sessionTaskId)
-        logger.debug('Sending streaming message', params)
-        let fullText = ''
+        logger.debug('→ sendMessageStream', params)
+        let eventIndex = 0
+        const accumulator = new StreamPartsAccumulator()
 
         for await (const event of client.sendMessageStream(params)) {
-          if (abortController.signal.aborted) break
-
-          const text = extractTextFromResult(event)
-          if (text) {
-            const delta = text.slice(fullText.length)
-            if (delta) {
-              fullText = text
-              port.postMessage({ type: 'delta', text: delta })
-            }
+          logger.debug(`← stream event #${eventIndex++}`, event)
+          if (abortController.signal.aborted) {
+            logger.debug('Stream aborted by client', { eventsReceived: eventIndex })
+            break
           }
 
           if ('kind' in event) {
             if (event.kind === 'status-update') {
-              const su = event as { status: { state: string }; taskId: string; contextId: string }
+              const su = event as TaskStatusUpdateEvent
+              if (su.status?.message) {
+                accumulator.ingestMessage(su.status.message, port)
+              }
               latestContextId = su.contextId
               latestTaskId = su.taskId
               latestTaskState = su.status.state
@@ -196,67 +203,96 @@ export function registerA2AHandlers(): void {
                 contextId: su.contextId
               })
             } else if (event.kind === 'artifact-update') {
-              const au = event as { contextId: string; taskId?: string }
+              const au = event as TaskArtifactUpdateEvent
+              if (au.artifact) {
+                accumulator.ingestArtifact(au.artifact, port)
+              }
               if (au.contextId) latestContextId = au.contextId
+            } else if (event.kind === 'message') {
+              const m = event as Message
+              accumulator.ingestMessage(m, port)
+              if (m.contextId) latestContextId = m.contextId
+              if (m.taskId) latestTaskId = m.taskId
             } else if (event.kind === 'task') {
-              const t = event as { id: string; contextId: string; status?: { state: string } }
+              const t = event as Task
               latestContextId = t.contextId
               latestTaskId = t.id
               if (t.status?.state) latestTaskState = t.status.state
-            } else if (event.kind === 'message') {
-              const m = event as { contextId?: string; taskId?: string }
-              if (m.contextId) latestContextId = m.contextId
-              if (m.taskId) latestTaskId = m.taskId
+              if (t.status?.message) {
+                accumulator.ingestMessage(t.status.message, port)
+              }
+              t.artifacts?.forEach((a) => accumulator.ingestArtifact(a, port))
             }
           }
         }
 
-        if (fullText) {
-          messageRepo.saveAssistant({ chatId, content: fullText })
+        const parts = accumulator.snapshotParts()
+        const answerText = accumulator.answerText()
+        logger.debug('Stream complete', {
+          eventsReceived: eventIndex,
+          parts: parts.map((p) => ({ kind: p.kind, len: p.text.length })),
+          answerLength: answerText.length
+        })
+
+        if (parts.length > 0) {
+          messageRepo.saveAssistant({
+            chatId,
+            content: answerText || parts.map((p) => p.text).join(''),
+            parts
+          })
         }
       } else {
         const params = buildSendParams(userContent, sessionContextId, sessionTaskId)
+        logger.debug('→ sendMessage', params)
         const result = await client.sendMessage(params)
+        logger.debug('← response', result)
         const responseJson = result as unknown as Record<string, unknown>
 
         const rpcResult = (responseJson.result ?? responseJson) as Record<string, unknown>
-        let fullText = ''
+        const accumulator = new StreamPartsAccumulator()
 
-        if (rpcResult.task) {
-          const task = rpcResult.task as {
-            id?: string
-            contextId?: string
-            status?: { state: string }
-          }
+        const ingestTaskShape = (task: {
+          id?: string
+          contextId?: string
+          status?: { state?: string; message?: MessageLike }
+          artifacts?: ArtifactLike[]
+        }): void => {
           if (task.contextId) latestContextId = task.contextId
           if (task.id) latestTaskId = task.id
           if (task.status?.state) latestTaskState = task.status.state
-          fullText = extractTextFromResult({ kind: 'task', ...(rpcResult.task as object) } as never)
-        } else if (rpcResult.message) {
-          const msg = rpcResult.message as { contextId?: string; taskId?: string }
-          if (msg.contextId) latestContextId = msg.contextId
-          if (msg.taskId) latestTaskId = msg.taskId
-          fullText = extractTextFromResult({
-            kind: 'message',
-            ...(rpcResult.message as object)
-          } as never)
-        } else {
-          const top = rpcResult as {
-            id?: string
-            contextId?: string
-            taskId?: string
-            status?: { state: string }
-          }
-          if (top.contextId) latestContextId = top.contextId
-          if (top.id && rpcResult.kind === 'task') latestTaskId = top.id
-          if (top.taskId) latestTaskId = top.taskId
-          if (top.status?.state) latestTaskState = top.status.state
-          fullText = extractTextFromResult(rpcResult as never)
+          if (task.status?.message) accumulator.ingestMessage(task.status.message, port)
+          task.artifacts?.forEach((a) => accumulator.ingestArtifact(a, port))
         }
 
-        if (fullText) {
-          port.postMessage({ type: 'delta', text: fullText })
-          messageRepo.saveAssistant({ chatId, content: fullText })
+        if (rpcResult.task) {
+          ingestTaskShape(rpcResult.task as Parameters<typeof ingestTaskShape>[0])
+        } else if (rpcResult.message) {
+          const msg = rpcResult.message as MessageLike & { contextId?: string; taskId?: string }
+          if (msg.contextId) latestContextId = msg.contextId
+          if (msg.taskId) latestTaskId = msg.taskId
+          accumulator.ingestMessage(msg, port)
+        } else if (rpcResult.kind === 'task') {
+          ingestTaskShape(rpcResult as Parameters<typeof ingestTaskShape>[0])
+        } else if (rpcResult.kind === 'message') {
+          const msg = rpcResult as unknown as MessageLike & { contextId?: string; taskId?: string }
+          if (msg.contextId) latestContextId = msg.contextId
+          if (msg.taskId) latestTaskId = msg.taskId
+          accumulator.ingestMessage(msg, port)
+        }
+
+        const parts = accumulator.snapshotParts()
+        const answerText = accumulator.answerText()
+        logger.debug('Non-streaming complete', {
+          parts: parts.map((p) => ({ kind: p.kind, len: p.text.length })),
+          answerLength: answerText.length
+        })
+
+        if (parts.length > 0) {
+          messageRepo.saveAssistant({
+            chatId,
+            content: answerText || parts.map((p) => p.text).join(''),
+            parts
+          })
         }
       }
 

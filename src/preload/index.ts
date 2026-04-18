@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import type { MessagePart } from '../shared/messageParts'
 
 export interface ChatData {
   id: string
@@ -22,6 +23,7 @@ export interface MessageData {
   toolInput?: Record<string, unknown>
   toolError?: boolean
   toolProvider?: string
+  parts?: MessagePart[] | null
   sortOrder: number
   createdAt: Date
 }

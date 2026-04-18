@@ -1,6 +1,7 @@
 import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
+import type { ContentKind } from '../../../shared/messageParts'
 
 type LlmEvent = {
   type: string
@@ -18,6 +19,8 @@ type LlmEvent = {
 type AgentEvent = {
   type: string
   text?: string
+  kind?: ContentKind
+  toolName?: string
   requestId?: string
   taskId?: string
   contextId?: string
@@ -83,7 +86,7 @@ export function useChatStream(): {
           startStreaming(event.requestId ?? '')
           break
         case 'delta':
-          appendDelta(event.text!)
+          appendDelta(event.text!, event.kind ?? 'text', event.toolName)
           break
         case 'done':
           stopStreaming()

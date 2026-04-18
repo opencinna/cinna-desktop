@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { hasColumn, hasTable } from './helpers'
+import { hasColumn } from './helpers'
 
 export function migrateUsers(sqlite: Database.Database): void {
   // Create users table

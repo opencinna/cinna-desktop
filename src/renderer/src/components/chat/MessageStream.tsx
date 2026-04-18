@@ -4,9 +4,12 @@ import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
+import { ThinkingBlock } from './ThinkingBlock'
+import { ToolNarrationBlock } from './ToolNarrationBlock'
 
 interface MessageStreamProps {
   chatId: string
+  bottomPadding?: number
 }
 
 function SystemMessage({ message, detail }: { message: string; detail?: string }): React.JSX.Element {
@@ -105,6 +108,28 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
           if (msg.role === 'assistant' && !msg.content) {
             return null
           }
+          // Assistant message with structured parts (e.g. A2A agents emitting
+          // thinking + text via `cinna.content_kind` metadata) — render each
+          // part in order using the appropriate block.
+          const parts = msg.parts
+          if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
+            return (
+              <div key={msg.id} className="space-y-2">
+                {parts.map((p, idx) => {
+                  const k = `${msg.id}-${idx}`
+                  if (p.kind === 'thinking') {
+                    return <ThinkingBlock key={k} content={p.text} />
+                  }
+                  if (p.kind === 'tool') {
+                    return (
+                      <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} />
+                    )
+                  }
+                  return <MessageBubble key={k} role="assistant" content={p.text} />
+                })}
+              </div>
+            )
+          }
           return (
             <MessageBubble
               key={msg.id}
@@ -123,10 +148,29 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
           </div>
         )}
 
-        {/* Render streaming blocks in order: text and tool calls interleaved */}
+        {/* Render streaming blocks in order: text/thinking/tool interleaved */}
         {streamingBlocks.map((block, i) => {
           if (block.type === 'text') {
             const isLastBlock = i === streamingBlocks.length - 1
+            if (block.kind === 'thinking') {
+              return (
+                <ThinkingBlock
+                  key={`stream-think-${i}`}
+                  content={block.content}
+                  isStreaming={isStreaming && isLastBlock}
+                />
+              )
+            }
+            if (block.kind === 'tool') {
+              return (
+                <ToolNarrationBlock
+                  key={`stream-tool-${i}`}
+                  content={block.content}
+                  toolName={block.toolName}
+                  isStreaming={isStreaming && isLastBlock}
+                />
+              )
+            }
             return (
               <MessageBubble
                 key={`stream-text-${i}`}
