@@ -32,6 +32,17 @@ export function MainArea(): React.JSX.Element {
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
   const [selectedAgent, setSelectedAgent] = useState<AgentData | null>(null)
   const chatInputRef = useRef<ChatInputHandle>(null)
+  const inputWrapperRef = useRef<HTMLDivElement>(null)
+  const [inputHeight, setInputHeight] = useState(0)
+
+  // Track input wrapper height for overlay padding
+  useEffect(() => {
+    const el = inputWrapperRef.current
+    if (!el) return
+    const ro = new ResizeObserver(([entry]) => setInputHeight(entry.contentRect.height))
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [activeChatId])
   const mcpDefaultsApplied = useRef(false)
   const [defaultMcpIds, setDefaultMcpIds] = useState<Set<string>>(new Set())
 
@@ -154,21 +165,32 @@ export function MainArea(): React.JSX.Element {
   const activeChatModeColor = activeChatMode ? getPreset(activeChatMode.colorPreset) : null
 
   return (
-    <div className="flex-1 flex flex-col min-w-0">
-      <MessageStream chatId={activeChatId} />
-      <div className="py-3">
-        <ChatInput
-          chatId={activeChatId}
-          modeColor={activeChatModeColor}
-          leftSlot={
-            activeChatMode ? (
-              <ChatConfigMenu
-                activeMode={activeChatMode}
-                onSelectMode={handleActiveChatModeChange}
-              />
-            ) : undefined
-          }
-        />
+    <div className="flex-1 flex flex-col min-w-0 relative overflow-hidden">
+      <MessageStream chatId={activeChatId} bottomPadding={inputHeight} />
+      <div
+        ref={inputWrapperRef}
+        className="absolute bottom-0 left-0 right-0 pt-6 pb-3 pointer-events-none"
+        style={{
+          WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 24px)',
+          maskImage: 'linear-gradient(to bottom, transparent, black 24px)',
+          backdropFilter: 'blur(12px)',
+          WebkitBackdropFilter: 'blur(12px)'
+        }}
+      >
+        <div className="pointer-events-auto">
+          <ChatInput
+            chatId={activeChatId}
+            modeColor={activeChatModeColor}
+            leftSlot={
+              activeChatMode ? (
+                <ChatConfigMenu
+                  activeMode={activeChatMode}
+                  onSelectMode={handleActiveChatModeChange}
+                />
+              ) : undefined
+            }
+          />
+        </div>
       </div>
     </div>
   )

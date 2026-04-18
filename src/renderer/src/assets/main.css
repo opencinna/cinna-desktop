@@ -157,6 +157,7 @@
   .markdown-body th {
     background: var(--color-bg-secondary);
     font-weight: 600;
+    opacity: 0.7;
   }
   .markdown-body a {
     color: var(--color-accent);

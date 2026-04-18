@@ -43,7 +43,7 @@ function SystemMessage({ message, detail }: { message: string; detail?: string }
   )
 }
 
-export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element {
+export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
   const { streamingBlocks, isStreaming } = useChatStore()
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -75,7 +75,7 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
   }, [chatId, messages])
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4">
+    <div className="flex-1 overflow-y-auto px-4 py-4" style={bottomPadding ? { paddingBottom: bottomPadding + 16 } : undefined}>
       <div className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           <div className="text-center text-[var(--color-text-muted)] py-16">
