@@ -7,7 +7,8 @@
  */
 import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/client'
-import { users, agents } from '../db/schema'
+import { agents } from '../db/schema'
+import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { nanoid } from 'nanoid'
 import { createLogger } from '../logger/logger'
@@ -49,7 +50,7 @@ const SYNC_INTERVAL_MS = 5 * 60 * 1000 // 5 minutes
  */
 export async function syncRemoteAgents(userId: string): Promise<{ synced: number; removed: number }> {
   const db = getDb()
-  const user = db.select().from(users).where(eq(users.id, userId)).get()
+  const user = userRepo.get(userId)
 
   if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) {
     return { synced: 0, removed: 0 }

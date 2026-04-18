@@ -1,6 +1,4 @@
-import { eq } from 'drizzle-orm'
-import { getDb } from '../db/client'
-import { users } from '../db/schema'
+import { userRepo } from '../db/users'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { refreshCinnaTokens, CinnaReauthRequired } from './cinna-oauth'
 
@@ -20,16 +18,12 @@ export function storeCinnaTokens(
     expiresIn: number
   }
 ): void {
-  const db = getDb()
-  db.update(users)
-    .set({
-      cinnaClientId: tokens.clientId,
-      cinnaAccessTokenEnc: encryptApiKey(tokens.accessToken),
-      cinnaRefreshTokenEnc: encryptApiKey(tokens.refreshToken),
-      cinnaTokenExpiresAt: Date.now() + tokens.expiresIn * 1000
-    })
-    .where(eq(users.id, userId))
-    .run()
+  userRepo.setCinnaTokens(userId, {
+    clientId: tokens.clientId,
+    accessTokenEnc: encryptApiKey(tokens.accessToken),
+    refreshTokenEnc: encryptApiKey(tokens.refreshToken),
+    expiresAt: Date.now() + tokens.expiresIn * 1000
+  })
 }
 
 /**
@@ -40,18 +34,17 @@ export function storeCinnaTokens(
  * @throws {CinnaReauthRequired} if tokens are revoked or replay detected
  */
 export async function getCinnaAccessToken(userId: string): Promise<string> {
-  const db = getDb()
-  const user = db.select().from(users).where(eq(users.id, userId)).get()
+  const state = userRepo.getCinnaTokenState(userId)
 
-  if (!user?.cinnaAccessTokenEnc || !user.cinnaRefreshTokenEnc) {
+  if (!state?.accessTokenEnc || !state.refreshTokenEnc) {
     throw new CinnaReauthRequired('No Cinna tokens stored')
   }
 
-  const expiresAt = user.cinnaTokenExpiresAt ?? 0
+  const expiresAt = state.expiresAt ?? 0
   const needsRefresh = Date.now() > expiresAt - 60_000
 
   if (!needsRefresh) {
-    return decryptApiKey(user.cinnaAccessTokenEnc)
+    return decryptApiKey(state.accessTokenEnc)
   }
 
   // Deduplicate concurrent refresh attempts
@@ -61,9 +54,9 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
   refreshInProgress = (async () => {
     try {
-      const currentRefreshToken = decryptApiKey(user.cinnaRefreshTokenEnc!)
-      const serverUrl = user.cinnaServerUrl
-      const clientId = user.cinnaClientId
+      const currentRefreshToken = decryptApiKey(state.refreshTokenEnc!)
+      const serverUrl = state.serverUrl
+      const clientId = state.clientId
 
       if (!serverUrl || !clientId) {
         throw new CinnaReauthRequired('Missing Cinna server URL or client ID')
@@ -71,7 +64,6 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
       const newTokens = await refreshCinnaTokens(serverUrl, clientId, currentRefreshToken)
 
-      // Store rotated tokens
       storeCinnaTokens(userId, {
         clientId,
         accessToken: newTokens.accessToken,
@@ -98,23 +90,5 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
  * Clear all Cinna tokens and client ID for a user.
  */
 export function clearCinnaTokens(userId: string): void {
-  const db = getDb()
-  db.update(users)
-    .set({
-      cinnaClientId: null,
-      cinnaAccessTokenEnc: null,
-      cinnaRefreshTokenEnc: null,
-      cinnaTokenExpiresAt: null
-    })
-    .where(eq(users.id, userId))
-    .run()
-}
-
-/**
- * Check if a user has Cinna tokens stored.
- */
-export function hasCinnaTokens(userId: string): boolean {
-  const db = getDb()
-  const user = db.select().from(users).where(eq(users.id, userId)).get()
-  return !!(user?.cinnaAccessTokenEnc && user?.cinnaRefreshTokenEnc)
+  userRepo.clearCinnaTokens(userId)
 }

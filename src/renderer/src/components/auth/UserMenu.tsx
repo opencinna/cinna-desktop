@@ -2,10 +2,6 @@ import { useState, useRef, useEffect } from 'react'
 import { User, ChevronDown, Plus, LogOut, Cloud } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUsers, useLogin, useLogout } from '../../hooks/useAuth'
-
-function useIsUnlocked(): (userId: string) => boolean {
-  return useAuthStore((s) => s.isUnlocked)
-}
 import { RegisterForm } from './RegisterForm'
 import { LoginPrompt } from './LoginPrompt'
 
@@ -15,7 +11,6 @@ export function UserMenu(): React.JSX.Element {
   const [loginUserId, setLoginUserId] = useState<string | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   const currentUser = useAuthStore((s) => s.currentUser)
-  const isUnlocked = useIsUnlocked()
   const { data: users } = useUsers()
   const login = useLogin()
   const logout = useLogout()
@@ -45,15 +40,17 @@ export function UserMenu(): React.JSX.Element {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [showRegister])
 
-  const handleSwitchUser = (userId: string, hasPassword: boolean): void => {
-    if (hasPassword && !isUnlocked(userId)) {
-      // Password required and not yet authenticated this session
+  const handleSwitchUser = async (userId: string, hasPassword: boolean): Promise<void> => {
+    setOpen(false)
+    if (!hasPassword) {
+      login.mutate({ userId })
+      return
+    }
+    // Main-process tracks whether the user has unlocked this session.
+    // Try without a password — if main says one is required, prompt for it.
+    const result = await login.mutateAsync({ userId })
+    if (!result.success) {
       setLoginUserId(userId)
-      setOpen(false)
-    } else {
-      // No password, or already unlocked this session — switch directly
-      login.mutate({ userId, skipPassword: true })
-      setOpen(false)
     }
   }
 

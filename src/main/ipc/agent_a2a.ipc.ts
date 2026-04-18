@@ -4,6 +4,7 @@ import { eq, and } from 'drizzle-orm'
 import { getDb } from '../db/client'
 import { agents, a2aSessions } from '../db/schema'
 import { messageRepo } from '../db/messages'
+import { chatRepo } from '../db/chats'
 import { decryptApiKey } from '../security/keystore'
 import {
   fetchAgentCard,
@@ -81,7 +82,12 @@ export function registerA2AHandlers(): void {
     }> => {
       userActivation.requireActivated()
       const db = getDb()
-      const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
+      const userId = getCurrentUserId()
+      const agent = db
+        .select()
+        .from(agents)
+        .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
+        .get()
       if (!agent) {
         logger.warn(`Test failed: agent ${agentId} not found`)
         return { success: false, error: 'Agent not found' }
@@ -113,7 +119,7 @@ export function registerA2AHandlers(): void {
                 description: s.description
               })) ?? null
             })
-            .where(eq(agents.id, agentId))
+            .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
             .run()
           return { success: true, card: card as unknown as Record<string, unknown> }
         } catch (err) {
@@ -134,6 +140,8 @@ export function registerA2AHandlers(): void {
   // Look up the A2A session for a chat (used by renderer to detect agent chats)
   ipcMain.handle('agent:get-session', async (_event, chatId: string) => {
     userActivation.requireActivated()
+    const userId = getCurrentUserId()
+    if (!chatRepo.getOwned(userId, chatId)) return null
     const db = getDb()
     return db.select().from(a2aSessions).where(eq(a2aSessions.chatId, chatId)).get() ?? null
   })
@@ -154,8 +162,22 @@ export function registerA2AHandlers(): void {
 
     port.start()
 
+    const userId = getCurrentUserId()
+
+    if (!chatRepo.getOwned(userId, chatId)) {
+      const err = 'Chat not found'
+      logger.error(err, { agentId, chatId })
+      port.postMessage({ type: 'error', error: err })
+      port.close()
+      return
+    }
+
     const db = getDb()
-    const agent = db.select().from(agents).where(eq(agents.id, agentId)).get()
+    const agent = db
+      .select()
+      .from(agents)
+      .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
+      .get()
     if (!agent || !agent.cardUrl) {
       const err = 'Agent not found or not configured'
       logger.error(err, { agentId, chatId, hasAgent: !!agent, cardUrl: agent?.cardUrl })
@@ -180,7 +202,7 @@ export function registerA2AHandlers(): void {
             protocolInterfaceUrl: protocol.url,
             protocolInterfaceVersion: protocol.version
           })
-          .where(eq(agents.id, agentId))
+          .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
           .run()
         logger.info(`Auto-resolved endpoint for "${agent.name}": ${protocol.url}`)
       } catch (err) {

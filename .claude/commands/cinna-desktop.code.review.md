@@ -215,6 +215,47 @@ Prioritized list of architectural improvements:
 
 1. **[Priority] Description** - What to create/change, which files are affected, what the result looks like
 
+**If the refactoring scope is large** (more than ~3 independent work units, spans multiple domains, or cannot reasonably be completed in a single focused session), automatically write a refactor plan to `plans/<topic>-refactor.md` instead of inlining the full details in the review report. In the review, link to the plan file and summarize priorities only.
+
+**Plan file structure** (`plans/<topic>-refactor.md`):
+
+```markdown
+# <Topic> Refactor Plan
+
+## Context
+Short paragraph — why this refactor, what triggered it, current pain points.
+
+## Goals
+- Bullet list of concrete outcomes
+
+## Non-Goals
+- What this plan explicitly does not cover (so separate sessions don't scope-creep)
+
+## Priorities
+
+### Priority 1: <Name> (independent)
+**Scope:** Files/modules touched
+**Depends on:** none
+**Deliverable:** What "done" looks like
+**Steps:**
+1. ...
+2. ...
+**Validation:** How to verify (build, type-check, manual test)
+
+### Priority 2: <Name> (independent)
+...
+
+### Priority 3: <Name> (depends on Priority 1)
+...
+```
+
+**Rules for splitting priorities:**
+- Each priority must be executable as a **standalone LLM session** — self-contained context, clear deliverable, independent build/type-check validation
+- Mark cross-priority dependencies explicitly (`Depends on: Priority N`) so sessions can be sequenced
+- Prefer independent priorities (no dependencies) where possible — they can run in parallel sessions
+- Group tightly coupled changes into a single priority; split loosely coupled ones
+- Each priority should ideally fit in one focused session (roughly: one domain, one architectural concern, or one vertical slice)
+
 ### Architecture Scorecard
 
 | Category | Score | Notes |
@@ -247,5 +288,6 @@ Prioritized list of architectural improvements:
 7. **Check Security Config** - Verify Electron security flags and credential handling
 8. **Score Each Category** - Rate 1-5 based on findings
 9. **Generate Report** - List issues, warnings, good patterns, and refactoring plan
+10. **Write Plan File (if scope is large)** - If the refactor spans more than ~3 independent work units or multiple domains, write `plans/<topic>-refactor.md` split into session-sized priorities, and reference it from the review
 
-Do NOT make changes automatically. Present the review report and wait for user approval before implementing.
+Do NOT make code changes automatically. Writing the plan file in `plans/` is allowed and expected for large refactors. Present the review report and wait for user approval before implementing any code changes.

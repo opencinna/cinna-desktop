@@ -58,16 +58,24 @@ export function registerAgentHandlers(): void {
       userActivation.requireActivated()
       const db = getDb()
       const id = data.id || nanoid()
+      const userId = getCurrentUserId()
 
       const existing = data.id
-        ? db.select().from(agents).where(eq(agents.id, data.id)).get()
+        ? db
+            .select()
+            .from(agents)
+            .where(and(eq(agents.id, data.id), eq(agents.userId, userId)))
+            .get()
         : null
+
+      if (data.id && !existing) {
+        // Either no such agent, or it belongs to another user — don't leak the distinction.
+        return { success: false, error: 'Agent not found' }
+      }
 
       const tokenEnc = data.accessToken
         ? encryptApiKey(data.accessToken)
         : existing?.accessTokenEncrypted ?? null
-
-      const userId = getCurrentUserId()
 
       if (existing) {
         db.update(agents)

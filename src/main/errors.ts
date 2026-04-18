@@ -22,6 +22,16 @@ export type ChatErrorCode =
   | 'adapter_unavailable'
   | 'not_activated'
 
+export type AuthErrorCode =
+  | 'not_found'
+  | 'username_taken'
+  | 'username_required'
+  | 'password_required'
+  | 'invalid_password'
+  | 'default_user_immutable'
+  | 'oauth_failed'
+  | 'missing_server_url'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -37,6 +47,7 @@ export class DomainError<TCode extends string = string> extends Error {
 export class ProviderError extends DomainError<ProviderErrorCode> {}
 export class McpError extends DomainError<McpErrorCode> {}
 export class ChatError extends DomainError<ChatErrorCode> {}
+export class AuthError extends DomainError<AuthErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

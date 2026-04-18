@@ -134,7 +134,6 @@ const api = {
     login: (data: {
       userId: string
       password?: string
-      skipPassword?: boolean
     }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
       ipcRenderer.invoke('auth:login', data),
     logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('auth:logout'),
@@ -246,7 +245,8 @@ const api = {
       cardData?: Record<string, unknown>
       skills?: Array<{ id: string; name: string; description?: string }>
       enabled?: boolean
-    }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('agent:upsert', data),
+    }): Promise<{ id?: string; success: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:upsert', data),
     delete: (agentId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:delete', agentId),
     syncRemote: (): Promise<{ success: boolean; synced?: number; removed?: number; error?: string }> =>

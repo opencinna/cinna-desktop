@@ -40,16 +40,13 @@ export function useCurrentUser() {
 export function useLogin() {
   const queryClient = useQueryClient()
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
-  const markUnlocked = useAuthStore((s) => s.markUnlocked)
 
   return useMutation({
-    mutationFn: (data: { userId: string; password?: string; skipPassword?: boolean }) =>
+    mutationFn: (data: { userId: string; password?: string }) =>
       window.api.auth.login(data),
     onSuccess: (result) => {
       if (result.success && result.user) {
         setCurrentUser(toAuthUser(result.user))
-        // Remember this user authenticated in this session
-        markUnlocked(result.user.id)
         // Reset chat state and refetch all queries for the new user
         useChatStore.getState().setActiveChatId(null)
         queryClient.resetQueries()
@@ -84,14 +81,10 @@ export function useRegister() {
 export function useLogout() {
   const queryClient = useQueryClient()
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
-  const markLocked = useAuthStore((s) => s.markLocked)
 
   return useMutation({
     mutationFn: () => window.api.auth.logout(),
     onSuccess: async () => {
-      // Re-lock the user so next sign-in requires password again
-      const prev = useAuthStore.getState().currentUser
-      if (prev) markLocked(prev.id)
       // Fetch the default user info before resetting
       const defaultUser = await window.api.auth.getCurrent()
       if (defaultUser) {

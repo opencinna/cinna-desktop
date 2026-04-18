@@ -2,9 +2,7 @@ import { app } from 'electron'
 import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { pbkdf2Sync, randomBytes } from 'crypto'
-import { eq } from 'drizzle-orm'
-import { getDb } from '../db/client'
-import { users } from '../db/schema'
+import { userRepo } from '../db/users'
 
 const ITERATIONS = 100_000
 const KEY_LENGTH = 64
@@ -81,12 +79,8 @@ export function initSession(): void {
 /** Pick a random display name for the default/guest user on each launch */
 function rotateGuestAlias(): void {
   try {
-    const db = getDb()
     const alias = GUEST_ALIASES[Math.floor(Math.random() * GUEST_ALIASES.length)]
-    db.update(users)
-      .set({ displayName: alias })
-      .where(eq(users.id, '__default__'))
-      .run()
+    userRepo.rotateGuestAlias(alias)
   } catch {
     // Best-effort — DB might not be ready in edge cases
   }

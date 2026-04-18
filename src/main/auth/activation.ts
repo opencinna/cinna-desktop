@@ -1,12 +1,13 @@
-import { setCurrentUser, getCurrentUserId } from './session'
+import { setCurrentUser } from './session'
 import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { syncRemoteAgents, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
-import { eq } from 'drizzle-orm'
-import { getDb } from '../db/client'
-import { users } from '../db/schema'
+import { userRepo } from '../db/users'
 import { getMainWindow } from '../index'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('activation')
 
 /**
  * Centralizes user session activation — LLM adapters and MCP connectors
@@ -14,9 +15,30 @@ import { getMainWindow } from '../index'
  */
 class UserActivation {
   private _activated = false
+  private _unlockedUserIds = new Set<string>()
 
   isActivated(): boolean {
     return this._activated
+  }
+
+  /** Mark a user as unlocked for the remainder of this app session. */
+  markUnlocked(userId: string): void {
+    this._unlockedUserIds.add(userId)
+  }
+
+  /** Whether the user has already supplied their password in this app session. */
+  isUnlocked(userId: string): boolean {
+    return this._unlockedUserIds.has(userId)
+  }
+
+  /** Drop all unlock memory (e.g. on sign-out). */
+  clearUnlocks(): void {
+    this._unlockedUserIds.clear()
+  }
+
+  /** Remove a single user from the unlock set (e.g. on account deletion). */
+  forgetUnlock(userId: string): void {
+    this._unlockedUserIds.delete(userId)
   }
 
   /** Activate a user session: set current user, load their providers, open the gate. */
@@ -31,8 +53,7 @@ class UserActivation {
 
   /** Trigger remote agent sync for Cinna users */
   private _startRemoteSync(userId: string): void {
-    const db = getDb()
-    const user = db.select().from(users).where(eq(users.id, userId)).get()
+    const user = userRepo.get(userId)
     if (user?.type === 'cinna_user' && user.cinnaServerUrl) {
       syncRemoteAgents(userId)
         .then(() => {
@@ -42,7 +63,7 @@ class UserActivation {
           }
         })
         .catch((err) => {
-          console.warn('[activation] Initial remote agent sync failed:', String(err))
+          logger.warn('Initial remote agent sync failed', { error: String(err) })
         })
       startPeriodicSync(userId)
     }
