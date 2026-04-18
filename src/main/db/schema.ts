@@ -8,6 +8,7 @@ export const users = sqliteTable('users', {
   displayName: text('display_name').notNull(),
   passwordHash: text('password_hash'),
   salt: text('salt'),
+  cinnaFullName: text('cinna_full_name'),
   cinnaServerUrl: text('cinna_server_url'),
   cinnaHostingType: text('cinna_hosting_type'), // 'cloud' | 'self_hosted'
   cinnaClientId: text('cinna_client_id'),

@@ -9,13 +9,14 @@ export function useUsers() {
   })
 }
 
-function toAuthUser(user: { id: string; type: string; username: string; displayName: string; hasPassword: boolean; cinnaHostingType?: 'cloud' | 'self_hosted'; cinnaServerUrl?: string; hasCinnaTokens?: boolean }) {
+function toAuthUser(user: { id: string; type: string; username: string; displayName: string; hasPassword: boolean; cinnaFullName?: string; cinnaHostingType?: 'cloud' | 'self_hosted'; cinnaServerUrl?: string; hasCinnaTokens?: boolean }) {
   return {
     id: user.id,
     type: user.type,
     username: user.username,
     displayName: user.displayName,
     hasPassword: user.hasPassword,
+    cinnaFullName: user.cinnaFullName,
     cinnaHostingType: user.cinnaHostingType,
     cinnaServerUrl: user.cinnaServerUrl,
     hasCinnaTokens: user.hasCinnaTokens

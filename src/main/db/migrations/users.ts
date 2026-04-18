@@ -46,6 +46,7 @@ export function migrateUsers(sqlite: Database.Database): void {
 
   // Cinna account columns
   const cinnaColumns: [string, string][] = [
+    ['cinna_full_name', 'TEXT'],
     ['cinna_server_url', 'TEXT'],
     ['cinna_hosting_type', 'TEXT'],
     ['cinna_client_id', 'TEXT'],

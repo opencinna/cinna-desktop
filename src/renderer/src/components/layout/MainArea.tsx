@@ -36,13 +36,14 @@ export function MainArea(): React.JSX.Element {
   const [inputHeight, setInputHeight] = useState(0)
 
   // Track input wrapper height for overlay padding
+  // Re-attach when activeView changes because the input wrapper unmounts in settings
   useEffect(() => {
     const el = inputWrapperRef.current
     if (!el) return
     const ro = new ResizeObserver(([entry]) => setInputHeight(entry.contentRect.height))
     ro.observe(el)
     return () => ro.disconnect()
-  }, [activeChatId])
+  }, [activeChatId, activeView])
   const mcpDefaultsApplied = useRef(false)
   const [defaultMcpIds, setDefaultMcpIds] = useState<Set<string>>(new Set())
 

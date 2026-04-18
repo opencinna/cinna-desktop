@@ -19,6 +19,7 @@ export interface CinnaEndpoints {
 export interface CinnaUserProfile {
   email: string
   displayName: string
+  fullName?: string
 }
 
 export interface CinnaOAuthResult {
@@ -194,7 +195,8 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
 }
 
 /**
- * Fetch user profile (email, display name) from the Cinna userinfo endpoint.
+ * Fetch user profile from the Cinna userinfo endpoint.
+ * The server returns: { email, full_name, username }
  */
 async function fetchCinnaUserInfo(
   userinfoEndpoint: string,
@@ -202,7 +204,7 @@ async function fetchCinnaUserInfo(
 ): Promise<CinnaUserProfile> {
   const data = (await fetchJson(userinfoEndpoint, {
     headers: { Authorization: `Bearer ${accessToken}` }
-  })) as { email?: string; name?: string; display_name?: string }
+  })) as { email?: string; full_name?: string; username?: string }
 
   if (!data.email) {
     logger.error('Userinfo response missing email', data)
@@ -211,7 +213,8 @@ async function fetchCinnaUserInfo(
 
   return {
     email: data.email,
-    displayName: data.display_name || data.name || data.email
+    fullName: data.full_name || undefined,
+    displayName: data.username || data.full_name || data.email
   }
 }
 

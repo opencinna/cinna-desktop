@@ -31,6 +31,7 @@ export interface UserDto {
   displayName: string
   hasPassword: boolean
   createdAt: Date
+  cinnaFullName?: string
   cinnaHostingType?: 'cloud' | 'self_hosted'
   cinnaServerUrl?: string
   hasCinnaTokens?: boolean
@@ -80,6 +81,7 @@ function toDto(row: UserRow): UserDto {
     createdAt: row.createdAt
   }
   if (row.type === 'cinna_user') {
+    dto.cinnaFullName = row.cinnaFullName ?? undefined
     dto.cinnaHostingType = row.cinnaHostingType as 'cloud' | 'self_hosted' | undefined
     dto.cinnaServerUrl = row.cinnaServerUrl ?? undefined
     dto.hasCinnaTokens = !!(row.cinnaAccessTokenEnc && row.cinnaRefreshTokenEnc)
@@ -162,6 +164,7 @@ export const authService = {
       type: 'cinna_user',
       username,
       displayName: tokens.profile.displayName,
+      cinnaFullName: tokens.profile.fullName,
       cinnaServerUrl: serverUrl,
       cinnaHostingType: input.hostingType ?? 'cloud'
     })

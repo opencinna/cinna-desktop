@@ -18,6 +18,7 @@ export interface InsertUserInput {
   displayName: string
   passwordHash?: string | null
   salt?: string | null
+  cinnaFullName?: string | null
   cinnaServerUrl?: string | null
   cinnaHostingType?: 'cloud' | 'self_hosted' | null
 }
@@ -61,6 +62,7 @@ export const userRepo = {
         displayName: input.displayName,
         passwordHash: input.passwordHash ?? null,
         salt: input.salt ?? null,
+        cinnaFullName: input.cinnaFullName ?? null,
         cinnaServerUrl: input.cinnaServerUrl ?? null,
         cinnaHostingType: input.cinnaHostingType ?? null,
         createdAt: new Date()

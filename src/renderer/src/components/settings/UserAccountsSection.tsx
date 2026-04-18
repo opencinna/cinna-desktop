@@ -15,6 +15,7 @@ interface UserCardProps {
     displayName: string
     hasPassword: boolean
     createdAt: Date
+    cinnaFullName?: string
     cinnaHostingType?: 'cloud' | 'self_hosted'
     cinnaServerUrl?: string
     hasCinnaTokens?: boolean
@@ -161,19 +162,15 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
                 Cinna Server Details
               </h3>
               <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Host</div>
-                  <div className="text-xs text-[var(--color-text)]">
-                    {user.cinnaHostingType === 'cloud'
-                      ? 'opencinna.io (Cloud)'
-                      : user.cinnaServerUrl ?? 'Unknown'}
+                {user.cinnaFullName && (
+                  <div className="col-span-2">
+                    <div className="text-[10px] text-[var(--color-text-muted)]">Full Name</div>
+                    <div className="text-xs text-[var(--color-text)]">{user.cinnaFullName}</div>
                   </div>
-                </div>
+                )}
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Hosting</div>
-                  <div className="text-xs text-[var(--color-text)]">
-                    {user.cinnaHostingType === 'cloud' ? 'Cloud' : 'Self-Hosted'}
-                  </div>
+                  <div className="text-[10px] text-[var(--color-text-muted)]">Email</div>
+                  <div className="text-xs text-[var(--color-text)] truncate">{user.username}</div>
                 </div>
                 <div>
                   <div className="text-[10px] text-[var(--color-text-muted)]">Connection</div>
@@ -182,8 +179,25 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Email</div>
-                  <div className="text-xs text-[var(--color-text)] truncate">{user.username}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)]">Host</div>
+                  {user.cinnaServerUrl ? (
+                    <button
+                      onClick={() => window.open(user.cinnaServerUrl, '_blank')}
+                      className="text-xs text-[var(--color-accent)] hover:underline text-left"
+                    >
+                      {user.cinnaHostingType === 'cloud'
+                        ? 'opencinna.io (Cloud)'
+                        : user.cinnaServerUrl}
+                    </button>
+                  ) : (
+                    <div className="text-xs text-[var(--color-text)]">Unknown</div>
+                  )}
+                </div>
+                <div>
+                  <div className="text-[10px] text-[var(--color-text-muted)]">Hosting</div>
+                  <div className="text-xs text-[var(--color-text)]">
+                    {user.cinnaHostingType === 'cloud' ? 'Cloud' : 'Self-Hosted'}
+                  </div>
                 </div>
               </div>
             </div>

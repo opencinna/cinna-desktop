@@ -83,6 +83,7 @@ export interface UserData {
   displayName: string
   hasPassword: boolean
   createdAt: Date
+  cinnaFullName?: string
   cinnaHostingType?: 'cloud' | 'self_hosted'
   cinnaServerUrl?: string
   hasCinnaTokens?: boolean

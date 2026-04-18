@@ -49,11 +49,13 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 3. User enters password or clicks "Continue as Guest" to use default account
 4. If last user was default or passwordless: app loads directly to new-chat page
 
-### Sign Out
+### Sign Out (Account Removal)
 1. User clicks "Sign Out" in the dropdown (only shown for non-default users)
-2. User's unlock state is cleared (will require password again on next sign-in)
-3. Session switches to default user
-4. All data refetches for the default user's context
+2. Centered confirmation modal appears with warning: all **local** chat history, providers, agents, and settings for this account will be permanently erased
+3. For Cinna accounts: modal notes that the cloud account will not be affected
+4. If the account has a password set, the user must enter it to confirm
+5. On confirmation: account is fully deleted (same cascade-delete flow as Settings → Delete Account), session falls back to default user
+6. All data refetches for the default user's context
 
 ### Manage Accounts (Settings)
 1. User navigates to Settings → "User Accounts" (last menu item in the main settings block, after MCP Providers)
@@ -106,6 +108,10 @@ User Switch:
                  ←── { success, user }
                      queryClient.resetQueries()
                      All data refetches for new user
+
+Sign Out (from UserMenu):
+  UserMenu "Sign Out" ──→ confirmation modal ──→ auth:delete-user
+                          (password if set)       verify password → cascade delete → activate __default__
 
 Account Management (Settings):
   UserAccountsSection ──→ auth:update-user ──→ update display name / password
