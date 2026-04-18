@@ -1,16 +1,16 @@
-import { ipcMain } from 'electron'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
 import { mcpService } from '../services/mcpService'
 import { ipcErrorShape } from '../errors'
+import { ipcHandle } from './_wrap'
 
 export function registerMcpHandlers(): void {
-  ipcMain.handle('mcp:list', async () => {
+  ipcHandle('mcp:list', async () => {
     userActivation.requireActivated()
     return mcpService.list(getCurrentUserId())
   })
 
-  ipcMain.handle(
+  ipcHandle(
     'mcp:upsert',
     async (
       _event,
@@ -31,13 +31,15 @@ export function registerMcpHandlers(): void {
     }
   )
 
-  ipcMain.handle('mcp:delete', async (_event, providerId: string) => {
+  ipcHandle('mcp:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
     await mcpService.delete(getCurrentUserId(), providerId)
     return { success: true }
   })
 
-  ipcMain.handle('mcp:connect', async (_event, providerId: string) => {
+  // mcp:connect returns error inline — settings UI surfaces the message
+  // beside the provider card rather than as a React Query error.
+  ipcHandle('mcp:connect', async (_event, providerId: string) => {
     userActivation.requireActivated()
     try {
       const { tools, status } = await mcpService.connect(getCurrentUserId(), providerId)
@@ -48,13 +50,13 @@ export function registerMcpHandlers(): void {
     }
   })
 
-  ipcMain.handle('mcp:disconnect', async (_event, providerId: string) => {
+  ipcHandle('mcp:disconnect', async (_event, providerId: string) => {
     userActivation.requireActivated()
     await mcpService.disconnect(getCurrentUserId(), providerId)
     return { success: true }
   })
 
-  ipcMain.handle('mcp:list-tools', async (_event, providerId: string) => {
+  ipcHandle('mcp:list-tools', async (_event, providerId: string) => {
     userActivation.requireActivated()
     return mcpService.listTools(getCurrentUserId(), providerId)
   })

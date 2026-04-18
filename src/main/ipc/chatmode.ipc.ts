@@ -1,33 +1,20 @@
-import { ipcMain } from 'electron'
-import { nanoid } from 'nanoid'
-import { eq, and } from 'drizzle-orm'
-import { getDb } from '../db/client'
-import { chatModes } from '../db/schema'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { chatModeService } from '../services/chatModeService'
+import { ipcHandle } from './_wrap'
 
 export function registerChatModeHandlers(): void {
-  ipcMain.handle('chatmode:list', async () => {
+  ipcHandle('chatmode:list', async () => {
     userActivation.requireActivated()
-    const db = getDb()
-    const userId = getCurrentUserId()
-    return db.select().from(chatModes).where(eq(chatModes.userId, userId)).all()
+    return chatModeService.list(getCurrentUserId())
   })
 
-  ipcMain.handle('chatmode:get', async (_event, id: string) => {
+  ipcHandle('chatmode:get', async (_event, id: string) => {
     userActivation.requireActivated()
-    const db = getDb()
-    const userId = getCurrentUserId()
-    return (
-      db
-        .select()
-        .from(chatModes)
-        .where(and(eq(chatModes.id, id), eq(chatModes.userId, userId)))
-        .get() ?? null
-    )
+    return chatModeService.get(getCurrentUserId(), id)
   })
 
-  ipcMain.handle(
+  ipcHandle(
     'chatmode:upsert',
     async (
       _event,
@@ -41,45 +28,14 @@ export function registerChatModeHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const db = getDb()
-      const id = data.id ?? nanoid()
-      const userId = getCurrentUserId()
-
-      if (data.id) {
-        db.update(chatModes)
-          .set({
-            name: data.name,
-            providerId: data.providerId ?? null,
-            modelId: data.modelId ?? null,
-            mcpProviderIds: data.mcpProviderIds ?? [],
-            colorPreset: data.colorPreset ?? 'slate'
-          })
-          .where(and(eq(chatModes.id, data.id), eq(chatModes.userId, userId)))
-          .run()
-      } else {
-        db.insert(chatModes)
-          .values({
-            id,
-            userId,
-            name: data.name,
-            providerId: data.providerId ?? null,
-            modelId: data.modelId ?? null,
-            mcpProviderIds: data.mcpProviderIds ?? [],
-            colorPreset: data.colorPreset ?? 'slate',
-            createdAt: new Date()
-          })
-          .run()
-      }
-
+      const { id } = chatModeService.upsert(getCurrentUserId(), data)
       return { id, success: true }
     }
   )
 
-  ipcMain.handle('chatmode:delete', async (_event, id: string) => {
+  ipcHandle('chatmode:delete', async (_event, id: string) => {
     userActivation.requireActivated()
-    const db = getDb()
-    const userId = getCurrentUserId()
-    db.delete(chatModes).where(and(eq(chatModes.id, id), eq(chatModes.userId, userId))).run()
+    chatModeService.delete(getCurrentUserId(), id)
     return { success: true }
   })
 }

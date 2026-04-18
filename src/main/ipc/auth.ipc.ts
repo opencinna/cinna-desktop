@@ -1,24 +1,27 @@
-import { ipcMain } from 'electron'
 import { getCurrentUserId, getLastUserId } from '../auth/session'
 import { abortCinnaOAuthFlow } from '../auth/cinna-oauth'
 import { authService, UserDto } from '../services/authService'
 import { ipcErrorShape } from '../errors'
+import { ipcHandle } from './_wrap'
 
 function errorResponse(err: unknown): { success: false; error: string } {
   return { success: false, error: ipcErrorShape(err).message }
 }
 
 export function registerAuthHandlers(): void {
-  ipcMain.handle('auth:list-users', async () => authService.listUsers())
+  ipcHandle('auth:list-users', async () => authService.listUsers())
 
-  ipcMain.handle(
+  ipcHandle(
     'auth:get-current',
     async (): Promise<UserDto | null> => authService.getCurrent(getCurrentUserId())
   )
 
-  ipcMain.handle('auth:get-startup', async () => authService.getStartup(getLastUserId()))
+  ipcHandle('auth:get-startup', async () => authService.getStartup(getLastUserId()))
 
-  ipcMain.handle(
+  // auth flows return {success, error} as a discriminated union — login/register
+  // forms render inline validation errors rather than entering a React Query
+  // error state.
+  ipcHandle(
     'auth:register',
     async (
       _event,
@@ -51,7 +54,7 @@ export function registerAuthHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     'auth:login',
     async (_event, data: { userId: string; password?: string }) => {
       try {
@@ -63,17 +66,17 @@ export function registerAuthHandlers(): void {
     }
   )
 
-  ipcMain.handle('auth:logout', async () => {
+  ipcHandle('auth:logout', async () => {
     await authService.logout()
     return { success: true as const }
   })
 
-  ipcMain.handle('auth:cinna-oauth-abort', async () => {
+  ipcHandle('auth:cinna-oauth-abort', async () => {
     abortCinnaOAuthFlow()
     return { success: true as const }
   })
 
-  ipcMain.handle(
+  ipcHandle(
     'auth:update-user',
     async (
       _event,
@@ -93,7 +96,7 @@ export function registerAuthHandlers(): void {
     }
   )
 
-  ipcMain.handle(
+  ipcHandle(
     'auth:delete-user',
     async (_event, data: { userId: string; password?: string }) => {
       try {

@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useCallback } from 'react'
+import { useChatStream } from './useChatStream'
 
 export function useChatList() {
   return useQuery({
@@ -101,89 +102,21 @@ export function useUpdateChat() {
 }
 
 export function useSendMessage() {
-  const queryClient = useQueryClient()
-  const { activeChatId, startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, stopStreaming } =
-    useChatStore()
+  const activeChatId = useChatStore((s) => s.activeChatId)
+  const { startLlm, startAgent } = useChatStream()
 
-  const send = useCallback(
+  return useCallback(
     async (content: string) => {
       if (!activeChatId) return
-
       const chatId = activeChatId
 
-      // Check if this chat has an A2A session — route to agent API instead of LLM
       const session = await window.api.agents.getSession(chatId)
       if (session) {
-        window.api.agents.sendMessage(session.agentId, chatId, content, (event) => {
-          switch (event.type) {
-            case 'request-id':
-              startStreaming(event.requestId ?? '')
-              break
-            case 'delta':
-              appendDelta(event.text!)
-              break
-            case 'done':
-              stopStreaming()
-              queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-              queryClient.invalidateQueries({ queryKey: ['chats'] })
-              break
-            case 'error':
-              console.error('Agent error:', event.error)
-              useChatStore.getState().stopStreaming()
-              queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-              break
-          }
-        })
-
-        setTimeout(() => {
-          queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-        }, 300)
+        startAgent(session.agentId, chatId, content)
         return
       }
-
-      window.api.llm.sendMessage(chatId, content, (event) => {
-        switch (event.type) {
-          case 'request-id':
-            startStreaming(event.requestId!)
-            break
-          case 'delta':
-            appendDelta(event.text!)
-            break
-          case 'tool_use':
-            addToolCall({
-              id: event.id!,
-              name: event.name!,
-              input: event.input!,
-              provider: event.provider
-            })
-            break
-          case 'tool_result':
-            resolveToolCall(event.id!, event.result)
-            break
-          case 'tool_error':
-            failToolCall(event.id!, event.error!)
-            break
-          case 'done':
-            stopStreaming()
-            queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-            queryClient.invalidateQueries({ queryKey: ['chats'] })
-            break
-          case 'error':
-            console.error('LLM error:', event.error)
-            useChatStore.getState().stopStreaming()
-            queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-            break
-        }
-      })
-
-      // Refetch chat detail shortly after so the user message bubble appears
-      // (main process saves the user message to DB before streaming starts)
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-      }, 300)
+      startLlm(chatId, content)
     },
-    [activeChatId, startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, stopStreaming, queryClient]
+    [activeChatId, startAgent, startLlm]
   )
-
-  return send
 }

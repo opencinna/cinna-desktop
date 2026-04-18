@@ -30,6 +30,18 @@ export interface SaveErrorMessage {
   detail?: string
 }
 
+export interface InsertRawMessage {
+  id: string
+  chatId: string
+  role: string
+  content: string
+  toolCallId: string | null
+  toolName: string | null
+  toolInput: Record<string, unknown> | null
+}
+
+export type MessageRow = typeof messages.$inferSelect
+
 function getNextSortOrder(chatId: string): number {
   const db = getDb()
   const last = db
@@ -111,5 +123,30 @@ export const messageRepo = {
       .set({ updatedAt: new Date() })
       .where(eq(chats.id, chatId))
       .run()
+  },
+
+  insertRaw(msg: InsertRawMessage): void {
+    getDb()
+      .insert(messages)
+      .values({
+        id: msg.id,
+        chatId: msg.chatId,
+        role: msg.role,
+        content: msg.content,
+        toolCallId: msg.toolCallId,
+        toolName: msg.toolName,
+        toolInput: msg.toolInput,
+        sortOrder: getNextSortOrder(msg.chatId),
+        createdAt: new Date()
+      })
+      .run()
+  },
+
+  getById(id: string): MessageRow | undefined {
+    return getDb()
+      .select()
+      .from(messages)
+      .where(eq(messages.id, id))
+      .get()
   }
 }

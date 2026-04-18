@@ -14,6 +14,7 @@ import { userActivation } from '../auth/activation'
 import { getCurrentUserId } from '../auth/session'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
+import { ipcHandle } from './_wrap'
 
 const logger = createLogger('A2A')
 
@@ -21,7 +22,7 @@ const activeAbortControllers = new Map<string, AbortController>()
 
 export function registerA2AHandlers(): void {
   // Fetch agent card from URL (for testing / adding a new agent)
-  ipcMain.handle(
+  ipcHandle(
     'agent:fetch-card',
     async (
       _event,
@@ -49,7 +50,7 @@ export function registerA2AHandlers(): void {
   )
 
   // Test connection to a saved agent
-  ipcMain.handle(
+  ipcHandle(
     'agent:test',
     async (
       _event,
@@ -76,7 +77,7 @@ export function registerA2AHandlers(): void {
   )
 
   // Look up the A2A session for a chat (used by renderer to detect agent chats)
-  ipcMain.handle('agent:get-session', async (_event, chatId: string) => {
+  ipcHandle('agent:get-session', async (_event, chatId: string) => {
     userActivation.requireActivated()
     const userId = getCurrentUserId()
     if (!chatRepo.getOwned(userId, chatId)) return null
@@ -293,7 +294,7 @@ export function registerA2AHandlers(): void {
     }
   })
 
-  ipcMain.handle('agent:cancel-message', async (_event, requestId: string) => {
+  ipcHandle('agent:cancel-message', async (_event, requestId: string) => {
     const controller = activeAbortControllers.get(requestId)
     if (controller) {
       controller.abort()

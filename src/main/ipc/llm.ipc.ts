@@ -3,6 +3,7 @@ import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
 import { chatStreamingService } from '../services/chatStreamingService'
 import { createLogger } from '../logger/logger'
+import { ipcHandle } from './_wrap'
 
 const logger = createLogger('llm-ipc')
 
@@ -35,12 +36,15 @@ export function registerLlmHandlers(): void {
         userContent,
         port
       })
-    } catch {
-      // Service already posted the error to the port and closed it
+    } catch (err) {
+      // Service is responsible for posting to the port and closing it; log
+      // here so handler-side context is not lost if the service fails before
+      // posting.
+      logger.error('llm stream failed', { chatId, error: err })
     }
   })
 
-  ipcMain.handle('llm:cancel', async (_event, requestId: string) => {
+  ipcHandle('llm:cancel', async (_event, requestId: string) => {
     chatStreamingService.cancel(requestId)
     return { success: true }
   })

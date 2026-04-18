@@ -1,16 +1,16 @@
-import { ipcMain } from 'electron'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
 import { providerService } from '../services/providerService'
 import { ipcErrorShape } from '../errors'
+import { ipcHandle } from './_wrap'
 
 export function registerProviderHandlers(): void {
-  ipcMain.handle('provider:list', async () => {
+  ipcHandle('provider:list', async () => {
     userActivation.requireActivated()
     return providerService.list(getCurrentUserId())
   })
 
-  ipcMain.handle(
+  ipcHandle(
     'provider:upsert',
     async (
       _event,
@@ -30,13 +30,16 @@ export function registerProviderHandlers(): void {
     }
   )
 
-  ipcMain.handle('provider:delete', async (_event, providerId: string) => {
+  ipcHandle('provider:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
     providerService.delete(getCurrentUserId(), providerId)
     return { success: true }
   })
 
-  ipcMain.handle('provider:test', async (_event, providerId: string) => {
+  // provider:test and provider:test-key catch their own errors and return
+  // them as a discriminated-union shape — the renderer's settings UI renders
+  // the error inline rather than letting React Query enter an error state.
+  ipcHandle('provider:test', async (_event, providerId: string) => {
     userActivation.requireActivated()
     try {
       const models = await providerService.test(getCurrentUserId(), providerId)
@@ -47,7 +50,7 @@ export function registerProviderHandlers(): void {
     }
   })
 
-  ipcMain.handle(
+  ipcHandle(
     'provider:test-key',
     async (_event, data: { type: string; apiKey: string }) => {
       userActivation.requireActivated()
@@ -61,7 +64,7 @@ export function registerProviderHandlers(): void {
     }
   )
 
-  ipcMain.handle('provider:list-models', async () => {
+  ipcHandle('provider:list-models', async () => {
     userActivation.requireActivated()
     return providerService.listModels()
   })

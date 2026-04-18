@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useMemo } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { useModels } from '../../hooks/useModels'
-import { useMcpProviders } from '../../hooks/useMcp'
+import { useMcpProviders, useChatMcpProviders, useSetChatMcpProviders } from '../../hooks/useMcp'
 import { useUpdateChat, useChatDetail } from '../../hooks/useChat'
 
 interface ChatControlsProps {
@@ -13,17 +13,15 @@ export function ChatControls({ chatId }: ChatControlsProps): React.JSX.Element {
   const { data: models } = useModels()
   const { data: mcpProviders } = useMcpProviders()
   const { data: chatData } = useChatDetail(chatId)
+  const { data: chatMcpLinks } = useChatMcpProviders(chatId)
+  const setChatMcp = useSetChatMcpProviders()
   const updateChat = useUpdateChat()
   const [showModelPicker, setShowModelPicker] = useState(false)
-  const [activeMcpIds, setActiveMcpIds] = useState<Set<string>>(new Set())
 
-  useEffect(() => {
-    if (chatId) {
-      window.api.chat.getMcpProviders(chatId).then((links) => {
-        setActiveMcpIds(new Set(links.map((l) => l.mcpProviderId)))
-      })
-    }
-  }, [chatId, mcpProviders])
+  const activeMcpIds = useMemo(
+    () => new Set((chatMcpLinks ?? []).map((l) => l.mcpProviderId)),
+    [chatMcpLinks]
+  )
 
   const selectedModel = models?.find(
     (m) => m.id === chatData?.modelId && m.providerId === chatData?.providerId
@@ -41,8 +39,7 @@ export function ChatControls({ chatId }: ChatControlsProps): React.JSX.Element {
     } else {
       next.add(mcpId)
     }
-    setActiveMcpIds(next)
-    window.api.chat.setMcpProviders(chatId, Array.from(next))
+    setChatMcp.mutate({ chatId, mcpProviderIds: Array.from(next) })
   }
 
   const modelsByProvider = (models ?? []).reduce(

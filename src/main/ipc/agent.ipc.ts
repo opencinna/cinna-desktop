@@ -1,18 +1,20 @@
-import { ipcMain } from 'electron'
 import { agentService } from '../services/agentService'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
 import { ipcErrorShape } from '../errors'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { registerA2AHandlers } from './agent_a2a.ipc'
+import { ipcHandle } from './_wrap'
 
 export function registerAgentHandlers(): void {
-  ipcMain.handle('agent:list', async () => {
+  ipcHandle('agent:list', async () => {
     userActivation.requireActivated()
     return agentService.list(getCurrentUserId())
   })
 
-  ipcMain.handle(
+  // agent:upsert/delete/sync-remote return inline errors so the settings UI
+  // can surface agent-specific messages (reauth, invalid URL, etc.).
+  ipcHandle(
     'agent:upsert',
     async (
       _event,
@@ -42,7 +44,7 @@ export function registerAgentHandlers(): void {
     }
   )
 
-  ipcMain.handle('agent:delete', async (_event, agentId: string) => {
+  ipcHandle('agent:delete', async (_event, agentId: string) => {
     userActivation.requireActivated()
     try {
       agentService.delete(getCurrentUserId(), agentId)
@@ -53,7 +55,7 @@ export function registerAgentHandlers(): void {
     }
   })
 
-  ipcMain.handle('agent:sync-remote', async () => {
+  ipcHandle('agent:sync-remote', async () => {
     userActivation.requireActivated()
     try {
       const result = await agentService.syncRemoteAgents(getCurrentUserId())

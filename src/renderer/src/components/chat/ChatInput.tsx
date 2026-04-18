@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useMemo, useImperativeHandle, forwardRef, type ReactNode } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useSendMessage, useChatDetail } from '../../hooks/useChat'
+import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
@@ -56,6 +57,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     focus: () => textareaRef.current?.focus()
   }))
   const sendMessage = useSendMessage()
+  const { cancel: cancelStream } = useChatStream()
   const { isStreaming, activeRequestId } = useChatStore()
 
   // @-mention state
@@ -126,11 +128,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   }, [input, isStreaming, sendMessage, chatId, onNewChat])
 
   const handleCancel = useCallback(() => {
-    if (activeRequestId) {
-      window.api.llm.cancel(activeRequestId)
-      window.api.agents.cancelMessage(activeRequestId)
-    }
-  }, [activeRequestId])
+    if (activeRequestId) cancelStream(activeRequestId)
+  }, [activeRequestId, cancelStream])
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     // When mention popup is open, intercept navigation keys

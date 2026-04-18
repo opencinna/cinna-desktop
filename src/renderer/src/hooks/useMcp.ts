@@ -63,3 +63,28 @@ export function useDisconnectMcp() {
     }
   })
 }
+
+export function useChatMcpProviders(chatId: string | null) {
+  return useQuery({
+    queryKey: ['chat-mcp', chatId],
+    queryFn: () =>
+      chatId ? window.api.chat.getMcpProviders(chatId) : Promise.resolve([]),
+    enabled: !!chatId
+  })
+}
+
+export function useSetChatMcpProviders() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      mcpProviderIds
+    }: {
+      chatId: string
+      mcpProviderIds: string[]
+    }) => window.api.chat.setMcpProviders(chatId, mcpProviderIds),
+    onSuccess: (_data, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chat-mcp', chatId] })
+    }
+  })
+}
