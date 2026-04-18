@@ -200,6 +200,51 @@
     100% { transform: translateX(400%); }
   }
 
+  @keyframes user-bubble-pop {
+    0% {
+      transform: scale(0.18);
+      border-radius: 999px;
+    }
+    100% {
+      transform: scale(1);
+      border-radius: 0.75rem;
+    }
+  }
+
+  @keyframes user-bubble-content-in {
+    0%, 35% { opacity: 0; }
+    100% { opacity: 1; }
+  }
+
+  .anim-user-bubble-pop {
+    animation: user-bubble-pop 300ms cubic-bezier(0.2, 0.85, 0.3, 1) both;
+    transform-origin: top right;
+    will-change: transform, border-radius;
+  }
+
+  .anim-user-bubble-content {
+    animation: user-bubble-content-in 300ms ease-out both;
+  }
+
+  /* Newly-rendered assistant block softly fades in as a whole — markdown/HTML
+     stays intact (no per-paragraph splitting). Theme-agnostic: only
+     opacity/blur change, colors come from the inherited text styles. */
+  @keyframes assistant-bubble-in {
+    0% {
+      opacity: 0;
+      filter: blur(4px);
+    }
+    100% {
+      opacity: 1;
+      filter: blur(0);
+    }
+  }
+
+  .anim-assistant-bubble {
+    animation: assistant-bubble-in 1000ms cubic-bezier(0.2, 0.7, 0.4, 1) both;
+    will-change: opacity, filter;
+  }
+
   @keyframes expand-in {
     from {
       max-width: 0;

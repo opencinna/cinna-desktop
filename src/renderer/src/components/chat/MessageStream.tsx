@@ -44,6 +44,10 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
   const { data: chatData } = useChatDetail(chatId)
   const { streamingBlocks, isStreaming } = useChatStore()
   const bottomRef = useRef<HTMLDivElement>(null)
+  const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
+    chatId: null,
+    messageIds: []
+  })
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -51,6 +55,21 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
 
   const messages = chatData?.messages ?? []
   const hasStreamingContent = streamingBlocks.length > 0
+
+  // Animate only when exactly one message was appended since the previous render
+  // for the same chat — this matches the "user sent a message" pattern and skips
+  // initial loads and bulk re-fetches.
+  const prev = prevRef.current
+  const newMessageId =
+    prev.chatId === chatId &&
+    messages.length === prev.messageIds.length + 1 &&
+    !prev.messageIds.includes(messages[messages.length - 1].id)
+      ? messages[messages.length - 1].id
+      : null
+
+  useEffect(() => {
+    prevRef.current = { chatId, messageIds: messages.map((m) => m.id) }
+  }, [chatId, messages])
 
   return (
     <div className="flex-1 overflow-y-auto px-4 py-4">
@@ -91,6 +110,7 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
               key={msg.id}
               role={msg.role as 'user' | 'assistant'}
               content={msg.content}
+              animate={msg.role === 'user' && msg.id === newMessageId}
             />
           )
         })}
@@ -113,6 +133,7 @@ export function MessageStream({ chatId }: MessageStreamProps): React.JSX.Element
                 role="assistant"
                 content={block.content}
                 isStreaming={isStreaming && isLastBlock}
+                animate
               />
             )
           }

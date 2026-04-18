@@ -13,6 +13,7 @@ interface MessageBubbleProps {
   content: string
   isStreaming?: boolean
   meta?: MessageMeta
+  animate?: boolean
 }
 
 function MetaPopup({ meta, onClose }: { meta: MessageMeta; onClose: () => void }): React.JSX.Element {
@@ -46,7 +47,7 @@ function MetaPopup({ meta, onClose }: { meta: MessageMeta; onClose: () => void }
   )
 }
 
-export function MessageBubble({ role, content, isStreaming, meta }: MessageBubbleProps): React.JSX.Element {
+export function MessageBubble({ role, content, isStreaming, meta, animate }: MessageBubbleProps): React.JSX.Element {
   const isUser = role === 'user'
   const [showMeta, setShowMeta] = useState(false)
   const hasMeta = meta && Object.keys(meta).length > 0
@@ -55,10 +56,14 @@ export function MessageBubble({ role, content, isStreaming, meta }: MessageBubbl
     return (
       <div className="flex justify-end">
         <div className="relative group max-w-[80%]">
-          <div className="rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)]">
-            <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
-              {content}
-            </Markdown>
+          <div
+            className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
+          >
+            <div className={animate ? 'anim-user-bubble-content' : ''}>
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+                {content}
+              </Markdown>
+            </div>
           </div>
         </div>
       </div>
@@ -67,7 +72,9 @@ export function MessageBubble({ role, content, isStreaming, meta }: MessageBubbl
 
   return (
     <div className="relative group">
-      <div className="text-sm leading-relaxed markdown-body text-[var(--color-text)]">
+      <div
+        className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
+      >
         <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
           {content}
         </Markdown>
