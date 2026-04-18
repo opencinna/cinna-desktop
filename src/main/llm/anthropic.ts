@@ -1,5 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('Anthropic')
 
 export class AnthropicAdapter implements LLMAdapter {
   readonly providerType = 'anthropic'
@@ -23,8 +26,13 @@ export class AnthropicAdapter implements LLMAdapter {
         })
       }
       return models
-    } catch {
-      // Fallback if the beta models endpoint is unavailable
+    } catch (err) {
+      // Fallback if the beta models endpoint is unavailable — log so the user
+      // can see the real reason in the logger overlay.
+      logger.warn('listModels via beta endpoint failed; using hardcoded fallback', {
+        providerId: this.providerId,
+        error: err instanceof Error ? err.message : String(err)
+      })
       return [
         { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
         { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },

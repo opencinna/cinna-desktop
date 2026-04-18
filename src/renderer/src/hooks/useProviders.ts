@@ -52,16 +52,6 @@ export function useTestProvider() {
 
 export function useTestProviderKey() {
   return useMutation({
-    mutationFn: (data: { type: string; apiKey: string }) => {
-      const api = getApi()
-      if (typeof api.providers.testKey === 'function') {
-        return api.providers.testKey(data)
-      }
-      // Fallback: save temporarily, test, then delete if no prior provider
-      return Promise.resolve({
-        success: false as const,
-        error: 'Restart the app to enable key validation'
-      })
-    }
+    mutationFn: (data: { type: string; apiKey: string }) => getApi().providers.testKey(data)
   })
 }

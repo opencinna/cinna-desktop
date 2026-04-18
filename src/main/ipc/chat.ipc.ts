@@ -5,6 +5,15 @@ import { getDb } from '../db/client'
 import { chats, messages } from '../db/schema'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { chatRepo } from '../db/chats'
+import { chatMcpRepo } from '../db/chatMcp'
+import { ChatError } from '../errors'
+
+function requireOwnedChat(userId: string, chatId: string): void {
+  if (!chatRepo.getOwned(userId, chatId)) {
+    throw new ChatError('not_found', 'Chat not found')
+  }
+}
 
 export function registerChatHandlers(): void {
   ipcMain.handle('chat:list', async () => {
@@ -119,10 +128,11 @@ export function registerChatHandlers(): void {
       updates: { title?: string; modelId?: string; providerId?: string; modeId?: string | null; agentId?: string }
     ) => {
       userActivation.requireActivated()
+      const userId = getCurrentUserId()
       const db = getDb()
       db.update(chats)
         .set({ ...updates, updatedAt: new Date() })
-        .where(eq(chats.id, chatId))
+        .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
         .run()
       return { success: true }
     }
@@ -142,6 +152,8 @@ export function registerChatHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
+      const userId = getCurrentUserId()
+      requireOwnedChat(userId, chatId)
       const db = getDb()
 
       // Get next sort order
@@ -171,10 +183,26 @@ export function registerChatHandlers(): void {
       db.insert(messages).values(msg).run()
       db.update(chats)
         .set({ updatedAt: new Date() })
-        .where(eq(chats.id, chatId))
+        .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
         .run()
 
       return msg
     }
   )
+
+  ipcMain.handle(
+    'chat:set-mcp-providers',
+    async (_event, chatId: string, mcpProviderIds: string[]) => {
+      userActivation.requireActivated()
+      requireOwnedChat(getCurrentUserId(), chatId)
+      chatMcpRepo.replaceForChat(chatId, mcpProviderIds)
+      return { success: true }
+    }
+  )
+
+  ipcMain.handle('chat:get-mcp-providers', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    requireOwnedChat(getCurrentUserId(), chatId)
+    return chatMcpRepo.list(chatId)
+  })
 }

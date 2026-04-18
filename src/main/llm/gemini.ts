@@ -1,4 +1,5 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
+import { nanoid } from 'nanoid'
 import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
 import type { Content, Part, FunctionCallPart, FunctionResponsePart } from '@google/generative-ai'
 
@@ -53,7 +54,7 @@ export class GeminiAdapter implements LLMAdapter {
         if ('functionCall' in part && part.functionCall) {
           const fc = part.functionCall
           toolCalls.push({
-            id: `gemini-${Date.now()}-${toolCalls.length}`,
+            id: `gemini-${nanoid(10)}`,
             name: fc.name,
             input: (fc.args ?? {}) as Record<string, unknown>
           })

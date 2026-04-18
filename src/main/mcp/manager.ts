@@ -6,9 +6,7 @@ import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
 import { McpProviderConfig, McpTool, McpConnection } from './types'
 import { ElectronOAuthProvider, OAuthStoredState } from './oauth-provider'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
-import { getDb } from '../db/client'
-import { mcpProviders } from '../db/schema'
-import { eq } from 'drizzle-orm'
+import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('MCP')
@@ -191,14 +189,10 @@ class MCPManager {
     tokens: import('@modelcontextprotocol/sdk/shared/auth.js').OAuthTokens
   ): void {
     try {
-      const db = getDb()
       const encrypted = encryptApiKey(JSON.stringify(tokens))
-      db.update(mcpProviders)
-        .set({ authTokensEncrypted: encrypted })
-        .where(eq(mcpProviders.id, providerId))
-        .run()
+      mcpProviderRepo.setAuthTokens(providerId, encrypted)
     } catch (err) {
-      console.error(`Failed to persist OAuth tokens for ${providerId}:`, err)
+      logger.error(`Failed to persist OAuth tokens for ${providerId}`, err)
     }
   }
 
@@ -207,13 +201,9 @@ class MCPManager {
     clientInfo: import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationMixed
   ): void {
     try {
-      const db = getDb()
-      db.update(mcpProviders)
-        .set({ clientInfo: clientInfo as Record<string, unknown> })
-        .where(eq(mcpProviders.id, providerId))
-        .run()
+      mcpProviderRepo.setClientInfo(providerId, clientInfo as Record<string, unknown>)
     } catch (err) {
-      console.error(`Failed to persist client info for ${providerId}:`, err)
+      logger.error(`Failed to persist client info for ${providerId}`, err)
     }
   }
 
@@ -237,7 +227,7 @@ class MCPManager {
           await conn.client.close()
         }
       } catch (err) {
-        console.error(`Error disconnecting MCP ${providerId}:`, err)
+        logger.error(`Error disconnecting MCP ${providerId}`, err)
       }
       this.connections.delete(providerId)
     }
@@ -281,8 +271,26 @@ class MCPManager {
       throw new Error(`MCP provider ${providerId} not connected`)
     }
 
-    const result = await conn.client.callTool({ name: toolName, arguments: input })
-    return result.content
+    const started = Date.now()
+    try {
+      const result = await conn.client.callTool({ name: toolName, arguments: input })
+      logger.debug('tool ok', {
+        providerId,
+        providerName: conn.config.name,
+        tool: toolName,
+        duration: Date.now() - started
+      })
+      return result.content
+    } catch (err) {
+      logger.error('tool failed', {
+        providerId,
+        providerName: conn.config.name,
+        tool: toolName,
+        duration: Date.now() - started,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw err
+    }
   }
 }
 
