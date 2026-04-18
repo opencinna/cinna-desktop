@@ -1,4 +1,7 @@
 import { LLMAdapter, ModelInfo } from './types'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('llm-registry')
 
 const adapters = new Map<string, LLMAdapter>()
 
@@ -27,7 +30,10 @@ export async function getAllModels(): Promise<ModelInfo[]> {
         ...models.map((m) => ({ ...m, providerId }))
       )
     } catch (err) {
-      console.error(`Failed to list models for provider ${providerId}:`, err)
+      logger.error('failed to list models', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err)
+      })
     }
   }
   return allModels

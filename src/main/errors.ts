@@ -27,10 +27,22 @@ export type AuthErrorCode =
   | 'username_taken'
   | 'username_required'
   | 'password_required'
+  | 'password_too_weak'
   | 'invalid_password'
   | 'default_user_immutable'
   | 'oauth_failed'
   | 'missing_server_url'
+
+export type AgentErrorCode =
+  | 'not_found'
+  | 'not_activated'
+  | 'unsupported_protocol'
+  | 'no_card_url'
+  | 'no_endpoint'
+  | 'remote_immutable'
+  | 'invalid_id'
+  | 'sync_reauth_required'
+  | 'sync_failed'
 
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
@@ -48,6 +60,7 @@ export class ProviderError extends DomainError<ProviderErrorCode> {}
 export class McpError extends DomainError<McpErrorCode> {}
 export class ChatError extends DomainError<ChatErrorCode> {}
 export class AuthError extends DomainError<AuthErrorCode> {}
+export class AgentError extends DomainError<AgentErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

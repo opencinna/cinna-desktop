@@ -249,8 +249,13 @@ const api = {
       ipcRenderer.invoke('agent:upsert', data),
     delete: (agentId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:delete', agentId),
-    syncRemote: (): Promise<{ success: boolean; synced?: number; removed?: number; error?: string }> =>
-      ipcRenderer.invoke('agent:sync-remote'),
+    syncRemote: (): Promise<{
+      success: boolean
+      synced?: number
+      removed?: number
+      code?: string
+      error?: string
+    }> => ipcRenderer.invoke('agent:sync-remote'),
     fetchCard: (data: {
       cardUrl: string
       accessToken?: string
@@ -296,8 +301,13 @@ const api = {
       taskId: string | null
       taskState: string | null
     } | null> => ipcRenderer.invoke('agent:get-session', chatId),
-    onRemoteSyncComplete: (handler: () => void): (() => void) => {
-      const listener = (): void => handler()
+    onRemoteSyncComplete: (
+      handler: (payload: { error?: 'reauth_required' | 'sync_failed' }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        payload: { error?: 'reauth_required' | 'sync_failed' }
+      ): void => handler(payload ?? {})
       ipcRenderer.on('agents:remote-sync-complete', listener)
       return () => ipcRenderer.off('agents:remote-sync-complete', listener)
     }

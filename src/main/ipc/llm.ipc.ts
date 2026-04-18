@@ -2,6 +2,9 @@ import { ipcMain } from 'electron'
 import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
 import { chatStreamingService } from '../services/chatStreamingService'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('llm-ipc')
 
 export function registerLlmHandlers(): void {
   // ipcRenderer.postMessage passes the payload as the 2nd arg to the listener
@@ -10,7 +13,7 @@ export function registerLlmHandlers(): void {
     const [chatId, userContent] = message
     const port = event.ports?.[0]
     if (!port) {
-      console.error('No MessagePort received for llm:send-message')
+      logger.error('No MessagePort received for llm:send-message')
       return
     }
 

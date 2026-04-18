@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Plus, RefreshCw, Cloud } from 'lucide-react'
+import { Plus, RefreshCw, Cloud, AlertTriangle } from 'lucide-react'
 import { AgentCard } from './AgentCard'
 import { A2AAgentForm } from './A2AAgentForm'
-import { useAgents, useSyncRemoteAgents } from '../../hooks/useAgents'
+import { useAgents, useRemoteSyncStatus, useSyncRemoteAgents } from '../../hooks/useAgents'
 import { useAuthStore } from '../../stores/auth.store'
 
 const REMOTE_SECTION_LABELS: Record<string, string> = {
@@ -15,6 +15,7 @@ export function AgentsSettingsSection(): React.JSX.Element {
   const { data: agents } = useAgents()
   const [showAdd, setShowAdd] = useState(false)
   const syncRemote = useSyncRemoteAgents()
+  const syncStatus = useRemoteSyncStatus()
   const currentUser = useAuthStore((s) => s.currentUser)
   const isCinnaUser = currentUser?.type === 'cinna_user'
 
@@ -49,6 +50,21 @@ export function AgentsSettingsSection(): React.JSX.Element {
               {syncRemote.isPending ? 'Syncing...' : 'Sync'}
             </button>
           </div>
+
+          {syncStatus.error && (
+            <div
+              className="flex items-start gap-2 px-2.5 py-2 mb-2 rounded-md
+                border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
+                text-[10px] text-[var(--color-text-secondary)]"
+            >
+              <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
+              <span>
+                {syncStatus.error === 'reauth_required'
+                  ? 'Cinna session expired. Sign out and back in to resume remote agent sync.'
+                  : 'Remote agent sync failed. Try again, or check the logger overlay (⌘`) for details.'}
+              </span>
+            </div>
+          )}
 
           {remoteAgents.length === 0 ? (
             <div className="text-[10px] text-[var(--color-text-muted)] py-2">

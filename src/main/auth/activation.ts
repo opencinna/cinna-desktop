@@ -2,12 +2,8 @@ import { setCurrentUser } from './session'
 import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
-import { syncRemoteAgents, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
+import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
 import { userRepo } from '../db/users'
-import { getMainWindow } from '../index'
-import { createLogger } from '../logger/logger'
-
-const logger = createLogger('activation')
 
 /**
  * Centralizes user session activation — LLM adapters and MCP connectors
@@ -55,16 +51,7 @@ class UserActivation {
   private _startRemoteSync(userId: string): void {
     const user = userRepo.get(userId)
     if (user?.type === 'cinna_user' && user.cinnaServerUrl) {
-      syncRemoteAgents(userId)
-        .then(() => {
-          const win = getMainWindow()
-          if (win && !win.isDestroyed()) {
-            win.webContents.send('agents:remote-sync-complete')
-          }
-        })
-        .catch((err) => {
-          logger.warn('Initial remote agent sync failed', { error: String(err) })
-        })
+      void runSyncOnce(userId)
       startPeriodicSync(userId)
     }
   }

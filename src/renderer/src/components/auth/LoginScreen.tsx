@@ -1,11 +1,9 @@
-import { useState } from 'react'
-import { Lock, User } from 'lucide-react'
+import { User } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUsers, useLogin } from '../../hooks/useAuth'
+import { PasswordUnlockForm } from './PasswordUnlockForm'
 
 export function LoginScreen(): React.JSX.Element {
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
   const pendingUserId = useAuthStore((s) => s.pendingUserId)
   const setNeedsPassword = useAuthStore((s) => s.setNeedsPassword)
   const setPendingUserId = useAuthStore((s) => s.setPendingUserId)
@@ -14,81 +12,32 @@ export function LoginScreen(): React.JSX.Element {
 
   const pendingUser = users?.find((u) => u.id === pendingUserId)
 
-  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
-    e.preventDefault()
-    setError('')
-
-    if (!pendingUserId) return
-
-    const result = await login.mutateAsync({ userId: pendingUserId, password })
-
-    if (result.success) {
-      setNeedsPassword(false)
-    } else {
-      setError(result.error ?? 'Invalid password')
-    }
-  }
-
   const handleSwitchToDefault = async (): Promise<void> => {
     await login.mutateAsync({ userId: '__default__' })
     setNeedsPassword(false)
     setPendingUserId(null)
   }
 
-  const initial = pendingUser?.displayName?.charAt(0).toUpperCase() ?? '?'
+  if (!pendingUserId) return <></>
 
   return (
     <div className="h-full flex flex-col items-center justify-center bg-[var(--color-bg)]">
-      {/* Draggable title bar area */}
       <div className="titlebar fixed top-0 left-0 right-0 h-10" />
 
-      <div className="w-72 space-y-6">
-        {/* User avatar */}
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-16 h-16 rounded-full bg-[var(--color-accent)] flex items-center justify-center">
-            <span className="text-2xl font-bold text-white">{initial}</span>
-          </div>
-          <div className="text-sm font-semibold text-[var(--color-text)]">
-            {pendingUser?.displayName ?? 'User'}
-          </div>
-        </div>
-
-        {/* Password form */}
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div className="relative">
-            <Lock size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)]" />
-            <input
-              type="password"
-              placeholder="Enter password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              autoFocus
-              className="w-full pl-8 pr-3 py-2 text-sm rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-2 focus:ring-[var(--color-accent)]"
-            />
-          </div>
-
-          {error && (
-            <div className="text-xs text-red-400 text-center">{error}</div>
-          )}
-
+      <PasswordUnlockForm
+        userId={pendingUserId}
+        userName={pendingUser?.displayName ?? 'User'}
+        onSuccess={() => setNeedsPassword(false)}
+        footer={
           <button
-            type="submit"
-            disabled={login.isPending}
-            className="w-full py-2 text-sm rounded-lg bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50"
+            onClick={handleSwitchToDefault}
+            className="w-full flex items-center justify-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
           >
-            {login.isPending ? 'Signing in...' : 'Unlock'}
+            <User size={12} />
+            Continue as Guest
           </button>
-        </form>
-
-        {/* Switch to guest */}
-        <button
-          onClick={handleSwitchToDefault}
-          className="w-full flex items-center justify-center gap-1.5 text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
-        >
-          <User size={12} />
-          Continue as Guest
-        </button>
-      </div>
+        }
+      />
     </div>
   )
 }

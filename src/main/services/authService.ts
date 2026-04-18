@@ -13,6 +13,17 @@ import { createLogger } from '../logger/logger'
 
 const logger = createLogger('auth')
 
+const MIN_PASSWORD_LENGTH = 4
+
+function assertPasswordStrong(password: string): void {
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    throw new AuthError(
+      'password_too_weak',
+      `Password must be at least ${MIN_PASSWORD_LENGTH} characters`
+    )
+  }
+}
+
 export interface UserDto {
   id: string
   type: string
@@ -95,6 +106,8 @@ export const authService = {
     if (userRepo.getByUsername(username)) {
       throw new AuthError('username_taken', 'Username already taken')
     }
+
+    if (input.password) assertPasswordStrong(input.password)
 
     const id = nanoid()
     const creds = input.password ? hashPassword(input.password) : undefined
@@ -224,6 +237,7 @@ export const authService = {
       userActivation.forgetUnlock(input.userId)
       logger.info('user.password_removed', { userId: input.userId, username: row.username })
     } else if (input.password) {
+      assertPasswordStrong(input.password)
       userRepo.setPassword(input.userId, hashPassword(input.password))
       logger.info('user.password_set', { userId: input.userId, username: row.username })
     }
