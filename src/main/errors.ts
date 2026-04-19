@@ -44,6 +44,12 @@ export type AgentErrorCode =
   | 'sync_reauth_required'
   | 'sync_failed'
 
+export type AgentStatusErrorCode =
+  | 'not_found'
+  | 'forbidden'
+  | 'remote_unreachable'
+  | 'unknown'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -61,6 +67,7 @@ export class McpError extends DomainError<McpErrorCode> {}
 export class ChatError extends DomainError<ChatErrorCode> {}
 export class AuthError extends DomainError<AuthErrorCode> {}
 export class AgentError extends DomainError<AgentErrorCode> {}
+export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

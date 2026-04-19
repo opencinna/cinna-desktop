@@ -19,6 +19,22 @@
     --color-danger: #ef4444;
     --color-success: #22c55e;
     --color-warning: #eab308;
+
+    /* Agent status severity palette. -text are tuned for dark-on-dark legibility. */
+    --color-severity-error: #ef4444;
+    --color-severity-error-text: #f87171;
+    --color-severity-warning: #fbbf24;
+    --color-severity-warning-text: #fbbf24;
+    --color-severity-info: #38bdf8;
+    --color-severity-info-text: #38bdf8;
+    --color-severity-ok: #10b981;
+    --color-severity-ok-text: #34d399;
+    --color-severity-unknown: var(--color-text-muted);
+    --color-severity-unknown-text: var(--color-text-muted);
+
+    /* Frosted-glass overlay tints. Dark theme darkens; light theme brightens. */
+    --color-overlay-backdrop: rgba(0, 0, 0, 0.4);
+    --color-overlay-panel: rgba(0, 0, 0, 0.2);
   }
 
   /* Light theme */
@@ -38,6 +54,22 @@
     --color-danger: #dc2626;
     --color-success: #16a34a;
     --color-warning: #ca8a04;
+
+    /* -text shades darken in light theme for contrast against light backgrounds. */
+    --color-severity-error: #dc2626;
+    --color-severity-error-text: #b91c1c;
+    --color-severity-warning: #ca8a04;
+    --color-severity-warning-text: #a16207;
+    --color-severity-info: #0284c7;
+    --color-severity-info-text: #0369a1;
+    --color-severity-ok: #16a34a;
+    --color-severity-ok-text: #15803d;
+    --color-severity-unknown: var(--color-text-muted);
+    --color-severity-unknown-text: var(--color-text-muted);
+
+    /* White-based tints for light theme — brighten/desaturate the backdrop. */
+    --color-overlay-backdrop: rgba(255, 255, 255, 0.55);
+    --color-overlay-panel: rgba(255, 255, 255, 0.35);
   }
 
   html, body, #root {

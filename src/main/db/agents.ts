@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNotNull } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { agents, a2aSessions } from './schema'
@@ -54,6 +54,21 @@ export interface SyncRemoteResult {
 export const agentRepo = {
   list(userId: string): AgentRow[] {
     return getDb().select().from(agents).where(eq(agents.userId, userId)).all()
+  },
+
+  /** Remote-synced agents that carry a backend UUID (`remoteTargetId`). */
+  listRemote(userId: string): AgentRow[] {
+    return getDb()
+      .select()
+      .from(agents)
+      .where(
+        and(
+          eq(agents.userId, userId),
+          eq(agents.source, 'remote'),
+          isNotNull(agents.remoteTargetId)
+        )
+      )
+      .all()
   },
 
   getOwned(userId: string, agentId: string): AgentRow | undefined {

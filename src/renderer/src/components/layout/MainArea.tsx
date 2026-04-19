@@ -1,6 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
+import { useAgents } from '../../hooks/useAgents'
 import { MessageStream } from '../chat/MessageStream'
 import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { SettingsPage } from '../settings/SettingsPage'
@@ -22,8 +23,11 @@ import { Sparkles } from 'lucide-react'
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
 export function MainArea(): React.JSX.Element {
-  const { activeView } = useUIStore()
+  const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
+  const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const activeChatId = useChatStore((s) => s.activeChatId)
+  const setActiveChatId = useChatStore((s) => s.setActiveChatId)
+  const { data: agentList } = useAgents()
   const updateChat = useUpdateChat()
   const defaultProviderId = useDefaultProviderId()
   const { data: providers } = useProviders()
@@ -74,6 +78,33 @@ export function MainArea(): React.JSX.Element {
   const focusChatInput = useCallback(() => {
     chatInputRef.current?.focus()
   }, [])
+
+  // Pending-agent selection from AgentStatusOverlay: land on new-chat screen,
+  // preselect the agent, and focus the input. One-shot; cleared after handling.
+  useEffect(() => {
+    if (!pendingAgentId || !agentList) return
+    const agent = agentList.find((a) => a.id === pendingAgentId)
+    if (!agent) {
+      setPendingAgentId(null)
+      return
+    }
+    setActiveChatId(null)
+    setSelectedAgent(agent)
+    setPendingAgentId(null)
+    // Focus after the new-chat screen mounts the input.
+    requestAnimationFrame(() => chatInputRef.current?.focus())
+  }, [pendingAgentId, agentList, setActiveChatId, setPendingAgentId])
+
+  // When the agent-status overlay closes and we're on the chat view (new-chat
+  // form or active chat), return focus to the chat input so the user can keep
+  // typing without another click.
+  const prevStatusOpen = useRef(agentStatusOpen)
+  useEffect(() => {
+    if (prevStatusOpen.current && !agentStatusOpen && activeView === 'chat') {
+      requestAnimationFrame(() => chatInputRef.current?.focus())
+    }
+    prevStatusOpen.current = agentStatusOpen
+  }, [agentStatusOpen, activeView])
 
   const handleNewChat = useCallback(
     async (message: string) => {
@@ -189,6 +220,7 @@ export function MainArea(): React.JSX.Element {
       >
         <div className="pointer-events-auto">
           <ChatInput
+            ref={chatInputRef}
             chatId={activeChatId}
             modeColor={activeChatModeColor}
             leftSlot={

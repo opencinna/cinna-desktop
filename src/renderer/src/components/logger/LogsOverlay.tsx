@@ -139,9 +139,16 @@ export function LogsOverlay(): React.JSX.Element | null {
     >
       <div
         onClick={(e) => e.stopPropagation()}
-        className="flex-1 flex flex-col rounded-xl overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl"
+        className="relative flex-1 flex flex-col rounded-xl overflow-hidden border border-[var(--color-border)] bg-[var(--color-bg)] shadow-2xl"
       >
-      <div className="flex items-center gap-3 px-4 py-2 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+        <button
+          onClick={() => setLogsOpen(false)}
+          className="absolute top-2 right-2 z-10 p-1.5 rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
+          title="Close"
+        >
+          <X size={14} />
+        </button>
+      <div className="flex items-center gap-3 px-4 py-2 pr-12 border-b border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
         <h2 className="text-sm font-semibold text-[var(--color-text)]">App Logs</h2>
 
         <input
@@ -191,14 +198,6 @@ export function LogsOverlay(): React.JSX.Element | null {
           title="Clear logs"
         >
           <Trash2 size={14} />
-        </button>
-
-        <button
-          onClick={() => setLogsOpen(false)}
-          className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
-          title="Close"
-        >
-          <X size={14} />
         </button>
       </div>
 

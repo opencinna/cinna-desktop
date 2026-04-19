@@ -57,6 +57,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
 - [A2A Streaming Pipeline](agents/agents/streaming_pipeline.md) — Per-part delta computation, `cinna.content_kind` / `cinna.tool_name` metadata contract, structured `parts[]` persistence
 - [Remote Agents](agents/remote_agents/remote_agents.md) — Auto-sync agents from Cinna backend, categorized display, JWT-based A2A communication
+- [Agent Status](agents/agent_status/agent_status.md) — Title-bar activity indicator + frosted-glass modal surfacing per-agent self-reported status (severity, summary, markdown body) with one-click "Start chat"
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

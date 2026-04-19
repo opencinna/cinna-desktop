@@ -77,6 +77,25 @@ export interface AgentData {
   createdAt: Date
 }
 
+export type AgentStatusSeverity = 'ok' | 'warning' | 'error' | 'info' | 'unknown'
+
+export interface AgentStatusSnapshot {
+  agentId: string
+  remoteAgentId: string
+  name: string
+  environmentId: string | null
+  severity: AgentStatusSeverity | null
+  summary: string | null
+  reportedAt: string | null
+  reportedAtSource: 'frontmatter' | 'file_mtime' | null
+  fetchedAt: string | null
+  raw: string | null
+  body: string | null
+  hasStructuredMetadata: boolean
+  prevSeverity: string | null
+  severityChangedAt: string | null
+}
+
 export interface UserData {
   id: string
   type: string // 'local_user' | 'cinna_user'
@@ -315,6 +334,24 @@ const api = {
       ipcRenderer.on('agents:remote-sync-complete', listener)
       return () => ipcRenderer.off('agents:remote-sync-complete', listener)
     }
+  },
+
+  agentStatus: {
+    list: (): Promise<{
+      success: boolean
+      items?: AgentStatusSnapshot[]
+      code?: string
+      error?: string
+    }> => ipcRenderer.invoke('agent-status:list'),
+    get: (data: {
+      agentId: string
+      forceRefresh?: boolean
+    }): Promise<{
+      success: boolean
+      item?: AgentStatusSnapshot | null
+      code?: string
+      error?: string
+    }> => ipcRenderer.invoke('agent-status:get', data)
   },
 
   mcp: {
