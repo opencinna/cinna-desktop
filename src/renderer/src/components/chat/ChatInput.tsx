@@ -21,7 +21,11 @@ interface ChatInputProps {
   onSelectAgent?: (agent: AgentData | null) => void
   /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
   selectedAgent?: AgentData | null
+  /** Fired when the user presses ESC twice in quick succession with no popup open. */
+  onDoubleEscape?: () => void
 }
+
+const DOUBLE_ESC_WINDOW_MS = 400
 
 /** Find a trigger token (@ or #) at the cursor position. */
 function findTriggerToken(
@@ -48,11 +52,12 @@ export interface ChatInputHandle {
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { chatId, onNewChat, leftSlot, modeColor, onSelectAgent, selectedAgent },
+  { chatId, onNewChat, leftSlot, modeColor, onSelectAgent, selectedAgent, onDoubleEscape },
   ref
 ) {
   const [input, setInput] = useState('')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const lastEscapeAt = useRef(0)
   const { data: chatData } = useChatDetail(chatId)
   const listboxId = useId()
 
@@ -198,8 +203,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Escape') {
         e.preventDefault()
         closeTrigger()
+        lastEscapeAt.current = 0
         return
       }
+    }
+
+    if (e.key === 'Escape' && onDoubleEscape) {
+      e.preventDefault()
+      const now = Date.now()
+      if (now - lastEscapeAt.current <= DOUBLE_ESC_WINDOW_MS) {
+        lastEscapeAt.current = 0
+        onDoubleEscape()
+      } else {
+        lastEscapeAt.current = now
+      }
+      return
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {

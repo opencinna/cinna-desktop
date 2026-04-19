@@ -184,6 +184,7 @@ export function MainArea(): React.JSX.Element {
           modeColor={modeColorPreset}
           onSelectAgent={setSelectedAgent}
           selectedAgent={selectedAgent}
+          onDoubleEscape={() => setSelectedAgent(null)}
           leftSlot={
             <>
               <ChatConfigMenu
