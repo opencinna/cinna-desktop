@@ -25,6 +25,7 @@ import { getCurrentUserId } from '../auth/session'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
+import type { CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('A2A')
 
@@ -90,6 +91,33 @@ export function registerA2AHandlers(): void {
           stack: err instanceof Error ? err.stack : undefined
         })
         return { success: false, error: e.message }
+      }
+    }
+  )
+
+  // Fetch CLI commands exposed by a saved agent (cinna.run.* skills)
+  ipcHandle(
+    'agent:list-cli-commands',
+    async (
+      _event,
+      agentId: string
+    ): Promise<{ success: boolean; commands: CliCommand[]; error?: string }> => {
+      userActivation.requireActivated()
+      try {
+        const commands = await agentService.listCliCommands(getCurrentUserId(), agentId)
+        return { success: true, commands }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        // Network-family errors on this low-stakes fetch are expected during
+        // brief backend outages; keep them at debug so the logger overlay
+        // doesn't flood. Domain errors (ownership, session) stay at warn.
+        const isTransient =
+          /ECONN(REFUSED|RESET)|ENOTFOUND|ETIMEDOUT|terminated|socket hang up|Could not reach|timed out|closed/i.test(
+            e.message
+          )
+        const log = isTransient ? logger.debug : logger.warn
+        log(`CLI commands fetch failed for agent ${agentId}`, { error: e.message })
+        return { success: false, commands: [], error: e.message }
       }
     }
   )

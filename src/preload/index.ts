@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
+import type { CliCommand } from '../shared/cliCommands'
 
 export interface ChatData {
   id: string
@@ -292,6 +293,10 @@ const api = {
       agentId: string
     ): Promise<{ success: boolean; card?: Record<string, unknown>; error?: string }> =>
       ipcRenderer.invoke('agent:test', agentId),
+    listCliCommands: (
+      agentId: string
+    ): Promise<{ success: boolean; commands: CliCommand[]; error?: string }> =>
+      ipcRenderer.invoke('agent:list-cli-commands', agentId),
     sendMessage: (
       agentId: string,
       chatId: string,

@@ -212,14 +212,20 @@ export function MainArea(): React.JSX.Element {
       <div
         ref={inputWrapperRef}
         className="absolute bottom-0 left-0 right-0 pt-6 pb-3 pointer-events-none"
-        style={{
-          WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 24px)',
-          maskImage: 'linear-gradient(to bottom, transparent, black 24px)',
-          backdropFilter: 'blur(12px)',
-          WebkitBackdropFilter: 'blur(12px)'
-        }}
       >
-        <div className="pointer-events-auto">
+        {/* Backdrop-blur + top fade rendered as a sibling so it never clips the
+            command / mention popups that overflow above the textarea. */}
+        <div
+          aria-hidden
+          className="absolute inset-0 pointer-events-none"
+          style={{
+            WebkitMaskImage: 'linear-gradient(to bottom, transparent, black 24px)',
+            maskImage: 'linear-gradient(to bottom, transparent, black 24px)',
+            backdropFilter: 'blur(12px)',
+            WebkitBackdropFilter: 'blur(12px)'
+          }}
+        />
+        <div className="relative pointer-events-auto">
           <ChatInput
             ref={chatInputRef}
             chatId={activeChatId}

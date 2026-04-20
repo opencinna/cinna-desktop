@@ -9,7 +9,7 @@ Catalog of every keyboard shortcut exposed by the app — both global (window-le
 - **Global shortcut** — Registered as an Electron `Menu` accelerator in the main process. Active whenever the window has focus, regardless of which element is focused. Broadcast to the renderer via `webContents.send`.
 - **Context shortcut** — Handled in a React component via `onKeyDown` on a specific element, or a `window.addEventListener('keydown', ...)` gated on some open-state flag (e.g. `logsOpen`, `agentStatusOpen`). Only fires when that context is active.
 - **Chord shortcut** — A double-press within a short time window (currently only ESC–ESC at 400 ms). Tracked via a `useRef` timestamp so consecutive presses can be correlated without re-rendering.
-- **Trigger character** — Not a keyboard shortcut per se, but a single-character input in the chat textarea (`@`, `#`) that opens a popup. Documented here for completeness because the popup then hijacks certain keys (`↑ ↓ Enter Tab Esc`).
+- **Trigger character** — Not a keyboard shortcut per se, but a single-character input in the chat textarea (`@`, `#`, `/`) that opens a popup. Documented here for completeness because the popup then hijacks certain keys (`↑ ↓ Enter Tab Esc`).
 
 ## Shortcut Registry
 
@@ -28,9 +28,9 @@ Catalog of every keyboard shortcut exposed by the app — both global (window-le
 | `Shift + Enter` | Insert a newline. | Input focused. |
 | `Esc` (double-press within 400 ms) | Reset the new-chat input's settings — currently deselects the selected agent. | New-chat screen only (`chatId === null`), no popup open. |
 
-### Chat input — trigger popups (`AgentMentionPopup` / `ExamplePromptPopup`)
+### Chat input — trigger popups (`AgentMentionPopup` / `ExamplePromptPopup` / `CliCommandPopup`)
 
-Typing `@` opens the agent mention popup (new-chat screen only). Typing `#` opens the example-prompts popup (when the active agent exposes prompts). While a popup is open, keys are routed to the popup:
+Typing `@` opens the agent mention popup (new-chat screen only). Typing `#` opens the example-prompts popup (when the active agent exposes prompts). Typing `/` opens the CLI-command popup (when the active agent exposes `cinna.run.*` skills). While a popup is open, keys are routed to the popup:
 
 | Combo | Action |
 |-------|--------|
@@ -93,4 +93,5 @@ Chord shortcut
 - [Agents](../../agents/agents/agents.md) / [Agent Status](../../agents/agent_status/agent_status.md) — `Esc` handling for the agent status overlay lives alongside those features.
 - [Messaging](../../chat/messaging/messaging.md) — `Enter` / `Shift+Enter` send/newline behaviour is part of the chat input.
 - [Example Prompts](../../chat/example_prompts/example_prompts.md) — `#` trigger + popup navigation keys.
+- [CLI Commands](../../chat/cli_commands/cli_commands.md) — `/` trigger that opens the per-agent command picker.
 - [Settings](../settings/settings.md) — Houses the `ChatModeCard` `Enter`-to-commit behaviour and the logger enable toggle that gates `⌘` `.

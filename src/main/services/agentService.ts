@@ -13,6 +13,7 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 import type { AgentCard } from '../agents/a2a-client'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
+import { extractCliCommands, type CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('agents')
 
@@ -281,6 +282,28 @@ export const agentService = {
       }
     }
     return agent.accessTokenEncrypted ? decryptApiKey(agent.accessTokenEncrypted) : undefined
+  },
+
+  /**
+   * Fetch the agent card fresh and extract CLI command skills
+   * (`cinna.run.*` / `tags: ["cinna-run"]`). Returns [] for non-A2A agents or
+   * agents without a card URL. Does not persist — the card cache is driven by
+   * `testAgent`.
+   */
+  async listCliCommands(userId: string, agentId: string): Promise<CliCommand[]> {
+    const agent = agentRepo.getOwned(userId, agentId)
+    if (!agent) throw new AgentError('not_found', 'Agent not found')
+    if (agent.protocol !== 'a2a' || !agent.cardUrl) return []
+    const accessToken = await this.resolveAccessToken(userId, agent)
+    const started = Date.now()
+    const { card } = await fetchAgentCard(agent.cardUrl, accessToken)
+    const commands = extractCliCommands((card as unknown as { skills?: unknown }).skills)
+    logger.info('CLI commands fetched', {
+      agentId,
+      count: commands.length,
+      durationMs: Date.now() - started
+    })
+    return commands
   },
 
   /**

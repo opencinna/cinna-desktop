@@ -6,12 +6,14 @@ import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
+import { CliCommandPopup } from './CliCommandPopup'
 import { useAgents } from '../../hooks/useAgents'
+import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset } from '../../constants/chatModeColors'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
-type TriggerChar = '@' | '#'
+type TriggerChar = '@' | '#' | '/'
 
 interface ChatInputProps {
   chatId: string | null
@@ -27,7 +29,7 @@ interface ChatInputProps {
 
 const DOUBLE_ESC_WINDOW_MS = 400
 
-/** Find a trigger token (@ or #) at the cursor position. */
+/** Find a trigger token (@, # or /) at the cursor position. */
 function findTriggerToken(
   value: string,
   cursorPos: number
@@ -35,7 +37,7 @@ function findTriggerToken(
   let i = cursorPos - 1
   while (i >= 0) {
     const ch = value[i]
-    if (ch === '@' || ch === '#') {
+    if (ch === '@' || ch === '#' || ch === '/') {
       if (i === 0 || /\s/.test(value[i - 1])) {
         return { char: ch, start: i, filter: value.slice(i + 1, cursorPos) }
       }
@@ -96,6 +98,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [promptSourceAgent]
   )
 
+  // CLI commands (`cinna.run.*`) fetched on demand from the prompt-source
+  // agent's card. Same gating rule as '#'.
+  const { data: cliCommands } = useCliCommands(promptSourceAgent?.id)
+  const commands = useMemo(() => cliCommands ?? [], [cliCommands])
+
   const filteredAgents = useMemo(
     () =>
       enabledAgents.filter(
@@ -113,8 +120,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     )
   }, [examplePrompts, triggerFilter])
 
+  const filteredCommands = useMemo(() => {
+    const q = triggerFilter.toLowerCase()
+    return commands.filter(
+      (c) =>
+        c.slug.toLowerCase().includes(q) ||
+        c.name.toLowerCase().includes(q) ||
+        c.command.toLowerCase().includes(q) ||
+        c.description.toLowerCase().includes(q)
+    )
+  }, [commands, triggerFilter])
+
   const agentPopupOpen = triggerChar === '@' && !chatId && !!onSelectAgent
   const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
+  const commandPopupOpen = triggerChar === '/' && commands.length > 0
 
   const closeTrigger = useCallback(() => {
     setTriggerChar(null)
@@ -155,6 +174,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [replaceTriggerToken]
   )
 
+  const selectCommand = useCallback(
+    (command: CliCommand) => {
+      replaceTriggerToken(command.command)
+    },
+    [replaceTriggerToken]
+  )
+
   const handleSend = useCallback(() => {
     const trimmed = input.trim()
     if (!trimmed || isStreaming) return
@@ -180,7 +206,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     ? filteredAgents.length
     : promptPopupOpen
       ? filteredPrompts.length
-      : 0
+      : commandPopupOpen
+        ? filteredCommands.length
+        : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (triggerChar && activeListLength > 0) {
@@ -198,6 +226,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         e.preventDefault()
         if (agentPopupOpen) selectAgent(filteredAgents[triggerIndex])
         else if (promptPopupOpen) selectPrompt(filteredPrompts[triggerIndex])
+        else if (commandPopupOpen) selectCommand(filteredCommands[triggerIndex])
         return
       }
       if (e.key === 'Escape') {
@@ -245,7 +274,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // Gate each trigger by context.
     const agentGate = token.char === '@' && !chatId && onSelectAgent && enabledAgents.length > 0
     const promptGate = token.char === '#' && examplePrompts.length > 0
-    if (!agentGate && !promptGate) {
+    const commandGate = token.char === '/' && commands.length > 0
+    if (!agentGate && !promptGate && !commandGate) {
       if (triggerChar) closeTrigger()
       return
     }
@@ -280,6 +310,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      {commandPopupOpen && (
+        <CliCommandPopup
+          items={filteredCommands}
+          selectedIndex={triggerIndex}
+          onSelect={selectCommand}
+          onClose={closeTrigger}
+          listboxId={listboxId}
+          anchorRef={textareaRef}
+        />
+      )}
+
       <div
         className="rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         style={{
@@ -296,11 +337,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           rows={1}
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={agentPopupOpen || promptPopupOpen}
-          aria-controls={agentPopupOpen || promptPopupOpen ? listboxId : undefined}
+          aria-expanded={agentPopupOpen || promptPopupOpen || commandPopupOpen}
+          aria-controls={
+            agentPopupOpen || promptPopupOpen || commandPopupOpen ? listboxId : undefined
+          }
           aria-activedescendant={
             (agentPopupOpen && filteredAgents.length > 0) ||
-            (promptPopupOpen && filteredPrompts.length > 0)
+            (promptPopupOpen && filteredPrompts.length > 0) ||
+            (commandPopupOpen && filteredCommands.length > 0)
               ? `${listboxId}-opt-${triggerIndex}`
               : undefined
           }
