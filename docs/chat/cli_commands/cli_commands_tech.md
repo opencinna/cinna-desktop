@@ -12,8 +12,8 @@
 
 | File | Role |
 |------|------|
-| `src/main/services/agentService.ts` | `listCliCommands(userId, agentId)` — loads the agent row, resolves its access token, calls `fetchAgentCard(cardUrl, token)`, and returns `extractCliCommands(card.skills)`. Returns `[]` for non-A2A agents or agents without a `cardUrl`. Does not persist — the card cache is still driven by `testAgent`. |
-| `src/main/ipc/agent_a2a.ipc.ts` | Registers `agent:list-cli-commands` handler. Wraps `agentService.listCliCommands` in `ipcErrorShape` and returns `{ success, commands, error? }`. |
+| `src/main/services/agentService.ts` | `listCliCommands(userId, agentId)` — loads the agent row, resolves its access token, calls `fetchAgentCard(cardUrl, token)`, and returns `extractCliCommands(card.skills)`. Returns `[]` for non-A2A agents or agents without a `cardUrl`. Emits a trace log with `{ agentId, count, durationMs }` on success. Does not persist — the card cache is still driven by `testAgent`. |
+| `src/main/ipc/agent_a2a.ipc.ts` | Registers `agent:list-cli-commands` handler. Wraps `agentService.listCliCommands` in `ipcErrorShape` and returns `{ success, commands, error? }`. Network-family failures (ECONN*, ETIMEDOUT, terminated, socket hang up, …) are logged at `debug` to avoid flooding the logger overlay during transient backend blips; other failures stay at `warn`. |
 | `src/main/agents/a2a-client.ts` | Unchanged — `fetchAgentCard` is reused for the on-demand card fetch. |
 
 ### Preload
@@ -26,7 +26,7 @@
 
 | File | Role |
 |------|------|
-| `src/renderer/src/hooks/useCliCommands.ts` | TanStack Query hook. Query key `['agents', 'cli-commands', agentId]`, `enabled` gated on a truthy `agentId`, `staleTime: 15_000`. Re-exports `CliCommand` for colocation with consumers. |
+| `src/renderer/src/hooks/useCliCommands.ts` | TanStack Query hook. Query key `['agents', 'cli-commands', agentId]`, `enabled` gated on a truthy `agentId`, `staleTime: 15_000`, `retry: 1` (one retry covers a transient blip without amplifying outages), `refetchOnWindowFocus: true` (card refreshes when the user returns to the agent screen). Re-exports `CliCommand` for colocation with consumers. |
 | `src/renderer/src/components/chat/CliCommandPopup.tsx` | Presentational `/` popup. Same contract as `ExamplePromptPopup` — receives pre-filtered `items`, a `selectedIndex`, and emits `onSelect` / `onClose`. Renders each command's invocation string (`cmd.command`) as the primary label, the skill's `name` as a trailing tag, and the first line of the description underneath. Uses `lucide-react`'s `Terminal` icon. |
 | `src/renderer/src/components/chat/ChatInput.tsx` | Adds `/` to `TriggerChar` and to `findTriggerToken`. Invokes `useCliCommands(promptSourceAgent?.id)` alongside the existing prompt extraction; memoises the result array. New `filteredCommands`, `commandPopupOpen`, `selectCommand`, and a `commandGate` in `handleInput`. `activeListLength` and the Enter/Tab branch extended to cover the command popup. ARIA wiring (`aria-expanded`, `aria-controls`, `aria-activedescendant`) extended. |
 
@@ -42,7 +42,7 @@ None. CLI commands are fetched fresh from the agent card every time they are req
 
 ## Services & Key Methods
 
-- `src/main/services/agentService.ts::listCliCommands(userId, agentId)` — fetches the agent card and returns parsed CLI commands. Throws `AgentError('not_found')` if the agent row isn't owned by the user; returns `[]` for non-A2A agents or missing card URLs.
+- `src/main/services/agentService.ts::listCliCommands(userId, agentId)` — fetches the agent card and returns parsed CLI commands. Throws `AgentError('not_found')` if the agent row isn't owned by the user; returns `[]` for non-A2A agents or missing card URLs. Emits a structured trace log (`CLI commands fetched`, `{ agentId, count, durationMs }`) so the logger overlay can correlate user actions with the external card fetch.
 - `src/shared/cliCommands.ts::extractCliCommands(skills)` — pure parser. Accepts `unknown` (defensive against raw card JSON), filters by skill id prefix `cinna.run.` or tag `cinna-run`, and derives `command` from `examples[0]` with a `/run:<slug>` fallback.
 
 ## Renderer Components

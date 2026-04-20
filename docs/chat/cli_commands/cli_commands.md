@@ -24,7 +24,7 @@ Surfaces the shell commands that a Cinna agent exposes via its `CLI_COMMANDS.yam
 ## Business Rules
 
 - CLI commands only come from agents that expose `cinna.run.*` skills (or skills tagged `cinna-run`) on their agent card. Agents without such skills leave the `/` trigger inert.
-- The agent card is fetched on demand from the main process with the agent's resolved access token. Fetch results are cached via TanStack Query with a 15 s stale time; card refreshes happen automatically when the prompt-source agent changes.
+- The agent card is fetched on demand from the main process with the agent's resolved access token. Fetch results are cached via TanStack Query with a 15 s stale time; card refreshes happen automatically when the prompt-source agent changes or the window regains focus (matches the backend's "re-fetch when the user returns to the agent screen" guidance).
 - Empty `CLI_COMMANDS.yaml`, missing card, or a card-fetch error all collapse to "no commands" — the `/` trigger is silently disabled.
 - The `/` trigger shares the popup-state slot in `ChatInput` with `@` and `#` — only one popup is open at a time; switching trigger characters replaces the popup's contents.
 - Unlike `#`, there is no pre-input tag cloud — commands only surface via the modal popup.
