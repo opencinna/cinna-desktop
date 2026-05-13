@@ -35,7 +35,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 | [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
-| [UI](ui/settings/settings.md) | Settings screen, sidebar navigation, theming |
+| [UI](ui/app_shell/app_shell.md) | App shell chrome (top bar, sidebar, footer menus), settings screen, theming |
 | [Development](development/setup/setup.md) | Dev environment, commands, gotchas |
 
 ## Feature Registry
@@ -67,6 +67,7 @@ Electron desktop chat client for LLMs (Anthropic, OpenAI, Gemini) with MCP conne
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR
 
 ### UI
+- [App Shell](ui/app_shell/app_shell.md) — Window chrome: permanent top bar (traffic-light gutter, sidebar toggle, new chat), animated floating sidebar, profile/agent/interface footer menus
 - [Settings](ui/settings/settings.md) — Settings screen with sidebar navigation, LLM provider and MCP server configuration
 - [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, and streaming block auto-expand behaviour
 - [Keyboard Shortcuts](ui/keyboard_shortcuts/keyboard_shortcuts.md) — Registry of every shortcut: global menu accelerators (⌘`), context-scoped ESC, chord patterns (double-ESC) and input-popup navigation

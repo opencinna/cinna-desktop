@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { TitleBar } from './components/layout/TitleBar'
 import { Sidebar } from './components/layout/Sidebar'
+import { TopBar } from './components/layout/TopBar'
 import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { LogsOverlay } from './components/logger/LogsOverlay'
@@ -55,17 +55,26 @@ function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Elemen
   return <>{children}</>
 }
 
+function Shell(): React.JSX.Element {
+  // Top bar is always present (next to macOS traffic lights) and the
+  // sidebar slides in/out below it. The toggle and new-chat buttons therefore
+  // keep their position regardless of sidebar state.
+  return (
+    <div className="h-full flex flex-col min-h-0 px-2 pb-2 gap-2">
+      <TopBar />
+      <div className="flex-1 flex min-h-0 gap-2">
+        <Sidebar />
+        <MainArea />
+      </div>
+    </div>
+  )
+}
+
 function App(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthGate>
-        <div className="h-full flex flex-col">
-          <TitleBar />
-          <div className="flex-1 flex overflow-hidden">
-            <Sidebar />
-            <MainArea />
-          </div>
-        </div>
+        <Shell />
         <LogsOverlay />
         <AgentStatusOverlay />
       </AuthGate>

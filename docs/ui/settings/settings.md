@@ -14,9 +14,10 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 
 ### Entering Settings
 
-1. User clicks "Settings" button in the sidebar bottom bar
-2. Sidebar transforms: chat list replaced by settings menu with "Back" button, "Settings" header, and vertical menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts)
-3. Main content area shows the active settings section (Chat Modes by default)
+1. User clicks the avatar in the sidebar footer to open the profile dropdown
+2. User clicks the "Settings" entry in the dropdown
+3. Sidebar transforms: chat list replaced by settings menu with "Back" button, "Settings" header, and vertical menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts)
+4. Main content area shows the active settings section (Chat Modes by default)
 
 ### Navigating Between Sections
 
@@ -33,14 +34,18 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 ## Business Rules
 
 - Switching settings sections always resets the page — open forms, partial input, expanded cards are all discarded on navigation
-- The sidebar "Settings" button is hidden when already in settings view (replaced by "Back" button)
-- Theme toggle remains in sidebar bottom bar regardless of view
+- Settings is entered from the profile dropdown ("Settings" item); there is no dedicated Settings button in the sidebar footer
+- A "Back" button replaces the chat list at the top of the sidebar while in settings view
+- The Interface popover (Console / Verbose / Theme toggles) remains accessible from the sidebar footer regardless of view — see [App Shell](../app_shell/app_shell.md)
 - Default settings tab is "Chat Modes" (`settingsTab: 'chats'`)
 - Settings view state (`settingsTab`) persists across view switches — returning to settings reopens the last active section
 
 ## Architecture Overview
 
 ```
+UserMenu (profile dropdown in sidebar footer)
+  └── "Settings" → setActiveView('settings')
+
 Sidebar (settings menu mode)
   ├── Back button → setActiveView('chat')
   ├── "Settings" header
@@ -60,6 +65,7 @@ MainArea
 ## Integration Points
 
 - **UI Store** — `activeView` and `settingsTab` state drives both sidebar mode and settings page content
+- [App Shell](../app_shell/app_shell.md) — Hosts the profile dropdown (settings entry) and the sidebar's settings-menu mode
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Chat modes section manages named presets
 - [Agents](../../agents/agents/agents.md) — Agents section manages A2A agent registrations
 - [Adapters](../../llm/adapters/adapters.md) — LLM settings section manages provider configuration consumed by the adapter layer

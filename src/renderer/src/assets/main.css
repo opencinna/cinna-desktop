@@ -72,6 +72,10 @@
     --color-overlay-panel: rgba(255, 255, 255, 0.35);
   }
 
+  html {
+    font-size: 17px;
+  }
+
   html, body, #root {
     height: 100%;
     overflow: hidden;
@@ -92,14 +96,62 @@
     background-color: transparent;
   }
 
-  /* Sidebar surface: solid in light, semi-transparent darker overlay in dark (so bg image shows through) */
+  /* Sidebar surface: floating card slightly inset from window edges. macOS
+     traffic lights overlay its top-left header (the 8 px inset is small enough
+     that they still land inside the filled rounded corner). */
   .app-sidebar {
     background-color: var(--color-bg-secondary);
+    border: 1px solid var(--color-border);
+    border-radius: 14px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
   [data-theme="dark"] .app-sidebar {
     background-color: rgba(0, 0, 0, 0.45);
-    backdrop-filter: blur(8px);
-    -webkit-backdrop-filter: blur(8px);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border-color: rgba(255, 255, 255, 0.06);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+  }
+
+  /* Animated collapse/expand. The wrap reserves layout width (so flex siblings
+     reflow correctly) while the inner panel is absolutely positioned — that
+     lets its `box-shadow` render outside the wrap's box instead of being
+     clipped to a rectangle. On collapse we slide the inner left and fade it,
+     so the shadow disappears with it (no residual strip). */
+  .app-sidebar-wrap {
+    --sidebar-width: 240px;
+    position: relative;
+    width: var(--sidebar-width);
+    transition: width 260ms cubic-bezier(0.2, 0.85, 0.3, 1);
+    will-change: width;
+    flex-shrink: 0;
+  }
+  .app-sidebar-wrap.is-collapsed {
+    width: 0;
+  }
+  .app-sidebar-wrap > .app-sidebar {
+    position: absolute;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: var(--sidebar-width);
+    transition:
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+    will-change: transform, opacity;
+  }
+  .app-sidebar-wrap.is-collapsed > .app-sidebar {
+    transform: translateX(-100%);
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  /* Draggable strips for the (windowless) macOS title-bar area. */
+  .app-drag-strip {
+    -webkit-app-region: drag;
+  }
+  .app-drag-strip button, .app-drag-strip a {
+    -webkit-app-region: no-drag;
   }
 
   ::-webkit-scrollbar {

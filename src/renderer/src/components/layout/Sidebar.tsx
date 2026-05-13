@@ -1,8 +1,20 @@
-import { Settings, Sun, Moon, Plus, ArrowLeft, Brain, Plug, Trash2, MessageSquare, Bot, Users, Wrench, Terminal, Eye, EyeOff } from 'lucide-react'
+import {
+  ArrowLeft,
+  Brain,
+  Plug,
+  Trash2,
+  MessageSquare,
+  Bot,
+  Users,
+  Wrench
+} from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import type { SettingsMenu } from '../../stores/ui.store'
-import { useChatStore } from '../../stores/chat.store'
+import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
+import { UserMenu } from '../auth/UserMenu'
+import { AgentStatusButton } from '../agents/AgentStatusButton'
+import { InterfaceMenu } from './InterfaceMenu'
 
 const settingsMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
@@ -14,38 +26,21 @@ const settingsMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }
 ]
 
 export function Sidebar(): React.JSX.Element {
-  const {
-    sidebarOpen,
-    setActiveView,
-    activeView,
-    settingsTab,
-    setSettingsMenu,
-    theme,
-    toggleTheme,
-    loggerEnabled,
-    logsOpen,
-    setLogsOpen,
-    verboseMode,
-    toggleVerboseMode
-  } = useUIStore()
-  const setActiveChatId = useChatStore((s) => s.setActiveChatId)
-
-  const handleNewChat = (): void => {
-    setActiveChatId(null)
-    setActiveView('chat')
-  }
+  const sidebarOpen = useUIStore((s) => s.sidebarOpen)
+  const activeView = useUIStore((s) => s.activeView)
+  const setActiveView = useUIStore((s) => s.setActiveView)
+  const settingsTab = useUIStore((s) => s.settingsTab)
+  const setSettingsMenu = useUIStore((s) => s.setSettingsMenu)
+  const currentUser = useAuthStore((s) => s.currentUser)
+  const isCinnaUser = currentUser?.type === 'cinna_user'
 
   const isSettings = activeView === 'settings'
 
   return (
-    <div
-      className="app-sidebar h-full shrink-0 overflow-hidden transition-[width] duration-250 ease-in-out border-r border-[var(--color-border)]"
-      style={{ width: sidebarOpen ? 240 : 0, borderRightWidth: sidebarOpen ? 1 : 0 }}
-    >
-      <div className="w-[240px] h-full flex flex-col">
+    <div className={`app-sidebar-wrap h-full ${sidebarOpen ? '' : 'is-collapsed'}`}>
+      <div className="app-sidebar overflow-hidden flex flex-col">
         {isSettings ? (
           <>
-            {/* Settings header with back button */}
             <div className="px-2 pt-2 pb-1">
               <button
                 onClick={() => setActiveView('chat')}
@@ -60,8 +55,7 @@ export function Sidebar(): React.JSX.Element {
               <h2 className="text-sm font-semibold text-[var(--color-text)]">Settings</h2>
             </div>
 
-            {/* Settings menu */}
-            <div className="flex-1 px-2 space-y-0.5">
+            <div className="flex-1 px-2 space-y-0.5 overflow-y-auto">
               {settingsMenuItems.map((item) => {
                 const Icon = item.icon
                 const active = settingsTab === item.id
@@ -81,7 +75,6 @@ export function Sidebar(): React.JSX.Element {
                 )
               })}
 
-              {/* Trash with delimiter */}
               <div className="mx-2.5 border-t border-[var(--color-border)]" />
               <button
                 onClick={() => setSettingsMenu('trash')}
@@ -97,70 +90,17 @@ export function Sidebar(): React.JSX.Element {
             </div>
           </>
         ) : (
-          <>
-            {/* New Chat button */}
-            <div className="px-2 pt-2 pb-1 mx-4 border-b border-[var(--color-border)]">
-              <button
-                onClick={handleNewChat}
-                className="w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium
-                  text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors"
-              >
-                <Plus size={14} />
-                New Chat
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto">
-              <ChatList />
-            </div>
-          </>
+          <div className="flex-1 overflow-y-auto pt-2">
+            <ChatList />
+          </div>
         )}
 
-        {/* Bottom bar: settings + theme */}
-        <div className="border-t border-[var(--color-border)] px-2 py-2 flex items-center gap-1">
-          <button
-            onClick={() => setActiveView(isSettings ? 'chat' : 'settings')}
-            className={`p-1.5 rounded-md transition-colors ${
-              isSettings
-                ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
-                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
-            }`}
-            title="Settings"
-          >
-            <Settings size={14} />
-          </button>
+        {/* Footer: profile (left) — agent status + interface (right) */}
+        <div className="px-2 py-2 flex items-center gap-1">
+          <UserMenu compact />
           <div className="flex-1" />
-          {loggerEnabled && (
-            <button
-              onClick={() => setLogsOpen(!logsOpen)}
-              className={`p-1.5 rounded-md transition-colors ${
-                logsOpen
-                  ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
-                  : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
-              }`}
-              title="App logs (⌘`)"
-            >
-              <Terminal size={14} />
-            </button>
-          )}
-          <button
-            onClick={toggleVerboseMode}
-            className={`p-1.5 rounded-md transition-colors ${
-              verboseMode
-                ? 'text-[var(--color-text)] bg-[var(--color-bg-tertiary)]'
-                : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
-            }`}
-            title={verboseMode ? 'Switch to compact mode' : 'Switch to verbose mode'}
-          >
-            {verboseMode ? <Eye size={14} /> : <EyeOff size={14} />}
-          </button>
-          <button
-            onClick={toggleTheme}
-            className="p-1.5 rounded-md text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)] transition-colors"
-            title={theme === 'dark' ? 'Switch to light' : 'Switch to dark'}
-          >
-            {theme === 'dark' ? <Sun size={14} /> : <Moon size={14} />}
-          </button>
+          {isCinnaUser && <AgentStatusButton />}
+          <InterfaceMenu />
         </div>
       </div>
     </div>
