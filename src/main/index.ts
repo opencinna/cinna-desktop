@@ -1,7 +1,7 @@
 import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/icon.png?asset'
+import icon from '../../resources/cinna-desktop-icon.png?asset'
 import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
@@ -47,6 +47,10 @@ function createWindow(): void {
 
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.cinna.desktop')
+
+  if (process.platform === 'darwin' && app.dock) {
+    app.dock.setIcon(icon)
+  }
 
   const toggleLogsOverlay = (): void => {
     const win = getMainWindow()
