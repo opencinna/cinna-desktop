@@ -205,13 +205,16 @@ Once you have signed+notarized DMGs in `dist/`:
 
 ## Releasing & auto-update
 
-Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`) and `electron-builder`'s GitHub publish provider. The flow:
+Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`) and `electron-builder`'s GitHub publish provider. Each release goes through the same 7-step runbook below.
 
-1. Bump the version in `package.json`.
-2. Build + sign + notarize + upload to a GitHub Release in one shot.
-3. Notarize the DMG containers.
-4. Publish the GitHub Release (it's created as a draft).
-5. Installed clients detect the new version and auto-update.
+At a glance:
+1. **Pre-flight** — clean tree on `main`, typecheck/build/dev sanity-checks pass.
+2. **Bump version** — `npm version patch|minor|major` commits + tags.
+3. **Build, sign, notarize, upload** — `npm run release:mac` produces a GitHub **draft** release with both DMGs + manifest.
+4. **Verify the draft** — `gh release view`, optional download-and-launch smoke test.
+5. **(Optional) Test auto-update** before users see it.
+6. **Write notes & publish** — `gh release edit ... --draft=false`.
+7. **Push** the version-bump commit.
 
 ### One-time setup: GitHub token
 
@@ -226,31 +229,185 @@ Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`
 
 The repo (`opencinna/cinna-desktop`) is configured in `electron-builder.yml`'s `publish:` block.
 
-### Release flow
+### Release runbook
+
+Step-by-step for cutting a new release. The whole flow takes ~20–30 min on a clean machine (most of it Apple's notary service).
+
+#### 1. Pre-flight checks
+
+```bash
+# On main, clean tree, up to date with origin
+git checkout main
+git pull
+git status               # should show: clean
+git diff origin/main     # should be empty
+
+# Build + typecheck succeed (release:mac runs this, but fail fast here)
+npm install
+npm run typecheck
+npx electron-vite build
+
+# Sanity-run the dev build to make sure the app still launches
+npm run dev              # Ctrl+C once the window opens cleanly
+```
+
+If anything fails, fix it on `main` before continuing — every release tag is a permanent reference point.
+
+#### 2. Pick the version bump
+
+```bash
+# Bug fixes only:
+npm version patch        # 0.1.1 -> 0.1.2
+
+# New features, backwards-compatible:
+npm version minor        # 0.1.1 -> 0.2.0
+
+# Breaking changes (rare):
+npm version major        # 0.1.1 -> 1.0.0
+```
+
+`npm version` updates `package.json`, creates a commit, and tags it (`vX.Y.Z`). It **refuses if the tree is dirty** — see Recovery below if you hit this.
+
+#### 3. Build, sign, notarize, upload
 
 ```bash
 source ~/.cinna-desktop-signing.env
-
-# 1. Bump version (creates a commit + tag; npm refuses if tree is dirty)
-npm version patch       # 0.1.0 -> 0.1.1; or `minor` / `major`
-
-# 2. Build + sign + notarize .app + upload to GitHub draft release
 npm run release:mac
+```
 
-# 3. Review the draft at https://github.com/opencinna/cinna-desktop/releases — edit the
-#    title/body, add release notes, then publish:
-gh release edit "v$(node -p "require('./package.json').version")" --draft=false
+This single command:
+- Compiles main/preload/renderer.
+- Packages `.app` bundles for `x64` and `arm64`.
+- Signs everything with the Developer ID cert.
+- Submits each `.app` to Apple notary and **waits** for `Accepted` (2–10 min per arch).
+- Staples the notarization ticket onto the `.app`.
+- Builds DMGs containing the stapled `.app`s.
+- Generates blockmaps (for differential auto-update).
+- Generates `latest-mac.yml` (the auto-update manifest).
+- Uploads everything to a **draft GitHub Release** at `v${version}` (created automatically; the tag is pushed by electron-builder at this point).
 
-# 4. Push the version commit (the tag was already pushed by electron-builder when it
-#    created the draft release):
+Watch the log for `notarization successful` (twice — once per arch) and final `uploading ... provider=github` lines for each artifact.
+
+#### 4. Verify the draft on GitHub
+
+```bash
+VERSION="v$(node -p "require('./package.json').version")"
+
+# Confirm the draft exists with all 5 expected assets
+gh release view "$VERSION" --repo opencinna/cinna-desktop
+
+# Expected assets:
+#   cinna-desktop-${V}-arm64.dmg
+#   cinna-desktop-${V}-arm64.dmg.blockmap
+#   cinna-desktop-${V}-x64.dmg
+#   cinna-desktop-${V}-x64.dmg.blockmap
+#   latest-mac.yml
+```
+
+> If `gh release view` shows `draft: false`, electron-builder published immediately. Check `electron-builder.yml`'s `publish.releaseType` — it should be `draft`.
+
+Optional sanity-check the downloaded artifact end-to-end:
+```bash
+mkdir -p /tmp/release-test && cd /tmp/release-test
+gh release download "$VERSION" --repo opencinna/cinna-desktop --pattern "*arm64.dmg"
+# Simulate a download from the internet (sets the quarantine bit)
+xattr -w com.apple.quarantine "0181;00000000;Safari;|com.apple.Safari" \
+  cinna-desktop-*-arm64.dmg
+open cinna-desktop-*-arm64.dmg
+# Drag the .app to /Applications, launch it — should open with no Gatekeeper warning.
+cd -
+```
+
+#### 5. Test auto-update BEFORE publishing the draft (recommended)
+
+The draft is invisible to `electron-updater`, so existing installs won't try to pull it until you publish. To preview the upgrade path safely:
+
+1. Temporarily flip the draft to a public release: `gh release edit "$VERSION" --draft=false --repo opencinna/cinna-desktop`
+2. Launch a previous-version install of Cinna Desktop.
+3. Open the in-app logs overlay (`Cmd+\``) → filter for scope `updater`.
+4. Watch for: `checking for update` → `update available: ${version}` → `download X%` → `update downloaded`.
+5. Confirm the "Update ready" dialog and the relaunch.
+
+If something's wrong, immediately flip back to draft (`--draft=true`) — installed clients that already saw the public release will continue, but new ones won't.
+
+For a typical patch release where you're confident, you can skip this step.
+
+#### 6. Write release notes and publish
+
+```bash
+# Pull commits since the previous tag, format them, and use gh to set the body:
+PREV_TAG=$(gh release list --repo opencinna/cinna-desktop --limit 2 --json tagName --jq '.[1].tagName')
+NOTES=$(git log --pretty="- %s" "$PREV_TAG..HEAD" -- . ':!docs/' ':!**/CLAUDE.md')
+
+gh release edit "$VERSION" --repo opencinna/cinna-desktop \
+  --notes "$NOTES" \
+  --draft=false
+```
+
+Or edit notes in the GitHub web UI: https://github.com/opencinna/cinna-desktop/releases → click the draft → write notes → Publish release.
+
+#### 7. Push the version commit
+
+The tag was pushed by electron-builder in step 3, but the version-bump commit on `main` is still local:
+
+```bash
 git push
 ```
 
-That's it. Once the draft is published, installed clients running an earlier version will detect the update within 6 hours (or on next launch) and prompt the user to restart.
+Done. Installed clients on a previous version will pick up the new release on next launch or within 6 hours of running.
 
-> ⚠️ **Do NOT run `notarize:dmgs` between `release:mac` and publishing the draft.** electron-builder generates `latest-mac.yml` with the SHA512 of the unstapled DMG. Stapling changes the DMG bytes, breaking the hash. `electron-updater` would then reject the update with a hash-mismatch error. The `.app` *inside* the DMG IS stapled by `release:mac` — that's what Gatekeeper checks when the user launches the app, so this is enough.
+---
+
+> ⚠️ **Do NOT run `notarize:dmgs` between `release:mac` and publishing the draft.** electron-builder generates `latest-mac.yml` with the SHA512 of the un-DMG-stapled DMG. Stapling the DMG container changes its bytes, breaking the hash. `electron-updater` would then reject the update with a hash-mismatch error. The `.app` *inside* the DMG IS stapled by `release:mac` — that's what Gatekeeper checks when the user launches the app.
 >
-> The `notarize:dmgs` script remains useful for non-auto-update channels (e.g., when you distribute the DMG via a download page and never publish a manifest).
+> The `notarize:dmgs` script remains useful for non-auto-update channels (e.g., when you distribute the DMG via a separate download page and never publish a manifest).
+
+### Recovery: things that can go wrong
+
+**`npm version` refuses with "working directory not clean"**
+
+```bash
+# Stash whatever's lying around
+git stash
+npm version <bump>
+git stash pop   # bring it back after
+```
+
+Or: commit the work-in-progress, *then* run `npm version`.
+
+**`release:mac` failed partway through, leaving a half-uploaded GitHub release**
+
+```bash
+VERSION="v$(node -p "require('./package.json').version")"
+# Delete the draft and the tag, fix the issue, rerun release:mac
+gh release delete "$VERSION" --repo opencinna/cinna-desktop --yes --cleanup-tag
+git tag -d "$VERSION"
+# Optional: rollback the version-bump commit if you also want to retry with a fresh bump
+git reset --hard HEAD~1
+```
+
+After fixing the cause, restart from step 2.
+
+**Released a broken version that's auto-updating users**
+
+Don't unpublish — `electron-updater` clients that already saw the manifest may already be downloading it, and a missing release URL produces error logs rather than a rollback.
+
+Instead, **ship a hotfix immediately**:
+1. Fix the bug on `main`.
+2. `npm version patch` (e.g. `0.2.0` → `0.2.1`).
+3. Run the full release flow.
+4. Clients on the broken `0.2.0` will pick up `0.2.1` on their next check.
+
+For a truly catastrophic release (won't launch at all → can't run auto-update from inside the broken app), you'd need to publish a download-page message asking users to manually reinstall. Worth keeping a small static landing page that links to the latest release as a fallback.
+
+**Lost `~/.cinna-desktop-signing.env` (machine reformat / new dev machine)**
+
+You need:
+- The Developer ID Application cert + private key. If you exported a `.p12` backup, restore it via Keychain Access. If not, revoke the old cert and follow section 2 to issue a new one.
+- The Apple ID, app-specific password (regenerate at https://account.apple.com), and Team ID.
+- A GitHub PAT with `repo` scope.
+
+Recreate the env file from section 5.
 
 ### What gets published
 
