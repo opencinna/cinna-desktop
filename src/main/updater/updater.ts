@@ -1,7 +1,9 @@
 import { app, dialog } from 'electron'
-import { autoUpdater } from 'electron-updater'
+import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { createLogger } from '../logger/logger'
+
+const { autoUpdater } = electronUpdater
 
 const log = createLogger('updater')
 
