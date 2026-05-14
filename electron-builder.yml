@@ -49,4 +49,4 @@ publish:
   provider: github
   owner: opencinna
   repo: cinna-desktop
-  releaseType: release
+  releaseType: draft

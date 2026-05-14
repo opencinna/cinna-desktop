@@ -231,26 +231,26 @@ The repo (`opencinna/cinna-desktop`) is configured in `electron-builder.yml`'s `
 ```bash
 source ~/.cinna-desktop-signing.env
 
-# 1. Bump version (creates a git tag too — push it after the release succeeds)
+# 1. Bump version (creates a commit + tag; npm refuses if tree is dirty)
 npm version patch       # 0.1.0 -> 0.1.1; or `minor` / `major`
 
 # 2. Build + sign + notarize .app + upload to GitHub draft release
 npm run release:mac
 
-# 3. Notarize + staple the DMG containers (re-runs notarytool against the same files in dist/)
-npm run notarize:dmgs
-
-# 4. Re-upload the now-stapled DMGs over the draft release
-#    (electron-builder uploads with --publish always, but the stapled versions are local)
-gh release upload "v$(node -p "require('./package.json').version")" \
-  dist/cinna-desktop-*.dmg --clobber
-
-# 5. Publish the draft (clients only see published releases)
+# 3. Review the draft at https://github.com/opencinna/cinna-desktop/releases — edit the
+#    title/body, add release notes, then publish:
 gh release edit "v$(node -p "require('./package.json').version")" --draft=false
 
-# 6. Push the version commit + tag
-git push && git push --tags
+# 4. Push the version commit (the tag was already pushed by electron-builder when it
+#    created the draft release):
+git push
 ```
+
+That's it. Once the draft is published, installed clients running an earlier version will detect the update within 6 hours (or on next launch) and prompt the user to restart.
+
+> ⚠️ **Do NOT run `notarize:dmgs` between `release:mac` and publishing the draft.** electron-builder generates `latest-mac.yml` with the SHA512 of the unstapled DMG. Stapling changes the DMG bytes, breaking the hash. `electron-updater` would then reject the update with a hash-mismatch error. The `.app` *inside* the DMG IS stapled by `release:mac` — that's what Gatekeeper checks when the user launches the app, so this is enough.
+>
+> The `notarize:dmgs` script remains useful for non-auto-update channels (e.g., when you distribute the DMG via a download page and never publish a manifest).
 
 ### What gets published
 
@@ -348,7 +348,7 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
   - `author`, `homepage` populated (electron-builder uses these for app metadata / copyright)
   - `build:mac` script: `electron-vite build && electron-builder --mac`
   - `build:mac:unsigned` script: same but with `-c.mac.identity=null -c.mac.notarize=false` for local testing without certs
-  - `notarize:dmgs` script: loops over `dist/cinna-desktop-*.dmg` and runs `notarytool submit --wait` + `stapler staple` on each. Needs `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` env vars sourced first.
+  - `notarize:dmgs` script: loops over `dist/cinna-desktop-*.dmg` and runs `notarytool submit --wait` + `stapler staple` on each. Needs `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` env vars sourced first. **Do not use this in the auto-update release flow** — see warning in "Release flow".
   - `release:mac` script: build + sign + notarize + upload to GitHub Releases (draft). Needs `GH_TOKEN` in addition to the Apple env vars.
   - Added runtime dep `electron-updater`.
 - `src/main/updater/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit.
