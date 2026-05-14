@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: react-ts
+appId: io.opencinna.desktop
+productName: Cinna Desktop
 directories:
   buildResources: build
 files:
@@ -12,22 +12,29 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: react-ts
+  executableName: cinna-desktop
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}
   uninstallDisplayName: ${productName}
   createDesktopShortcut: always
 mac:
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
-  notarize: false
+  notarize: true
+  target:
+    - target: dmg
+      arch: [x64, arm64]
 dmg:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage
@@ -39,5 +46,7 @@ appImage:
   artifactName: ${name}-${version}.${ext}
 npmRebuild: false
 publish:
-  provider: generic
-  url: https://example.com/auto-updates
+  provider: github
+  owner: opencinna
+  repo: cinna-desktop
+  releaseType: release

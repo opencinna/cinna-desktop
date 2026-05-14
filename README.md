@@ -5,7 +5,7 @@
 > **Tip:** This project is designed to be explored with AI coding assistants. Try prompts like `read core and explain how i can work with a2a agents` to navigate the codebase and understand any feature in depth.
 > If you're using an AI assistant other than Claude Code, make sure to include `CLAUDE.md` in the context — it contains the project conventions and navigation instructions.
 
-**Agent Communication Desktop — a lightweight cross-platform chat client for talking to AI agents over open protocols.**
+**Desktop client for remote agents (MCP, A2A, OpenCinna).**
 
 Cinna Desktop is an Electron app that gives you a single, unified interface for chatting with:
 

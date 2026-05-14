@@ -142,7 +142,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
         )}
       </button>
 
-      {loginUserId && (
+      {loginUserId && createPortal(
         <LoginPrompt
           userId={loginUserId}
           userName={users?.find((u) => u.id === loginUserId)?.displayName ?? ''}
@@ -151,7 +151,8 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
             setOpen(false)
           }}
           onCancel={() => setLoginUserId(null)}
-        />
+        />,
+        document.body
       )}
 
       {open && dropdownStyle && createPortal(
@@ -257,7 +258,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
       )}
 
       {/* Centered modal for account creation */}
-      {showRegister && (
+      {showRegister && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div ref={modalRef} className="w-96 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-xl">
             <RegisterForm
@@ -265,11 +266,12 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               onCancel={() => setShowRegister(false)}
             />
           </div>
-        </div>
+        </div>,
+        document.body
       )}
 
       {/* Sign-out confirmation modal */}
-      {showSignOutConfirm && currentUser && (
+      {showSignOutConfirm && currentUser && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
           <div ref={signOutModalRef} className="w-96 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-xl p-5 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-red-400">
@@ -321,7 +323,8 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               </button>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </div>
   )

@@ -6,6 +6,7 @@ import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
 import { initSession } from './auth/session'
+import { initAutoUpdater } from './updater/updater'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -99,6 +100,7 @@ app.whenReady().then(() => {
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
   createWindow()
+  initAutoUpdater()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
