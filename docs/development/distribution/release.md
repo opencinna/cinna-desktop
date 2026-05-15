@@ -1,11 +1,17 @@
-# macOS Code Signing & Notarization
+# Release & Distribution
 
-End-to-end guide for producing a signed, notarized DMG that macOS users can download and install without Gatekeeper warnings.
+End-to-end guide for cutting a Cinna Desktop release: macOS code signing + notarization, Linux packaging via GitHub Actions, GitHub Releases upload, and in-app auto-update via `electron-updater`.
 
 App identity:
 - **App ID:** `io.opencinna.desktop`
 - **Product name:** `Cinna Desktop`
-- **Artifacts:** `dist/cinna-desktop-${version}-x64.dmg`, `dist/cinna-desktop-${version}-arm64.dmg`
+- **Release artifacts per version:**
+  - **macOS:** `cinna-desktop-${version}-x64.dmg`, `cinna-desktop-${version}-arm64.dmg`, + `.blockmap` files, + `latest-mac.yml`
+  - **Linux:** `cinna-desktop-${version}-x64.AppImage`, `cinna-desktop-${version}-x64.deb`, + `latest-linux.yml`
+- **Channels:**
+  - macOS: signed + notarized, auto-updates via `electron-updater`.
+  - Linux AppImage: auto-updates via `electron-updater`.
+  - Linux `.deb`: manual reinstall (apt-driven channel, no in-app update).
 
 ## What "signable + distributable" actually means
 
@@ -374,10 +380,14 @@ When you push the `v*` tag in step 3, the workflow `.github/workflows/release-li
 
 Watch progress at https://github.com/opencinna/cinna-desktop/actions. Typical runtime: 5–8 min.
 
-If your tag was pushed before the workflow file existed, or you need to re-run for any reason, trigger it manually:
+If you need to re-run the Linux build for an existing tag (e.g. CI flaked, or the tag predates the workflow), trigger it manually. The `ref` input is optional — defaults to `main`:
 
 ```bash
-gh workflow run release-linux.yml --ref main -F ref=v0.1.3
+# Build from the latest main
+gh workflow run release-linux.yml --repo opencinna/cinna-desktop
+
+# Or build from a specific tag (must contain the release:linux script — v0.1.3+)
+gh workflow run release-linux.yml --repo opencinna/cinna-desktop -f ref=v0.1.3
 ```
 
 After Linux finishes uploading, the draft will contain both macOS and Linux assets — that's the right moment to write release notes and publish (step 6).
@@ -439,15 +449,41 @@ You need:
 
 Recreate the env file from section 5.
 
+**Linux GitHub Actions build failed**
+
+The macOS draft is already on GitHub but Linux assets are missing. Inspect the run:
+
+```bash
+gh run list --repo opencinna/cinna-desktop --workflow=release-linux.yml --limit 5
+gh run view <run-id> --repo opencinna/cinna-desktop --log-failed
+```
+
+Common causes:
+- **`npm error Missing script: release:linux`** — the tag predates the script being added. Either dispatch the workflow with `-f ref=main` (uses current main) or skip Linux for that release.
+- **`startup_failure` with no steps**: usually a transient GitHub Actions issue. Re-dispatch the workflow.
+- **`electron-builder` upload fails with 422 Validation Failed**: the asset already exists in the release. Delete it from the GH Releases page or `gh release delete-asset` first, then re-dispatch.
+- **`better-sqlite3` build error** during `npm ci`: a native dep changed and no linux prebuild exists yet. Pin to the previous version of the offending dep or wait for an upstream prebuild.
+
+Re-trigger after fixing:
+```bash
+gh workflow run release-linux.yml --repo opencinna/cinna-desktop -f ref=v0.1.X
+```
+
 ### What gets published
 
 For each release, GitHub Releases will hold:
 
+**macOS** (uploaded by local `npm run release:mac`):
 - `cinna-desktop-${version}-x64.dmg` + `.blockmap`
 - `cinna-desktop-${version}-arm64.dmg` + `.blockmap`
-- `latest-mac.yml` — the manifest that `electron-updater` reads
+- `latest-mac.yml` — auto-update manifest for `electron-updater`
 
-The `.blockmap` files enable **differential downloads** — a user updating from 0.1.0 to 0.1.1 typically transfers ~5–20 MB instead of the full ~130 MB.
+**Linux** (uploaded by the `release-linux.yml` GitHub Actions workflow):
+- `cinna-desktop-${version}-x64.AppImage`
+- `cinna-desktop-${version}-x64.deb`
+- `latest-linux.yml` — auto-update manifest (only AppImage uses it)
+
+The `.blockmap` files (macOS only currently) enable **differential downloads** — a user updating from 0.1.0 to 0.1.1 typically transfers ~5–20 MB instead of the full ~130 MB. Linux AppImage updates download the full new AppImage.
 
 ### How the in-app update works
 
@@ -458,6 +494,11 @@ The `.blockmap` files enable **differential downloads** — a user updating from
 When an update is available, it auto-downloads in the background. When the download is complete, a native dialog asks the user "Restart now / Later". Choosing Later → the update installs silently when the app next quits (`autoInstallOnAppQuit: true`).
 
 Auto-update only runs in production builds (`is.dev` guard) — `npm run dev` will never trigger it.
+
+**Platform behavior:**
+- **macOS:** `electron-updater` reads `latest-mac.yml`, downloads the matching `.dmg` (with blockmap-driven differential download), verifies code signature against the running app's Developer ID, and applies on quit.
+- **Linux AppImage:** `electron-updater` reads `latest-linux.yml`, downloads the new AppImage, verifies sha512, and replaces the running AppImage in-place using the `APPIMAGE` env var that AppImage sets at launch. Requires the user to actually run the `.AppImage` (not extracted).
+- **Linux deb:** no auto-update. The `.deb` is a one-time install via `apt`; users get new versions by manually re-downloading.
 
 ### Verifying auto-update works
 
@@ -471,7 +512,9 @@ After publishing release `0.1.1` while running `0.1.0`:
 
 ### Trust model
 
-`electron-updater` verifies that each downloaded DMG is signed by the **same Developer ID** as the currently-running app. An attacker who compromises the GitHub Release cannot push a malicious update without your Developer ID private key. This is why auto-update requires code signing AND notarization (both of which we have).
+- **macOS:** `electron-updater` verifies each downloaded DMG is signed by the **same Developer ID** as the currently-running app. An attacker who compromises the GitHub Release cannot push a malicious update without your Developer ID private key. This is why macOS auto-update requires code signing AND notarization (both of which we have).
+- **Linux AppImage:** verified via SHA-512 hash in `latest-linux.yml`. No OS-level code signing — the trust anchor is HTTPS + the integrity of GitHub Releases. An attacker who gained write access to the release could push a malicious AppImage; the user's only defense is checksum-on-publish.
+- **GitHub Actions builds (Linux):** the workflow uses `${{ secrets.GITHUB_TOKEN }}`, which is scoped to the repo and rotated per run. Compromise surface is the repo's collaborator set + Actions secrets.
 
 ## Troubleshooting
 
@@ -529,15 +572,20 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
 - `electron-builder.yml`:
   - `appId: io.opencinna.desktop`, `productName: Cinna Desktop`
   - `mac.hardenedRuntime: true`, `mac.notarize: true`
-  - `mac.target: dmg [x64, arm64]` — dual-arch builds
+  - `mac.target: dmg [x64, arm64]` — dual-arch macOS builds
   - `dmg.artifactName` includes `${arch}` so x64/arm64 artifacts don't collide
+  - `linux.target: [AppImage, deb] x64` — Linux packaging (x64 only for now)
+  - `appImage.artifactName` / `deb.artifactName` include `${arch}` and `${ext}`
+  - `publish: github (owner: opencinna, repo: cinna-desktop, releaseType: draft)` — uploads go to a draft release for review
 - `package.json`:
-  - `author`, `homepage` populated (electron-builder uses these for app metadata / copyright)
-  - `build:mac` script: `electron-vite build && electron-builder --mac`
-  - `build:mac:unsigned` script: same but with `-c.mac.identity=null -c.mac.notarize=false` for local testing without certs
-  - `notarize:dmgs` script: loops over `dist/cinna-desktop-*.dmg` and runs `notarytool submit --wait` + `stapler staple` on each. Needs `APPLE_ID`/`APPLE_APP_SPECIFIC_PASSWORD`/`APPLE_TEAM_ID` env vars sourced first. **Do not use this in the auto-update release flow** — see warning in "Release flow".
-  - `release:mac` script: build + sign + notarize + upload to GitHub Releases (draft). Needs `GH_TOKEN` in addition to the Apple env vars.
+  - `author`, `homepage`, `description` populated (electron-builder uses these for app metadata / copyright / linux package metadata)
+  - `build:mac`, `build:mac:unsigned` — local macOS builds (no upload)
+  - `notarize:dmgs` — standalone DMG notarization (NOT for auto-update release flow)
+  - `release:mac` — local macOS build + sign + notarize + upload draft. Needs Apple env vars + `GH_TOKEN`.
+  - `release:linux` — Linux AppImage + deb build + upload draft. Designed for CI; can also run locally on Linux/Docker.
+  - `release:all` — both platforms in one invocation (only useful from a Linux box with Apple secrets).
   - Added runtime dep `electron-updater`.
-- `src/main/updater/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit.
-- `src/main/index.ts`: calls `initAutoUpdater()` after `createWindow()`.
+- `src/main/updater/updater.ts`: auto-update wire-up. Checks on launch + every 6h, prompts user on `update-downloaded`, installs on quit. Dev-mode guard via `is.dev`.
+- `src/main/index.ts`: calls `initAutoUpdater()` after `createWindow()`. Loads dock icon from `resources/cinna-desktop-icon.png`.
+- `.github/workflows/release-linux.yml`: triggers on `v*` tag push or manual dispatch. Runs on `ubuntu-latest`, calls `npm run release:linux` with the auto-provided `GITHUB_TOKEN`. Appends Linux assets to the same draft release the macOS build created.
 - `build/entitlements.mac.plist`: unchanged — current entitlements (JIT, unsigned exec memory, dyld env vars) are correct for Electron + hardened runtime.

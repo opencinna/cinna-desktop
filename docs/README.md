@@ -77,7 +77,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [UI Guidelines](development/ui_guidelines/ui_guidelines_llm.md) — Color system, expandable card pattern, button layout rules, form conventions (LLM reference)
 - [Logger](development/logger/logger.md) — In-app debug logger with full-window overlay, scoped loggers for main/renderer, ⌘` keyboard shortcut
 - [Main-Process Layering](development/main_layering/main_layering_llm.md) — `db → services → ipc` convention, `ipcHandle()` wrap, DomainError codes, DTO masking (LLM reference)
-- [macOS Signing & Distribution](development/distribution/macos-signing.md) — Apple Developer ID setup, notarization, building signed DMGs for download
+- [Release & Distribution](development/distribution/release.md) — Full release cycle: macOS signing/notarization, Linux build via GitHub Actions, GitHub Releases, in-app auto-update
 
 ## Architecture
 
