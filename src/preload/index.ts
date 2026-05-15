@@ -138,6 +138,11 @@ export interface McpProviderData {
 }
 
 const api = {
+  app: {
+    setTheme: (theme: 'dark' | 'light'): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('app:set-theme', theme)
+  },
+
   auth: {
     listUsers: (): Promise<UserData[]> => ipcRenderer.invoke('auth:list-users'),
     getCurrent: (): Promise<UserData | null> => ipcRenderer.invoke('auth:get-current'),

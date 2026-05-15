@@ -1,12 +1,12 @@
 import { app, shell, BrowserWindow, Menu } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
-import icon from '../../resources/cinna-desktop-icon.png?asset'
 import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
 import { initSession } from './auth/session'
 import { initAutoUpdater } from './updater/updater'
+import { appIconService } from './services/appIconService'
 
 let mainWindow: BrowserWindow | null = null
 
@@ -20,7 +20,7 @@ function createWindow(): void {
     titleBarStyle: 'hiddenInset',
     trafficLightPosition: { x: 15, y: 10 },
     autoHideMenuBar: true,
-    ...(process.platform === 'linux' ? { icon } : {}),
+    ...(process.platform === 'linux' ? { icon: appIconService.iconForCurrentTheme() } : {}),
     webPreferences: {
       preload: join(__dirname, '../preload/index.mjs'),
       sandbox: true,
@@ -48,9 +48,7 @@ function createWindow(): void {
 app.whenReady().then(() => {
   electronApp.setAppUserModelId('com.cinna.desktop')
 
-  if (process.platform === 'darwin' && app.dock) {
-    app.dock.setIcon(icon)
-  }
+  appIconService.apply(appIconService.getCurrentTheme())
 
   const toggleLogsOverlay = (): void => {
     const win = getMainWindow()

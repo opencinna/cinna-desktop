@@ -1,3 +1,4 @@
+import { registerAppHandlers } from './app.ipc'
 import { registerChatHandlers } from './chat.ipc'
 import { registerProviderHandlers } from './provider.ipc'
 import { registerMcpHandlers } from './mcp.ipc'
@@ -10,6 +11,7 @@ import { registerLoggerHandlers } from './logger.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
+  registerAppHandlers()
   registerAuthHandlers()
   registerChatHandlers()
   registerProviderHandlers()

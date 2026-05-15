@@ -53,6 +53,7 @@ export const useUIStore = create<UIStore>((set) => ({
       const next = state.theme === 'dark' ? 'light' : 'dark'
       localStorage.setItem('cinna-theme', next)
       document.documentElement.setAttribute('data-theme', next)
+      window.api.app.setTheme(next).catch(() => {})
       return { theme: next }
     }),
   setLoggerEnabled: (enabled) => {
@@ -71,5 +72,6 @@ export const useUIStore = create<UIStore>((set) => ({
 }))
 
 // Apply theme on load
-const savedTheme = localStorage.getItem('cinna-theme') || 'dark'
+const savedTheme = (localStorage.getItem('cinna-theme') as Theme) || 'dark'
 document.documentElement.setAttribute('data-theme', savedTheme)
+window.api.app.setTheme(savedTheme).catch(() => {})
