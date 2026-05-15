@@ -159,7 +159,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
         <div
           ref={dropdownRef}
           style={dropdownStyle}
-          className="w-64 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg z-50 overflow-hidden"
+          className="app-popover-surface w-64 rounded-lg border border-[var(--color-border)] shadow-lg z-50 overflow-hidden"
         >
           {/* Profiles */}
           {allUsers.length > 0 && (
@@ -260,11 +260,8 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
       {/* Centered modal for account creation */}
       {showRegister && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div ref={modalRef} className="w-96 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-xl">
-            <RegisterForm
-              onSuccess={() => setShowRegister(false)}
-              onCancel={() => setShowRegister(false)}
-            />
+          <div ref={modalRef} className="app-popover-surface w-96 rounded-lg border border-[var(--color-border)] shadow-xl">
+            <RegisterForm onSuccess={() => setShowRegister(false)} />
           </div>
         </div>,
         document.body
@@ -273,7 +270,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
       {/* Sign-out confirmation modal */}
       {showSignOutConfirm && currentUser && createPortal(
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div ref={signOutModalRef} className="w-96 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-xl p-5 space-y-4">
+          <div ref={signOutModalRef} className="app-popover-surface w-96 rounded-lg border border-[var(--color-border)] shadow-xl p-5 space-y-4">
             <div className="flex items-center gap-2 text-sm font-medium text-red-400">
               <AlertTriangle size={16} />
               Sign Out — {currentUser.cinnaFullName ?? currentUser.displayName}

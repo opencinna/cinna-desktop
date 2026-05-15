@@ -1,13 +1,31 @@
 import { useState } from 'react'
-import { ArrowLeft, Cloud, HardDrive, Loader2 } from 'lucide-react'
+import { ArrowLeft, Cloud, HardDrive, Loader2, X } from 'lucide-react'
 import { useRegister, useCinnaOAuthAbort } from '../../hooks/useAuth'
 
 interface RegisterFormProps {
   onSuccess: () => void
-  onCancel: () => void
 }
 
 type Step = 'type-select' | 'cinna-hosting' | 'local-form' | 'cinna-waiting'
+
+const SELFHOSTED_HISTORY_KEY = 'cinna-selfhosted-history'
+const SELFHOSTED_HISTORY_LIMIT = 8
+
+function readSelfHostedHistory(): string[] {
+  try {
+    const raw = localStorage.getItem(SELFHOSTED_HISTORY_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((v): v is string => typeof v === 'string')
+  } catch {
+    return []
+  }
+}
+
+function writeSelfHostedHistory(urls: string[]): void {
+  localStorage.setItem(SELFHOSTED_HISTORY_KEY, JSON.stringify(urls))
+}
 
 const inputClass =
   'w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]'
@@ -15,13 +33,14 @@ const inputClass =
 const btnSecondaryClass =
   'flex-1 px-3 py-2 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors'
 
-const btnPrimaryClass =
-  'flex-1 px-3 py-2 text-sm rounded-md bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50'
+const btnPrimaryCenteredClass =
+  'px-6 py-2 text-sm rounded-md bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50'
 
-export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.JSX.Element {
+export function RegisterForm({ onSuccess }: RegisterFormProps): React.JSX.Element {
   const [step, setStep] = useState<Step>('type-select')
-  const [cinnaHostingType, setCinnaHostingType] = useState<'cloud' | 'self_hosted'>('cloud')
+  const [cinnaHostingType, setCinnaHostingType] = useState<'cloud' | 'self_hosted'>('self_hosted')
   const [cinnaServerUrl, setCinnaServerUrl] = useState('')
+  const [selfHostedHistory, setSelfHostedHistory] = useState<string[]>(() => readSelfHostedHistory())
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -47,27 +66,50 @@ export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.
     }
   }
 
-  const handleCinnaConnect = async (): Promise<void> => {
+  const connectSelfHosted = async (rawUrl: string): Promise<void> => {
     setError('')
-    if (cinnaHostingType === 'self_hosted' && !cinnaServerUrl.trim()) {
+    const trimmedUrl = rawUrl.trim()
+    if (!trimmedUrl) {
       setError('Server URL is required')
       return
     }
-
+    setCinnaServerUrl(trimmedUrl)
     setStep('cinna-waiting')
 
     const result = await register.mutateAsync({
       accountType: 'cinna',
-      cinnaHostingType,
-      cinnaServerUrl: cinnaHostingType === 'self_hosted' ? cinnaServerUrl.trim() : undefined
+      cinnaHostingType: 'self_hosted',
+      cinnaServerUrl: trimmedUrl
     })
 
     if (result.success) {
+      const next = [trimmedUrl, ...selfHostedHistory.filter((u) => u !== trimmedUrl)].slice(
+        0,
+        SELFHOSTED_HISTORY_LIMIT
+      )
+      writeSelfHostedHistory(next)
+      setSelfHostedHistory(next)
       onSuccess()
     } else {
       setError(result.error ?? 'Authentication failed')
       setStep('cinna-hosting')
     }
+  }
+
+  const handleCinnaConnect = async (): Promise<void> => {
+    setError('')
+    if (cinnaHostingType === 'cloud') {
+      // opencinna.io cloud is not yet available — handled via the inline
+      // Under Development notice; this guard prevents accidental submits.
+      return
+    }
+    await connectSelfHosted(cinnaServerUrl)
+  }
+
+  const handleRemoveHistoryEntry = (url: string): void => {
+    const next = selfHostedHistory.filter((u) => u !== url)
+    writeSelfHostedHistory(next)
+    setSelfHostedHistory(next)
   }
 
   const handleLocalSubmit = async (e: React.FormEvent): Promise<void> => {
@@ -133,11 +175,6 @@ export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.
           </button>
         </div>
 
-        <div className="pt-1">
-          <button type="button" onClick={onCancel} className={`w-full ${btnSecondaryClass}`}>
-            Cancel
-          </button>
-        </div>
       </div>
     )
   }
@@ -162,22 +199,6 @@ export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.
         <div className="flex gap-3">
           <button
             type="button"
-            onClick={() => setCinnaHostingType('cloud')}
-            className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors text-center ${
-              cinnaHostingType === 'cloud'
-                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
-                : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
-            }`}
-          >
-            <Cloud size={20} className="text-[var(--color-text-muted)]" />
-            <div>
-              <div className="text-sm font-medium text-[var(--color-text)]">Cloud</div>
-              <div className="text-[11px] text-[var(--color-text-muted)]">opencinna.io</div>
-            </div>
-          </button>
-
-          <button
-            type="button"
             onClick={() => setCinnaHostingType('self_hosted')}
             className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors text-center ${
               cinnaHostingType === 'self_hosted'
@@ -191,30 +212,94 @@ export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.
               <div className="text-[11px] text-[var(--color-text-muted)]">Your own server</div>
             </div>
           </button>
+
+          <button
+            type="button"
+            onClick={() => setCinnaHostingType('cloud')}
+            className={`flex-1 flex flex-col items-center gap-2 p-4 rounded-lg border transition-colors text-center ${
+              cinnaHostingType === 'cloud'
+                ? 'border-[var(--color-accent)] bg-[var(--color-accent)]/5'
+                : 'border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]'
+            }`}
+          >
+            <Cloud size={20} className="text-[var(--color-text-muted)]" />
+            <div>
+              <div className="text-sm font-medium text-[var(--color-text)]">Cloud</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">opencinna.io</div>
+            </div>
+          </button>
         </div>
 
+        {cinnaHostingType === 'cloud' && (
+          <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-hover)] px-3 py-2 text-xs text-[var(--color-text-secondary)]">
+            <span className="font-medium text-[var(--color-text)]">Under Development.</span>{' '}
+            opencinna.io cloud accounts are not available yet. For now, please use a self-hosted
+            Cinna server.
+          </div>
+        )}
+
         {cinnaHostingType === 'self_hosted' && (
-          <input
-            type="url"
-            placeholder="https://your-server.com"
-            value={cinnaServerUrl}
-            onChange={(e) => setCinnaServerUrl(e.target.value)}
-            autoFocus
-            className={inputClass}
-          />
+          <>
+            <input
+              type="url"
+              placeholder="https://your-server.com"
+              value={cinnaServerUrl}
+              onChange={(e) => setCinnaServerUrl(e.target.value)}
+              autoFocus
+              className={inputClass}
+            />
+
+            {selfHostedHistory.length > 0 && (
+              <div className="space-y-1">
+                <div className="text-[11px] text-[var(--color-text-muted)]">Recent servers</div>
+                <ul className="space-y-1">
+                  {selfHostedHistory.map((url) => (
+                    <li key={url}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => connectSelfHosted(url)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault()
+                            connectSelfHosted(url)
+                          }
+                        }}
+                        title={`Connect to ${url}`}
+                        aria-label={`Connect to ${url}`}
+                        className="group w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)] transition-colors cursor-pointer"
+                      >
+                        <span className="flex-1 truncate text-left">{url}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleRemoveHistoryEntry(url)
+                          }}
+                          onKeyDown={(e) => e.stopPropagation()}
+                          title="Remove from history"
+                          aria-label={`Remove ${url} from history`}
+                          className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-opacity"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </>
         )}
 
         {error && <div className="text-xs text-red-400">{error}</div>}
 
-        <div className="flex gap-2 pt-1">
-          <button type="button" onClick={onCancel} className={btnSecondaryClass}>
-            Cancel
-          </button>
+        <div className="flex justify-center pt-1">
           <button
             type="button"
             onClick={handleCinnaConnect}
-            disabled={register.isPending}
-            className={btnPrimaryClass}
+            disabled={register.isPending || cinnaHostingType === 'cloud'}
+            className={btnPrimaryCenteredClass}
           >
             Connect
           </button>
@@ -299,11 +384,8 @@ export function RegisterForm({ onSuccess, onCancel }: RegisterFormProps): React.
 
       {error && <div className="text-xs text-red-400">{error}</div>}
 
-      <div className="flex gap-2 pt-1">
-        <button type="button" onClick={onCancel} className={btnSecondaryClass}>
-          Cancel
-        </button>
-        <button type="submit" disabled={register.isPending} className={btnPrimaryClass}>
+      <div className="flex justify-center pt-1">
+        <button type="submit" disabled={register.isPending} className={btnPrimaryCenteredClass}>
           {register.isPending ? 'Creating...' : 'Create'}
         </button>
       </div>
