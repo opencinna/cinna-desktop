@@ -1,6 +1,8 @@
 import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
+import { useAuthStore } from '../stores/auth.store'
+import { useForceRefreshAgentStatus } from './useAgentStatus'
 import type { ContentKind } from '../../../shared/messageParts'
 
 type LlmEvent = {
@@ -40,6 +42,8 @@ export function useChatStream(): {
   const queryClient = useQueryClient()
   const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
     useChatStore()
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  const forceRefreshAgentStatus = useForceRefreshAgentStatus()
 
   const handleLlm = useCallback(
     (chatId: string, event: LlmEvent): void => {
@@ -130,7 +134,16 @@ export function useChatStream(): {
     (agentId: string, chatId: string, content: string): void => {
       setPendingUserMessage(content)
       try {
-        window.api.agents.sendMessage(agentId, chatId, content, (event) => handleAgent(chatId, event))
+        window.api.agents.sendMessage(agentId, chatId, content, (event) => {
+          handleAgent(chatId, event)
+          // When the agent finishes (or errors out), it may have updated its
+          // STATUS.md during the turn — pull a fresh snapshot so tiles in the
+          // status overlay / title-bar dot stay in sync. Backend rate-limits
+          // 1/30s per env; 429 is swallowed upstream. Cinna-only feature.
+          if (isCinnaUser && (event.type === 'done' || event.type === 'error')) {
+            forceRefreshAgentStatus.mutate(agentId)
+          }
+        })
       } catch {
         stopStreaming()
         return
@@ -139,7 +152,7 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleAgent, queryClient, setPendingUserMessage, stopStreaming]
+    [handleAgent, queryClient, setPendingUserMessage, stopStreaming, isCinnaUser, forceRefreshAgentStatus]
   )
 
   const cancel = useCallback((requestId: string): void => {
