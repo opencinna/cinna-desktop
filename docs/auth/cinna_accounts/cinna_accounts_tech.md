@@ -100,14 +100,26 @@ Multi-step form with state machine:
 
 | Step | UI | Transitions |
 |------|----|-------------|
-| `type-select` | Two cards: Local / Cinna | Local → `local-form`; Cinna → `cinna-hosting` |
-| `cinna-hosting` | Cloud / Self-Hosted radio + URL input + "Connect" | Connect → `cinna-waiting`; Back → `type-select` |
-| `local-form` | Username, Display Name, Password (all optional except username) | Create → success; Back → `type-select` |
-| `cinna-waiting` | Spinner + cancel button | Cancel → abort + `cinna-hosting`; Success → `onSuccess` |
+| `type-select` | Two cards: Local / Cinna. No Cancel — dismiss via click-outside on the modal backdrop. | Local → `local-form`; Cinna → `cinna-hosting` |
+| `cinna-hosting` | Two cards: Self-Hosted (left, default) / Cloud (right, shows "Under Development" notice + disables Connect when selected). URL input + "Recent servers" list (self-hosted only, sourced from `localStorage('cinna-selfhosted-history')`). Each recent row is full-width clickable (immediately connects) with an X-on-hover (`stopPropagation`) to remove. Centered "Connect" button. No Cancel. | Connect (or click on a recent row) → `cinna-waiting`; Back → `type-select` |
+| `local-form` | Username, Display Name, Password (all optional except username). Centered "Create" button. No Cancel. | Create → success; Back → `type-select` |
+| `cinna-waiting` | Spinner + Cancel button (only step that keeps Cancel — it calls `auth:cinna-oauth-abort` to terminate the in-flight flow). | Cancel → abort + `cinna-hosting`; Success → `onSuccess` |
 
 For Cinna accounts, there is no form step — username and display name are received from the OAuth server's userinfo endpoint after authentication. Password can be set later.
 
-Rendered as a centered modal overlay (fixed inset, `bg-black/50` backdrop) instead of inside the dropdown.
+Rendered as a centered modal overlay (fixed inset, `bg-black/50` backdrop) instead of inside the dropdown. The dropdown, the modal panel, and the sign-out confirm panel all use the `.app-popover-surface` utility class (frosted-glass, theme-aware) defined in `src/renderer/src/assets/main.css`.
+
+The `RegisterFormProps` interface no longer carries an `onCancel` callback — only `onSuccess`. Dismissal of `type-select` / `cinna-hosting` / `local-form` is the caller's responsibility (click-outside on the backdrop in `UserMenu.tsx`).
+
+### Self-hosted history (renderer-only)
+
+| Concern | Location |
+|---------|----------|
+| Storage key | `localStorage('cinna-selfhosted-history')` — JSON array of URL strings |
+| Read / write helpers | `readSelfHostedHistory()` / `writeSelfHostedHistory(urls)` at the top of `src/renderer/src/components/auth/RegisterForm.tsx` (defensive JSON parse, filters non-strings) |
+| Cap | `SELFHOSTED_HISTORY_LIMIT = 8` (most-recent-first, dedup on push) |
+| Write trigger | `connectSelfHosted()` on successful `register.mutateAsync`. Failed attempts (`result.success === false`) do not write — wrong URLs do not pollute the list |
+| Remove trigger | `handleRemoveHistoryEntry(url)` — the X button inside each row |
 
 ### `UserMenu` in `src/renderer/src/components/auth/UserMenu.tsx`
 

@@ -30,7 +30,7 @@
 | Force-refresh mutation (patches batch cache on success) | `src/renderer/src/hooks/useAgentStatus.ts` — `useForceRefreshAgentStatus()` |
 | Typed client-side error | `src/renderer/src/hooks/useAgentStatus.ts` — `AgentStatusRequestError` |
 | Severity palette + `worstSeverity()` | `src/renderer/src/constants/agentSeverity.ts` |
-| Title-bar icon with severity dot | `src/renderer/src/components/layout/TitleBar.tsx` |
+| Sidebar-footer activity icon with severity dot | `src/renderer/src/components/agents/AgentStatusButton.tsx` |
 | Modal / overlay (grid + detail view + cards) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` |
 | Overlay mount point | `src/renderer/src/App.tsx` |
 | UI state (`agentStatusOpen`, `pendingAgentId`) | `src/renderer/src/stores/ui.store.ts` |
@@ -74,8 +74,8 @@ Both endpoints use the user's Cinna JWT via `Authorization: Bearer <token>` (res
 | Component / hook | File | Role |
 |------------------|------|------|
 | `useAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | React Query for the batch list; `refetchInterval: 45_000`, `staleTime: 15_000`, `enabled: cinna_user`. Throws `AgentStatusRequestError` with typed `code` on failure. |
-| `useForceRefreshAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | Per-agent mutation; `onSuccess` patches the batch cache so consumers update in place. |
-| `TitleBar` | `src/renderer/src/components/layout/TitleBar.tsx` | Renders the `Activity` icon + severity dot (via `worstSeverity()` + `SEVERITY_DOT`); only for `cinna_user`. |
+| `useForceRefreshAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | Per-agent mutation; `onSuccess` patches the batch cache so consumers update in place. Consumed both by user-triggered refresh buttons in `AgentStatusOverlay.tsx` and by the auto-refresh in `useChatStream.startAgent` (fires on agent stream `done` / `error`, gated on `cinna_user`). |
+| `AgentStatusButton` | `src/renderer/src/components/agents/AgentStatusButton.tsx` | Renders the `Activity` icon + severity dot (via `worstSeverity()` + `SEVERITY_DOT`) in the sidebar footer; only mounted by `Sidebar.tsx` for `cinna_user`. |
 | `AgentStatusOverlay` | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Root of the modal; owns the fade state machine (`mounted` + `visible`), the single force-refresh mutation, and swaps between grid and detail views. |
 | `StatusCard` (inner) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Grid tile — bot avatar, name, severity label, summary, timestamp row, circular Refresh + Chat buttons. Takes `refreshing` + `onRefresh` from the parent — no local mutation state. |
 | `DetailView` (inner) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Header with agent avatar + severity dot + Refresh / Start Chat buttons; body renders markdown via `react-markdown` + `remark-gfm`. Reads live snapshot from the parent (no local cache). |

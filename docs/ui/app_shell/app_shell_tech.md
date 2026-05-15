@@ -28,6 +28,8 @@
 - `src/renderer/src/assets/main.css` — `@layer base` rules:
   - `html { font-size: 17px }` — base scaling
   - `.app-sidebar` / `[data-theme="dark"] .app-sidebar` — rounded card surface, border, shadow, dark-theme translucent blur
+  - `.app-popover-surface` / `[data-theme="dark"] .app-popover-surface` — shared frosted-glass utility for floating panels (profile dropdown, register/sign-out modals, interface-toggles popover). Translucent fill + `backdrop-filter: blur(14px) saturate(140%)`, theme-aware tint
+  - `.app-nav-active` / `[data-theme="dark"] .app-nav-active` — translucent tint for active sidebar nav rows (chat item, settings menu, Trash). Replaces solid `bg-tertiary` so the sidebar's frosted background shows through
   - `.app-sidebar-wrap` — `--sidebar-width: 240px`, width transition (collapse/expand)
   - `.app-sidebar-wrap > .app-sidebar` — absolute position + transform/opacity transitions
   - `.app-sidebar-wrap.is-collapsed > .app-sidebar` — `translateX(-100%)` + `opacity: 0` + `pointer-events: none`
@@ -46,7 +48,7 @@
 | `sidebarOpen` | Drives `.is-collapsed` on the sidebar wrapper |
 | `activeView` | `'chat' \| 'settings'` — switches sidebar content + main area |
 | `settingsTab` | Active settings sub-section (consumed by `Sidebar` + `SettingsPage`) |
-| `theme` | `'dark' \| 'light'` — toggled from `InterfaceMenu`; written to `localStorage('cinna-theme')`, applied via `data-theme` on `<html>` |
+| `theme` | `'dark' \| 'light'` — toggled from `InterfaceMenu`; written to `localStorage('cinna-theme')`, applied via `data-theme` on `<html>`, and propagated to main process via `window.api.app.setTheme(theme)` so `appIconService.apply()` swaps the macOS dock + window icon to the matching `cinna-desktop-icon-{dark,light}.png` asset |
 | `verboseMode` | Toggled from `InterfaceMenu`; persisted via `localStorage` |
 | `logsOpen` | Toggled from `InterfaceMenu` and via ⌘\` |
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
@@ -55,7 +57,11 @@ All shell consumers select individual keys (`useUIStore((s) => s.x)`) rather tha
 
 ## IPC Channels
 
-None. The app shell is renderer-only chrome; it consumes existing IPC via hooks (`useAgentStatus`, `useUsers`, etc.) rendered into the footer.
+| Channel | Type | Params | Returns | Purpose |
+|---------|------|--------|---------|---------|
+| `app:set-theme` | handle | `'dark' \| 'light'` | `{ success: boolean }` | Updates main-process icon state via `appIconService.apply()`; called on bootstrap and on every theme toggle. Handler in `src/main/ipc/app.ipc.ts` via the shared `ipcHandle` wrap. |
+
+Other shell features (status indicator, profile menu, etc.) consume existing IPC via hooks (`useAgentStatus`, `useUsers`, etc.) — no new channels.
 
 ## Renderer Components
 
@@ -105,6 +111,8 @@ None. The app shell is renderer-only chrome; it consumes existing IPC via hooks 
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
 - **Sidebar width** — `--sidebar-width: 240px` on `.app-sidebar-wrap`. Both the wrapper `width` and the inner `width` consume it; the collapse animation translates `-100%` of that value.
+- **Shell vertical spacing** — `App.tsx` `Shell` uses `flex-col gap-1` between `TopBar` and the sidebar/main row so the visible space between the expand/collapse buttons and the sidebar's top border matches the `px-2 pb-2` (8 px) window-edge insets. The horizontal `gap-2` on the inner row between Sidebar and MainArea stays at 8 px.
+- **App icons** — `resources/cinna-desktop-icon-{dark,light}.png`, loaded via `?asset` in `src/main/services/appIconService.ts`. Build-time installer icons (`build/icon.png`, `build/icon.icns`) are the dark variant (default theme). Windows `build/icon.ico` is built externally — regenerate from `build/icon.png` after icon changes.
 
 ## Security
 

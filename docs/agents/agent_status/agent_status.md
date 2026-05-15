@@ -47,6 +47,13 @@ Surfaces the per-agent self-reported status (severity, summary, timestamps, mark
 3. If the backend returns 429 (rate-limited) the spin stops silently and the displayed status is unchanged
 4. On success, the shared batch cache is patched in place — the card (and detail view, if open) update without a full re-poll
 
+### Auto-refresh after an agent chat turn
+
+1. User sends a message in a chat bound to a remote agent
+2. The agent stream emits `done` (or `error`) when the turn ends
+3. `useChatStream.startAgent` fires the same force-refresh mutation for that `agentId`, going through the per-agent endpoint with `force_refresh=true`
+4. If the backend returns 429 (back-to-back turns within 30 s), the mutation no-ops silently — polling will catch up at the next 45 s tick. On success, the batch cache is patched in place so the title-bar dot and any open tile reflect the new status without a user action
+
 ### Starting a chat from a status tile
 
 1. User clicks the chat button on the card or the "Start Chat" button in the detail view
@@ -64,7 +71,7 @@ Surfaces the per-agent self-reported status (severity, summary, timestamps, mark
 
 - **Cinna-only feature.** The title-bar icon is only rendered for `cinna_user` accounts; the batch hook runs with `enabled: false` for local users. A user who has a Cinna account but no remote agents yet sees no icon (dot only appears when there is at least one non-null severity).
 - **Background polling** runs every **45 s** against the cache-only batch route. The query is marked stale after 15 s so mounting a new consumer (opening the overlay) reuses the cache. Focus events refetch.
-- **Force refresh** is one-shot and user-triggered only — never auto-invoked. The backend enforces 1/30 s per environment; 429 responses are treated as a no-op.
+- **Force refresh** is one-shot and either user-triggered (clicking refresh on a card / detail view) or auto-triggered when the active agent chat turn ends (`done` or `error` from the agent stream). The backend enforces 1/30 s per environment; 429 responses are logged at info and treated as a no-op (the cache patch is skipped, polling catches up later).
 - **Sentinel snapshots** (`severity == null && raw == null`) are filtered out client-side; they represent agents that have never published.
 - **Local mapping.** The batch response returns backend agent UUIDs. Desktop maps them to local agent rows via `remoteTargetId` (added during `agent:sync-remote`). Any backend row without a local match is dropped — prevents surfacing statuses for agents the user just removed locally.
 - **Severity rank** (highest → lowest urgency): `error`, `warning`, `info`, `ok`, `unknown`. `null` is ignored when computing worst severity.
