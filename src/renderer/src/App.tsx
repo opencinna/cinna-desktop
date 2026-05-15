@@ -60,7 +60,7 @@ function Shell(): React.JSX.Element {
   // sidebar slides in/out below it. The toggle and new-chat buttons therefore
   // keep their position regardless of sidebar state.
   return (
-    <div className="h-full flex flex-col min-h-0 px-2 pb-2 gap-2">
+    <div className="h-full flex flex-col min-h-0 px-2 pb-2 gap-1">
       <TopBar />
       <div className="flex-1 flex min-h-0 gap-2">
         <Sidebar />

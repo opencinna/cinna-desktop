@@ -24,7 +24,7 @@ export function ChatItem({ chat }: ChatItemProps): React.JSX.Element {
     <div
       className={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md cursor-pointer text-xs transition-colors ${
         isActive
-          ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
+          ? 'app-nav-active text-[var(--color-text)]'
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
       }`}
       onClick={() => {

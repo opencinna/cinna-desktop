@@ -65,7 +65,7 @@ export function Sidebar(): React.JSX.Element {
                     onClick={() => setSettingsMenu(item.id)}
                     className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-colors ${
                       active
-                        ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
+                        ? 'app-nav-active text-[var(--color-text)]'
                         : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
                     }`}
                   >
@@ -80,7 +80,7 @@ export function Sidebar(): React.JSX.Element {
                 onClick={() => setSettingsMenu('trash')}
                 className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-md text-xs font-medium transition-colors ${
                   settingsTab === 'trash'
-                    ? 'bg-[var(--color-bg-tertiary)] text-[var(--color-text)]'
+                    ? 'app-nav-active text-[var(--color-text)]'
                     : 'text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text-secondary)]'
                 }`}
               >

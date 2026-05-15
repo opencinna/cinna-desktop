@@ -113,6 +113,31 @@
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
   }
 
+  /* Frosted-glass surface for modals/popovers (profile dropdown, register
+     modal, sign-out confirm, interface toggles). Mirrors the sidebar treatment
+     so floating UI feels consistent over the wallpaper. */
+  .app-popover-surface {
+    background-color: rgba(245, 245, 245, 0.72);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+  }
+  [data-theme="dark"] .app-popover-surface {
+    background-color: rgba(20, 20, 20, 0.6);
+    backdrop-filter: blur(14px) saturate(140%);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    border-color: rgba(255, 255, 255, 0.06);
+  }
+
+  /* Active nav-item highlight (chat list, settings menu) inside the (already
+     blurred) sidebar — a translucent tint that picks up the panel's frosted
+     background instead of reading as a solid block. */
+  .app-nav-active {
+    background-color: rgba(0, 0, 0, 0.06);
+  }
+  [data-theme="dark"] .app-nav-active {
+    background-color: rgba(255, 255, 255, 0.08);
+  }
+
   /* Animated collapse/expand. The wrap reserves layout width (so flex siblings
      reflow correctly) while the inner panel is absolutely positioned — that
      lets its `box-shadow` render outside the wrap's box instead of being

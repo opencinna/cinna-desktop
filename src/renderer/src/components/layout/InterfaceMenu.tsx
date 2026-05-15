@@ -37,8 +37,8 @@ export function InterfaceMenu(): React.JSX.Element {
         <div
           ref={popoverRef}
           style={style}
-          className="flex items-center gap-1 px-1.5 py-1.5 rounded-lg
-            border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg z-50"
+          className="app-popover-surface flex items-center gap-1 px-1.5 py-1.5 rounded-lg
+            border border-[var(--color-border)] shadow-lg z-50"
         >
           <button
             onClick={() => setLogsOpen(!logsOpen)}
