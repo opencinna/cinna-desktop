@@ -7,8 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Tag or branch to build from (e.g. v0.1.3)
-        required: true
+        description: Tag or branch to build from (defaults to main)
+        required: false
+        default: ''
 
 jobs:
   build:
