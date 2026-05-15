@@ -13,6 +13,8 @@
     "build:mac:unsigned": "electron-vite build && electron-builder --mac -c.mac.identity=null -c.mac.notarize=false",
     "notarize:dmgs": "for f in dist/cinna-desktop-*.dmg; do echo \"--- $f ---\" && xcrun notarytool submit \"$f\" --apple-id \"$APPLE_ID\" --team-id \"$APPLE_TEAM_ID\" --password \"$APPLE_APP_SPECIFIC_PASSWORD\" --wait && xcrun stapler staple \"$f\"; done",
     "release:mac": "electron-vite build && electron-builder --mac --publish always",
+    "release:linux": "electron-vite build && electron-builder --linux --publish always",
+    "release:all": "electron-vite build && electron-builder --mac --linux --publish always",
     "start": "electron-vite preview",
     "postinstall": "electron-builder install-app-deps",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",

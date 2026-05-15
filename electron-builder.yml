@@ -37,13 +37,17 @@ dmg:
   artifactName: ${name}-${version}-${arch}.${ext}
 linux:
   target:
-    - AppImage
-    - snap
-    - deb
-  maintainer: electronjs.org
+    - target: AppImage
+      arch: [x64]
+    - target: deb
+      arch: [x64]
+  maintainer: Evgenii Leksunin <evgeny-l@opencinna.io>
   category: Utility
+  synopsis: Desktop client for remote agents (MCP, A2A, OpenCinna)
 appImage:
-  artifactName: ${name}-${version}.${ext}
+  artifactName: ${name}-${version}-${arch}.${ext}
+deb:
+  artifactName: ${name}-${version}-${arch}.${ext}
 npmRebuild: false
 publish:
   provider: github

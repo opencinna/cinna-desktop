@@ -214,7 +214,8 @@ At a glance:
 4. **Verify the draft** — `gh release view`, optional download-and-launch smoke test.
 5. **(Optional) Test auto-update** before users see it.
 6. **Write notes & publish** — `gh release edit ... --draft=false`.
-7. **Push** the version-bump commit.
+7. **Push** the version-bump commit. Pushing the tag also triggers...
+8. **Linux build (automated)** — GitHub Actions runs on `ubuntu-latest`, appends `.AppImage` + `.deb` to the same release.
 
 ### One-time setup: GitHub token
 
@@ -288,6 +289,8 @@ This single command:
 
 Watch the log for `notarization successful` (twice — once per arch) and final `uploading ... provider=github` lines for each artifact.
 
+**As soon as the tag lands on GitHub (during step 3), `.github/workflows/release-linux.yml` triggers and starts building Linux artifacts on `ubuntu-latest` in parallel.** Check it at https://github.com/opencinna/cinna-desktop/actions. Wait for it to finish (5–8 min) before publishing the draft in step 6, so the released version includes Linux too. See step 8 for details.
+
 #### 4. Verify the draft on GitHub
 
 ```bash
@@ -296,12 +299,17 @@ VERSION="v$(node -p "require('./package.json').version")"
 # Confirm the draft exists with all 5 expected assets
 gh release view "$VERSION" --repo opencinna/cinna-desktop
 
-# Expected assets:
+# Expected assets (macOS):
 #   cinna-desktop-${V}-arm64.dmg
 #   cinna-desktop-${V}-arm64.dmg.blockmap
 #   cinna-desktop-${V}-x64.dmg
 #   cinna-desktop-${V}-x64.dmg.blockmap
 #   latest-mac.yml
+#
+# Expected assets (Linux, added by CI ~5-8 min after tag push):
+#   cinna-desktop-${V}-x64.AppImage
+#   cinna-desktop-${V}-x64.deb
+#   latest-linux.yml
 ```
 
 > If `gh release view` shows `draft: false`, electron-builder published immediately. Check `electron-builder.yml`'s `publish.releaseType` — it should be `draft`.
@@ -355,6 +363,28 @@ git push
 ```
 
 Done. Installed clients on a previous version will pick up the new release on next launch or within 6 hours of running.
+
+#### 8. Linux artifacts (automated via GitHub Actions)
+
+When you push the `v*` tag in step 3, the workflow `.github/workflows/release-linux.yml` triggers automatically on `ubuntu-latest` and:
+
+- Runs `npm ci` (which installs `linux-x64` native binaries for `better-sqlite3` and friends).
+- Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update.
+- Uploads them to the **same draft release** the macOS build created.
+
+Watch progress at https://github.com/opencinna/cinna-desktop/actions. Typical runtime: 5–8 min.
+
+If your tag was pushed before the workflow file existed, or you need to re-run for any reason, trigger it manually:
+
+```bash
+gh workflow run release-linux.yml --ref main -F ref=v0.1.3
+```
+
+After Linux finishes uploading, the draft will contain both macOS and Linux assets — that's the right moment to write release notes and publish (step 6).
+
+> **Linux auto-update caveats**
+> - **AppImage**: `electron-updater` works fully. The downloaded AppImage replaces the running one in-place via the `APPIMAGE` env var. Users must run from the AppImage (not extract it).
+> - **deb**: NO auto-update — `electron-updater` doesn't drive `apt`. `.deb` users have to install new versions manually. Document this on the download page if you ship `.deb`.
 
 ---
 
