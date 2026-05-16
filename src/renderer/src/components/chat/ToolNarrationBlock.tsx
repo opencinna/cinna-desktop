@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Wrench, ChevronRight } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from '../../utils/markdownComponents'
 
 interface ToolNarrationBlockProps {
   content: string
@@ -54,7 +55,7 @@ export function ToolNarrationBlock({
           className="px-3 pb-2.5 pt-0 text-[12.5px] leading-relaxed
             text-[var(--color-text-secondary)] markdown-body opacity-90"
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
         </div>
       )}
     </div>

@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Brain, ChevronRight } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from '../../utils/markdownComponents'
 
 interface ThinkingBlockProps {
   content: string
@@ -51,7 +52,7 @@ export function ThinkingBlock({
             text-[var(--color-text-secondary)] markdown-body
             opacity-80"
         >
-          <Markdown remarkPlugins={[remarkGfm]}>{content}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
         </div>
       )}
     </div>

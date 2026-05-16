@@ -4,6 +4,7 @@ import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
+import { markdownComponents } from '../../utils/markdownComponents'
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -31,7 +32,7 @@ export function MessageBubble({ role, content, isStreaming, meta, animate, anima
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
                 {content}
               </Markdown>
             </div>
@@ -47,7 +48,7 @@ export function MessageBubble({ role, content, isStreaming, meta, animate, anima
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >
-        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
+        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
           {content}
         </Markdown>
         {isStreaming && (

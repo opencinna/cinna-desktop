@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import { markdownComponents } from '../../utils/markdownComponents'
 import {
   X,
   RefreshCw,
@@ -286,7 +287,7 @@ function DetailView({
 
           {snapshot.body ? (
             <div className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-3 text-sm markdown-body">
-              <Markdown remarkPlugins={[remarkGfm]}>{snapshot.body}</Markdown>
+              <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{snapshot.body}</Markdown>
             </div>
           ) : (
             <p className="text-xs italic text-[var(--color-text-muted)]">
