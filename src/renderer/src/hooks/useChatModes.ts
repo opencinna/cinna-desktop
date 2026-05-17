@@ -17,11 +17,18 @@ export function useUpsertChatMode() {
       modelId?: string | null
       mcpProviderIds?: string[]
       colorPreset?: string
+      isDefault?: boolean
     }) => window.api.chatModes.upsert(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
     }
   })
+}
+
+export function useDefaultChatMode() {
+  const query = useChatModes()
+  const mode = (query.data ?? []).find((m) => m.isDefault) ?? null
+  return { ...query, data: mode }
 }
 
 export function useDeleteChatMode() {

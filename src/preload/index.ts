@@ -39,7 +39,6 @@ export interface ProviderData {
   type: string
   name: string
   enabled: boolean
-  isDefault: boolean
   defaultModelId: string | null
   hasApiKey: boolean
   createdAt: Date
@@ -59,6 +58,7 @@ export interface ChatModeData {
   modelId: string | null
   mcpProviderIds: string[]
   colorPreset: string
+  isDefault: boolean
   createdAt: Date
 }
 
@@ -232,7 +232,6 @@ const api = {
       name: string
       apiKey?: string
       enabled?: boolean
-      isDefault?: boolean
       defaultModelId?: string | null
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('provider:upsert', data),
     delete: (providerId: string): Promise<{ success: boolean }> =>
@@ -259,6 +258,7 @@ const api = {
       modelId?: string | null
       mcpProviderIds?: string[]
       colorPreset?: string
+      isDefault?: boolean
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('chatmode:upsert', data),
     delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
   },

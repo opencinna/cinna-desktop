@@ -11,7 +11,6 @@ export interface UpsertInput {
   name: string
   apiKeyEncrypted?: Buffer | null
   enabled?: boolean
-  isDefault?: boolean
   defaultModelId?: string | null
 }
 
@@ -38,10 +37,7 @@ export const llmProviderRepo = {
       .get()
   },
 
-  /**
-   * Insert or update a provider, scoped to userId. If isDefault is true, other
-   * providers for the same user are cleared in the same transaction.
-   */
+  /** Insert or update a provider, scoped to userId. */
   upsert(userId: string, input: UpsertInput): UpsertResult {
     const db = getDb()
     const id = input.id ?? nanoid()
@@ -59,13 +55,6 @@ export const llmProviderRepo = {
         throw new Error('Provider not found')
       }
 
-      if (input.isDefault) {
-        tx.update(llmProviders)
-          .set({ isDefault: false })
-          .where(eq(llmProviders.userId, userId))
-          .run()
-      }
-
       const apiKeyEncrypted =
         input.apiKeyEncrypted !== undefined
           ? input.apiKeyEncrypted
@@ -78,7 +67,6 @@ export const llmProviderRepo = {
             type: input.type,
             apiKeyEncrypted,
             enabled: input.enabled ?? existing.enabled,
-            isDefault: input.isDefault ?? existing.isDefault,
             defaultModelId:
               input.defaultModelId !== undefined
                 ? input.defaultModelId
@@ -95,7 +83,6 @@ export const llmProviderRepo = {
             name: input.name,
             apiKeyEncrypted,
             enabled: input.enabled ?? true,
-            isDefault: input.isDefault ?? false,
             defaultModelId: input.defaultModelId ?? null,
             createdAt: new Date()
           })

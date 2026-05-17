@@ -10,11 +10,10 @@ import { AgentSelector } from '../chat/AgentSelector'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { useUpdateChat, useChatDetail } from '../../hooks/useChat'
-import { useChatModes } from '../../hooks/useChatModes'
+import { useChatModes, useDefaultChatMode } from '../../hooks/useChatModes'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders, useSetChatMcpProviders } from '../../hooks/useMcp'
-import { useDefaultProviderId } from '../../hooks/useDefaultProvider'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
@@ -27,12 +26,14 @@ export function MainArea(): React.JSX.Element {
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)
   const activeChatId = useChatStore((s) => s.activeChatId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
+  const sendError = useChatStore((s) => s.sendError)
+  const setSendError = useChatStore((s) => s.setSendError)
   const { data: agentList } = useAgents()
   const updateChat = useUpdateChat()
-  const defaultProviderId = useDefaultProviderId()
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
+  const { data: defaultMode } = useDefaultChatMode()
   const setChatMcp = useSetChatMcpProviders()
   const { startNewChat } = useNewChatFlow()
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
@@ -64,8 +65,11 @@ export function MainArea(): React.JSX.Element {
     }
   }, [mcpProviders])
 
-  // Resolve effective provider: mode > default
-  const effectiveProviderId = activeMode?.providerId ?? defaultProviderId
+  // Resolve effective provider exclusively from the active chat mode — the
+  // app no longer keeps a "default LLM provider" concept, so the mode is the
+  // single source of truth for both new chats and active chats that switch
+  // modes mid-conversation.
+  const effectiveProviderId = activeMode?.providerId ?? null
   // Resolve effective MCPs: mode > defaults
   const effectiveMcpIds = activeMode?.mcpProviderIds?.length
     ? new Set(activeMode.mcpProviderIds)
@@ -73,7 +77,17 @@ export function MainArea(): React.JSX.Element {
 
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setActiveMode(mode)
+    setSendError(null)
   }, [])
+
+  // Auto-apply the default chat mode whenever the user lands on the new-chat
+  // screen with nothing chosen — the default chat mode replaces the previous
+  // "default LLM provider" concept. The user can still deselect it; the
+  // default reapplies on the next new-chat entry.
+  useEffect(() => {
+    if (activeChatId) return
+    setActiveMode((current) => (current ? current : defaultMode ?? null))
+  }, [activeChatId, defaultMode?.id])
 
   // Chat-modes popup can be opened two ways: the `+` button (rendered above
   // the button itself by ChatConfigMenu) and the `~` sole-character shortcut
@@ -130,6 +144,17 @@ export function MainArea(): React.JSX.Element {
 
   const handleNewChat = useCallback(
     async (message: string) => {
+      const resolvedModelId = selectedAgent
+        ? null
+        : resolveModel(activeMode, effectiveProviderId, providers, allModels)
+      const hasDestination = !!selectedAgent || (!!effectiveProviderId && !!resolvedModelId)
+      if (!hasDestination) {
+        setSendError(
+          "Can't send message — no agent, chat mode, or LLM provider is configured. Pick an agent or set a default chat mode in Settings."
+        )
+        return
+      }
+      setSendError(null)
       await startNewChat({
         message,
         agent: selectedAgent,
@@ -162,7 +187,7 @@ export function MainArea(): React.JSX.Element {
         return
       }
 
-      const resolvedProviderId = mode.providerId ?? defaultProviderId
+      const resolvedProviderId = mode.providerId ?? null
       const resolvedModelId = resolveModel(mode, resolvedProviderId, providers, allModels)
 
       const updates: { modeId: string; providerId?: string; modelId?: string } = { modeId: mode.id }
@@ -177,7 +202,7 @@ export function MainArea(): React.JSX.Element {
         : Array.from(defaultMcpIds)
       setChatMcp.mutate({ chatId: activeChatId, mcpProviderIds: mcpIds })
     },
-    [activeChatId, updateChat, defaultProviderId, providers, allModels, defaultMcpIds, setChatMcp]
+    [activeChatId, updateChat, providers, allModels, defaultMcpIds, setChatMcp]
   )
 
   // Tilde-driven select: apply the mode, wipe the `~` from the textarea, and
@@ -226,6 +251,17 @@ export function MainArea(): React.JSX.Element {
   }
   const availableModes = chatModes ?? []
 
+  const sendErrorBanner = sendError ? (
+    <div
+      role="alert"
+      className="w-full max-w-3xl mx-auto px-4 mb-2 text-xs text-[var(--color-danger)]
+        bg-[var(--color-danger)]/10 border border-[var(--color-danger)]/30
+        rounded-lg py-2 text-center"
+    >
+      {sendError}
+    </div>
+  ) : null
+
   // Default / New Chat screen
   if (!activeChatId) {
     return (
@@ -239,12 +275,13 @@ export function MainArea(): React.JSX.Element {
           animationKey={selectedAgent?.id ?? 'none'}
           onSelect={(p) => handleNewChat(p.full)}
         />
+        {sendErrorBanner}
         <ChatInput
           ref={chatInputRef}
           chatId={null}
           onNewChat={handleNewChat}
           modeColor={modeColorPreset}
-          onSelectAgent={setSelectedAgent}
+          onSelectAgent={(agent) => { setSelectedAgent(agent); setSendError(null) }}
           selectedAgent={selectedAgent}
           onDoubleEscape={() => setSelectedAgent(null)}
           tildeModePopup={
@@ -304,6 +341,7 @@ export function MainArea(): React.JSX.Element {
           }}
         />
         <div className="relative pointer-events-auto">
+          {sendErrorBanner}
           <ChatInput
             ref={chatInputRef}
             chatId={activeChatId}

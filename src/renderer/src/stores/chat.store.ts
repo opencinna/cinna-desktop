@@ -40,6 +40,10 @@ interface ChatStore {
   // exact chat whose stream just finished — out-of-band message arrivals on
   // other chats still animate normally.
   streamedIncrementallyChatId: string | null
+  // User-facing send error surfaced above the chat input (e.g. "no provider
+  // configured"). Set by the new-chat pre-flight check and by stream `error`
+  // events; cleared on next user action.
+  sendError: string | null
 
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
@@ -56,6 +60,7 @@ interface ChatStore {
   finishStreaming: () => void
   clearStreamingBlocks: () => void
   stopStreaming: () => void
+  setSendError: (error: string | null) => void
   reset: () => void
 }
 
@@ -67,6 +72,7 @@ export const useChatStore = create<ChatStore>((set) => ({
   activeRequestId: null,
   pendingUserMessage: null,
   streamedIncrementallyChatId: null,
+  sendError: null,
 
   setActiveChatId: (id) =>
     set({
@@ -74,7 +80,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamingBlocks: [],
       isStreaming: false,
       pendingUserMessage: null,
-      streamedIncrementallyChatId: null
+      streamedIncrementallyChatId: null,
+      sendError: null
     }),
 
   setPendingUserMessage: (content) =>
@@ -86,7 +93,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamingBlocks: [],
       activeRequestId: requestId,
       pendingUserMessage: null,
-      streamedIncrementallyChatId: null
+      streamedIncrementallyChatId: null,
+      sendError: null
     }),
 
   appendDelta: (text, kind = 'text', toolName, toolInput) =>
@@ -150,6 +158,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamedIncrementallyChatId: null
     }),
 
+  setSendError: (error) => set({ sendError: error }),
+
   reset: () =>
     set({
       activeChatId: null,
@@ -157,6 +167,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       isStreaming: false,
       activeRequestId: null,
       pendingUserMessage: null,
-      streamedIncrementallyChatId: null
+      streamedIncrementallyChatId: null,
+      sendError: null
     })
 }))

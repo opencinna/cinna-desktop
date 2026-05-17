@@ -7,6 +7,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 ## Core Concepts
 
 - **Chat Mode** — A saved configuration preset with a name, optional LLM provider/model, a set of MCP providers, and a color from 10 presets
+- **Default Chat Mode** — At most one mode per user can be flagged `isDefault`. The new-chat screen auto-applies it whenever the user lands there without an explicit choice — this is the only implicit fallback when routing a message; there is no longer a "default LLM provider" concept
 - **Color Preset** — One of 10 named color themes (slate, indigo, violet, rose, amber, emerald, cyan, sky, orange, fuchsia) that visually distinguish modes in the UI
 - **Mode Selection** — Choosing a mode from the `+` popup below the chat input; available on both the new-chat screen and active chats that were created with a mode
 
@@ -35,7 +36,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 ### Deselecting a mode (new-chat screen)
 1. User clicks the `+` button again and clicks the already-selected mode
-2. Mode deselects — input returns to default styling, chat will use the default provider and all enabled MCPs
+2. Mode deselects — input returns to default styling. Without a mode (and without a selected agent) the next send raises an inline "can't determine destination" error banner above the input; the user has to pick a mode or an agent to send
 
 ### Switching mode on an active chat
 1. User is in a chat that was created with a mode — the input border/background shows the mode's color, and the `+` button appears below the input
@@ -51,8 +52,10 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 ## Business Rules
 
-- A chat mode's provider and model are optional — if not set, the default provider and its default model are used
+- A chat mode's provider and model are optional — if neither the mode nor the user explicitly selects a provider on the new-chat screen, sending fails with a "can't determine destination" error (no implicit provider fallback exists)
 - A chat mode's MCP list can be empty — if so, the app falls back to all enabled MCP providers
+- At most one mode per user is `isDefault`. Marking a mode as default in Settings clears the flag on any previously default mode (single-default invariant, enforced in the same transaction)
+- The default chat mode auto-applies whenever the user lands on the new-chat screen with nothing chosen. Deselecting it via the popup keeps it cleared for the rest of that new-chat session; it reapplies the next time the user returns to the new-chat screen
 - Mode selection is available on the new-chat screen and on active chats that were created with a mode
 - Active chats with a `mode_id` show the mode selector instead of separate model/MCP controls
 - Switching modes on an active chat updates its provider, model, and MCP configuration immediately

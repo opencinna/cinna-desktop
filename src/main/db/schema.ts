@@ -28,7 +28,6 @@ export const llmProviders = sqliteTable('llm_providers', {
   name: text('name').notNull(),
   apiKeyEncrypted: blob('api_key_enc', { mode: 'buffer' }),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   defaultModelId: text('default_model_id'),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -90,6 +89,7 @@ export const chatModes = sqliteTable('chat_modes', {
   modelId: text('model_id'),
   mcpProviderIds: text('mcp_provider_ids', { mode: 'json' }).$type<string[]>().default([]),
   colorPreset: text('color_preset').notNull().default('slate'),
+  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

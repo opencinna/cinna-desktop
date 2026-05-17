@@ -22,6 +22,8 @@ export type ChatErrorCode =
   | 'adapter_unavailable'
   | 'not_activated'
 
+export type ChatModeErrorCode = 'not_found'
+
 export type AuthErrorCode =
   | 'not_found'
   | 'username_taken'
@@ -65,6 +67,7 @@ export class DomainError<TCode extends string = string> extends Error {
 export class ProviderError extends DomainError<ProviderErrorCode> {}
 export class McpError extends DomainError<McpErrorCode> {}
 export class ChatError extends DomainError<ChatErrorCode> {}
+export class ChatModeError extends DomainError<ChatModeErrorCode> {}
 export class AuthError extends DomainError<AuthErrorCode> {}
 export class AgentError extends DomainError<AgentErrorCode> {}
 export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}

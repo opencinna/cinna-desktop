@@ -13,10 +13,6 @@ export function migrateProviders(sqlite: Database.Database): void {
     );
   `)
 
-  if (!hasColumn(sqlite, 'llm_providers', 'is_default')) {
-    sqlite.exec(`ALTER TABLE llm_providers ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0`)
-  }
-
   if (!hasColumn(sqlite, 'llm_providers', 'default_model_id')) {
     sqlite.exec(`ALTER TABLE llm_providers ADD COLUMN default_model_id TEXT`)
   }

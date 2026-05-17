@@ -9,7 +9,7 @@
 - `src/main/llm/anthropic.ts` — `AnthropicAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/openai.ts` — `OpenAIAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/gemini.ts` — `GeminiAdapter` (single-turn streamer, returns `StreamResult`)
-- `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`. `upsert()` runs in a transaction and clears other defaults when `isDefault` is set, all scoped by `userId`.
+- `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`. Providers no longer carry a `is_default` flag; the "default" concept moved to chat modes (see [Chat Modes](../../chat/chat_modes/chat_modes.md)).
 - `src/main/services/providerService.ts` — `providerService` — DTO mapping (`hasApiKey: boolean`), encryption via `encryptApiKey()`, registry sync on upsert/delete, `test()` and `testKey()` helpers, `listModels()` aggregator
 - `src/main/services/chatStreamingService.ts` — Drives the centralized tool-call loop via `getAdapter()` from the registry
 - `src/main/ipc/llm.ipc.ts` — `llm:send-message` (MessagePort) delegates to `chatStreamingService.stream()`; `llm:cancel` delegates to `chatStreamingService.cancel()`
@@ -27,21 +27,21 @@
 - `src/renderer/src/hooks/useProviders.ts` — useProviders, useUpsertProvider, useDeleteProvider, useTestProvider
 - `src/renderer/src/hooks/useModels.ts` — useModels (aggregates from all providers)
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Settings page with LLM Providers tab
-- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, default star, edit key, test, select model, delete
+- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, edit key, test, select model, delete (no per-provider default flag — defaults live on chat modes)
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — Add new provider form: type selector, key input, test, save
 
 ## Database Schema
 
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
-| `llm_providers` | API credentials | id, type (anthropic\|openai\|gemini), name, api_key_enc (encrypted blob), enabled, is_default, default_model_id |
+| `llm_providers` | API credentials | id, type (anthropic\|openai\|gemini), name, api_key_enc (encrypted blob), enabled, default_model_id |
 
 ## IPC Channels
 
 | Channel | Type | Purpose |
 |---------|------|---------|
-| `provider:list` | invoke | List LLM providers (API keys masked, includes isDefault, defaultModelId) |
-| `provider:upsert` | invoke | Create/update provider (supports isDefault, defaultModelId) |
+| `provider:list` | invoke | List LLM providers (API keys masked, includes `defaultModelId`) |
+| `provider:upsert` | invoke | Create/update provider (supports `defaultModelId`, no isDefault flag) |
 | `provider:delete` | invoke | Delete provider |
 | `provider:test` | invoke | Test saved provider connection, return model list |
 | `provider:test-key` | invoke | Test an API key before saving (takes type + apiKey) |
@@ -51,7 +51,7 @@
 
 - `src/main/llm/factory.ts:createAdapter(type, apiKey, providerId)` — Factory: instantiates the correct adapter based on provider type. `isProviderType(type)` narrows to the supported union.
 - `src/main/llm/registry.ts` — `registerAdapter(providerId, adapter)`, `unregisterAdapter(providerId)`, `getAdapter(providerId)`, `clearAllAdapters()`, `getAllModels()`
-- `src/main/services/providerService.ts:upsert()` — Validates type, encrypts API key, calls `llmProviderRepo.upsert()` (which clears other defaults transactionally), then either registers or unregisters the adapter based on `enabled` + `hasApiKey`.
+- `src/main/services/providerService.ts:upsert()` — Validates type, encrypts API key, calls `llmProviderRepo.upsert()`, then either registers or unregisters the adapter based on `enabled` + `hasApiKey`.
 - `src/main/services/providerService.ts:test()` — Looks up owned provider, decrypts key, instantiates adapter via factory, calls `adapter.listModels()`.
 - `src/main/services/providerService.ts:testKey(type, apiKey)` — Probe with a temporary `__probe__` provider id; not registered.
 - `src/main/index.ts:initLLMProviders()` — On user activation: loads all enabled providers from DB, decrypts keys, creates adapters via factory, registers them.
@@ -59,7 +59,7 @@
 
 ## Renderer Components
 
-- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable provider card with: enable/disable toggle, default star (only one at a time), API key field (masked), test connection button, model selector dropdown (fetches models on demand via `provider:test`), delete button
+- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable provider card with: enable/disable toggle, API key field (masked), test connection button, model selector dropdown (fetches models on demand via `provider:test`), delete button. No per-provider default flag — the "default" concept now lives on chat modes.
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — New provider form: type selector with search filter, API key input, test before save
 
 ## Security

@@ -41,7 +41,7 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, setSendError } =
     useChatStore()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const forceRefreshAgentStatus = useForceRefreshAgentStatus()
@@ -80,12 +80,13 @@ export function useChatStream(): {
           break
         case 'error':
           console.error('LLM error:', event.error)
+          setSendError(event.error ?? 'LLM request failed')
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setSendError, queryClient]
   )
 
   const handleAgent = useCallback(
@@ -106,12 +107,13 @@ export function useChatStream(): {
           break
         case 'error':
           console.error('Agent error:', event.error)
+          setSendError(event.error ?? 'Agent request failed')
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
       }
     },
-    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
+    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, setSendError, queryClient]
   )
 
   const startLlm = useCallback(

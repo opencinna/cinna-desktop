@@ -17,7 +17,6 @@ export interface ProviderDto {
   type: string
   name: string
   enabled: boolean
-  isDefault: boolean
   defaultModelId: string | null
   hasApiKey: boolean
   createdAt: Date
@@ -29,7 +28,6 @@ export interface UpsertProviderInput {
   name: string
   apiKey?: string
   enabled?: boolean
-  isDefault?: boolean
   defaultModelId?: string | null
 }
 
@@ -39,7 +37,6 @@ function toDto(row: LlmProviderRow): ProviderDto {
     type: row.type,
     name: row.name,
     enabled: row.enabled,
-    isDefault: row.isDefault,
     defaultModelId: row.defaultModelId,
     hasApiKey: !!row.apiKeyEncrypted,
     createdAt: row.createdAt
@@ -62,15 +59,13 @@ export const providerService = {
       name: input.name,
       apiKeyEncrypted: input.apiKey ? encryptApiKey(input.apiKey) : undefined,
       enabled: input.enabled,
-      isDefault: input.isDefault,
       defaultModelId: input.defaultModelId
     })
 
     logger.info(created ? 'provider created' : 'provider updated', {
       providerId: id,
       type: row.type,
-      enabled: row.enabled,
-      isDefault: row.isDefault
+      enabled: row.enabled
     })
 
     if (row.enabled && row.apiKeyEncrypted) {

@@ -52,7 +52,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - A chat can have zero or more MCP servers enabled (junction table)
 - Messages are ordered by `sort_order` within a chat
 - Chat title defaults to the first user message, truncated to 50 chars
-- The default provider is the one marked `is_default`; the default model is the provider's `default_model_id` (or first available)
+- The provider/model for a new chat comes from the active [chat mode](../chat_modes/chat_modes.md) (auto-applied default mode if the user hasn't picked one explicitly); the model defaults to the mode's `modelId`, falling back to the provider's `default_model_id` and finally the first available model. There is no provider-level "default" flag — if no mode or agent is chosen, sending raises an inline "can't determine destination" error
 - Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages, then persisted to DB as `role: 'error'` messages so they survive navigation
 - Tool calls are only available when MCP servers are connected and enabled for the chat
 

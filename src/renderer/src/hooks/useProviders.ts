@@ -23,7 +23,6 @@ export function useUpsertProvider() {
       name: string
       apiKey?: string
       enabled?: boolean
-      isDefault?: boolean
       defaultModelId?: string | null
     }) => getApi().providers.upsert(data),
     onSuccess: () => {

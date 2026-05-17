@@ -1,6 +1,6 @@
 import { useCallback } from 'react'
 import { useState } from 'react'
-import { Trash2, ChevronDown, Check } from 'lucide-react'
+import { Trash2, ChevronDown, Check, Star } from 'lucide-react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
@@ -29,14 +29,15 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
 
   const save = useCallback(
-    (patch: Partial<{ name: string; providerId: string | null; modelId: string | null; mcpProviderIds: string[]; colorPreset: string }>) => {
+    (patch: Partial<{ name: string; providerId: string | null; modelId: string | null; mcpProviderIds: string[]; colorPreset: string; isDefault: boolean }>) => {
       upsert.mutate({
         id: mode.id,
         name: patch.name ?? mode.name,
         providerId: patch.providerId !== undefined ? patch.providerId : (mode.providerId ?? null),
         modelId: patch.modelId !== undefined ? patch.modelId : (mode.modelId ?? null),
         mcpProviderIds: patch.mcpProviderIds ?? mode.mcpProviderIds ?? [],
-        colorPreset: patch.colorPreset ?? mode.colorPreset
+        colorPreset: patch.colorPreset ?? mode.colorPreset,
+        isDefault: patch.isDefault !== undefined ? patch.isDefault : mode.isDefault
       })
     },
     [upsert, mode]
@@ -65,6 +66,19 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
         <div className="flex-1 min-w-0">
           <span className="font-medium text-xs">{mode.name}</span>
         </div>
+
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); save({ isDefault: !mode.isDefault }) }}
+          className={`p-1 rounded transition-colors ${
+            mode.isDefault
+              ? 'text-[var(--color-warning)]'
+              : 'text-[var(--color-text-muted)] hover:text-[var(--color-warning)]'
+          }`}
+          title={mode.isDefault ? 'Remove as default' : 'Set as default'}
+        >
+          <Star size={12} className={mode.isDefault ? 'fill-current' : ''} />
+        </button>
 
         <button
           type="button"

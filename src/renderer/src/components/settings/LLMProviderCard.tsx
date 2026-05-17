@@ -7,8 +7,7 @@ import {
   CheckCircle,
   XCircle,
   Loader2,
-  Circle,
-  Star
+  Circle
 } from 'lucide-react'
 import {
   useUpsertProvider,
@@ -30,7 +29,6 @@ interface LLMProviderCardProps {
     type: string
     name: string
     enabled: boolean
-    isDefault: boolean
     defaultModelId: string | null
     hasApiKey: boolean
   }
@@ -53,18 +51,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
       id: provider.id,
       type: provider.type,
       name: provider.name,
-      enabled: !provider.enabled,
-      // If disabling and it was default, unset default
-      isDefault: !provider.enabled ? provider.isDefault : false
-    })
-  }
-
-  const handleToggleDefault = (): void => {
-    upsert.mutate({
-      id: provider.id,
-      type: provider.type,
-      name: provider.name,
-      isDefault: !provider.isDefault
+      enabled: !provider.enabled
     })
   }
 
@@ -140,20 +127,6 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
             {PROVIDER_LABELS[provider.type] ?? provider.type}
           </span>
         </div>
-
-        <button
-          type="button"
-          onClick={(e) => { e.stopPropagation(); handleToggleDefault() }}
-          disabled={!provider.enabled}
-          className={`p-1 rounded transition-colors ${
-            provider.isDefault
-              ? 'text-[var(--color-warning)]'
-              : 'text-[var(--color-text-muted)] hover:text-[var(--color-warning)]'
-          } disabled:opacity-30 disabled:cursor-not-allowed`}
-          title={provider.isDefault ? 'Remove as default' : 'Set as default'}
-        >
-          <Star size={12} className={provider.isDefault ? 'fill-current' : ''} />
-        </button>
 
         <button
           type="button"

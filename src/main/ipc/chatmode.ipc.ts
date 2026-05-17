@@ -25,6 +25,7 @@ export function registerChatModeHandlers(): void {
         modelId?: string | null
         mcpProviderIds?: string[]
         colorPreset?: string
+        isDefault?: boolean
       }
     ) => {
       userActivation.requireActivated()

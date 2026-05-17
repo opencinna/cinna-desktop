@@ -21,9 +21,9 @@ All app resources (LLM adapters, MCP connectors, user data) are scoped to the ac
 Every data table in the app has a `userId` column, but it is filtered along one of two scopes — see [Settings Scope](../settings_scope/settings_scope.md):
 
 - **Default scope** (`userId = '__default__'`) — shared across profiles:
-  - **LLM providers** — API keys, model selection, default provider
+  - **LLM providers** — API keys, model selection
   - **MCP servers** — server configs, OAuth tokens, connection state
-  - **Chat modes** — preset configurations bundling provider + MCP servers
+  - **Chat modes** — preset configurations bundling provider + MCP servers; one mode per user can be flagged as the default that auto-applies on new chats
   - **Local agents** — manually-registered A2A agents
 - **Profile scope** (`userId = activeUserId`) — per-profile, swapped on user switch:
   - **Chats & messages** — conversations, message history, trash
