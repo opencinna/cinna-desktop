@@ -20,7 +20,7 @@
 ### Renderer
 - `src/renderer/src/stores/logger.store.ts` — Zustand `useLoggerStore`; holds entries + subscription state; `createLogger(scope)` for renderer code; `append`, `setAll`, `clear`, `log`, `subscribe`
 - `src/renderer/src/stores/ui.store.ts` — `loggerEnabled`, `logsOpen`, `setLoggerEnabled`, `setLogsOpen`; persists `loggerEnabled` to `localStorage('cinna-logger-enabled')`
-- `src/renderer/src/components/logger/LogsOverlay.tsx` — Overlay shell + header (filter input, level toggles, count, pause, clear, close); `LogRow` sub-component; subscribes to `onToggleOverlay` and handles `Escape`
+- `src/renderer/src/components/logger/LogsOverlay.tsx` — Overlay shell + header (filter input, level toggles, count, selection copy/clear, pause, clear, close); `LogRow` sub-component; subscribes to `onToggleOverlay` and handles `Escape`. Owns selection state (`selected: Set<id>`, `anchorIndex`, `dragRef`), expand state (`expandedIds: Set<id>`, lifted out of the row), and the `formatEntryForCopy` helper.
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — "Debug" section with "Enable Logger" switch
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Wires `development` tab to `DevelopmentSettingsSection`
 - `src/renderer/src/components/layout/Sidebar.tsx` — Adds `Development` menu item (before the Trash separator); renders terminal icon in footer when `loggerEnabled`
@@ -51,8 +51,8 @@ None — logger is in-memory only.
 
 ## Renderer Components
 
-- `LogsOverlay` — Reads `logsOpen`, `setLogsOpen` from `ui.store`; `entries`, `subscribe`, `clear` from `logger.store`. Subscribes on first open. Keyboard: `Escape` closes; `⌘`` / `⌘~` handled via `onToggleOverlay` IPC listener (not DOM keydown).
-- `LogRow` — Expandable row; `hasData` controls the chevron affordance; data rendered as `<pre>` JSON
+- `LogsOverlay` — Reads `logsOpen`, `setLogsOpen` from `ui.store`; `entries`, `subscribe`, `clear` from `logger.store`. Subscribes on first open. Keyboard: `Escape` clears the selection if non-empty, otherwise closes; `⌘`` / `⌘~` handled via `onToggleOverlay` IPC listener (not DOM keydown). Drag selection is finalized by a single `window` `mouseup` listener that clears the `dragRef`.
+- `LogRow` — Row body is a `<div>` (not a `<button>`) so `mouseenter` fires while a mouse button is held down — that's how drag-extend works. Three pointer paths: chevron click → `onChevronClick` toggles `expandedIds`; row `mousedown` → `onMouseDown` mutates `selected` based on `shift` / `meta|ctrl` modifiers and seeds `dragRef`; row `mouseenter` while `dragRef` is set → `onMouseEnter` recomputes the range `[min(anchor,i), max(anchor,i)]` against `filteredRef.current` and unions it with the base selection. The chevron's `mousedown` stops propagation so toggling expand never starts a selection drag. Selection IDs are stable across filter/level changes because the row identity is the `LogEntry.id`, not its filtered index.
 - `DevelopmentSettingsSection` — Reads/writes `loggerEnabled` via `ui.store`; toggle styling matches `LLMProviderCard` / `AgentCard` switches
 
 ## Configuration

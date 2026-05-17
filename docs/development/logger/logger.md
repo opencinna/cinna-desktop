@@ -11,6 +11,7 @@ In-app debug logger for tracing activity across the main and renderer processes 
 - **Logger Enabled** — User-level toggle persisted in localStorage (`cinna-logger-enabled`); when off, the log icon and overlay are hidden and the keyboard shortcut is a no-op
 - **Ring Buffer** — Both main and renderer cap stored entries at 2000; oldest entries are dropped on overflow
 - **Logs Overlay** — Full-window (with ~5vmin padding) panel that renders entries terminal-style with filtering, auto-scroll, and clear
+- **Row Selection** — Visible log entries can be marked as selected so a contiguous range or arbitrary subset can be copied to the clipboard as plain text. Selection state is local to the overlay session (not persisted) and survives filter / level-toggle changes — entries that drop out of the filtered view stay selected and re-appear highlighted if they return
 
 ## User Stories / Flows
 
@@ -26,6 +27,16 @@ In-app debug logger for tracing activity across the main and renderer processes 
 3. Level toggles (DBG/INF/WRN/ERR) hide entries of that level
 4. Clicking a row with attached `data` expands to show the JSON payload
 5. Auto-scroll follows new entries; can be paused via the pause button
+
+### Copying entries out of the overlay
+1. User scrubs through the live logs, finds the interesting range
+2. User clicks a row to start a selection, then either:
+   - Drags the mouse across additional rows to extend the range, **or**
+   - Shift-clicks another row to select everything between the two, **or**
+   - ⌘/Ctrl-clicks individual rows to toggle them in/out of the selection
+3. A `Copy N` button appears in the header alongside a `N selected` counter and a clear-selection (`×`) button
+4. Clicking `Copy N` writes the selected entries to the clipboard as plain text — one entry per line, with attached `data` indented underneath — and the button briefly flips to `Copied`. If any selected entries have already been evicted from the 2000-row ring buffer, the label instead reads `Copied K/N` so the user knows some rows were dropped.
+5. Pressing `Escape` clears the selection (without closing the overlay); a second `Escape` closes the overlay as before
 
 ### Debugging an external service error
 1. User enables logger, opens overlay, triggers the failing action (e.g. Cinna self-hosted login)
@@ -48,6 +59,8 @@ In-app debug logger for tracing activity across the main and renderer processes 
 - The logger is **not** a persistence mechanism — entries live only in memory for the current session
 - `console.log/warn/error/debug` is still called in parallel with every structured entry, so terminal-based dev workflows are unaffected
 - Entries attach serialized `data` — Errors are reduced to `{name, message, stack}`; all other values go through `JSON.parse(JSON.stringify(...))` with a string fallback so circular references don't crash the logger
+- Row click is a **selection** gesture, not an expand gesture — to expand the `data` panel the user clicks the chevron in the row's left gutter. Plain click replaces the selection with that row; ⌘/Ctrl-click toggles a single row; Shift-click extends from the last anchor; mouse-down + drag across rows extends a range from the press anchor. The anchor row is whatever the last non-shift click landed on.
+- Copy formats each selected entry on one line as `[HH:MM:SS.mmm] LVL [source:scope] message`, followed by an indented dump of the attached `data` (if any). Entries are emitted in monotonically-increasing `id` order regardless of the order they were clicked, so the clipboard output is always chronological. Clipboard writes go through `navigator.clipboard.writeText`; failures flip the button to `Failed` for ~1.2 s instead of throwing.
 
 ## Architecture Overview
 
