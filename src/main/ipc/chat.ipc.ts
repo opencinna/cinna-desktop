@@ -1,50 +1,50 @@
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getProfileScopeUserId } from '../auth/scope'
 import { chatService } from '../services/chatService'
 import { ipcHandle } from './_wrap'
 
 export function registerChatHandlers(): void {
   ipcHandle('chat:list', async () => {
     userActivation.requireActivated()
-    return chatService.list(getCurrentUserId())
+    return chatService.list(getProfileScopeUserId())
   })
 
   ipcHandle('chat:get', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    return chatService.get(getCurrentUserId(), chatId)
+    return chatService.get(getProfileScopeUserId(), chatId)
   })
 
   ipcHandle('chat:create', async () => {
     userActivation.requireActivated()
-    return chatService.create(getCurrentUserId())
+    return chatService.create(getProfileScopeUserId())
   })
 
   ipcHandle('chat:delete', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    chatService.delete(getCurrentUserId(), chatId)
+    chatService.delete(getProfileScopeUserId(), chatId)
     return { success: true }
   })
 
   ipcHandle('chat:trash-list', async () => {
     userActivation.requireActivated()
-    return chatService.listTrash(getCurrentUserId())
+    return chatService.listTrash(getProfileScopeUserId())
   })
 
   ipcHandle('chat:restore', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    chatService.restore(getCurrentUserId(), chatId)
+    chatService.restore(getProfileScopeUserId(), chatId)
     return { success: true }
   })
 
   ipcHandle('chat:permanent-delete', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    chatService.permanentDelete(getCurrentUserId(), chatId)
+    chatService.permanentDelete(getProfileScopeUserId(), chatId)
     return { success: true }
   })
 
   ipcHandle('chat:empty-trash', async () => {
     userActivation.requireActivated()
-    chatService.emptyTrash(getCurrentUserId())
+    chatService.emptyTrash(getProfileScopeUserId())
     return { success: true }
   })
 
@@ -62,7 +62,7 @@ export function registerChatHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      chatService.update(getCurrentUserId(), chatId, updates)
+      chatService.update(getProfileScopeUserId(), chatId, updates)
       return { success: true }
     }
   )
@@ -81,7 +81,7 @@ export function registerChatHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      return chatService.addMessage(getCurrentUserId(), chatId, message)
+      return chatService.addMessage(getProfileScopeUserId(), chatId, message)
     }
   )
 
@@ -89,13 +89,13 @@ export function registerChatHandlers(): void {
     'chat:set-mcp-providers',
     async (_event, chatId: string, mcpProviderIds: string[]) => {
       userActivation.requireActivated()
-      chatService.setMcpProviders(getCurrentUserId(), chatId, mcpProviderIds)
+      chatService.setMcpProviders(getProfileScopeUserId(), chatId, mcpProviderIds)
       return { success: true }
     }
   )
 
   ipcHandle('chat:get-mcp-providers', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    return chatService.getMcpProviders(getCurrentUserId(), chatId)
+    return chatService.getMcpProviders(getProfileScopeUserId(), chatId)
   })
 }

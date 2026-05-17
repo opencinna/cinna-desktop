@@ -9,7 +9,12 @@ import {
   Eye,
   EyeOff
 } from 'lucide-react'
-import { useUpsertAgent, useDeleteAgent, useTestAgent } from '../../hooks/useAgents'
+import {
+  useUpsertAgent,
+  useDeleteAgent,
+  useTestAgent,
+  useSetAgentEnabled
+} from '../../hooks/useAgents'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -31,14 +36,10 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
   const upsert = useUpsertAgent()
   const deleteAgent = useDeleteAgent()
   const testAgent = useTestAgent()
+  const setEnabled = useSetAgentEnabled()
 
   const handleToggle = (): void => {
-    upsert.mutate({
-      id: agent.id,
-      name: agent.name,
-      protocol: agent.protocol,
-      enabled: !agent.enabled
-    })
+    setEnabled.mutate({ agentId: agent.id, enabled: !agent.enabled })
   }
 
   const handleSaveToken = (): void => {
@@ -109,8 +110,13 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
         <button
           type="button"
           onClick={(e) => { e.stopPropagation(); handleToggle() }}
+          title={setEnabled.error ? String(setEnabled.error) : undefined}
           className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
-            agent.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+            setEnabled.error
+              ? 'bg-[var(--color-danger)]/40 ring-1 ring-[var(--color-danger)]'
+              : agent.enabled
+                ? 'bg-[var(--color-accent)]'
+                : 'bg-[var(--color-border)]'
           }`}
         >
           <div

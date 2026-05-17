@@ -1,5 +1,5 @@
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { mcpService } from '../services/mcpService'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
@@ -7,7 +7,7 @@ import { ipcHandle } from './_wrap'
 export function registerMcpHandlers(): void {
   ipcHandle('mcp:list', async () => {
     userActivation.requireActivated()
-    return mcpService.list(getCurrentUserId())
+    return mcpService.list(getSettingsScopeUserId())
   })
 
   ipcHandle(
@@ -26,14 +26,14 @@ export function registerMcpHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = await mcpService.upsert(getCurrentUserId(), data)
+      const { id } = await mcpService.upsert(getSettingsScopeUserId(), data)
       return { id, success: true }
     }
   )
 
   ipcHandle('mcp:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
-    await mcpService.delete(getCurrentUserId(), providerId)
+    await mcpService.delete(getSettingsScopeUserId(), providerId)
     return { success: true }
   })
 
@@ -42,7 +42,7 @@ export function registerMcpHandlers(): void {
   ipcHandle('mcp:connect', async (_event, providerId: string) => {
     userActivation.requireActivated()
     try {
-      const { tools, status } = await mcpService.connect(getCurrentUserId(), providerId)
+      const { tools, status } = await mcpService.connect(getSettingsScopeUserId(), providerId)
       return { success: true as const, tools, status }
     } catch (err) {
       const e = ipcErrorShape(err)
@@ -52,12 +52,12 @@ export function registerMcpHandlers(): void {
 
   ipcHandle('mcp:disconnect', async (_event, providerId: string) => {
     userActivation.requireActivated()
-    await mcpService.disconnect(getCurrentUserId(), providerId)
+    await mcpService.disconnect(getSettingsScopeUserId(), providerId)
     return { success: true }
   })
 
   ipcHandle('mcp:list-tools', async (_event, providerId: string) => {
     userActivation.requireActivated()
-    return mcpService.listTools(getCurrentUserId(), providerId)
+    return mcpService.listTools(getSettingsScopeUserId(), providerId)
   })
 }

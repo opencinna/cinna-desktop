@@ -6,7 +6,8 @@ import {
   llmProviders,
   mcpProviders,
   chatModes,
-  agents
+  agents,
+  agentOverrides
 } from './schema'
 
 export type UserRow = typeof users.$inferSelect
@@ -150,6 +151,7 @@ export const userRepo = {
       tx.delete(mcpProviders).where(eq(mcpProviders.userId, id)).run()
       tx.delete(chatModes).where(eq(chatModes.userId, id)).run()
       tx.delete(agents).where(eq(agents.userId, id)).run()
+      tx.delete(agentOverrides).where(eq(agentOverrides.userId, id)).run()
       tx.delete(users).where(eq(users.id, id)).run()
     })
   },

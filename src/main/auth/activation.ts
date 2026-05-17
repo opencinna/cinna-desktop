@@ -4,6 +4,7 @@ import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
 import { userRepo } from '../db/users'
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 
 /**
  * Centralizes user session activation — LLM adapters and MCP connectors
@@ -62,7 +63,7 @@ class UserActivation {
     stopPeriodicSync()
     clearAllAdapters()
     await mcpManager.disconnectAll()
-    setCurrentUser('__default__')
+    setCurrentUser(DEFAULT_USER_ID)
   }
 
   /** Guard for IPC handlers — throws if no user is activated. */

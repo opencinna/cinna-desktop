@@ -1,6 +1,6 @@
 import { agentStatusService, type AgentStatusSnapshot } from '../services/agentStatusService'
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getProfileScopeUserId } from '../auth/scope'
 import { ipcErrorShape } from '../errors'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { ipcHandle } from './_wrap'
@@ -9,7 +9,7 @@ export function registerAgentStatusHandlers(): void {
   ipcHandle('agent-status:list', async () => {
     userActivation.requireActivated()
     try {
-      const items = await agentStatusService.list(getCurrentUserId())
+      const items = await agentStatusService.list(getProfileScopeUserId())
       return { success: true as const, items }
     } catch (err) {
       if (err instanceof CinnaReauthRequired) {
@@ -32,7 +32,7 @@ export function registerAgentStatusHandlers(): void {
       userActivation.requireActivated()
       try {
         const item = await agentStatusService.get(
-          getCurrentUserId(),
+          getProfileScopeUserId(),
           data.agentId,
           data.forceRefresh ?? false
         )

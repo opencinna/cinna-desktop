@@ -82,10 +82,10 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - Passwords are optional for all account types — used only to lock the local session
 - Password is required to delete a password-protected account (security confirmation)
 - Cinna account profile fields (username, display name) come from OAuth and cannot be edited locally — only local password can be set/changed
-- Every data table (chats, providers, agents, modes, MCP) is filtered by `userId` — users cannot see each other's data
-- Messages and chat-MCP links inherit user scope through their chat foreign key
+- Data is split into two scopes — see [Settings Scope](../../core/settings_scope/settings_scope.md): **Default scope** (LLM providers, MCP providers, chat modes, local agents) is shared across all profiles; **Profile scope** (chats, remote agents, agent overrides, Cinna tokens) is per-account and changes on user switch
+- Messages and chat-MCP links inherit profile scope through their chat foreign key
 - On user switch: LLM adapters are cleared and re-initialized, MCP connections are disconnected and reconnected for the new user's providers (see [Resource Activation](../../core/resource_activation/resource_activation.md))
-- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all data tables → delete user row → re-activate as default user
+- On account deletion: deactivate session → clear Cinna tokens → cascade-delete all profile-scope data (chats, remote agents, `agent_overrides`) → delete user row → re-activate as default user. Default-scope settings remain untouched.
 - Password verification uses PBKDF2 (100k iterations, SHA-512) — no plaintext storage
 - Session persistence stores only the last user ID, not credentials
 - Per-session unlock tracking resets on app restart or sign-out (password required again)

@@ -7,6 +7,7 @@ import { useUsers, useLogin, useDeleteUser } from '../../hooks/useAuth'
 import { usePopover } from '../ui/usePopover'
 import { RegisterForm } from './RegisterForm'
 import { LoginPrompt } from './LoginPrompt'
+import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 interface UserMenuProps {
   /** Compact mode: render only the avatar (no name + chevron). Dropdown opens
@@ -109,7 +110,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     }
   }
 
-  const isDefault = currentUser?.id === '__default__'
+  const isDefault = currentUser?.id === DEFAULT_USER_ID
   const initial = (currentUser?.cinnaFullName ?? currentUser?.displayName)?.charAt(0).toUpperCase() ?? '?'
   const allUsers = users ?? []
 
@@ -184,7 +185,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
                       ? 'bg-[var(--color-accent)]'
                       : 'bg-[var(--color-bg-tertiary)]'
                   }`}>
-                    {u.id === '__default__' ? (
+                    {u.id === DEFAULT_USER_ID ? (
                       <User size={11} className={isCurrent ? 'text-white' : ''} />
                     ) : (
                       <span className={`text-[10px] font-bold ${isCurrent ? 'text-white' : ''}`}>
@@ -198,7 +199,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
                       <span className="text-[10px] text-[var(--color-text-muted)] truncate">{u.displayName}</span>
                     )}
                   </div>
-                  {u.id === '__default__' && (
+                  {u.id === DEFAULT_USER_ID && (
                     <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
                       Guest
                     </span>

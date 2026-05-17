@@ -4,17 +4,21 @@ import { clearAllAdapters, registerAdapter } from '../llm/registry'
 import { createAdapter } from '../llm/factory'
 import { decryptApiKey } from '../security/keystore'
 import { mcpManager } from '../mcp/manager'
-import { getCurrentUserId } from './session'
+import { getSettingsScopeUserId } from './scope'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('Activation')
 
-/** Reload LLM + MCP providers for the current user (called on user switch) */
+/**
+ * Reload LLM + MCP providers from the default (shared) settings scope. Called
+ * on activation: providers are not per-profile, so the same set is loaded
+ * regardless of which user just signed in.
+ */
 export async function reloadUserProviders(): Promise<void> {
   clearAllAdapters()
   await mcpManager.disconnectAll()
 
-  const userId = getCurrentUserId()
+  const userId = getSettingsScopeUserId()
 
   for (const provider of llmProviderRepo.list(userId)) {
     if (provider.enabled && provider.apiKeyEncrypted) {

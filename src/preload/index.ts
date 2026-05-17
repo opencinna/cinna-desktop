@@ -282,6 +282,11 @@ const api = {
       ipcRenderer.invoke('agent:upsert', data),
     delete: (agentId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:delete', agentId),
+    setEnabled: (
+      agentId: string,
+      enabled: boolean
+    ): Promise<{ success: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:set-enabled', { agentId, enabled }),
     syncRemote: (): Promise<{
       success: boolean
       synced?: number

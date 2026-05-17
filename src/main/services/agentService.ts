@@ -1,5 +1,5 @@
 import { net } from 'electron'
-import { agentRepo, AgentRow, RemoteTarget } from '../db/agents'
+import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
 import { userRepo } from '../db/users'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import {
@@ -127,8 +127,71 @@ interface ExternalTarget {
 }
 
 export const agentService = {
-  list(userId: string): AgentDto[] {
-    return agentRepo.list(userId).map(toDto)
+  /**
+   * Local agents (shared, default scope) + the active profile's remote agents.
+   * When the active profile is the default user, the merge collapses to a
+   * single `list(defaultUserId)` call. Remote agents have their `enabled` flag
+   * overlaid from {@link agentOverrideRepo} so the user's manual toggle wins.
+   */
+  listMerged(defaultUserId: string, profileUserId: string): AgentDto[] {
+    const local = agentRepo.list(defaultUserId).filter((a) => a.source === 'local')
+    const remoteRows =
+      profileUserId === defaultUserId
+        ? agentRepo.list(defaultUserId).filter((a) => a.source === 'remote')
+        : agentRepo.list(profileUserId).filter((a) => a.source === 'remote')
+
+    const overrides = new Map(
+      agentOverrideRepo.listForUser(profileUserId).map((o) => [o.agentId, o.enabled])
+    )
+    const remote = remoteRows.map((row) => {
+      const override = overrides.get(row.id)
+      return override === undefined ? row : { ...row, enabled: override }
+    })
+
+    return [...local, ...remote].map(toDto)
+  },
+
+  /**
+   * Resolve an agent across the dual scopes used by the new chat surface:
+   * remote agents live in the active profile, everything else in the default
+   * (shared) scope. Returns the row plus the userId that owns it so callers
+   * can pass it into the user-scoped service methods.
+   */
+  findAgent(
+    defaultUserId: string,
+    profileUserId: string,
+    agentId: string
+  ): { row: AgentRow; userId: string } | null {
+    if (agentId.startsWith(REMOTE_ID_PREFIX)) {
+      const row = agentRepo.getOwned(profileUserId, agentId)
+      return row ? { row, userId: profileUserId } : null
+    }
+    const row = agentRepo.getOwned(defaultUserId, agentId)
+    return row ? { row, userId: defaultUserId } : null
+  },
+
+  /**
+   * Toggle the enabled flag for an agent. Local (default-scope) agents update
+   * the row directly; remote (sync-managed) agents write to the per-profile
+   * {@link agentOverrideRepo} so the manual choice survives subsequent syncs.
+   */
+  setEnabled(
+    defaultUserId: string,
+    profileUserId: string,
+    agentId: string,
+    enabled: boolean
+  ): void {
+    if (agentId.startsWith(REMOTE_ID_PREFIX)) {
+      const row = agentRepo.getOwned(profileUserId, agentId)
+      if (!row) throw new AgentError('not_found', 'Agent not found')
+      agentOverrideRepo.set(profileUserId, agentId, enabled)
+      logger.info('agent enabled flag set', { agentId, enabled, scope: 'override' })
+      return
+    }
+    const existing = agentRepo.getOwned(defaultUserId, agentId)
+    if (!existing) throw new AgentError('not_found', 'Agent not found')
+    agentRepo.update(defaultUserId, agentId, { enabled })
+    logger.info('agent enabled flag set', { agentId, enabled, scope: 'local' })
   },
 
   /**

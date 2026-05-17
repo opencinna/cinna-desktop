@@ -1,4 +1,5 @@
-import { getCurrentUserId, getLastUserId } from '../auth/session'
+import { getLastUserId } from '../auth/session'
+import { getProfileScopeUserId } from '../auth/scope'
 import { abortCinnaOAuthFlow } from '../auth/cinna-oauth'
 import { authService, UserDto } from '../services/authService'
 import { ipcErrorShape } from '../errors'
@@ -13,7 +14,7 @@ export function registerAuthHandlers(): void {
 
   ipcHandle(
     'auth:get-current',
-    async (): Promise<UserDto | null> => authService.getCurrent(getCurrentUserId())
+    async (): Promise<UserDto | null> => authService.getCurrent(getProfileScopeUserId())
   )
 
   ipcHandle('auth:get-startup', async () => authService.getStartup(getLastUserId()))

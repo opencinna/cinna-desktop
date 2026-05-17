@@ -1,5 +1,5 @@
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { providerService } from '../services/providerService'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
@@ -7,7 +7,7 @@ import { ipcHandle } from './_wrap'
 export function registerProviderHandlers(): void {
   ipcHandle('provider:list', async () => {
     userActivation.requireActivated()
-    return providerService.list(getCurrentUserId())
+    return providerService.list(getSettingsScopeUserId())
   })
 
   ipcHandle(
@@ -25,14 +25,14 @@ export function registerProviderHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = providerService.upsert(getCurrentUserId(), data)
+      const { id } = providerService.upsert(getSettingsScopeUserId(), data)
       return { id, success: true }
     }
   )
 
   ipcHandle('provider:delete', async (_event, providerId: string) => {
     userActivation.requireActivated()
-    providerService.delete(getCurrentUserId(), providerId)
+    providerService.delete(getSettingsScopeUserId(), providerId)
     return { success: true }
   })
 
@@ -42,7 +42,7 @@ export function registerProviderHandlers(): void {
   ipcHandle('provider:test', async (_event, providerId: string) => {
     userActivation.requireActivated()
     try {
-      const models = await providerService.test(getCurrentUserId(), providerId)
+      const models = await providerService.test(getSettingsScopeUserId(), providerId)
       return { success: true as const, models }
     } catch (err) {
       const e = ipcErrorShape(err)

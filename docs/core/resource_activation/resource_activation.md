@@ -18,13 +18,18 @@ All app resources (LLM adapters, MCP connectors, user data) are scoped to the ac
 
 ### Account-Scoped Data Model
 
-Every data table in the app has a `userId` column. Users cannot see or modify each other's data — all queries are filtered by the active user ID. This applies to:
+Every data table in the app has a `userId` column, but it is filtered along one of two scopes — see [Settings Scope](../settings_scope/settings_scope.md):
 
-- **Chats & messages** — conversations, message history, trash
-- **LLM providers** — API keys, model selection, default provider
-- **MCP servers** — server configs, OAuth tokens, connection state
-- **Agents** — A2A agent registrations, access tokens, card data
-- **Chat modes** — preset configurations bundling provider + MCP servers
+- **Default scope** (`userId = '__default__'`) — shared across profiles:
+  - **LLM providers** — API keys, model selection, default provider
+  - **MCP servers** — server configs, OAuth tokens, connection state
+  - **Chat modes** — preset configurations bundling provider + MCP servers
+  - **Local agents** — manually-registered A2A agents
+- **Profile scope** (`userId = activeUserId`) — per-profile, swapped on user switch:
+  - **Chats & messages** — conversations, message history, trash
+  - **Remote agents** — agents synced from a Cinna account
+  - **Agent overrides** — per-profile enable/disable of remote agents
+  - **Cinna OAuth tokens** — stored on the user row
 
 ### Startup Lifecycle
 
@@ -68,8 +73,9 @@ Renderer: AuthGate → auth:get-startup
 
 When switching users (via UserMenu or login), the activation cycle repeats:
 1. Previous user's adapters cleared, MCP connections disconnected
-2. New user's providers loaded from DB
-3. All data queries refetch for the new user's context
+2. Default-scope providers reloaded (same set across profiles — see [Settings Scope](../settings_scope/settings_scope.md))
+3. Remote-agent sync starts for the new profile if it's a Cinna account
+4. All profile-scoped data queries (chats, remote agents) refetch for the new user's context
 
 ### Logout
 
@@ -93,6 +99,7 @@ Deactivation (used when deleting the current user) is different from logout:
 
 ## Integration Points
 
+- **[Settings Scope](../settings_scope/settings_scope.md)** — defines which resources live in Default vs Profile scope and how reload routes them
 - **[User Accounts](../../auth/user_accounts/user_accounts.md)** — authentication flow, session management, user CRUD
 - **[Adapters](../../llm/adapters/adapters.md)** — LLM provider lifecycle controlled by activation
 - **[Connections](../../mcp/connections/connections.md)** — MCP server connections controlled by activation

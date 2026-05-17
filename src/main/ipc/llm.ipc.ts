@@ -1,6 +1,6 @@
 import { ipcMain } from 'electron'
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getProfileScopeUserId } from '../auth/scope'
 import { chatStreamingService } from '../services/chatStreamingService'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
@@ -31,7 +31,7 @@ export function registerLlmHandlers(): void {
 
     try {
       await chatStreamingService.stream({
-        userId: getCurrentUserId(),
+        userId: getProfileScopeUserId(),
         chatId,
         userContent,
         port

@@ -10,6 +10,7 @@ import {
 import { storeCinnaTokens, clearCinnaTokens } from '../auth/cinna-tokens'
 import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 
 const logger = createLogger('auth')
 
@@ -218,7 +219,7 @@ export const authService = {
 
   async logout(): Promise<void> {
     userActivation.clearUnlocks()
-    await userActivation.activate('__default__')
+    await userActivation.activate(DEFAULT_USER_ID)
     logger.info('user.logout')
   },
 
@@ -227,7 +228,7 @@ export const authService = {
     if (!row) {
       throw new AuthError('not_found', 'User not found')
     }
-    if (input.userId === '__default__') {
+    if (input.userId === DEFAULT_USER_ID) {
       throw new AuthError('default_user_immutable', 'Cannot modify default user')
     }
 
@@ -251,7 +252,7 @@ export const authService = {
   },
 
   async deleteAccount(input: DeleteAccountInput): Promise<void> {
-    if (input.userId === '__default__') {
+    if (input.userId === DEFAULT_USER_ID) {
       throw new AuthError('default_user_immutable', 'Cannot delete default user')
     }
     const row = userRepo.get(input.userId)
@@ -283,15 +284,15 @@ export const authService = {
     logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
 
     if (wasCurrent) {
-      await userActivation.activate('__default__')
+      await userActivation.activate(DEFAULT_USER_ID)
     }
   },
 
   async getStartup(lastUserId: string): Promise<StartupResult> {
     const row = userRepo.get(lastUserId)
     if (!row) {
-      await userActivation.activate('__default__')
-      const defaultUser = userRepo.get('__default__')
+      await userActivation.activate(DEFAULT_USER_ID)
+      const defaultUser = userRepo.get(DEFAULT_USER_ID)
       return {
         needsLogin: false,
         user: defaultUser ? toDto(defaultUser) : undefined

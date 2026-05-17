@@ -1,17 +1,17 @@
-import { getCurrentUserId } from '../auth/session'
 import { userActivation } from '../auth/activation'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { chatModeService } from '../services/chatModeService'
 import { ipcHandle } from './_wrap'
 
 export function registerChatModeHandlers(): void {
   ipcHandle('chatmode:list', async () => {
     userActivation.requireActivated()
-    return chatModeService.list(getCurrentUserId())
+    return chatModeService.list(getSettingsScopeUserId())
   })
 
   ipcHandle('chatmode:get', async (_event, id: string) => {
     userActivation.requireActivated()
-    return chatModeService.get(getCurrentUserId(), id)
+    return chatModeService.get(getSettingsScopeUserId(), id)
   })
 
   ipcHandle(
@@ -28,14 +28,14 @@ export function registerChatModeHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
-      const { id } = chatModeService.upsert(getCurrentUserId(), data)
+      const { id } = chatModeService.upsert(getSettingsScopeUserId(), data)
       return { id, success: true }
     }
   )
 
   ipcHandle('chatmode:delete', async (_event, id: string) => {
     userActivation.requireActivated()
-    chatModeService.delete(getCurrentUserId(), id)
+    chatModeService.delete(getSettingsScopeUserId(), id)
     return { success: true }
   })
 }

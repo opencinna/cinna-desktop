@@ -118,6 +118,25 @@ export const agents = sqliteTable('agents', {
     .$defaultFn(() => new Date())
 })
 
+/**
+ * Per-profile enable/disable preference for synced agents. Sync owns the
+ * `agents` row content (name, skills, etc.), so user-controllable state is
+ * kept here — survives sync without being clobbered, and only affects whether
+ * the agent appears in selectors.
+ */
+export const agentOverrides = sqliteTable(
+  'agent_overrides',
+  {
+    userId: text('user_id').notNull(),
+    agentId: text('agent_id').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.agentId] })]
+)
+
 export const a2aSessions = sqliteTable('a2a_sessions', {
   id: text('id').primaryKey(),
   chatId: text('chat_id')

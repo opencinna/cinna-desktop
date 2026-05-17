@@ -3,6 +3,7 @@ import { User, Cloud, HardDrive, Trash2, ChevronDown, ChevronUp, Lock, Unlock, A
 import { useUsers, useUpdateUser, useDeleteUser } from '../../hooks/useAuth'
 import { useAuthStore } from '../../stores/auth.store'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const inputClass =
   'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
@@ -34,7 +35,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
   const updateUser = useUpdateUser()
   const deleteUser = useDeleteUser()
 
-  const isDefault = user.id === '__default__'
+  const isDefault = user.id === DEFAULT_USER_ID
   const isCinna = user.type === 'cinna_user'
 
   const handleSave = async (): Promise<void> => {

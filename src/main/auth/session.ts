@@ -3,6 +3,7 @@ import { join } from 'path'
 import { readFileSync, writeFileSync } from 'fs'
 import { pbkdf2Sync, randomBytes } from 'crypto'
 import { userRepo } from '../db/users'
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 
 const ITERATIONS = 100_000
 const KEY_LENGTH = 64
@@ -31,7 +32,7 @@ const GUEST_ALIASES = [
   'Wanderer'
 ]
 
-let currentUserId: string = '__default__'
+let currentUserId: string = DEFAULT_USER_ID
 
 /** Get the currently active user ID */
 export function getCurrentUserId(): string {
@@ -62,9 +63,9 @@ export function loadLastUser(): string {
   try {
     const filePath = getSessionFilePath()
     const data = JSON.parse(readFileSync(filePath, 'utf-8'))
-    return data.lastUserId || '__default__'
+    return data.lastUserId || DEFAULT_USER_ID
   } catch {
-    return '__default__'
+    return DEFAULT_USER_ID
   }
 }
 
@@ -72,7 +73,7 @@ export function loadLastUser(): string {
 export function initSession(): void {
   // Don't auto-set currentUserId here; the renderer will call auth:get-startup
   // which validates password requirements before activating the user session.
-  currentUserId = '__default__'
+  currentUserId = DEFAULT_USER_ID
   rotateGuestAlias()
 }
 

@@ -24,6 +24,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Default User** | Built-in guest account (`__default__`) with no password, always present |
 | **Cinna Account** | A user account linked to a remote Cinna server (cloud or self-hosted) via OAuth 2.0 + PKCE |
 | **Cinna Server** | Remote service (cloud at `opencinna.io` or self-hosted) providing agent orchestration and future features |
+| **Default Scope** | Shared storage under `__default__` user id — LLM providers, MCP servers, chat modes, and local agents live here and are visible from every profile |
+| **Profile Scope** | Per-account storage under the active user id — chats, remote agents, agent overrides, and Cinna tokens live here and swap on user switch |
+| **Agent Override** | Per-profile boolean (`agent_overrides` table) that overlays a synced agent's `enabled` flag so user toggles survive resync |
 
 ## Domain Map
 
@@ -42,6 +45,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### Core
 - [Resource Activation](core/resource_activation/resource_activation.md) — Account-scoped resource lifecycle: services only run after user authentication
+- [Settings Scope](core/settings_scope/settings_scope.md) — Default (shared) vs Profile (per-account) scope: which settings follow the user across profiles, which stay account-bound
 
 ### Auth
 - [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with optional password auth, user-scoped data isolation, session management

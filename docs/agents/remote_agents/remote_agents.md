@@ -16,6 +16,7 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 | **Dynamic JWT** | Remote agents authenticate using the user's Cinna JWT fetched fresh at send time, not a stored per-agent token |
 | **Entrypoint Prompt** | A suggested first-message prompt provided by the backend for a remote agent |
 | **Example Prompts** | A list of clickable prompt suggestions provided by the backend for a remote agent |
+| **Agent Override** | A row in `agent_overrides` recording a per-profile enable/disable toggle for a remote agent. Sync never touches this table — see [Settings Scope](../../core/settings_scope/settings_scope.md). |
 
 ## User Stories / Flows
 
@@ -28,6 +29,14 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 5. The renderer's `useAgents()` hook listens for this event and auto-invalidates the TanStack Query cache, causing an immediate re-fetch
 6. Agents appear in the chat agent selector and Settings > Agents under "Remote Agents" — no page refresh needed
 7. Periodic sync runs every 5 minutes to keep the list current; each periodic sync also triggers the same event-driven UI refresh
+
+### Toggle a Remote Agent
+
+1. User opens Settings → Profile → Agents
+2. Clicks the toggle on a remote agent card
+3. UI flips optimistically; main process writes a row to `agent_overrides` keyed by `(profileUserId, agentId)` via `agent:set-enabled` (see `agentService.setEnabled`)
+4. Agent vanishes from the chat agent selector
+5. Future syncs upsert agent metadata but never touch `agent_overrides` — the toggle persists across syncs, app restarts, and re-appearances of the agent
 
 ### Manual Sync
 
@@ -58,14 +67,15 @@ When remote agents are present, the agent selector dropdown groups agents into s
 
 - **Cinna-only feature** — Remote agent sync only activates for `cinna_user` accounts with a valid `cinnaServerUrl`
 - **Deterministic IDs** — Remote agents use `remote:{target_type}:{target_id}` as their local ID, ensuring stable identity across syncs
-- **Sync-managed lifecycle** — Remote agents cannot be manually deleted; they appear/disappear based on backend state. Users can only enable/disable them locally
+- **Sync-managed lifecycle** — Remote agents cannot be manually deleted; they appear/disappear based on backend state. Users can only enable/disable them locally via the `agent_overrides` table (sync never writes there)
+- **Override survives re-add** — `agent_overrides` has no FK / no cascade against `agents.id`; if a remote agent is removed and later re-synced under the same id, the prior override re-applies on the next list. Per-user cleanup happens in `userRepo.deleteWithCascade` only
 - **Dynamic JWT auth** — Remote agents never store an access token in `accessTokenEncrypted`. At send time, the system detects `source='remote'` and fetches a fresh JWT via `getCinnaAccessToken()`. This avoids stale tokens and leverages the existing token refresh mechanism
 - **Graceful degradation** — If the backend is unreachable during sync (network error, 4xx/5xx), the sync silently fails and existing remote agents remain unchanged
 - **Stale agent removal** — Remote agents that no longer appear in the backend response are deleted from the local DB during sync
 - **No card pre-fetch** — Remote agents are synced with `cardUrl` but without pre-fetching the agent card. The card and protocol endpoint are auto-resolved on first message send; the result is cached so subsequent messages skip the card fetch
 - **Event-driven UI refresh** — After each sync (initial or periodic), the main process broadcasts `agents:remote-sync-complete` to the renderer, which auto-invalidates the agents query cache for immediate UI updates
 - **Periodic sync** — A 5-minute interval timer runs while a Cinna user is active; it stops on deactivation
-- **Settings UI** — Remote agents show a "Remote" badge, hide the delete button, and hide the access token section (JWT is managed automatically)
+- **Settings UI** — Remote agents show a "Remote" badge, hide the delete button, and hide the access token section (JWT is managed automatically). They live in the sidebar's "Profile {name}" group, separate from the Default group's local agents — see [Settings](../../ui/settings/settings.md)
 
 ## Architecture Overview
 
@@ -116,3 +126,4 @@ Agent Selector (categorized):
 - **[Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)** — JWT obtained via `getCinnaAccessToken()` which handles token refresh and rotation. Sync triggers on Cinna user activation
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — Remote sync starts on `activate()` and stops on `deactivate()`, following the same resource lifecycle gate as LLM/MCP providers
 - **External Agent Access API** — Backend surface at `/api/v1/external/` providing agent discovery (`GET /agents`) and per-target A2A endpoints (`/a2a/{target_type}/{target_id}/`)
+- **[Settings Scope](../../core/settings_scope/settings_scope.md)** — defines why remote agents live in Profile scope and how `agent_overrides` overlays the synced `enabled` flag in `agentService.listMerged`

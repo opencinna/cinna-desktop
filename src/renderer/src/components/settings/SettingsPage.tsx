@@ -14,6 +14,7 @@ const sectionTitles = {
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
   development: 'Development',
+  'profile-agents': 'Profile Agents',
   trash: 'Trash'
 } as const
 
@@ -26,7 +27,10 @@ export function SettingsPage(): React.JSX.Element {
         <h1 className="text-base font-semibold mb-4">{sectionTitles[settingsTab]}</h1>
         {settingsTab === 'chats' && <ChatModesSection key="chats" />}
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
-        {settingsTab === 'agents' && <AgentsSettingsSection key="agents" />}
+        {settingsTab === 'agents' && <AgentsSettingsSection key="agents" scope="default" />}
+        {settingsTab === 'profile-agents' && (
+          <AgentsSettingsSection key="profile-agents" scope="profile" />
+        )}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
         {settingsTab === 'accounts' && <UserAccountsSection key="accounts" />}
         {settingsTab === 'development' && <DevelopmentSettingsSection key="development" />}

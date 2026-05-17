@@ -59,6 +59,40 @@ export function useUpsertAgent() {
   })
 }
 
+type AgentRow = Awaited<ReturnType<typeof window.api.agents.list>>[number]
+
+export function useSetAgentEnabled() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ agentId, enabled }: { agentId: string; enabled: boolean }) => {
+      const res = await window.api.agents.setEnabled(agentId, enabled)
+      if (!res.success) throw new Error(res.error ?? 'Failed to update agent')
+      return res
+    },
+    // Optimistically flip the cached agent so the toggle moves immediately;
+    // roll back if the IPC fails.
+    onMutate: async ({ agentId, enabled }) => {
+      await queryClient.cancelQueries({ queryKey: ['agents'] })
+      const previous = queryClient.getQueryData<AgentRow[]>(['agents'])
+      if (previous) {
+        queryClient.setQueryData<AgentRow[]>(
+          ['agents'],
+          previous.map((a) => (a.id === agentId ? { ...a, enabled } : a))
+        )
+      }
+      return { previous }
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) {
+        queryClient.setQueryData(['agents'], context.previous)
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
+  })
+}
+
 export function useDeleteAgent() {
   const queryClient = useQueryClient()
   return useMutation({

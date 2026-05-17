@@ -2,7 +2,7 @@ import { ipcMain } from 'electron'
 import { nanoid } from 'nanoid'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
-import { a2aSessionRepo, agentRepo } from '../db/agents'
+import { a2aSessionRepo } from '../db/agents'
 import {
   createA2AClient,
   buildSendParams,
@@ -21,7 +21,7 @@ import {
 } from '../agents/streamPartsAccumulator'
 import { agentService } from '../services/agentService'
 import { userActivation } from '../auth/activation'
-import { getCurrentUserId } from '../auth/session'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
@@ -80,9 +80,14 @@ export function registerA2AHandlers(): void {
       error?: string
     }> => {
       userActivation.requireActivated()
-      const userId = getCurrentUserId()
       try {
-        const { card } = await agentService.testAgent(userId, agentId)
+        const located = agentService.findAgent(
+          getSettingsScopeUserId(),
+          getProfileScopeUserId(),
+          agentId
+        )
+        if (!located) throw new AgentError('not_found', 'Agent not found')
+        const { card } = await agentService.testAgent(located.userId, agentId)
         return { success: true, card: card as unknown as Record<string, unknown> }
       } catch (err) {
         const e = ipcErrorShape(err)
@@ -104,7 +109,13 @@ export function registerA2AHandlers(): void {
     ): Promise<{ success: boolean; commands: CliCommand[]; error?: string }> => {
       userActivation.requireActivated()
       try {
-        const commands = await agentService.listCliCommands(getCurrentUserId(), agentId)
+        const located = agentService.findAgent(
+          getSettingsScopeUserId(),
+          getProfileScopeUserId(),
+          agentId
+        )
+        if (!located) throw new AgentError('not_found', 'Agent not found')
+        const commands = await agentService.listCliCommands(located.userId, agentId)
         return { success: true, commands }
       } catch (err) {
         const e = ipcErrorShape(err)
@@ -125,8 +136,7 @@ export function registerA2AHandlers(): void {
   // Look up the A2A session for a chat (used by renderer to detect agent chats)
   ipcHandle('agent:get-session', async (_event, chatId: string) => {
     userActivation.requireActivated()
-    const userId = getCurrentUserId()
-    if (!chatRepo.getOwned(userId, chatId)) return null
+    if (!chatRepo.getOwned(getProfileScopeUserId(), chatId)) return null
     return a2aSessionRepo.getByChat(chatId) ?? null
   })
 
@@ -146,9 +156,9 @@ export function registerA2AHandlers(): void {
 
     port.start()
 
-    const userId = getCurrentUserId()
+    const profileUserId = getProfileScopeUserId()
 
-    if (!chatRepo.getOwned(userId, chatId)) {
+    if (!chatRepo.getOwned(profileUserId, chatId)) {
       const err = 'Chat not found'
       logger.error(err, { agentId, chatId })
       port.postMessage({ type: 'error', error: err })
@@ -156,8 +166,9 @@ export function registerA2AHandlers(): void {
       return
     }
 
-    const agent = agentRepo.getOwned(userId, agentId)
-    if (!agent || !agent.cardUrl) {
+    const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
+    const agent = located?.row
+    if (!located || !agent || !agent.cardUrl) {
       const err = 'Agent not found or not configured'
       logger.error(err, { agentId, chatId, hasAgent: !!agent, cardUrl: agent?.cardUrl })
       port.postMessage({ type: 'error', error: err })
@@ -165,10 +176,11 @@ export function registerA2AHandlers(): void {
       port.close()
       return
     }
+    const agentOwnerId = located.userId
 
     let endpointUrl: string
     try {
-      endpointUrl = await agentService.resolveEndpointIfNeeded(userId, agent)
+      endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
     } catch (err) {
       const errMsg =
         err instanceof AgentError
@@ -190,7 +202,7 @@ export function registerA2AHandlers(): void {
     messageRepo.saveUser({ chatId, content: userContent })
 
     try {
-      const accessToken = await agentService.resolveAccessToken(userId, agent)
+      const accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
 
       const client = await createA2AClient(endpointUrl, agent.cardUrl, accessToken)
       activeRequest.client = client

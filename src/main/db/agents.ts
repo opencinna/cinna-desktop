@@ -1,11 +1,12 @@
 import { and, eq, isNotNull } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
-import { agents, a2aSessions } from './schema'
+import { agents, a2aSessions, agentOverrides } from './schema'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 export type AgentRow = typeof agents.$inferSelect
 export type A2ASessionRow = typeof a2aSessions.$inferSelect
+export type AgentOverrideRow = typeof agentOverrides.$inferSelect
 
 export interface CreateAgentInput {
   id?: string
@@ -273,6 +274,45 @@ export const agentRepo = {
 
       return { synced, removed }
     })
+  }
+}
+
+/**
+ * Per-profile enable/disable overrides for sync-managed agents. Sync owns the
+ * `agents` row, so we keep the user's manual toggle here — survives sync
+ * rewrites and only impacts whether the agent appears in selectors.
+ */
+export const agentOverrideRepo = {
+  listForUser(userId: string): AgentOverrideRow[] {
+    return getDb()
+      .select()
+      .from(agentOverrides)
+      .where(eq(agentOverrides.userId, userId))
+      .all()
+  },
+
+  get(userId: string, agentId: string): AgentOverrideRow | undefined {
+    return getDb()
+      .select()
+      .from(agentOverrides)
+      .where(and(eq(agentOverrides.userId, userId), eq(agentOverrides.agentId, agentId)))
+      .get()
+  },
+
+  set(userId: string, agentId: string, enabled: boolean): void {
+    const db = getDb()
+    const existing = this.get(userId, agentId)
+    const now = new Date()
+    if (existing) {
+      db.update(agentOverrides)
+        .set({ enabled, updatedAt: now })
+        .where(and(eq(agentOverrides.userId, userId), eq(agentOverrides.agentId, agentId)))
+        .run()
+    } else {
+      db.insert(agentOverrides)
+        .values({ userId, agentId, enabled, updatedAt: now })
+        .run()
+    }
   }
 }
 

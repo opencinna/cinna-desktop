@@ -2,6 +2,7 @@ import { User } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUsers, useLogin } from '../../hooks/useAuth'
 import { PasswordUnlockForm } from './PasswordUnlockForm'
+import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 export function LoginScreen(): React.JSX.Element {
   const pendingUserId = useAuthStore((s) => s.pendingUserId)
@@ -13,7 +14,7 @@ export function LoginScreen(): React.JSX.Element {
   const pendingUser = users?.find((u) => u.id === pendingUserId)
 
   const handleSwitchToDefault = async (): Promise<void> => {
-    await login.mutateAsync({ userId: '__default__' })
+    await login.mutateAsync({ userId: DEFAULT_USER_ID })
     setNeedsPassword(false)
     setPendingUserId(null)
   }

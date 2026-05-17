@@ -8,7 +8,15 @@ export type SettingsMenu =
   | 'agents'
   | 'accounts'
   | 'development'
+  | 'profile-agents'
   | 'trash'
+
+/**
+ * Tabs that live in the "Profile" sidebar group — only valid when the active
+ * profile renders that group (currently: Cinna users). Switching to a profile
+ * without them should snap the sidebar back to a default-scope tab.
+ */
+export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = ['profile-agents']
 export type Theme = 'dark' | 'light'
 
 const VERBOSE_KEY = 'cinna-verbose-mode'
