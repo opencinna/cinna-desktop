@@ -10,7 +10,9 @@
 | `src/renderer/src/components/chat/AgentMentionPopup.tsx` | Thin wrapper for the `@` trigger. Binds `AgentData` and renders `Bot` icon, `Agents` header, `w-72` width, `agent.protocol` as the meta tag, `agent.description` as the truncated secondary line. |
 | `src/renderer/src/components/chat/CliCommandPopup.tsx` | Thin wrapper for the `/` trigger. Binds `CliCommand`, renders `Terminal` icon, `Agent Commands` header, `w-80` width, `cmd.description` as a 2-line clamped secondary. |
 | `src/renderer/src/components/chat/ExamplePromptPopup.tsx` | Thin wrapper for the `#` trigger. Binds `ExamplePrompt`, renders `Hash` icon, `Example Prompts` header, `w-80` width, `prompt.full` as a 2-line clamped secondary. |
-| `src/renderer/src/components/chat/ChatInput.tsx` | Owns the trigger-token state machine (`triggerChar`, `triggerFilter`, `triggerStart`, `triggerIndex`), the three filter `useMemo`s, the popup-open gates, and the shared keyboard handler. The shared textarea carries `role="combobox"` and `aria-controls` / `aria-activedescendant` referring to `${listboxId}-opt-${triggerIndex}`. |
+| `src/renderer/src/components/chat/ChatConfigMenu.tsx` | The `+`-button consumer for the chat-modes selector. Renders its own trigger button — clicking opens `MentionPopup<ChatModeData>` positioned above the button itself, with `renderIcon` supplying a per-mode colored dot (the mode's preset border color). Open state is internal by default but switches to controlled when `open` / `onOpenChange` props are supplied. Mouse-only — no keyboard navigation. |
+| `src/renderer/src/components/chat/ChatInput.tsx` | Owns the trigger-token state machine (`triggerChar`, `triggerFilter`, `triggerStart`, `triggerIndex`), the three filter `useMemo`s, the popup-open gates, and the shared keyboard handler. The shared textarea carries `role="combobox"` and `aria-controls` / `aria-activedescendant` referring to `${listboxId}-opt-${triggerIndex}`. Also owns the `~` sole-character shortcut: detects the empty→`~` transition, fires the parent's `onOpenRequest`, and (when open AND textarea still holds the lone `~`) renders `MentionPopup<ChatModeData>` above the textarea, owns the local kbd-nav `tildeIndex`, and routes Arrow/Enter/Tab/Esc into the popup the same way it does for `@` / `#` / `/`. Exposes `clearInput()` on its imperative handle so the parent can wipe the `~` after a mode is selected. |
+| `src/renderer/src/components/layout/MainArea.tsx` | Owns two distinct open states — `buttonModePopupOpen` (passed to `ChatConfigMenu`) and `tildeModePopupOpen` (passed to `ChatInput.tildeModePopup.open`) — so that the popup renders above the right anchor for each entry point and only one is ever visible. Provides the `renderIcon` / `composeSecondary` callbacks that keep `ChatInput` agnostic of chat-mode visuals. Wraps mode selection with via-tilde variants that also `chatInputRef.clearInput()` the leftover `~`. |
 | `src/renderer/src/assets/main.css` | Theme tokens for `--color-accent` (used by the popup tint, border, and selected-item gradient) and the page-level `data-theme` attribute switch that the popup's light-theme overrides target. |
 
 ## Component API — `MentionPopup<T>`
@@ -25,7 +27,8 @@
 | `anchorRef?` | `RefObject<HTMLElement>` | Element treated as "inside" for outside-click detection — typically the chat textarea. |
 | `header` | `string` | Uppercase section label rendered above the list. |
 | `ariaLabel` | `string` | `aria-label` on the `<ul role="listbox">`. |
-| `icon` | `LucideIcon` | Icon component rendered at the start of each row. |
+| `icon?` | `LucideIcon` | Lucide icon rendered at the start of each row. Ignored when `renderIcon` is set. |
+| `renderIcon?` | `(item, { isActive }) => ReactNode` | Custom per-item icon (e.g. a colored dot keyed off the item's data). Takes precedence over `icon`. |
 | `width?` | `string` | Tailwind width class for the container. Defaults to `w-72`. |
 | `getKey(item, i)` | `string` | React key extractor — wrappers compose stable keys (e.g. `${cmd.slug}-${i}`). |
 | `getPrimary(item)` | `string` | Bold primary label on each row. |

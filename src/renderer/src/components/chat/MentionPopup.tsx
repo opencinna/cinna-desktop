@@ -13,7 +13,10 @@ export interface MentionPopupProps<T> {
 
   header: string
   ariaLabel: string
-  icon: LucideIcon
+  /** Lucide icon rendered at the start of each row. Ignored if `renderIcon` is set. */
+  icon?: LucideIcon
+  /** Custom per-item icon (e.g. a colored dot). Takes precedence over `icon`. */
+  renderIcon?: (item: T, opts: { isActive: boolean }) => React.ReactNode
   /** Tailwind width class for the popup container. */
   width?: string
   getKey: (item: T, index: number) => string
@@ -53,6 +56,7 @@ export function MentionPopup<T>({
   header,
   ariaLabel,
   icon: Icon,
+  renderIcon,
   width = 'w-72',
   getKey,
   getPrimary,
@@ -116,10 +120,14 @@ export function MentionPopup<T>({
                 }`}
               >
                 <div className="flex items-center gap-1.5">
-                  <Icon
-                    size={12}
-                    className={isActive ? ACTIVE_TEXT : 'text-[var(--color-text-muted)]'}
-                  />
+                  {renderIcon
+                    ? renderIcon(item, { isActive })
+                    : Icon && (
+                        <Icon
+                          size={12}
+                          className={isActive ? ACTIVE_TEXT : 'text-[var(--color-text-muted)]'}
+                        />
+                      )}
                   <span
                     className={`text-xs font-medium ${isActive ? ACTIVE_TEXT : 'text-[var(--color-text)]'}`}
                   >

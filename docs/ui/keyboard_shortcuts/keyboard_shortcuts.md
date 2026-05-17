@@ -10,6 +10,7 @@ Catalog of every keyboard shortcut exposed by the app — both global (window-le
 - **Context shortcut** — Handled in a React component via `onKeyDown` on a specific element, or a `window.addEventListener('keydown', ...)` gated on some open-state flag (e.g. `logsOpen`, `agentStatusOpen`). Only fires when that context is active.
 - **Chord shortcut** — A double-press within a short time window (currently only ESC–ESC at 400 ms). Tracked via a `useRef` timestamp so consecutive presses can be correlated without re-rendering.
 - **Trigger character** — Not a keyboard shortcut per se, but a single-character input in the chat textarea (`@`, `#`, `/`) that opens a popup. Documented here for completeness because the popup then hijacks certain keys (`↑ ↓ Enter Tab Esc`).
+- **Sole-character shortcut** — `~` typed into an empty chat input opens the chat-modes selector (`ChatConfigMenu`). Unlike trigger characters, `~` is not a filter — it is consumed as a shortcut only when it is the lone character. Typing past it commits to a literal `~` and closes the popup.
 
 ## Shortcut Registry
 
@@ -37,6 +38,18 @@ Typing `@` opens the agent mention popup (new-chat screen only). Typing `#` open
 | `↓` / `↑` | Move selection within the popup. |
 | `Enter` / `Tab` | Accept the highlighted item. |
 | `Esc` | Close the popup without selecting. Also resets any pending double-ESC timer so it cannot chain with a later stray press. |
+
+### Chat input — chat-modes shortcut (`~`)
+
+Typing `~` into an empty input opens the chat-modes picker above the textarea (same anchoring as the `@` / `#` / `/` popups — distinct from the `+`-button-anchored popup owned by `ChatConfigMenu`). While the popup is in this state (textarea still holds the lone `~`):
+
+| Combo | Action |
+|-------|--------|
+| `↓` / `↑` | Move selection within the popup. |
+| `Enter` / `Tab` | Apply the highlighted mode AND wipe the `~` from the textarea. |
+| `Esc` | Closes the popup, leaves the `~` in the textarea. |
+| Any other character | Closes the popup and is appended to the input — the user is interpreted as having meant to type `~`. |
+| Click a mode | Same as Enter — applies AND wipes the `~`. |
 
 ### Logs overlay (`LogsOverlay`)
 

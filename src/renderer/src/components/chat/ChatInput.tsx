@@ -10,7 +10,8 @@ import { CliCommandPopup } from './CliCommandPopup'
 import { useAgents } from '../../hooks/useAgents'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
-import type { ColorPreset } from '../../constants/chatModeColors'
+import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
+import { MentionPopup } from './MentionPopup'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/'
@@ -25,6 +26,22 @@ interface ChatInputProps {
   selectedAgent?: AgentData | null
   /** Fired when the user presses ESC twice in quick succession with no popup open. */
   onDoubleEscape?: () => void
+  /**
+   * Optional `~` sole-character shortcut that opens a chat-mode picker above
+   * the textarea (mirroring the @ / # / / popup positioning). When supplied,
+   * ChatInput owns the popup rendering, keyboard navigation, and Enter-to-send
+   * suppression — the parent only orchestrates open/close state and selection.
+   */
+  tildeModePopup?: {
+    open: boolean
+    modes: ChatModeData[]
+    activeId: string | null
+    onOpenRequest: () => void
+    onCancel: () => void
+    onSelect: (mode: ChatModeData) => void
+    renderIcon: (mode: ChatModeData) => React.ReactNode
+    composeSecondary?: (mode: ChatModeData) => string | null | undefined
+  }
 }
 
 const DOUBLE_ESC_WINDOW_MS = 400
@@ -51,10 +68,20 @@ function findTriggerToken(
 
 export interface ChatInputHandle {
   focus: () => void
+  clearInput: () => void
 }
 
 export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function ChatInput(
-  { chatId, onNewChat, leftSlot, modeColor, onSelectAgent, selectedAgent, onDoubleEscape },
+  {
+    chatId,
+    onNewChat,
+    leftSlot,
+    modeColor,
+    onSelectAgent,
+    selectedAgent,
+    onDoubleEscape,
+    tildeModePopup
+  },
   ref
 ) {
   const [input, setInput] = useState('')
@@ -63,8 +90,30 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const { data: chatData } = useChatDetail(chatId)
   const listboxId = useId()
 
+  // Local kbd-nav index for the `~` chat-mode popup. Reset to the active mode
+  // (or the first row) whenever the popup is freshly opened so navigation
+  // starts from a sensible spot.
+  const [tildeIndex, setTildeIndex] = useState(0)
+  const tildeOpen = tildeModePopup?.open ?? false
+  // `tildeActive` distinguishes a popup actually being driven by `~` (textarea
+  // still holds the lone "~") from any other reason the open prop is true.
+  const tildeActive = tildeOpen && input === '~'
+
+  useEffect(() => {
+    if (!tildeOpen || !tildeModePopup) return
+    const idx = tildeModePopup.activeId
+      ? tildeModePopup.modes.findIndex((m) => m.id === tildeModePopup.activeId)
+      : -1
+    setTildeIndex(idx >= 0 ? idx : 0)
+  }, [tildeOpen]) // eslint-disable-line react-hooks/exhaustive-deps
+
   useImperativeHandle(ref, () => ({
-    focus: () => textareaRef.current?.focus()
+    focus: () => textareaRef.current?.focus(),
+    clearInput: () => {
+      setInput('')
+      const el = textareaRef.current
+      if (el) el.style.height = 'auto'
+    }
   }))
 
   useEffect(() => {
@@ -207,6 +256,34 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Tilde-shortcut popup is in progress (open AND textarea still holds the
+    // lone "~"): route arrow/enter/tab/esc into the mode popup, identical to
+    // the @ / # / / popups.
+    if (tildeActive && tildeModePopup) {
+      const count = tildeModePopup.modes.length
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        if (count > 0) setTildeIndex((i) => (i + 1) % count)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (count > 0) setTildeIndex((i) => (i - 1 + count) % count)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const mode = tildeModePopup.modes[tildeIndex]
+        if (mode) tildeModePopup.onSelect(mode)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        tildeModePopup.onCancel()
+        return
+      }
+    }
+
     if (triggerChar && activeListLength > 0) {
       if (e.key === 'ArrowDown') {
         e.preventDefault()
@@ -253,11 +330,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
     const value = e.target.value
+    const prevValue = input
     setInput(value)
 
     const el = e.target
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+
+    // `~` shortcut — opens the mode popup only when it's the first and only
+    // character typed. Continuing to type closes the popup and leaves the `~`
+    // in place (the user meant to type it).
+    if (tildeModePopup) {
+      if (prevValue === '' && value === '~') {
+        tildeModePopup.onOpenRequest()
+      } else if (tildeOpen && prevValue === '~' && value !== '~') {
+        tildeModePopup.onCancel()
+      }
+    }
 
     const cursorPos = el.selectionStart
     const token = findTriggerToken(value, cursorPos)
@@ -314,6 +403,24 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           onClose={closeTrigger}
           listboxId={listboxId}
           anchorRef={textareaRef}
+        />
+      )}
+
+      {tildeActive && tildeModePopup && (
+        <MentionPopup<ChatModeData>
+          items={tildeModePopup.modes}
+          selectedIndex={tildeIndex}
+          onSelect={tildeModePopup.onSelect}
+          onClose={tildeModePopup.onCancel}
+          listboxId={`${listboxId}-tilde-modes`}
+          anchorRef={textareaRef}
+          header="Chat Modes"
+          ariaLabel="Chat modes"
+          width="w-72"
+          renderIcon={tildeModePopup.renderIcon}
+          getKey={(m) => m.id}
+          getPrimary={(m) => m.name}
+          getSecondary={tildeModePopup.composeSecondary}
         />
       )}
 

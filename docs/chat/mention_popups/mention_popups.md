@@ -31,9 +31,20 @@ Trigger-driven floating picker family that appears above the chat input when the
 1. User types `/`; popup lists `cinna.run.*` commands declared by the prompt-source agent's card.
 2. Selecting an entry replaces the `/token` with the invocation string (e.g. `/run:status`). No auto-send.
 
+### `~` — Chat mode picker (shortcut)
+
+1. User types `~` into an empty chat input. The chat-modes popup opens **above the textarea** (same anchoring as `@` / `#` / `/`) — distinct from the popup that opens above the `+` button when ChatConfigMenu is clicked.
+2. **Arrow Up / Down** navigates the mode list; **Enter** / **Tab** applies the highlighted mode AND wipes the `~` from the textarea.
+3. **Continuing to type a non-nav character**: the popup closes and the `~` stays in place — the user is interpreted as having meant to type the character.
+4. **Esc**: closes the popup, leaves the `~` in place.
+5. **Outside click**: closes the popup, leaves the `~` in place.
+6. **Backspace removing the `~`**: closes the popup.
+
+The trigger fires only when input transitions from empty to exactly `~` — `~` typed anywhere else (mid-text, after other characters) is just a regular character.
+
 ## Business Rules
 
-- **Gating** — `@` only opens before a chat exists (`!chatId`). `#` and `/` open whenever the source agent declares prompts or commands; gating is the parent's responsibility, not the popup's.
+- **Gating** — `@` only opens before a chat exists (`!chatId`). `#` and `/` open whenever the source agent declares prompts or commands; gating is the parent's responsibility, not the popup's. `~` opens only when the input transitions from empty to exactly `~` (sole-character rule) and the chat-modes feature has at least one mode available.
 - **Filter scope** — each picker chooses what fields match its filter token. Agents match name/protocol; example prompts match label/body; CLI commands match only the **signature** (`slug`, `command`) so typing `/status` does not pull in commands whose description happens to contain the word.
 - **Empty state** — popups render nothing when the filtered list is empty. The trigger state stays open so continued typing can re-populate it.
 - **Outside click** — closes the popup unless the click lands inside the textarea (anchor) or the popup itself.
@@ -43,13 +54,15 @@ Trigger-driven floating picker family that appears above the chat input when the
 ## Architecture Overview
 
 ```
-User keystroke
+User keystroke or click on selector trigger
   -> ChatInput (trigger-token state, filtered list, keyboard handling)
-    -> AgentMentionPopup | ExamplePromptPopup | CliCommandPopup  (thin wrapper)
-      -> MentionPopup<T>  (shared listbox shell, item layout, theming)
+       -> AgentMentionPopup | ExamplePromptPopup | CliCommandPopup  (thin wrapper)
+  -> ChatConfigMenu (mouse-driven `+` button)
+       -> direct MentionPopup<ChatModeData> usage
+            -> MentionPopup<T>  (shared listbox shell, item layout, theming)
 ```
 
-The wrappers exist only to bind the data shape (`AgentData`, `ExamplePrompt`, `CliCommand`) to the generic `MentionPopup<T>` and to declare the icon, header label, width, and field accessors. They hold no state.
+The three text-trigger wrappers exist only to bind their data shape (`AgentData`, `ExamplePrompt`, `CliCommand`) to the generic `MentionPopup<T>` and declare the icon, header label, width, and field accessors. `ChatConfigMenu` is the fourth consumer — mouse-driven rather than keystroke-driven, and supplies a per-mode colored dot via `renderIcon` instead of a Lucide icon.
 
 ## Integration Points
 

@@ -1,40 +1,39 @@
 import { Plus } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef } from 'react'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
+import { MentionPopup } from './MentionPopup'
 
 interface ChatConfigMenuProps {
   activeMode: ChatModeData | null
   onSelectMode: (mode: ChatModeData | null) => void
+  /** Controlled open state — when set, the parent owns open/close (used by the `~` shortcut). */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
 }
 
 export function ChatConfigMenu({
   activeMode,
-  onSelectMode
+  onSelectMode,
+  open: openProp,
+  onOpenChange
 }: ChatConfigMenuProps): React.JSX.Element {
   const { data: chatModes } = useChatModes()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
-  const [open, setOpen] = useState(false)
-  const [hoveredId, setHoveredId] = useState<string | null>(null)
-  const ref = useRef<HTMLDivElement>(null)
+  const [internalOpen, setInternalOpen] = useState(false)
+  const isControlled = openProp !== undefined
+  const open = isControlled ? openProp : internalOpen
+  const setOpen = (next: boolean): void => {
+    if (isControlled) onOpenChange?.(next)
+    else setInternalOpen(next)
+  }
+  const triggerRef = useRef<HTMLButtonElement>(null)
 
   const modes = chatModes ?? []
-
-  // Close on outside click
-  useEffect(() => {
-    if (!open) return
-    const handler = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [open])
 
   if (modes.length === 0) return <></>
 
@@ -45,7 +44,6 @@ export function ChatConfigMenu({
 
   const activeModePreset = activeMode ? getPreset(activeMode.colorPreset) : null
 
-  // Helpers to resolve names
   const modelName = (modelId: string | null): string | null => {
     if (!modelId) return null
     const m = (allModels ?? []).find((m) => m.id === modelId)
@@ -58,9 +56,21 @@ export function ChatConfigMenu({
     return ids.map((id) => all.find((p) => p.id === id)?.name ?? id)
   }
 
+  const composeSecondary = (mode: ChatModeData): string | null => {
+    const model = modelName(mode.modelId)
+    const mcps = mcpNames(mode.mcpProviderIds ?? [])
+    if (!model && !mcps.length) return null
+    return [model, mcps.length ? mcps.join(', ') : null].filter(Boolean).join(' · ')
+  }
+
+  // selectedIndex tracks the active mode so the popup highlights it. -1 when
+  // no mode is active (nothing visually selected, all rows are inactive).
+  const selectedIndex = activeMode ? modes.findIndex((m) => m.id === activeMode.id) : -1
+
   return (
-    <div className="relative" ref={ref}>
+    <div className="relative">
       <button
+        ref={triggerRef}
         onClick={() => setOpen(!open)}
         className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)]
           border transition-colors"
@@ -73,68 +83,26 @@ export function ChatConfigMenu({
       </button>
 
       {open && (
-        <div
-          className="absolute bottom-full mb-1 left-0 w-72 bg-[var(--color-bg-secondary)]
-            border border-[var(--color-border)] rounded-lg shadow-xl z-50 overflow-hidden"
-        >
-          <div className="px-2.5 pt-2 pb-1">
-            <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">
-              Chat Modes
-            </div>
-          </div>
-
-          <div className="px-1.5 pb-1.5 space-y-1 max-h-72 overflow-y-auto">
-            {modes.map((mode) => {
-              const preset = getPreset(mode.colorPreset)
-              const isActive = activeMode?.id === mode.id
-              const model = modelName(mode.modelId)
-              const mcps = mcpNames(mode.mcpProviderIds ?? [])
-
-              const isHovered = hoveredId === mode.id
-
-              return (
-                <button
-                  key={mode.id}
-                  onClick={() => handleSelectMode(mode)}
-                  onMouseEnter={() => setHoveredId(mode.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  className="w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer"
-                  style={{
-                    backgroundColor: isActive ? preset.card : isHovered ? preset.bg : 'transparent',
-                    borderLeft: isHovered && !isActive ? `2px solid ${preset.border}` : '2px solid transparent',
-                    opacity: activeMode && !isActive && !isHovered ? 0.55 : 1
-                  }}
-                >
-                  {/* Mode name with color dot */}
-                  <div className="flex items-center gap-1.5">
-                    <div
-                      className="w-2.5 h-2.5 rounded-full shrink-0"
-                      style={{ backgroundColor: preset.border }}
-                    />
-                    <span
-                      className="text-xs font-medium"
-                      style={{ color: isActive ? preset.text : 'var(--color-text)' }}
-                    >
-                      {mode.name}
-                    </span>
-                  </div>
-
-                  {/* Model + MCP summary */}
-                  {(model || mcps.length > 0) && (
-                    <div
-                      className="mt-0.5 pl-4 text-[10px] leading-snug truncate"
-                      style={{ color: isActive ? preset.text : 'var(--color-text-muted)', opacity: isActive ? 0.75 : 1 }}
-                    >
-                      {model && <span>{model}</span>}
-                      {model && mcps.length > 0 && <span> · </span>}
-                      {mcps.length > 0 && <span>{mcps.join(', ')}</span>}
-                    </div>
-                  )}
-                </button>
-              )
-            })}
-          </div>
-        </div>
+        <MentionPopup<ChatModeData>
+          items={modes}
+          selectedIndex={selectedIndex}
+          onSelect={handleSelectMode}
+          onClose={() => setOpen(false)}
+          listboxId="chat-modes-listbox"
+          anchorRef={triggerRef}
+          header="Chat Modes"
+          ariaLabel="Chat modes"
+          width="w-72"
+          renderIcon={(mode) => (
+            <div
+              className="w-2.5 h-2.5 rounded-full shrink-0"
+              style={{ backgroundColor: getPreset(mode.colorPreset).border }}
+            />
+          )}
+          getKey={(mode) => mode.id}
+          getPrimary={(mode) => mode.name}
+          getSecondary={composeSecondary}
+        />
       )}
     </div>
   )

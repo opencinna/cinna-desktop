@@ -75,6 +75,28 @@ export function MainArea(): React.JSX.Element {
     setActiveMode(mode)
   }, [])
 
+  // Chat-modes popup can be opened two ways: the `+` button (rendered above
+  // the button itself by ChatConfigMenu) and the `~` sole-character shortcut
+  // (rendered above the textarea by ChatInput). Keeping the two opens as
+  // distinct states lets each component render its own popup with the right
+  // anchoring while ensuring only one is visible at a time.
+  const [buttonModePopupOpen, setButtonModePopupOpen] = useState(false)
+  const [tildeModePopupOpen, setTildeModePopupOpen] = useState(false)
+
+  const handleTildeOpenRequest = useCallback(() => {
+    setTildeModePopupOpen(true)
+    setButtonModePopupOpen(false)
+  }, [])
+
+  const handleTildeCancel = useCallback(() => {
+    setTildeModePopupOpen(false)
+  }, [])
+
+  const handleButtonOpenChange = useCallback((next: boolean) => {
+    setButtonModePopupOpen(next)
+    if (next) setTildeModePopupOpen(false)
+  }, [])
+
   const focusChatInput = useCallback(() => {
     chatInputRef.current?.focus()
   }, [])
@@ -158,11 +180,51 @@ export function MainArea(): React.JSX.Element {
     [activeChatId, updateChat, defaultProviderId, providers, allModels, defaultMcpIds, setChatMcp]
   )
 
+  // Tilde-driven select: apply the mode, wipe the `~` from the textarea, and
+  // close the popup. Button-driven select just closes the popup (no wipe —
+  // there's no `~` involved).
+  const handleSelectModeViaTilde = useCallback(
+    (mode: ChatModeData) => {
+      handleSelectMode(mode)
+      chatInputRef.current?.clearInput()
+      setTildeModePopupOpen(false)
+    },
+    [handleSelectMode]
+  )
+
+  const handleActiveChatModeChangeViaTilde = useCallback(
+    async (mode: ChatModeData) => {
+      await handleActiveChatModeChange(mode)
+      chatInputRef.current?.clearInput()
+      setTildeModePopupOpen(false)
+    },
+    [handleActiveChatModeChange]
+  )
+
   if (activeView === 'settings') {
     return <SettingsPage />
   }
 
   const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null
+
+  // Helpers shared by both ChatInput instances when wiring the `~` mode popup.
+  const renderModeIcon = (mode: ChatModeData): React.ReactNode => (
+    <div
+      className="w-2.5 h-2.5 rounded-full shrink-0"
+      style={{ backgroundColor: getPreset(mode.colorPreset).border }}
+    />
+  )
+  const composeModeSecondary = (mode: ChatModeData): string | null => {
+    const model = mode.modelId
+      ? (allModels ?? []).find((m) => m.id === mode.modelId)?.name ?? mode.modelId
+      : null
+    const mcps = (mode.mcpProviderIds ?? []).map(
+      (id) => (mcpProviders ?? []).find((p) => p.id === id)?.name ?? id
+    )
+    if (!model && !mcps.length) return null
+    return [model, mcps.length ? mcps.join(', ') : null].filter(Boolean).join(' · ')
+  }
+  const availableModes = chatModes ?? []
 
   // Default / New Chat screen
   if (!activeChatId) {
@@ -185,11 +247,27 @@ export function MainArea(): React.JSX.Element {
           onSelectAgent={setSelectedAgent}
           selectedAgent={selectedAgent}
           onDoubleEscape={() => setSelectedAgent(null)}
+          tildeModePopup={
+            availableModes.length > 0
+              ? {
+                  open: tildeModePopupOpen,
+                  modes: availableModes,
+                  activeId: activeMode?.id ?? null,
+                  onOpenRequest: handleTildeOpenRequest,
+                  onCancel: handleTildeCancel,
+                  onSelect: handleSelectModeViaTilde,
+                  renderIcon: renderModeIcon,
+                  composeSecondary: composeModeSecondary
+                }
+              : undefined
+          }
           leftSlot={
             <>
               <ChatConfigMenu
                 activeMode={activeMode}
                 onSelectMode={handleSelectMode}
+                open={buttonModePopupOpen}
+                onOpenChange={handleButtonOpenChange}
               />
               <AgentSelector
                 selectedAgent={selectedAgent}
@@ -230,11 +308,27 @@ export function MainArea(): React.JSX.Element {
             ref={chatInputRef}
             chatId={activeChatId}
             modeColor={activeChatModeColor}
+            tildeModePopup={
+              activeChatMode && availableModes.length > 0
+                ? {
+                    open: tildeModePopupOpen,
+                    modes: availableModes,
+                    activeId: activeChatMode.id,
+                    onOpenRequest: handleTildeOpenRequest,
+                    onCancel: handleTildeCancel,
+                    onSelect: handleActiveChatModeChangeViaTilde,
+                    renderIcon: renderModeIcon,
+                    composeSecondary: composeModeSecondary
+                  }
+                : undefined
+            }
             leftSlot={
               activeChatMode ? (
                 <ChatConfigMenu
                   activeMode={activeChatMode}
                   onSelectMode={handleActiveChatModeChange}
+                  open={buttonModePopupOpen}
+                  onOpenChange={handleButtonOpenChange}
                 />
               ) : undefined
             }
