@@ -166,8 +166,7 @@ export function LogsOverlay(): React.JSX.Element | null {
 
   useEffect(() => {
     const unsub = window.api.logger.onToggleOverlay(() => {
-      const { loggerEnabled: enabled, logsOpen: open, setLogsOpen: set } = useUIStore.getState()
-      if (!enabled) return
+      const { logsOpen: open, setLogsOpen: set } = useUIStore.getState()
       set(!open)
     })
     return unsub
