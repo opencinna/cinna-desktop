@@ -226,7 +226,11 @@ export function registerA2AHandlers(): void {
         const params = buildSendParams(userContent, sessionContextId, sessionTaskId)
         logger.debug('→ sendMessageStream', params)
         let eventIndex = 0
-        const accumulator = new StreamPartsAccumulator()
+        const accumulator = new StreamPartsAccumulator({
+          onToolCall: ({ name, input }) => {
+            logger.info(`tool call → ${name}`, { input })
+          }
+        })
 
         for await (const event of client.sendMessageStream(params)) {
           logger.debug(`← stream event #${eventIndex++}`, event)
@@ -297,7 +301,11 @@ export function registerA2AHandlers(): void {
         const responseJson = result as unknown as Record<string, unknown>
 
         const rpcResult = (responseJson.result ?? responseJson) as Record<string, unknown>
-        const accumulator = new StreamPartsAccumulator()
+        const accumulator = new StreamPartsAccumulator({
+          onToolCall: ({ name, input }) => {
+            logger.info(`tool call → ${name}`, { input })
+          }
+        })
 
         const ingestTaskShape = (task: {
           id?: string

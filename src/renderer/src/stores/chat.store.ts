@@ -23,6 +23,8 @@ interface TextBlock {
   // assistant message, instead of silently growing the content string.
   segments: string[]
   toolName?: string
+  /** Structured tool arguments from `cinna.tool_input` metadata (tool kind). */
+  toolInput?: Record<string, unknown>
 }
 
 export type StreamBlock = TextBlock | ToolCallBlock
@@ -42,7 +44,12 @@ interface ChatStore {
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
   setPendingUserMessage: (content: string | null) => void
-  appendDelta: (text: string, kind?: ContentKind, toolName?: string) => void
+  appendDelta: (
+    text: string,
+    kind?: ContentKind,
+    toolName?: string,
+    toolInput?: Record<string, unknown>
+  ) => void
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
@@ -82,7 +89,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamedIncrementallyChatId: null
     }),
 
-  appendDelta: (text, kind = 'text', toolName) =>
+  appendDelta: (text, kind = 'text', toolName, toolInput) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
@@ -90,14 +97,14 @@ export const useChatStore = create<ChatStore>((set) => ({
         blocks[blocks.length - 1] = {
           ...last,
           content: last.content + text,
-          segments: [...last.segments, text]
+          segments: [...last.segments, text],
+          toolInput: last.toolInput ?? toolInput
         }
       } else {
-        blocks.push(
-          toolName
-            ? { type: 'text', kind, content: text, segments: [text], toolName }
-            : { type: 'text', kind, content: text, segments: [text] }
-        )
+        const next: TextBlock = { type: 'text', kind, content: text, segments: [text] }
+        if (toolName) next.toolName = toolName
+        if (toolInput) next.toolInput = toolInput
+        blocks.push(next)
       }
       return {
         streamingBlocks: blocks,

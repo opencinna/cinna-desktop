@@ -8,6 +8,40 @@ import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
+import { CollapsibleGroup, type CollapsibleGroupItem } from './CollapsibleGroup'
+
+type RenderNode =
+  | { slot: 'plain'; key: string; node: React.ReactNode }
+  | { slot: 'collapsible'; item: CollapsibleGroupItem }
+
+/** Wrap runs of consecutive collapsible nodes (length >= 2) into a CollapsibleGroup. */
+function groupConsecutive(nodes: RenderNode[]): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  let i = 0
+  while (i < nodes.length) {
+    const n = nodes[i]
+    if (n.slot !== 'collapsible') {
+      out.push(<div key={n.key}>{n.node}</div>)
+      i++
+      continue
+    }
+    let j = i
+    while (j < nodes.length && nodes[j].slot === 'collapsible') j++
+    const run = nodes.slice(i, j) as Extract<RenderNode, { slot: 'collapsible' }>[]
+    if (run.length >= 2) {
+      out.push(
+        <CollapsibleGroup
+          key={`group-${run[0].item.key}`}
+          items={run.map((r) => r.item)}
+        />
+      )
+    } else {
+      out.push(<div key={run[0].item.key}>{run[0].item.node}</div>)
+    }
+    i = j
+  }
+  return out
+}
 
 interface MessageStreamProps {
   chatId: string
@@ -78,7 +112,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   }, [chatId, messages])
 
   return (
-    <div className="flex-1 overflow-y-auto px-4 py-4" style={bottomPadding ? { paddingBottom: bottomPadding + 16 } : undefined}>
+    <div
+      className="flex-1 overflow-y-auto px-4 pb-4 pt-[calc(var(--topbar-h)+12px)]"
+      style={bottomPadding ? { paddingBottom: bottomPadding + 16 } : undefined}
+    >
       <div className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           <div className="text-center text-[var(--color-text-muted)] py-16">
@@ -86,28 +123,30 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           </div>
         )}
 
-        {messages.map((msg) => {
-          const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
-          const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
+        {(() => {
+          const renderNodes: RenderNode[] = []
 
-          if (msg.role === 'error') {
-            let node: React.JSX.Element
-            try {
-              const err = JSON.parse(msg.content) as { short: string; detail?: string }
-              node = <SystemMessage message={err.short} detail={err.detail} />
-            } catch {
-              node = <SystemMessage message={msg.content} />
+          for (const msg of messages) {
+            const align: 'left' | 'right' = msg.role === 'user' ? 'right' : 'left'
+            const footer = verboseMode ? <MessageMetaFooter msg={msg} align={align} /> : null
+
+            if (msg.role === 'error') {
+              let node: React.JSX.Element
+              try {
+                const err = JSON.parse(msg.content) as { short: string; detail?: string }
+                node = <SystemMessage message={err.short} detail={err.detail} />
+              } catch {
+                node = <SystemMessage message={msg.content} />
+              }
+              renderNodes.push({
+                slot: 'plain',
+                key: msg.id,
+                node: <>{node}{footer}</>
+              })
+              continue
             }
-            return (
-              <div key={msg.id}>
-                {node}
-                {footer}
-              </div>
-            )
-          }
-          if (msg.role === 'tool_call') {
-            return (
-              <div key={msg.id}>
+            if (msg.role === 'tool_call') {
+              const toolBlock = (
                 <ToolCallBlock
                   name={msg.toolName ?? 'unknown'}
                   input={msg.toolInput as Record<string, unknown>}
@@ -116,119 +155,216 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   status={msg.toolError ? 'error' : 'done'}
                   provider={msg.toolProvider}
                 />
-                {footer}
-              </div>
-            )
-          }
-          if (msg.role === 'assistant' && !msg.content) {
-            return null
-          }
-          // Assistant message with structured parts (e.g. A2A agents emitting
-          // thinking + text via `cinna.content_kind` metadata) — render each
-          // part in order using the appropriate block.
-          const parts = msg.parts
-          // Skip the fade-in when an assistant message replaces streaming blocks
-          // that already animated piece-by-piece — otherwise the content blinks
-          // as it re-animates on DB arrival. Scoped to the exact chat whose
-          // stream just finished so out-of-band arrivals elsewhere still animate.
-          const suppressStreamReanimation =
-            msg.role === 'assistant' && streamedIncrementallyChatId === chatId
-          const shouldAnimate = msg.id === newMessageId && !suppressStreamReanimation
-          if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
-            return (
-              <div key={msg.id} className="space-y-2">
-                {parts.map((p, idx) => {
+              )
+              // In verbose mode the per-message footer must stay attached, so
+              // skip grouping (push as plain) — otherwise circles can be grouped
+              // across consecutive tool_call / thinking blocks.
+              if (verboseMode) {
+                renderNodes.push({
+                  slot: 'plain',
+                  key: msg.id,
+                  node: <>{toolBlock}{footer}</>
+                })
+              } else {
+                renderNodes.push({
+                  slot: 'collapsible',
+                  item: {
+                    key: msg.id,
+                    kind: 'tool_call',
+                    status: msg.toolError ? 'error' : 'done',
+                    node: toolBlock
+                  }
+                })
+              }
+              continue
+            }
+            if (msg.role === 'assistant' && !msg.content) {
+              continue
+            }
+            const parts = msg.parts
+            const suppressStreamReanimation =
+              msg.role === 'assistant' && streamedIncrementallyChatId === chatId
+            const shouldAnimate = msg.id === newMessageId && !suppressStreamReanimation
+            if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
+              if (verboseMode) {
+                renderNodes.push({
+                  slot: 'plain',
+                  key: msg.id,
+                  node: (
+                    <div className="space-y-2">
+                      {parts.map((p, idx) => {
+                        const k = `${msg.id}-${idx}`
+                        if (p.kind === 'thinking') {
+                          return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                        }
+                        if (p.kind === 'tool') {
+                          return (
+                            <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
+                          )
+                        }
+                        return <MessageBubble key={k} role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                      })}
+                      {footer}
+                    </div>
+                  )
+                })
+              } else {
+                parts.forEach((p, idx) => {
                   const k = `${msg.id}-${idx}`
                   if (p.kind === 'thinking') {
-                    return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                    renderNodes.push({
+                      slot: 'collapsible',
+                      item: {
+                        key: k,
+                        kind: 'thinking',
+                        status: 'done',
+                        node: <ThinkingBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                      }
+                    })
+                  } else if (p.kind === 'tool') {
+                    renderNodes.push({
+                      slot: 'collapsible',
+                      item: {
+                        key: k,
+                        kind: 'tool_narration',
+                        status: 'done',
+                        node: <ToolNarrationBlock content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
+                      }
+                    })
+                  } else {
+                    renderNodes.push({
+                      slot: 'plain',
+                      key: k,
+                      node: <MessageBubble role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                    })
                   }
-                  if (p.kind === 'tool') {
-                    return (
-                      <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} animate={shouldAnimate} animateDelay={idx * 80} />
-                    )
-                  }
-                  return <MessageBubble key={k} role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
-                })}
-                {footer}
-              </div>
-            )
+                })
+              }
+              continue
+            }
+            renderNodes.push({
+              slot: 'plain',
+              key: msg.id,
+              node: (
+                <>
+                  <MessageBubble
+                    role={msg.role as 'user' | 'assistant'}
+                    content={msg.content}
+                    animate={shouldAnimate}
+                  />
+                  {footer}
+                </>
+              )
+            })
           }
-          return (
-            <div key={msg.id}>
-              <MessageBubble
-                role={msg.role as 'user' | 'assistant'}
-                content={msg.content}
-                animate={shouldAnimate}
-              />
-              {footer}
-            </div>
-          )
-        })}
 
-        {/* Optimistic user bubble — shown immediately while the DB round-trip
-             is in flight so the dots always appear BELOW the user message. */}
-        {pendingUserMessage && !messages.some((m) => m.role === 'user' && m.content === pendingUserMessage) && (
-          <MessageBubble role="user" content={pendingUserMessage} animate />
-        )}
+          // Optimistic user bubble — shown immediately while the DB round-trip
+          // is in flight so the dots always appear BELOW the user message.
+          if (pendingUserMessage && !messages.some((m) => m.role === 'user' && m.content === pendingUserMessage)) {
+            renderNodes.push({
+              slot: 'plain',
+              key: 'pending-user',
+              node: <MessageBubble role="user" content={pendingUserMessage} animate />
+            })
+          }
 
-        {isStreaming && !hasStreamingContent && (
-          <div className="flex gap-1 py-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '0ms' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '150ms' }} />
-            <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
-          </div>
-        )}
+          if (isStreaming && !hasStreamingContent) {
+            renderNodes.push({
+              slot: 'plain',
+              key: 'stream-dots-pre',
+              node: (
+                <div className="flex gap-1 py-1">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+              )
+            })
+          }
 
-        {/* Render streaming blocks in order: text/thinking/tool interleaved */}
-        {streamingBlocks.map((block, i) => {
-          if (block.type === 'text') {
+          streamingBlocks.forEach((block, i) => {
             const isLastBlock = i === streamingBlocks.length - 1
-            if (block.kind === 'thinking') {
-              return (
-                <ThinkingBlock
-                  key={`stream-think-${i}`}
-                  content={block.content}
-                  isStreaming={isStreaming && isLastBlock}
-                  defaultExpanded={verboseMode ? undefined : false}
-                />
-              )
+            if (block.type === 'text') {
+              if (block.kind === 'thinking') {
+                const live = isStreaming && isLastBlock
+                const node = (
+                  <ThinkingBlock
+                    content={block.content}
+                    isStreaming={live}
+                    defaultExpanded={verboseMode ? undefined : false}
+                  />
+                )
+                if (verboseMode) {
+                  renderNodes.push({ slot: 'plain', key: `stream-think-${i}`, node })
+                } else {
+                  renderNodes.push({
+                    slot: 'collapsible',
+                    item: { key: `stream-think-${i}`, kind: 'thinking', status: 'done', isLive: live, node }
+                  })
+                }
+                return
+              }
+              if (block.kind === 'tool') {
+                const live = isStreaming && isLastBlock
+                const node = (
+                  <ToolNarrationBlock
+                    content={block.content}
+                    toolName={block.toolName}
+                    toolInput={block.toolInput}
+                    isStreaming={live}
+                    defaultExpanded={verboseMode ? undefined : false}
+                  />
+                )
+                if (verboseMode) {
+                  renderNodes.push({ slot: 'plain', key: `stream-tool-${i}`, node })
+                } else {
+                  renderNodes.push({
+                    slot: 'collapsible',
+                    item: { key: `stream-tool-${i}`, kind: 'tool_narration', status: 'done', isLive: live, node }
+                  })
+                }
+                return
+              }
+              renderNodes.push({
+                slot: 'plain',
+                key: `stream-text-${i}`,
+                node: (
+                  <div className="text-sm leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">
+                    {block.segments.map((seg, si) => (
+                      <span key={si} className="anim-chunk">
+                        {seg}
+                      </span>
+                    ))}
+                    {isStreaming && isLastBlock && (
+                      <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm align-middle" />
+                    )}
+                  </div>
+                )
+              })
+              return
             }
-            if (block.kind === 'tool') {
-              return (
-                <ToolNarrationBlock
-                  key={`stream-tool-${i}`}
-                  content={block.content}
-                  toolName={block.toolName}
-                  isStreaming={isStreaming && isLastBlock}
-                  defaultExpanded={verboseMode ? undefined : false}
-                />
-              )
-            }
-            return (
-              <div key={`stream-text-${i}`} className="text-sm leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">
-                {block.segments.map((seg, si) => (
-                  <span key={si} className="anim-chunk">
-                    {seg}
-                  </span>
-                ))}
-                {isStreaming && isLastBlock && (
-                  <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm align-middle" />
-                )}
-              </div>
+            const toolNode = (
+              <ToolCallBlock
+                name={block.name}
+                input={block.input}
+                result={block.result != null ? (typeof block.result === 'string' ? block.result : JSON.stringify(block.result)) : undefined}
+                error={block.error}
+                status={block.status}
+                provider={block.provider}
+              />
             )
-          }
-          return (
-            <ToolCallBlock
-              key={`stream-tc-${block.id}`}
-              name={block.name}
-              input={block.input}
-              result={block.result != null ? (typeof block.result === 'string' ? block.result : JSON.stringify(block.result)) : undefined}
-              error={block.error}
-              status={block.status}
-              provider={block.provider}
-            />
-          )
-        })}
+            if (verboseMode) {
+              renderNodes.push({ slot: 'plain', key: `stream-tc-${block.id}`, node: toolNode })
+            } else {
+              renderNodes.push({
+                slot: 'collapsible',
+                item: { key: `stream-tc-${block.id}`, kind: 'tool_call', status: block.status, node: toolNode }
+              })
+            }
+          })
+
+          return groupConsecutive(renderNodes)
+        })()}
 
         {/* Persistent streaming indicator — stays at the bottom of all blocks
             while the stream is active so the user always sees progress. */}

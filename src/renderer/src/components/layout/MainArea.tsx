@@ -167,7 +167,7 @@ export function MainArea(): React.JSX.Element {
   // Default / New Chat screen
   if (!activeChatId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-4">
+      <div className="flex-1 flex flex-col items-center justify-center px-4 pt-[var(--topbar-h)]">
         <div className="mb-8 text-center">
           <Sparkles size={32} className="mx-auto mb-3 text-[var(--color-accent)] opacity-60" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>

@@ -4,11 +4,11 @@
 
 ### Renderer — Composition Root
 
-- `src/renderer/src/App.tsx` — `App` (QueryClientProvider + AuthGate), `Shell` (flex column: TopBar + sidebar/main row)
+- `src/renderer/src/App.tsx` — `App` (QueryClientProvider + AuthGate), `Shell` (relative container with `p-2` window padding; sidebar/main flex row + absolutely positioned TopBar overlaying the top so MainArea can claim full window height)
 
 ### Renderer — Layout
 
-- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`
+- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
 - `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders `ChatList` (chat view) or settings menu (settings view); footer composes `UserMenu`, `AgentStatusButton`, `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
 - `src/renderer/src/components/layout/MainArea.tsx` — Chat or settings content area (untouched by this feature)
@@ -27,11 +27,12 @@
 
 - `src/renderer/src/assets/main.css` — `@layer base` rules:
   - `html { font-size: 17px }` — base scaling
+  - `:root { --topbar-h: 36px }` — TopBar height token; consumed by `TopBar` (`h-[var(--topbar-h)]`), the sidebar card offset, and any view that needs to clear the bar (e.g. `MessageStream`'s `pt-[calc(var(--topbar-h)+12px)]`, `SettingsPage`'s top padding)
   - `.app-sidebar` / `[data-theme="dark"] .app-sidebar` — rounded card surface, border, shadow, dark-theme translucent blur
   - `.app-popover-surface` / `[data-theme="dark"] .app-popover-surface` — shared frosted-glass utility for floating panels (profile dropdown, register/sign-out modals, interface-toggles popover). Translucent fill + `backdrop-filter: blur(14px) saturate(140%)`, theme-aware tint
   - `.app-nav-active` / `[data-theme="dark"] .app-nav-active` — translucent tint for active sidebar nav rows (chat item, settings menu, Trash). Replaces solid `bg-tertiary` so the sidebar's frosted background shows through
   - `.app-sidebar-wrap` — `--sidebar-width: 240px`, width transition (collapse/expand)
-  - `.app-sidebar-wrap > .app-sidebar` — absolute position + transform/opacity transitions
+  - `.app-sidebar-wrap > .app-sidebar` — absolute position with `top: calc(var(--topbar-h) + 4px)` so the visible card sits below the overlaid TopBar (the wrap itself stays full-height to keep the width-collapse animation pristine); `bottom: 0`; transform/opacity transitions
   - `.app-sidebar-wrap.is-collapsed > .app-sidebar` — `translateX(-100%)` + `opacity: 0` + `pointer-events: none`
   - `.app-drag-strip` — `-webkit-app-region: drag`, with `no-drag` exception for buttons/anchors
 
@@ -67,10 +68,11 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 ### TopBar (`TopBar.tsx`)
 
-- Always rendered above the sidebar/main flex row
+- Absolutely positioned overlay (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) — sits on top of the sidebar card and MainArea so the chat scroll viewport keeps full window height. Inset by 8 px on top/left/right to match the Shell's `p-2` window border
 - Reads `sidebarOpen` to pick icon (`PanelLeftClose` vs `PanelLeft`)
 - Calls `useStartNewChat()` for the `+` button
 - Buttons share the `TOPBAR_BTN` class string: slight-tint background at rest, solid background + subtle border on hover
+- Background is transparent — content scrolling at the very top of MainArea is visible behind the bar's drag region; child views (`MessageStream`, `SettingsPage`, new-chat default) add their own `pt-[…var(--topbar-h)…]` so visible content starts below the buttons
 
 ### Sidebar (`Sidebar.tsx`)
 
@@ -111,7 +113,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
 - **Sidebar width** — `--sidebar-width: 240px` on `.app-sidebar-wrap`. Both the wrapper `width` and the inner `width` consume it; the collapse animation translates `-100%` of that value.
-- **Shell vertical spacing** — `App.tsx` `Shell` uses `flex-col gap-1` between `TopBar` and the sidebar/main row so the visible space between the expand/collapse buttons and the sidebar's top border matches the `px-2 pb-2` (8 px) window-edge insets. The horizontal `gap-2` on the inner row between Sidebar and MainArea stays at 8 px.
+- **Shell layering** — `App.tsx` `Shell` is a `relative` flex column with symmetric `p-2` (8 px) window padding. The sidebar/main row is the only in-flow child; `TopBar` is absolutely positioned with the same 8 px inset (`top-2 left-2 right-2`) so the row claims the full Shell height instead of losing it to a flex-sibling header. The horizontal `gap-2` between Sidebar and MainArea stays at 8 px. Visible content in each view clears the bar through `var(--topbar-h)`-derived top padding (sidebar card via CSS `top`, `MessageStream` / `SettingsPage` / new-chat view via `pt-[calc(var(--topbar-h)+12px)]`).
 - **App icons** — `resources/cinna-desktop-icon-{dark,light}.png`, loaded via `?asset` in `src/main/services/appIconService.ts`. Build-time installer icons (`build/icon.png`, `build/icon.icns`) are the dark variant (default theme). Windows `build/icon.ico` is built externally — regenerate from `build/icon.png` after icon changes.
 
 ## Security

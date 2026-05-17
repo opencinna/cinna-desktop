@@ -23,6 +23,7 @@ type AgentEvent = {
   text?: string
   kind?: ContentKind
   toolName?: string
+  toolInput?: Record<string, unknown>
   requestId?: string
   taskId?: string
   contextId?: string
@@ -94,7 +95,7 @@ export function useChatStream(): {
           startStreaming(event.requestId ?? '')
           break
         case 'delta':
-          appendDelta(event.text!, event.kind ?? 'text', event.toolName)
+          appendDelta(event.text!, event.kind ?? 'text', event.toolName, event.toolInput)
           break
         case 'done':
           finishStreaming()

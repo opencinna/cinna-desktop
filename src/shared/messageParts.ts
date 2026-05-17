@@ -18,4 +18,6 @@ export interface MessagePart {
   text: string
   /** Set only when `kind === 'tool'`; comes from `metadata['cinna.tool_name']`. */
   toolName?: string
+  /** Structured tool arguments from `metadata['cinna.tool_input']`. */
+  toolInput?: Record<string, unknown>
 }

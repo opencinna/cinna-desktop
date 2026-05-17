@@ -72,6 +72,14 @@
     --color-overlay-panel: rgba(255, 255, 255, 0.35);
   }
 
+  /* Layout tokens — theme-agnostic. TopBar is absolutely positioned over the
+     Shell so MainArea can claim full window height; the sidebar card and chat
+     scroll viewport offset themselves using this so their content sits below
+     the buttons. */
+  :root {
+    --topbar-h: 36px;
+  }
+
   html {
     font-size: 17px;
   }
@@ -156,7 +164,9 @@
   }
   .app-sidebar-wrap > .app-sidebar {
     position: absolute;
-    top: 0;
+    /* Offset below the absolutely-positioned TopBar so the card sits under
+       the buttons (matches pre-overlay layout). */
+    top: calc(var(--topbar-h) + 4px);
     left: 0;
     bottom: 0;
     width: var(--sidebar-width);

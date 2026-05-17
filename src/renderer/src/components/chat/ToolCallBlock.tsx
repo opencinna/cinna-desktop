@@ -1,5 +1,6 @@
 import { Wrench, Check, X, Loader2, Plug, ChevronRight } from 'lucide-react'
 import { useRef, useState } from 'react'
+import { ToolCallSummary } from './ToolCallSummary'
 
 interface ToolCallBlockProps {
   name: string
@@ -138,27 +139,24 @@ export function ToolCallBlock({
 
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors"
+        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors min-w-0 text-left"
       >
         <ChevronRight
           size={12}
-          className={`text-[var(--color-text-muted)] transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
+          className={`text-[var(--color-text-muted)] shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
         />
         {provider ? (
-          <>
-            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--color-accent)]/15 text-[11px] font-semibold text-[var(--color-accent)]">
-              <Plug size={10} />
-              {provider}
-            </span>
-            <span className="font-mono text-[var(--color-text-muted)]">{name}</span>
-          </>
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--color-accent)]/15 text-[11px] font-semibold text-[var(--color-accent)] shrink-0">
+            <Plug size={10} />
+            {provider}
+          </span>
         ) : (
-          <>
-            <Wrench size={11} className="text-[var(--color-text-muted)]" />
-            <span className="font-mono text-[var(--color-accent)]">{name}</span>
-          </>
+          <Wrench size={11} className="text-[var(--color-text-muted)] shrink-0" />
         )}
-        {statusIcon}
+        <span className="flex-1 min-w-0 truncate">
+          <ToolCallSummary name={name} input={input} variant="inline" />
+        </span>
+        <span className="shrink-0">{statusIcon}</span>
       </button>
 
       <div
@@ -169,8 +167,8 @@ export function ToolCallBlock({
           <div ref={contentRef} className="border-t border-[var(--color-border)] px-2.5 py-2 space-y-2">
             <div>
               <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Input</p>
-              <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded font-mono">
-                <JsonView data={input} />
+              <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded">
+                <ToolCallSummary name={name} input={input} variant="block" hideName />
               </div>
             </div>
             {parsedResult && !error && (

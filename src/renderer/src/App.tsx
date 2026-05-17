@@ -56,16 +56,16 @@ function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Elemen
 }
 
 function Shell(): React.JSX.Element {
-  // Top bar is always present (next to macOS traffic lights) and the
-  // sidebar slides in/out below it. The toggle and new-chat buttons therefore
-  // keep their position regardless of sidebar state.
+  // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
+  // area can claim full window height instead of losing the bar's height. The
+  // sidebar card offsets its top via CSS so it still sits below the buttons.
   return (
-    <div className="h-full flex flex-col min-h-0 px-2 pb-2 gap-1">
-      <TopBar />
+    <div className="h-full flex flex-col min-h-0 p-2 relative">
       <div className="flex-1 flex min-h-0 gap-2">
         <Sidebar />
         <MainArea />
       </div>
+      <TopBar />
     </div>
   )
 }

@@ -19,7 +19,7 @@ export function TopBar(): React.JSX.Element {
 
   return (
     <div
-      className={`app-drag-strip h-9 shrink-0 flex items-center gap-1 ${TRAFFIC_LIGHT_GUTTER} pr-3`}
+      className={`app-drag-strip absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30 flex items-center gap-1 ${TRAFFIC_LIGHT_GUTTER} pr-3`}
     >
       <button
         onClick={toggleSidebar}
