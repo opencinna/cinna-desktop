@@ -31,7 +31,12 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT`)
   }
 
-  // Cleanup: permanently delete chats that have been in trash for over 30 days
-  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000
-  sqlite.exec(`DELETE FROM chats WHERE deleted_at IS NOT NULL AND deleted_at < ${thirtyDaysAgo}`)
+  // Cleanup: permanently delete chats that have been in trash for over 30 days.
+  // `deleted_at` is stored as Unix seconds (drizzle's `mode: 'timestamp'`), so
+  // we must compare against seconds — using `Date.now()` directly would wipe
+  // every trashed chat on the next startup (ms value >> any second-scaled row).
+  const thirtyDaysAgoSeconds = Math.floor((Date.now() - 30 * 24 * 60 * 60 * 1000) / 1000)
+  sqlite.exec(
+    `DELETE FROM chats WHERE deleted_at IS NOT NULL AND deleted_at < ${thirtyDaysAgoSeconds}`
+  )
 }
