@@ -6,7 +6,7 @@ App identity:
 - **App ID:** `io.opencinna.desktop`
 - **Product name:** `Cinna Desktop`
 - **Release artifacts per version:**
-  - **macOS:** `cinna-desktop-${version}-x64.dmg`, `cinna-desktop-${version}-arm64.dmg`, + `.blockmap` files, + `latest-mac.yml`
+  - **macOS:** `cinna-desktop-${version}-x64.dmg` + `cinna-desktop-${version}-arm64.dmg` (user downloads), `cinna-desktop-${version}-x64-mac.zip` + `cinna-desktop-${version}-arm64-mac.zip` (auto-update payload, mandatory — see below), `.blockmap` files for each, + `latest-mac.yml`
   - **Linux:** `cinna-desktop-${version}-x64.AppImage`, `cinna-desktop-${version}-x64.deb`, + `latest-linux.yml`
 - **Channels:**
   - macOS: signed + notarized, auto-updates via `electron-updater`.
@@ -302,20 +302,25 @@ Watch the log for `notarization successful` (twice — once per arch) and final 
 ```bash
 VERSION="v$(node -p "require('./package.json').version")"
 
-# Confirm the draft exists with all 5 expected assets
+# Confirm the draft exists with all expected assets
 gh release view "$VERSION" --repo opencinna/cinna-desktop
 
 # Expected assets (macOS):
-#   cinna-desktop-${V}-arm64.dmg
-#   cinna-desktop-${V}-arm64.dmg.blockmap
-#   cinna-desktop-${V}-x64.dmg
-#   cinna-desktop-${V}-x64.dmg.blockmap
-#   latest-mac.yml
+#   cinna-desktop-${V}-arm64.dmg            (+ .blockmap)
+#   cinna-desktop-${V}-x64.dmg              (+ .blockmap)
+#   cinna-desktop-${V}-arm64-mac.zip        (+ .blockmap)  ← mandatory for auto-update
+#   cinna-desktop-${V}-x64-mac.zip          (+ .blockmap)  ← mandatory for auto-update
+#   latest-mac.yml                          (must list the .zip URLs in `files:`)
 #
 # Expected assets (Linux, added by CI ~5-8 min after tag push):
 #   cinna-desktop-${V}-x64.AppImage
 #   cinna-desktop-${V}-x64.deb
 #   latest-linux.yml
+
+# Sanity-check latest-mac.yml lists ZIPs (electron-updater will throw
+# "ZIP file not provided" on the client side if it only sees DMGs):
+gh release download "$VERSION" --repo opencinna/cinna-desktop --pattern "latest-mac.yml" --clobber
+grep -q '\.zip$' latest-mac.yml || echo "WARNING: latest-mac.yml has no zip entries — auto-update will fail"
 ```
 
 > If `gh release view` shows `draft: false`, electron-builder published immediately. Check `electron-builder.yml`'s `publish.releaseType` — it should be `draft`.
@@ -572,7 +577,7 @@ A clean re-run will redownload Electron (~120 MB per arch from GitHub Releases) 
 - `electron-builder.yml`:
   - `appId: io.opencinna.desktop`, `productName: Cinna Desktop`
   - `mac.hardenedRuntime: true`, `mac.notarize: true`
-  - `mac.target: dmg [x64, arm64]` — dual-arch macOS builds
+  - `mac.target: [dmg, zip] x [x64, arm64]` — DMG for user downloads, ZIP for `electron-updater`. **The ZIP is mandatory:** without it `MacUpdater` throws `ZIP file not provided` on every check and auto-update breaks for all existing installs. `latest-mac.yml` must list the `.zip` URLs.
   - `dmg.artifactName` includes `${arch}` so x64/arm64 artifacts don't collide
   - `linux.target: [AppImage, deb] x64` — Linux packaging (x64 only for now)
   - `appImage.artifactName` / `deb.artifactName` include `${arch}` and `${ext}`

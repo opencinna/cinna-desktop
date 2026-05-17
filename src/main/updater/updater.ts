@@ -9,11 +9,12 @@ const log = createLogger('updater')
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000
 
-export function initAutoUpdater(): void {
-  if (is.dev) {
-    log.info('skipping auto-updater in dev mode')
-    return
-  }
+let updaterConfigured = false
+let manualCheckInFlight = false
+
+function configureUpdater(): void {
+  if (updaterConfigured) return
+  updaterConfigured = true
 
   autoUpdater.autoDownload = true
   autoUpdater.autoInstallOnAppQuit = true
@@ -50,6 +51,15 @@ export function initAutoUpdater(): void {
       autoUpdater.quitAndInstall()
     }
   })
+}
+
+export function initAutoUpdater(): void {
+  if (is.dev) {
+    log.info('skipping auto-updater in dev mode')
+    return
+  }
+
+  configureUpdater()
 
   autoUpdater.checkForUpdates().catch((err) => log.error(`initial check failed: ${err.message}`))
 
@@ -62,4 +72,53 @@ export function initAutoUpdater(): void {
   app.on('before-quit', () => {
     // electron-updater installs queued update via autoInstallOnAppQuit
   })
+}
+
+export async function checkForUpdatesManual(): Promise<void> {
+  if (manualCheckInFlight) return
+  manualCheckInFlight = true
+
+  try {
+    if (is.dev) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: 'Updates',
+        message: 'Auto-update is disabled in development builds.',
+        buttons: ['OK']
+      })
+      return
+    }
+
+    configureUpdater()
+    log.info('manual check requested')
+    const result = await autoUpdater.checkForUpdates()
+
+    if (result?.downloadPromise) {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: 'Update available',
+        message: `Cinna Desktop ${result.updateInfo.version} is downloading.`,
+        detail: `You'll be prompted to restart once the download completes.`,
+        buttons: ['OK']
+      })
+    } else {
+      await dialog.showMessageBox({
+        type: 'info',
+        title: 'You’re up to date',
+        message: `Cinna Desktop ${app.getVersion()} is the latest version.`,
+        buttons: ['OK']
+      })
+    }
+  } catch (err) {
+    log.error(`manual check failed: ${(err as Error).message}`)
+    await dialog.showMessageBox({
+      type: 'error',
+      title: 'Updates',
+      message: 'Could not check for updates.',
+      detail: (err as Error).message,
+      buttons: ['OK']
+    })
+  } finally {
+    manualCheckInFlight = false
+  }
 }

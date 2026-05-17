@@ -5,7 +5,7 @@ import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
 import { initSession } from './auth/session'
-import { initAutoUpdater } from './updater/updater'
+import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
 
 let mainWindow: BrowserWindow | null = null
@@ -58,7 +58,26 @@ app.whenReady().then(() => {
   }
 
   const menu = Menu.buildFromTemplate([
-    { role: 'appMenu' },
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        {
+          label: 'Check for Updates…',
+          click: () => {
+            void checkForUpdatesManual()
+          }
+        },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' }
+      ]
+    },
     {
       label: 'Edit',
       submenu: [
