@@ -2,6 +2,10 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
+import {
+  UPDATER_BROADCAST_CHANNEL,
+  type UpdaterState
+} from '../shared/updaterState'
 
 export interface ChatData {
   id: string
@@ -434,6 +438,17 @@ const api = {
     },
     cancel: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('llm:cancel', requestId)
+  },
+
+  updater: {
+    getState: (): Promise<UpdaterState> => ipcRenderer.invoke('updater:get-state'),
+    promptInstall: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('updater:prompt-install'),
+    onState: (handler: (state: UpdaterState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: UpdaterState): void => handler(state)
+      ipcRenderer.on(UPDATER_BROADCAST_CHANNEL, listener)
+      return () => ipcRenderer.off(UPDATER_BROADCAST_CHANNEL, listener)
+    }
   }
 }
 

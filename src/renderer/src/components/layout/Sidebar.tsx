@@ -14,6 +14,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
+import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 import { InterfaceMenu } from './InterfaceMenu'
 
 const settingsMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
@@ -100,6 +101,7 @@ export function Sidebar(): React.JSX.Element {
           <UserMenu compact />
           <div className="flex-1" />
           {isCinnaUser && <AgentStatusButton />}
+          <UpdateStatusButton />
           <InterfaceMenu />
         </div>
       </div>

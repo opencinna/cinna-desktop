@@ -8,6 +8,7 @@ import { registerAgentHandlers } from './agent.ipc'
 import { registerAgentStatusHandlers } from './agent_status.ipc'
 import { registerAuthHandlers } from './auth.ipc'
 import { registerLoggerHandlers } from './logger.ipc'
+import { registerUpdaterHandlers } from './updater.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -20,4 +21,5 @@ export function registerAllIpcHandlers(): void {
   registerChatModeHandlers()
   registerAgentHandlers()
   registerAgentStatusHandlers()
+  registerUpdaterHandlers()
 }

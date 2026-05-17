@@ -78,6 +78,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Logger](development/logger/logger.md) — In-app debug logger with full-window overlay, scoped loggers for main/renderer, ⌘` keyboard shortcut
 - [Main-Process Layering](development/main_layering/main_layering_llm.md) — `db → services → ipc` convention, `ipcHandle()` wrap, DomainError codes, DTO masking (LLM reference)
 - [Release & Distribution](development/distribution/release.md) — Full release cycle: macOS signing/notarization, Linux build via GitHub Actions, GitHub Releases, in-app auto-update
+- [Auto-Update](development/auto_update/auto_update.md) — Runtime auto-update behavior: state machine, sidebar footer progress indicator, "Check for Updates…" menu, restart prompt
 
 ## Architecture
 

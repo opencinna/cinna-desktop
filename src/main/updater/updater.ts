@@ -1,7 +1,11 @@
-import { app, dialog } from 'electron'
+import { app, BrowserWindow, dialog } from 'electron'
 import electronUpdater from 'electron-updater'
 import { is } from '@electron-toolkit/utils'
 import { createLogger } from '../logger/logger'
+import {
+  UPDATER_BROADCAST_CHANNEL,
+  type UpdaterState
+} from '../../shared/updaterState'
 
 const { autoUpdater } = electronUpdater
 
@@ -10,7 +14,48 @@ const log = createLogger('updater')
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000
 
 let updaterConfigured = false
-let manualCheckInFlight = false
+let currentState: UpdaterState = { phase: 'idle' }
+
+function setState(next: UpdaterState): void {
+  currentState = next
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send(UPDATER_BROADCAST_CHANNEL, currentState)
+    }
+  }
+}
+
+export function getUpdaterState(): UpdaterState {
+  return currentState
+}
+
+async function promptInstall(version: string): Promise<void> {
+  const { response } = await dialog.showMessageBox({
+    type: 'info',
+    buttons: ['Restart now', 'Later'],
+    defaultId: 0,
+    cancelId: 1,
+    title: 'Update ready',
+    message: `Cinna Desktop ${version} is ready to install.`,
+    detail: 'The app will restart to apply the update.'
+  })
+  if (response === 0) {
+    autoUpdater.quitAndInstall()
+  }
+}
+
+export async function promptInstallCurrent(): Promise<void> {
+  if (currentState.phase !== 'downloaded') {
+    await dialog.showMessageBox({
+      type: 'info',
+      title: 'Updates',
+      message: 'No update is ready to install yet.',
+      buttons: ['OK']
+    })
+    return
+  }
+  await promptInstall(currentState.version)
+}
 
 function configureUpdater(): void {
   if (updaterConfigured) return
@@ -27,29 +72,32 @@ function configureUpdater(): void {
   } as never
 
   autoUpdater.on('checking-for-update', () => log.info('checking for update'))
-  autoUpdater.on('update-available', (info) =>
+
+  autoUpdater.on('update-available', (info) => {
     log.info(`update available: ${info.version}`)
-  )
+    // Already-downloaded state wins — don't overwrite it with downloading(0)
+    // when the periodic check re-discovers the same version.
+    if (currentState.phase === 'downloaded' && currentState.version === info.version) {
+      return
+    }
+    setState({ phase: 'downloading', version: info.version, percent: 0 })
+  })
+
   autoUpdater.on('update-not-available', () => log.info('no update available'))
+
   autoUpdater.on('error', (err) => log.error(`updater error: ${err.message}`))
-  autoUpdater.on('download-progress', (p) =>
+
+  autoUpdater.on('download-progress', (p) => {
     log.debug(`download ${p.percent.toFixed(1)}% (${p.transferred}/${p.total})`)
-  )
+    if (currentState.phase === 'downloaded') return
+    const version = currentState.phase === 'downloading' ? currentState.version : ''
+    setState({ phase: 'downloading', version, percent: p.percent })
+  })
 
   autoUpdater.on('update-downloaded', async (info) => {
     log.info(`update downloaded: ${info.version} — prompting user`)
-    const { response } = await dialog.showMessageBox({
-      type: 'info',
-      buttons: ['Restart now', 'Later'],
-      defaultId: 0,
-      cancelId: 1,
-      title: 'Update ready',
-      message: `Cinna Desktop ${info.version} is ready to install.`,
-      detail: 'The app will restart to apply the update.'
-    })
-    if (response === 0) {
-      autoUpdater.quitAndInstall()
-    }
+    setState({ phase: 'downloaded', version: info.version })
+    await promptInstall(info.version)
   })
 }
 
@@ -75,9 +123,6 @@ export function initAutoUpdater(): void {
 }
 
 export async function checkForUpdatesManual(): Promise<void> {
-  if (manualCheckInFlight) return
-  manualCheckInFlight = true
-
   try {
     if (is.dev) {
       await dialog.showMessageBox({
@@ -101,6 +146,8 @@ export async function checkForUpdatesManual(): Promise<void> {
         detail: `You'll be prompted to restart once the download completes.`,
         buttons: ['OK']
       })
+    } else if (currentState.phase === 'downloaded') {
+      await promptInstall(currentState.version)
     } else {
       await dialog.showMessageBox({
         type: 'info',
@@ -118,7 +165,5 @@ export async function checkForUpdatesManual(): Promise<void> {
       detail: (err as Error).message,
       buttons: ['OK']
     })
-  } finally {
-    manualCheckInFlight = false
   }
 }
