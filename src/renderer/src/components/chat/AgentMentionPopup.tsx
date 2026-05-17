@@ -1,5 +1,6 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import type { RefObject } from 'react'
 import { Bot } from 'lucide-react'
+import { MentionPopup } from './MentionPopup'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -14,99 +15,18 @@ interface AgentMentionPopupProps {
   anchorRef?: RefObject<HTMLElement | null>
 }
 
-export function AgentMentionPopup({
-  items,
-  selectedIndex,
-  onSelect,
-  onClose,
-  listboxId,
-  anchorRef
-}: AgentMentionPopupProps): React.JSX.Element | null {
-  const ref = useRef<HTMLDivElement>(null)
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
-
-  useEffect(() => {
-    const handler = (e: MouseEvent): void => {
-      const target = e.target as Node
-      if (ref.current?.contains(target)) return
-      if (anchorRef?.current?.contains(target)) return
-      onClose()
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [onClose, anchorRef])
-
-  useEffect(() => {
-    itemRefs.current[selectedIndex]?.scrollIntoView({ block: 'nearest' })
-  }, [selectedIndex])
-
-  if (items.length === 0) return null
-
+export function AgentMentionPopup(props: AgentMentionPopupProps): React.JSX.Element | null {
   return (
-    <div
-      ref={ref}
-      className="absolute bottom-full mb-1 left-0 w-72 bg-[var(--color-bg-secondary)]
-        border border-[var(--color-border)] rounded-lg shadow-xl z-50 overflow-hidden"
-    >
-      <div className="px-2.5 pt-2 pb-1">
-        <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">
-          Agents
-        </div>
-      </div>
-
-      <ul
-        id={listboxId}
-        role="listbox"
-        aria-label="Agents"
-        className="px-1.5 pb-1.5 space-y-0.5 max-h-72 overflow-y-auto list-none m-0"
-      >
-        {items.map((agent, i) => {
-          const isActive = i === selectedIndex
-          const optionId = `${listboxId}-opt-${i}`
-
-          return (
-            <li key={agent.id} role="presentation">
-              <button
-                id={optionId}
-                role="option"
-                aria-selected={isActive}
-                type="button"
-                ref={(el) => {
-                  itemRefs.current[i] = el
-                }}
-                onClick={() => onSelect(agent)}
-                className={`w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer ${
-                  isActive
-                    ? 'bg-[var(--color-accent)]/10 border-l-2 border-[var(--color-accent)]'
-                    : 'hover:bg-[var(--color-bg-hover)] border-l-2 border-transparent'
-                }`}
-              >
-                <div className="flex items-center gap-1.5">
-                  <Bot
-                    size={12}
-                    className={
-                      isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
-                    }
-                  />
-                  <span
-                    className={`text-xs font-medium ${isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}
-                  >
-                    {agent.name}
-                  </span>
-                  <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
-                    {agent.protocol.toUpperCase()}
-                  </span>
-                </div>
-                {agent.description && (
-                  <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] truncate">
-                    {agent.description}
-                  </div>
-                )}
-              </button>
-            </li>
-          )
-        })}
-      </ul>
-    </div>
+    <MentionPopup<AgentData>
+      {...props}
+      header="Agents"
+      ariaLabel="Agents"
+      icon={Bot}
+      width="w-72"
+      getKey={(agent) => agent.id}
+      getPrimary={(agent) => agent.name}
+      getSecondary={(agent) => agent.description}
+      getMeta={(agent) => agent.protocol.toUpperCase()}
+    />
   )
 }

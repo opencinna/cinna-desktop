@@ -13,9 +13,11 @@
     --color-text: #e0e0e0;
     --color-text-secondary: #999;
     --color-text-muted: #666;
-    --color-accent: #6366f1;
-    --color-accent-hover: #818cf8;
-    --color-user-bubble: #2d2b55;
+    --color-accent: #d97a4a;
+    --color-accent-hover: #e8a87c;
+    /* Foreground laid over the accent (e.g. selected items on accent-tinted surfaces). */
+    --color-on-accent: #ffffff;
+    --color-user-bubble: #3d2818;
     --color-danger: #ef4444;
     --color-success: #22c55e;
     --color-warning: #eab308;
@@ -48,9 +50,11 @@
     --color-text: #1a1a1a;
     --color-text-secondary: #555;
     --color-text-muted: #999;
-    --color-accent: #6366f1;
-    --color-accent-hover: #4f46e5;
-    --color-user-bubble: #e8e7f8;
+    --color-accent: #2e88b8;
+    --color-accent-hover: #226a92;
+    /* Light-theme accents are desaturated; black reads better than white on top. */
+    --color-on-accent: #1a1a1a;
+    --color-user-bubble: #d4e6f1;
     --color-danger: #dc2626;
     --color-success: #16a34a;
     --color-warning: #ca8a04;

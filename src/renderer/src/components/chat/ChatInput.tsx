@@ -123,11 +123,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const filteredCommands = useMemo(() => {
     const q = triggerFilter.toLowerCase()
     return commands.filter(
-      (c) =>
-        c.slug.toLowerCase().includes(q) ||
-        c.name.toLowerCase().includes(q) ||
-        c.command.toLowerCase().includes(q) ||
-        c.description.toLowerCase().includes(q)
+      (c) => c.slug.toLowerCase().includes(q) || c.command.toLowerCase().includes(q)
     )
   }, [commands, triggerFilter])
 

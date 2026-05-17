@@ -133,8 +133,8 @@ export function AgentSelector({
 
       {open && (
         <div
-          className="absolute bottom-full mb-1 left-0 w-72 bg-[var(--color-bg-secondary)]
-            border border-[var(--color-border)] rounded-lg shadow-xl z-50 overflow-hidden"
+          className="absolute bottom-full mb-1 left-0 w-72 bg-[var(--color-accent)]/10
+            backdrop-blur-xl border border-[var(--color-accent)]/25 rounded-lg shadow-xl z-50 overflow-hidden"
         >
           <div className="px-2.5 pt-2 pb-1">
             <div className="text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-1.5">
@@ -159,21 +159,21 @@ export function AgentSelector({
                       onClick={() => handleSelect(agent)}
                       className={`w-full text-left px-2.5 py-2 rounded-md transition-all cursor-pointer ${
                         isActive
-                          ? 'bg-[var(--color-accent)]/10 border-l-2 border-[var(--color-accent)]'
-                          : 'hover:bg-[var(--color-bg-hover)] border-l-2 border-transparent'
+                          ? 'bg-[var(--color-accent)] text-white'
+                          : 'hover:bg-[var(--color-bg-hover)]'
                       }`}
                     >
                       <div className="flex items-center gap-1.5">
-                        <Bot size={12} className={isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'} />
-                        <span className={`text-xs font-medium ${isActive ? 'text-[var(--color-accent)]' : 'text-[var(--color-text)]'}`}>
+                        <Bot size={12} className={isActive ? 'text-white' : 'text-[var(--color-text-muted)]'} />
+                        <span className={`text-xs font-medium ${isActive ? 'text-white' : 'text-[var(--color-text)]'}`}>
                           {agent.name}
                         </span>
-                        <span className="text-[10px] text-[var(--color-text-muted)] ml-auto">
+                        <span className={`text-[10px] ml-auto ${isActive ? 'text-white/70' : 'text-[var(--color-text-muted)]'}`}>
                           {agent.protocol.toUpperCase()}
                         </span>
                       </div>
                       {agent.description && (
-                        <div className="mt-0.5 pl-[18px] text-[10px] text-[var(--color-text-muted)] truncate">
+                        <div className={`mt-0.5 pl-[18px] text-[10px] truncate ${isActive ? 'text-white/80' : 'text-[var(--color-text-muted)]'}`}>
                           {agent.description}
                         </div>
                       )}

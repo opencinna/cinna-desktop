@@ -27,7 +27,7 @@
 | File | Role |
 |------|------|
 | `src/renderer/src/hooks/useCliCommands.ts` | TanStack Query hook. Query key `['agents', 'cli-commands', agentId]`, `enabled` gated on a truthy `agentId`, `staleTime: 15_000`, `retry: 1` (one retry covers a transient blip without amplifying outages), `refetchOnWindowFocus: true` (card refreshes when the user returns to the agent screen). Re-exports `CliCommand` for colocation with consumers. |
-| `src/renderer/src/components/chat/CliCommandPopup.tsx` | Presentational `/` popup. Same contract as `ExamplePromptPopup` — receives pre-filtered `items`, a `selectedIndex`, and emits `onSelect` / `onClose`. Renders each command's invocation string (`cmd.command`) as the primary label, the skill's `name` as a trailing tag, and the first line of the description underneath. Uses `lucide-react`'s `Terminal` icon. |
+| `src/renderer/src/components/chat/CliCommandPopup.tsx` | Thin wrapper around the shared [Mention Popups](../mention_popups/mention_popups.md) primitive — binds `CliCommand`, declares the `Terminal` icon, `Agent Commands` header, `w-80` width, and a 2-line-clamped `cmd.description` secondary. Primary label is the invocation string (`cmd.command`, e.g. `/run:status`). |
 | `src/renderer/src/components/chat/ChatInput.tsx` | Adds `/` to `TriggerChar` and to `findTriggerToken`. Invokes `useCliCommands(promptSourceAgent?.id)` alongside the existing prompt extraction; memoises the result array. New `filteredCommands`, `commandPopupOpen`, `selectCommand`, and a `commandGate` in `handleInput`. `activeListLength` and the Enter/Tab branch extended to cover the command popup. ARIA wiring (`aria-expanded`, `aria-controls`, `aria-activedescendant`) extended. |
 
 ## Database Schema
@@ -49,18 +49,15 @@ None. CLI commands are fetched fresh from the agent card every time they are req
 
 ### CliCommandPopup
 
-- Props: `items`, `selectedIndex`, `onSelect`, `onClose`, `listboxId`, `anchorRef?`
-- Renders nothing when `items` is empty
-- Scrolls the active `<button role="option">` into view on `selectedIndex` change
-- Outside-click handler ignores clicks inside `anchorRef` so typing in the textarea doesn't close the popup
-- Visual layout mirrors `ExamplePromptPopup` with a terminal icon and the invocation string (`/run:<slug>`) as the primary label
+- Thin wrapper over the shared `MentionPopup<T>` primitive — see [Mention Popups](../mention_popups/mention_popups.md) for the listbox shell, ARIA semantics, theming, and outside-click handling
+- Wrapper-specific config: `Terminal` icon, `Agent Commands` header, `w-80` width, 2-line-clamped secondary
 
 ### ChatInput extensions
 
 - `TriggerChar` union extended to `'@' | '#' | '/'`
 - `findTriggerToken` scans backward for any of the three trigger characters
 - `commandPopupOpen = triggerChar === '/' && commands.length > 0`
-- `filteredCommands` matches against `slug`, `name`, `command`, and `description`
+- `filteredCommands` matches **only** `slug` and `command` (the signature parts) — `name` and `description` are intentionally excluded so a filter like `/status` does not pull in commands whose human-readable text happens to contain "status"
 - `selectCommand(cmd)` replaces the `/filter` token with `cmd.command` (no auto-send, consistent with `#`)
 - `commands` memoised via `useMemo(() => cliCommands ?? [], [cliCommands])` so the filter `useMemo` stays stable across renders that leave the query data unchanged
 

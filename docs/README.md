@@ -53,6 +53,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Chat Modes](chat/chat_modes/chat_modes.md) — Named presets bundling LLM provider/model, MCP servers, and color scheme for one-click chat setup
 - [Example Prompts](chat/example_prompts/example_prompts.md) — Remote-agent starter prompts shown as an animated tag cloud and surfaced via `#` in the chat input
 - [CLI Commands](chat/cli_commands/cli_commands.md) — `/` picker surfacing an agent's `cinna.run.*` shell commands; selecting one inserts the `/run:<slug>` invocation string
+- [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
