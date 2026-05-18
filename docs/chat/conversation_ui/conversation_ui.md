@@ -47,7 +47,7 @@ MessageStream
   ├── MessageBubble (role=user)    -> right-aligned bubble, no icon
   ├── MessageBubble (role=assistant) -> full-width plain text
   ├── ThinkingBlock                -> collapsible dimmed card (brain icon, italic body)
-  ├── ToolNarrationBlock           -> collapsible dimmed card (wrench icon, "Tool: <name>")
+  ├── ToolNarrationBlock           -> collapsible dimmed card (wrench icon; header is "Tool: <name>" in compact mode, "<name>(<args>)" in verbose mode when cinna.tool_input is present)
   ├── ToolCallBlock                -> collapsible, borderless until hover/expand (MCP tool calls)
   ├── SystemMessage                -> centered error box (inline in MessageStream)
   └── Loading dots                 -> three bouncing dots, no wrapper

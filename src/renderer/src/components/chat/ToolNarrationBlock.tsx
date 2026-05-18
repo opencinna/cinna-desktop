@@ -3,6 +3,7 @@ import { Wrench, ChevronRight } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { useUIStore } from '../../stores/ui.store'
 import { ToolCallSummary } from './ToolCallSummary'
 
 interface ToolNarrationBlockProps {
@@ -24,8 +25,12 @@ export function ToolNarrationBlock({
   animate,
   animateDelay
 }: ToolNarrationBlockProps): React.JSX.Element {
+  const verboseMode = useUIStore((s) => s.verboseMode)
   const [expanded, setExpanded] = useState(defaultExpanded ?? !!isStreaming)
   const hasStructured = !!(toolName && toolInput)
+  // Compact mode hides structured args in the always-visible header; the
+  // expanded body still shows full detail when the user clicks through.
+  const showStructuredHeader = hasStructured && verboseMode
 
   return (
     <div
@@ -48,7 +53,7 @@ export function ToolNarrationBlock({
         />
         <Wrench size={11} className="shrink-0" />
         <span className="flex-1 min-w-0 truncate">
-          {hasStructured ? (
+          {showStructuredHeader ? (
             <ToolCallSummary name={toolName!} input={toolInput} variant="inline" />
           ) : toolName ? (
             <>

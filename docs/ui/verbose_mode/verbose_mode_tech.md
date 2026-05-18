@@ -17,7 +17,8 @@
 | `src/renderer/src/components/chat/MessageMetaFooter.tsx` | Single-message footer: relative timestamp span + info button. Uses `useRelativeNow()` for the tick and `MetaPopup` for the info panel. Owns `buildMeta()` which selects and labels the fields surfaced in the popup. |
 | `src/renderer/src/components/chat/MetaPopup.tsx` | Shared popup used by both `MessageMetaFooter` and `MessageBubble`. Accepts `meta`, `align`, `onClose`. Positions itself with `absolute bottom-full mb-1` above the nearest `relative` parent. Closes on `mousedown` outside the popup. |
 | `src/renderer/src/components/chat/MessageBubble.tsx` | Consumes the shared `MetaPopup` for its own hover-info use case (assistant messages with a `meta` prop). Verbose mode does not touch the hover popup path — it only adds the persistent footer. |
-| `src/renderer/src/components/chat/ThinkingBlock.tsx` / `ToolNarrationBlock.tsx` | Unchanged APIs. The `defaultExpanded` prop (already present) is what `MessageStream` uses to gate verbose vs compact expansion during streaming. Behaviour: `useState(defaultExpanded ?? !!isStreaming)` — when `defaultExpanded` is `false`, the block mounts collapsed even while `isStreaming` is true; when `undefined`, it falls back to `!!isStreaming`. |
+| `src/renderer/src/components/chat/ThinkingBlock.tsx` | Unchanged API. The `defaultExpanded` prop (already present) is what `MessageStream` uses to gate verbose vs compact expansion during streaming. Behaviour: `useState(defaultExpanded ?? !!isStreaming)` — when `defaultExpanded` is `false`, the block mounts collapsed even while `isStreaming` is true; when `undefined`, it falls back to `!!isStreaming`. |
+| `src/renderer/src/components/chat/ToolNarrationBlock.tsx` | Same `defaultExpanded` gating as `ThinkingBlock` for the initial expansion state. Additionally subscribes to `useUIStore((s) => s.verboseMode)` to decide its header rendering: when verbose and `cinna.tool_input` is present, the header renders `<ToolCallSummary variant="inline">` (name + truncated args); otherwise it falls back to `Tool: <toolName>`. The expanded body always renders the structured `<ToolCallSummary variant="block">` when input is present, so compact mode never hides information — it only collapses the always-visible header. Reading the store inside the leaf component (not via prop) keeps the verbose toggle reactive at every mount site without prop-drilling. |
 
 ### Renderer — Hooks
 
@@ -57,6 +58,14 @@
    - Compact (`defaultExpanded === false`) → mounts collapsed regardless of `isStreaming`
    - Verbose (`defaultExpanded === undefined`) → falls back to `!!isStreaming`, matching legacy behaviour
 3. When streaming completes, `streamingBlocks` clears and the persisted message renders via `parts[]`. Fresh block instances mount there with no `defaultExpanded` and `isStreaming` undefined — they default to collapsed in both modes (unchanged).
+
+### Tool narration header gating
+
+1. `ToolNarrationBlock` reads `verboseMode` from `useUIStore` on every render. The header decision is `showStructuredHeader = hasStructured && verboseMode` where `hasStructured = !!(toolName && toolInput)`.
+2. When `showStructuredHeader` is true, the header renders `<ToolCallSummary name={toolName} input={toolInput} variant="inline" />`.
+3. Otherwise the header falls back to the literal `Tool: <toolName>` (or just `Tool` when name is also absent).
+4. Because the store is read inside the leaf component, toggling verbose in the sidebar re-renders every mounted header immediately — `MessageStream` does not need to pass the flag through, and no prop-drilling is required across the three `ToolNarrationBlock` mount sites (persisted parts × verbose layout, persisted parts × compact layout, streaming blocks).
+5. The expanded body is independent of `verboseMode` — it always renders the `variant="block"` summary when `hasStructured`, so the compact mode hides info from the always-visible header only, not from the on-demand expanded view.
 
 ## Type Derivation
 

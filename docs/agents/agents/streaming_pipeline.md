@@ -2,7 +2,7 @@
 
 ## Purpose
 
-How A2A streaming events from a remote agent become structured, kind-routed message parts in the UI and DB. Focused on the per-part delta computation, the `cinna.content_kind` / `cinna.tool_name` metadata contract with the Cinna backend, and the persisted `parts[]` shape.
+How A2A streaming events from a remote agent become structured, kind-routed message parts in the UI and DB. Focused on the per-part delta computation, the `cinna.content_kind` / `cinna.tool_name` / `cinna.tool_input` metadata contract with the Cinna backend, and the persisted `parts[]` shape.
 
 ## Core Concepts
 
@@ -11,8 +11,9 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 | **TextPart** | A2A protocol text fragment inside a `Message` or `Artifact`. May carry arbitrary `metadata` |
 | **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, or `'tool'`. Defaults to `'text'` when absent |
 | **Tool Name** | Value of `metadata['cinna.tool_name']` on a `tool`-kind part — names the tool the agent is narrating about |
+| **Tool Input** | Value of `metadata['cinna.tool_input']` on a `tool`-kind part — structured arguments object (e.g. `{ command: "ls -la" }` for Bash). Used by `ToolNarrationBlock` to render the inline `<ToolCallSummary>` header in verbose mode |
 | **Per-part delta** | The new substring appended to a TextPart since the last seen snapshot of that part. Keyed by `(messageId, partIndex)` |
-| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName? }` entries persisted on the assistant message row |
+| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName?, toolInput? }` entries persisted on the assistant message row |
 | **Answer text** | Concatenation of `text`-kind parts only — stored in `messages.content` for previews/search/title generation |
 
 ## Cinna Metadata Contract (with the backend)
@@ -23,6 +24,7 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 |--------------|------|----------|---------|
 | `cinna.content_kind` | `'text' \| 'thinking' \| 'tool'` | Every part | Tells client which block to render this fragment in |
 | `cinna.tool_name` | string | Only on `tool`-kind parts | Names the tool being narrated about |
+| `cinna.tool_input` | object | Optional, only on `tool`-kind parts | Structured arguments for the tool call (e.g. `{ command, description }` for Bash). When present, the renderer can show a compact `<ToolCallSummary>` inline header in verbose mode and a structured argument block in the expanded body |
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
@@ -43,9 +45,11 @@ For each event (status-update | artifact-update | message | task):
         if no delta -> skip
         seenPartText.set(key, text)
         kind = metadata['cinna.content_kind'] ?? 'text'
-        toolName = (kind === 'tool') ? metadata['cinna.tool_name'] : undefined
+        toolName  = (kind === 'tool') ? metadata['cinna.tool_name']  : undefined
+        toolInput = (kind === 'tool') ? metadata['cinna.tool_input'] : undefined
         append to internal parts[] (merge with last only if same kind+toolName)
-        port.postMessage({ type: 'delta', kind, text: delta, toolName })
+        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput })
+        if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
   - Forward `{ type: 'status', state, taskId, contextId }` to the renderer
   ↓
@@ -72,7 +76,8 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | `type` | `'delta'` | Discriminator |
 | `kind` | `ContentKind` | `'text' \| 'thinking' \| 'tool'` |
 | `text` | string | The fragment to append (already a delta — renderer does not need to dedupe) |
-| `toolName` | string \| undefined | Set only when `kind === 'tool'` |
+| `toolName` | string \| undefined | Set only when `kind === 'tool'` and `cinna.tool_name` was present |
+| `toolInput` | object \| undefined | Set only when `kind === 'tool'` and `cinna.tool_input` was a plain object. Carried through `appendDelta` and merged onto the in-flight streaming block so `ToolNarrationBlock` can render the inline tool-call summary as soon as it arrives |
 
 ## Persisted Shape (`messages.parts`)
 
@@ -81,10 +86,12 @@ Stored as JSON on the `messages` row:
 ```
 [
   { "kind": "thinking", "text": "**Considering user request**\n\nI think..." },
-  { "kind": "tool", "text": "Calling search...", "toolName": "web_search" },
+  { "kind": "tool", "text": "Calling search...", "toolName": "web_search", "toolInput": { "query": "weather paris" } },
   { "kind": "text", "text": "Here is the answer..." }
 ]
 ```
+
+`toolInput` is optional — older parts and any backend that doesn't emit `cinna.tool_input` simply omit the field.
 
 Renderer prefers `parts[]` when present; falls back to `messages.content` (the flat answer text) for legacy/LLM messages with no parts.
 
@@ -94,7 +101,7 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 
 - `kind: 'text'` → `MessageBubble` (assistant role, full-width markdown, no border)
 - `kind: 'thinking'` → `ThinkingBlock` (collapsible dimmed card with brain icon, italic markdown body)
-- `kind: 'tool'` → `ToolNarrationBlock` (collapsible card with wrench icon + `Tool: <toolName>` header)
+- `kind: 'tool'` → `ToolNarrationBlock` (collapsible card with wrench icon). Header is `Tool: <toolName>` in compact mode; in verbose mode and when `toolInput` is present, the header renders an inline `<ToolCallSummary>` (`name(arg: value, …)`). Expanded body always shows the structured `<ToolCallSummary>` block when `toolInput` is present. See [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) for the gating rules
 
 Streaming blocks merge consecutive deltas only when both `kind` AND `toolName` match — same merge rule as the main-process accumulator.
 

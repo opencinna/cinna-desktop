@@ -59,6 +59,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Example Prompts](chat/example_prompts/example_prompts.md) — Remote-agent starter prompts shown as an animated tag cloud and surfaced via `#` in the chat input
 - [CLI Commands](chat/cli_commands/cli_commands.md) — `/` picker surfacing an agent's `cinna.run.*` shell commands; selecting one inserts the `/run:<slug>` invocation string
 - [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
+- [Multi-Agent Chats](chat/multi_agent/multi_agent.md) — In-chat `@-mention` routing to additional agents, smart-rewrite on agent join (double-send), catch-up replay across agent switches
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
@@ -75,7 +76,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 ### UI
 - [App Shell](ui/app_shell/app_shell.md) — Window chrome: permanent top bar (traffic-light gutter, sidebar toggle, new chat), animated floating sidebar, profile/agent/interface footer menus
 - [Settings](ui/settings/settings.md) — Settings screen with sidebar navigation, LLM provider and MCP server configuration
-- [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, and streaming block auto-expand behaviour
+- [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, streaming block auto-expand, and structured tool-call headers in tool narration
 - [Keyboard Shortcuts](ui/keyboard_shortcuts/keyboard_shortcuts.md) — Registry of every shortcut: global menu accelerators (⌘`), context-scoped ESC, chord patterns (double-ESC) and input-popup navigation
 
 ### Development
