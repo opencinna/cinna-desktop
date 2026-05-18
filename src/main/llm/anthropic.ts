@@ -1,8 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
-import { createLogger } from '../logger/logger'
-
-const logger = createLogger('Anthropic')
 
 export class AnthropicAdapter implements LLMAdapter {
   readonly providerType = 'anthropic'
@@ -15,35 +12,16 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    try {
-      const models: ModelInfo[] = []
-      for await (const model of this.client.beta.models.list()) {
-        models.push({
-          id: model.id,
-          name: model.display_name,
-          providerId: this.providerId,
-          providerType: this.providerType
-        })
-      }
-      return models
-    } catch (err) {
-      // Fallback if the beta models endpoint is unavailable — log so the user
-      // can see the real reason in the logger overlay.
-      logger.warn('listModels via beta endpoint failed; using hardcoded fallback', {
-        providerId: this.providerId,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      return [
-        { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
-        { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
-        { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' }
-      ].map((m) => ({
-        id: m.id,
-        name: m.name,
+    const models: ModelInfo[] = []
+    for await (const model of this.client.beta.models.list()) {
+      models.push({
+        id: model.id,
+        name: model.display_name,
         providerId: this.providerId,
         providerType: this.providerType
-      }))
+      })
     }
+    return models
   }
 
   async stream(params: StreamParams): Promise<StreamResult> {

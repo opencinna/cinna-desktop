@@ -50,6 +50,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 ### Auth
 - [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with optional password auth, user-scoped data isolation, session management
 - [Cinna Accounts](auth/cinna_accounts/cinna_accounts.md) — OAuth 2.0 + PKCE connection to remote Cinna servers (cloud or self-hosted), token rotation
+- [Onboarding](auth/onboarding/onboarding.md) — First-launch welcome screen: pick API key (validate + auto-create default chat mode) or Cinna Server (reuses self-hosted OAuth flow); force-on-restart toggle in Development settings for QA
 
 ### Chat
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop

@@ -1,31 +1,17 @@
 import { useState } from 'react'
 import { ArrowLeft, Cloud, HardDrive, Loader2, X } from 'lucide-react'
 import { useRegister, useCinnaOAuthAbort } from '../../hooks/useAuth'
+import {
+  readSelfHostedHistory,
+  writeSelfHostedHistory,
+  prependSelfHostedHistory
+} from '../../constants/selfHostedHistory'
 
 interface RegisterFormProps {
   onSuccess: () => void
 }
 
 type Step = 'type-select' | 'cinna-hosting' | 'local-form' | 'cinna-waiting'
-
-const SELFHOSTED_HISTORY_KEY = 'cinna-selfhosted-history'
-const SELFHOSTED_HISTORY_LIMIT = 8
-
-function readSelfHostedHistory(): string[] {
-  try {
-    const raw = localStorage.getItem(SELFHOSTED_HISTORY_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((v): v is string => typeof v === 'string')
-  } catch {
-    return []
-  }
-}
-
-function writeSelfHostedHistory(urls: string[]): void {
-  localStorage.setItem(SELFHOSTED_HISTORY_KEY, JSON.stringify(urls))
-}
 
 const inputClass =
   'w-full px-3 py-2 text-sm rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:ring-1 focus:ring-[var(--color-accent)]'
@@ -83,10 +69,7 @@ export function RegisterForm({ onSuccess }: RegisterFormProps): React.JSX.Elemen
     })
 
     if (result.success) {
-      const next = [trimmedUrl, ...selfHostedHistory.filter((u) => u !== trimmedUrl)].slice(
-        0,
-        SELFHOSTED_HISTORY_LIMIT
-      )
+      const next = prependSelfHostedHistory(selfHostedHistory, trimmedUrl)
       writeSelfHostedHistory(next)
       setSelfHostedHistory(next)
       onSuccess()

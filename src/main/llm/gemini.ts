@@ -10,29 +10,74 @@ import type {
   FunctionDeclarationSchema
 } from '@google/generative-ai'
 
+// The `@google/generative-ai` SDK doesn't expose a list-models call, so we
+// hit the public REST endpoint directly. Returns models filtered to those
+// that support `generateContent` (i.e. usable for text chat).
+interface GeminiRestModel {
+  name: string // "models/<id>"
+  displayName?: string
+  supportedGenerationMethods?: string[]
+}
+
+interface GeminiListModelsResponse {
+  models?: GeminiRestModel[]
+  nextPageToken?: string
+}
+
+async function fetchGeminiModels(apiKey: string): Promise<GeminiRestModel[]> {
+  const base = 'https://generativelanguage.googleapis.com/v1beta/models'
+  const collected: GeminiRestModel[] = []
+  let pageToken: string | undefined
+  for (let i = 0; i < 5; i++) {
+    const url = new URL(base)
+    url.searchParams.set('key', apiKey)
+    url.searchParams.set('pageSize', '100')
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+    const res = await fetch(url.toString())
+    if (!res.ok) {
+      // Use the bracketed status format that parseError() recognizes so the
+      // listModels error path produces the same friendly messages as the
+      // streaming path (401 → "Invalid API key", 429 → "Rate limit exceeded", etc.)
+      throw new Error(`Gemini list-models failed [${res.status} ${res.statusText}]`)
+    }
+    const data = (await res.json()) as GeminiListModelsResponse
+    if (data.models) collected.push(...data.models)
+    if (!data.nextPageToken) break
+    pageToken = data.nextPageToken
+  }
+  return collected
+}
+
 export class GeminiAdapter implements LLMAdapter {
   readonly providerType = 'gemini'
   private genAI: GoogleGenerativeAI
+  private apiKey: string
   private providerId: string
 
   constructor(apiKey: string, providerId: string) {
     this.genAI = new GoogleGenerativeAI(apiKey)
+    this.apiKey = apiKey
     this.providerId = providerId
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const models = [
-      { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro' },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash' }
-    ]
-
-    return models.map((m) => ({
-      id: m.id,
-      name: m.name,
-      providerId: this.providerId,
-      providerType: this.providerType
-    }))
+    let raw: GeminiRestModel[]
+    try {
+      raw = await fetchGeminiModels(this.apiKey)
+    } catch (err) {
+      // Route through parseError so the user sees the same friendly copy as
+      // the chat-stream path ("Invalid API key" instead of "401 Unauthorized").
+      const mapped = this.parseError(err instanceof Error ? err : new Error(String(err)))
+      throw new Error(mapped.short)
+    }
+    return raw
+      .filter((m) => m.supportedGenerationMethods?.includes('generateContent'))
+      .map((m) => ({
+        id: m.name.replace(/^models\//, ''),
+        name: m.displayName ?? m.name.replace(/^models\//, ''),
+        providerId: this.providerId,
+        providerType: this.providerType
+      }))
   }
 
   async stream(params: StreamParams): Promise<StreamResult> {

@@ -56,9 +56,11 @@ providerService -> createAdapter(type, apiKey, providerId) [llm/factory.ts]
 
 ## Current Adapters
 
-- **Anthropic** — `client.messages.stream()`, dynamic model list via `client.beta.models.list()` (hardcoded fallback), collects `tool_use` content blocks into `StreamResult.toolCalls`
-- **OpenAI** — `client.chat.completions.create({ stream: true })`, hardcoded model list (GPT-4o, GPT-4o Mini, GPT-4 Turbo, o3, o4 Mini), accumulates partial tool call args during streaming, returns them in `StreamResult`
-- **Gemini** — `chat.sendMessageStream()`, hardcoded model list (Gemini 2.5 Pro, 2.5 Flash, 2.0 Flash), collects `functionCall` parts into `StreamResult.toolCalls`
+- **Anthropic** — `client.messages.stream()`, dynamic model list via `client.beta.models.list()` (no hardcoded fallback — propagates errors so test-key surfaces them), collects `tool_use` content blocks into `StreamResult.toolCalls`
+- **OpenAI** — `client.chat.completions.create({ stream: true })`, dynamic model list via `client.models.list()` filtered to chat-capable IDs (`gpt-*`, `o<digit>-*`, `chatgpt-*`; excludes embeddings/audio/realtime/image/whisper/tts/dall-e/moderation/instruct/fine-tunes), sorted newest first, display name humanized from the id; accumulates partial tool call args during streaming, returns them in `StreamResult`
+- **Gemini** — `chat.sendMessageStream()`, dynamic model list via the REST `v1beta/models` endpoint filtered to `supportedGenerationMethods.includes('generateContent')` (SDK doesn't expose list-models); collects `functionCall` parts into `StreamResult.toolCalls`
+
+No adapter hardcodes versioned model IDs anywhere — listing is always live against the provider's API. If listing fails (network, invalid key, region restriction) the error surfaces through `providerService.testKey()` so the user sees the real cause rather than a stale picker.
 
 ## Adding a New Provider
 

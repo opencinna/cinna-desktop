@@ -4,9 +4,16 @@ import { Sidebar } from './components/layout/Sidebar'
 import { TopBar } from './components/layout/TopBar'
 import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
+import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { useAuthStore } from './stores/auth.store'
+import { useProviders } from './hooks/useProviders'
+import {
+  consumeForceOnboarding,
+  isOnboardingDismissed,
+  markOnboardingDismissed
+} from './constants/onboarding'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -70,11 +77,38 @@ function Shell(): React.JSX.Element {
   )
 }
 
+function OnboardingGate({ children }: { children: React.ReactNode }): React.JSX.Element {
+  const { data: providers, isLoading } = useProviders()
+  // Consume the force-onboarding flag once per session (StrictMode-safe via
+  // module-level memo in `constants/onboarding`).
+  const [forced, setForced] = useState<boolean>(() => consumeForceOnboarding())
+  const [dismissed, setDismissed] = useState<boolean>(() => !forced && isOnboardingDismissed())
+
+  if (isLoading) return <div className="h-full bg-[var(--color-bg)]" />
+
+  const hasProviders = (providers?.length ?? 0) > 0
+  // Forced mode bypasses the dismissed flag AND the providers-count gate so
+  // we can re-trigger onboarding on a fully configured install for testing.
+  if (!forced && (dismissed || hasProviders)) return <>{children}</>
+
+  return (
+    <OnboardingScreen
+      onComplete={() => {
+        markOnboardingDismissed()
+        setDismissed(true)
+        setForced(false)
+      }}
+    />
+  )
+}
+
 function App(): React.JSX.Element {
   return (
     <QueryClientProvider client={queryClient}>
       <AuthGate>
-        <Shell />
+        <OnboardingGate>
+          <Shell />
+        </OnboardingGate>
         <LogsOverlay />
         <AgentStatusOverlay />
       </AuthGate>

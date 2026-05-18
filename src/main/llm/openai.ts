@@ -1,6 +1,51 @@
 import OpenAI from 'openai'
 import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
 
+// Modality / capability flags that disqualify a model from text chat.
+// Substring match (case-insensitive) on the model id.
+const NON_CHAT_TOKENS = [
+  'embedding',
+  'whisper',
+  'tts',
+  'dall-e',
+  'image',
+  'moderation',
+  'audio',
+  'realtime',
+  'transcribe',
+  'search',
+  'computer-use',
+  'omni-moderation'
+]
+
+function isChatCapableId(id: string): boolean {
+  if (id.startsWith('ft:')) return false
+  if (id.startsWith('text-') || id.startsWith('davinci-') || id.startsWith('babbage-')) return false
+  if (/-instruct(\b|-)/i.test(id)) return false
+  const lower = id.toLowerCase()
+  if (NON_CHAT_TOKENS.some((t) => lower.includes(t))) return false
+  // Keep the gpt-*, o<digit>-*, and chatgpt-* families.
+  return /^gpt-/i.test(id) || /^o\d/i.test(id) || /^chatgpt-/i.test(id)
+}
+
+// Best-effort humanization of an OpenAI model id — the SDK doesn't return a
+// display name, so we tokenize the id into something readable. New model
+// families fall through cleanly because we don't enumerate versions.
+function humanizeOpenAIName(id: string): string {
+  const parts = id.split('-').map((p) => {
+    const lower = p.toLowerCase()
+    if (lower === 'gpt') return 'GPT'
+    if (lower === 'chatgpt') return 'ChatGPT'
+    if (/^o\d+$/i.test(p)) return p
+    if (/^\d/.test(p)) return p
+    return p.charAt(0).toUpperCase() + p.slice(1)
+  })
+  if (parts.length <= 2) return parts.join('-')
+  // First two segments stay glued (e.g. "GPT-4o"), the rest become spaced
+  // descriptors (e.g. "Mini", "Turbo").
+  return parts[0] + '-' + parts[1] + ' ' + parts.slice(2).join(' ')
+}
+
 export class OpenAIAdapter implements LLMAdapter {
   readonly providerType = 'openai'
   private client: OpenAI
@@ -12,17 +57,18 @@ export class OpenAIAdapter implements LLMAdapter {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const models = [
-      { id: 'gpt-4o', name: 'GPT-4o' },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini' },
-      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo' },
-      { id: 'o3', name: 'o3' },
-      { id: 'o4-mini', name: 'o4 Mini' }
-    ]
-
-    return models.map((m) => ({
+    const collected: { id: string; created: number }[] = []
+    for await (const m of this.client.models.list()) {
+      if (isChatCapableId(m.id)) {
+        collected.push({ id: m.id, created: m.created ?? 0 })
+      }
+    }
+    // Newest first so the picker surfaces current models without us
+    // hardcoding a "preferred" order that goes stale.
+    collected.sort((a, b) => b.created - a.created)
+    return collected.map((m) => ({
       id: m.id,
-      name: m.name,
+      name: humanizeOpenAIName(m.id),
       providerId: this.providerId,
       providerType: this.providerType
     }))
