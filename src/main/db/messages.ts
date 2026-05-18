@@ -9,6 +9,12 @@ export type { MessagePart }
 export interface SaveUserMessage {
   chatId: string
   content: string
+  /** Multi-agent: agent the message was routed to (null when sent to LLM root). */
+  addressedAgentId?: string | null
+  /** Multi-agent: Smart Rewrite output that was actually sent. */
+  rewrittenText?: string | null
+  /** Multi-agent: user's literal input before rewrite (preserved for audit / learning). */
+  originalText?: string | null
 }
 
 export interface SaveAssistantMessage {
@@ -16,6 +22,8 @@ export interface SaveAssistantMessage {
   content: string
   toolCalls?: Array<{ id: string; name: string; input: Record<string, unknown> }> | null
   parts?: MessagePart[] | null
+  /** Multi-agent: agent that produced this assistant turn (null for LLM root). */
+  sourceAgentId?: string | null
 }
 
 export interface SaveToolCallMessage {
@@ -59,18 +67,23 @@ function getNextSortOrder(chatId: string): number {
 }
 
 export const messageRepo = {
-  saveUser(msg: SaveUserMessage): void {
+  saveUser(msg: SaveUserMessage): string {
+    const id = nanoid()
     getDb()
       .insert(messages)
       .values({
-        id: nanoid(),
+        id,
         chatId: msg.chatId,
         role: 'user',
         content: msg.content,
+        addressedAgentId: msg.addressedAgentId ?? null,
+        rewrittenText: msg.rewrittenText ?? null,
+        originalText: msg.originalText ?? null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })
       .run()
+    return id
   },
 
   saveAssistant(msg: SaveAssistantMessage): void {
@@ -83,6 +96,7 @@ export const messageRepo = {
         content: msg.content,
         toolCalls: msg.toolCalls ?? null,
         parts: msg.parts ?? null,
+        sourceAgentId: msg.sourceAgentId ?? null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })

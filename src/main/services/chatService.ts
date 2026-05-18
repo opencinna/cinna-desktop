@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { chatRepo, ChatRow, ChatUpdateInput, MessageRow } from '../db/chats'
+import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
 import { messageRepo } from '../db/messages'
 import { ChatError } from '../errors'
@@ -66,8 +66,8 @@ export const chatService = {
     logger.info('trash emptied', { removed })
   },
 
-  update(userId: string, chatId: string, updates: ChatUpdateInput): void {
-    const ok = chatRepo.update(userId, chatId, updates)
+  update(userId: string, chatId: string, updates: ChatMetaUpdate): void {
+    const ok = chatRepo.updateMeta(userId, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
   },
 

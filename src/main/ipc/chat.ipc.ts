@@ -62,6 +62,9 @@ export function registerChatHandlers(): void {
       }
     ) => {
       userActivation.requireActivated()
+      // The service signature is `ChatMetaUpdate` only — routing fields
+      // (activeAgentId, smartAssistDisabled) are a compile-time error here
+      // and must go through the `multiAgent:*` channels.
       chatService.update(getProfileScopeUserId(), chatId, updates)
       return { success: true }
     }

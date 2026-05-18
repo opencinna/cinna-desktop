@@ -27,7 +27,14 @@ export class AnthropicAdapter implements LLMAdapter {
   async stream(params: StreamParams): Promise<StreamResult> {
     const { model, messages, tools, signal, onDelta } = params
 
-    const currentMessages = this.convertMessages(messages)
+    // Anthropic accepts `system` as a top-level field, not as a message.
+    // Concatenate all `role: 'system'` entries; the remainder becomes history.
+    const systemPrompt = messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n\n')
+    const nonSystem = messages.filter((m) => m.role !== 'system')
+    const currentMessages = this.convertMessages(nonSystem)
     const anthropicTools = tools ? this.convertTools(tools) : undefined
 
     let content = ''
@@ -37,7 +44,8 @@ export class AnthropicAdapter implements LLMAdapter {
       model,
       max_tokens: 8192,
       messages: currentMessages,
-      tools: anthropicTools
+      tools: anthropicTools,
+      ...(systemPrompt ? { system: systemPrompt } : {})
     }, { signal })
 
     stream.on('text', (text) => {

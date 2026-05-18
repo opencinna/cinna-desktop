@@ -59,7 +59,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Example Prompts](chat/example_prompts/example_prompts.md) — Remote-agent starter prompts shown as an animated tag cloud and surfaced via `#` in the chat input
 - [CLI Commands](chat/cli_commands/cli_commands.md) — `/` picker surfacing an agent's `cinna.run.*` shell commands; selecting one inserts the `/run:<slug>` invocation string
 - [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
-- [Multi-Agent Chats](chat/multi_agent/multi_agent.md) — In-chat `@-mention` routing to additional agents, smart-rewrite on agent join (double-send), catch-up replay across agent switches
+- [Multi-Agent Chats](chat/multi_agent/multi_agent.md) — In-chat `@-mention` routing to additional agents, immediate active-agent switch on popup-select, Smart Rewrite on agent join (double-send, with LLM-driven keep-original shortcut), catch-up replay between agent re-engagements, inline switch-back chip + button
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
@@ -69,6 +69,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters
+- [AI Functions](llm/ai_functions/ai_functions.md) — Shared primitive for one-shot LLM calls (Smart Rewrite today; chat-title / summary generation in the future) — adapter resolution + `runSingleShot`
 
 ### MCP
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR

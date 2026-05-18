@@ -178,6 +178,10 @@ export function MainArea(): React.JSX.Element {
     ? (chatModes ?? []).find((m) => m.id === activeChatData.modeId) ?? null
     : null
 
+  // Multi-agent routing lives entirely inside ChatInput (via useChatComposer).
+  // MainArea no longer needs to thread active-agent / catchup / rewrite state
+  // through props — the composer reads fresh React Query state at submit time.
+
   const handleActiveChatModeChange = useCallback(
     async (mode: ChatModeData | null) => {
       if (!activeChatId) return

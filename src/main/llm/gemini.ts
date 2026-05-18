@@ -83,12 +83,20 @@ export class GeminiAdapter implements LLMAdapter {
   async stream(params: StreamParams): Promise<StreamResult> {
     const { model, messages, tools, signal, onDelta } = params
 
+    // Gemini accepts `systemInstruction` on model creation, not in history.
+    const systemPrompt = messages
+      .filter((m) => m.role === 'system')
+      .map((m) => m.content)
+      .join('\n\n')
+    const nonSystem = messages.filter((m) => m.role !== 'system')
+
     const genModel = this.genAI.getGenerativeModel({
       model,
-      tools: tools ? [{ functionDeclarations: this.convertTools(tools) }] : undefined
+      tools: tools ? [{ functionDeclarations: this.convertTools(tools) }] : undefined,
+      ...(systemPrompt ? { systemInstruction: systemPrompt } : {})
     })
 
-    const { history, lastMessage } = this.convertMessages(messages)
+    const { history, lastMessage } = this.convertMessages(nonSystem)
     const chat = genModel.startChat({ history })
 
     let content = ''

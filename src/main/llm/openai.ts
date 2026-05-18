@@ -158,7 +158,9 @@ export class OpenAIAdapter implements LLMAdapter {
     const result: OpenAI.Chat.ChatCompletionMessageParam[] = []
 
     for (const msg of messages) {
-      if (msg.role === 'user') {
+      if (msg.role === 'system') {
+        result.push({ role: 'system', content: msg.content })
+      } else if (msg.role === 'user') {
         result.push({ role: 'user', content: msg.content })
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
+import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
 import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
@@ -14,6 +15,8 @@ export interface ChatData {
   providerId: string | null
   modeId: string | null
   agentId: string | null
+  activeAgentId: string | null
+  smartAssistDisabled: boolean
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -30,6 +33,14 @@ export interface MessageData {
   toolError?: boolean
   toolProvider?: string
   parts?: MessagePart[] | null
+  /** Multi-agent: agent the user message was routed to (null when sent to LLM root). */
+  addressedAgentId?: string | null
+  /** Multi-agent: Smart Rewrite output, when rewrite happened. */
+  rewrittenText?: string | null
+  /** Multi-agent: user's literal pre-rewrite text. */
+  originalText?: string | null
+  /** Multi-agent: agent that produced an assistant turn (null for LLM root). */
+  sourceAgentId?: string | null
   sortOrder: number
   createdAt: Date
 }
@@ -201,7 +212,13 @@ const api = {
     emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
     update: (
       chatId: string,
-      updates: { title?: string; modelId?: string; providerId?: string; modeId?: string | null; agentId?: string }
+      updates: {
+        title?: string
+        modelId?: string
+        providerId?: string
+        modeId?: string | null
+        agentId?: string
+      }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
       chatId: string,
@@ -323,13 +340,26 @@ const api = {
         contextId?: string
         state?: string
         error?: string
-      }) => void
+      }) => void,
+      extras?: {
+        catchupPacket?: string
+        rewrittenText?: string | null
+        originalText?: string | null
+      }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
         onEvent(event.data)
       }
-      ipcRenderer.postMessage('agent:send-message', [agentId, chatId, content], [channel.port2])
+      const payload: AgentSendPayload = {
+        agentId,
+        chatId,
+        content,
+        catchupPacket: extras?.catchupPacket,
+        rewrittenText: extras?.rewrittenText,
+        originalText: extras?.originalText
+      }
+      ipcRenderer.postMessage('agent:send-message', payload, [channel.port2])
     },
     cancelMessage: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agent:cancel-message', requestId),
@@ -433,16 +463,43 @@ const api = {
         errorDetail?: string
         requestId?: string
         provider?: string
-      }) => void
+      }) => void,
+      extras?: { catchupPacket?: string }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
         onEvent(event.data)
       }
-      ipcRenderer.postMessage('llm:send-message', [chatId, content], [channel.port2])
+      const payload: LlmSendPayload = {
+        chatId,
+        content,
+        catchupPacket: extras?.catchupPacket
+      }
+      ipcRenderer.postMessage('llm:send-message', payload, [channel.port2])
     },
     cancel: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('llm:cancel', requestId)
+  },
+
+  multiAgent: {
+    rewrite: (data: {
+      chatId: string
+      targetAgentId: string
+      userText: string
+    }): Promise<{ rewrittenText: string | null }> =>
+      ipcRenderer.invoke('multiAgent:rewrite', data),
+    setActiveAgent: (data: {
+      chatId: string
+      agentId: string | null
+    }): Promise<{ changed: boolean }> =>
+      ipcRenderer.invoke('multiAgent:set-active-agent', data),
+    disableSmartAssist: (data: { chatId: string }): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('multiAgent:disable-smart-assist', data),
+    buildCatchup: (data: {
+      chatId: string
+      targetAgentId: string
+    }): Promise<{ packet: string }> =>
+      ipcRenderer.invoke('multiAgent:build-catchup', data)
   },
 
   updater: {

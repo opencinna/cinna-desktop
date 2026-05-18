@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
+import { useAgents } from '../../hooks/useAgents'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -81,9 +82,16 @@ function SystemMessage({ message, detail }: { message: string; detail?: string }
 
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
+  const { data: agents } = useAgents()
   const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const agentNameById = useMemo(() => {
+    const map = new Map<string, string>()
+    for (const a of agents ?? []) map.set(a.id, a.name)
+    return map
+  }, [agents])
+  const rootAgentId = chatData?.agentId ?? null
   const prevRef = useRef<{ chatId: string | null; messageIds: string[] }>({
     chatId: null,
     messageIds: []
@@ -145,6 +153,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               })
               continue
             }
+            // Legacy `agent_transition` rows (from earlier builds) are skipped
+            // silently — the persistent "Talking to X / Switch back" banner
+            // above the input is now the source of truth for routing state.
+            if (msg.role === 'agent_transition') {
+              continue
+            }
             if (msg.role === 'tool_call') {
               const toolBlock = (
                 <ToolCallBlock
@@ -185,6 +199,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             const suppressStreamReanimation =
               msg.role === 'assistant' && streamedIncrementallyChatId === chatId
             const shouldAnimate = msg.id === newMessageId && !suppressStreamReanimation
+            const sourceAgentId = msg.role === 'assistant' ? msg.sourceAgentId ?? null : null
+            const sourceAgentName =
+              sourceAgentId && sourceAgentId !== rootAgentId
+                ? agentNameById.get(sourceAgentId) ?? null
+                : null
+            const addressedAgentId = msg.role === 'user' ? msg.addressedAgentId ?? null : null
+            const addressedAgentName =
+              addressedAgentId && addressedAgentId !== rootAgentId
+                ? agentNameById.get(addressedAgentId) ?? null
+                : null
             if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
               if (verboseMode) {
                 renderNodes.push({
@@ -202,7 +226,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                             <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
                           )
                         }
-                        return <MessageBubble key={k} role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                        return (
+                          <MessageBubble
+                            key={k}
+                            role="assistant"
+                            content={p.text}
+                            animate={shouldAnimate}
+                            animateDelay={idx * 80}
+                            agentName={idx === 0 ? sourceAgentName : null}
+                            agentId={sourceAgentId}
+                          />
+                        )
                       })}
                       {footer}
                     </div>
@@ -235,7 +269,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     renderNodes.push({
                       slot: 'plain',
                       key: k,
-                      node: <MessageBubble role="assistant" content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                      node: (
+                        <MessageBubble
+                          role="assistant"
+                          content={p.text}
+                          animate={shouldAnimate}
+                          animateDelay={idx * 80}
+                          agentName={idx === 0 ? sourceAgentName : null}
+                          agentId={sourceAgentId}
+                        />
+                      )
                     })
                   }
                 })
@@ -251,6 +294,10 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     role={msg.role as 'user' | 'assistant'}
                     content={msg.content}
                     animate={shouldAnimate}
+                    agentName={sourceAgentName}
+                    agentId={sourceAgentId}
+                    addressedAgentName={addressedAgentName}
+                    addressedAgentId={addressedAgentId}
                   />
                   {footer}
                 </>

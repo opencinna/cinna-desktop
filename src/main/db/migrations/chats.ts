@@ -31,6 +31,16 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT`)
   }
 
+  if (!hasColumn(sqlite, 'chats', 'active_agent_id')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN active_agent_id TEXT`)
+  }
+
+  if (!hasColumn(sqlite, 'chats', 'smart_assist_disabled')) {
+    sqlite.exec(
+      `ALTER TABLE chats ADD COLUMN smart_assist_disabled INTEGER NOT NULL DEFAULT 0`
+    )
+  }
+
   // Cleanup: permanently delete chats that have been in trash for over 30 days.
   // `deleted_at` is stored as Unix seconds (drizzle's `mode: 'timestamp'`), so
   // we must compare against seconds — using `Date.now()` directly would wipe

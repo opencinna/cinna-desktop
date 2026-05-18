@@ -12,10 +12,12 @@
 - `src/main/db/messages.ts` — `messageRepo` — centralized message persistence (user, assistant, tool_call, error messages + chat timestamp updates)
 - `src/main/db/chatMcp.ts` — `chatMcpRepo` — chat-MCP junction table (`replaceForChat()` runs in a transaction)
 - `src/main/services/chatService.ts` — `chatService` — chat CRUD orchestration, throws `ChatError` for missing rows
-- `src/main/services/chatStreamingService.ts` — Streaming orchestration: ownership check, MCP tool aggregation, centralized tool-call loop (up to 10 rounds), message persistence via `messageRepo`, MessagePort fan-out
+- `src/main/services/messageRoutingService.ts` — `messageRoutingService` — single chokepoint for "user just sent a routed message": persists the user row (with any multi-agent metadata), assembles `wireContent` from `userContent` + optional `catchupPacket`, advances the per-agent catch-up cursor on the agent path. Called by both `agent:send-message` and `llm:send-message` so the side-effects stay consistent
+- `src/main/services/chatStreamingService.ts` — LLM tool-call loop only: receives the pre-assembled `wireContent`, rebuilds history from `messages`, drives the up-to-10-round tool-call loop, persists `assistant` / `tool_call` / `error` rows via `messageRepo`, fans out MessagePort events. **No longer persists the user message** — that happens up-stream in `messageRoutingService.prepareLlmSend`
 - `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId)` + `isProviderType()` (extracted from `llm.ipc.ts`)
 - `src/main/ipc/chat.ipc.ts` — Thin `chat:*` handlers, all wrapped with `ipcHandle()` and gated by `userActivation.requireActivated()`, delegate to `chatService`
-- `src/main/ipc/llm.ipc.ts` — `llm:send-message` (`ipcMain.on` + MessagePort) — checks activation, delegates to `chatStreamingService.stream()`. `llm:cancel` invokes `chatStreamingService.cancel(requestId)`.
+- `src/main/ipc/llm.ipc.ts` — `llm:send-message` (`ipcMain.on` + MessagePort) — thin controller: receives `LlmSendPayload`, checks activation, calls `messageRoutingService.prepareLlmSend()` then hands `wireContent` to `chatStreamingService.stream()`. `llm:cancel` invokes `chatStreamingService.cancel(requestId)`
+- `src/shared/ipcPayloads.ts` — `LlmSendPayload` / `AgentSendPayload` named-object types for the streaming channels (replacing the legacy positional-tuple style)
 - `src/main/errors.ts` — `ChatError` + `ChatErrorCode` (`not_found`, `not_configured`, `adapter_unavailable`, `not_activated`)
 
 ### Preload
@@ -69,10 +71,11 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 - `src/main/db/chats.ts` — `chatRepo`: `getOwned()`, `list()`, `listMessages()`, `listTrash()`, `create()`, `softDelete()`, `restore()`, `permanentDelete()`, `emptyTrash()`, `update()`. All writes scoped by `userId`.
 - `src/main/db/chatMcp.ts` — `chatMcpRepo`: `list()`, `listProviderIds()`, `replaceForChat()` (transactional).
 - `src/main/services/chatService.ts` — `chatService.list/get/create/delete/listTrash/restore/permanentDelete/emptyTrash/update/addMessage/setMcpProviders/getMcpProviders`. Throws `ChatError('not_found', ...)` for missing/unowned rows.
-- `src/main/services/chatStreamingService.ts` — `chatStreamingService.stream({ userId, chatId, userContent, port })`: validates ownership and configuration (throws `ChatError`), aggregates MCP tools, registers the `AbortController` in `activeAbortControllers`, fires the tool-call loop in the background (caller is not awaited), closes the port on completion. `chatStreamingService.cancel(requestId)` aborts the controller.
+- `src/main/services/messageRoutingService.ts` — `prepareLlmSend({ userId, chatId, userContent, catchupPacket? })` and `prepareAgentSend({ userId, chatId, agentId, userContent, rewrittenText?, originalText?, catchupPacket? })`. Each verifies ownership, assembles `wireContent`, persists the user row, and (on the agent path) advances `chat_agent_sessions` cursor. Returns `{ wireContent, userMessageId }`. See [Multi-Agent Chats — Tech](../multi_agent/multi_agent_tech.md) for the full agent-path lifecycle.
+- `src/main/services/chatStreamingService.ts` — `chatStreamingService.stream({ userId, chatId, wireContent, port })`: validates ownership and configuration (throws `ChatError`), aggregates MCP tools, registers the `AbortController` in `activeAbortControllers`, fires the tool-call loop in the background (caller is not awaited), closes the port on completion. `chatStreamingService.cancel(requestId)` aborts the controller. The user message is already persisted before this is called.
 - `src/main/llm/factory.ts:createAdapter(type, apiKey, providerId)` — Factory that instantiates the correct LLM adapter based on provider type. Used by `chatStreamingService` (via the registry) and `providerService` (for `test`/`testKey`).
 - `src/main/ipc/chat.ipc.ts` — Thin handlers: each `ipcHandle('chat:*', ...)` calls `userActivation.requireActivated()` then delegates to `chatService` with `getCurrentUserId()`.
-- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, checks `userActivation.isActivated()` (sends error to port if not), delegates the entire stream to `chatStreamingService.stream()`. `llm:cancel` is wrapped with `ipcHandle()`.
+- `src/main/ipc/llm.ipc.ts` — `ipcMain.on('llm:send-message')` handler: receives MessagePort, checks `userActivation.isActivated()` (sends error to port if not), persists via `messageRoutingService.prepareLlmSend()`, then hands `wireContent` to `chatStreamingService.stream()`. `llm:cancel` is wrapped with `ipcHandle()`.
 
 ## Streaming Protocol
 

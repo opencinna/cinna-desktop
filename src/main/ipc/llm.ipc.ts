@@ -1,17 +1,19 @@
 import { ipcMain } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
+import { messageRoutingService } from '../services/messageRoutingService'
 import { chatStreamingService } from '../services/chatStreamingService'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
+import type { LlmSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('llm-ipc')
 
 export function registerLlmHandlers(): void {
   // ipcRenderer.postMessage passes the payload as the 2nd arg to the listener
   // and the MessagePort on event.ports — see CLAUDE.md.
-  ipcMain.on('llm:send-message', async (event, message: [string, string]) => {
-    const [chatId, userContent] = message
+  ipcMain.on('llm:send-message', async (event, payload: LlmSendPayload) => {
+    const { chatId, content: userContent, catchupPacket = '' } = payload
     const port = event.ports?.[0]
     if (!port) {
       logger.error('No MessagePort received for llm:send-message')
@@ -30,10 +32,16 @@ export function registerLlmHandlers(): void {
     }
 
     try {
-      await chatStreamingService.stream({
+      const { wireContent } = messageRoutingService.prepareLlmSend({
         userId: getProfileScopeUserId(),
         chatId,
         userContent,
+        catchupPacket
+      })
+      await chatStreamingService.stream({
+        userId: getProfileScopeUserId(),
+        chatId,
+        wireContent,
         port
       })
     } catch (err) {

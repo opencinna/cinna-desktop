@@ -7,12 +7,24 @@ import type { MessageRow } from './messages'
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
 
-export interface ChatUpdateInput {
+/**
+ * Fields freely editable via the `chat:update` IPC channel. Anything that
+ * affects the multi-agent routing audit trail belongs in `ChatRoutingUpdate`
+ * instead — it routes through dedicated `multiAgent:*` channels so logging
+ * and (future) auditing stay consistent.
+ */
+export interface ChatMetaUpdate {
   title?: string
   modelId?: string
   providerId?: string
   modeId?: string | null
   agentId?: string
+}
+
+/** Routing fields — write only via `multiAgentService`, never via `chat:update`. */
+export interface ChatRoutingUpdate {
+  activeAgentId?: string | null
+  smartAssistDisabled?: boolean
 }
 
 export const chatRepo = {
@@ -62,6 +74,8 @@ export const chatRepo = {
       providerId: null,
       modeId: null,
       agentId: null,
+      activeAgentId: null,
+      smartAssistDisabled: false,
       deletedAt: null,
       createdAt: now,
       updatedAt: now
@@ -104,7 +118,18 @@ export const chatRepo = {
     return result.changes
   },
 
-  update(userId: string, chatId: string, updates: ChatUpdateInput): boolean {
+  updateMeta(userId: string, chatId: string, updates: ChatMetaUpdate): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  // Separate entry point so the type system enforces the IPC whitelist:
+  // `chat:update` cannot reach this method, only `multiAgentService` can.
+  updateRouting(userId: string, chatId: string, updates: ChatRoutingUpdate): boolean {
     const result = getDb()
       .update(chats)
       .set({ ...updates, updatedAt: new Date() })

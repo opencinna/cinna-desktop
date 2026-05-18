@@ -32,4 +32,20 @@ export function migrateMessages(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'messages', 'parts')) {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN parts TEXT`)
   }
+
+  if (!hasColumn(sqlite, 'messages', 'addressed_agent_id')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN addressed_agent_id TEXT`)
+  }
+
+  if (!hasColumn(sqlite, 'messages', 'rewritten_text')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN rewritten_text TEXT`)
+  }
+
+  if (!hasColumn(sqlite, 'messages', 'original_text')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN original_text TEXT`)
+  }
+
+  if (!hasColumn(sqlite, 'messages', 'source_agent_id')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN source_agent_id TEXT`)
+  }
 }

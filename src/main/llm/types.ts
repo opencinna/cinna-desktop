@@ -12,7 +12,7 @@ export interface ToolCallInfo {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'tool_call'
+  role: 'user' | 'assistant' | 'tool_call' | 'system'
   content: string
   toolCalls?: ToolCallInfo[]
   toolCallId?: string

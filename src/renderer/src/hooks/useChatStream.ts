@@ -31,13 +31,23 @@ type AgentEvent = {
   error?: string
 }
 
+export interface StartLlmOptions {
+  catchupPacket?: string
+}
+
+export interface StartAgentOptions {
+  rewrittenText?: string | null
+  originalText?: string | null
+  catchupPacket?: string
+}
+
 /**
  * Start a chat send and connect the stream to the chat store + query cache.
  * Returns void — callers should not await; streaming is fire-and-forget.
  */
 export function useChatStream(): {
-  startLlm: (chatId: string, content: string) => void
-  startAgent: (agentId: string, chatId: string, content: string) => void
+  startLlm: (chatId: string, content: string, opts?: StartLlmOptions) => void
+  startAgent: (agentId: string, chatId: string, content: string, opts?: StartAgentOptions) => void
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
@@ -117,10 +127,15 @@ export function useChatStream(): {
   )
 
   const startLlm = useCallback(
-    (chatId: string, content: string): void => {
+    (chatId: string, content: string, opts?: StartLlmOptions): void => {
       setPendingUserMessage(content)
       try {
-        window.api.llm.sendMessage(chatId, content, (event) => handleLlm(chatId, event))
+        window.api.llm.sendMessage(
+          chatId,
+          content,
+          (event) => handleLlm(chatId, event),
+          opts
+        )
       } catch {
         stopStreaming()
         return
@@ -134,19 +149,25 @@ export function useChatStream(): {
   )
 
   const startAgent = useCallback(
-    (agentId: string, chatId: string, content: string): void => {
+    (agentId: string, chatId: string, content: string, opts?: StartAgentOptions): void => {
       setPendingUserMessage(content)
       try {
-        window.api.agents.sendMessage(agentId, chatId, content, (event) => {
-          handleAgent(chatId, event)
-          // When the agent finishes (or errors out), it may have updated its
-          // STATUS.md during the turn — pull a fresh snapshot so tiles in the
-          // status overlay / title-bar dot stay in sync. Backend rate-limits
-          // 1/30s per env; 429 is swallowed upstream. Cinna-only feature.
-          if (isCinnaUser && (event.type === 'done' || event.type === 'error')) {
-            forceRefreshAgentStatus.mutate(agentId)
-          }
-        })
+        window.api.agents.sendMessage(
+          agentId,
+          chatId,
+          content,
+          (event) => {
+            handleAgent(chatId, event)
+            // When the agent finishes (or errors out), it may have updated its
+            // STATUS.md during the turn — pull a fresh snapshot so tiles in the
+            // status overlay / title-bar dot stay in sync. Backend rate-limits
+            // 1/30s per env; 429 is swallowed upstream. Cinna-only feature.
+            if (isCinnaUser && (event.type === 'done' || event.type === 'error')) {
+              forceRefreshAgentStatus.mutate(agentId)
+            }
+          },
+          opts
+        )
       } catch {
         stopStreaming()
         return

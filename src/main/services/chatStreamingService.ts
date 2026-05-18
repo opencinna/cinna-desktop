@@ -24,7 +24,12 @@ export interface StreamPort {
 export interface StreamInput {
   userId: string
   chatId: string
-  userContent: string
+  /**
+   * Wire-level content for the latest user message. The user message itself
+   * is already persisted by `messageRoutingService.prepareLlmSend`; this
+   * value is what the LLM sees (catch-up packet prepended when applicable).
+   */
+  wireContent: string
   port: StreamPort
 }
 
@@ -45,12 +50,14 @@ export const chatStreamingService = {
   },
 
   /**
-   * Stream an LLM response for the given chat. Returns the StreamHandle once
-   * setup completes; the caller should not await the stream finish — the port
-   * is closed when streaming completes or errors out.
+   * Stream an LLM response for the given chat. The user message must already
+   * be persisted by the caller (via `messageRoutingService.prepareLlmSend`).
+   * Returns the StreamHandle once setup completes; the caller should not
+   * await the stream finish — the port is closed when streaming completes or
+   * errors out.
    */
   async stream(input: StreamInput): Promise<StreamHandle> {
-    const { userId, chatId, userContent, port } = input
+    const { userId, chatId, wireContent, port } = input
 
     const chat = chatRepo.getOwned(userId, chatId)
     if (!chat) {
@@ -76,8 +83,6 @@ export const chatStreamingService = {
       port.close()
       throw new ChatError('adapter_unavailable', err)
     }
-
-    messageRepo.saveUser({ chatId, content: userContent })
 
     const mcpProviderIds = chatMcpRepo.listProviderIds(chatId)
     const tools: ToolDefinition[] = mcpManager.getToolsForProviders(mcpProviderIds)
@@ -117,7 +122,8 @@ export const chatStreamingService = {
       toolProviderNameMap,
       abortController,
       port,
-      baseLog
+      baseLog,
+      wireContent
     ).finally(() => {
       port.close()
       activeAbortControllers.delete(requestId)
@@ -139,12 +145,14 @@ export const chatStreamingService = {
     toolProviderNameMap: Map<string, string>,
     abortController: AbortController,
     port: StreamPort,
-    baseLog: Record<string, unknown>
+    baseLog: Record<string, unknown>,
+    /** Wire-level content for the latest user message (catch-up packet prepended when applicable). */
+    wireContent: string
   ): Promise<void> {
     try {
       const dbMessages = chatRepo.listMessages(chatId)
       const currentMessages: ChatMessage[] = dbMessages
-        .filter((m) => m.role !== 'error')
+        .filter((m) => m.role !== 'error' && m.role !== 'agent_transition')
         .map((m) => ({
           role: m.role as ChatMessage['role'],
           content: m.content,
@@ -154,6 +162,17 @@ export const chatStreamingService = {
           toolInput: (m.toolInput as Record<string, unknown>) ?? undefined,
           toolError: m.toolError ?? undefined
         }))
+
+      // The user message is already persisted (with its plain `userContent`);
+      // patch the rebuilt history's most recent user turn so the wire-level
+      // content (catch-up prepended) is what the LLM sees, without polluting
+      // the persisted row.
+      for (let i = currentMessages.length - 1; i >= 0; i--) {
+        if (currentMessages[i].role === 'user') {
+          currentMessages[i] = { ...currentMessages[i], content: wireContent }
+          break
+        }
+      }
 
       for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
         if (abortController.signal.aborted) break

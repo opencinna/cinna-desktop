@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type ReactNode } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
-import { useSendMessage, useChatDetail } from '../../hooks/useChat'
+import { useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
@@ -12,6 +12,11 @@ import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
+import { useChatComposer } from '../../hooks/useChatComposer'
+import { useRewriteUX } from '../../hooks/useRewriteUX'
+import { RewriteHintBar } from './RewriteHintBar'
+import { RewriteFailureModal } from './RewriteFailureModal'
+import { ActiveAgentChip } from './ActiveAgentChip'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/'
@@ -89,6 +94,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const lastEscapeAt = useRef(0)
   const { data: chatData } = useChatDetail(chatId)
   const listboxId = useId()
+  // Single source of truth for everything multi-agent: routing decisions,
+  // active-agent switching, Smart Rewrite, dispatch. Read fresh snapshots
+  // internally at every action so there is no closure-staleness window.
+  const composer = useChatComposer(chatId)
+
+  const clearComposer = useCallback(() => {
+    setInput('')
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto'
+    }
+  }, [])
+
+  // Hook owns rewrite state machine + textarea side-effects (resize, focus,
+  // selection). ChatInput just calls into it from key/change/submit handlers.
+  const rewriteUX = useRewriteUX({ textareaRef, setInput, clearComposer })
 
   // Local kbd-nav index for the `~` chat-mode popup. Reset to the active mode
   // (or the first row) whenever the popup is freshly opened so navigation
@@ -119,7 +139,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   useEffect(() => {
     textareaRef.current?.focus()
   }, [chatId])
-  const sendMessage = useSendMessage()
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming, activeRequestId } = useChatStore()
 
@@ -176,7 +195,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     )
   }, [commands, triggerFilter])
 
-  const agentPopupOpen = triggerChar === '@' && !chatId && !!onSelectAgent
+  // `@` is available on new-chat (agent picker) AND inside an active chat when
+  // multi-agent routing is wired up (in-chat mentions).
+  const agentPopupOpen =
+    triggerChar === '@' &&
+    enabledAgents.length > 0 &&
+    ((!chatId && !!onSelectAgent) || !!chatId)
   const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
   const commandPopupOpen = triggerChar === '/' && commands.length > 0
 
@@ -205,11 +229,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const selectAgent = useCallback(
     (agent: AgentData) => {
-      // Drop the @token entirely; agent binding happens via callback.
+      if (chatId) {
+        // In-chat mention: selecting from the popup is the *switch* action.
+        // Drop the `@token` from the composer and flip the chat's active
+        // agent. The chip below the input updates via the composer hook's
+        // reactive subscription. The next Enter routes via the same hook —
+        // there's no separate "active agent" state to keep in sync.
+        replaceTriggerToken('')
+        void composer.switchActiveAgent(agent.id)
+        return
+      }
+      // New-chat agent picker: drop the @token; agent binding happens via callback.
       replaceTriggerToken('')
       onSelectAgent?.(agent)
     },
-    [replaceTriggerToken, onSelectAgent]
+    [replaceTriggerToken, onSelectAgent, chatId, composer]
   )
 
   const selectPrompt = useCallback(
@@ -226,22 +260,40 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [replaceTriggerToken]
   )
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const trimmed = input.trim()
     if (!trimmed || isStreaming) return
 
-    setInput('')
-    if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-    }
-
-    if (!chatId && onNewChat) {
-      onNewChat(trimmed)
+    // New chat path — unchanged.
+    if (!chatId) {
+      clearComposer()
+      onNewChat?.(trimmed)
       return
     }
 
-    sendMessage(trimmed)
-  }, [input, isStreaming, sendMessage, chatId, onNewChat])
+    // Second Enter while confirming a rewrite — fire the (possibly edited)
+    // rewritten text via the composer.
+    const confirm = rewriteUX.beginConfirmDispatch()
+    if (confirm) {
+      await composer.confirmRewrite(confirm.text, confirm.pending)
+      return
+    }
+
+    // Hand off to the composer hook, which decides everything from a fresh
+    // cache snapshot: parse mentions, resolve target, build catch-up,
+    // optionally rewrite, dispatch on the right channel.
+    rewriteUX.beginRewriting()
+    const result = await composer.submit(trimmed)
+    rewriteUX.handleSubmitResult(result)
+  }, [
+    input,
+    isStreaming,
+    chatId,
+    onNewChat,
+    composer,
+    rewriteUX,
+    clearComposer
+  ])
 
   const handleCancel = useCallback(() => {
     if (activeRequestId) cancelStream(activeRequestId)
@@ -310,6 +362,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
 
+    // Esc during rewrite confirmation: revert to the user's original text.
+    if (e.key === 'Escape' && rewriteUX.handleEscape()) {
+      e.preventDefault()
+      return
+    }
+
     if (e.key === 'Escape' && onDoubleEscape) {
       e.preventDefault()
       const now = Date.now()
@@ -323,8 +381,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
+      // Block Enter while a rewrite call is in flight to prevent double-send.
+      if (rewriteUX.state === 'rewriting') {
+        e.preventDefault()
+        return
+      }
       e.preventDefault()
-      handleSend()
+      void handleSend()
     }
   }
 
@@ -336,6 +399,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const el = e.target
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+
+    // Clearing the composer mid-confirm abandons the pending rewrite (so the
+    // next typed message starts fresh and re-triggers a rewrite if applicable).
+    rewriteUX.handleComposerCleared(value)
 
     // `~` shortcut — opens the mode popup only when it's the first and only
     // character typed. Continuing to type closes the popup and leaves the `~`
@@ -357,7 +424,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
 
     // Gate each trigger by context.
-    const agentGate = token.char === '@' && !chatId && onSelectAgent && enabledAgents.length > 0
+    // `@` opens the popup in two contexts: new-chat (picks the chat's bound
+    // agent) and active chats with multi-agent routing wired up (in-chat
+    // mention). The render-time `agentPopupOpen` mirrors this — keep them in
+    // sync so the popup actually mounts when the input handler triggers it.
+    const agentGate =
+      token.char === '@' &&
+      enabledAgents.length > 0 &&
+      ((!chatId && !!onSelectAgent) || !!chatId)
     const promptGate = token.char === '#' && examplePrompts.length > 0
     const commandGate = token.char === '/' && commands.length > 0
     if (!agentGate && !promptGate && !commandGate) {
@@ -370,6 +444,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setTriggerStart(token.start)
     setTriggerIndex(0)
   }
+
+  const handleSendAnyway = useCallback((): void => {
+    const pending = rewriteUX.consumePendingForSendAnyway()
+    if (pending) void composer.sendRaw(pending)
+  }, [composer, rewriteUX])
+
+  const handleDisableRewrite = useCallback((): void => {
+    rewriteUX.dismissError()
+    void composer.disableSmartAssist()
+  }, [composer, rewriteUX])
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
@@ -424,6 +508,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      <RewriteHintBar state={rewriteUX.state} />
+
       <div
         className="rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
         style={{
@@ -456,10 +542,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       </div>
 
+      {rewriteUX.error && rewriteUX.pending && (
+        <RewriteFailureModal
+          error={rewriteUX.error}
+          pending={rewriteUX.pending}
+          onCancel={rewriteUX.dismissError}
+          onDisable={handleDisableRewrite}
+          onSendAnyway={handleSendAnyway}
+        />
+      )}
+
       <div className="flex items-center justify-between px-1 pt-2">
         <div className="flex items-center gap-1.5">
           {leftSlot}
-          {chatId && boundAgent ? (
+          {chatId && composer.activeAgent ? (
+            <ActiveAgentChip
+              activeAgent={composer.activeAgent}
+              rootAgent={composer.rootAgent}
+              rootLabel={composer.rootLabel}
+              onSwitchBack={(target) => void composer.switchActiveAgent(target)}
+            />
+          ) : chatId && boundAgent ? (
             <div
               className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border
                 text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10"

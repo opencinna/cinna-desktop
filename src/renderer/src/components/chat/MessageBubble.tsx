@@ -1,10 +1,11 @@
 import { useState } from 'react'
-import { Info } from 'lucide-react'
+import { Info, Bot, ArrowRight } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { markdownComponents } from '../../utils/markdownComponents'
+import { presetForAgentId } from '../../utils/agentColors'
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -17,12 +18,33 @@ interface MessageBubbleProps {
   meta?: MessageMeta
   animate?: boolean
   animateDelay?: number
+  /** Multi-agent: name of the agent that produced this assistant turn. */
+  agentName?: string | null
+  /** Multi-agent: id of the agent that produced this assistant turn — drives color. */
+  agentId?: string | null
+  /** Multi-agent: name of the agent this user message was routed to (non-root). */
+  addressedAgentName?: string | null
+  /** Multi-agent: id of the agent this user message was routed to — drives color. */
+  addressedAgentId?: string | null
 }
 
-export function MessageBubble({ role, content, isStreaming, meta, animate, animateDelay }: MessageBubbleProps): React.JSX.Element {
+export function MessageBubble({
+  role,
+  content,
+  isStreaming,
+  meta,
+  animate,
+  animateDelay,
+  agentName,
+  agentId,
+  addressedAgentName,
+  addressedAgentId
+}: MessageBubbleProps): React.JSX.Element {
   const isUser = role === 'user'
   const [showMeta, setShowMeta] = useState(false)
   const hasMeta = meta && Object.keys(meta).length > 0
+  const agentColor = agentId ? presetForAgentId(agentId) : null
+  const addressedColor = addressedAgentId ? presetForAgentId(addressedAgentId) : null
 
   if (isUser) {
     return (
@@ -36,6 +58,18 @@ export function MessageBubble({ role, content, isStreaming, meta, animate, anima
                 {content}
               </Markdown>
             </div>
+            {addressedAgentName && (
+              <div className="mt-0.5 flex justify-end">
+                <span
+                  className="inline-flex items-center gap-0.5 text-[9px] font-medium opacity-70"
+                  style={{ color: addressedColor?.border ?? 'var(--color-text-muted)' }}
+                >
+                  <ArrowRight size={8} />
+                  <Bot size={9} />
+                  <span>{addressedAgentName}</span>
+                </span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -44,6 +78,15 @@ export function MessageBubble({ role, content, isStreaming, meta, animate, anima
 
   return (
     <div className="relative group">
+      {agentName && (
+        <div
+          className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide"
+          style={{ color: agentColor?.border ?? 'var(--color-text-muted)' }}
+        >
+          <Bot size={10} />
+          <span>{agentName}</span>
+        </div>
+      )}
       <div
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}

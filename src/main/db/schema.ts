@@ -59,6 +59,10 @@ export const chats = sqliteTable('chats', {
   providerId: text('provider_id'),
   modeId: text('mode_id'),
   agentId: text('agent_id'),
+  activeAgentId: text('active_agent_id'),
+  smartAssistDisabled: integer('smart_assist_disabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -161,7 +165,7 @@ export const messages = sqliteTable('messages', {
   chatId: text('chat_id')
     .notNull()
     .references(() => chats.id, { onDelete: 'cascade' }),
-  role: text('role').notNull(), // 'user' | 'assistant' | 'tool_call'
+  role: text('role').notNull(), // 'user' | 'assistant' | 'tool_call' | 'error' | 'agent_transition'
   content: text('content').notNull(),
   toolCallId: text('tool_call_id'),
   toolName: text('tool_name'),
@@ -172,8 +176,38 @@ export const messages = sqliteTable('messages', {
   toolError: integer('tool_error', { mode: 'boolean' }),
   toolProvider: text('tool_provider'),
   parts: text('parts', { mode: 'json' }).$type<MessagePart[]>(),
+  // Multi-agent routing metadata
+  addressedAgentId: text('addressed_agent_id'),
+  rewrittenText: text('rewritten_text'),
+  originalText: text('original_text'),
+  sourceAgentId: text('source_agent_id'),
   sortOrder: integer('sort_order').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
 })
+
+/**
+ * Tracks each agent's catch-up cursor per chat — the last message id that has
+ * already been replayed to that agent. Catch-up packets start from the next
+ * message after this cursor.
+ */
+export const chatAgentSessions = sqliteTable(
+  'chat_agent_sessions',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    lastReplayedMessageId: text('last_replayed_message_id').notNull(),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date()),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
+)

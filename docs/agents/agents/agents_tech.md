@@ -14,7 +14,9 @@
 | DB Repo (sessions) | `src/main/db/agents.ts` — `a2aSessionRepo` (`getByChat`, `getByChatAndAgent`, `upsert`) |
 | Errors | `src/main/errors.ts` — `AgentError` + `AgentErrorCode` (`not_found`, `unsupported_protocol`, `no_card_url`, `no_endpoint`, `remote_immutable`, `invalid_id`, `sync_reauth_required`, `sync_failed`) |
 | IPC handlers (CRUD) | `src/main/ipc/agent.ipc.ts` — thin handlers delegating to `agentService` |
-| IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` — fetch-card, test, send-message (MessagePort), cancel-message, get-session |
+| IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` — fetch-card, test, send-message (MessagePort), cancel-message, get-session. `send-message` is a thin controller — delegates persistence to `messageRoutingService` and the A2A pump to `a2aStreamingService` |
+| A2A streaming service | `src/main/services/a2aStreamingService.ts` — A2A client init, stream pump, session save, cancel registry |
+| Message routing service | `src/main/services/messageRoutingService.ts` — single chokepoint for user-message persistence + wire-content assembly + catch-up cursor advance, used by both `agent:send-message` and `llm:send-message` |
 | IPC wrap | `src/main/ipc/_wrap.ts` — `ipcHandle()` used by all `agent:*` channels |
 | IPC registration | `src/main/ipc/index.ts` — `registerAgentHandlers()` |
 | DB schema (agents) | `src/main/db/schema.ts` — `agents` table |
@@ -91,7 +93,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 | `agent:delete` | handle | `agentId: string` | `{ success }` |
 | `agent:fetch-card` | handle | `{ cardUrl, accessToken? }` | `{ success, card?, protocol?: { url, version }, error? }` |
 | `agent:test` | handle | `agentId: string` | `{ success, card?, error? }` — also updates DB cached metadata + protocol interface |
-| `agent:send-message` | on (MessagePort) | `[agentId, chatId, content]` | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
+| `agent:send-message` | on (MessagePort) | `AgentSendPayload = { agentId, chatId, content, catchupPacket?, rewrittenText?, originalText? }` (from `src/shared/ipcPayloads.ts`) | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
 | `agent:cancel-message` | handle | `requestId: string` | `{ success }` |
 | `agent:get-session` | handle | `chatId: string` | `{ id, chatId, agentId, contextId, taskId, taskState } \| null` |
 
@@ -103,7 +105,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - `resolveProtocol(card)` — Protocol version negotiation logic. Checks for top-level `url` (v0.3 style), then scans `supportedInterfaces` for a `0.3.x` entry. Throws with a descriptive error if no compatible version found.
 - `createA2AClient(endpointUrl, cardUrl, accessToken?)` — Fetches the raw card, patches `url` with the pre-resolved `endpointUrl`, then instantiates `A2AClient` from `@a2a-js/sdk` with the patched card object.
 - `buildSendParams(content, contextId?, taskId?)` — Constructs `MessageSendParams` with nanoid message ID, `role: 'user'`, text part.
-- `humanizeA2AError(err)` — Maps undici/Node socket-layer failures (`TypeError: terminated`, `ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, `ECONNRESET`, `UND_ERR_SOCKET`, "socket hang up", "other side closed") to short user-readable messages. Falls back to `err.message`. Checks both `err.message`/`err.cause.message` via a lower-cased haystack and `err.cause.code`. Consumed by the `agent:send-message` catch block and by the SSE log-tee warn path.
+- `humanizeA2AError(err)` — Maps undici/Node socket-layer failures (`TypeError: terminated`, `ECONNREFUSED`, `ENOTFOUND`, `ETIMEDOUT`, `ECONNRESET`, `UND_ERR_SOCKET`, "socket hang up", "other side closed") to short user-readable messages. Falls back to `err.message`. Checks both `err.message`/`err.cause.message` via a lower-cased haystack and `err.cause.code`. Consumed by the `a2aStreamingService` catch block and by the SSE log-tee warn path.
 
 ### Stream Parts Accumulator — `src/main/agents/streamPartsAccumulator.ts`
 
@@ -129,10 +131,18 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
 - `registerA2AHandlers()` — Registers A2A protocol-specific channels (fetch-card, test, send-message, cancel-message, get-session).
-- `agent:send-message` handler — Streaming via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Loads existing `a2a_sessions` row for the chat/agent pair, passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Constructs a `StreamPartsAccumulator` and forwards each event's message/artifacts to it (`ingestMessage`, `ingestArtifact`) — the accumulator handles delta computation, kind routing, and structured-parts build-up. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange. On stream completion, persists `messages.content = accumulator.answerText()` and `messages.parts = accumulator.snapshotParts()` via `messageRepo.saveAssistant()`. Same accumulator pattern is used for the non-streaming branch (single response). Uses `AbortController` tracked by `activeAbortControllers` map. On catch (non-aborted), runs the error through `humanizeA2AError()` — the humanized string is posted to the port, stored as `short` on the saved error message, and the raw `String(err)` is stored as `detail`.
+- `agent:send-message` handler — Thin streaming controller via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Then delegates the work to two services:
+  - `messageRoutingService.prepareAgentSend({ userId, chatId, agentId, userContent, rewrittenText, originalText, catchupPacket })` persists the user message with all multi-agent metadata, assembles `wireContent` (catch-up prepended), and advances the `chat_agent_sessions` cursor for this (chat, agent) pair. Returns `{ wireContent, userMessageId }`. See [Multi-Agent Chats — Tech](../../chat/multi_agent/multi_agent_tech.md).
+  - `a2aStreamingService.streamToAgent({ chatId, agentId, agentName, endpointUrl, cardUrl, accessToken, wireContent, port })` owns the entire A2A pump (see next section).
 - `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
 - `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.
 - `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `a2aSessionRepo.getByChat(chatId) ?? null`. Used by the renderer to detect agent chats and resolve the `agentId` for routing.
+- `agent:cancel-message` handler — Delegates to `a2aStreamingService.cancel(requestId)`.
+
+### A2A Streaming Service — `src/main/services/a2aStreamingService.ts`
+
+- `streamToAgent({ chatId, agentId, agentName, endpointUrl, cardUrl, accessToken, wireContent, port })` — Owns the entire A2A turn: creates the A2A client, checks streaming capability on the card, loads the existing `a2a_sessions` row for the (chat, agent) pair and passes stored `contextId`/`taskId` to `buildSendParams()` for conversation continuity. Constructs a `StreamPartsAccumulator` and forwards each event's message/artifacts to it (`ingestMessage`, `ingestArtifact`) — the accumulator handles delta computation, kind routing, and structured-parts build-up. Extracts `contextId`/`taskId`/`taskState` from all response event types (`status-update`, `artifact-update`, `task`, `message`). Always upserts the session row after each exchange. On stream completion, persists `messages.content = accumulator.answerText()` and `messages.parts = accumulator.snapshotParts()` via `messageRepo.saveAssistant({ sourceAgentId: agentId })`. Same accumulator pattern is used for the non-streaming branch (single response). Uses `AbortController` tracked by an internal `activeRequests` map. On catch (non-aborted), runs the error through `humanizeA2AError()` — the humanized string is posted to the port, stored as `short` on the saved error message, and the raw `String(err)` is stored as `detail`.
+- `cancel(requestId)` — Aborts the local `AbortController` for the request and fires `cancelTask` at the agent in the background.
 
 ## Renderer Components
 
