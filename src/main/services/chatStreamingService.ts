@@ -1,7 +1,10 @@
 import { nanoid } from 'nanoid'
 import { chatRepo } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
+import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
+import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { getAdapter } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import {
@@ -39,6 +42,34 @@ export interface StreamHandle {
 }
 
 const activeAbortControllers = new Map<string, AbortController>()
+
+/**
+ * Resolve the on-demand MCPs that still owe an announcement for this chat,
+ * along with the silent "user just enabled MCP X, Y, Z" prefix that should
+ * be prepended to the wire content. The flag is NOT flipped here — that
+ * happens after the adapter actually consumes the prefix, so a pre-flight
+ * failure does not silently burn the one-shot announcement.
+ */
+function resolvePendingAnnounce(chatId: string): { ids: string[]; names: string[]; prefix: string } {
+  const ids = chatOnDemandMcpRepo.peekPending(chatId)
+  if (ids.length === 0) return { ids: [], names: [], prefix: '' }
+  const settingsUserId = getSettingsScopeUserId()
+  const resolvedIds: string[] = []
+  const names: string[] = []
+  for (const id of ids) {
+    const row = mcpProviderRepo.getOwned(settingsUserId, id)
+    if (row) {
+      resolvedIds.push(id)
+      names.push(row.name)
+    }
+  }
+  if (names.length === 0) return { ids: [], names: [], prefix: '' }
+  const formatted = names.map((n) => `"${n}"`).join(', ')
+  const prefix =
+    `[System note: For this message the user specifically enabled the MCP server${names.length > 1 ? 's' : ''} ${formatted}. ` +
+    `Use ${names.length > 1 ? 'them' : 'it'} when appropriate to fulfil the request below.]\n\n`
+  return { ids: resolvedIds, names, prefix }
+}
 
 export const chatStreamingService = {
   cancel(requestId: string): boolean {
@@ -84,7 +115,12 @@ export const chatStreamingService = {
       throw new ChatError('adapter_unavailable', err)
     }
 
-    const mcpProviderIds = chatMcpRepo.listProviderIds(chatId)
+    // Union of the chat-mode-driven MCP set and any on-demand MCPs the user
+    // has `@-mention`ed into this chat. De-duplicate so a provider that
+    // appears in both lists is only contributed once.
+    const baseMcpIds = chatMcpRepo.listProviderIds(chatId)
+    const onDemandMcpIds = chatOnDemandMcpRepo.listProviderIds(chatId)
+    const mcpProviderIds = Array.from(new Set([...baseMcpIds, ...onDemandMcpIds]))
     const tools: ToolDefinition[] = mcpManager.getToolsForProviders(mcpProviderIds)
 
     const toolProviderMap = new Map<string, string>()
@@ -94,6 +130,17 @@ export const chatStreamingService = {
       const conn = mcpManager.getConnection(t.mcpProviderId)
       if (conn) toolProviderNameMap.set(t.name, conn.config.name)
     }
+
+    // Resolve any owed on-demand announcements: builds a one-line
+    // system-style prefix letting the LLM know which MCPs the user just
+    // engaged for this turn. The flag flip is deferred to `_runStreamLoop`
+    // so a pre-flight failure (auth error, network down) does not silently
+    // burn the one-shot announcement — the user can retry and the LLM will
+    // still see the prefix.
+    const announce = resolvePendingAnnounce(chatId)
+    const augmentedWireContent = announce.prefix
+      ? `${announce.prefix}${wireContent}`
+      : wireContent
 
     const abortController = new AbortController()
     const requestId = nanoid()
@@ -107,7 +154,17 @@ export const chatStreamingService = {
       providerId: chat.providerId,
       model: chat.modelId,
       providerType: adapter.providerType,
-      toolCount: tools.length
+      toolCount: tools.length,
+      onDemandMcpCount: onDemandMcpIds.length,
+      announceMcpCount: announce.names.length
+    }
+
+    if (announce.names.length > 0) {
+      logger.debug('on-demand mcp prefix queued', {
+        requestId,
+        chatId,
+        mcpNames: announce.names
+      })
     }
 
     // Fire-and-forget the actual streaming work so the caller can release
@@ -123,7 +180,8 @@ export const chatStreamingService = {
       abortController,
       port,
       baseLog,
-      wireContent
+      augmentedWireContent,
+      announce.ids
     ).finally(() => {
       port.close()
       activeAbortControllers.delete(requestId)
@@ -147,7 +205,14 @@ export const chatStreamingService = {
     port: StreamPort,
     baseLog: Record<string, unknown>,
     /** Wire-level content for the latest user message (catch-up packet prepended when applicable). */
-    wireContent: string
+    wireContent: string,
+    /**
+     * On-demand MCP provider ids whose `pendingAnnounce` flag should be
+     * cleared *only* once the LLM has actually consumed the announce prefix
+     * (i.e. the first adapter response completes). Empty when no announce was
+     * owed for this turn.
+     */
+    pendingAnnounceMcpIds: string[]
   ): Promise<void> {
     try {
       const dbMessages = chatRepo.listMessages(chatId)
@@ -189,6 +254,18 @@ export const chatStreamingService = {
             port.postMessage({ type: 'delta', text })
           }
         })
+
+        // Clear the one-shot announce flag the moment the first adapter
+        // response resolves successfully — at this point the LLM has seen
+        // the prefix, so a later failure (mid-tool-loop, abort) doesn't
+        // re-announce on retry. Guard so we only fire on the first round.
+        if (round === 0 && pendingAnnounceMcpIds.length > 0) {
+          chatOnDemandMcpRepo.clearPending(chatId, pendingAnnounceMcpIds)
+          logger.debug('on-demand mcp announce consumed', {
+            ...baseLog,
+            mcpIds: pendingAnnounceMcpIds
+          })
+        }
 
         logger.info('stream response', {
           ...baseLog,

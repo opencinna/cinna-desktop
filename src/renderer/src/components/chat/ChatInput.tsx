@@ -5,10 +5,12 @@ import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
+import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { useAgents } from '../../hooks/useAgents'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
+import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
@@ -17,6 +19,7 @@ import { useRewriteUX } from '../../hooks/useRewriteUX'
 import { RewriteHintBar } from './RewriteHintBar'
 import { RewriteFailureModal } from './RewriteFailureModal'
 import { ActiveAgentChip } from './ActiveAgentChip'
+import { OnDemandMcpChips } from './OnDemandMcpChips'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/'
@@ -154,6 +157,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [agents]
   )
 
+  // MCP servers available for on-demand engagement in this chat. Only the
+  // settings-enabled providers — disabled ones can't connect anyway. Only
+  // surfaced inside an active chat (`chatId != null`).
+  const { data: allMcps } = useMcpProviders()
+  const enabledMcps = useMemo(
+    () => (allMcps ?? []).filter((m) => m.enabled),
+    [allMcps]
+  )
+  const addOnDemandMcp = useAddOnDemandMcp()
+
   const boundAgent = useMemo(
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
     [chatData?.agentId, agents]
@@ -181,6 +194,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [enabledAgents, triggerFilter]
   )
 
+  // MCP @-mention candidates: all settings-enabled MCPs, filtered by the
+  // typed token. Only meaningful inside an active chat (the engagement
+  // attaches to the chat row).
+  const filteredMcps = useMemo(() => {
+    if (!chatId) return []
+    const q = triggerFilter.toLowerCase()
+    return enabledMcps.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.transportType.toLowerCase().includes(q)
+    )
+  }, [enabledMcps, triggerFilter, chatId])
+
   const filteredPrompts = useMemo(() => {
     const q = triggerFilter.toLowerCase()
     return examplePrompts.filter(
@@ -197,10 +221,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   // `@` is available on new-chat (agent picker) AND inside an active chat when
   // multi-agent routing is wired up (in-chat mentions).
+  // In an active chat, the popup also surfaces an "MCP" section — having
+  // either agents or MCPs is enough to open it.
+  const inChatMentionItems = !!chatId && (enabledAgents.length > 0 || enabledMcps.length > 0)
   const agentPopupOpen =
     triggerChar === '@' &&
-    enabledAgents.length > 0 &&
-    ((!chatId && !!onSelectAgent) || !!chatId)
+    ((!chatId && !!onSelectAgent && enabledAgents.length > 0) || inChatMentionItems)
   const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
   const commandPopupOpen = triggerChar === '/' && commands.length > 0
 
@@ -244,6 +270,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       onSelectAgent?.(agent)
     },
     [replaceTriggerToken, onSelectAgent, chatId, composer]
+  )
+
+  /**
+   * In-chat MCP @-mention: attach the MCP to the chat's on-demand set. The
+   * stream loop unions it with the chat-mode baseline on the next send and
+   * silently prepends a "user just enabled MCP X" announcement so the LLM
+   * understands the engagement without the user typing it themselves.
+   */
+  const selectMcp = useCallback(
+    (mcp: { id: string }) => {
+      if (!chatId) return
+      replaceTriggerToken('')
+      void addOnDemandMcp.mutateAsync({ chatId, mcpProviderId: mcp.id })
+    },
+    [replaceTriggerToken, addOnDemandMcp, chatId]
+  )
+
+  const selectAgentOrMcp = useCallback(
+    (item: AgentMcpItem) => {
+      if (item.kind === 'agent') selectAgent(item.agent)
+      else selectMcp(item.mcp)
+    },
+    [selectAgent, selectMcp]
   )
 
   const selectPrompt = useCallback(
@@ -299,8 +348,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (activeRequestId) cancelStream(activeRequestId)
   }, [activeRequestId, cancelStream])
 
+  // In an active chat the @ popup is the combined agent+MCP picker, so the
+  // length used for keyboard nav is the sum across both sections.
+  const agentPopupItemCount =
+    chatId !== null ? filteredAgents.length + filteredMcps.length : filteredAgents.length
   const activeListLength = agentPopupOpen
-    ? filteredAgents.length
+    ? agentPopupItemCount
     : promptPopupOpen
       ? filteredPrompts.length
       : commandPopupOpen
@@ -349,8 +402,21 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
-        if (agentPopupOpen) selectAgent(filteredAgents[triggerIndex])
-        else if (promptPopupOpen) selectPrompt(filteredPrompts[triggerIndex])
+        if (agentPopupOpen) {
+          // In an active chat the popup is the combined agent+MCP picker —
+          // the trigger index maps to agents first, then MCPs (matching the
+          // render order in `AgentMcpMentionPopup`).
+          if (chatId) {
+            if (triggerIndex < filteredAgents.length) {
+              selectAgent(filteredAgents[triggerIndex])
+            } else {
+              const mcp = filteredMcps[triggerIndex - filteredAgents.length]
+              if (mcp) selectMcp(mcp)
+            }
+          } else {
+            selectAgent(filteredAgents[triggerIndex])
+          }
+        } else if (promptPopupOpen) selectPrompt(filteredPrompts[triggerIndex])
         else if (commandPopupOpen) selectCommand(filteredCommands[triggerIndex])
         return
       }
@@ -425,13 +491,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
     // Gate each trigger by context.
     // `@` opens the popup in two contexts: new-chat (picks the chat's bound
-    // agent) and active chats with multi-agent routing wired up (in-chat
-    // mention). The render-time `agentPopupOpen` mirrors this — keep them in
-    // sync so the popup actually mounts when the input handler triggers it.
+    // agent) and active chats (in-chat agent mention OR MCP attach). The
+    // render-time `agentPopupOpen` mirrors this — keep them in sync so the
+    // popup actually mounts when the input handler triggers it.
     const agentGate =
       token.char === '@' &&
-      enabledAgents.length > 0 &&
-      ((!chatId && !!onSelectAgent) || !!chatId)
+      ((!chatId && !!onSelectAgent && enabledAgents.length > 0) ||
+        (!!chatId && (enabledAgents.length > 0 || enabledMcps.length > 0)))
     const promptGate = token.char === '#' && examplePrompts.length > 0
     const commandGate = token.char === '/' && commands.length > 0
     if (!agentGate && !promptGate && !commandGate) {
@@ -457,16 +523,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
-      {agentPopupOpen && (
-        <AgentMentionPopup
-          items={filteredAgents}
-          selectedIndex={triggerIndex}
-          onSelect={selectAgent}
-          onClose={closeTrigger}
-          listboxId={listboxId}
-          anchorRef={textareaRef}
-        />
-      )}
+      {agentPopupOpen &&
+        (chatId ? (
+          <AgentMcpMentionPopup
+            agents={filteredAgents}
+            mcps={filteredMcps}
+            selectedIndex={triggerIndex}
+            onSelect={selectAgentOrMcp}
+            onClose={closeTrigger}
+            listboxId={listboxId}
+            anchorRef={textareaRef}
+          />
+        ) : (
+          <AgentMentionPopup
+            items={filteredAgents}
+            selectedIndex={triggerIndex}
+            onSelect={selectAgent}
+            onClose={closeTrigger}
+            listboxId={listboxId}
+            anchorRef={textareaRef}
+          />
+        ))}
 
       {promptPopupOpen && (
         <ExamplePromptPopup
@@ -531,7 +608,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             agentPopupOpen || promptPopupOpen || commandPopupOpen ? listboxId : undefined
           }
           aria-activedescendant={
-            (agentPopupOpen && filteredAgents.length > 0) ||
+            (agentPopupOpen && agentPopupItemCount > 0) ||
             (promptPopupOpen && filteredPrompts.length > 0) ||
             (commandPopupOpen && filteredCommands.length > 0)
               ? `${listboxId}-opt-${triggerIndex}`
@@ -553,7 +630,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       )}
 
       <div className="flex items-center justify-between px-1 pt-2">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
           {leftSlot}
           {chatId && composer.activeAgent ? (
             <ActiveAgentChip
@@ -575,6 +652,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ) : chatId && !leftSlot ? (
             <ChatControls chatId={chatId} inline />
           ) : null}
+          {chatId && <OnDemandMcpChips chatId={chatId} />}
         </div>
 
         <div className="flex items-center gap-1.5">

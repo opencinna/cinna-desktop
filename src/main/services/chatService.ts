@@ -1,10 +1,11 @@
 import { nanoid } from 'nanoid'
 import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
+import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
 import { getSettingsScopeUserId } from '../auth/scope'
-import { ChatError } from '../errors'
+import { ChatError, McpError } from '../errors'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('chat')
@@ -89,6 +90,32 @@ export const chatService = {
     const inserted = messageRepo.getById(id)
     if (!inserted) throw new ChatError('not_found', 'Message not found after insert')
     return inserted
+  },
+
+  /**
+   * On-demand MCP attachments for a chat: user-engaged MCPs from the in-chat
+   * `@-mention` flow. Separate from `chat_mcp_providers` (which reflects the
+   * chat mode's baseline set) so removals don't fight the chat mode.
+   */
+  listOnDemandMcps(userId: string, chatId: string): Array<{ mcpProviderId: string; pendingAnnounce: boolean }> {
+    requireOwnedChat(userId, chatId)
+    return chatOnDemandMcpRepo
+      .list(chatId)
+      .map((r) => ({ mcpProviderId: r.mcpProviderId, pendingAnnounce: r.pendingAnnounce }))
+  },
+
+  addOnDemandMcp(userId: string, chatId: string, mcpProviderId: string): void {
+    requireOwnedChat(userId, chatId)
+    const mcp = mcpProviderRepo.getOwned(getSettingsScopeUserId(), mcpProviderId)
+    if (!mcp) throw new McpError('not_found', 'MCP provider not found')
+    chatOnDemandMcpRepo.add(chatId, mcpProviderId)
+    logger.info('on-demand MCP added', { chatId, mcpProviderId, mcpName: mcp.name })
+  },
+
+  removeOnDemandMcp(userId: string, chatId: string, mcpProviderId: string): void {
+    requireOwnedChat(userId, chatId)
+    chatOnDemandMcpRepo.remove(chatId, mcpProviderId)
+    logger.info('on-demand MCP removed', { chatId, mcpProviderId })
   },
 
   setMcpProviders(userId: string, chatId: string, mcpProviderIds: string[]): void {

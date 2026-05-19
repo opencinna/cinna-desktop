@@ -35,6 +35,7 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 2. When sending a message, enabled MCP tools are passed to the LLM adapter
 3. If LLM emits `tool_use`, main process calls `mcpManager.callTool()` on the correct server
 4. Result is fed back to the LLM
+5. For lazy per-chat engagement, see [On-Demand MCP](../on_demand/on_demand.md) — users `@-mention` MCPs in the composer so tool schemas are only attached when actually needed
 
 ## Business Rules
 

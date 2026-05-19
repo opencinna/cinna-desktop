@@ -1,4 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { createLogger } from '../stores/logger.store'
+
+const onDemandLog = createLogger('on-demand-mcp')
 
 export function useMcpProviders() {
   return useQuery({
@@ -101,6 +104,68 @@ export function useSetChatMcpProviders() {
     }) => window.api.chat.setMcpProviders(chatId, mcpProviderIds),
     onSuccess: (_data, { chatId }) => {
       queryClient.invalidateQueries({ queryKey: ['chat-mcp', chatId] })
+    }
+  })
+}
+
+/**
+ * On-demand MCPs the user has `@-mentioned` into the current chat. Lives in
+ * its own cache key because it has a different lifecycle from the chat-mode
+ * baseline set tracked by [[useChatMcpProviders]].
+ */
+export function useChatOnDemandMcps(chatId: string | null) {
+  return useQuery({
+    queryKey: ['chat-on-demand-mcp', chatId],
+    queryFn: () =>
+      chatId ? window.api.chat.listOnDemandMcps(chatId) : Promise.resolve([]),
+    enabled: !!chatId
+  })
+}
+
+export function useAddOnDemandMcp() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      mcpProviderId
+    }: {
+      chatId: string
+      mcpProviderId: string
+    }) => window.api.chat.addOnDemandMcp(chatId, mcpProviderId),
+    onSuccess: (_data, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-mcp', chatId] })
+    },
+    // No toast system yet — at least surface the failure in the in-app
+    // logger so the user can ⌘` it and see why a chip never appeared.
+    onError: (error, { chatId, mcpProviderId }) => {
+      onDemandLog.error('add failed', {
+        chatId,
+        mcpProviderId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  })
+}
+
+export function useRemoveOnDemandMcp() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      chatId,
+      mcpProviderId
+    }: {
+      chatId: string
+      mcpProviderId: string
+    }) => window.api.chat.removeOnDemandMcp(chatId, mcpProviderId),
+    onSuccess: (_data, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-mcp', chatId] })
+    },
+    onError: (error, { chatId, mcpProviderId }) => {
+      onDemandLog.error('remove failed', {
+        chatId,
+        mcpProviderId,
+        error: error instanceof Error ? error.message : String(error)
+      })
     }
   })
 }

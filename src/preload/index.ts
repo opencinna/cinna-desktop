@@ -242,7 +242,21 @@ const api = {
     getMcpProviders: (
       chatId: string
     ): Promise<Array<{ chatId: string; mcpProviderId: string }>> =>
-      ipcRenderer.invoke('chat:get-mcp-providers', chatId)
+      ipcRenderer.invoke('chat:get-mcp-providers', chatId),
+    listOnDemandMcps: (
+      chatId: string
+    ): Promise<Array<{ mcpProviderId: string; pendingAnnounce: boolean }>> =>
+      ipcRenderer.invoke('chat:on-demand-mcp-list', chatId),
+    addOnDemandMcp: (
+      chatId: string,
+      mcpProviderId: string
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:on-demand-mcp-add', chatId, mcpProviderId),
+    removeOnDemandMcp: (
+      chatId: string,
+      mcpProviderId: string
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:on-demand-mcp-remove', chatId, mcpProviderId)
   },
 
   providers: {

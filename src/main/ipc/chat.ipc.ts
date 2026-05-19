@@ -101,4 +101,27 @@ export function registerChatHandlers(): void {
     userActivation.requireActivated()
     return chatService.getMcpProviders(getProfileScopeUserId(), chatId)
   })
+
+  ipcHandle('chat:on-demand-mcp-list', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    return chatService.listOnDemandMcps(getProfileScopeUserId(), chatId)
+  })
+
+  ipcHandle(
+    'chat:on-demand-mcp-add',
+    async (_event, chatId: string, mcpProviderId: string) => {
+      userActivation.requireActivated()
+      chatService.addOnDemandMcp(getProfileScopeUserId(), chatId, mcpProviderId)
+      return { success: true }
+    }
+  )
+
+  ipcHandle(
+    'chat:on-demand-mcp-remove',
+    async (_event, chatId: string, mcpProviderId: string) => {
+      userActivation.requireActivated()
+      chatService.removeOnDemandMcp(getProfileScopeUserId(), chatId, mcpProviderId)
+      return { success: true }
+    }
+  )
 }

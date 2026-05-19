@@ -12,6 +12,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Adapter** | Implementation of the `LLMAdapter` interface that translates between our chat system and a provider's SDK |
 | **MCP Server** | A Model Context Protocol server (local stdio or remote HTTP) that exposes tools to the LLM |
 | **MCP Connection** | A live client session to an MCP server, managed by MCPManager |
+| **On-Demand MCP** | An MCP server the user `@-mentions` into a chat so its tools are available only for that chat — tracked separately from the chat mode's baseline MCP set |
 | **Tool Call** | LLM requests a tool -> main process calls MCP server -> result fed back to LLM |
 | **MessagePort** | Electron's streaming channel used to send LLM response chunks from main to renderer |
 | **safeStorage** | Electron's OS-keychain encryption used for API keys and OAuth tokens at rest |
@@ -74,6 +75,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### MCP
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR
+- [On-Demand MCP](mcp/on_demand/on_demand.md) — `@-mention` MCP servers into a chat lazily so default chats don't pay token cost for tools they don't need; sticky chips + one-shot silent announce to the LLM
 - [Registries](mcp/registries/registries.md) — Browse public MCP catalogs from Settings, one-click Connect into the standard MCP flow; built-in adapters for `registry.modelcontextprotocol.io` and the Cinna-curated catalog
 - [Cinna Official Registry](mcp/registries/cinna_official.md) — Curated catalog of recommended remote MCP servers, served as a static JSON from `opencinna.io`; add/remove servers without a desktop release
 

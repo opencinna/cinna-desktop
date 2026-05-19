@@ -85,6 +85,35 @@ export const chatMcpProviders = sqliteTable(
   (table) => [primaryKey({ columns: [table.chatId, table.mcpProviderId] })]
 )
 
+/**
+ * On-demand MCP attachments: MCPs the user `@-mentions` into a specific chat
+ * to engage them lazily without bloating every chat's token budget. Lives
+ * separately from `chat_mcp_providers` (which is owned by the chat mode) so
+ * the user's per-chat engagements don't tangle with the mode's baseline set.
+ *
+ * `pendingAnnounce = true` means the silent "User specifically enabled MCP X"
+ * prefix is still owed on the next send — flipped to false after the prefix
+ * is consumed so follow-up turns don't repeat the announcement.
+ */
+export const chatOnDemandMcps = sqliteTable(
+  'chat_on_demand_mcps',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    mcpProviderId: text('mcp_provider_id')
+      .notNull()
+      .references(() => mcpProviders.id, { onDelete: 'cascade' }),
+    pendingAnnounce: integer('pending_announce', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.mcpProviderId] })]
+)
+
 export const chatModes = sqliteTable('chat_modes', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().default('__default__'),

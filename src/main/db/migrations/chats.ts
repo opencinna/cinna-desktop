@@ -17,6 +17,14 @@ export function migrateChats(sqlite: Database.Database): void {
       mcp_provider_id TEXT NOT NULL REFERENCES mcp_providers(id) ON DELETE CASCADE,
       PRIMARY KEY (chat_id, mcp_provider_id)
     );
+
+    CREATE TABLE IF NOT EXISTS chat_on_demand_mcps (
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      mcp_provider_id TEXT NOT NULL REFERENCES mcp_providers(id) ON DELETE CASCADE,
+      pending_announce INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (chat_id, mcp_provider_id)
+    );
   `)
 
   if (!hasColumn(sqlite, 'chats', 'deleted_at')) {
