@@ -11,7 +11,7 @@ import { migrateChatModes } from './migrations/chat-modes'
 import { migrateAgents } from './migrations/agents'
 import { migrateA2aSessions } from './migrations/a2a-sessions'
 import { migrateAgentOverrides } from './migrations/agent-overrides'
-import { migrateUsers } from './migrations/users'
+import { migrateUsers, migrateUserIdColumns } from './migrations/users'
 import { migrateChatAgentSessions } from './migrations/chat-agent-sessions'
 import { chatModeRepo } from './chatModes'
 import { createLogger } from '../logger/logger'
@@ -74,6 +74,9 @@ function runMigrations(): void {
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)
   migrateChatAgentSessions(sqlite)
+  // Backfill `user_id` on legacy tables — must run AFTER table creation so
+  // fresh installs don't ALTER tables that don't exist yet.
+  migrateUserIdColumns(sqlite)
 }
 
 export function getDb(): BetterSQLite3Database<typeof schema> {

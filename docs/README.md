@@ -47,6 +47,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 ### Core
 - [Resource Activation](core/resource_activation/resource_activation.md) — Account-scoped resource lifecycle: services only run after user authentication
 - [Settings Scope](core/settings_scope/settings_scope.md) — Default (shared) vs Profile (per-account) scope: which settings follow the user across profiles, which stay account-bound
+- [Boot Resilience](core/boot_resilience/boot_resilience.md) — Fatal-startup dialog instead of ghost windows, renderer-crash detection, migration ordering safety for fresh installs
 
 ### Auth
 - [User Accounts](auth/user_accounts/user_accounts.md) — Local user profiles with optional password auth, user-scoped data isolation, session management

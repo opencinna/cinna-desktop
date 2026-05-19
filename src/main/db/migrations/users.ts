@@ -1,5 +1,5 @@
 import type Database from 'better-sqlite3'
-import { hasColumn } from './helpers'
+import { hasColumn, hasTable } from './helpers'
 
 export function migrateUsers(sqlite: Database.Database): void {
   // Create users table
@@ -34,16 +34,6 @@ export function migrateUsers(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE users ADD COLUMN type TEXT NOT NULL DEFAULT 'local_user'`)
   }
 
-  // Add user_id column to all data tables
-  const tables = ['llm_providers', 'mcp_providers', 'chats', 'chat_modes', 'agents']
-  for (const table of tables) {
-    if (!hasColumn(sqlite, table, 'user_id')) {
-      sqlite.exec(
-        `ALTER TABLE ${table} ADD COLUMN user_id TEXT NOT NULL DEFAULT '__default__'`
-      )
-    }
-  }
-
   // Cinna account columns
   const cinnaColumns: [string, string][] = [
     ['cinna_full_name', 'TEXT'],
@@ -57,6 +47,24 @@ export function migrateUsers(sqlite: Database.Database): void {
   for (const [col, type] of cinnaColumns) {
     if (!hasColumn(sqlite, 'users', col)) {
       sqlite.exec(`ALTER TABLE users ADD COLUMN ${col} ${type}`)
+    }
+  }
+}
+
+/**
+ * Backfill the `user_id` column on legacy data tables that predate the
+ * multi-user refactor. Must run AFTER the table-creation migrations — on a
+ * fresh install these tables don't exist yet when `migrateUsers` runs, and
+ * `hasTable` keeps us from issuing ALTERs against missing tables.
+ */
+export function migrateUserIdColumns(sqlite: Database.Database): void {
+  const tables = ['llm_providers', 'mcp_providers', 'chats', 'chat_modes', 'agents']
+  for (const table of tables) {
+    if (!hasTable(sqlite, table)) continue
+    if (!hasColumn(sqlite, table, 'user_id')) {
+      sqlite.exec(
+        `ALTER TABLE ${table} ADD COLUMN user_id TEXT NOT NULL DEFAULT '__default__'`
+      )
     }
   }
 }
