@@ -1,6 +1,7 @@
-import { Wrench, Check, X, Loader2, Plug, ChevronRight } from 'lucide-react'
+import { Wrench, X, Loader2, Plug, ChevronRight } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { ToolCallSummary } from './ToolCallSummary'
+import { useUIStore } from '../../stores/ui.store'
 
 interface ToolCallBlockProps {
   name: string
@@ -112,18 +113,10 @@ export function ToolCallBlock({
   status,
   provider
 }: ToolCallBlockProps): React.JSX.Element {
+  const verboseMode = useUIStore((s) => s.verboseMode)
   const [expanded, setExpanded] = useState(false)
 
   const isPending = status === 'pending'
-
-  const statusIcon =
-    isPending ? (
-      <Loader2 size={12} className="animate-spin text-[var(--color-warning)]" />
-    ) : status === 'done' ? (
-      <Check size={12} className="text-[var(--color-success)]" />
-    ) : (
-      <X size={12} className="text-[var(--color-danger)]" />
-    )
 
   const parsedResult = result != null ? parseResult(result) : null
   const contentRef = useRef<HTMLDivElement>(null)
@@ -153,10 +146,17 @@ export function ToolCallBlock({
         ) : (
           <Wrench size={11} className="text-[var(--color-text-muted)] shrink-0" />
         )}
-        <span className="flex-1 min-w-0 truncate">
-          <ToolCallSummary name={name} input={input} variant="inline" />
-        </span>
-        <span className="shrink-0">{statusIcon}</span>
+        {isPending && (
+          <Loader2 size={12} className="animate-spin text-[var(--color-warning)] shrink-0" />
+        )}
+        {status === 'error' && (
+          <X size={12} className="text-[var(--color-danger)] shrink-0" />
+        )}
+        {verboseMode && (
+          <span className="flex-1 min-w-0 truncate">
+            <ToolCallSummary name={name} input={input} variant="inline" />
+          </span>
+        )}
       </button>
 
       <div
@@ -165,6 +165,10 @@ export function ToolCallBlock({
       >
         <div className="overflow-hidden">
           <div ref={contentRef} className="border-t border-[var(--color-border)] px-2.5 py-2 space-y-2">
+            <div>
+              <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Method</p>
+              <div className="font-mono text-[11px] text-[var(--color-accent)]">{name}</div>
+            </div>
             <div>
               <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Input</p>
               <div className="text-[11px] bg-[var(--color-bg)] p-2 rounded">

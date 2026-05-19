@@ -9,6 +9,9 @@ import type {
   FunctionDeclaration,
   FunctionDeclarationSchema
 } from '@google/generative-ai'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('gemini')
 
 // The `@google/generative-ai` SDK doesn't expose a list-models call, so we
 // hit the public REST endpoint directly. Returns models filtered to those
@@ -197,7 +200,7 @@ export class GeminiAdapter implements LLMAdapter {
           responseObj = { result: msg.content }
         }
         history.push({
-          role: 'user',
+          role: 'function',
           parts: [{
             functionResponse: {
               name: msg.toolName ?? '',
@@ -246,13 +249,45 @@ export class GeminiAdapter implements LLMAdapter {
   }
 
   private convertTools(tools: ToolDefinition[]): FunctionDeclaration[] {
-    // MCP tool inputSchemas are JSON Schema objects (`{ type: 'object', properties: {...} }`)
-    // which match Gemini's FunctionDeclarationSchema shape at runtime; we cast to satisfy
-    // the stricter compile-time interface.
-    return tools.map((t) => ({
-      name: t.name,
-      description: t.description,
-      parameters: t.inputSchema as unknown as FunctionDeclarationSchema
-    }))
+    return tools.map((t) => {
+      const dropped: string[] = []
+      const parameters = sanitizeForGemini(t.inputSchema, dropped)
+      if (dropped.length > 0) {
+        logger.debug('schema sanitized', { tool: t.name, dropped })
+      }
+      return {
+        name: t.name,
+        description: t.description,
+        parameters: parameters as unknown as FunctionDeclarationSchema
+      }
+    })
   }
+}
+
+// Gemini's `function_declarations.parameters` accepts only a narrow OpenAPI-3
+// subset and rejects standard JSON-Schema keywords that MCP servers commonly
+// emit (`$schema`, `additionalProperties`, `$defs`, `$id`, `$ref`,
+// `definitions`). Anthropic and OpenAI tolerate them; Gemini hard-fails the
+// whole request. Walk the schema and drop the unsupported keys.
+const GEMINI_DROP_KEYS = new Set([
+  '$schema',
+  '$id',
+  '$ref',
+  '$defs',
+  'definitions',
+  'additionalProperties'
+])
+
+function sanitizeForGemini(schema: unknown, dropped: string[] = []): unknown {
+  if (Array.isArray(schema)) return schema.map((s) => sanitizeForGemini(s, dropped))
+  if (!schema || typeof schema !== 'object') return schema
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
+    if (GEMINI_DROP_KEYS.has(k)) {
+      if (!dropped.includes(k)) dropped.push(k)
+      continue
+    }
+    out[k] = sanitizeForGemini(v, dropped)
+  }
+  return out
 }

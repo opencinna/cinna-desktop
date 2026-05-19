@@ -69,6 +69,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters
+- [Provider Integration](llm/adapters/provider_integration.md) — Cross-provider translation matrix (message history, tool schema, tool-call extraction, error parsing) and known per-provider quirks
 - [AI Functions](llm/ai_functions/ai_functions.md) — Shared primitive for one-shot LLM calls (Smart Rewrite today; chat-title / summary generation in the future) — adapter resolution + `runSingleShot`
 
 ### MCP
