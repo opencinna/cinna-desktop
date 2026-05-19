@@ -39,6 +39,18 @@ export function MainArea(): React.JSX.Element {
   const { startNewChat } = useNewChatFlow()
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
   const [selectedAgent, setSelectedAgent] = useState<AgentData | null>(null)
+  // On-demand MCP buffer for the new-chat screen — the chat row doesn't
+  // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
+  // flushes them onto the created chat.
+  const [pendingMcpIds, setPendingMcpIds] = useState<string[]>([])
+
+  const togglePendingMcp = useCallback((mcpId: string) => {
+    setPendingMcpIds((curr) => (curr.includes(mcpId) ? curr : [...curr, mcpId]))
+  }, [])
+
+  const removePendingMcp = useCallback((mcpId: string) => {
+    setPendingMcpIds((curr) => curr.filter((id) => id !== mcpId))
+  }, [])
   const examplePrompts = useMemo(() => extractExamplePrompts(selectedAgent), [selectedAgent])
   const chatInputRef = useRef<ChatInputHandle>(null)
   const inputWrapperRef = useRef<HTMLDivElement>(null)
@@ -163,12 +175,23 @@ export function MainArea(): React.JSX.Element {
         providerId: effectiveProviderId,
         providers,
         allModels,
-        mcpIds: effectiveMcpIds
+        mcpIds: effectiveMcpIds,
+        onDemandMcpIds: pendingMcpIds
       })
       setSelectedAgent(null)
       setActiveMode(null)
+      setPendingMcpIds([])
     },
-    [startNewChat, selectedAgent, activeMode, effectiveProviderId, providers, allModels, effectiveMcpIds]
+    [
+      startNewChat,
+      selectedAgent,
+      activeMode,
+      effectiveProviderId,
+      providers,
+      allModels,
+      effectiveMcpIds,
+      pendingMcpIds
+    ]
   )
 
   // Active chat: resolve current mode from chatData.modeId
@@ -286,6 +309,9 @@ export function MainArea(): React.JSX.Element {
           modeColor={modeColorPreset}
           onSelectAgent={(agent) => { setSelectedAgent(agent); setSendError(null) }}
           selectedAgent={selectedAgent}
+          pendingMcpIds={pendingMcpIds}
+          onTogglePendingMcp={togglePendingMcp}
+          onRemovePendingMcp={removePendingMcp}
           onDoubleEscape={() => setSelectedAgent(null)}
           tildeModePopup={
             availableModes.length > 0

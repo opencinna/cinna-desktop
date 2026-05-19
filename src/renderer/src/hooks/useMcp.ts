@@ -1,14 +1,30 @@
+import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createLogger } from '../stores/logger.store'
 
 const onDemandLog = createLogger('on-demand-mcp')
 
 export function useMcpProviders() {
+  const queryClient = useQueryClient()
+
+  // Subscribe to main-process MCP status broadcasts so any UI consuming the
+  // provider list (Settings cards, the `@` picker MCP section, the chips
+  // strip) reflects connect/disconnect transitions instantly — without
+  // waiting for the auth-pending polling fallback to tick.
+  useEffect(() => {
+    return window.api.mcp.onStatusChanged(() => {
+      queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })
+    })
+  }, [queryClient])
+
   return useQuery({
     queryKey: ['mcp-providers'],
     queryFn: () => window.api.mcp.list(),
     refetchInterval: (query) => {
-      // Poll while any provider is awaiting auth
+      // Polling fallback for the awaiting-auth state — the main process can't
+      // broadcast progress *during* the OAuth dance (no transition events
+      // fire until the user clicks through the browser), so we still poll
+      // here for the spinner to feel live.
       const data = query.state.data
       if (data?.some((p) => p.status === 'awaiting-auth')) {
         return 2000

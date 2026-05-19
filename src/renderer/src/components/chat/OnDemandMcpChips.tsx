@@ -6,33 +6,52 @@ import {
   useRemoveOnDemandMcp
 } from '../../hooks/useMcp'
 
-interface OnDemandMcpChipsProps {
-  chatId: string
-}
+type OnDemandMcpChipsProps =
+  | { chatId: string; pendingIds?: never; onRemovePending?: never }
+  | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
 
 /**
- * Renders the user-engaged MCP set for a chat as a strip of removable chips
- * next to the active-agent chip below the composer. Reads directly from the
- * caches rather than taking props so the strip stays in sync no matter which
- * path mutated the on-demand set (popup pick, follow-up @-mention, dedupe).
+ * Renders the user-engaged MCP set as a strip of removable chips next to the
+ * active-agent chip below the composer. Two modes:
+ *
+ *  - **Active chat** (`chatId` set): reads `chat_on_demand_mcps` via React
+ *    Query; removal hits the DB through `chat:on-demand-mcp-remove`.
+ *  - **New chat** (`pendingIds` set): reads the parent's in-memory buffer;
+ *    removal mutates the buffer via `onRemovePending`. `useNewChatFlow`
+ *    flushes the buffer onto the chat row after creation.
  */
-export function OnDemandMcpChips({ chatId }: OnDemandMcpChipsProps): React.JSX.Element | null {
-  const { data: onDemand } = useChatOnDemandMcps(chatId)
+export function OnDemandMcpChips(
+  props: OnDemandMcpChipsProps
+): React.JSX.Element | null {
   const { data: mcps } = useMcpProviders()
-  const remove = useRemoveOnDemandMcp()
+  const dbOnDemand = useChatOnDemandMcps(props.chatId ?? null)
+  const removeFromChat = useRemoveOnDemandMcp()
+
+  const ids = useMemo(() => {
+    if (props.chatId) return (dbOnDemand.data ?? []).map((r) => r.mcpProviderId)
+    return props.pendingIds
+  }, [props.chatId, props.pendingIds, dbOnDemand.data])
 
   const rows = useMemo(() => {
     const byId = new Map((mcps ?? []).map((m) => [m.id, m]))
-    return (onDemand ?? [])
-      .map((r) => {
-        const mcp = byId.get(r.mcpProviderId)
+    return ids
+      .map((id) => {
+        const mcp = byId.get(id)
         if (!mcp) return null
         return { id: mcp.id, name: mcp.name, status: mcp.status }
       })
       .filter((x): x is { id: string; name: string; status: string } => x !== null)
-  }, [onDemand, mcps])
+  }, [ids, mcps])
 
   if (rows.length === 0) return null
+
+  const handleRemove = (id: string): void => {
+    if (props.chatId) {
+      void removeFromChat.mutateAsync({ chatId: props.chatId, mcpProviderId: id })
+    } else {
+      props.onRemovePending(id)
+    }
+  }
 
   return (
     <>
@@ -58,9 +77,7 @@ export function OnDemandMcpChips({ chatId }: OnDemandMcpChipsProps): React.JSX.E
             <span className="text-[11px] font-medium whitespace-nowrap">{m.name}</span>
             <button
               type="button"
-              onClick={() =>
-                void remove.mutateAsync({ chatId, mcpProviderId: m.id })
-              }
+              onClick={() => handleRemove(m.id)}
               className="ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
               aria-label={`Remove MCP ${m.name} from this chat`}
             >

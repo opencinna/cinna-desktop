@@ -8,6 +8,16 @@ import { ElectronOAuthProvider, OAuthStoredState } from './oauth-provider'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
+import { getMainWindow } from '../index'
+
+/**
+ * Channel the main process uses to tell the renderer that one or more MCP
+ * connection states have changed (connected ↔ disconnected ↔ awaiting-auth ↔
+ * error). The renderer reacts by invalidating its `mcp-providers` query so
+ * UI surfaces — Settings cards, the on-demand `@` picker, the chips below
+ * the composer — reflect the new status without a manual refresh.
+ */
+export const MCP_STATUS_CHANGED_CHANNEL = 'mcp:status-changed'
 
 const logger = createLogger('MCP')
 
@@ -19,8 +29,37 @@ interface InternalConnection extends McpConnection {
   oauthProvider?: ElectronOAuthProvider
 }
 
+function broadcastStatusChange(providerId: string, status: string): void {
+  const win = getMainWindow()
+  if (win && !win.isDestroyed()) {
+    win.webContents.send(MCP_STATUS_CHANGED_CHANNEL, { providerId, status })
+  }
+}
+
 class MCPManager {
   private connections = new Map<string, InternalConnection>()
+
+  /**
+   * Persist the status on the connection and notify the renderer. Centralised
+   * so every transition (connect, disconnect, OAuth completion, error) goes
+   * through the same broadcast — the renderer's `useMcpProviders` listener
+   * invalidates its React Query cache off the back of this event.
+   */
+  private setStatus(
+    providerId: string,
+    connection: InternalConnection,
+    status: McpConnection['status'],
+    error?: string
+  ): void {
+    connection.status = status
+    if (error !== undefined) {
+      connection.error = error
+    } else if (status === 'connected') {
+      connection.error = undefined
+    }
+    this.connections.set(providerId, connection)
+    broadcastStatusChange(providerId, status)
+  }
 
   async connect(config: McpProviderConfig): Promise<McpConnection> {
     // Disconnect existing if any
@@ -97,16 +136,13 @@ class MCPManager {
       } catch (err) {
         if (err instanceof UnauthorizedError && connection.oauthProvider) {
           // OAuth flow initiated — browser was opened for user to authorize
-          connection.status = 'awaiting-auth'
-          this.connections.set(config.id, connection)
+          this.setStatus(config.id, connection, 'awaiting-auth')
           logger.info(`${config.name}: awaiting OAuth authorization...`)
 
           // Wait for the callback in the background
           this.handleOAuthCallback(config.id).catch((authErr) => {
             logger.error(`OAuth failed for ${config.name}`, authErr)
-            connection.status = 'error'
-            connection.error = `OAuth failed: ${String(authErr)}`
-            this.connections.set(config.id, connection)
+            this.setStatus(config.id, connection, 'error', `OAuth failed: ${String(authErr)}`)
           })
 
           return this.toPublic(connection)
@@ -117,22 +153,19 @@ class MCPManager {
       // Connected successfully (no auth needed, or tokens were valid)
       const tools = await this.listToolsFromClient(client, config.id)
       connection.tools = tools
-      connection.status = 'connected'
 
       if (connection.oauthProvider) {
         connection.oauthProvider.cleanup()
       }
 
-      this.connections.set(config.id, connection)
+      this.setStatus(config.id, connection, 'connected')
       logger.info(`Connected: ${config.name} (${tools.length} tools)`)
       return this.toPublic(connection)
     } catch (err) {
-      connection.status = 'error'
-      connection.error = String(err)
       if (connection.oauthProvider) {
         connection.oauthProvider.cleanup()
       }
-      this.connections.set(config.id, connection)
+      this.setStatus(config.id, connection, 'error', String(err))
       logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
     }
@@ -166,11 +199,9 @@ class MCPManager {
 
     const tools = await this.listToolsFromClient(client, providerId)
     conn.tools = tools
-    conn.status = 'connected'
-    conn.error = undefined
 
     conn.oauthProvider.cleanup()
-    this.connections.set(providerId, conn)
+    this.setStatus(providerId, conn, 'connected')
     logger.info(`Connected after OAuth: ${conn.config.name} (${tools.length} tools)`)
   }
 
@@ -230,6 +261,9 @@ class MCPManager {
         logger.error(`Error disconnecting MCP ${providerId}`, err)
       }
       this.connections.delete(providerId)
+      // Notify the renderer so any UI that had been showing this provider as
+      // `connected` flips back to `disconnected` immediately.
+      broadcastStatusChange(providerId, 'disconnected')
     }
   }
 

@@ -15,6 +15,15 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ## User Stories / Flows
 
+### Pre-engaging an MCP from the new-chat screen
+
+1. User is on the default new-chat screen (no chat exists yet). They want their first message to use the GitHub MCP.
+2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry alongside any agents.
+3. User selects the entry. The `@gith` token disappears and a green "GitHub" chip appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
+4. User types their first message and presses Enter.
+5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add` (which sets `pendingAnnounce = true`), then kicks off the stream as usual. The LLM sees the silent announce prefix on this very first send.
+6. The buffer is cleared so a return trip to the new-chat screen starts fresh.
+
 ### Engaging an MCP mid-chat
 
 1. User is in a regular chat (LLM root, no MCP attached) and realises they need GitHub access for the next message.
@@ -47,8 +56,9 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ## Business Rules
 
-- On-demand MCPs apply to LLM-channel sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them.
+- On-demand MCPs apply to LLM-channel sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them. (Picks made on the new-chat screen still persist onto the chat row, so a later "switch back to LLM root" in a multi-agent chat picks them up.)
 - The on-demand set is persisted per chat (`chat_on_demand_mcps`) and survives reload, app restart, and chat reopen. It is intentionally *not* per-message.
+- New-chat screen picks live in a renderer-only buffer until the chat is created. `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
 - The silent announcement is built once per engagement: the moment the user picks the MCP, `pendingAnnounce = true`; the next stream consumes it and flips it false; only re-adding the MCP (via the popup) re-arms it.
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.
@@ -59,29 +69,41 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 ## Architecture Overview
 
 ```
-User types '@' in active chat
+User types '@' in any chat context
   -> ChatInput trigger -> AgentMcpMentionPopup
        (combined agents + MCPs, single selectedIndex)
   -> User picks an MCP row
-       -> useAddOnDemandMcp -> chat:on-demand-mcp-add
-            -> chatService.addOnDemandMcp
-                 -> chatOnDemandMcpRepo.add (pendingAnnounce=true)
-       -> OnDemandMcpChips reactively renders the new chip
+       Active chat:
+         -> useAddOnDemandMcp -> chat:on-demand-mcp-add
+              -> chatService.addOnDemandMcp
+                   -> chatOnDemandMcpRepo.add (pendingAnnounce=true)
+         -> OnDemandMcpChips reads DB via React Query, renders the chip
+       New chat (no chatId yet):
+         -> onTogglePendingMcp pushes id into MainArea's buffer
+         -> OnDemandMcpChips (pending mode) reads the buffer, renders the chip
 
 User presses Enter
-  -> llm:send-message -> chatStreamingService.stream
-       -> baseline MCP ids (chat_mcp_providers)
-       -> on-demand MCP ids (chat_on_demand_mcps)
-       -> mcpManager.getToolsForProviders(union)
-       -> chatOnDemandMcpRepo.consumePending(chatId)
-            -> resolves names -> "[System note: ...]" prefix
-       -> wireContent = prefix + userContent
-       -> standard LLM stream loop with augmented tools + wire content
+  Active chat:
+    -> llm:send-message -> chatStreamingService.stream
+  New chat:
+    -> useNewChatFlow.startNewChat
+         -> chat:create
+         -> chat:on-demand-mcp-add per buffered id (BEFORE startLlm)
+         -> startLlm -> llm:send-message -> chatStreamingService.stream
+
+chatStreamingService.stream:
+  -> baseline MCP ids (chat_mcp_providers)
+  -> on-demand MCP ids (chat_on_demand_mcps)
+  -> mcpManager.getToolsForProviders(union)
+  -> chatOnDemandMcpRepo.peekPending(chatId)
+       -> resolves names -> "[System note: ...]" prefix
+  -> wireContent = prefix + userContent
+  -> _runStreamLoop: on first successful adapter response,
+     chatOnDemandMcpRepo.clearPending(chatId, ids)
 
 User clicks × on a chip
-  -> useRemoveOnDemandMcp -> chat:on-demand-mcp-remove
-       -> chatOnDemandMcpRepo.remove
-  -> chip disappears; next send omits that MCP
+  Active chat: useRemoveOnDemandMcp -> chat:on-demand-mcp-remove
+  New chat:    onRemovePendingMcp removes from MainArea buffer
 ```
 
 ## Integration Points

@@ -16,6 +16,12 @@ export interface NewChatOptions {
   providers: ProviderData[] | undefined
   allModels: ModelData[] | undefined
   mcpIds: Iterable<string>
+  /**
+   * On-demand MCPs the user `@-mentioned` on the new-chat screen before the
+   * chat row existed. Flushed onto the freshly-created chat *before* the
+   * first send so the stream loop's announce prefix picks them up.
+   */
+  onDemandMcpIds?: Iterable<string>
 }
 
 export function resolveModel(
@@ -48,11 +54,30 @@ export function useNewChatFlow(): {
 
   const startNewChat = useCallback(
     async (opts: NewChatOptions): Promise<void> => {
-      const { message, agent, mode, providerId, providers, allModels, mcpIds } = opts
+      const {
+        message,
+        agent,
+        mode,
+        providerId,
+        providers,
+        allModels,
+        mcpIds,
+        onDemandMcpIds
+      } = opts
       const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
       try {
         const chat = await createChat.mutateAsync()
+
+        // Flush the new-chat MCP buffer before either channel kicks off. The
+        // LLM stream loop reads `chat_on_demand_mcps` at setup time, so the
+        // rows must exist by the moment `startLlm` fires. For agent-bound
+        // chats we still persist (MCPs are LLM-only at send time, but the
+        // user may switch to the LLM root later via multi-agent routing).
+        const onDemandSnapshot = onDemandMcpIds ? Array.from(onDemandMcpIds) : []
+        for (const mcpId of onDemandSnapshot) {
+          await window.api.chat.addOnDemandMcp(chat.id, mcpId)
+        }
 
         if (agent) {
           await updateChat.mutateAsync({

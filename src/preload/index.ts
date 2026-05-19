@@ -449,7 +449,23 @@ const api = {
       query?: string
       limit?: number
     }): Promise<McpRegistrySearchAllResult> =>
-      ipcRenderer.invoke('mcp:registry-search-all', data)
+      ipcRenderer.invoke('mcp:registry-search-all', data),
+    /**
+     * Subscribe to MCP connection state transitions. The main process emits
+     * one event per transition; the renderer typically reacts by invalidating
+     * its `mcp-providers` cache so cards and chips reflect the new status.
+     * Returns an unsubscribe function.
+     */
+    onStatusChanged: (
+      handler: (payload: { providerId: string; status: string }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        payload: { providerId: string; status: string }
+      ): void => handler(payload)
+      ipcRenderer.on('mcp:status-changed', listener)
+      return () => ipcRenderer.off('mcp:status-changed', listener)
+    }
   },
 
   logger: {
