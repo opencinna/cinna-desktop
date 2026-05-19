@@ -29,7 +29,7 @@ export function OnDemandMcpChips(
 
   const ids = useMemo(() => {
     if (props.chatId) return (dbOnDemand.data ?? []).map((r) => r.mcpProviderId)
-    return props.pendingIds
+    return props.pendingIds ?? []
   }, [props.chatId, props.pendingIds, dbOnDemand.data])
 
   const rows = useMemo(() => {
@@ -49,7 +49,7 @@ export function OnDemandMcpChips(
     if (props.chatId) {
       void removeFromChat.mutateAsync({ chatId: props.chatId, mcpProviderId: id })
     } else {
-      props.onRemovePending(id)
+      props.onRemovePending?.(id)
     }
   }
 
