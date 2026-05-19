@@ -11,6 +11,7 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 - **Transport** — How the client communicates: `stdio` (local process), `sse` (Server-Sent Events), or `streamable-http` (bidirectional HTTP)
 - **Tool** — A capability exposed by an MCP server (name, description, input schema), aggregated and passed to LLM adapters
 - **OAuth DCR** — Dynamic Client Registration (RFC 7591) used for authenticating with remote MCP servers
+- **Registry** — A public catalog of MCP servers the user can browse to discover and one-click install — see [Registries](../registries/registries.md)
 
 ## User Stories / Flows
 
@@ -20,11 +21,14 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 3. Saves; system auto-connects and lists available tools
 
 ### Adding a remote MCP server (streamable-http)
-1. User clicks "Add Remote MCP", enters name and URL
+1. User clicks "Add Custom MCP", enters name and URL
 2. Saves; system attempts connection
 3. If server requires OAuth: status becomes `awaiting-auth`, browser opens for authorization
 4. After user authorizes in browser, OAuth callback completes, tokens are encrypted and persisted
 5. Connection resumes with authenticated transport, tools are listed
+
+### Browsing a registry
+See [MCP Registries](../registries/registries.md). The Connect button in the picker reuses the same `mcp:upsert` → `mcpManager.connect` path documented below.
 
 ### Using MCP tools in a chat
 1. User enables MCP servers for a chat via the [+] config menu or MCP toggle pills
@@ -71,6 +75,7 @@ Chat flow:
 
 ## Integration Points
 
+- [MCP Registries](../registries/registries.md) — Discovery layer; the picker creates providers through `mcp:upsert` and reuses the connection flow above
 - [Chat Messaging](../../chat/messaging/messaging.md) — Tool calls during streaming are routed through MCPManager
 - [LLM Adapters](../../llm/adapters/adapters.md) — MCP tools are converted to each provider's tool schema format
 - Database — MCP configs, OAuth tokens, and chat-MCP junction stored in SQLite

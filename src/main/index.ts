@@ -34,7 +34,18 @@ function createWindow(): void {
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {
-    shell.openExternal(details.url)
+    // Defense-in-depth: only forward http(s) URLs to the OS. Some link sources
+    // (e.g. third-party MCP registry data) are untrusted, and shell.openExternal
+    // will hand any registered scheme — file:, javascript:, custom protocol —
+    // straight to the OS.
+    try {
+      const parsed = new URL(details.url)
+      if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+        shell.openExternal(details.url)
+      }
+    } catch {
+      // Invalid URL — ignore
+    }
     return { action: 'deny' }
   })
 

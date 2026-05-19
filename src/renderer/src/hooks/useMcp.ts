@@ -64,6 +64,24 @@ export function useDisconnectMcp() {
   })
 }
 
+export function useMcpRegistries() {
+  return useQuery({
+    queryKey: ['mcp-registries'],
+    queryFn: () => window.api.mcp.registryList(),
+    staleTime: Infinity
+  })
+}
+
+export function useMcpRegistrySearch(registryId: string | null, query: string) {
+  return useQuery({
+    queryKey: ['mcp-registry-search', registryId, query.trim()],
+    queryFn: () =>
+      window.api.mcp.registrySearch({ registryId: registryId!, query, limit: 50 }),
+    enabled: !!registryId,
+    staleTime: 5 * 60 * 1000
+  })
+}
+
 export function useChatMcpProviders(chatId: string | null) {
   return useQuery({
     queryKey: ['chat-mcp', chatId],

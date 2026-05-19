@@ -3,6 +3,10 @@ import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
+import type {
+  McpRegistryEntry,
+  McpRegistryInfo
+} from '../shared/mcpRegistries'
 import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
@@ -424,7 +428,17 @@ const api = {
     disconnect: (providerId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('mcp:disconnect', providerId),
     listTools: (providerId: string): Promise<unknown[]> =>
-      ipcRenderer.invoke('mcp:list-tools', providerId)
+      ipcRenderer.invoke('mcp:list-tools', providerId),
+    registryList: (): Promise<McpRegistryInfo[]> =>
+      ipcRenderer.invoke('mcp:registry-list'),
+    registrySearch: (data: {
+      registryId: string
+      query?: string
+      limit?: number
+    }): Promise<
+      | { success: true; entries: McpRegistryEntry[] }
+      | { success: false; code: string; error: string }
+    > => ipcRenderer.invoke('mcp:registry-search', data)
   },
 
   logger: {

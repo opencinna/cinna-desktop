@@ -74,6 +74,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### MCP
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR
+- [Registries](mcp/registries/registries.md) — Browse public MCP catalogs from Settings, one-click Connect into the standard MCP flow; built-in adapter for `registry.modelcontextprotocol.io`
 
 ### UI
 - [App Shell](ui/app_shell/app_shell.md) — Window chrome: permanent top bar (traffic-light gutter, sidebar toggle, new chat), animated floating sidebar, profile/agent/interface footer menus

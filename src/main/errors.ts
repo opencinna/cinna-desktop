@@ -15,6 +15,8 @@ export type McpErrorCode =
   | 'not_activated'
   | 'invalid_transport'
   | 'connect_failed'
+  | 'registry_unknown'
+  | 'registry_unreachable'
 
 export type ChatErrorCode =
   | 'not_found'

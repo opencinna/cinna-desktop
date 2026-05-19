@@ -1,6 +1,7 @@
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { mcpService } from '../services/mcpService'
+import { mcpRegistryService } from '../services/mcpRegistryService'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
 
@@ -60,4 +61,32 @@ export function registerMcpHandlers(): void {
     userActivation.requireActivated()
     return mcpService.listTools(getSettingsScopeUserId(), providerId)
   })
+
+  ipcHandle('mcp:registry-list', async () => {
+    userActivation.requireActivated()
+    return mcpRegistryService.list()
+  })
+
+  // Returns error inline so the picker can render a retry/empty state without
+  // a React Query error boundary swallowing the search input.
+  ipcHandle(
+    'mcp:registry-search',
+    async (
+      _event,
+      data: { registryId: string; query?: string; limit?: number }
+    ) => {
+      userActivation.requireActivated()
+      try {
+        const result = await mcpRegistryService.search(
+          data.registryId,
+          data.query ?? '',
+          data.limit
+        )
+        return { success: true as const, entries: result.entries }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false as const, code: e.code, error: e.message }
+      }
+    }
+  )
 }

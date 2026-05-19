@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Trash2, ChevronDown, Wrench, Circle, Shield } from 'lucide-react'
 import { useUpsertMcpProvider, useDeleteMcpProvider, useConnectMcp, useDisconnectMcp } from '../../hooks/useMcp'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { formatEnvVars, parseEnvVars } from '../../utils/envVars'
 
 interface MCPProviderCardProps {
   provider: {
@@ -27,11 +28,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
   const [command, setCommand] = useState(provider.command ?? '')
   const [args, setArgs] = useState((provider.args ?? []).join(' '))
   const [url, setUrl] = useState(provider.url ?? '')
-  const [envStr, setEnvStr] = useState(
-    Object.entries(provider.env ?? {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n')
-  )
+  const [envStr, setEnvStr] = useState(formatEnvVars(provider.env))
 
   const upsert = useUpsertMcpProvider()
   const deleteMcp = useDeleteMcpProvider()
@@ -54,14 +51,19 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         ? provider.error ?? 'Error'
         : undefined
 
+  // Local edits diverge from the persisted record. The toggle bypasses the
+  // form (it only flips `enabled`) so when the form is dirty we freeze the
+  // toggle to avoid silently overwriting the user's in-progress changes.
+  const isDirty =
+    name !== provider.name ||
+    transportType !== provider.transportType ||
+    command !== (provider.command ?? '') ||
+    args !== (provider.args ?? []).join(' ') ||
+    url !== (provider.url ?? '') ||
+    envStr !== formatEnvVars(provider.env)
+
   const handleSave = (): void => {
-    const envObj: Record<string, string> = {}
-    envStr.split('\n').forEach((line) => {
-      const eqIdx = line.indexOf('=')
-      if (eqIdx > 0) {
-        envObj[line.slice(0, eqIdx).trim()] = line.slice(eqIdx + 1).trim()
-      }
-    })
+    const envObj = parseEnvVars(envStr)
 
     upsert.mutate({
       id: provider.id,
@@ -70,7 +72,8 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
       command: transportType === 'stdio' ? command : undefined,
       args: transportType === 'stdio' ? args.split(/\s+/).filter(Boolean) : undefined,
       url: transportType !== 'stdio' ? url : undefined,
-      env: Object.keys(envObj).length > 0 ? envObj : undefined,
+      env:
+        transportType === 'stdio' && Object.keys(envObj).length > 0 ? envObj : undefined,
       enabled: provider.enabled
     })
   }
@@ -113,10 +116,12 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         )}
 
         <button
-          onClick={(e) => { e.stopPropagation(); handleToggle() }}
+          onClick={(e) => { e.stopPropagation(); if (!isDirty) handleToggle() }}
+          disabled={isDirty}
+          title={isDirty ? 'Save or discard your edits first' : undefined}
           className={`relative w-9 h-5 rounded-full transition-colors ${
             provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-          }`}
+          } ${isDirty ? 'opacity-50 cursor-not-allowed' : ''}`}
         >
           <div
             className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
@@ -144,14 +149,16 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
           </div>
 
-          <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
-            <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
-              <option value="stdio">stdio</option>
-              <option value="sse">SSE</option>
-              <option value="streamable-http">Streamable HTTP</option>
-            </select>
-          </div>
+          {transportType === 'stdio' && (
+            <div>
+              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
+              <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
+                <option value="stdio">stdio</option>
+                <option value="sse">SSE</option>
+                <option value="streamable-http">Streamable HTTP</option>
+              </select>
+            </div>
+          )}
 
           {transportType === 'stdio' ? (
             <>
@@ -163,6 +170,16 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
                 <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
                 <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="space separated" className={inputClass} />
               </div>
+              <div>
+                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
+                <textarea
+                  value={envStr}
+                  onChange={(e) => setEnvStr(e.target.value)}
+                  rows={2}
+                  placeholder="API_KEY=xxx"
+                  className={`${inputClass} resize-none font-mono`}
+                />
+              </div>
             </>
           ) : (
             <div>
@@ -170,17 +187,6 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
               <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
             </div>
           )}
-
-          <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
-            <textarea
-              value={envStr}
-              onChange={(e) => setEnvStr(e.target.value)}
-              rows={2}
-              placeholder="API_KEY=xxx"
-              className={`${inputClass} resize-none font-mono`}
-            />
-          </div>
 
           <div className="flex justify-end gap-2">
             {provider.status === 'connected' ? (
