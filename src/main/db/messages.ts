@@ -3,6 +3,7 @@ import { eq, desc } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
 import type { MessagePart } from '../../shared/messageParts'
+import type { MessageAttachment } from '../../shared/attachments'
 
 export type { MessagePart }
 
@@ -15,6 +16,8 @@ export interface SaveUserMessage {
   rewrittenText?: string | null
   /** Multi-agent: user's literal input before rewrite (preserved for audit / learning). */
   originalText?: string | null
+  /** File attachments shipped with this user turn (Cinna agents only). */
+  attachments?: MessageAttachment[] | null
 }
 
 export interface SaveAssistantMessage {
@@ -79,6 +82,7 @@ export const messageRepo = {
         addressedAgentId: msg.addressedAgentId ?? null,
         rewrittenText: msg.rewrittenText ?? null,
         originalText: msg.originalText ?? null,
+        attachments: msg.attachments && msg.attachments.length > 0 ? msg.attachments : null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })

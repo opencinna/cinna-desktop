@@ -10,6 +10,7 @@ import { registerAuthHandlers } from './auth.ipc'
 import { registerLoggerHandlers } from './logger.ipc'
 import { registerUpdaterHandlers } from './updater.ipc'
 import { registerMultiAgentHandlers } from './multi_agent.ipc'
+import { registerFilesHandlers } from './files.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -24,4 +25,5 @@ export function registerAllIpcHandlers(): void {
   registerAgentStatusHandlers()
   registerUpdaterHandlers()
   registerMultiAgentHandlers()
+  registerFilesHandlers()
 }

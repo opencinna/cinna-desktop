@@ -1,6 +1,7 @@
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
 import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
+import type { MessageAttachment } from '../../shared/attachments'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -205,6 +206,8 @@ export const messages = sqliteTable('messages', {
   toolError: integer('tool_error', { mode: 'boolean' }),
   toolProvider: text('tool_provider'),
   parts: text('parts', { mode: 'json' }).$type<MessagePart[]>(),
+  /** File attachments persisted on user messages — drives badge rendering. */
+  attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),
   // Multi-agent routing metadata
   addressedAgentId: text('addressed_agent_id'),
   rewrittenText: text('rewritten_text'),

@@ -39,6 +39,7 @@ export interface StartAgentOptions {
   rewrittenText?: string | null
   originalText?: string | null
   catchupPacket?: string
+  attachments?: Array<{ id: string; filename: string; size: number; mimeType: string }>
 }
 
 /**

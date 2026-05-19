@@ -3,6 +3,7 @@ import { useCreateChat, useUpdateChat } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { useChatStream } from './useChatStream'
 import type { ChatModeData } from '../constants/chatModeColors'
+import type { MessageAttachment } from '../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
@@ -22,6 +23,8 @@ export interface NewChatOptions {
    * first send so the stream loop's announce prefix picks them up.
    */
   onDemandMcpIds?: Iterable<string>
+  /** File attachments uploaded to the Cinna backend before chat creation. */
+  attachments?: MessageAttachment[]
 }
 
 export function resolveModel(
@@ -62,7 +65,8 @@ export function useNewChatFlow(): {
         providers,
         allModels,
         mcpIds,
-        onDemandMcpIds
+        onDemandMcpIds,
+        attachments
       } = opts
       const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
@@ -85,7 +89,7 @@ export function useNewChatFlow(): {
             updates: { title, agentId: agent.id }
           })
           useChatStore.getState().setActiveChatId(chat.id)
-          startAgent(agent.id, chat.id, message)
+          startAgent(agent.id, chat.id, message, { attachments })
           return
         }
 

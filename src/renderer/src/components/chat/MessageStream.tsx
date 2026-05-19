@@ -298,6 +298,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     agentId={sourceAgentId}
                     addressedAgentName={addressedAgentName}
                     addressedAgentId={addressedAgentId}
+                    attachments={msg.role === 'user' ? msg.attachments ?? null : null}
                   />
                   {footer}
                 </>

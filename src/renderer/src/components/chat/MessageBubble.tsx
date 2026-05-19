@@ -1,11 +1,13 @@
 import { useState } from 'react'
-import { Info, Bot, ArrowRight } from 'lucide-react'
+import { Info, Bot, ArrowRight, X } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { presetForAgentId } from '../../utils/agentColors'
+import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
+import { useFileDownload } from '../../hooks/useFileDownload'
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -26,6 +28,8 @@ interface MessageBubbleProps {
   addressedAgentName?: string | null
   /** Multi-agent: id of the agent this user message was routed to — drives color. */
   addressedAgentId?: string | null
+  /** File attachments to render under the bubble (user turn). */
+  attachments?: AttachmentBadgeData[] | null
 }
 
 export function MessageBubble({
@@ -38,17 +42,33 @@ export function MessageBubble({
   agentName,
   agentId,
   addressedAgentName,
-  addressedAgentId
+  addressedAgentId,
+  attachments
 }: MessageBubbleProps): React.JSX.Element {
   const isUser = role === 'user'
   const [showMeta, setShowMeta] = useState(false)
   const hasMeta = meta && Object.keys(meta).length > 0
   const agentColor = agentId ? presetForAgentId(agentId) : null
   const addressedColor = addressedAgentId ? presetForAgentId(addressedAgentId) : null
+  // Download state is store-backed (see fileDownload.store) — every bubble
+  // reads from the same source so the spinner and error stay consistent
+  // across the whole message stream. Each bubble only renders the error
+  // label for its own attachments by matching `errorFileId`.
+  const {
+    isDownloading,
+    download,
+    error: downloadError,
+    errorFileId,
+    dismissError
+  } = useFileDownload()
+  const downloadErrorForThisBubble =
+    isUser && downloadError && attachments?.some((a) => a.id === errorFileId)
+      ? downloadError
+      : null
 
   if (isUser) {
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-1">
         <div className="relative group max-w-[80%]">
           <div
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
@@ -72,6 +92,28 @@ export function MessageBubble({
             )}
           </div>
         </div>
+        {attachments && attachments.length > 0 && (
+          <AttachmentList
+            attachments={attachments}
+            variant="message"
+            align="right"
+            onClick={(a) => void download(a)}
+            isLoading={isDownloading}
+          />
+        )}
+        {downloadErrorForThisBubble && (
+          <div className="flex items-center gap-1 max-w-[80%] justify-end text-[10px] text-[var(--color-danger)]">
+            <span className="truncate">{downloadErrorForThisBubble}</span>
+            <button
+              type="button"
+              onClick={dismissError}
+              className="p-0.5 rounded hover:bg-[var(--color-bg-hover)] shrink-0"
+              aria-label="Dismiss download error"
+            >
+              <X size={10} />
+            </button>
+          </div>
+        )}
       </div>
     )
   }

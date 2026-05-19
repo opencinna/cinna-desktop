@@ -129,8 +129,10 @@ export function registerA2AHandlers(): void {
         content: userContent,
         catchupPacket = '',
         rewrittenText = null,
-        originalText = null
+        originalText = null,
+        attachments
       } = payload
+      const fileIds = attachments?.map((a) => a.id)
       const port = event.ports?.[0]
       if (!port) return
 
@@ -191,7 +193,8 @@ export function registerA2AHandlers(): void {
         userContent,
         rewrittenText,
         originalText,
-        catchupPacket
+        catchupPacket,
+        attachments
       })
 
       let accessToken: string | undefined
@@ -214,6 +217,7 @@ export function registerA2AHandlers(): void {
         cardUrl: agent.cardUrl,
         accessToken,
         wireContent,
+        fileIds,
         port
       })
     }

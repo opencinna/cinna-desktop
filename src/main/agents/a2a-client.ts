@@ -358,11 +358,16 @@ export async function createA2AClient(
 
 /**
  * Build a MessageSendParams object for sending text to an A2A agent.
+ *
+ * `metadata` is forwarded as the message-level `metadata` map — Cinna
+ * agents recognise `cinna_file_ids` here and attach the matching uploaded
+ * files to the user turn before passing it into the agent environment.
  */
 export function buildSendParams(
   content: string,
   contextId?: string,
-  taskId?: string
+  taskId?: string,
+  metadata?: Record<string, unknown>
 ): MessageSendParams {
   return {
     message: {
@@ -371,7 +376,8 @@ export function buildSendParams(
       role: 'user',
       parts: [{ kind: 'text', text: content }],
       ...(contextId && { contextId }),
-      ...(taskId && { taskId })
+      ...(taskId && { taskId }),
+      ...(metadata && Object.keys(metadata).length > 0 && { metadata })
     },
     configuration: {
       acceptedOutputModes: ['text/plain', 'application/json']

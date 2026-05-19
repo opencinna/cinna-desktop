@@ -6,6 +6,8 @@
  * fields are added later.
  */
 
+import type { MessageAttachment } from './attachments'
+
 export interface AgentSendPayload {
   agentId: string
   chatId: string
@@ -16,6 +18,12 @@ export interface AgentSendPayload {
   rewrittenText?: string | null
   /** User's literal pre-rewrite text (persisted on the user message). */
   originalText?: string | null
+  /**
+   * File attachments to ship with this user turn. Persisted on the user
+   * message (so the bubble can re-render badges from history) and forwarded
+   * to the Cinna backend via A2A message `metadata.cinna_file_ids`.
+   */
+  attachments?: MessageAttachment[]
 }
 
 export interface LlmSendPayload {

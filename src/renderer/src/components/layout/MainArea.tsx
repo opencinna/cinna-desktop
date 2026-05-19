@@ -19,6 +19,7 @@ import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
+import type { MessageAttachment } from '../../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
@@ -156,7 +157,7 @@ export function MainArea(): React.JSX.Element {
   }, [agentStatusOpen, activeView])
 
   const handleNewChat = useCallback(
-    async (message: string) => {
+    async (message: string, attachments?: MessageAttachment[]) => {
       const resolvedModelId = selectedAgent
         ? null
         : resolveModel(activeMode, effectiveProviderId, providers, allModels)
@@ -176,7 +177,8 @@ export function MainArea(): React.JSX.Element {
         providers,
         allModels,
         mcpIds: effectiveMcpIds,
-        onDemandMcpIds: pendingMcpIds
+        onDemandMcpIds: pendingMcpIds,
+        attachments
       })
       setSelectedAgent(null)
       setActiveMode(null)

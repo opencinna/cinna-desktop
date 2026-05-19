@@ -11,6 +11,7 @@ import {
 import { useChatStream } from './useChatStream'
 import { useChatModes } from './useChatModes'
 import { findAgentMention } from '../utils/agentSlug'
+import type { MessageAttachment } from '../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
@@ -20,6 +21,8 @@ export interface PendingRewrite {
   targetAgentId: string
   targetAgentName: string
   originalText: string
+  /** Attachments captured at submit time — replayed when the rewrite is confirmed or sent raw. */
+  attachments?: MessageAttachment[]
 }
 
 export type RewriteErrorCode =
@@ -60,7 +63,7 @@ export interface ComposerView {
  */
 export function useChatComposer(chatId: string | null): ComposerView & {
   switchActiveAgent: (agentId: string | null) => Promise<void>
-  submit: (input: string) => Promise<SubmitResult>
+  submit: (input: string, attachments?: MessageAttachment[]) => Promise<SubmitResult>
   confirmRewrite: (text: string, pending: PendingRewrite) => Promise<void>
   sendRaw: (pending: PendingRewrite) => Promise<void>
   disableSmartAssist: () => Promise<void>
@@ -131,7 +134,8 @@ export function useChatComposer(chatId: string | null): ComposerView & {
       agentId: string,
       text: string,
       rewrittenText: string | null,
-      originalText: string | null
+      originalText: string | null,
+      attachments?: MessageAttachment[]
     ): Promise<void> => {
       if (!chatId) return
       let catchupPacket = ''
@@ -149,23 +153,30 @@ export function useChatComposer(chatId: string | null): ComposerView & {
       if (snap && snap.chat.activeAgentId !== agentId) {
         await setActiveAgentMutation.mutateAsync({ chatId, agentId })
       }
-      startAgent(agentId, chatId, text, { rewrittenText, originalText, catchupPacket })
+      startAgent(agentId, chatId, text, {
+        rewrittenText,
+        originalText,
+        catchupPacket,
+        attachments
+      })
     },
     [chatId, buildCatchupMutation, readSnapshot, setActiveAgentMutation, startAgent]
   )
 
   /** Send a message via the chat's root channel (bound agent or LLM mode). */
   const dispatchToRoot = useCallback(
-    async (text: string): Promise<void> => {
+    async (text: string, attachments?: MessageAttachment[]): Promise<void> => {
       if (!chatId) return
       const snap = readSnapshot()
       if (!snap) return
       const { rootAgent } = resolveActive(snap.chat, snap.agents)
       if (rootAgent) {
-        await dispatchToAgent(rootAgent.id, text, null, null)
+        await dispatchToAgent(rootAgent.id, text, null, null, attachments)
         return
       }
-      // LLM root — flip active to null and start the LLM channel.
+      // LLM root — flip active to null and start the LLM channel. Attachments
+      // are silently dropped for raw-LLM chats (the local LLM SDKs don't have
+      // a path to forward Cinna-backend file IDs).
       if (snap.chat.activeAgentId !== null) {
         await setActiveAgentMutation.mutateAsync({ chatId, agentId: null })
       }
@@ -184,7 +195,7 @@ export function useChatComposer(chatId: string | null): ComposerView & {
 
   /** The composer's single entry point. ChatInput calls this on Enter. */
   const submit = useCallback(
-    async (input: string): Promise<SubmitResult> => {
+    async (input: string, attachments?: MessageAttachment[]): Promise<SubmitResult> => {
       const trimmed = input.trim()
       if (!trimmed) return { kind: 'noop' }
       const snap = readSnapshot()
@@ -199,20 +210,21 @@ export function useChatComposer(chatId: string | null): ComposerView & {
 
       // Routes to the root channel when no target or target is the root agent.
       if (!targetAgent || (rootAgent && targetAgent.id === rootAgent.id)) {
-        await dispatchToRoot(payload)
+        await dispatchToRoot(payload, attachments)
         return { kind: 'sent' }
       }
 
       const needsRewrite = computeNeedsRewrite(snap.chat, targetAgent.id, rootAgent)
       if (!needsRewrite) {
-        await dispatchToAgent(targetAgent.id, payload, null, null)
+        await dispatchToAgent(targetAgent.id, payload, null, null, attachments)
         return { kind: 'sent' }
       }
 
       const pending: PendingRewrite = {
         targetAgentId: targetAgent.id,
         targetAgentName: targetAgent.name,
-        originalText: payload
+        originalText: payload,
+        attachments
       }
 
       // Rewrite path — return so ChatInput can show the confirm UI.
@@ -226,7 +238,7 @@ export function useChatComposer(chatId: string | null): ComposerView & {
         // (it emitted the KEEP_ORIGINAL sentinel). Dispatch the original text
         // straight through, skipping the double-send confirmation.
         if (rewrittenText === null) {
-          await dispatchToAgent(targetAgent.id, payload, null, null)
+          await dispatchToAgent(targetAgent.id, payload, null, null, attachments)
           return { kind: 'sent' }
         }
         return { kind: 'rewrite-pending', rewrittenText, pending }
@@ -265,7 +277,13 @@ export function useChatComposer(chatId: string | null): ComposerView & {
   /** After the user confirms the rewritten text (second Enter). */
   const confirmRewrite = useCallback(
     async (text: string, pending: PendingRewrite): Promise<void> => {
-      await dispatchToAgent(pending.targetAgentId, text, text, pending.originalText)
+      await dispatchToAgent(
+        pending.targetAgentId,
+        text,
+        text,
+        pending.originalText,
+        pending.attachments
+      )
     },
     [dispatchToAgent]
   )
@@ -273,7 +291,13 @@ export function useChatComposer(chatId: string | null): ComposerView & {
   /** Send the user's original text as-is, skipping the failed rewrite. */
   const sendRaw = useCallback(
     async (pending: PendingRewrite): Promise<void> => {
-      await dispatchToAgent(pending.targetAgentId, pending.originalText, null, null)
+      await dispatchToAgent(
+        pending.targetAgentId,
+        pending.originalText,
+        null,
+        null,
+        pending.attachments
+      )
     },
     [dispatchToAgent]
   )

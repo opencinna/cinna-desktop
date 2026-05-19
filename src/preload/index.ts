@@ -3,6 +3,7 @@ import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
+import type { MessageAttachment } from '../shared/attachments'
 import type {
   McpRegistryInfo,
   McpRegistrySearchAllResult
@@ -11,6 +12,8 @@ import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
 } from '../shared/updaterState'
+
+export type { MessageAttachment }
 
 export interface ChatData {
   id: string
@@ -45,6 +48,8 @@ export interface MessageData {
   originalText?: string | null
   /** Multi-agent: agent that produced an assistant turn (null for LLM root). */
   sourceAgentId?: string | null
+  /** File attachments persisted on user turns (badges below the bubble). */
+  attachments?: MessageAttachment[] | null
   sortOrder: number
   createdAt: Date
 }
@@ -363,6 +368,7 @@ const api = {
         catchupPacket?: string
         rewrittenText?: string | null
         originalText?: string | null
+        attachments?: MessageAttachment[]
       }
     ): void => {
       const channel = new MessageChannel()
@@ -375,7 +381,8 @@ const api = {
         content,
         catchupPacket: extras?.catchupPacket,
         rewrittenText: extras?.rewrittenText,
-        originalText: extras?.originalText
+        originalText: extras?.originalText,
+        attachments: extras?.attachments
       }
       ipcRenderer.postMessage('agent:send-message', payload, [channel.port2])
     },
@@ -520,6 +527,37 @@ const api = {
     },
     cancel: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('llm:cancel', requestId)
+  },
+
+  files: {
+    /**
+     * Opens the native file picker, uploads chosen files to the Cinna
+     * backend, returns the condensed MessageAttachment list. Cancellation
+     * is a successful `canceled: true` response — distinguish from errors
+     * with the `success` discriminator.
+     */
+    pickAndUpload: (): Promise<
+      | { success: true; canceled?: false; files: MessageAttachment[] }
+      | { success: true; canceled: true; files: [] }
+      | { success: false; canceled?: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:pick-and-upload'),
+    remove: (
+      fileId: string
+    ): Promise<{ success: true } | { success: false; error: string; code?: string }> =>
+      ipcRenderer.invoke('files:remove', fileId),
+    /**
+     * Save-as for a previously-uploaded file. Opens the native save dialog
+     * with the original filename, streams from the Cinna backend to the
+     * chosen path, then reveals the file in Finder/Explorer.
+     */
+    download: (data: {
+      fileId: string
+      filename: string
+    }): Promise<
+      | { success: true; canceled?: false; savedPath: string }
+      | { success: true; canceled: true }
+      | { success: false; canceled?: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:download', data)
   },
 
   multiAgent: {

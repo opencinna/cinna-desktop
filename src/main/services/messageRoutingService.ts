@@ -3,6 +3,7 @@ import { messageRepo } from '../db/messages'
 import { multiAgentService } from './multiAgentService'
 import { ChatError } from '../errors'
 import { createLogger } from '../logger/logger'
+import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('routing')
 
@@ -14,6 +15,7 @@ export interface PrepareAgentSendInput {
   rewrittenText?: string | null
   originalText?: string | null
   catchupPacket?: string
+  attachments?: MessageAttachment[]
 }
 
 export interface PrepareLlmSendInput {
@@ -47,7 +49,8 @@ export const messageRoutingService = {
       userContent,
       rewrittenText,
       originalText,
-      catchupPacket
+      catchupPacket,
+      attachments
     } = input
 
     if (!chatRepo.getOwned(userId, chatId)) {
@@ -60,7 +63,8 @@ export const messageRoutingService = {
       content: userContent,
       addressedAgentId: agentId,
       rewrittenText: rewrittenText ?? null,
-      originalText: originalText ?? null
+      originalText: originalText ?? null,
+      attachments: attachments && attachments.length > 0 ? attachments : null
     })
 
     multiAgentService.advanceCatchupCursor({
@@ -75,7 +79,8 @@ export const messageRoutingService = {
       agentId,
       userMessageId,
       hasCatchup: !!catchupPacket,
-      hasRewrite: !!rewrittenText
+      hasRewrite: !!rewrittenText,
+      attachmentCount: attachments?.length ?? 0
     })
 
     return { wireContent, userMessageId }

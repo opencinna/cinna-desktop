@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type ReactNode } from 'react'
-import { SendHorizontal, Square, Bot } from 'lucide-react'
+import { SendHorizontal, Square, Bot, Plus, Loader2, Paperclip } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
+import { useAuthStore } from '../../stores/auth.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
 import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
@@ -11,6 +12,7 @@ import { CliCommandPopup } from './CliCommandPopup'
 import { useAgents } from '../../hooks/useAgents'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
+import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
@@ -20,13 +22,16 @@ import { RewriteHintBar } from './RewriteHintBar'
 import { RewriteFailureModal } from './RewriteFailureModal'
 import { ActiveAgentChip } from './ActiveAgentChip'
 import { OnDemandMcpChips } from './OnDemandMcpChips'
+import { AttachmentList } from './AttachmentBadge'
+import { AttachMenuPopup, type AttachMenuItem } from './AttachMenuPopup'
+import type { MessageAttachment } from '../../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/'
 
 interface ChatInputProps {
   chatId: string | null
-  onNewChat?: (message: string) => void
+  onNewChat?: (message: string, attachments?: MessageAttachment[]) => void
   leftSlot?: ReactNode
   modeColor?: ColorPreset | null
   onSelectAgent?: (agent: AgentData | null) => void
@@ -105,10 +110,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   ref
 ) {
   const [input, setInput] = useState('')
+  const [attachMenuOpen, setAttachMenuOpen] = useState(false)
+  const attachButtonRef = useRef<HTMLButtonElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastEscapeAt = useRef(0)
   const { data: chatData } = useChatDetail(chatId)
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const listboxId = useId()
+
+  // Composer-local attachment buffer + IPC wiring. Hook owns staleness so
+  // switching chats mid-upload (or after a clear) won't repopulate state
+  // when the upload eventually resolves. See `useChatAttachments` for the
+  // generation-ref trick.
+  const {
+    attachments: pendingAttachments,
+    isUploading,
+    error: attachError,
+    pick: pickAttachments,
+    remove: handleRemoveAttachment,
+    clear: clearPendingAttachments,
+    setError: setAttachError
+  } = useChatAttachments(chatId)
   // Single source of truth for everything multi-agent: routing decisions,
   // active-agent switching, Smart Rewrite, dispatch. Read fresh snapshots
   // internally at every action so there is no closure-staleness window.
@@ -116,10 +138,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const clearComposer = useCallback(() => {
     setInput('')
+    clearPendingAttachments()
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto'
     }
-  }, [])
+  }, [clearPendingAttachments])
 
   // Hook owns rewrite state machine + textarea side-effects (resize, focus,
   // selection). ChatInput just calls into it from key/change/submit handlers.
@@ -183,6 +206,44 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
     [chatData?.agentId, agents]
   )
+
+  /**
+   * File attachments are routed only to Cinna remote agents — the upload
+   * endpoint lives on the Cinna backend and the agent-env transfer only
+   * fires for sessions started via the cinna A2A surface.
+   *
+   * Two distinct gates:
+   *
+   *  - `canShowAttachButton` — when to render the [+] button. Permissive on
+   *    the new-chat screen (Cinna users see the button even before picking
+   *    an agent, since uploads are user-scoped on the backend and the user
+   *    may pick an agent moments later). Strict in active chats (target
+   *    must already be a remote agent).
+   *
+   *  - `targetSupportsAttachments` — whether the *current* target will
+   *    actually deliver attachments. Drives the auto-clear effect so
+   *    pending uploads don't linger after the user switches to an
+   *    incompatible target (local agent, LLM root, etc.).
+   */
+  const attachmentTargetAgent: AgentData | null = chatId
+    ? composer.activeAgent ?? boundAgent ?? null
+    : selectedAgent ?? null
+  const targetIsRemote = attachmentTargetAgent?.source === 'remote'
+
+  const canShowAttachButton = isCinnaUser && (chatId ? targetIsRemote : true)
+
+  // New-chat with no agent selected yet is compatible (user might pick a
+  // remote agent next). Selecting a non-remote agent flips this false and
+  // triggers the clear effect below.
+  const targetSupportsAttachments =
+    isCinnaUser &&
+    (chatId ? targetIsRemote : !attachmentTargetAgent || targetIsRemote)
+
+  useEffect(() => {
+    if (!targetSupportsAttachments && pendingAttachments.length > 0) {
+      clearPendingAttachments()
+    }
+  }, [targetSupportsAttachments, pendingAttachments.length, clearPendingAttachments])
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
   const promptSourceAgent = boundAgent ?? selectedAgent ?? null
@@ -332,14 +393,46 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [replaceTriggerToken]
   )
 
+  // Menu actions. Today the menu has one entry ("Add files"); the array is
+  // here so future additions (clipboard import, drag-zone toggle, browse
+  // workspace, …) only need to push a new item.
+  const attachMenuItems = useMemo<AttachMenuItem[]>(
+    () => [
+      {
+        id: 'add-files',
+        label: 'Add files',
+        icon: Paperclip,
+        onSelect: () => void pickAttachments()
+      }
+    ],
+    [pickAttachments]
+  )
+
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
-    if (!trimmed || isStreaming) return
+    // Allow attachment-only sends (no text) so users can drop a file in and
+    // hit send with a quick "look at this" — only for active chats where the
+    // composer handles attachments; new chats still require text for title.
+    const hasContent = trimmed.length > 0 || (chatId !== null && pendingAttachments.length > 0)
+    if (!hasContent || isStreaming) return
+    const attachmentsToSend =
+      targetSupportsAttachments && pendingAttachments.length > 0
+        ? [...pendingAttachments]
+        : undefined
 
-    // New chat path — unchanged.
+    // New chat path — refuse to silently drop attachments if the user picked
+    // a non-remote target (LLM-only chat mode, local A2A agent). The button
+    // is permissive on the new-chat screen so they could have queued files
+    // before settling on a destination.
     if (!chatId) {
+      if (attachmentsToSend && !targetIsRemote) {
+        setAttachError(
+          'Pick a Cinna agent to send these attachments — non-Cinna targets cannot receive files'
+        )
+        return
+      }
       clearComposer()
-      onNewChat?.(trimmed)
+      onNewChat?.(trimmed, attachmentsToSend)
       return
     }
 
@@ -348,6 +441,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const confirm = rewriteUX.beginConfirmDispatch()
     if (confirm) {
       await composer.confirmRewrite(confirm.text, confirm.pending)
+      clearPendingAttachments()
       return
     }
 
@@ -355,8 +449,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // cache snapshot: parse mentions, resolve target, build catch-up,
     // optionally rewrite, dispatch on the right channel.
     rewriteUX.beginRewriting()
-    const result = await composer.submit(trimmed)
+    const result = await composer.submit(trimmed, attachmentsToSend)
     rewriteUX.handleSubmitResult(result)
+    if (result.kind === 'sent' || result.kind === 'rewrite-pending') {
+      // Sent: drop the attachments now that they live on the message row.
+      // Rewrite-pending: pending.attachments owns them; clear the composer's
+      // copy so a second send (after rewrite confirmation) doesn't double-attach.
+      clearPendingAttachments()
+    }
   }, [
     input,
     isStreaming,
@@ -364,7 +464,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChat,
     composer,
     rewriteUX,
-    clearComposer
+    clearComposer,
+    targetSupportsAttachments,
+    targetIsRemote,
+    pendingAttachments,
+    clearPendingAttachments,
+    setAttachError
   ])
 
   const handleCancel = useCallback(() => {
@@ -535,8 +640,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const handleSendAnyway = useCallback((): void => {
     const pending = rewriteUX.consumePendingForSendAnyway()
-    if (pending) void composer.sendRaw(pending)
-  }, [composer, rewriteUX])
+    if (pending) {
+      void composer.sendRaw(pending)
+      clearPendingAttachments()
+    }
+  }, [composer, rewriteUX, clearPendingAttachments])
 
   const handleDisableRewrite = useCallback((): void => {
     rewriteUX.dismissError()
@@ -639,7 +747,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
+        {pendingAttachments.length > 0 && (
+          <div className="px-3 pb-2 pt-1 flex flex-wrap gap-1 justify-end">
+            <AttachmentList
+              attachments={pendingAttachments}
+              variant="input"
+              onRemove={handleRemoveAttachment}
+              align="right"
+            />
+          </div>
+        )}
       </div>
+
+      {attachError && (
+        <div className="mt-1 text-[11px] text-[var(--color-danger)] text-right px-1">
+          {attachError}
+        </div>
+      )}
 
       {rewriteUX.error && rewriteUX.pending && (
         <RewriteFailureModal
@@ -685,6 +809,37 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         </div>
 
         <div className="flex items-center gap-1.5">
+          {canShowAttachButton && !isStreaming && (
+            <div className="relative">
+              <button
+                ref={attachButtonRef}
+                type="button"
+                onClick={() => setAttachMenuOpen((v) => !v)}
+                disabled={isUploading}
+                title={isUploading ? 'Uploading…' : 'Attach'}
+                aria-label="Attach"
+                aria-haspopup="menu"
+                aria-expanded={attachMenuOpen}
+                className="p-1.5 rounded-lg border border-[var(--color-border)]
+                  text-[var(--color-text-secondary)] hover:text-[var(--color-text)]
+                  hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed
+                  transition-colors"
+              >
+                {isUploading ? (
+                  <Loader2 size={16} className="animate-spin" />
+                ) : (
+                  <Plus size={16} />
+                )}
+              </button>
+              {attachMenuOpen && (
+                <AttachMenuPopup
+                  items={attachMenuItems}
+                  onClose={() => setAttachMenuOpen(false)}
+                  anchorRef={attachButtonRef}
+                />
+              )}
+            </div>
+          )}
           {isStreaming ? (
             <button
               onClick={handleCancel}
@@ -695,7 +850,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ) : (
             <button
               onClick={handleSend}
-              disabled={!input.trim()}
+              disabled={
+                !input.trim() &&
+                !(chatId !== null && targetSupportsAttachments && pendingAttachments.length > 0)
+              }
               className="p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
                 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity"
             >

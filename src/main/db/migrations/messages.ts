@@ -48,4 +48,8 @@ export function migrateMessages(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'messages', 'source_agent_id')) {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN source_agent_id TEXT`)
   }
+
+  if (!hasColumn(sqlite, 'messages', 'attachments')) {
+    sqlite.exec(`ALTER TABLE messages ADD COLUMN attachments TEXT`)
+  }
 }

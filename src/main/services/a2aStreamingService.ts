@@ -41,6 +41,13 @@ export interface StreamToAgentInput {
   cardUrl: string
   accessToken?: string
   wireContent: string
+  /**
+   * Cinna file IDs (UUIDs) to attach to this turn — forwarded as
+   * `metadata.cinna_file_ids` on the A2A message. The cinna-backend reads
+   * this and transfers the uploaded files into the agent environment under
+   * `./uploads/` before the agent receives the message.
+   */
+  fileIds?: string[]
   port: StreamPort
 }
 
@@ -54,8 +61,19 @@ export interface StreamToAgentInput {
  */
 export const a2aStreamingService = {
   async streamToAgent(input: StreamToAgentInput): Promise<void> {
-    const { chatId, agentId, agentName, endpointUrl, cardUrl, accessToken, wireContent, port } =
-      input
+    const {
+      chatId,
+      agentId,
+      agentName,
+      endpointUrl,
+      cardUrl,
+      accessToken,
+      wireContent,
+      fileIds,
+      port
+    } = input
+    const metadata =
+      fileIds && fileIds.length > 0 ? { cinna_file_ids: fileIds } : undefined
 
     const abortController = new AbortController()
     const requestId = nanoid()
@@ -94,7 +112,7 @@ export const a2aStreamingService = {
       if (sessionTaskId) activeRequest.taskId = sessionTaskId
 
       if (supportsStreaming) {
-        const params = buildSendParams(wireContent, sessionContextId, sessionTaskId)
+        const params = buildSendParams(wireContent, sessionContextId, sessionTaskId, metadata)
         logger.debug('→ sendMessageStream', params)
         let eventIndex = 0
         const accumulator = new StreamPartsAccumulator({
@@ -166,7 +184,7 @@ export const a2aStreamingService = {
           })
         }
       } else {
-        const params = buildSendParams(wireContent, sessionContextId, sessionTaskId)
+        const params = buildSendParams(wireContent, sessionContextId, sessionTaskId, metadata)
         logger.debug('→ sendMessage', params)
         const result = await client.sendMessage(params)
         logger.debug('← response', result)
