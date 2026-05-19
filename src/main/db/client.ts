@@ -13,6 +13,10 @@ import { migrateA2aSessions } from './migrations/a2a-sessions'
 import { migrateAgentOverrides } from './migrations/agent-overrides'
 import { migrateUsers } from './migrations/users'
 import { migrateChatAgentSessions } from './migrations/chat-agent-sessions'
+import { chatModeRepo } from './chatModes'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('db')
 
 let db: BetterSQLite3Database<typeof schema>
 let sqlite: Database.Database
@@ -27,6 +31,34 @@ export function initDatabase(): void {
   db = drizzle(sqlite, { schema })
 
   runMigrations()
+  runConsistencyChecks()
+}
+
+/**
+ * Idempotent boot-time data healing. Migrations handle schema; this handles
+ * orphaned references in JSON columns (which have no FK enforcement). Each
+ * check runs inside `safeRun` so a buggy or data-tripped cleanup can never
+ * block app startup — the worst case is the previous behavior (stale data
+ * left in place).
+ */
+function runConsistencyChecks(): void {
+  safeRun('prune-dangling-mcp-ids', () => {
+    const touched = chatModeRepo.pruneDanglingMcpProviderIds()
+    if (touched > 0) {
+      logger.info('boot-cleanup:pruned-dangling-mcp-ids-from-chat-modes', { touched })
+    }
+  })
+}
+
+function safeRun(name: string, fn: () => void): void {
+  try {
+    fn()
+  } catch (err) {
+    logger.error('boot-cleanup:failed', {
+      check: name,
+      error: err instanceof Error ? err.message : String(err)
+    })
+  }
 }
 
 function runMigrations(): void {

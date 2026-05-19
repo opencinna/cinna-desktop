@@ -1,7 +1,9 @@
 import { nanoid } from 'nanoid'
 import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
+import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { ChatError } from '../errors'
 import { createLogger } from '../logger/logger'
 
@@ -91,7 +93,20 @@ export const chatService = {
 
   setMcpProviders(userId: string, chatId: string, mcpProviderIds: string[]): void {
     requireOwnedChat(userId, chatId)
-    chatMcpRepo.replaceForChat(chatId, mcpProviderIds)
+    // MCP providers live in settings scope; chats live in profile scope. The
+    // renderer can pass stale IDs (e.g. a chat mode's JSON `mcpProviderIds`
+    // array still referencing a provider that was deleted before a cascade
+    // could clean it) — drop those before they hit the FK in
+    // `chat_mcp_providers` and crash the chat creation flow.
+    const validIds = new Set(
+      mcpProviderRepo.list(getSettingsScopeUserId()).map((p) => p.id)
+    )
+    const filtered = mcpProviderIds.filter((id) => validIds.has(id))
+    if (filtered.length !== mcpProviderIds.length) {
+      const dropped = mcpProviderIds.filter((id) => !validIds.has(id))
+      logger.warn('setMcpProviders:dropped-stale-ids', { chatId, dropped })
+    }
+    chatMcpRepo.replaceForChat(chatId, filtered)
   },
 
   getMcpProviders(userId: string, chatId: string): Array<{ chatId: string; mcpProviderId: string }> {

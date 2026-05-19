@@ -1,4 +1,5 @@
 import { mcpProviderRepo, McpProviderRow } from '../db/mcpProviders'
+import { chatModeRepo } from '../db/chatModes'
 import { mcpManager } from '../mcp/manager'
 import { McpError } from '../errors'
 import { McpProviderConfig } from '../mcp/types'
@@ -119,7 +120,12 @@ export const mcpService = {
     if (!row) throw new McpError('not_found', 'MCP provider not found')
     await mcpManager.disconnect(id)
     mcpProviderRepo.delete(userId, id)
-    logger.info('mcp deleted', { providerId: id })
+    // `chat_mcp_providers` is cleaned up by the FK cascade in the schema, but
+    // `chat_modes.mcpProviderIds` is a JSON array without FK enforcement —
+    // strip the dead id here so a chat created from an affected mode doesn't
+    // crash on `chat:set-mcp-providers` with SQLITE_CONSTRAINT_FOREIGNKEY.
+    const touchedModes = chatModeRepo.stripMcpProviderId(userId, id)
+    logger.info('mcp deleted', { providerId: id, touchedModes })
   },
 
   async connect(

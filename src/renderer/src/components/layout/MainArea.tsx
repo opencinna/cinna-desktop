@@ -9,6 +9,7 @@ import { ChatConfigMenu } from '../chat/ChatConfigMenu'
 import { AgentSelector } from '../chat/AgentSelector'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
+import { resolveMcpNames } from '../../utils/mcpNames'
 import { useUpdateChat, useChatDetail } from '../../hooks/useChat'
 import { useChatModes, useDefaultChatMode } from '../../hooks/useChatModes'
 import { useProviders } from '../../hooks/useProviders'
@@ -247,9 +248,7 @@ export function MainArea(): React.JSX.Element {
     const model = mode.modelId
       ? (allModels ?? []).find((m) => m.id === mode.modelId)?.name ?? mode.modelId
       : null
-    const mcps = (mode.mcpProviderIds ?? []).map(
-      (id) => (mcpProviders ?? []).find((p) => p.id === id)?.name ?? id
-    )
+    const mcps = resolveMcpNames(mode.mcpProviderIds, mcpProviders)
     if (!model && !mcps.length) return null
     return [model, mcps.length ? mcps.join(', ') : null].filter(Boolean).join(' · ')
   }

@@ -2,9 +2,10 @@ import { net } from 'electron'
 import type {
   McpRegistryEntry,
   McpRegistryInfo,
+  McpRegistrySearchAllResult,
   McpRegistrySearchResult
 } from '../../shared/mcpRegistries'
-import { McpError } from '../errors'
+import { McpError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('MCP-Registry')
@@ -35,6 +36,23 @@ interface OfficialServerEntry {
   }
 }
 
+interface CinnaOfficialJson {
+  version?: number
+  servers?: Array<{
+    id?: string
+    name?: string
+    title?: string
+    description?: string
+    version?: string
+    websiteUrl?: string
+    remotes?: Array<{
+      type?: string
+      url?: string
+      requiresAuth?: boolean
+    }>
+  }>
+}
+
 function isHttpUrl(raw: string | undefined): raw is string {
   if (!raw) return false
   try {
@@ -42,6 +60,101 @@ function isHttpUrl(raw: string | undefined): raw is string {
     return u.protocol === 'http:' || u.protocol === 'https:'
   } catch {
     return false
+  }
+}
+
+// Shared fetch+parse used by every adapter so transport failures, non-2xx
+// responses, and malformed JSON all surface as the same typed `McpError` with
+// a registry-specific label in the message.
+async function fetchRegistryJson<T>(url: string, label: string): Promise<T> {
+  let resp: Response
+  try {
+    resp = await net.fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    })
+  } catch (err) {
+    throw new McpError(
+      'registry_unreachable',
+      `Could not reach ${label}: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+  if (!resp.ok) {
+    throw new McpError(
+      'registry_unreachable',
+      `${label} returned ${resp.status} ${resp.statusText}`
+    )
+  }
+  try {
+    return (await resp.json()) as T
+  } catch (err) {
+    throw new McpError(
+      'registry_unreachable',
+      `Invalid JSON from ${label}: ${err instanceof Error ? err.message : String(err)}`
+    )
+  }
+}
+
+const CINNA_OFFICIAL_URL = 'https://opencinna.io/.well-known/mcp_registry/index.json'
+
+let cinnaOfficialCache: { expiresAt: number; entries: McpRegistryEntry[] } | null = null
+
+async function loadCinnaOfficialEntries(): Promise<McpRegistryEntry[]> {
+  const now = Date.now()
+  if (cinnaOfficialCache && cinnaOfficialCache.expiresAt > now) {
+    return cinnaOfficialCache.entries
+  }
+
+  const data = await fetchRegistryJson<CinnaOfficialJson>(
+    CINNA_OFFICIAL_URL,
+    'the Cinna registry'
+  )
+
+  const entries: McpRegistryEntry[] = []
+  for (const s of data.servers ?? []) {
+    if (!s?.id || !s?.name) continue
+
+    const remotes: McpRegistryEntry['remotes'] = []
+    for (const r of s.remotes ?? []) {
+      if (!isHttpUrl(r?.url)) continue
+      if (r.type !== 'streamable-http' && r.type !== 'sse') continue
+      remotes.push({ type: r.type, url: r.url, requiresAuth: r.requiresAuth === true })
+    }
+    if (remotes.length === 0) continue
+
+    entries.push({
+      registryId: 'cinna-official',
+      id: s.id,
+      name: s.name,
+      title: s.title,
+      description: s.description,
+      version: s.version,
+      websiteUrl: isHttpUrl(s.websiteUrl) ? s.websiteUrl : undefined,
+      remotes
+    })
+  }
+
+  cinnaOfficialCache = { expiresAt: now + CACHE_TTL_MS, entries }
+  return entries
+}
+
+const cinnaOfficialAdapter: RegistryAdapter = {
+  id: 'cinna-official',
+  label: 'Cinna Official',
+  name: 'Cinna Official Registry',
+  homepage: 'https://opencinna.io/',
+  async search(query, limit) {
+    const all = await loadCinnaOfficialEntries()
+    const q = query.trim().toLowerCase()
+    const filtered = q
+      ? all.filter(
+          (e) =>
+            e.name.toLowerCase().includes(q) ||
+            (e.title?.toLowerCase().includes(q) ?? false) ||
+            (e.description?.toLowerCase().includes(q) ?? false)
+        )
+      : all
+    return filtered.slice(0, limit)
   }
 }
 
@@ -56,25 +169,10 @@ const officialAdapter: RegistryAdapter = {
     url.searchParams.set('version', 'latest')
     if (query.trim()) url.searchParams.set('search', query.trim())
 
-    let resp: Response
-    try {
-      resp = await net.fetch(url.toString(), {
-        headers: { Accept: 'application/json' },
-        signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
-      })
-    } catch (err) {
-      throw new McpError(
-        'registry_unreachable',
-        `Could not reach the registry: ${err instanceof Error ? err.message : String(err)}`
-      )
-    }
-    if (!resp.ok) {
-      throw new McpError(
-        'registry_unreachable',
-        `Registry returned ${resp.status} ${resp.statusText}`
-      )
-    }
-    const data = (await resp.json()) as { servers?: OfficialServerEntry[] }
+    const data = await fetchRegistryJson<{ servers?: OfficialServerEntry[] }>(
+      url.toString(),
+      'the MCP Official registry'
+    )
     const servers = data.servers ?? []
 
     const entries: McpRegistryEntry[] = []
@@ -115,7 +213,10 @@ const officialAdapter: RegistryAdapter = {
   }
 }
 
+// Insertion order determines the merged-result order in `searchAll`; Cinna-
+// curated entries appear first.
 const adapters: Record<string, RegistryAdapter> = {
+  [cinnaOfficialAdapter.id]: cinnaOfficialAdapter,
   [officialAdapter.id]: officialAdapter
 }
 
@@ -149,6 +250,42 @@ export const mcpRegistryService = {
       name,
       homepage
     }))
+  },
+
+  async searchAll(query: string, limit?: number): Promise<McpRegistrySearchAllResult> {
+    const clamped = clampLimit(limit)
+    // Run all registries in parallel; isolated failures must not block the
+    // merged result, so we use allSettled and surface per-registry errors.
+    const order = Object.values(adapters)
+    const started = Date.now()
+    const results = await Promise.allSettled(
+      order.map((adapter) => this.search(adapter.id, query, clamped))
+    )
+
+    const entries: McpRegistryEntry[] = []
+    const errors: McpRegistrySearchAllResult['errors'] = []
+    results.forEach((res, idx) => {
+      const adapter = order[idx]
+      if (res.status === 'fulfilled') {
+        entries.push(...res.value.entries)
+      } else {
+        const e = ipcErrorShape(res.reason)
+        errors.push({ registryId: adapter.id, code: e.code, error: e.message })
+        logger.warn('searchAll:registry-failed', {
+          registryId: adapter.id,
+          code: e.code,
+          error: e.message
+        })
+      }
+    })
+    logger.info('searchAll:done', {
+      query,
+      limit: clamped,
+      totalEntries: entries.length,
+      failedRegistries: errors.length,
+      duration: Date.now() - started
+    })
+    return { entries, errors }
   },
 
   async search(

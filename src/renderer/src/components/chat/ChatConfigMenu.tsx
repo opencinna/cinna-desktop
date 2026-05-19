@@ -5,6 +5,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
+import { resolveMcpNames } from '../../utils/mcpNames'
 import { MentionPopup } from './MentionPopup'
 
 interface ChatConfigMenuProps {
@@ -50,15 +51,9 @@ export function ChatConfigMenu({
     return m?.name ?? modelId
   }
 
-  const mcpNames = (ids: string[]): string[] => {
-    if (!ids.length) return []
-    const all = mcpProviders ?? []
-    return ids.map((id) => all.find((p) => p.id === id)?.name ?? id)
-  }
-
   const composeSecondary = (mode: ChatModeData): string | null => {
     const model = modelName(mode.modelId)
-    const mcps = mcpNames(mode.mcpProviderIds ?? [])
+    const mcps = resolveMcpNames(mode.mcpProviderIds, mcpProviders)
     if (!model && !mcps.length) return null
     return [model, mcps.length ? mcps.join(', ') : null].filter(Boolean).join(' · ')
   }

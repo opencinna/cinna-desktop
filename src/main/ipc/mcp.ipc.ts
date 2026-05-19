@@ -67,25 +67,24 @@ export function registerMcpHandlers(): void {
     return mcpRegistryService.list()
   })
 
-  // Returns error inline so the picker can render a retry/empty state without
-  // a React Query error boundary swallowing the search input.
+  // Aggregated search across every built-in registry — used by the unified
+  // picker UI. Always returns success: per-registry failures are reported in
+  // the `errors` array alongside the merged entries. The try/catch is a
+  // defensive backstop — `searchAll` is meant to be throwless (it uses
+  // `Promise.allSettled` internally), so anything bubbling up here is a
+  // programmer error we still want the picker to recover from gracefully.
   ipcHandle(
-    'mcp:registry-search',
-    async (
-      _event,
-      data: { registryId: string; query?: string; limit?: number }
-    ) => {
+    'mcp:registry-search-all',
+    async (_event, data: { query?: string; limit?: number }) => {
       userActivation.requireActivated()
       try {
-        const result = await mcpRegistryService.search(
-          data.registryId,
-          data.query ?? '',
-          data.limit
-        )
-        return { success: true as const, entries: result.entries }
+        return await mcpRegistryService.searchAll(data.query ?? '', data.limit)
       } catch (err) {
         const e = ipcErrorShape(err)
-        return { success: false as const, code: e.code, error: e.message }
+        return {
+          entries: [],
+          errors: [{ registryId: '*', code: e.code, error: e.message }]
+        }
       }
     }
   )

@@ -49,3 +49,18 @@ export interface McpRegistryEntry {
 export interface McpRegistrySearchResult {
   entries: McpRegistryEntry[]
 }
+
+/**
+ * Aggregated result from searching every built-in registry at once. Entries
+ * from all registries are merged in registry insertion order. Per-registry
+ * failures are surfaced inline so the picker can show partial results plus a
+ * warning for the registries that errored.
+ */
+export interface McpRegistrySearchAllResult {
+  entries: McpRegistryEntry[]
+  errors: Array<{
+    registryId: string
+    code: string
+    error: string
+  }>
+}

@@ -2,7 +2,7 @@ import { nanoid } from 'nanoid'
 import { and, eq } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { getDb } from './client'
-import { chatModes } from './schema'
+import { chatModes, mcpProviders } from './schema'
 import type * as schema from './schema'
 
 export type ChatModeRow = typeof chatModes.$inferSelect
@@ -91,5 +91,76 @@ export const chatModeRepo = {
       .where(and(eq(chatModes.id, id), eq(chatModes.userId, userId)))
       .run()
     return result.changes > 0
+  },
+
+  /**
+   * Strip a now-deleted MCP provider id from every chat mode's
+   * `mcpProviderIds` JSON array. The array is plain JSON (no FK), so a
+   * deleted MCP provider would otherwise leave stale references that break
+   * `chat:set-mcp-providers` with `SQLITE_CONSTRAINT_FOREIGNKEY` the next
+   * time a chat is created from the affected mode. Returns the number of
+   * chat-mode rows that were updated.
+   */
+  stripMcpProviderId(
+    userId: string,
+    mcpProviderId: string,
+    db: DbOrTx = getDb()
+  ): number {
+    // SELECT + N UPDATEs need atomicity so a crash mid-loop leaves the table
+    // either fully cleaned or untouched. When the caller already supplies a
+    // tx, drizzle nests this as a savepoint.
+    return db.transaction((tx) => {
+      const rows = tx
+        .select({ id: chatModes.id, ids: chatModes.mcpProviderIds })
+        .from(chatModes)
+        .where(eq(chatModes.userId, userId))
+        .all()
+
+      let touched = 0
+      for (const row of rows) {
+        const current = row.ids ?? []
+        if (!current.includes(mcpProviderId)) continue
+        const next = current.filter((x) => x !== mcpProviderId)
+        tx.update(chatModes)
+          .set({ mcpProviderIds: next })
+          .where(and(eq(chatModes.id, row.id), eq(chatModes.userId, userId)))
+          .run()
+        touched += 1
+      }
+      return touched
+    })
+  },
+
+  /**
+   * Boot-time consistency pass: scans every chat mode and removes any
+   * `mcpProviderIds` entry that doesn't point at a row in `mcp_providers`.
+   * Heals modes that were corrupted before {@link stripMcpProviderId} was
+   * wired into the MCP delete path. Idempotent — does nothing on clean DBs.
+   * Returns the number of chat-mode rows updated.
+   */
+  pruneDanglingMcpProviderIds(db: DbOrTx = getDb()): number {
+    return db.transaction((tx) => {
+      const validIds = new Set(
+        tx.select({ id: mcpProviders.id }).from(mcpProviders).all().map((r) => r.id)
+      )
+      const rows = tx
+        .select({ id: chatModes.id, ids: chatModes.mcpProviderIds })
+        .from(chatModes)
+        .all()
+
+      let touched = 0
+      for (const row of rows) {
+        const current = row.ids ?? []
+        if (current.length === 0) continue
+        const next = current.filter((x) => validIds.has(x))
+        if (next.length === current.length) continue
+        tx.update(chatModes)
+          .set({ mcpProviderIds: next })
+          .where(eq(chatModes.id, row.id))
+          .run()
+        touched += 1
+      }
+      return touched
+    })
   }
 }

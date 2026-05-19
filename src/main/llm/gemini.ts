@@ -266,16 +266,27 @@ export class GeminiAdapter implements LLMAdapter {
 
 // Gemini's `function_declarations.parameters` accepts only a narrow OpenAPI-3
 // subset and rejects standard JSON-Schema keywords that MCP servers commonly
-// emit (`$schema`, `additionalProperties`, `$defs`, `$id`, `$ref`,
-// `definitions`). Anthropic and OpenAI tolerate them; Gemini hard-fails the
-// whole request. Walk the schema and drop the unsupported keys.
+// emit. Anthropic and OpenAI tolerate them; Gemini hard-fails the whole
+// request ("Unknown name … Cannot find field"). Walk the schema and drop
+// the unsupported keys.
+//
+// `exclusiveMinimum` / `exclusiveMaximum` deserve special note: in JSON
+// Schema 2020-12 they're numeric (`exclusiveMinimum: 0`), but Gemini's
+// schema follows OpenAPI 3.0 where they're booleans alongside
+// `minimum`/`maximum`. Different shapes => safest fix is to drop them.
 const GEMINI_DROP_KEYS = new Set([
   '$schema',
   '$id',
   '$ref',
   '$defs',
   'definitions',
-  'additionalProperties'
+  'additionalProperties',
+  'exclusiveMinimum',
+  'exclusiveMaximum',
+  'multipleOf',
+  'patternProperties',
+  'examples',
+  '$comment'
 ])
 
 function sanitizeForGemini(schema: unknown, dropped: string[] = []): unknown {

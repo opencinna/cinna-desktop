@@ -1,8 +1,8 @@
 import { useState } from 'react'
-import { Search, Loader2 } from 'lucide-react'
+import { Search, Loader2, AlertTriangle } from 'lucide-react'
 import {
   useMcpRegistries,
-  useMcpRegistrySearch,
+  useMcpRegistrySearchAll,
   useUpsertMcpProvider
 } from '../../hooks/useMcp'
 import type { McpRegistryEntry, McpRegistryInfo } from '../../../../shared/mcpRegistries'
@@ -13,23 +13,21 @@ interface Props {
 
 export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
   const { data: registries } = useMcpRegistries()
-  const [activeRegistry, setActiveRegistry] = useState<string | null>(null)
   const [query, setQuery] = useState('')
   const upsertMcp = useUpsertMcpProvider()
   const [addingId, setAddingId] = useState<string | null>(null)
 
-  // Pick the first registry once the list arrives
-  const registryId =
-    activeRegistry ?? (registries && registries.length > 0 ? registries[0].id : null)
-
-  const search = useMcpRegistrySearch(registryId, query)
-  const entries: McpRegistryEntry[] =
-    search.data?.success ? search.data.entries : []
+  const search = useMcpRegistrySearchAll(query)
+  const entries: McpRegistryEntry[] = search.data?.entries ?? []
+  const errors = search.data?.errors ?? []
+  const registriesById = new Map((registries ?? []).map((r) => [r.id, r]))
 
   const handleAdd = (entry: McpRegistryEntry): void => {
     const remote = entry.remotes[0]
     if (!remote) return
-    setAddingId(entry.id)
+    // Composite id avoids cross-registry collisions in the spinner state when
+    // the same server name appears in more than one registry.
+    setAddingId(`${entry.registryId}::${entry.id}`)
     // mcp:upsert with enabled:true triggers the same mcpManager.connect()
     // path the explicit Connect button uses. Closing the picker on success
     // surfaces the freshly-created card (with its live status) right away.
@@ -62,24 +60,6 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
         </button>
       </div>
 
-      {registries && registries.length > 1 && (
-        <div className="flex gap-1 flex-wrap">
-          {registries.map((r) => (
-            <button
-              key={r.id}
-              onClick={() => setActiveRegistry(r.id)}
-              className={`px-2 py-0.5 rounded text-[10px] font-medium transition-colors ${
-                r.id === registryId
-                  ? 'bg-[var(--color-accent)] text-white'
-                  : 'bg-[var(--color-bg)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
-              }`}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div className="relative">
         <Search
           size={12}
@@ -94,6 +74,25 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
         />
       </div>
 
+      {errors.length > 0 && (
+        <div className="space-y-1">
+          {errors.map((err) => {
+            const label = registriesById.get(err.registryId)?.label ?? err.registryId
+            return (
+              <div
+                key={err.registryId}
+                className="flex items-center gap-1.5 text-[10px] text-[var(--color-warning)]"
+              >
+                <AlertTriangle size={10} className="shrink-0" />
+                <span>
+                  {label}: {err.error}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
       <div className="max-h-80 overflow-y-auto -mx-1 px-1 space-y-1.5">
         {search.isLoading && (
           <div className="flex items-center justify-center gap-2 py-6 text-[10px] text-[var(--color-text-muted)]">
@@ -102,13 +101,7 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
           </div>
         )}
 
-        {!search.isLoading && search.data?.success === false && (
-          <div className="text-[10px] text-[var(--color-danger)] py-3 px-1">
-            {search.data.error}
-          </div>
-        )}
-
-        {!search.isLoading && entries.length === 0 && search.data?.success !== false && (
+        {!search.isLoading && entries.length === 0 && errors.length === 0 && (
           <div className="text-[10px] text-[var(--color-text-muted)] py-3 px-1">
             No servers found.
           </div>
@@ -118,9 +111,11 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
           <RegistryEntryRow
             key={`${entry.registryId}::${entry.id}::${entry.version ?? ''}`}
             entry={entry}
-            registry={registries?.find((r) => r.id === entry.registryId)}
+            registry={registriesById.get(entry.registryId)}
             onAdd={() => handleAdd(entry)}
-            adding={addingId === entry.id && upsertMcp.isPending}
+            adding={
+              addingId === `${entry.registryId}::${entry.id}` && upsertMcp.isPending
+            }
           />
         ))}
       </div>
