@@ -14,6 +14,14 @@ import type {
   JobFolderCreateInputDto,
   JobFolderPatchDto
 } from '../shared/jobs'
+import type {
+  NoteData,
+  NoteCreateInputDto,
+  NotePatchDto,
+  NoteFolderData,
+  NoteFolderCreateInputDto,
+  NoteFolderPatchDto
+} from '../shared/notes'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type {
   McpRegistryInfo,
@@ -756,6 +764,41 @@ const api = {
       ipcRenderer.invoke('jobFolder:delete', folderId),
     reorder: (orderedIds: string[]): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('jobFolder:reorder', orderedIds)
+  },
+
+  notes: {
+    list: (): Promise<NoteData[]> => ipcRenderer.invoke('note:list'),
+    get: (noteId: string): Promise<NoteData> => ipcRenderer.invoke('note:get', noteId),
+    create: (input?: NoteCreateInputDto): Promise<NoteData> =>
+      ipcRenderer.invoke('note:create', input ?? {}),
+    update: (noteId: string, patch: NotePatchDto): Promise<NoteData> =>
+      ipcRenderer.invoke('note:update', noteId, patch),
+    delete: (noteId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('note:delete', noteId),
+    trashList: (): Promise<NoteData[]> => ipcRenderer.invoke('note:trash-list'),
+    restore: (noteId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('note:restore', noteId),
+    permanentDelete: (noteId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('note:permanent-delete', noteId),
+    emptyTrash: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('note:empty-trash'),
+    reorder: (
+      targetFolderId: string | null,
+      orderedNoteIds: string[]
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('note:reorder', targetFolderId, orderedNoteIds)
+  },
+
+  noteFolders: {
+    list: (): Promise<NoteFolderData[]> => ipcRenderer.invoke('noteFolder:list'),
+    create: (input: NoteFolderCreateInputDto): Promise<NoteFolderData> =>
+      ipcRenderer.invoke('noteFolder:create', input),
+    update: (folderId: string, patch: NoteFolderPatchDto): Promise<NoteFolderData> =>
+      ipcRenderer.invoke('noteFolder:update', folderId, patch),
+    delete: (folderId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('noteFolder:delete', folderId),
+    reorder: (orderedIds: string[]): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('noteFolder:reorder', orderedIds)
   },
 
   cinna: {

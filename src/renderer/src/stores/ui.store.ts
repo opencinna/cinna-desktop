@@ -6,7 +6,8 @@ export type ActiveView =
   | 'job-detail'
   | 'job-edit'
   | 'cinna-task-run'
-export type SidebarTab = 'chats' | 'jobs'
+  | 'note-detail'
+export type SidebarTab = 'chats' | 'jobs' | 'notes'
 export type SettingsMenu =
   | 'chats'
   | 'llm'
@@ -34,6 +35,7 @@ interface UIStore {
   activeJobId: string | null
   /** Cinna task run currently being viewed (when activeView === 'cinna-task-run'). */
   activeCinnaRunId: string | null
+  activeNoteId: string | null
   sidebarOpen: boolean
   theme: Theme
   logsOpen: boolean
@@ -45,6 +47,7 @@ interface UIStore {
   setSidebarTab: (tab: SidebarTab) => void
   setActiveJobId: (id: string | null) => void
   setActiveCinnaRunId: (id: string | null) => void
+  setActiveNoteId: (id: string | null) => void
   toggleSidebar: () => void
   toggleTheme: () => void
   setLogsOpen: (open: boolean) => void
@@ -59,6 +62,7 @@ export const useUIStore = create<UIStore>((set) => ({
   sidebarTab: 'chats',
   activeJobId: null,
   activeCinnaRunId: null,
+  activeNoteId: null,
   sidebarOpen: true,
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   logsOpen: false,
@@ -70,6 +74,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   setActiveJobId: (id) => set({ activeJobId: id }),
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
+  setActiveNoteId: (id) => set({ activeNoteId: id }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   toggleTheme: () =>
     set((state) => {

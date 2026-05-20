@@ -362,6 +362,48 @@ export const chatFiles = sqliteTable('chat_files', {
     .$defaultFn(() => new Date())
 })
 
+/**
+ * A Note is a profile-scoped markdown document. Lightweight write-and-read
+ * storage — the renderer edits the raw markdown text and renders it via the
+ * same react-markdown stack used in chat bubbles.
+ */
+export const notes = sqliteTable('notes', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  title: text('title').notNull().default('Untitled note'),
+  body: text('body').notNull().default(''),
+  /** Sidebar folder this note belongs to. Null = root. No FK (folder
+   *  deletion detaches notes back to root manually, same as jobs). */
+  folderId: text('folder_id'),
+  position: integer('position').notNull().default(0),
+  deletedAt: integer('deleted_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+/**
+ * User-defined groupings for notes in the sidebar. Profile-scoped. A thin
+ * collapsible separator with a name, a sort position, and a collapsed flag —
+ * directly mirrors `jobFolders`.
+ */
+export const noteFolders = sqliteTable('note_folders', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: text('name').notNull(),
+  position: integer('position').notNull().default(0),
+  collapsed: integer('collapsed', { mode: 'boolean' }).notNull().default(false),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
 export const chatAgentSessions = sqliteTable(
   'chat_agent_sessions',
   {

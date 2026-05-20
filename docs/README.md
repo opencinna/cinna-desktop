@@ -38,6 +38,8 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Task Comment** | Authored content on a cinna task (`comment_type = message \| result`); see also Activity for system-generated entries |
 | **Task Attachment** | A file attached to a cinna task or one of its comments. Distinct from `FileUpload` (chat attachments) — uses a task-scoped download URL (`/api/v1/tasks/{taskId}/attachments/{id}/download`) |
 | **Task Activity** | UI grouping for system-generated comment types (`status_change`, `assignment`, `system`) — shown as a compact collapsible log separate from authored comments |
+| **Note** | A profile-scoped markdown document (title + body) the user inline-edits in the Notes tab. Autosaves on debounce; rendered with the same `react-markdown` stack used for chat bubbles |
+| **Note Folder** | User-defined sidebar grouping for notes (profile-scoped, name + collapsed-state + sort position). Mirrors Job Folder semantics — a thin collapsible separator that owns ordering, not content |
 
 ## Domain Map
 
@@ -48,6 +50,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | [Chat](chat/messaging/messaging.md) | Conversation CRUD, message streaming, tool-call loop |
 | [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
 | [Jobs](jobs/jobs/jobs.md) | Reusable saved work specs (prompt + config) the user can execute repeatedly — local (spawns a chat) or Cinna Task |
+| [Notes](notes/notes/notes.md) | Profile-scoped markdown notes with inline edit, folder organisation, and shared trash retention |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
 | [UI](ui/app_shell/app_shell.md) | App shell chrome (top bar, sidebar, footer menus), settings screen, theming |
@@ -84,6 +87,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 ### Jobs
 - [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip and drag-and-drop folders for organising jobs; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
 - [Cinna Task Run View](jobs/cinna_task_view/cinna_task_view.md) — Read-only in-app view of a `cinna_task` run: comments + standalone/inline attachments fetched from cinna-core, markdown-rendered, with task-scoped attachment download; reached by clicking a cinna_task row in a job's run history
+
+### Notes
+- [Notes](notes/notes/notes.md) — Inline-edit markdown notes with folder organisation, drag-drop ordering, soft-delete to trash, and shared 30-day retention with chats
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

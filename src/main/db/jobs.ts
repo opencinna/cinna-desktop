@@ -148,6 +148,27 @@ export const jobsRepo = {
   },
 
   /**
+   * Count how many of the given job ids belong to the user and are live
+   * (not soft-deleted). Used as a single-query ownership check before a
+   * reorder, replacing what would otherwise be an N+1 loop in the service.
+   */
+  countOwned(userId: string, ids: string[]): number {
+    if (ids.length === 0) return 0
+    const row = getDb()
+      .select({ n: sql<number>`count(*)` })
+      .from(jobs)
+      .where(
+        and(
+          eq(jobs.userId, userId),
+          isNull(jobs.deletedAt),
+          inArray(jobs.id, ids)
+        )
+      )
+      .get()
+    return row?.n ?? 0
+  },
+
+  /**
    * Move + reorder jobs inside a single target group (folder or root). The
    * caller passes the full ordered list of job ids for that group — every id
    * in the list is written with `folderId = targetFolderId` and a fresh
@@ -258,6 +279,20 @@ export const jobFoldersRepo = {
         .run()
       return result.changes > 0
     })
+  },
+
+  /**
+   * Single-query ownership check for a batch of folder ids. Mirrors
+   * `jobsRepo.countOwned`.
+   */
+  countOwned(userId: string, ids: string[]): number {
+    if (ids.length === 0) return 0
+    const row = getDb()
+      .select({ n: sql<number>`count(*)` })
+      .from(jobFolders)
+      .where(and(eq(jobFolders.userId, userId), inArray(jobFolders.id, ids)))
+      .get()
+    return row?.n ?? 0
   },
 
   /**

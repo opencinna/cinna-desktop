@@ -14,6 +14,7 @@ import type { SettingsMenu } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
 import { JobsList } from '../jobs/JobsList'
+import { NotesList } from '../notes/NotesList'
 import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
@@ -137,8 +138,14 @@ export function Sidebar(): React.JSX.Element {
             </div>
           </>
         ) : (
-          <div className="flex-1 overflow-y-auto pt-2">
-            {sidebarTab === 'chats' ? <ChatList /> : <JobsList />}
+          <div className="flex-1 overflow-y-auto">
+            {sidebarTab === 'chats' ? (
+              <ChatList />
+            ) : sidebarTab === 'jobs' ? (
+              <JobsList />
+            ) : (
+              <NotesList />
+            )}
           </div>
         )}
 

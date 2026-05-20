@@ -1,11 +1,12 @@
-import { MessageSquare, Briefcase } from 'lucide-react'
+import { MessageSquare, Cog, NotebookPen } from 'lucide-react'
 import { useUIStore, type SidebarTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
 
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
-  { id: 'jobs', label: 'Jobs', Icon: Briefcase }
+  { id: 'jobs', label: 'Jobs', Icon: Cog },
+  { id: 'notes', label: 'Notes', Icon: NotebookPen }
 ]
 
 /**
@@ -20,6 +21,7 @@ export function SidebarTabs(): React.JSX.Element {
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
+  const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
   const { data: chats } = useChatList()
@@ -39,9 +41,12 @@ export function SidebarTabs(): React.JSX.Element {
       const firstChat = chats?.[0]
       setActiveView('chat')
       setActiveChatId(firstChat?.id ?? null)
-    } else {
+    } else if (target === 'jobs') {
       setActiveJobId(null)
       setActiveView('job-detail')
+    } else {
+      setActiveNoteId(null)
+      setActiveView('note-detail')
     }
   }
 

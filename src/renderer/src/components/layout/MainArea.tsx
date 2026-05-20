@@ -8,6 +8,7 @@ import { SettingsPage } from '../settings/SettingsPage'
 import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
 import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
+import { NoteDetail } from '../notes/NoteDetail'
 import { ChatConfigMenu } from '../chat/ChatConfigMenu'
 import { AgentSelector } from '../chat/AgentSelector'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
@@ -273,6 +274,10 @@ export function MainArea(): React.JSX.Element {
 
   if (activeView === 'cinna-task-run') {
     return <CinnaTaskRunView />
+  }
+
+  if (activeView === 'note-detail') {
+    return <NoteDetail />
   }
 
   const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null

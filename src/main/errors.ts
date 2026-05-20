@@ -61,6 +61,11 @@ export type JobErrorCode =
   | 'missing_dependency'
   | 'invalid_input'
 
+export type NoteErrorCode =
+  | 'not_found'
+  | 'not_activated'
+  | 'invalid_input'
+
 export type CinnaApiErrorCode =
   | 'not_cinna_user'
   | 'missing_server_url'
@@ -97,6 +102,7 @@ export class AuthError extends DomainError<AuthErrorCode> {}
 export class AgentError extends DomainError<AgentErrorCode> {}
 export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
 export class JobError extends DomainError<JobErrorCode> {}
+export class NoteError extends DomainError<NoteErrorCode> {}
 export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
 export class FileError extends DomainError<FileErrorCode> {}
 

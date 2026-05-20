@@ -432,6 +432,12 @@ export const jobService = {
   },
 
   reorderFolders(userId: string, orderedIds: string[]): void {
+    if (orderedIds.length > 0) {
+      const matched = jobFoldersRepo.countOwned(userId, orderedIds)
+      if (matched !== orderedIds.length) {
+        throw new JobError('not_found', 'One or more folders not found')
+      }
+    }
     jobFoldersRepo.reorder(userId, orderedIds)
     logger.info('folders reordered', { count: orderedIds.length })
   },
@@ -442,7 +448,8 @@ export const jobService = {
    * the client to have a consistent view (the list is refetched after every
    * folder operation, so drift is short-lived).
    *
-   * Validates folder ownership and job ownership before any write.
+   * Validates folder ownership and job ownership before any write — single
+   * COUNT query for the batch instead of N+1 reads.
    */
   reorderJobs(
     userId: string,
@@ -453,10 +460,10 @@ export const jobService = {
       const folder = jobFoldersRepo.getById(userId, targetFolderId)
       if (!folder) throw new JobError('not_found', 'Folder not found')
     }
-    for (const id of orderedJobIds) {
-      const job = jobsRepo.getById(userId, id)
-      if (!job || job.deletedAt) {
-        throw new JobError('not_found', `Job not found: ${id}`)
+    if (orderedJobIds.length > 0) {
+      const matched = jobsRepo.countOwned(userId, orderedJobIds)
+      if (matched !== orderedJobIds.length) {
+        throw new JobError('not_found', 'One or more jobs not found')
       }
     }
     jobsRepo.reorderInGroup(userId, targetFolderId, orderedJobIds)
