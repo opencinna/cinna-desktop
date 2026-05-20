@@ -21,7 +21,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
 | **Message Part** | A typed segment of an assistant message (`kind: 'text' \| 'thinking' \| 'tool'`) — A2A messages may persist a structured `parts[]` list driven by the Cinna `cinna.content_kind` metadata convention |
 | **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
-| **Attachment** | A file uploaded to the user's Cinna backend and attached to a single user turn; referenced on the A2A wire via `metadata.cinna_file_ids` |
+| **Attachment** | A file attached to a single user turn. Three sources: `cinna` (bytes on the Cinna backend, A2A-referenced), `local` (bytes in `userData/files/<userId>/<chatId>/`, used for raw-LLM chats), or `pending` (composer-only, paths held on disk for the new-chat flow until scope is known) |
+| **Media Part** (file) | Resolver output handed to an LLM adapter: `image`, `document` (native non-image bytes like PDF), or `text` (UTF-8 from extraction). Adapters translate to provider-native content blocks |
+| **Path Guard** | TTL-based allowlist of OS paths the renderer is permitted to reference. Populated by file dialogs and `webUtils.getPathForFile` so a compromised renderer can't synthesize arbitrary absolute paths |
 | **User Account** | A local profile (username + optional password) that scopes all data — chats, providers, agents, settings |
 | **Default User** | Built-in guest account (`__default__`) with no password, always present |
 | **Cinna Account** | A user account linked to a remote Cinna server (cloud or self-hosted) via OAuth 2.0 + PKCE |
@@ -71,7 +73,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [CLI Commands](chat/cli_commands/cli_commands.md) — `/` picker surfacing an agent's `cinna.run.*` shell commands; selecting one inserts the `/run:<slug>` invocation string
 - [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
 - [Multi-Agent Chats](chat/multi_agent/multi_agent.md) — In-chat `@-mention` routing to additional agents, immediate active-agent switch on popup-select, Smart Rewrite on agent join (double-send, with LLM-driven keep-original shortcut), catch-up replay between agent re-engagements, inline switch-back chip + button
-- [File Attachments](chat/file_attachments/file_attachments.md) — `[+]` attach menu, native file picker → Cinna backend upload, badges in composer and under user bubbles, click-to-download with save dialog + reveal-in-folder; gated to Cinna users + remote agent targets
+- [File Attachments](chat/file_attachments/file_attachments.md) — `[+]` menu + drag-drop with deferred ingest on new-chat; per-model capability picks native pass-through (images, PDF on Anthropic/Gemini) vs text extraction (CSV/JSON/code via UTF-8, DOCX/XLSX/PPTX/PDF-on-OpenAI via `officeparser`); local store under `userData/files/<userId>/<chatId>/` for raw-LLM chats, Cinna backend for remote agents; path-guard allowlist + chat-ownership check + `basename` filename sanitization
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents

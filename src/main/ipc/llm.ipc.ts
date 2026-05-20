@@ -3,6 +3,8 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { messageRoutingService } from '../services/messageRoutingService'
 import { chatStreamingService } from '../services/chatStreamingService'
+import { providerService } from '../services/providerService'
+import { type ModelCapability } from '../llm/types'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
 import type { LlmSendPayload } from '../../shared/ipcPayloads'
@@ -13,7 +15,7 @@ export function registerLlmHandlers(): void {
   // ipcRenderer.postMessage passes the payload as the 2nd arg to the listener
   // and the MessagePort on event.ports — see CLAUDE.md.
   ipcMain.on('llm:send-message', async (event, payload: LlmSendPayload) => {
-    const { chatId, content: userContent, catchupPacket = '' } = payload
+    const { chatId, content: userContent, catchupPacket = '', attachments } = payload
     const port = event.ports?.[0]
     if (!port) {
       logger.error('No MessagePort received for llm:send-message')
@@ -36,7 +38,8 @@ export function registerLlmHandlers(): void {
         userId: getProfileScopeUserId(),
         chatId,
         userContent,
-        catchupPacket
+        catchupPacket,
+        attachments
       })
       await chatStreamingService.stream({
         userId: getProfileScopeUserId(),
@@ -56,4 +59,20 @@ export function registerLlmHandlers(): void {
     chatStreamingService.cancel(requestId)
     return { success: true }
   })
+
+  /**
+   * Reports a model's accepted MIME types + size envelope. Used by the
+   * renderer to gate the attach button and filter the file picker by
+   * capability.
+   */
+  ipcHandle(
+    'llm:get-model-capability',
+    async (
+      _event,
+      data: { providerId: string; modelId: string }
+    ): Promise<ModelCapability> => {
+      userActivation.requireActivated()
+      return providerService.getModelCapability(data.providerId, data.modelId)
+    }
+  )
 }

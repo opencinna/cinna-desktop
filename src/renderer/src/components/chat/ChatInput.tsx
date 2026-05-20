@@ -10,9 +10,11 @@ import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { useAgents } from '../../hooks/useAgents'
+import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
+import { useModelCapability } from '../../hooks/useModelCapability'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
@@ -24,14 +26,14 @@ import { ActiveAgentChip } from './ActiveAgentChip'
 import { OnDemandMcpChips } from './OnDemandMcpChips'
 import { AttachmentList } from './AttachmentBadge'
 import { AttachMenuPopup, type AttachMenuItem } from './AttachMenuPopup'
-import type { MessageAttachment } from '../../../../shared/attachments'
+import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type TriggerChar = '@' | '#' | '/'
 
 interface ChatInputProps {
   chatId: string | null
-  onNewChat?: (message: string, attachments?: MessageAttachment[]) => void
+  onNewChat?: (message: string, attachments?: ComposerAttachment[]) => void
   leftSlot?: ReactNode
   modeColor?: ColorPreset | null
   onSelectAgent?: (agent: AgentData | null) => void
@@ -116,21 +118,43 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const lastEscapeAt = useRef(0)
   const { data: chatData } = useChatDetail(chatId)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  // Used only to gate the new-chat attach button: showing `[+]` for a
+  // user with no Cinna account *and* no configured LLM provider would
+  // lead them to attach files they have nowhere to send.
+  const { data: providers } = useProviders()
+  const hasAnyDestination =
+    isCinnaUser || (providers ?? []).some((p) => p.enabled && p.hasApiKey)
   const listboxId = useId()
+
+  // Model capability drives both gating (show/hide the [+]) and scope
+  // selection for the local-vs-cinna upload split below. Read off the chat
+  // detail so a model swap mid-chat re-evaluates immediately.
+  const modelCapability = useModelCapability(
+    chatData?.providerId ?? null,
+    chatData?.modelId ?? null
+  )
+  const modelSupportsMedia = modelCapability.acceptedMimeTypes.length > 0
 
   // Composer-local attachment buffer + IPC wiring. Hook owns staleness so
   // switching chats mid-upload (or after a clear) won't repopulate state
   // when the upload eventually resolves. See `useChatAttachments` for the
-  // generation-ref trick.
+  // generation-ref trick. `scope` is decided below — Cinna for remote-agent
+  // targets, local for raw LLM chats.
+  const attachScope: 'cinna' | 'local' = useMemo(() => {
+    if (!chatId) return 'cinna'
+    if (chatData?.agentId || chatData?.activeAgentId) return 'cinna'
+    return 'local'
+  }, [chatId, chatData?.agentId, chatData?.activeAgentId])
   const {
     attachments: pendingAttachments,
     isUploading,
     error: attachError,
     pick: pickAttachments,
+    pickFromPaths: pickAttachmentsFromPaths,
     remove: handleRemoveAttachment,
     clear: clearPendingAttachments,
     setError: setAttachError
-  } = useChatAttachments(chatId)
+  } = useChatAttachments(chatId, attachScope)
   // Single source of truth for everything multi-agent: routing decisions,
   // active-agent switching, Smart Rewrite, dispatch. Read fresh snapshots
   // internally at every action so there is no closure-staleness window.
@@ -208,42 +232,121 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   )
 
   /**
-   * File attachments are routed only to Cinna remote agents — the upload
-   * endpoint lives on the Cinna backend and the agent-env transfer only
-   * fires for sessions started via the cinna A2A surface.
+   * Two backing flows feed the [+] button:
    *
-   * Two distinct gates:
+   *  - Remote-agent target: Cinna-scoped upload (bytes go to the Cinna
+   *    backend, A2A metadata carries the file id). Cinna users only.
    *
-   *  - `canShowAttachButton` — when to render the [+] button. Permissive on
-   *    the new-chat screen (Cinna users see the button even before picking
-   *    an agent, since uploads are user-scoped on the backend and the user
-   *    may pick an agent moments later). Strict in active chats (target
-   *    must already be a remote agent).
+   *  - Raw LLM target: local-scoped upload (bytes copied into per-user
+   *    `userData/files/`, resolved into provider-native image blocks at
+   *    send time). Gated by the active model's capability — empty
+   *    capability ⇒ hide the button.
    *
-   *  - `targetSupportsAttachments` — whether the *current* target will
-   *    actually deliver attachments. Drives the auto-clear effect so
-   *    pending uploads don't linger after the user switches to an
-   *    incompatible target (local agent, LLM root, etc.).
+   * `canShowAttachButton` collapses both flows into one render gate; the
+   * `attachScope` memo upstream picks which IPC route the picker calls.
+   * `targetSupportsAttachments` mirrors the gate so pending uploads clear
+   * the moment the user pivots to an incompatible target.
    */
   const attachmentTargetAgent: AgentData | null = chatId
     ? composer.activeAgent ?? boundAgent ?? null
     : selectedAgent ?? null
   const targetIsRemote = attachmentTargetAgent?.source === 'remote'
 
-  const canShowAttachButton = isCinnaUser && (chatId ? targetIsRemote : true)
+  // Active-chat gates: split by destination so the wrong scope never queues.
+  const canAttachToRemoteAgent = isCinnaUser && targetIsRemote
+  const canAttachToLlmModel =
+    chatId !== null && !attachmentTargetAgent && modelSupportsMedia
 
-  // New-chat with no agent selected yet is compatible (user might pick a
-  // remote agent next). Selecting a non-remote agent flips this false and
-  // triggers the clear effect below.
-  const targetSupportsAttachments =
-    isCinnaUser &&
-    (chatId ? targetIsRemote : !attachmentTargetAgent || targetIsRemote)
+  // New-chat: attachments are deferred until chat creation, so we don't
+  // know yet whether the user is going to an LLM or a remote agent.
+  // Accept files when *any* destination is plausible — Cinna account or
+  // a configured LLM provider — so the button doesn't appear for users
+  // who have no way to send a message yet.
+  const canShowAttachButton = chatId
+    ? canAttachToRemoteAgent || canAttachToLlmModel
+    : hasAnyDestination
+
+  const targetSupportsAttachments = chatId
+    ? canAttachToRemoteAgent || canAttachToLlmModel
+    : hasAnyDestination
 
   useEffect(() => {
     if (!targetSupportsAttachments && pendingAttachments.length > 0) {
       clearPendingAttachments()
     }
   }, [targetSupportsAttachments, pendingAttachments.length, clearPendingAttachments])
+
+  // Pivoting between scopes (e.g. switching active agent from remote to LLM
+  // root) makes already-queued attachments wrong-scope. Drop them so the
+  // user re-picks under the new destination's rules.
+  const lastScopeRef = useRef(attachScope)
+  useEffect(() => {
+    if (lastScopeRef.current !== attachScope) {
+      lastScopeRef.current = attachScope
+      if (pendingAttachments.length > 0) clearPendingAttachments()
+    }
+  }, [attachScope, pendingAttachments.length, clearPendingAttachments])
+
+  // Drag-drop wiring. `dragOverDepth` is a counter (not a boolean) because
+  // dragenter/dragleave fire on every child during a drag — we'd flicker
+  // off the moment the pointer crosses an inner element. Counting nested
+  // enters keeps the overlay stable until the user truly leaves.
+  const [dragOverDepth, setDragOverDepth] = useState(0)
+  const isDraggingOver = dragOverDepth > 0
+  const canAcceptDrop = canShowAttachButton && !isStreaming
+  const handleDragEnter = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canAcceptDrop) return
+      // Only react to file drags — `Files` is in the types list when the OS
+      // is dragging real files, vs. text/HTML selections from inside the app.
+      if (!e.dataTransfer.types.includes('Files')) return
+      e.preventDefault()
+      setDragOverDepth((d) => d + 1)
+    },
+    [canAcceptDrop]
+  )
+  const handleDragOver = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canAcceptDrop) return
+      if (!e.dataTransfer.types.includes('Files')) return
+      e.preventDefault()
+      // Hint at the action — "+" icon on the cursor — so the user knows
+      // the drop will attach, not navigate.
+      e.dataTransfer.dropEffect = 'copy'
+    },
+    [canAcceptDrop]
+  )
+  const handleDragLeave = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canAcceptDrop) return
+      if (!e.dataTransfer.types.includes('Files')) return
+      setDragOverDepth((d) => Math.max(0, d - 1))
+    },
+    [canAcceptDrop]
+  )
+  const handleDrop = useCallback(
+    (e: React.DragEvent<HTMLDivElement>) => {
+      if (!canAcceptDrop) return
+      if (!e.dataTransfer.types.includes('Files')) return
+      e.preventDefault()
+      setDragOverDepth(0)
+      const dropped = Array.from(e.dataTransfer.files ?? [])
+      if (dropped.length === 0) return
+      // Renderer can't read file paths off `File` objects directly under
+      // contextIsolation + sandbox — webUtils.getPathForFile is the
+      // sanctioned bridge. Filter empty results so a folder drop (which
+      // returns '') doesn't reach the main process.
+      const paths = dropped
+        .map((f) => window.api.files.getPathForFile(f))
+        .filter((p): p is string => typeof p === 'string' && p.length > 0)
+      if (paths.length === 0) {
+        setAttachError('Folders and unresolved files cannot be attached')
+        return
+      }
+      void pickAttachmentsFromPaths(paths)
+    },
+    [canAcceptDrop, pickAttachmentsFromPaths, setAttachError]
+  )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
   const promptSourceAgent = boundAgent ?? selectedAgent ?? null
@@ -420,17 +523,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         ? [...pendingAttachments]
         : undefined
 
-    // New chat path — refuse to silently drop attachments if the user picked
-    // a non-remote target (LLM-only chat mode, local A2A agent). The button
-    // is permissive on the new-chat screen so they could have queued files
-    // before settling on a destination.
+    // New chat path — attachments are held as `pending` on the renderer
+    // until the chat row exists. `useNewChatFlow.startNewChat` ingests
+    // them post-creation under the right scope (Cinna for remote agents,
+    // local for raw LLM destinations), so there's no scope mismatch to
+    // refuse here.
     if (!chatId) {
-      if (attachmentsToSend && !targetIsRemote) {
-        setAttachError(
-          'Pick a Cinna agent to send these attachments — non-Cinna targets cannot receive files'
-        )
-        return
-      }
       clearComposer()
       onNewChat?.(trimmed, attachmentsToSend)
       return
@@ -447,9 +545,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
     // Hand off to the composer hook, which decides everything from a fresh
     // cache snapshot: parse mentions, resolve target, build catch-up,
-    // optionally rewrite, dispatch on the right channel.
+    // optionally rewrite, dispatch on the right channel. The active-chat
+    // composer only ever holds already-ingested attachments — `pending`
+    // is gated to the new-chat path by `useChatAttachments` — so the
+    // type narrow below is safe.
     rewriteUX.beginRewriting()
-    const result = await composer.submit(trimmed, attachmentsToSend)
+    const persistedAttachments = attachmentsToSend?.filter(
+      (a): a is MessageAttachment => a.source !== 'pending'
+    )
+    const result = await composer.submit(trimmed, persistedAttachments)
     rewriteUX.handleSubmitResult(result)
     if (result.kind === 'sent' || result.kind === 'rewrite-pending') {
       // Sent: drop the attachments now that they live on the message row.
@@ -466,10 +570,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     rewriteUX,
     clearComposer,
     targetSupportsAttachments,
-    targetIsRemote,
     pendingAttachments,
-    clearPendingAttachments,
-    setAttachError
+    clearPendingAttachments
   ])
 
   const handleCancel = useCallback(() => {
@@ -718,9 +820,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       <RewriteHintBar state={rewriteUX.state} />
 
       <div
-        className="rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        className="relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
         style={{
-          borderColor: modeColor ? modeColor.border : 'var(--color-border)',
+          borderColor: isDraggingOver
+            ? 'var(--color-accent)'
+            : modeColor
+              ? modeColor.border
+              : 'var(--color-border)',
           backgroundColor: modeColor ? modeColor.bg : undefined
         }}
       >
@@ -752,9 +862,23 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <AttachmentList
               attachments={pendingAttachments}
               variant="input"
-              onRemove={handleRemoveAttachment}
+              onRemove={(id) => {
+                const att = pendingAttachments.find((a) => a.id === id)
+                if (att) handleRemoveAttachment(att)
+              }}
               align="right"
             />
+          </div>
+        )}
+        {isDraggingOver && (
+          // Pointer-events off so the overlay never eats the underlying
+          // drop event — the container's own handler does the work.
+          <div
+            className="pointer-events-none absolute inset-0 flex items-center justify-center
+              rounded-2xl bg-[var(--color-accent)]/10 border-2 border-dashed
+              border-[var(--color-accent)] text-[var(--color-accent)] text-xs font-medium"
+          >
+            Drop to attach
           </div>
         )}
       </div>

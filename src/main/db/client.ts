@@ -13,6 +13,7 @@ import { migrateA2aSessions } from './migrations/a2a-sessions'
 import { migrateAgentOverrides } from './migrations/agent-overrides'
 import { migrateUsers, migrateUserIdColumns } from './migrations/users'
 import { migrateChatAgentSessions } from './migrations/chat-agent-sessions'
+import { migrateChatFiles } from './migrations/chat-files'
 import { migrateJobs } from './migrations/jobs'
 import { chatModeRepo } from './chatModes'
 import { createLogger } from '../logger/logger'
@@ -75,6 +76,7 @@ function runMigrations(): void {
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)
   migrateChatAgentSessions(sqlite)
+  migrateChatFiles(sqlite)
   // Jobs depend on chats + mcp_providers being present (FK references).
   migrateJobs(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so

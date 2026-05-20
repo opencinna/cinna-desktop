@@ -68,6 +68,15 @@ export type CinnaApiErrorCode =
   | 'request_failed'
   | 'invalid_response'
 
+export type FileErrorCode =
+  | 'not_found'
+  | 'invalid_scope'
+  | 'missing_chat_id'
+  | 'chat_not_found'
+  | 'read_failed'
+  | 'write_failed'
+  | 'unsupported_source'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -89,6 +98,7 @@ export class AgentError extends DomainError<AgentErrorCode> {}
 export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
 export class JobError extends DomainError<JobErrorCode> {}
 export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
+export class FileError extends DomainError<FileErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

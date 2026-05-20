@@ -23,6 +23,7 @@ export interface PrepareLlmSendInput {
   chatId: string
   userContent: string
   catchupPacket?: string
+  attachments?: MessageAttachment[]
 }
 
 export interface PreparedSend {
@@ -87,19 +88,24 @@ export const messageRoutingService = {
   },
 
   prepareLlmSend(input: PrepareLlmSendInput): PreparedSend {
-    const { userId, chatId, userContent, catchupPacket } = input
+    const { userId, chatId, userContent, catchupPacket, attachments } = input
 
     if (!chatRepo.getOwned(userId, chatId)) {
       throw new ChatError('not_found', 'Chat not found')
     }
 
     const wireContent = catchupPacket ? `${catchupPacket}${userContent}` : userContent
-    const userMessageId = messageRepo.saveUser({ chatId, content: userContent })
+    const userMessageId = messageRepo.saveUser({
+      chatId,
+      content: userContent,
+      attachments: attachments && attachments.length > 0 ? attachments : null
+    })
 
     logger.debug('prepared llm send', {
       chatId,
       userMessageId,
-      hasCatchup: !!catchupPacket
+      hasCatchup: !!catchupPacket,
+      attachmentCount: attachments?.length ?? 0
     })
 
     return { wireContent, userMessageId }

@@ -51,7 +51,8 @@ export const useFileDownloadStore = create<FileDownloadStore>((set, get) => ({
     try {
       const result = await window.api.files.download({
         fileId: attachment.id,
-        filename: attachment.filename
+        filename: attachment.filename,
+        source: attachment.source ?? 'cinna'
       })
       if (!result.success) {
         set({

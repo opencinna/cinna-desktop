@@ -15,7 +15,10 @@ import {
 } from '../llm/types'
 import { ChatError } from '../errors'
 import { jobService } from './jobService'
+import { attachmentToMediaPart } from './fileStore'
 import { createLogger } from '../logger/logger'
+import type { MessageAttachment } from '../../shared/attachments'
+import type { MediaPart } from '../llm/types'
 
 const logger = createLogger('LLM')
 const MAX_TOOL_ROUNDS = 10
@@ -173,6 +176,7 @@ export const chatStreamingService = {
     this._runStreamLoop(
       chat.providerId,
       chat.modelId,
+      userId,
       chatId,
       adapter,
       tools,
@@ -197,6 +201,7 @@ export const chatStreamingService = {
   async _runStreamLoop(
     _providerId: string,
     modelId: string,
+    userId: string,
     chatId: string,
     adapter: LLMAdapter,
     tools: ToolDefinition[],
@@ -217,17 +222,54 @@ export const chatStreamingService = {
   ): Promise<void> {
     try {
       const dbMessages = chatRepo.listMessages(chatId)
-      const currentMessages: ChatMessage[] = dbMessages
-        .filter((m) => m.role !== 'error' && m.role !== 'agent_transition')
-        .map((m) => ({
+      // Capability acts as a filter for the per-turn `media[]` so adapters
+      // never have to reject attachments at convert time — by the time the
+      // ChatMessage reaches `adapter.stream`, it carries only media that
+      // the active model has declared support for.
+      const capability = adapter.modelCapability(modelId)
+      const supportsMedia = capability.acceptedMimeTypes.length > 0
+
+      const currentMessages: ChatMessage[] = []
+      let resolvedMediaCount = 0
+      let droppedMediaCount = 0
+      for (const m of dbMessages) {
+        if (m.role === 'error' || m.role === 'agent_transition') continue
+        let media: MediaPart[] | undefined
+        if (supportsMedia && m.role === 'user' && m.attachments) {
+          const resolved: MediaPart[] = []
+          for (const att of m.attachments as MessageAttachment[]) {
+            const part = await attachmentToMediaPart(att, {
+              userId,
+              acceptedMimeTypes: capability.acceptedMimeTypes,
+              nativeMimeTypes: capability.nativeMimeTypes,
+              maxFileSizeBytes: capability.maxFileSizeBytes
+            })
+            if (part) resolved.push(part)
+            else droppedMediaCount++
+          }
+          if (resolved.length > 0) {
+            media = resolved.slice(0, capability.maxFilesPerMessage)
+            resolvedMediaCount += media.length
+          }
+        }
+        currentMessages.push({
           role: m.role as ChatMessage['role'],
           content: m.content,
+          media,
           toolCalls: (m.toolCalls as ToolCallInfo[] | null) ?? undefined,
           toolCallId: m.toolCallId ?? undefined,
           toolName: m.toolName ?? undefined,
           toolInput: (m.toolInput as Record<string, unknown>) ?? undefined,
           toolError: m.toolError ?? undefined
-        }))
+        })
+      }
+      if (resolvedMediaCount > 0 || droppedMediaCount > 0) {
+        logger.debug('media resolution', {
+          ...baseLog,
+          resolved: resolvedMediaCount,
+          dropped: droppedMediaCount
+        })
+      }
 
       // The user message is already persisted (with its plain `userContent`);
       // patch the rebuilt history's most recent user turn so the wire-level

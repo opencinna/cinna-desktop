@@ -4,6 +4,7 @@ import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useForceRefreshAgentStatus } from './useAgentStatus'
 import type { ContentKind } from '../../../shared/messageParts'
+import type { MessageAttachment } from '../../../shared/attachments'
 
 type LlmEvent = {
   type: string
@@ -33,13 +34,14 @@ type AgentEvent = {
 
 export interface StartLlmOptions {
   catchupPacket?: string
+  attachments?: MessageAttachment[]
 }
 
 export interface StartAgentOptions {
   rewrittenText?: string | null
   originalText?: string | null
   catchupPacket?: string
-  attachments?: Array<{ id: string; filename: string; size: number; mimeType: string }>
+  attachments?: MessageAttachment[]
 }
 
 /**
@@ -137,7 +139,10 @@ export function useChatStream(): {
           chatId,
           content,
           (event) => handleLlm(chatId, event),
-          opts
+          {
+            catchupPacket: opts?.catchupPacket,
+            attachments: opts?.attachments
+          }
         )
       } catch {
         stopStreaming()

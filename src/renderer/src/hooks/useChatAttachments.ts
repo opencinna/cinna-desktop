@@ -1,14 +1,20 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import type { MessageAttachment } from '../../../shared/attachments'
+import type { ComposerAttachment } from '../../../shared/attachments'
 
 export interface ChatAttachmentsAPI {
-  attachments: MessageAttachment[]
+  attachments: ComposerAttachment[]
   isUploading: boolean
   error: string | null
   /** Open the native picker and upload chosen files into the pending list. */
   pick: () => Promise<void>
+  /**
+   * Skip the picker — ingest the given OS paths straight through. Used by
+   * the drag-drop flow; renderer resolves paths via
+   * `window.api.files.getPathForFile(file)`.
+   */
+  pickFromPaths: (paths: string[]) => Promise<void>
   /** Remove a pending attachment (soft-deletes on the backend too). */
-  remove: (fileId: string) => void
+  remove: (attachment: ComposerAttachment) => void
   /** Drop all pending attachments. Bumps the staleness generation so any
    *  upload still in flight from before the clear is silently discarded. */
   clear: () => void
@@ -30,12 +36,20 @@ export interface ChatAttachmentsAPI {
  *    chats mid-upload would cause files picked on chat A to land in chat
  *    B's composer when the upload eventually resolves.
  *
- * Pass `null` as `chatId` for the new-chat screen — the same staleness
- * logic still works because picking a file then navigating to a different
- * destination flushes the buffer.
+ * The hook itself doesn't know the difference between Cinna and local
+ * scopes — the caller decides via `scope`. Routing the decision in the
+ * caller keeps the hook a clean composer-local buffer regardless of how
+ * many storage backends grow over time.
+ *
+ * Pass `null` as `chatId` for the new-chat screen — local-scope picks are
+ * blocked there (the local store needs an existing chat row to attach to),
+ * but Cinna-scope picks still work because the Cinna backend is global.
  */
-export function useChatAttachments(chatId: string | null): ChatAttachmentsAPI {
-  const [attachments, setAttachments] = useState<MessageAttachment[]>([])
+export function useChatAttachments(
+  chatId: string | null,
+  scope: 'cinna' | 'local' = 'cinna'
+): ChatAttachmentsAPI {
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([])
   const [isUploading, setIsUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -51,13 +65,20 @@ export function useChatAttachments(chatId: string | null): ChatAttachmentsAPI {
     setIsUploading(false)
   }, [chatId])
 
+  // New-chat composer holds paths only; ingest happens at send time once
+  // the destination (and thus the scope) is known. Active chats keep the
+  // eager-upload behavior so badges show up the instant they're picked.
+  const deferred = chatId === null
+
   const pick = useCallback(async () => {
     if (isUploading) return
     const gen = ++generationRef.current
     setError(null)
     setIsUploading(true)
     try {
-      const result = await window.api.files.pickAndUpload()
+      const result = deferred
+        ? await window.api.files.pickPaths()
+        : await window.api.files.pickAndUpload({ scope, chatId })
       if (gen !== generationRef.current) return
       if (!result.success) {
         setError(result.error)
@@ -71,14 +92,49 @@ export function useChatAttachments(chatId: string | null): ChatAttachmentsAPI {
     } finally {
       if (gen === generationRef.current) setIsUploading(false)
     }
-  }, [isUploading])
+  }, [isUploading, scope, chatId, deferred])
 
-  const remove = useCallback((fileId: string) => {
-    setAttachments((curr) => curr.filter((a) => a.id !== fileId))
+  // Drag-drop path. Shares the same generation-counter staleness as the
+  // picker so a drop that resolves after a chat-switch is silently
+  // dropped instead of landing in the wrong composer. Routes through the
+  // deferred resolver for new-chat, the immediate ingest otherwise.
+  const pickFromPaths = useCallback(
+    async (paths: string[]) => {
+      if (isUploading || paths.length === 0) return
+      const gen = ++generationRef.current
+      setError(null)
+      setIsUploading(true)
+      try {
+        const result = deferred
+          ? await window.api.files.resolvePaths({ paths })
+          : await window.api.files.ingestPaths({ scope, chatId, paths })
+        if (gen !== generationRef.current) return
+        if (!result.success) {
+          setError(result.error)
+          return
+        }
+        setAttachments((curr) => [...curr, ...result.files])
+      } catch (err) {
+        if (gen !== generationRef.current) return
+        setError(err instanceof Error ? err.message : String(err))
+      } finally {
+        if (gen === generationRef.current) setIsUploading(false)
+      }
+    },
+    [isUploading, scope, chatId, deferred]
+  )
+
+  const remove = useCallback((attachment: ComposerAttachment) => {
+    setAttachments((curr) => curr.filter((a) => a.id !== attachment.id))
+    // Pending attachments never reached a backend, so there's nothing to
+    // delete — dropping them from the local list is the full cleanup.
+    if (attachment.source === 'pending') return
     // Fire-and-forget: if a race makes the file already-attached server-side,
     // the backend rejects the delete and the 24h GC takes over. We don't
     // surface delete errors here because the user already moved on.
-    void window.api.files.remove(fileId).catch(() => {})
+    void window.api.files
+      .remove({ id: attachment.id, source: attachment.source ?? 'cinna' })
+      .catch(() => {})
   }, [])
 
   const clear = useCallback(() => {
@@ -96,6 +152,7 @@ export function useChatAttachments(chatId: string | null): ChatAttachmentsAPI {
     isUploading,
     error,
     pick,
+    pickFromPaths,
     remove,
     clear,
     setError: setExternalError,

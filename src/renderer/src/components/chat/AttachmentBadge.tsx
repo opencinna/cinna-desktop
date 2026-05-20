@@ -1,5 +1,11 @@
 import { Paperclip, X, Image, FileText, Archive, Loader2 } from 'lucide-react'
 
+/**
+ * Visual subset of an attachment the badge needs to render. Carries no
+ * lifecycle/source field — consumers either pass a {@link MessageAttachment}
+ * or a {@link PendingAttachment}, both of which structurally satisfy this
+ * shape. The badge component itself doesn't branch on source.
+ */
 export interface AttachmentBadgeData {
   id: string
   filename: string
@@ -135,12 +141,12 @@ export function AttachmentBadge({
   )
 }
 
-interface AttachmentListProps {
-  attachments: AttachmentBadgeData[]
+interface AttachmentListProps<T extends AttachmentBadgeData> {
+  attachments: T[]
   variant?: 'input' | 'message'
   onRemove?: (id: string) => void
   /** Per-badge click action — typically the download trigger for message variant. */
-  onClick?: (attachment: AttachmentBadgeData) => void
+  onClick?: (attachment: T) => void
   /**
    * Predicate flipping a badge into spinner / disabled state. Predicate form
    * (vs. a single id) lets multiple concurrent downloads each light up.
@@ -149,14 +155,20 @@ interface AttachmentListProps {
   align?: 'left' | 'right'
 }
 
-export function AttachmentList({
+/**
+ * Generic on the concrete attachment type the caller passes in, so the
+ * `onClick` callback sees the same type — e.g. `MessageAttachment` for
+ * the message-bubble (and the download store stays narrow), or
+ * {@link ComposerAttachment} for the new-chat composer.
+ */
+export function AttachmentList<T extends AttachmentBadgeData>({
   attachments,
   variant = 'input',
   onRemove,
   onClick,
   isLoading,
   align = 'left'
-}: AttachmentListProps): React.JSX.Element | null {
+}: AttachmentListProps<T>): React.JSX.Element | null {
   if (attachments.length === 0) return null
   return (
     <div

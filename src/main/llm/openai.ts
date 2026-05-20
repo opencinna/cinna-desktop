@@ -1,5 +1,28 @@
 import OpenAI from 'openai'
-import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
+import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, NO_FILE_SUPPORT, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
+import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
+
+// OpenAI Chat Completions accepts images natively. PDFs and office formats
+// have no native input block here (the Responses API does, but we use
+// Chat Completions), so they route through the text extractor and arrive
+// as inlined `<file>` blocks on the user message.
+const OPENAI_IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+const OPENAI_MAX_FILE = 20 * 1024 * 1024
+const OPENAI_MAX_FILES = 10
+
+/**
+ * Which OpenAI model families accept images. We err on the side of "yes" for
+ * `gpt-4*` and `o*` (modern multimodal lineup) and "no" for everything else
+ * — older `gpt-3.5*` and the embedding/audio side-channels return the empty
+ * capability so the UI hides the attach button.
+ */
+function openaiHasVision(modelId: string): boolean {
+  const id = modelId.toLowerCase()
+  if (/^gpt-4/.test(id)) return true
+  if (/^o\d/.test(id)) return true
+  if (/^chatgpt-4/.test(id)) return true
+  return false
+}
 
 // Modality / capability flags that disqualify a model from text chat.
 // Substring match (case-insensitive) on the model id.
@@ -130,6 +153,24 @@ export class OpenAIAdapter implements LLMAdapter {
     return { content, toolCalls }
   }
 
+  modelCapability(modelId: string): ModelCapability {
+    // Even non-vision models benefit from text-extracted attachments —
+    // CSV, code, office docs can be inlined into the prompt regardless of
+    // multimodal support. Only vision-capable models additionally accept
+    // image MIMEs natively.
+    const vision = openaiHasVision(modelId)
+    const accepted = vision
+      ? [...OPENAI_IMAGE_MIMES, ...TEXT_EXTRACTABLE_MIMES]
+      : [...TEXT_EXTRACTABLE_MIMES]
+    const native = vision ? [...OPENAI_IMAGE_MIMES] : []
+    return {
+      acceptedMimeTypes: accepted,
+      nativeMimeTypes: native,
+      maxFileSizeBytes: OPENAI_MAX_FILE,
+      maxFilesPerMessage: OPENAI_MAX_FILES
+    }
+  }
+
   parseError(error: Error): LLMError {
     const msg = error.message
     const err = error as Error & { status?: number; code?: string }
@@ -161,7 +202,16 @@ export class OpenAIAdapter implements LLMAdapter {
       if (msg.role === 'system') {
         result.push({ role: 'system', content: msg.content })
       } else if (msg.role === 'user') {
-        result.push({ role: 'user', content: msg.content })
+        const imageParts = this.buildImageParts(msg.media)
+        const textPrefix = renderTextPartsPrefix(msg.media)
+        const userText = `${textPrefix}${msg.content}`
+        if (imageParts.length > 0) {
+          const parts: OpenAI.Chat.ChatCompletionContentPart[] = [...imageParts]
+          if (userText) parts.unshift({ type: 'text', text: userText })
+          result.push({ role: 'user', content: parts })
+        } else {
+          result.push({ role: 'user', content: userText })
+        }
       } else if (msg.role === 'assistant') {
         if (msg.toolCalls && msg.toolCalls.length > 0) {
           result.push({
@@ -189,6 +239,24 @@ export class OpenAIAdapter implements LLMAdapter {
     }
 
     return result
+  }
+
+  private buildImageParts(
+    media: MediaPart[] | undefined
+  ): OpenAI.Chat.ChatCompletionContentPartImage[] {
+    if (!media || media.length === 0) return []
+    const parts: OpenAI.Chat.ChatCompletionContentPartImage[] = []
+    for (const part of media) {
+      if (part.kind !== 'image') continue
+      if (!OPENAI_IMAGE_MIMES.includes(part.mimeType)) continue
+      parts.push({
+        type: 'image_url',
+        image_url: {
+          url: `data:${part.mimeType};base64,${part.bytes.toString('base64')}`
+        }
+      })
+    }
+    return parts
   }
 
   private convertTools(tools: ToolDefinition[]): OpenAI.Chat.ChatCompletionTool[] {

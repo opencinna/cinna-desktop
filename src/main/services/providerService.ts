@@ -4,10 +4,11 @@ import { createAdapter, isProviderType } from '../llm/factory'
 import {
   registerAdapter,
   unregisterAdapter,
+  getAdapter,
   getAllModels
 } from '../llm/registry'
 import { ProviderError } from '../errors'
-import { ModelInfo } from '../llm/types'
+import { ModelInfo, ModelCapability, NO_FILE_SUPPORT } from '../llm/types'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('Providers')
@@ -156,5 +157,17 @@ export const providerService = {
 
   listModels(): Promise<ModelInfo[]> {
     return getAllModels()
+  },
+
+  /**
+   * Resolve a model's accepted MIME types + size envelope. Degrades to
+   * {@link NO_FILE_SUPPORT} when the provider isn't registered (missing
+   * API key, disabled, deleted) so the renderer-side capability gate
+   * fails closed rather than throwing.
+   */
+  getModelCapability(providerId: string, modelId: string): ModelCapability {
+    const adapter = getAdapter(providerId)
+    if (!adapter) return NO_FILE_SUPPORT
+    return adapter.modelCapability(modelId)
   }
 }

@@ -1,15 +1,41 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { nanoid } from 'nanoid'
-import { LLMAdapter, LLMError, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo } from './types'
+import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, NO_FILE_SUPPORT, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
 import type {
   Content,
   Part,
+  InlineDataPart,
   FunctionCallPart,
   FunctionResponsePart,
   FunctionDeclaration,
   FunctionDeclarationSchema
 } from '@google/generative-ai'
+import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
 import { createLogger } from '../logger/logger'
+
+// Gemini accepts images and PDFs natively via `inlineData`. Office formats
+// / CSV / code files go through the shared text extractor and land as a
+// `<file>` prefix on the user message — same envelope as the other
+// adapters use.
+const GEMINI_IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/webp']
+const GEMINI_NATIVE_MIMES = [...GEMINI_IMAGE_MIMES, 'application/pdf']
+const GEMINI_MAX_FILE = 20 * 1024 * 1024
+const GEMINI_MAX_FILES = 16
+
+/**
+ * Gemini's 1.5 / 2.x families are multimodal. We assume "yes" for anything
+ * matching `gemini-1.5*`, `gemini-2.*`, `gemini-pro-vision`, and the new
+ * naming on `*-flash` / `*-pro`. Older `gemini-pro` (text-only) and any
+ * non-Gemini id falls through to the empty capability.
+ */
+function geminiHasVision(modelId: string): boolean {
+  const id = modelId.toLowerCase()
+  if (id === 'gemini-pro') return false
+  if (id.startsWith('gemini-1.5')) return true
+  if (/^gemini-\d/.test(id)) return true
+  if (id.includes('vision')) return true
+  return false
+}
 
 const logger = createLogger('gemini')
 
@@ -128,6 +154,23 @@ export class GeminiAdapter implements LLMAdapter {
     return { content, toolCalls }
   }
 
+  modelCapability(modelId: string): ModelCapability {
+    // Text-extracted attachments work on any Gemini model — the model only
+    // needs to read text. Multimodal models additionally accept images and
+    // PDFs as native `inlineData` parts.
+    const vision = geminiHasVision(modelId)
+    const accepted = vision
+      ? [...GEMINI_NATIVE_MIMES, ...TEXT_EXTRACTABLE_MIMES]
+      : [...TEXT_EXTRACTABLE_MIMES]
+    const native = vision ? [...GEMINI_NATIVE_MIMES] : []
+    return {
+      acceptedMimeTypes: accepted,
+      nativeMimeTypes: native,
+      maxFileSizeBytes: GEMINI_MAX_FILE,
+      maxFilesPerMessage: GEMINI_MAX_FILES
+    }
+  }
+
   parseError(error: Error): LLMError {
     const msg = error.message
     const statusMatch = msg.match(/\[(\d{3})\s+([^\]]+)\]/)
@@ -164,7 +207,13 @@ export class GeminiAdapter implements LLMAdapter {
     for (let i = 0; i < messages.length - 1; i++) {
       const msg = messages[i]
       if (msg.role === 'user') {
-        history.push({ role: 'user', parts: [{ text: msg.content }] })
+        const parts: Part[] = []
+        const mediaParts = this.buildInlineDataParts(msg.media)
+        parts.push(...mediaParts)
+        const textPrefix = renderTextPartsPrefix(msg.media)
+        const userText = `${textPrefix}${msg.content}`
+        if (userText || parts.length === 0) parts.push({ text: userText })
+        history.push({ role: 'user', parts })
       } else if (msg.role === 'assistant') {
         const parts: Part[] = []
         if (msg.content) {
@@ -241,11 +290,53 @@ export class GeminiAdapter implements LLMAdapter {
           response: responseObj
         }
       } as FunctionResponsePart]
+    } else if (last.role === 'user') {
+      // The most recent user turn is where freshly-attached media lives.
+      // Gemini's `sendMessageStream` accepts either a string or a Part[],
+      // so we promote to Part[] only when native media is present; text
+      // attachments fold into the user's string content via the shared
+      // prefix renderer.
+      const mediaParts = this.buildInlineDataParts(last.media)
+      const textPrefix = renderTextPartsPrefix(last.media)
+      const userText = `${textPrefix}${last.content}`
+      if (mediaParts.length > 0) {
+        const parts: Part[] = [...mediaParts]
+        if (userText) parts.push({ text: userText })
+        lastMessage = parts
+      } else {
+        lastMessage = userText
+      }
     } else {
       lastMessage = last.content
     }
 
     return { history, lastMessage }
+  }
+
+  private buildInlineDataParts(media: MediaPart[] | undefined): InlineDataPart[] {
+    if (!media || media.length === 0) return []
+    const parts: InlineDataPart[] = []
+    for (const part of media) {
+      // Both images and PDFs ship as `inlineData` parts. Text-kind parts
+      // never reach this branch — they fold into the user's string content
+      // via the shared text-prefix renderer.
+      if (part.kind === 'image' && GEMINI_IMAGE_MIMES.includes(part.mimeType)) {
+        parts.push({
+          inlineData: {
+            mimeType: part.mimeType,
+            data: part.bytes.toString('base64')
+          }
+        })
+      } else if (part.kind === 'document' && part.mimeType === 'application/pdf') {
+        parts.push({
+          inlineData: {
+            mimeType: part.mimeType,
+            data: part.bytes.toString('base64')
+          }
+        })
+      }
+    }
+    return parts
   }
 
   private convertTools(tools: ToolDefinition[]): FunctionDeclaration[] {

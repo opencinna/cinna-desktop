@@ -339,6 +339,29 @@ export const jobRuns = sqliteTable('job_runs', {
  * already been replayed to that agent. Catch-up packets start from the next
  * message after this cursor.
  */
+/**
+ * Local-store backed attachments. One row per file the user picked into a
+ * chat composer where the destination is a raw LLM (no Cinna backend in the
+ * picture). The actual bytes live at `storagePath` under `userData/files/...`;
+ * this row carries the metadata the renderer and adapter need (filename, mime,
+ * size). Cleanup follows the chat — `ON DELETE CASCADE` deletes the metadata
+ * row, and a small post-delete sweep removes the on-disk blob.
+ */
+export const chatFiles = sqliteTable('chat_files', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  chatId: text('chat_id')
+    .notNull()
+    .references(() => chats.id, { onDelete: 'cascade' }),
+  storagePath: text('storage_path').notNull(),
+  mimeType: text('mime_type').notNull(),
+  size: integer('size').notNull(),
+  filename: text('filename').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
 export const chatAgentSessions = sqliteTable(
   'chat_agent_sessions',
   {

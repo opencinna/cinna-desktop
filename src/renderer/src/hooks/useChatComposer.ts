@@ -175,12 +175,13 @@ export function useChatComposer(chatId: string | null): ComposerView & {
         return
       }
       // LLM root — flip active to null and start the LLM channel. Attachments
-      // are silently dropped for raw-LLM chats (the local LLM SDKs don't have
-      // a path to forward Cinna-backend file IDs).
+      // forward through so the adapter can translate them into provider-native
+      // media blocks; the streaming service drops anything the active model
+      // doesn't declare support for.
       if (snap.chat.activeAgentId !== null) {
         await setActiveAgentMutation.mutateAsync({ chatId, agentId: null })
       }
-      startLlm(chatId, text)
+      startLlm(chatId, text, { attachments })
     },
     [chatId, readSnapshot, resolveActive, dispatchToAgent, setActiveAgentMutation, startLlm]
   )

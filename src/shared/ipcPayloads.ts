@@ -31,4 +31,12 @@ export interface LlmSendPayload {
   content: string
   /** Catch-up replay packet to prepend to wire content. Empty when unused. */
   catchupPacket?: string
+  /**
+   * File attachments to ship with this user turn. Persisted on the user
+   * message and resolved by the chat-streaming service into provider-native
+   * content blocks (image inputs for vision-capable models). Provider/model
+   * combos without file support drop the attachments silently — the badge
+   * is gated upstream by `llm:get-model-capability`.
+   */
+  attachments?: MessageAttachment[]
 }

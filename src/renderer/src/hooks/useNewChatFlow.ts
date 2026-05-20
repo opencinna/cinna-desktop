@@ -3,7 +3,11 @@ import { useCreateChat, useUpdateChat } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { useChatStream } from './useChatStream'
 import type { ChatModeData } from '../constants/chatModeColors'
-import type { MessageAttachment } from '../../../shared/attachments'
+import type {
+  ComposerAttachment,
+  MessageAttachment,
+  PendingAttachment
+} from '../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
@@ -23,8 +27,14 @@ export interface NewChatOptions {
    * first send so the stream loop's announce prefix picks them up.
    */
   onDemandMcpIds?: Iterable<string>
-  /** File attachments uploaded to the Cinna backend before chat creation. */
-  attachments?: MessageAttachment[]
+  /**
+   * Attachments collected in the composer. May be a mix of already-uploaded
+   * Cinna files (legacy / drag-and-drop into an active chat path) and
+   * `pending` entries (paths held on disk). Pending entries are converted
+   * to real {@link MessageAttachment}s post-chat-creation by
+   * `resolvePendingAttachments`.
+   */
+  attachments?: ComposerAttachment[]
 }
 
 export function resolveModel(
@@ -54,6 +64,58 @@ export function useNewChatFlow(): {
   const createChat = useCreateChat()
   const updateChat = useUpdateChat()
   const { startLlm, startAgent } = useChatStream()
+  const setSendError = useChatStore((s) => s.setSendError)
+
+  /**
+   * Ingest every `pending` attachment now that the chat row exists and
+   * the destination is known. `id` on a pending attachment carries the
+   * absolute path; we hand the list to `files.ingestPaths` with the
+   * right scope and stitch the returned real attachments back into the
+   * original ordering. Throws on ingest failure so the caller can clean
+   * up the chat row instead of leaving an orphan with no message.
+   */
+  const resolvePendingAttachments = useCallback(
+    async (
+      chatId: string,
+      scope: 'cinna' | 'local',
+      attachments: ComposerAttachment[] | undefined
+    ): Promise<MessageAttachment[]> => {
+      if (!attachments || attachments.length === 0) return []
+      const pending = attachments.filter(
+        (a): a is PendingAttachment => a.source === 'pending'
+      )
+      const persisted = attachments.filter(
+        (a): a is MessageAttachment => a.source !== 'pending'
+      )
+      if (pending.length === 0) return persisted
+      const result = await window.api.files.ingestPaths({
+        scope,
+        chatId,
+        paths: pending.map((a) => a.id)
+      })
+      if (!result.success) {
+        throw new Error(result.error || 'File ingest failed')
+      }
+      const ingestedByPath = new Map<string, MessageAttachment>()
+      pending.forEach((p, i) => {
+        const ingested = result.files[i]
+        if (ingested) ingestedByPath.set(p.id, ingested)
+      })
+      // Preserve the user's drop order. `pending` entries get swapped
+      // for their real counterparts; `persisted` entries pass through.
+      const out: MessageAttachment[] = []
+      for (const a of attachments) {
+        if (a.source === 'pending') {
+          const ing = ingestedByPath.get(a.id)
+          if (ing) out.push(ing)
+        } else {
+          out.push(a)
+        }
+      }
+      return out
+    },
+    []
+  )
 
   const startNewChat = useCallback(
     async (opts: NewChatOptions): Promise<void> => {
@@ -70,8 +132,10 @@ export function useNewChatFlow(): {
       } = opts
       const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
+      let chatId: string | null = null
       try {
         const chat = await createChat.mutateAsync()
+        chatId = chat.id
 
         // Flush the new-chat MCP buffer before either channel kicks off. The
         // LLM stream loop reads `chat_on_demand_mcps` at setup time, so the
@@ -88,8 +152,12 @@ export function useNewChatFlow(): {
             chatId: chat.id,
             updates: { title, agentId: agent.id }
           })
+          // Remote and local agents both ingest as Cinna-scoped today —
+          // the cinna upload service is the only A2A-friendly backend,
+          // and a local-A2A agent has no file path of its own.
+          const resolved = await resolvePendingAttachments(chat.id, 'cinna', attachments)
           useChatStore.getState().setActiveChatId(chat.id)
-          startAgent(agent.id, chat.id, message, { attachments })
+          startAgent(agent.id, chat.id, message, { attachments: resolved })
           return
         }
 
@@ -113,13 +181,31 @@ export function useNewChatFlow(): {
           await window.api.chat.setMcpProviders(chat.id, mcpSnapshot)
         }
 
+        // LLM destination: ingest pending into the local store under the
+        // freshly-created chat.
+        const resolved = await resolvePendingAttachments(chat.id, 'local', attachments)
+
         useChatStore.getState().setActiveChatId(chat.id)
-        startLlm(chat.id, message)
+        startLlm(chat.id, message, { attachments: resolved })
       } catch (err) {
-        console.error('Failed to create chat:', err)
+        const msg = err instanceof Error ? err.message : String(err)
+        // Surface the error so the user knows the send didn't go through
+        // — without this, a failed ingest leaves an empty chat row and a
+        // cleared composer with no feedback.
+        setSendError(msg || 'Could not start new chat')
+        // Best-effort cleanup of the orphan chat. The user can retry
+        // without dragging accumulated empty rows along.
+        if (chatId) {
+          try {
+            await window.api.chat.delete(chatId)
+          } catch {
+            // Swallow — the chat row exists in the DB but at worst it's
+            // an empty list entry the user can manually delete.
+          }
+        }
       }
     },
-    [createChat, updateChat, startAgent, startLlm]
+    [createChat, updateChat, startAgent, startLlm, resolvePendingAttachments, setSendError]
   )
 
   return { startNewChat }

@@ -1,9 +1,9 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
-import type { MessageAttachment } from '../shared/attachments'
+import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
 import type {
   JobData,
   JobDetailData,
@@ -525,7 +525,7 @@ const api = {
         requestId?: string
         provider?: string
       }) => void,
-      extras?: { catchupPacket?: string }
+      extras?: { catchupPacket?: string; attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
@@ -534,38 +534,121 @@ const api = {
       const payload: LlmSendPayload = {
         chatId,
         content,
-        catchupPacket: extras?.catchupPacket
+        catchupPacket: extras?.catchupPacket,
+        attachments: extras?.attachments
       }
       ipcRenderer.postMessage('llm:send-message', payload, [channel.port2])
     },
     cancel: (requestId: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('llm:cancel', requestId)
+      ipcRenderer.invoke('llm:cancel', requestId),
+    /**
+     * Reports what MIME types + size envelope the given (provider, model)
+     * accepts. Drives the renderer's attach-button gating and the picker's
+     * file-type filter. Empty `acceptedMimeTypes` ⇒ hide the button.
+     */
+    getModelCapability: (data: {
+      providerId: string
+      modelId: string
+    }): Promise<{
+      acceptedMimeTypes: string[]
+      maxFileSizeBytes: number
+      maxFilesPerMessage: number
+    }> => ipcRenderer.invoke('llm:get-model-capability', data)
   },
 
   files: {
     /**
-     * Opens the native file picker, uploads chosen files to the Cinna
-     * backend, returns the condensed MessageAttachment list. Cancellation
-     * is a successful `canceled: true` response — distinguish from errors
-     * with the `success` discriminator.
+     * Opens the native file picker and routes the upload based on `scope`:
+     *
+     *  - `cinna` (default for back-compat) — pushes bytes to the user's
+     *    Cinna backend; required for remote-agent (A2A) sends.
+     *  - `local` — copies bytes into the per-user local store; required
+     *    for raw LLM chats that ship images inline. Needs a `chatId` so
+     *    the store can scope and clean up alongside the chat row.
+     *
+     * Cancellation is a successful `canceled: true` response.
      */
-    pickAndUpload: (): Promise<
+    pickAndUpload: (opts?: {
+      scope?: 'cinna' | 'local'
+      chatId?: string | null
+    }): Promise<
       | { success: true; canceled?: false; files: MessageAttachment[] }
       | { success: true; canceled: true; files: [] }
       | { success: false; canceled?: false; error: string; code?: string }
-    > => ipcRenderer.invoke('files:pick-and-upload'),
-    remove: (
-      fileId: string
-    ): Promise<{ success: true } | { success: false; error: string; code?: string }> =>
-      ipcRenderer.invoke('files:remove', fileId),
+    > => ipcRenderer.invoke('files:pick-and-upload', opts),
     /**
-     * Save-as for a previously-uploaded file. Opens the native save dialog
-     * with the original filename, streams from the Cinna backend to the
-     * chosen path, then reveals the file in Finder/Explorer.
+     * Ingest pre-resolved paths into the same backing store the picker
+     * uses. Used by the drag-drop flow — the picker has no role there
+     * because the OS already handed us the file. Paths come from
+     * {@link getPathForFile} (which wraps Electron's `webUtils`).
+     */
+    ingestPaths: (data: {
+      scope?: 'cinna' | 'local'
+      chatId?: string | null
+      paths: string[]
+    }): Promise<
+      | { success: true; files: MessageAttachment[] }
+      | { success: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:ingest-paths', data),
+    /**
+     * Deferred-ingest picker. Opens the file dialog and returns metadata
+     * for each picked file as `source: 'pending'` attachments — bytes
+     * stay on disk. The new-chat composer uses this so the scope (Cinna
+     * vs local) is chosen at send time, after the user picks a
+     * destination.
+     */
+    pickPaths: (): Promise<
+      | { success: true; canceled?: false; files: PendingAttachment[] }
+      | { success: true; canceled: true; files: [] }
+      | { success: false; canceled?: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:pick-paths'),
+    /**
+     * Resolve drag-dropped paths to badge-ready metadata without
+     * ingesting. Same deferred semantics as {@link pickPaths} but for
+     * the drop flow.
+     */
+    resolvePaths: (data: {
+      paths: string[]
+    }): Promise<
+      | { success: true; files: PendingAttachment[] }
+      | { success: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:resolve-paths', data),
+    /**
+     * Resolve the OS path of a dropped File. Renderers can't read paths
+     * off File objects directly under the contextIsolated + sandboxed
+     * config; this wraps Electron's `webUtils.getPathForFile`.
+     *
+     * As a side-effect, every resolved path is reported to the main
+     * process via `files:track-path` so the path-guard allowlist
+     * picks it up before the renderer round-trips it through
+     * `resolvePaths` / `ingestPaths`. A path the renderer can't
+     * legitimately get a File handle for never goes through this
+     * function, and therefore never reaches the allowlist.
+     */
+    getPathForFile: (file: File): string => {
+      const path = webUtils.getPathForFile(file)
+      if (path) ipcRenderer.send('files:track-path', path)
+      return path
+    },
+    /**
+     * Remove a pending or persisted attachment from its backing store.
+     * The legacy single-string signature (Cinna only) is preserved for
+     * older callers that don't carry a `source`.
+     */
+    remove: (
+      arg: string | { id: string; source?: 'cinna' | 'local' }
+    ): Promise<{ success: true } | { success: false; error: string; code?: string }> =>
+      ipcRenderer.invoke('files:remove', arg),
+    /**
+     * Save-as for a previously-attached file. Streams from whichever store
+     * owns the attachment (Cinna backend for `source: 'cinna'`, local
+     * disk-to-disk for `source: 'local'`), then reveals the file in
+     * Finder/Explorer.
      */
     download: (data: {
       fileId: string
       filename: string
+      source?: 'cinna' | 'local'
     }): Promise<
       | { success: true; canceled?: false; savedPath: string }
       | { success: true; canceled: true }
