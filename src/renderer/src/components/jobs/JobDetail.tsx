@@ -29,7 +29,7 @@ export function JobDetail(): React.JSX.Element {
   if (!activeJobId) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
-        Select a job from the sidebar.
+        Select a job to view.
       </div>
     )
   }

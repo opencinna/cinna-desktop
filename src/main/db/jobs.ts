@@ -1,9 +1,17 @@
 import { nanoid } from 'nanoid'
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
-import { jobs, jobMcpProviders, jobRuns, chats, chatMcpProviders } from './schema'
+import {
+  jobs,
+  jobFolders,
+  jobMcpProviders,
+  jobRuns,
+  chats,
+  chatMcpProviders
+} from './schema'
 
 export type JobRow = typeof jobs.$inferSelect
+export type JobFolderRow = typeof jobFolders.$inferSelect
 export type JobMcpRow = typeof jobMcpProviders.$inferSelect
 export type JobRunRow = typeof jobRuns.$inferSelect
 
@@ -48,11 +56,14 @@ export interface JobRunCreateInput {
 
 export const jobsRepo = {
   list(userId: string): JobRow[] {
+    // Order: position ASC within each folder; ties (and legacy rows with
+    // identical 0 positions) fall back to updatedAt DESC so the list keeps a
+    // sensible default before the user ever drags anything.
     return getDb()
       .select()
       .from(jobs)
       .where(and(eq(jobs.userId, userId), isNull(jobs.deletedAt)))
-      .orderBy(desc(jobs.updatedAt))
+      .orderBy(asc(jobs.position), desc(jobs.updatedAt))
       .all()
   },
 
@@ -64,8 +75,29 @@ export const jobsRepo = {
       .get()
   },
 
+  /**
+   * Smallest existing `position` value across the user's jobs in the given
+   * folder (null = root). Used so new jobs are inserted at the top of their
+   * group with position = min - 1.
+   */
+  minPositionInFolder(userId: string, folderId: string | null): number | null {
+    const cond = folderId === null
+      ? and(eq(jobs.userId, userId), isNull(jobs.folderId), isNull(jobs.deletedAt))
+      : and(eq(jobs.userId, userId), eq(jobs.folderId, folderId), isNull(jobs.deletedAt))
+    const row = getDb()
+      .select({ minPos: sql<number | null>`min(${jobs.position})` })
+      .from(jobs)
+      .where(cond)
+      .get()
+    return row?.minPos ?? null
+  },
+
   create(userId: string, input: JobCreateInput): JobRow {
     const now = new Date()
+    // Place the new job at the top of the root group — the only group jobs
+    // are created into today; folder assignment happens later via drag-drop.
+    const min = this.minPositionInFolder(userId, null)
+    const position = min !== null ? min - 1 : 0
     const row = {
       id: nanoid(),
       userId,
@@ -79,6 +111,8 @@ export const jobsRepo = {
       cinnaPriority: input.cinnaPriority ?? null,
       colorPreset: input.colorPreset ?? null,
       iconName: input.iconName ?? null,
+      folderId: null,
+      position,
       deletedAt: null,
       createdAt: now,
       updatedAt: now
@@ -111,6 +145,135 @@ export const jobsRepo = {
       .where(and(eq(jobs.id, jobId), eq(jobs.userId, userId)))
       .run()
     return result.changes > 0
+  },
+
+  /**
+   * Move + reorder jobs inside a single target group (folder or root). The
+   * caller passes the full ordered list of job ids for that group — every id
+   * in the list is written with `folderId = targetFolderId` and a fresh
+   * `position` reflecting its index. Other groups are untouched.
+   *
+   * Drag-drop on the client constructs the new ordering of the destination
+   * group and hands it in. Anything not in `orderedJobIds` keeps its prior
+   * `folderId` / `position`.
+   */
+  reorderInGroup(
+    userId: string,
+    targetFolderId: string | null,
+    orderedJobIds: string[]
+  ): void {
+    const db = getDb()
+    db.transaction((tx) => {
+      orderedJobIds.forEach((id, idx) => {
+        tx.update(jobs)
+          .set({ folderId: targetFolderId, position: idx })
+          .where(and(eq(jobs.id, id), eq(jobs.userId, userId)))
+          .run()
+      })
+    })
+  }
+}
+
+export interface JobFolderCreateInput {
+  name: string
+}
+
+export interface JobFolderPatch {
+  name?: string
+  collapsed?: boolean
+}
+
+export const jobFoldersRepo = {
+  list(userId: string): JobFolderRow[] {
+    return getDb()
+      .select()
+      .from(jobFolders)
+      .where(eq(jobFolders.userId, userId))
+      .orderBy(asc(jobFolders.position), asc(jobFolders.createdAt))
+      .all()
+  },
+
+  getById(userId: string, folderId: string): JobFolderRow | undefined {
+    return getDb()
+      .select()
+      .from(jobFolders)
+      .where(and(eq(jobFolders.id, folderId), eq(jobFolders.userId, userId)))
+      .get()
+  },
+
+  maxPosition(userId: string): number | null {
+    const row = getDb()
+      .select({ maxPos: sql<number | null>`max(${jobFolders.position})` })
+      .from(jobFolders)
+      .where(eq(jobFolders.userId, userId))
+      .get()
+    return row?.maxPos ?? null
+  },
+
+  create(userId: string, input: JobFolderCreateInput): JobFolderRow {
+    // New folders go to the bottom of the folder list. They sit above the
+    // root jobs visually but, since folders and root-level jobs are rendered
+    // in two separate sections, "bottom of folder list" is what feels right
+    // for a brand-new container.
+    const max = this.maxPosition(userId)
+    const position = max !== null ? max + 1 : 0
+    const now = new Date()
+    const row = {
+      id: nanoid(),
+      userId,
+      name: input.name,
+      position,
+      collapsed: false,
+      createdAt: now,
+      updatedAt: now
+    }
+    getDb().insert(jobFolders).values(row).run()
+    return row
+  },
+
+  update(userId: string, folderId: string, patch: JobFolderPatch): boolean {
+    const result = getDb()
+      .update(jobFolders)
+      .set({ ...patch, updatedAt: new Date() })
+      .where(and(eq(jobFolders.id, folderId), eq(jobFolders.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /**
+   * Delete a folder. Any jobs inside are detached back to the root group
+   * (folderId set to null) in the same transaction so deleting a folder never
+   * loses jobs. We don't reorder positions on the orphaned jobs — they keep
+   * their previous order; the user can re-tidy if they want.
+   */
+  delete(userId: string, folderId: string): boolean {
+    return getDb().transaction((tx) => {
+      tx.update(jobs)
+        .set({ folderId: null })
+        .where(and(eq(jobs.userId, userId), eq(jobs.folderId, folderId)))
+        .run()
+      const result = tx
+        .delete(jobFolders)
+        .where(and(eq(jobFolders.id, folderId), eq(jobFolders.userId, userId)))
+        .run()
+      return result.changes > 0
+    })
+  },
+
+  /**
+   * Reorder folders. `orderedIds` is the full new order top-to-bottom; rows
+   * not in the list are left alone (they keep their old position).
+   */
+  reorder(userId: string, orderedIds: string[]): void {
+    const db = getDb()
+    db.transaction((tx) => {
+      orderedIds.forEach((id, idx) => {
+        tx.update(jobFolders)
+          .set({ position: idx, updatedAt: new Date() })
+          .where(and(eq(jobFolders.id, id), eq(jobFolders.userId, userId)))
+          .run()
+      })
+    })
   }
 }
 

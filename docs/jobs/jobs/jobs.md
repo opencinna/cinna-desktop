@@ -10,6 +10,8 @@ Let users save reusable units of work (title + description + prompt + execution 
   - **Local Job** — Runs against the user's local agent / chat mode / MCPs. Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run calls cinna-core's `POST /api/v1/tasks/`; the conversation lives on cinna-core and the desktop keeps a pointer (`cinnaTaskId` + `cinnaShortCode`).
 - **Job Run** — One execution of a job. Local runs reference the spawned `chatId`; Cinna runs reference the remote task. Status moves through `pending → running → succeeded | failed | cancelled`.
+- **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config. A job lives either in exactly one folder or at the root level.
+- **Group** — A bucket the sidebar can address by drag-drop: either the root level (`folderId = null`) or a specific folder. Each group has its own job ordering.
 - **Sidebar Tab Rail** — Two icon-only square tabs (Chats / Jobs) stuck to the sidebar's left edge like the bookmark tabs on a folder. The selected tab visually merges with the sidebar surface (no seam on its right edge); inactive tabs are smaller recessed blocks. Hidden in the settings view.
 - **Run Status** — Local runs flip via the chat-stream completion hook (success when the first assistant turn finishes, failure when the stream errors). Cinna runs flip via polling cinna-core's task status while non-terminal.
 
@@ -18,7 +20,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 ### Switching between Chats and Jobs
 1. User clicks the icon tab on the sidebar's left edge (speech bubble = Chats, briefcase = Jobs).
 2. Sidebar body swaps from the chat list to the jobs list. The selected tab visually fuses with the sidebar (same surface, no border between them); the other sits as a separate recessed block.
-3. **Main area realigns to the first item in the new list.** Switching to Chats opens the first chat (or lands on the New Chat screen when none exist); switching to Jobs opens the first job's detail page (or shows the "Select a job from the sidebar" empty state). This avoids the dissonance of seeing one domain's list while the central pane shows a different domain's content. `activeCinnaRunId` is cleared on every tab switch.
+3. **Main area realigns**. Switching to Chats opens the first chat (or lands on the New Chat screen when none exist). Switching to Jobs lands on the **"Select a job to view." empty state** — auto-selecting the first job would be misleading when jobs can live inside a collapsed folder. `activeCinnaRunId` is cleared on every tab switch and `activeJobId` is reset to null.
 4. Settings view hides the tab rail entirely (it owns the full sidebar).
 
 ### Creating a job (non-Cinna profile)
@@ -63,6 +65,27 @@ Let users save reusable units of work (title + description + prompt + execution 
 3. ESC, click-outside, or the Cancel button dismisses without deleting.
 4. Confirming soft-deletes the job (`deleted_at`). The row disappears; if the deleted job was the active one, Main area returns to the chat view.
 5. There is **no delete from the sidebar** — sidebar hover surfaces only the run-now button, so accidental deletes from a misclick on a row can't happen.
+
+### Organising jobs into folders
+1. The Jobs sidebar header has two icon buttons: **FolderPlus** (new folder) and **Plus** (new job).
+2. Clicking FolderPlus creates a folder named "New folder" at the bottom of the folder list and immediately opens the **rename modal** so the user can type a real name and confirm (Enter / Save). ESC / click-outside / Cancel keep the placeholder name.
+3. Each folder row is a thin header with a chevron (▶ collapsed / ▼ expanded), the folder name, and a trailing slot.
+4. The trailing slot shows the **count of jobs inside** when idle; on hover (or while the action menu is open) the count is replaced by a **gear** icon. Clicking the gear opens an inline dropdown anchored to the right edge with two items: **Edit** (opens the rename modal) and **Delete** (red, opens a confirmation modal).
+5. **Single click on the header toggles collapse / expand**; the choice persists across launches (stored as `collapsed` on the folder row).
+6. **Deleting a folder is always confirmed**. On confirm, the folder row disappears and any jobs that lived inside are **detached back to the root group** — they are not deleted. The confirmation copy spells this out.
+
+### Reordering and moving by drag-and-drop
+1. Job rows and folder headers are both drag sources.
+2. **Dragging a job** can drop:
+   - **Onto another job row** → reorders within the target's group (inserts before the drop-target row). If the source and target are in different groups, the job's `folderId` changes to match the target group.
+   - **Onto a folder header (or its empty body)** → moves the job INTO that folder, appended to the end.
+   - **Onto the root area** (the section under the folder list that holds ungrouped jobs) → detaches the job from any folder, appended to the end of the root group. Only highlighted when the dragged job currently lives in a folder.
+3. **Dragging a folder header** onto another folder header → reorders folders (inserts the dragged folder before the target).
+4. Visual feedback while dragging:
+   - The drag source row dims to `opacity-40` so the user sees which row they're carrying.
+   - Compatible drop targets get an accent `ring-1 ring-inset`. The folder header gains a top accent border when it's about to accept a folder reorder, distinguishing it from "drop a job here."
+   - Empty folder bodies render a dashed accent outline plus a "Drop a job here" hint when expanded and a job drag is in flight.
+5. The renderer constructs the new ordering of the affected group and posts it to the server in one IPC call (`job:reorder` or `jobFolder:reorder`); the server rewrites positions in a single transaction. The job list / folder list refetches automatically afterwards.
 
 ### Running a local job
 1. User clicks "Run" on the job detail view.
@@ -110,19 +133,45 @@ Let users save reusable units of work (title + description + prompt + execution 
 - **Cinna status mapping.** cinna-core `completed | archived → succeeded`, `error → failed`, `cancelled → cancelled`, `new | pending → pending`, everything else (`refining`, `open`, `in_progress`, `blocked`, etc.) → `running`.
 - **Cinna run polling.** Polls every 5s when the window is focused, 10s when hidden. Stops automatically when the active set of non-terminal cinna runs becomes empty. Network failures during polling are silent.
 - **External URL safety.** `app:open-external` only forwards `http:`/`https:` URLs (mirrors the renderer's `setWindowOpenHandler` policy).
+- **Folder scope.** Folders are profile-scoped (per-account); they don't follow the user across profile switches.
+- **Folder name.** `name` must be non-empty after trim — both at create and rename. Empty names raise `JobError('invalid_input', 'Folder name is required')`.
+- **Folder delete preserves jobs.** Deleting a folder detaches its jobs back to the root group (`folderId = null`) in the **same transaction** as the folder row drop — folder deletion can never lose jobs even on crash. Job `position` values on the orphaned jobs are left untouched (they keep their previous order; the user can re-tidy via drag-drop).
+- **Group ordering contract.** `jobsRepo.reorderInGroup(userId, targetFolderId, orderedJobIds)` rewrites every id in the list with `folderId = targetFolderId` and `position = index` in a single transaction. The caller is expected to submit the **full new ordering** of the destination group; partial lists would leave the omitted jobs with stale positions. Folder reorder is symmetric.
+- **Reorder ownership.** `jobService.reorderJobs` pre-validates every submitted job id against the active profile before any write, and verifies the target folder belongs to the profile when `targetFolderId !== null`. A stale or cross-profile id raises `JobError('not_found')` and aborts the batch.
+- **Jobs tab empty state.** Switching to the Jobs sidebar tab clears `activeJobId` and lands the main pane on a "Select a job to view." pane — auto-selecting the first job would be misleading when the first job can be inside a collapsed folder.
 
 ## Architecture Overview
 
 ```
 Sidebar
   -> SidebarTabs (icon book-tabs stuck to the left edge of the sidebar card)
+       jobs tab click -> setActiveJobId(null) + setActiveView('job-detail')  (empty pane on tab switch)
   -> ChatList OR JobsList
 
 JobsList
+  -> Header: FolderPlus (new folder) + Plus (new job)
+  -> useJobList + useJobFolders, groups jobs by folder client-side
+  -> JobFolderRow[] (folders + their jobs)
+  -> root drop zone (ungrouped jobs)
+  -> JobsDragContext provider — sets `{ kind, id }` while a drag is in flight so drop targets only highlight for compatible drags
   -> JobItem -> useUIStore.setActiveJobId + setActiveView('job-detail')
+  -> JobItem (draggable; drop target → reorder within group via parent callback)
   -> + button -> JobTypePicker modal (Cinna users)  OR  direct useCreateJob (local users)
   -> JobItem hover green Play pill -> useExecuteJob({ jobId, navigate: false })  (fire-and-forget run from sidebar)
   -> JobItem spinner (green Loader2) shown unconditionally while `inProgressRunsCount > 0` (read off JobData from job:list)
+
+JobFolderRow
+  -> draggable header (folder reorder source / target)
+  -> header drop target: job  → onDropJobInto  (append job to folder, parent posts new ordering)
+                       folder → onReorderFolder (parent rewrites folder positions)
+  -> single click → useUpdateJobFolder({ collapsed: !collapsed })
+  -> trailing slot: job count (idle) or Settings gear (hover / menu open)
+       gear menu: Edit → JobFolderEditModal, Delete → confirm modal → useDeleteJobFolder
+  -> empty body (when expanded + empty) accepts a job drop with "Drop a job here" hint
+
+Reorder posting paths
+  job moved/reordered  → useReorderJobs.mutate({ targetFolderId, orderedJobIds })  -> jobs:reorder
+  folder reordered     → useReorderJobFolders.mutate(orderedIds)                  -> jobFolder:reorder
 
 MainArea (activeView === 'job-detail')
   -> JobDetail  (read-only view)

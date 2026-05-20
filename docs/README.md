@@ -30,6 +30,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Profile Scope** | Per-account storage under the active user id — chats, remote agents, agent overrides, and Cinna tokens live here and swap on user switch |
 | **Agent Override** | Per-profile boolean (`agent_overrides` table) that overlays a synced agent's `enabled` flag so user toggles survive resync |
 | **Job** | A reusable, profile-scoped saved spec (title, prompt, execution config). Two execution types: `local` (spawns a chat) or `cinna_task` (creates a remote cinna-core task) |
+| **Job Folder** | User-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Thin collapsible separator — owns ordering, not execution config. A job lives in exactly one folder or at the root |
 | **Job Run** | One execution of a Job. Local runs reference the spawned `chatId`; Cinna runs reference the remote task; status flips via stream completion (local) or polling (cinna) |
 | **Cinna Task Job** | Job variant that calls cinna-core's `POST /api/v1/tasks/`. Only available on Cinna-linked profiles; conversation lives on cinna-core, desktop keeps a pointer |
 | **Task Comment** | Authored content on a cinna task (`comment_type = message \| result`); see also Activity for system-generated entries |
@@ -79,7 +80,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Agent Status](agents/agent_status/agent_status.md) — Title-bar activity indicator + frosted-glass modal surfacing per-agent self-reported status (severity, summary, markdown body) with one-click "Start chat"
 
 ### Jobs
-- [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
+- [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip and drag-and-drop folders for organising jobs; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
 - [Cinna Task Run View](jobs/cinna_task_view/cinna_task_view.md) — Read-only in-app view of a `cinna_task` run: comments + standalone/inline attachments fetched from cinna-core, markdown-rendered, with task-scoped attachment download; reached by clicking a cinna_task row in a job's run history
 
 ### LLM

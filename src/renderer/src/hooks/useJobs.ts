@@ -1,5 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { JobCreateInputDto, JobPatchDto } from '../../../shared/jobs'
+import type {
+  JobCreateInputDto,
+  JobPatchDto,
+  JobFolderCreateInputDto,
+  JobFolderPatchDto
+} from '../../../shared/jobs'
 import { useUIStore } from '../stores/ui.store'
 import { useChatStore } from '../stores/chat.store'
 import { useChatStream } from './useChatStream'
@@ -242,6 +247,88 @@ export function useExecuteJob() {
  * highlighted, so the user can step back to the job detail with one click.
  * `activeJobId` is intentionally preserved.
  */
+// ---- Folders --------------------------------------------------------------
+
+export function useJobFolders() {
+  return useQuery({
+    queryKey: ['job-folders'],
+    queryFn: () => window.api.jobFolders.list()
+  })
+}
+
+export function useCreateJobFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (input: JobFolderCreateInputDto) =>
+      window.api.jobFolders.create(input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['job-folders'] })
+    }
+  })
+}
+
+export function useUpdateJobFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      folderId,
+      patch
+    }: {
+      folderId: string
+      patch: JobFolderPatchDto
+    }) => window.api.jobFolders.update(folderId, patch),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['job-folders'] })
+    }
+  })
+}
+
+export function useDeleteJobFolder() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (folderId: string) => window.api.jobFolders.delete(folderId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['job-folders'] })
+      // Jobs that lived in the folder were detached to the root; refresh the
+      // job list so the rows show up at the bottom of the root group.
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    }
+  })
+}
+
+/**
+ * Reorder jobs inside one target group (folder or root). The caller hands
+ * over the new full ordering of jobs that should end up in that group; the
+ * server rewrites their `folderId` to the target and their `position` to
+ * their array index. Jobs not in the list keep their previous state.
+ */
+export function useReorderJobs() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({
+      targetFolderId,
+      orderedJobIds
+    }: {
+      targetFolderId: string | null
+      orderedJobIds: string[]
+    }) => window.api.jobs.reorder(targetFolderId, orderedJobIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    }
+  })
+}
+
+export function useReorderJobFolders() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (orderedIds: string[]) =>
+      window.api.jobFolders.reorder(orderedIds),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['job-folders'] })
+    }
+  })
+}
+
 export function useOpenChatFromRun() {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)

@@ -2,7 +2,12 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { jobService } from '../services/jobService'
 import { ipcHandle } from './_wrap'
-import type { JobCreateInput, JobPatch } from '../db/jobs'
+import type {
+  JobCreateInput,
+  JobPatch,
+  JobFolderCreateInput,
+  JobFolderPatch
+} from '../db/jobs'
 
 export function registerJobHandlers(): void {
   ipcHandle('job:list', async () => {
@@ -76,4 +81,45 @@ export function registerJobHandlers(): void {
     userActivation.requireActivated()
     return jobService.getCinnaServerUrl(getProfileScopeUserId())
   })
+
+  // ---- Folders ------------------------------------------------------------
+
+  ipcHandle('jobFolder:list', async () => {
+    userActivation.requireActivated()
+    return jobService.listFolders(getProfileScopeUserId())
+  })
+
+  ipcHandle('jobFolder:create', async (_event, input: JobFolderCreateInput) => {
+    userActivation.requireActivated()
+    return jobService.createFolder(getProfileScopeUserId(), input)
+  })
+
+  ipcHandle(
+    'jobFolder:update',
+    async (_event, folderId: string, patch: JobFolderPatch) => {
+      userActivation.requireActivated()
+      return jobService.updateFolder(getProfileScopeUserId(), folderId, patch)
+    }
+  )
+
+  ipcHandle('jobFolder:delete', async (_event, folderId: string) => {
+    userActivation.requireActivated()
+    jobService.deleteFolder(getProfileScopeUserId(), folderId)
+    return { success: true }
+  })
+
+  ipcHandle('jobFolder:reorder', async (_event, orderedIds: string[]) => {
+    userActivation.requireActivated()
+    jobService.reorderFolders(getProfileScopeUserId(), orderedIds)
+    return { success: true }
+  })
+
+  ipcHandle(
+    'job:reorder',
+    async (_event, targetFolderId: string | null, orderedJobIds: string[]) => {
+      userActivation.requireActivated()
+      jobService.reorderJobs(getProfileScopeUserId(), targetFolderId, orderedJobIds)
+      return { success: true }
+    }
+  )
 }

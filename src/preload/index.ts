@@ -9,7 +9,10 @@ import type {
   JobDetailData,
   JobRunData,
   JobCreateInputDto,
-  JobPatchDto
+  JobPatchDto,
+  JobFolderData,
+  JobFolderCreateInputDto,
+  JobFolderPatchDto
 } from '../shared/jobs'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type {
@@ -649,7 +652,27 @@ const api = {
       runId: string,
       options?: { force?: boolean }
     ): Promise<JobRunData> => ipcRenderer.invoke('job:refresh-run', runId, options),
-    cinnaServerUrl: (): Promise<string> => ipcRenderer.invoke('job:cinna-server-url')
+    cinnaServerUrl: (): Promise<string> => ipcRenderer.invoke('job:cinna-server-url'),
+    reorder: (
+      targetFolderId: string | null,
+      orderedJobIds: string[]
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('job:reorder', targetFolderId, orderedJobIds)
+  },
+
+  jobFolders: {
+    list: (): Promise<JobFolderData[]> => ipcRenderer.invoke('jobFolder:list'),
+    create: (input: JobFolderCreateInputDto): Promise<JobFolderData> =>
+      ipcRenderer.invoke('jobFolder:create', input),
+    update: (
+      folderId: string,
+      patch: JobFolderPatchDto
+    ): Promise<JobFolderData> =>
+      ipcRenderer.invoke('jobFolder:update', folderId, patch),
+    delete: (folderId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('jobFolder:delete', folderId),
+    reorder: (orderedIds: string[]): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('jobFolder:reorder', orderedIds)
   },
 
   cinna: {

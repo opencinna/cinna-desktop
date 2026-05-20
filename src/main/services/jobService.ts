@@ -1,8 +1,12 @@
 import {
   jobsRepo,
+  jobFoldersRepo,
   jobMcpRepo,
   jobRunsRepo,
   type JobRow,
+  type JobFolderRow,
+  type JobFolderCreateInput,
+  type JobFolderPatch,
   type JobRunRow,
   type JobRunRowWithMeta,
   type JobCreateInput,
@@ -383,6 +387,83 @@ export const jobService = {
     const updated = jobRunsRepo.getById(userId, runId)
     if (!updated) throw new JobError('not_found', 'Job run not found after update')
     return enrichRun(userId, updated)
+  },
+
+  // ---- Folders ------------------------------------------------------------
+
+  listFolders(userId: string): JobFolderRow[] {
+    return jobFoldersRepo.list(userId)
+  },
+
+  createFolder(userId: string, input: JobFolderCreateInput): JobFolderRow {
+    const name = input.name?.trim()
+    if (!name) throw new JobError('invalid_input', 'Folder name is required')
+    const folder = jobFoldersRepo.create(userId, { name })
+    logger.info('job folder created', { folderId: folder.id })
+    return folder
+  },
+
+  updateFolder(
+    userId: string,
+    folderId: string,
+    patch: JobFolderPatch
+  ): JobFolderRow {
+    const existing = jobFoldersRepo.getById(userId, folderId)
+    if (!existing) throw new JobError('not_found', 'Folder not found')
+    if (patch.name !== undefined && !patch.name.trim()) {
+      throw new JobError('invalid_input', 'Folder name is required')
+    }
+    const normalized: JobFolderPatch = {}
+    if (patch.name !== undefined) normalized.name = patch.name.trim()
+    if (patch.collapsed !== undefined) normalized.collapsed = patch.collapsed
+    if (Object.keys(normalized).length === 0) return existing
+    const ok = jobFoldersRepo.update(userId, folderId, normalized)
+    if (!ok) throw new JobError('not_found', 'Folder not found')
+    const updated = jobFoldersRepo.getById(userId, folderId)
+    if (!updated) throw new JobError('not_found', 'Folder not found after update')
+    return updated
+  },
+
+  deleteFolder(userId: string, folderId: string): void {
+    const existing = jobFoldersRepo.getById(userId, folderId)
+    if (!existing) throw new JobError('not_found', 'Folder not found')
+    jobFoldersRepo.delete(userId, folderId)
+    logger.info('job folder deleted', { folderId })
+  },
+
+  reorderFolders(userId: string, orderedIds: string[]): void {
+    jobFoldersRepo.reorder(userId, orderedIds)
+    logger.info('folders reordered', { count: orderedIds.length })
+  },
+
+  /**
+   * Re-position the jobs inside one target group (folder or root). The
+   * caller submits the new full order of the destination group; we trust
+   * the client to have a consistent view (the list is refetched after every
+   * folder operation, so drift is short-lived).
+   *
+   * Validates folder ownership and job ownership before any write.
+   */
+  reorderJobs(
+    userId: string,
+    targetFolderId: string | null,
+    orderedJobIds: string[]
+  ): void {
+    if (targetFolderId !== null) {
+      const folder = jobFoldersRepo.getById(userId, targetFolderId)
+      if (!folder) throw new JobError('not_found', 'Folder not found')
+    }
+    for (const id of orderedJobIds) {
+      const job = jobsRepo.getById(userId, id)
+      if (!job || job.deletedAt) {
+        throw new JobError('not_found', `Job not found: ${id}`)
+      }
+    }
+    jobsRepo.reorderInGroup(userId, targetFolderId, orderedJobIds)
+    logger.info('jobs reordered', {
+      targetFolderId,
+      count: orderedJobIds.length
+    })
   }
 }
 

@@ -4,18 +4,27 @@ import { createPortal } from 'react-dom'
 import { useUIStore } from '../../stores/ui.store'
 import { useExecuteJob } from '../../hooks/useJobs'
 import type { JobData } from '../../../../shared/jobs'
+import { useJobsDrag } from './dragContext'
 
 interface JobItemProps {
   job: JobData
+  /**
+   * Called when another job is dropped on top of THIS row. The parent (folder
+   * or root container) is responsible for translating that into a reorder
+   * within its own group — see JobsList / JobFolderRow.
+   */
+  onDropJob?: (draggedJobId: string, beforeJobId: string) => void
 }
 
-export function JobItem({ job }: JobItemProps): React.JSX.Element {
+export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
   const activeJobId = useUIStore((s) => s.activeJobId)
   const activeView = useUIStore((s) => s.activeView)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const executeJob = useExecuteJob()
   const [hovering, setHovering] = useState(false)
+  const [dropTarget, setDropTarget] = useState(false)
+  const { drag, setDrag } = useJobsDrag()
   // Highlight while the user is anywhere in this job's context — its detail
   // view, edit page, OR the chat view spawned/opened from one of its runs
   // (activeJobId is preserved across that handoff so the sidebar reflects
@@ -38,12 +47,73 @@ export function JobItem({ job }: JobItemProps): React.JSX.Element {
     executeJob.mutate({ jobId: job.id, navigate: false })
   }
 
+  // Only accept a `job` drag from a different job — folder drags don't drop
+  // onto job rows, and re-dropping onto self is a no-op.
+  const canAcceptDrop =
+    !!onDropJob && drag?.kind === 'job' && drag.id !== job.id
+
+  // Row is the currently-dragged source — dim it so the user sees what's
+  // moving even though the browser-native drag preview is suppressed.
+  const isDraggingSelf = drag?.kind === 'job' && drag.id === job.id
+
+  const handleDragStart = (e: React.DragEvent): void => {
+    e.dataTransfer.effectAllowed = 'move'
+    e.dataTransfer.setData('application/x-cinna-job', job.id)
+    // Chromium rasterizes the row's bounding box for the drag preview, so any
+    // pixels OUTSIDE the rounded-radius come out as the row's background. The
+    // idle row is transparent, which paints white in the light theme and
+    // makes the preview look like a square with rounded inset. Force the
+    // sidebar surface color (matches what's behind the row anyway) for the
+    // duration of the drag so the preview blends in and looks rounded.
+    ;(e.currentTarget as HTMLElement).style.backgroundColor =
+      'var(--color-bg-secondary)'
+    setDrag({ kind: 'job', id: job.id })
+  }
+
+  const handleDragEnd = (e: React.DragEvent): void => {
+    setDrag(null)
+    setDropTarget(false)
+    ;(e.currentTarget as HTMLElement).style.backgroundColor = ''
+  }
+
+  const handleDragOver = (e: React.DragEvent): void => {
+    if (!canAcceptDrop) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    if (!dropTarget) setDropTarget(true)
+  }
+
+  const handleDragLeave = (): void => {
+    if (dropTarget) setDropTarget(false)
+  }
+
+  const handleDrop = (e: React.DragEvent): void => {
+    if (!canAcceptDrop || !onDropJob) return
+    e.preventDefault()
+    e.stopPropagation()
+    const draggedId = e.dataTransfer.getData('application/x-cinna-job')
+    if (draggedId && draggedId !== job.id) {
+      onDropJob(draggedId, job.id)
+    }
+    setDropTarget(false)
+    setDrag(null)
+  }
+
   return (
     <div
+      draggable
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
       className={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md cursor-pointer text-xs transition-colors ${
         isActive
           ? 'app-nav-active text-[var(--color-text)]'
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
+      } ${dropTarget ? 'ring-1 ring-inset ring-[var(--color-accent)]' : ''} ${
+        isDraggingSelf ? 'opacity-40' : ''
       }`}
       onClick={() => {
         setActiveJobId(job.id)

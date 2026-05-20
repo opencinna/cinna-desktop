@@ -254,7 +254,39 @@ export const jobs = sqliteTable('jobs', {
   cinnaPriority: text('cinna_priority'), // 'low' | 'normal' | 'high' | 'urgent'
   colorPreset: text('color_preset'),
   iconName: text('icon_name'),
+  /**
+   * Optional sidebar folder this job lives in. Null = job sits at the root
+   * level of the Jobs sidebar. Folders are user-defined groupings (see
+   * `jobFolders`). No FK — folder deletes set this column to null manually.
+   */
+  folderId: text('folder_id'),
+  /**
+   * Sort key within its parent (folder or root). Lower = closer to the top.
+   * Drag-drop renumbers all rows in the affected group; new jobs are inserted
+   * at the top (min - 1). Real number to allow occasional gap-based inserts
+   * without renumbering, but the move handler still rewrites the full set.
+   */
+  position: integer('position').notNull().default(0),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+/**
+ * User-defined groupings for jobs in the sidebar. Profile-scoped. A folder is
+ * a thin collapsible separator — it has a name, a sort position, and a
+ * collapsed flag that persists across launches.
+ */
+export const jobFolders = sqliteTable('job_folders', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  name: text('name').notNull(),
+  position: integer('position').notNull().default(0),
+  collapsed: integer('collapsed', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date()),

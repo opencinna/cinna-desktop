@@ -58,4 +58,28 @@ export function migrateJobs(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'chats', 'hidden_from_list')) {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN hidden_from_list INTEGER NOT NULL DEFAULT 0`)
   }
+
+  // Folders: user-defined groupings for sidebar jobs.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS job_folders (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      collapsed INTEGER NOT NULL DEFAULT 0,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_job_folders_user_id ON job_folders(user_id);
+  `)
+
+  // folder_id / position on jobs — folder_id is nullable (root), position is
+  // a per-group sort key managed by the reorder service.
+  if (!hasColumn(sqlite, 'jobs', 'folder_id')) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN folder_id TEXT`)
+  }
+  if (!hasColumn(sqlite, 'jobs', 'position')) {
+    sqlite.exec(`ALTER TABLE jobs ADD COLUMN position INTEGER NOT NULL DEFAULT 0`)
+  }
 }

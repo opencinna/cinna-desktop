@@ -19,6 +19,10 @@ export interface JobData {
   cinnaPriority: string | null
   colorPreset: string | null
   iconName: string | null
+  /** Optional sidebar folder this job belongs to; null = root. */
+  folderId: string | null
+  /** Sort key within its folder (or root). Lower = top. */
+  position: number
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -28,6 +32,30 @@ export interface JobData {
    * spinner on rows whose runs are still working. Defaults to 0.
    */
   inProgressRunsCount: number
+}
+
+/**
+ * Sidebar folder grouping for jobs. Lives in the active profile's scope.
+ * `position` is a per-user sort key; `collapsed` persists the user's
+ * expand/collapse choice across launches.
+ */
+export interface JobFolderData {
+  id: string
+  userId: string
+  name: string
+  position: number
+  collapsed: boolean
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface JobFolderCreateInputDto {
+  name: string
+}
+
+export interface JobFolderPatchDto {
+  name?: string
+  collapsed?: boolean
 }
 
 export interface JobRunData {
