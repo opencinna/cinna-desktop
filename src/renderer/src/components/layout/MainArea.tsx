@@ -161,7 +161,11 @@ export function MainArea(): React.JSX.Element {
   }, [agentStatusOpen, activeView])
 
   const handleNewChat = useCallback(
-    async (message: string, attachments?: ComposerAttachment[]) => {
+    async (
+      message: string,
+      attachments?: ComposerAttachment[],
+      noteIds?: string[]
+    ) => {
       const resolvedModelId = selectedAgent
         ? null
         : resolveModel(activeMode, effectiveProviderId, providers, allModels)
@@ -182,7 +186,8 @@ export function MainArea(): React.JSX.Element {
         allModels,
         mcpIds: effectiveMcpIds,
         onDemandMcpIds: pendingMcpIds,
-        attachments
+        attachments,
+        noteIds
       })
       setSelectedAgent(null)
       setActiveMode(null)

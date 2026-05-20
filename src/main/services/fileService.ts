@@ -5,8 +5,9 @@ import { chatFileRepo } from '../db/chatFiles'
 import { FileError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { createReadStream, createWriteStream } from 'fs'
-import { stat } from 'fs/promises'
-import { basename } from 'path'
+import { mkdtemp, rm, stat, writeFile } from 'fs/promises'
+import { tmpdir } from 'os'
+import { basename, join } from 'path'
 import { pipeline } from 'stream/promises'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
 
@@ -114,6 +115,60 @@ export const fileService = {
     const files = await cinnaFileService.uploadMany(userId, filePaths)
     logger.info('cinna files ingested', { count: files.length })
     return files.map((f) => ({ ...f, source: 'cinna' as const }))
+  },
+
+  /**
+   * Materialize in-memory content as real attachments by routing it through
+   * the same {@link ingest} pipeline used for picked / dropped files. Writes
+   * each item to a fresh temp dir, calls `ingest`, then cleans up — so the
+   * synthetic blobs are never visible outside this method.
+   *
+   * Used by features that produce attachment-shaped content from non-file
+   * sources (today: notes attached via the `?` mention popup). The
+   * filename passed in is treated as a basename — any path separators are
+   * stripped — and is what the downstream store / Cinna backend records.
+   */
+  async ingestSyntheticContent(opts: {
+    userId: string
+    scope: FileScope
+    chatId: string | null
+    items: { filename: string; content: string | Buffer }[]
+  }): Promise<MessageAttachment[]> {
+    if (opts.items.length === 0) return []
+    // Mirror `ingest`'s pre-check so we don't pay the mkdtemp cost just to
+    // throw on a scope/chat mismatch.
+    if (opts.scope === 'local' && !opts.chatId) {
+      throw new FileError(
+        'missing_chat_id',
+        'A chat must be created before attaching local files'
+      )
+    }
+    const started = Date.now()
+    const dir = await mkdtemp(join(tmpdir(), 'cinna-synth-'))
+    try {
+      const paths: string[] = []
+      for (const item of opts.items) {
+        const safeName = basename(item.filename) || 'attachment'
+        const target = join(dir, safeName)
+        await writeFile(target, item.content)
+        paths.push(target)
+      }
+      const files = await this.ingest({
+        userId: opts.userId,
+        scope: opts.scope,
+        chatId: opts.chatId,
+        filePaths: paths
+      })
+      logger.info('synthetic content ingested', {
+        scope: opts.scope,
+        chatId: opts.chatId,
+        count: files.length,
+        durationMs: Date.now() - started
+      })
+      return files
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {})
+    }
   },
 
   /**

@@ -21,6 +21,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Agent Card** | A2A discovery metadata (JSON) fetched from a well-known URL, describing agent capabilities and endpoint |
 | **Message Part** | A typed segment of an assistant message (`kind: 'text' \| 'thinking' \| 'tool'`) — A2A messages may persist a structured `parts[]` list driven by the Cinna `cinna.content_kind` metadata convention |
 | **@-mention** | Typing `@` in the new-chat input to open a popup for selecting references (agents, and extensible for future types) |
+| **Note Attachment** | A profile note attached to a user message via the composer's `?` mention popup. Materialized at send time into a synthetic `.md` riding the standard file-attachment pipeline |
 | **Attachment** | A file attached to a single user turn. Three sources: `cinna` (bytes on the Cinna backend, A2A-referenced), `local` (bytes in `userData/files/<userId>/<chatId>/`, used for raw-LLM chats), or `pending` (composer-only, paths held on disk for the new-chat flow until scope is known) |
 | **Media Part** (file) | Resolver output handed to an LLM adapter: `image`, `document` (native non-image bytes like PDF), or `text` (UTF-8 from extraction). Adapters translate to provider-native content blocks |
 | **Path Guard** | TTL-based allowlist of OS paths the renderer is permitted to reference. Populated by file dialogs and `webUtils.getPathForFile` so a compromised renderer can't synthesize arbitrary absolute paths |
@@ -77,6 +78,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
 - [Multi-Agent Chats](chat/multi_agent/multi_agent.md) — In-chat `@-mention` routing to additional agents, immediate active-agent switch on popup-select, Smart Rewrite on agent join (double-send, with LLM-driven keep-original shortcut), catch-up replay between agent re-engagements, inline switch-back chip + button
 - [File Attachments](chat/file_attachments/file_attachments.md) — `[+]` menu + drag-drop with deferred ingest on new-chat; per-model capability picks native pass-through (images, PDF on Anthropic/Gemini) vs text extraction (CSV/JSON/code via UTF-8, DOCX/XLSX/PPTX/PDF-on-OpenAI via `officeparser`); local store under `userData/files/<userId>/<chatId>/` for raw-LLM chats, Cinna backend for remote agents; path-guard allowlist + chat-ownership check + `basename` filename sanitization
+- [Note Attachments](chat/note_attachments/note_attachments.md) — `?` mention popup attaches profile notes as composer badges (click to preview); at send time each note's live body is materialized as a `<safe-title>.md` routed through the existing file-attachment pipeline (`fileService.ingestSyntheticContent` → `fileService.ingest`)
 
 ### Agents
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents

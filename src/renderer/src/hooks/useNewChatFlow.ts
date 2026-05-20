@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useCreateChat, useUpdateChat } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { useChatStream } from './useChatStream'
+import { useAttachNotesAsFiles } from './useNotes'
 import type { ChatModeData } from '../constants/chatModeColors'
 import type {
   ComposerAttachment,
@@ -35,6 +36,12 @@ export interface NewChatOptions {
    * `resolvePendingAttachments`.
    */
   attachments?: ComposerAttachment[]
+  /**
+   * Notes selected via the composer's `?` mention popup. Materialized into
+   * real `.md` attachments post-chat-creation under the destination's
+   * scope, then merged with `attachments` before the first send.
+   */
+  noteIds?: string[]
 }
 
 export function resolveModel(
@@ -65,6 +72,7 @@ export function useNewChatFlow(): {
   const updateChat = useUpdateChat()
   const { startLlm, startAgent } = useChatStream()
   const setSendError = useChatStore((s) => s.setSendError)
+  const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
 
   /**
    * Ingest every `pending` attachment now that the chat row exists and
@@ -117,6 +125,24 @@ export function useNewChatFlow(): {
     []
   )
 
+  /**
+   * Materialize the new-chat composer's selected notes into real `.md`
+   * {@link MessageAttachment}s by routing them through the shared attach
+   * mutation under the destination's scope. Returns an empty list when no
+   * notes were staged so callers can unconditionally concat.
+   */
+  const ingestPendingNotes = useCallback(
+    async (
+      chatId: string,
+      scope: 'cinna' | 'local',
+      noteIds: string[] | undefined
+    ): Promise<MessageAttachment[]> => {
+      if (!noteIds || noteIds.length === 0) return []
+      return attachNotesAsync({ chatId, scope, noteIds })
+    },
+    [attachNotesAsync]
+  )
+
   const startNewChat = useCallback(
     async (opts: NewChatOptions): Promise<void> => {
       const {
@@ -128,7 +154,8 @@ export function useNewChatFlow(): {
         allModels,
         mcpIds,
         onDemandMcpIds,
-        attachments
+        attachments,
+        noteIds
       } = opts
       const title = message.length > 50 ? message.slice(0, 50) + '…' : message
 
@@ -156,8 +183,11 @@ export function useNewChatFlow(): {
           // the cinna upload service is the only A2A-friendly backend,
           // and a local-A2A agent has no file path of its own.
           const resolved = await resolvePendingAttachments(chat.id, 'cinna', attachments)
+          const noteAttachments = await ingestPendingNotes(chat.id, 'cinna', noteIds)
           useChatStore.getState().setActiveChatId(chat.id)
-          startAgent(agent.id, chat.id, message, { attachments: resolved })
+          startAgent(agent.id, chat.id, message, {
+            attachments: [...resolved, ...noteAttachments]
+          })
           return
         }
 
@@ -184,9 +214,10 @@ export function useNewChatFlow(): {
         // LLM destination: ingest pending into the local store under the
         // freshly-created chat.
         const resolved = await resolvePendingAttachments(chat.id, 'local', attachments)
+        const noteAttachments = await ingestPendingNotes(chat.id, 'local', noteIds)
 
         useChatStore.getState().setActiveChatId(chat.id)
-        startLlm(chat.id, message, { attachments: resolved })
+        startLlm(chat.id, message, { attachments: [...resolved, ...noteAttachments] })
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         // Surface the error so the user knows the send didn't go through
@@ -205,7 +236,15 @@ export function useNewChatFlow(): {
         }
       }
     },
-    [createChat, updateChat, startAgent, startLlm, resolvePendingAttachments, setSendError]
+    [
+      createChat,
+      updateChat,
+      startAgent,
+      startLlm,
+      resolvePendingAttachments,
+      ingestPendingNotes,
+      setSendError
+    ]
   )
 
   return { startNewChat }

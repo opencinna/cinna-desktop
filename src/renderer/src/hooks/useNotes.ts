@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type {
+  NoteAttachAsFilesInputDto,
   NoteCreateInputDto,
   NoteData,
   NotePatchDto,
   NoteFolderCreateInputDto,
   NoteFolderPatchDto
 } from '../../../shared/notes'
+import type { MessageAttachment } from '../../../shared/attachments'
 import { useUIStore } from '../stores/ui.store'
 
 export function useNoteList() {
@@ -282,6 +284,30 @@ export function useAutosaveNote(note: NoteData | null | undefined): AutosaveNote
   }, [note?.id, title, body, persist])
 
   return { title, body, setTitle, setBody, flushNow }
+}
+
+/**
+ * Materialize a set of notes as real `.md` {@link MessageAttachment}s via
+ * the main-process ingest pipeline. Used by the composer when sending: the
+ * caller passes the chosen `noteIds` along with the chat's destination
+ * scope, and gets back a list of attachments ready to merge with whatever
+ * file attachments the user picked.
+ *
+ * Rejects on the underlying IPC error shape so callers can `try/await` and
+ * surface failures the same way they do for direct exceptions.
+ */
+export function useAttachNotesAsFiles() {
+  return useMutation({
+    mutationFn: async (
+      input: NoteAttachAsFilesInputDto
+    ): Promise<MessageAttachment[]> => {
+      const result = await window.api.notes.attachAsFiles(input)
+      if (!result.success) {
+        throw new Error(result.error || 'Note attachment failed')
+      }
+      return result.files
+    }
+  })
 }
 
 export function useReorderNoteFolders() {

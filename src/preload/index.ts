@@ -20,7 +20,9 @@ import type {
   NotePatchDto,
   NoteFolderData,
   NoteFolderCreateInputDto,
-  NoteFolderPatchDto
+  NoteFolderPatchDto,
+  NoteAttachAsFilesInputDto,
+  NoteAttachAsFilesResultDto
 } from '../shared/notes'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type {
@@ -786,7 +788,17 @@ const api = {
       targetFolderId: string | null,
       orderedNoteIds: string[]
     ): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('note:reorder', targetFolderId, orderedNoteIds)
+      ipcRenderer.invoke('note:reorder', targetFolderId, orderedNoteIds),
+    /**
+     * Materialize selected notes as real {@link MessageAttachment}s by
+     * writing each note's body to a synthetic `.md` file routed through
+     * the file ingest pipeline. Used by the composer when the user
+     * attaches notes via the `?` mention popup.
+     */
+    attachAsFiles: (
+      data: NoteAttachAsFilesInputDto
+    ): Promise<NoteAttachAsFilesResultDto> =>
+      ipcRenderer.invoke('note:attach-as-files', data)
   },
 
   noteFolders: {

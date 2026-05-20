@@ -10,6 +10,8 @@ import {
 } from '../db/notes'
 import { NoteError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { fileService, type FileScope } from './fileService'
+import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('note')
 
@@ -17,6 +19,22 @@ function requireNote(userId: string, noteId: string): NoteRow {
   const note = notesRepo.getById(userId, noteId)
   if (!note || note.deletedAt) throw new NoteError('not_found', 'Note not found')
   return note
+}
+
+/**
+ * Strip filesystem-hostile characters from a note title so it survives a
+ * `basename` round-trip when the synthetic .md file lands in the local
+ * store or the Cinna backend. Anything outside a small allowlist becomes
+ * `_`; the suffix is fixed to `.md`.
+ */
+function safeNoteFilename(title: string): string {
+  const cleaned = title
+    .trim()
+    .replace(/[^a-zA-Z0-9 \-_.]/g, '_')
+    .replace(/\s+/g, ' ')
+    .slice(0, 80)
+    .trim()
+  return `${cleaned || 'note'}.md`
 }
 
 export const notesService = {
@@ -124,6 +142,38 @@ export const notesService = {
     }
     noteFoldersRepo.reorder(userId, orderedIds)
     logger.info('note folders reordered', { count: orderedIds.length })
+  },
+
+  /**
+   * Convert a list of profile-owned notes into real attachments by routing
+   * each note's body through `fileService.ingestSyntheticContent` as a
+   * `<safeTitle>.md` file. Ownership is enforced per-note via `requireNote`
+   * before any file is materialized — a single missing/foreign id aborts
+   * the whole call before the temp dir is even created.
+   */
+  async materializeAsAttachments(
+    userId: string,
+    input: { chatId: string | null; scope: FileScope; noteIds: string[] }
+  ): Promise<MessageAttachment[]> {
+    if (input.noteIds.length === 0) return []
+    const items = input.noteIds.map((noteId) => {
+      const note = requireNote(userId, noteId)
+      return {
+        filename: safeNoteFilename(note.title),
+        content: note.body ?? ''
+      }
+    })
+    logger.info('materializing notes as attachments', {
+      scope: input.scope,
+      chatId: input.chatId,
+      count: items.length
+    })
+    return fileService.ingestSyntheticContent({
+      userId,
+      scope: input.scope,
+      chatId: input.chatId,
+      items
+    })
   },
 
   reorderNotes(

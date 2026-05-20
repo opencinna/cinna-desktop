@@ -9,12 +9,15 @@ import { AgentMentionPopup } from './AgentMentionPopup'
 import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
+import { NoteMentionPopup } from './NoteMentionPopup'
 import { useAgents } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
+import { useNoteList, useAttachNotesAsFiles } from '../../hooks/useNotes'
+import { useChatNotes } from '../../hooks/useChatNotes'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
@@ -25,15 +28,22 @@ import { RewriteFailureModal } from './RewriteFailureModal'
 import { ActiveAgentChip } from './ActiveAgentChip'
 import { OnDemandMcpChips } from './OnDemandMcpChips'
 import { AttachmentList } from './AttachmentBadge'
+import { NoteBadgeList } from './NoteBadge'
 import { AttachMenuPopup, type AttachMenuItem } from './AttachMenuPopup'
+import { NotePreviewModal } from '../notes/NotePreviewModal'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
+import type { NoteData } from '../../../../shared/notes'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
-type TriggerChar = '@' | '#' | '/'
+type TriggerChar = '@' | '#' | '/' | '?'
 
 interface ChatInputProps {
   chatId: string | null
-  onNewChat?: (message: string, attachments?: ComposerAttachment[]) => void
+  onNewChat?: (
+    message: string,
+    attachments?: ComposerAttachment[],
+    noteIds?: string[]
+  ) => void
   leftSlot?: ReactNode
   modeColor?: ColorPreset | null
   onSelectAgent?: (agent: AgentData | null) => void
@@ -70,7 +80,7 @@ interface ChatInputProps {
 
 const DOUBLE_ESC_WINDOW_MS = 400
 
-/** Find a trigger token (@, # or /) at the cursor position. */
+/** Find a trigger token (@, #, /, or ?) at the cursor position. */
 function findTriggerToken(
   value: string,
   cursorPos: number
@@ -78,7 +88,7 @@ function findTriggerToken(
   let i = cursorPos - 1
   while (i >= 0) {
     const ch = value[i]
-    if (ch === '@' || ch === '#' || ch === '/') {
+    if (ch === '@' || ch === '#' || ch === '/' || ch === '?') {
       if (i === 0 || /\s/.test(value[i - 1])) {
         return { char: ch, start: i, filter: value.slice(i + 1, cursorPos) }
       }
@@ -204,11 +214,33 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const { cancel: cancelStream } = useChatStream()
   const { isStreaming, activeRequestId } = useChatStore()
 
-  // Trigger popup state — shared between @ (agents) and # (example prompts)
+  // Trigger popup state — shared between @ (agents/MCP), # (example prompts),
+  // / (CLI commands), and ? (notes).
   const [triggerChar, setTriggerChar] = useState<TriggerChar | null>(null)
   const [triggerFilter, setTriggerFilter] = useState('')
   const [triggerStart, setTriggerStart] = useState(0)
   const [triggerIndex, setTriggerIndex] = useState(0)
+
+  // Notes attached via the `?` mention popup. Composer-local buffer keyed
+  // by chatId — switching chats wipes it. Body is fetched on the main side
+  // at send time, so late edits to a note are reflected in the attached `.md`.
+  const {
+    notes: pendingNotes,
+    add: addPendingNote,
+    remove: removePendingNote,
+    clear: clearPendingNotes
+  } = useChatNotes(chatId)
+  const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
+  const [previewNoteId, setPreviewNoteId] = useState<string | null>(null)
+  const previewNote = useMemo(
+    () => pendingNotes.find((n) => n.id === previewNoteId) ?? null,
+    [pendingNotes, previewNoteId]
+  )
+  // Preview is UI-only; reset whenever the chat row swaps so a modal
+  // doesn't bleed into a different chat's composer.
+  useEffect(() => {
+    setPreviewNoteId(null)
+  }, [chatId])
 
   const { data: agents } = useAgents()
   const enabledAgents = useMemo(
@@ -397,6 +429,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     )
   }, [commands, triggerFilter])
 
+  // Notes available for `?` attachment. Profile-scoped via `useNoteList`;
+  // filter by title only — the user explicitly asked to search titles, and
+  // matching body text would make typing a common word balloon the list.
+  const { data: notes } = useNoteList()
+  const filteredNotes = useMemo(() => {
+    const all = notes ?? []
+    const q = triggerFilter.toLowerCase()
+    if (!q) return all
+    return all.filter((n) => n.title.toLowerCase().includes(q))
+  }, [notes, triggerFilter])
+
   // `@` is available on new-chat (agent picker + MCP buffer) AND inside an
   // active chat (in-chat agent mention + DB-backed MCP attach). The popup
   // surfaces both an "Agents" and an "MCP" section in either context — the
@@ -410,6 +453,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     triggerChar === '@' && (newChatHasContent || activeChatHasContent)
   const promptPopupOpen = triggerChar === '#' && examplePrompts.length > 0
   const commandPopupOpen = triggerChar === '/' && commands.length > 0
+  const notePopupOpen = triggerChar === '?' && (notes ?? []).length > 0
 
   const closeTrigger = useCallback(() => {
     setTriggerChar(null)
@@ -496,6 +540,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [replaceTriggerToken]
   )
 
+  const selectNote = useCallback(
+    (note: NoteData) => {
+      // Drop the `?token` from the textarea — the badge stands in for it.
+      replaceTriggerToken('')
+      addPendingNote({ id: note.id, title: note.title || 'Untitled note' })
+    },
+    [replaceTriggerToken, addPendingNote]
+  )
+
   // Menu actions. Today the menu has one entry ("Add files"); the array is
   // here so future additions (clipboard import, drag-zone toggle, browse
   // workspace, …) only need to push a new item.
@@ -516,7 +569,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // Allow attachment-only sends (no text) so users can drop a file in and
     // hit send with a quick "look at this" — only for active chats where the
     // composer handles attachments; new chats still require text for title.
-    const hasContent = trimmed.length > 0 || (chatId !== null && pendingAttachments.length > 0)
+    const hasContent =
+      trimmed.length > 0 ||
+      (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
     if (!hasContent || isStreaming) return
     const attachmentsToSend =
       targetSupportsAttachments && pendingAttachments.length > 0
@@ -527,10 +582,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // until the chat row exists. `useNewChatFlow.startNewChat` ingests
     // them post-creation under the right scope (Cinna for remote agents,
     // local for raw LLM destinations), so there's no scope mismatch to
-    // refuse here.
+    // refuse here. Notes ride the same deferral — startNewChat will
+    // materialize each into a `.md` attachment once the scope is known.
     if (!chatId) {
+      const noteIds = pendingNotes.map((n) => n.id)
       clearComposer()
-      onNewChat?.(trimmed, attachmentsToSend)
+      clearPendingNotes()
+      onNewChat?.(trimmed, attachmentsToSend, noteIds.length > 0 ? noteIds : undefined)
       return
     }
 
@@ -540,7 +598,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     if (confirm) {
       await composer.confirmRewrite(confirm.text, confirm.pending)
       clearPendingAttachments()
+      clearPendingNotes()
       return
+    }
+
+    // Convert any pending notes into real .md attachments via the IPC
+    // ingest path so they ride the same code-path as user-attached files
+    // for the rest of the send. Scope mirrors the file pipeline: Cinna
+    // when the destination is a remote agent (or unknown), local for raw
+    // LLM chats.
+    let noteAttachments: MessageAttachment[] = []
+    if (pendingNotes.length > 0) {
+      try {
+        noteAttachments = await attachNotesAsync({
+          chatId,
+          scope: attachScope,
+          noteIds: pendingNotes.map((n) => n.id)
+        })
+      } catch (err) {
+        setAttachError(err instanceof Error ? err.message : String(err))
+        return
+      }
     }
 
     // Hand off to the composer hook, which decides everything from a fresh
@@ -553,13 +631,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const persistedAttachments = attachmentsToSend?.filter(
       (a): a is MessageAttachment => a.source !== 'pending'
     )
-    const result = await composer.submit(trimmed, persistedAttachments)
+    const mergedAttachments =
+      noteAttachments.length > 0
+        ? [...(persistedAttachments ?? []), ...noteAttachments]
+        : persistedAttachments
+    const result = await composer.submit(trimmed, mergedAttachments)
     rewriteUX.handleSubmitResult(result)
     if (result.kind === 'sent' || result.kind === 'rewrite-pending') {
       // Sent: drop the attachments now that they live on the message row.
       // Rewrite-pending: pending.attachments owns them; clear the composer's
       // copy so a second send (after rewrite confirmation) doesn't double-attach.
       clearPendingAttachments()
+      clearPendingNotes()
     }
   }, [
     input,
@@ -568,10 +651,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChat,
     composer,
     rewriteUX,
+    pendingNotes,
+    attachScope,
+    attachNotesAsync,
+    setAttachError,
     clearComposer,
     targetSupportsAttachments,
     pendingAttachments,
-    clearPendingAttachments
+    clearPendingAttachments,
+    clearPendingNotes
   ])
 
   const handleCancel = useCallback(() => {
@@ -591,7 +679,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       ? filteredPrompts.length
       : commandPopupOpen
         ? filteredCommands.length
-        : 0
+        : notePopupOpen
+          ? filteredNotes.length
+          : 0
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     // Tilde-shortcut popup is in progress (open AND textarea still holds the
@@ -651,6 +741,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           }
         } else if (promptPopupOpen) selectPrompt(filteredPrompts[triggerIndex])
         else if (commandPopupOpen) selectCommand(filteredCommands[triggerIndex])
+        else if (notePopupOpen) selectNote(filteredNotes[triggerIndex])
         return
       }
       if (e.key === 'Escape') {
@@ -729,7 +820,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const agentGate = token.char === '@' && (newChatHasContent || activeChatHasContent)
     const promptGate = token.char === '#' && examplePrompts.length > 0
     const commandGate = token.char === '/' && commands.length > 0
-    if (!agentGate && !promptGate && !commandGate) {
+    const noteGate = token.char === '?' && (notes ?? []).length > 0
+    if (!agentGate && !promptGate && !commandGate && !noteGate) {
       if (triggerChar) closeTrigger()
       return
     }
@@ -744,9 +836,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const pending = rewriteUX.consumePendingForSendAnyway()
     if (pending) {
       void composer.sendRaw(pending)
+      // pending.attachments already carries the materialized notes — drop
+      // the composer's badges so the next send doesn't re-ingest them.
       clearPendingAttachments()
+      clearPendingNotes()
     }
-  }, [composer, rewriteUX, clearPendingAttachments])
+  }, [composer, rewriteUX, clearPendingAttachments, clearPendingNotes])
 
   const handleDisableRewrite = useCallback((): void => {
     rewriteUX.dismissError()
@@ -799,6 +894,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      {notePopupOpen && (
+        <NoteMentionPopup
+          items={filteredNotes}
+          selectedIndex={triggerIndex}
+          onSelect={selectNote}
+          onClose={closeTrigger}
+          listboxId={listboxId}
+          anchorRef={textareaRef}
+        />
+      )}
+
       {tildeActive && tildeModePopup && (
         <MentionPopup<ChatModeData>
           items={tildeModePopup.modes}
@@ -843,21 +949,24 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           rows={1}
           role="combobox"
           aria-autocomplete="list"
-          aria-expanded={agentPopupOpen || promptPopupOpen || commandPopupOpen}
+          aria-expanded={agentPopupOpen || promptPopupOpen || commandPopupOpen || notePopupOpen}
           aria-controls={
-            agentPopupOpen || promptPopupOpen || commandPopupOpen ? listboxId : undefined
+            agentPopupOpen || promptPopupOpen || commandPopupOpen || notePopupOpen
+              ? listboxId
+              : undefined
           }
           aria-activedescendant={
             (agentPopupOpen && agentPopupItemCount > 0) ||
             (promptPopupOpen && filteredPrompts.length > 0) ||
-            (commandPopupOpen && filteredCommands.length > 0)
+            (commandPopupOpen && filteredCommands.length > 0) ||
+            (notePopupOpen && filteredNotes.length > 0)
               ? `${listboxId}-opt-${triggerIndex}`
               : undefined
           }
           className="w-full bg-transparent text-[var(--color-text)] placeholder-[var(--color-text-muted)]
             px-4 pt-3 pb-3 resize-none text-sm leading-relaxed focus:outline-none"
         />
-        {pendingAttachments.length > 0 && (
+        {(pendingAttachments.length > 0 || pendingNotes.length > 0) && (
           <div className="px-3 pb-2 pt-1 flex flex-wrap gap-1 justify-end">
             <AttachmentList
               attachments={pendingAttachments}
@@ -866,6 +975,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 const att = pendingAttachments.find((a) => a.id === id)
                 if (att) handleRemoveAttachment(att)
               }}
+              align="right"
+            />
+            <NoteBadgeList
+              notes={pendingNotes}
+              onRemove={removePendingNote}
+              onPreview={setPreviewNoteId}
               align="right"
             />
           </div>
@@ -896,6 +1011,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           onCancel={rewriteUX.dismissError}
           onDisable={handleDisableRewrite}
           onSendAnyway={handleSendAnyway}
+        />
+      )}
+
+      {previewNote && (
+        <NotePreviewModal
+          noteId={previewNote.id}
+          fallbackTitle={previewNote.title}
+          onClose={() => setPreviewNoteId(null)}
         />
       )}
 
@@ -976,7 +1099,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               onClick={handleSend}
               disabled={
                 !input.trim() &&
-                !(chatId !== null && targetSupportsAttachments && pendingAttachments.length > 0)
+                !(
+                  chatId !== null &&
+                  ((targetSupportsAttachments && pendingAttachments.length > 0) ||
+                    pendingNotes.length > 0)
+                )
               }
               className="p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
                 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity"

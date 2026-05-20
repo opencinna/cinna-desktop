@@ -112,4 +112,5 @@ See [Notes — Technical Details](notes_tech.md) for file paths, IPC channel sig
 - [App Shell](../../ui/app_shell/app_shell.md) — Sidebar tab rail gains the Notes (NotebookPen) tab alongside Chats and Jobs.
 - [Messaging](../../chat/messaging/messaging.md) — Notes reuse the chat trash retention contract (30-day permanent delete) and share the Settings → Trash view.
 - [Jobs](../../jobs/jobs/jobs.md) — Folder/drag-drop UX (FolderPlus header button, gear menu, root drop zone, accepting-state visuals) mirrors the Jobs sidebar exactly, including the `application/x-cinna-*` MIME-namespace pattern to keep drags from cross-pollinating between tabs.
+- [Note Attachments](../../chat/note_attachments/note_attachments.md) — Notes are also addressable from the chat composer via the `?` mention popup. The chat-side feature owns the composer state and materialization; `notesService.materializeAsAttachments` is the entry point.
 - [Settings](../../ui/settings/settings.md) — `TrashSection` is extended to render both chats and notes; the empty-state copy mentions both. No new settings tab — Trash is unchanged from the user's perspective.

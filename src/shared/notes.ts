@@ -4,6 +4,8 @@
  * uses the same react-markdown stack as chat bubbles.
  */
 
+import type { MessageAttachment } from './attachments'
+
 export interface NoteData {
   id: string
   userId: string
@@ -49,3 +51,20 @@ export interface NoteFolderPatchDto {
   name?: string
   collapsed?: boolean
 }
+
+/**
+ * Input for materializing a set of notes as real file attachments on a
+ * pending message. The chat row must already exist for `local` scope (the
+ * file ingest pipeline needs a chat to attach to); Cinna scope can target
+ * a pre-creation buffer but the renderer always passes a non-null chatId
+ * once the row is ready.
+ */
+export interface NoteAttachAsFilesInputDto {
+  chatId: string | null
+  scope: 'cinna' | 'local'
+  noteIds: string[]
+}
+
+export type NoteAttachAsFilesResultDto =
+  | { success: true; files: MessageAttachment[] }
+  | { success: false; error: string; code?: string }
