@@ -1,12 +1,12 @@
 import { useMemo } from 'react'
-import { Play, Loader2, Pencil, Bot, Wrench, Users, GitBranch, Flag } from 'lucide-react'
+import { Play, Loader2, Pencil, Bot, Wrench, Flag } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import { useJob, useJobRuns, useExecuteJob } from '../../hooks/useJobs'
 import { useCinnaRunPoll } from '../../hooks/useCinnaRunPoll'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
-import { useCinnaAgents, useCinnaTeams } from '../../hooks/useCinna'
+import { useCinnaAgents } from '../../hooks/useCinna'
 import { getPreset } from '../../constants/chatModeColors'
 import { JobRunRow } from './JobRunRow'
 import type { JobDetailData } from '../../../../shared/jobs'
@@ -138,7 +138,6 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
   const { data: chatModes } = useChatModes()
   const { data: mcpProviders } = useMcpProviders()
   const { data: cinnaAgents } = useCinnaAgents()
-  const { data: cinnaTeams } = useCinnaTeams()
 
   const agentName = useMemo(
     () => (job.agentId ? (agents ?? []).find((a) => a.id === job.agentId)?.name ?? null : null),
@@ -162,18 +161,6 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
         : null,
     [cinnaAgents, job.cinnaAgentId]
   )
-  const cinnaTeam = useMemo(
-    () =>
-      job.cinnaTeamId ? (cinnaTeams ?? []).find((t) => t.id === job.cinnaTeamId) ?? null : null,
-    [cinnaTeams, job.cinnaTeamId]
-  )
-  const cinnaNodeName = useMemo(
-    () =>
-      job.cinnaAssignedNodeId && cinnaTeam
-        ? cinnaTeam.nodes.find((n) => n.id === job.cinnaAssignedNodeId)?.name ?? null
-        : null,
-    [cinnaTeam, job.cinnaAssignedNodeId]
-  )
 
   const chips: React.ReactNode[] = []
 
@@ -195,12 +182,6 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
         <MissingChip key="cinna-agent" label="No Cinna agent" />
       )
     )
-    if (cinnaTeam) {
-      chips.push(<TeamChip key="team" name={cinnaTeam.name} />)
-    }
-    if (cinnaNodeName) {
-      chips.push(<NodeChip key="node" name={cinnaNodeName} />)
-    }
     if (job.cinnaPriority && job.cinnaPriority !== CINNA_DEFAULT_PRIORITY) {
       chips.push(<PriorityChip key="priority" priority={job.cinnaPriority} />)
     }
@@ -287,14 +268,6 @@ function ModeChip({
 
 function McpChip({ name }: { name: string }): React.JSX.Element {
   return <Chip icon={<Wrench size={12} />} label={name} title={`MCP: ${name}`} />
-}
-
-function TeamChip({ name }: { name: string }): React.JSX.Element {
-  return <Chip icon={<Users size={12} />} label={name} title={`Team: ${name}`} />
-}
-
-function NodeChip({ name }: { name: string }): React.JSX.Element {
-  return <Chip icon={<GitBranch size={12} />} label={name} title={`Assigned node: ${name}`} />
 }
 
 function PriorityChip({ priority }: { priority: string }): React.JSX.Element {

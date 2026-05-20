@@ -64,10 +64,13 @@ export function registerJobHandlers(): void {
     return { success: true as const, ...result }
   })
 
-  ipcHandle('job:refresh-run', async (_event, runId: string) => {
-    userActivation.requireActivated()
-    return jobService.refreshCinnaRun(getProfileScopeUserId(), runId)
-  })
+  ipcHandle(
+    'job:refresh-run',
+    async (_event, runId: string, options?: { force?: boolean }) => {
+      userActivation.requireActivated()
+      return jobService.refreshCinnaRun(getProfileScopeUserId(), runId, options ?? {})
+    }
+  )
 
   ipcHandle('job:cinna-server-url', async () => {
     userActivation.requireActivated()

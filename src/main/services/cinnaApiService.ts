@@ -4,6 +4,13 @@ import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { CinnaApiError } from '../errors'
 import { createLogger } from '../logger/logger'
+import type {
+  CinnaTaskAttachmentDto,
+  CinnaTaskCommentDto,
+  CinnaTaskViewDto
+} from '../../shared/cinnaTaskView'
+
+export type { CinnaTaskAttachmentDto, CinnaTaskCommentDto, CinnaTaskViewDto }
 
 const logger = createLogger('cinna-api')
 
@@ -11,25 +18,26 @@ export interface CinnaAgentDto {
   id: string
   name: string
   description: string | null
-  team_id: string | null
-}
-
-export interface CinnaTeamDto {
-  id: string
-  name: string
-  task_prefix: string | null
-  nodes: Array<{ id: string; name: string }>
 }
 
 export interface CinnaTaskCreateRequest {
   original_message: string
-  current_description: string
   title: string
   selected_agent_id: string
-  team_id?: string | null
-  assigned_node_id?: string | null
   priority?: string
   auto_execute?: boolean
+}
+
+interface PaginatedResponse<T> {
+  data: T[]
+  count: number
+}
+
+function unwrapPaginated<T>(data: unknown, path: string): T[] {
+  if (data && typeof data === 'object' && Array.isArray((data as PaginatedResponse<T>).data)) {
+    return (data as PaginatedResponse<T>).data
+  }
+  throw new CinnaApiError('invalid_response', `Expected paginated {data} from ${path}`)
 }
 
 export interface CinnaTaskRef {
@@ -41,6 +49,7 @@ export interface CinnaTaskRef {
 export interface CinnaTaskDetail extends CinnaTaskRef {
   title: string
 }
+
 
 interface FetchOptions {
   method?: string
@@ -128,41 +137,13 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
 
 export const cinnaApiService = {
   async listAgents(userId: string): Promise<CinnaAgentDto[]> {
-    const data = await cinnaFetch<unknown>(userId, '/api/v1/agents/')
-    if (!Array.isArray(data)) {
-      throw new CinnaApiError('invalid_response', 'Expected array from /api/v1/agents/')
-    }
-    return data.map((raw): CinnaAgentDto => {
-      const r = raw as Record<string, unknown>
-      return {
-        id: String(r.id ?? ''),
-        name: String(r.name ?? r.id ?? 'Unnamed'),
-        description: typeof r.description === 'string' ? r.description : null,
-        team_id: typeof r.team_id === 'string' ? r.team_id : null
-      }
-    })
-  },
-
-  async listTeams(userId: string): Promise<CinnaTeamDto[]> {
-    const data = await cinnaFetch<unknown>(userId, '/api/v1/teams/')
-    if (!Array.isArray(data)) {
-      throw new CinnaApiError('invalid_response', 'Expected array from /api/v1/teams/')
-    }
-    return data.map((raw): CinnaTeamDto => {
-      const r = raw as Record<string, unknown>
-      const nodes = Array.isArray(r.nodes)
-        ? (r.nodes as Array<Record<string, unknown>>).map((n) => ({
-            id: String(n.id ?? ''),
-            name: String(n.name ?? n.id ?? 'Unnamed')
-          }))
-        : []
-      return {
-        id: String(r.id ?? ''),
-        name: String(r.name ?? r.id ?? 'Unnamed team'),
-        task_prefix: typeof r.task_prefix === 'string' ? r.task_prefix : null,
-        nodes
-      }
-    })
+    const body = await cinnaFetch<unknown>(userId, '/api/v1/agents/')
+    const items = unwrapPaginated<Record<string, unknown>>(body, '/api/v1/agents/')
+    return items.map((r): CinnaAgentDto => ({
+      id: String(r.id ?? ''),
+      name: String(r.name ?? r.id ?? 'Unnamed'),
+      description: typeof r.description === 'string' ? r.description : null
+    }))
   },
 
   async createTask(userId: string, payload: CinnaTaskCreateRequest): Promise<CinnaTaskRef> {
@@ -191,10 +172,139 @@ export const cinnaApiService = {
   },
 
   /**
+   * Fetch the full cinna task detail (`InputTaskDetailPublic`) which already
+   * embeds `comments` and `attachments` — single roundtrip instead of three.
+   * Comments contain inline attachments (matched by `comment_id` on the
+   * server side); standalone (task-level) attachments are surfaced in the
+   * top-level `attachments` array.
+   *
+   * Parsing is tolerant of missing/optional fields. Author display is taken
+   * from the server-resolved `author_name` / `author_role` (see
+   * `TaskCommentService._to_public`); when those are absent (legacy rows or
+   * `system` comments) we fall back to "System" or "Unknown".
+   */
+  async getTaskView(userId: string, taskId: string): Promise<CinnaTaskViewDto> {
+    logger.info('fetching cinna task view', { taskId })
+    const data = await cinnaFetch<Record<string, unknown>>(
+      userId,
+      `/api/v1/tasks/${encodeURIComponent(taskId)}/detail`
+    )
+
+    const task: CinnaTaskDetail = {
+      id: String(data.id ?? taskId),
+      short_code: typeof data.short_code === 'string' ? data.short_code : null,
+      status: String(data.status ?? 'new'),
+      title: String(data.title ?? '')
+    }
+
+    const commentsRaw = Array.isArray(data.comments) ? data.comments : []
+    const comments = commentsRaw
+      .map(parseComment)
+      .filter((c): c is CinnaTaskCommentDto => c !== null)
+
+    const attachmentsRaw = Array.isArray(data.attachments) ? data.attachments : []
+    const attachments = parseAttachmentList(attachmentsRaw)
+
+    logger.info('cinna task view loaded', {
+      taskId,
+      commentCount: comments.length,
+      attachmentCount: attachments.length
+    })
+    return { task, comments, attachments }
+  },
+
+  /**
    * Resolve the configured Cinna server URL so the renderer can build deep
    * links (e.g. /tasks/{short_code}) without re-implementing the lookup.
    */
   getServerUrl(userId: string): string {
     return resolveBaseUrl(userId)
+  }
+}
+
+// ---------- Lenient parsing helpers ----------
+
+function asString(v: unknown): string | null {
+  if (typeof v === 'string' && v.length > 0) return v
+  if (typeof v === 'number') return String(v)
+  return null
+}
+
+function asNumber(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string') {
+    const n = Number(v)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
+
+function pick<T extends string>(
+  row: Record<string, unknown>,
+  ...keys: T[]
+): unknown {
+  for (const k of keys) {
+    if (row[k] !== undefined && row[k] !== null) return row[k]
+  }
+  return null
+}
+
+/**
+ * Parse a `TaskAttachmentPublic` row from cinna-core. Real field names:
+ *   id, file_name, file_size, content_type, created_at, comment_id?
+ */
+function parseAttachment(raw: unknown): CinnaTaskAttachmentDto | null {
+  if (!raw || typeof raw !== 'object') return null
+  const row = raw as Record<string, unknown>
+  const id = asString(pick(row, 'id'))
+  if (!id) return null
+  return {
+    id,
+    filename:
+      asString(pick(row, 'file_name', 'filename', 'name', 'original_filename')) ??
+      'unnamed',
+    size: asNumber(pick(row, 'file_size', 'size', 'size_bytes')),
+    mimeType: asString(pick(row, 'content_type', 'mime_type', 'mimeType', 'contentType')),
+    url: asString(pick(row, 'download_url', 'url'))
+  }
+}
+
+function parseAttachmentList(raw: unknown): CinnaTaskAttachmentDto[] {
+  if (!Array.isArray(raw)) return []
+  return raw
+    .map(parseAttachment)
+    .filter((a): a is CinnaTaskAttachmentDto => a !== null)
+}
+
+/**
+ * Parse a `TaskCommentPublic` row. Server resolves authorship into the flat
+ * `author_name` + `author_role` fields (see TaskCommentService._to_public);
+ * we surface both. `inline_attachments` (server's name) carries per-comment
+ * files — also accept `attachments` as a fallback.
+ */
+function parseComment(raw: unknown): CinnaTaskCommentDto | null {
+  if (!raw || typeof raw !== 'object') return null
+  const row = raw as Record<string, unknown>
+  const id = asString(pick(row, 'id'))
+  if (!id) return null
+
+  const commentType = (asString(pick(row, 'comment_type', 'commentType')) ?? 'message') as
+    CinnaTaskCommentDto['commentType']
+
+  const attachments = parseAttachmentList(
+    pick(row, 'inline_attachments', 'attachments', 'files')
+  )
+
+  return {
+    id,
+    commentType,
+    authorName: asString(pick(row, 'author_name', 'authorName')),
+    authorRole: asString(pick(row, 'author_role', 'authorRole')),
+    authorId: asString(
+      pick(row, 'author_user_id', 'author_agent_id', 'authorId', 'author_id')
+    ),
+    content: asString(pick(row, 'content', 'text', 'body')) ?? '',
+    createdAt: asString(pick(row, 'created_at', 'createdAt', 'timestamp')),
+    attachments
   }
 }

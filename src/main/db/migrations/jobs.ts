@@ -13,8 +13,6 @@ export function migrateJobs(sqlite: Database.Database): void {
       agent_id TEXT,
       mode_id TEXT,
       cinna_agent_id TEXT,
-      cinna_team_id TEXT,
-      cinna_assigned_node_id TEXT,
       cinna_priority TEXT,
       color_preset TEXT,
       icon_name TEXT,

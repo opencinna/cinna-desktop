@@ -40,7 +40,7 @@ export function useCinnaRunPoll(runs: JobRunData[] | undefined): void {
           return
         }
         for (const runId of pendingIdsRef.current) {
-          refresh.mutate(runId)
+          refresh.mutate({ runId })
         }
       }, period)
     }

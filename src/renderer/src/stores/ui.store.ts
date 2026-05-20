@@ -1,6 +1,11 @@
 import { create } from 'zustand'
 
-export type ActiveView = 'chat' | 'settings' | 'job-detail' | 'job-edit'
+export type ActiveView =
+  | 'chat'
+  | 'settings'
+  | 'job-detail'
+  | 'job-edit'
+  | 'cinna-task-run'
 export type SidebarTab = 'chats' | 'jobs'
 export type SettingsMenu =
   | 'chats'
@@ -27,6 +32,8 @@ interface UIStore {
   settingsTab: SettingsMenu
   sidebarTab: SidebarTab
   activeJobId: string | null
+  /** Cinna task run currently being viewed (when activeView === 'cinna-task-run'). */
+  activeCinnaRunId: string | null
   sidebarOpen: boolean
   theme: Theme
   logsOpen: boolean
@@ -37,6 +44,7 @@ interface UIStore {
   setSettingsMenu: (tab: SettingsMenu) => void
   setSidebarTab: (tab: SidebarTab) => void
   setActiveJobId: (id: string | null) => void
+  setActiveCinnaRunId: (id: string | null) => void
   toggleSidebar: () => void
   toggleTheme: () => void
   setLogsOpen: (open: boolean) => void
@@ -50,6 +58,7 @@ export const useUIStore = create<UIStore>((set) => ({
   settingsTab: 'chats',
   sidebarTab: 'chats',
   activeJobId: null,
+  activeCinnaRunId: null,
   sidebarOpen: true,
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   logsOpen: false,
@@ -60,6 +69,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   setActiveJobId: (id) => set({ activeJobId: id }),
+  setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   toggleTheme: () =>
     set((state) => {

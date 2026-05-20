@@ -9,8 +9,8 @@ export function registerCinnaHandlers(): void {
     return cinnaApiService.listAgents(getProfileScopeUserId())
   })
 
-  ipcHandle('cinna:list-teams', async () => {
+  ipcHandle('cinna:get-task-view', async (_event, taskId: string) => {
     userActivation.requireActivated()
-    return cinnaApiService.listTeams(getProfileScopeUserId())
+    return cinnaApiService.getTaskView(getProfileScopeUserId(), taskId)
   })
 }

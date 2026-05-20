@@ -111,4 +111,47 @@ export function registerFilesHandlers(): void {
       }
     }
   )
+
+  /**
+   * Save-as flow for a `TaskAttachment` (cinna-core's task-scoped attachment
+   * record). Same UX as `files:download` but hits the task-scoped endpoint
+   * since these aren't `FileUpload` rows.
+   */
+  ipcHandle(
+    'files:download-task-attachment',
+    async (
+      event,
+      data: { taskId: string; attachmentId: string; filename: string }
+    ): Promise<FilesDownloadResult> => {
+      userActivation.requireActivated()
+      const userId = getProfileScopeUserId()
+
+      const defaultPath = join(app.getPath('downloads'), data.filename)
+      const win = BrowserWindow.fromWebContents(event.sender) ?? undefined
+      const saveResult = win
+        ? await dialog.showSaveDialog(win, { defaultPath, title: 'Save attachment' })
+        : await dialog.showSaveDialog({ defaultPath, title: 'Save attachment' })
+      if (saveResult.canceled || !saveResult.filePath) {
+        return { success: true, canceled: true }
+      }
+
+      try {
+        await cinnaFileService.downloadTaskAttachmentToPath(
+          userId,
+          data.taskId,
+          data.attachmentId,
+          saveResult.filePath
+        )
+        try {
+          shell.showItemInFolder(saveResult.filePath)
+        } catch {
+          // Ignored — file is on disk.
+        }
+        return { success: true, savedPath: saveResult.filePath }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false, error: e.message, code: e.code }
+      }
+    }
+  )
 }

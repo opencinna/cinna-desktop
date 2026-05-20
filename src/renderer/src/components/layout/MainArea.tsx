@@ -7,6 +7,7 @@ import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
 import { SettingsPage } from '../settings/SettingsPage'
 import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
+import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
 import { ChatConfigMenu } from '../chat/ChatConfigMenu'
 import { AgentSelector } from '../chat/AgentSelector'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
@@ -268,6 +269,10 @@ export function MainArea(): React.JSX.Element {
 
   if (activeView === 'job-edit') {
     return <JobEditPage />
+  }
+
+  if (activeView === 'cinna-task-run') {
+    return <CinnaTaskRunView />
   }
 
   const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null

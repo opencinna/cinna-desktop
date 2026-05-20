@@ -1,11 +1,27 @@
-import { ExternalLink, MessageSquare, RefreshCw, Inbox, Trash2, AlertTriangle } from 'lucide-react'
+import {
+  ExternalLink,
+  MessageSquare,
+  Paperclip,
+  RefreshCw,
+  Inbox,
+  Trash2,
+  AlertTriangle
+} from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import type { JobRunData, JobRunStatus } from '../../../../shared/jobs'
 import { useOpenChatFromRun, useDeleteJobRun } from '../../hooks/useJobs'
 import { useRefreshCinnaRun, useCinnaServerUrl } from '../../hooks/useCinna'
+import { useCinnaTaskView } from '../../hooks/useCinnaTaskView'
 import { useShowChatInList } from '../../hooks/useChat'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
+import { useUIStore } from '../../stores/ui.store'
+import { createLogger } from '../../stores/logger.store'
+import { formatRelativeFromDate } from '../../utils/cinnaTime'
+import { isContentComment } from '../../../../shared/cinnaTaskView'
+
+const log = createLogger('job-run-row')
+const MIN_SPIN_MS = 500
 
 interface JobRunRowProps {
   run: JobRunData
@@ -27,29 +43,21 @@ const STATUS_LABEL: Record<JobRunStatus, string> = {
   cancelled: 'Cancelled'
 }
 
-function formatRelative(date: Date, now: Date): string {
-  const diff = Math.max(0, now.getTime() - date.getTime())
-  const minutes = Math.floor(diff / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
-}
 
 export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
   const openChatFromRun = useOpenChatFromRun()
   const refreshCinna = useRefreshCinnaRun()
   const showChatInList = useShowChatInList()
   const deleteRun = useDeleteJobRun()
+  const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
+  const setActiveView = useUIStore((s) => s.setActiveView)
   const now = useRelativeNow()
   const tint = STATUS_TINT[run.status]
   const label = STATUS_LABEL[run.status]
   const createdAt = new Date(run.createdAt)
   const [openError, setOpenError] = useState<string | null>(null)
-  const [hovering, setHovering] = useState(false)
   const [confirming, setConfirming] = useState(false)
+  const [refreshSpinning, setRefreshSpinning] = useState(false)
 
   // Only used for cinna runs; the hook self-gates on `currentUser.type`,
   // so non-cinna profiles never pay for the request.
@@ -57,7 +65,22 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
 
   const chatGone = run.type === 'local' && !run.localChatId
   const canOpenChat = run.type === 'local' && !!run.localChatId
+  const canOpenCinnaView = run.type === 'cinna_task' && !!run.cinnaTaskId
   const canMoveToChats = canOpenChat && run.chatHidden
+
+  // Cinna rows show comment/attachment count badges. Polling is disabled
+  // here so N visible rows don't trigger N /detail fetches every 5s; the
+  // detail view polls on its own subscription and shares the same query
+  // key + cache. Disabled for non-cinna rows or rows without a cinnaTaskId.
+  const taskViewQuery = useCinnaTaskView(canOpenCinnaView ? run.cinnaTaskId : null, {
+    polling: false
+  })
+  const counts = taskViewQuery.data
+    ? {
+        comments: taskViewQuery.data.comments.filter(isContentComment).length,
+        attachments: taskViewQuery.data.attachments.length
+      }
+    : null
   const cinnaUrl =
     run.type === 'cinna_task' && cinnaServerQuery.data && run.cinnaShortCode
       ? `${cinnaServerQuery.data.replace(/\/$/, '')}/tasks/${encodeURIComponent(run.cinnaShortCode)}`
@@ -91,9 +114,38 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
     )
   }
 
-  const rowClickable = canOpenChat
+  const rowClickable = canOpenChat || canOpenCinnaView
   const handleRowClick = (): void => {
-    if (canOpenChat && run.localChatId) openChatFromRun(run.localChatId)
+    if (canOpenChat && run.localChatId) {
+      openChatFromRun(run.localChatId)
+      return
+    }
+    if (canOpenCinnaView) {
+      setActiveCinnaRunId(run.id)
+      setActiveView('cinna-task-run')
+    }
+  }
+
+  const handleRefreshClick = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    log.info('manual cinna run refresh', { runId: run.id, status: run.status })
+    setRefreshSpinning(true)
+    const startedAt = Date.now()
+    refreshCinna.mutate(
+      { runId: run.id, force: true },
+      {
+        onError: (err) =>
+          log.warn('cinna run refresh failed', {
+            runId: run.id,
+            error: err instanceof Error ? err.message : String(err)
+          }),
+        onSettled: () => {
+          const elapsed = Date.now() - startedAt
+          const wait = Math.max(0, MIN_SPIN_MS - elapsed)
+          window.setTimeout(() => setRefreshSpinning(false), wait)
+        }
+      }
+    )
   }
 
   return (
@@ -102,8 +154,6 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
       role={rowClickable ? 'button' : undefined}
       tabIndex={rowClickable ? 0 : undefined}
       onClick={rowClickable ? handleRowClick : undefined}
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
       onKeyDown={
         rowClickable
           ? (e) => {
@@ -114,7 +164,15 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
             }
           : undefined
       }
-      title={rowClickable ? 'Open chat' : chatGone ? 'Chat no longer available' : undefined}
+      title={
+        canOpenChat
+          ? 'Open chat'
+          : canOpenCinnaView
+            ? 'Open task view'
+            : chatGone
+              ? 'Chat no longer available'
+              : undefined
+      }
       className={`group flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] transition-colors ${
         rowClickable
           ? 'cursor-pointer hover:bg-[var(--color-bg-hover)] hover:border-[var(--color-text-muted)]'
@@ -143,44 +201,53 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
               : 'Local chat'}
         </div>
         <div className="text-[10px] text-[var(--color-text-muted)]">
-          {formatRelative(createdAt, now)}
+          {formatRelativeFromDate(createdAt, now)}
           {run.errorMessage ? ` · ${run.errorMessage}` : ''}
           {openError ? ` · ${openError}` : ''}
         </div>
       </div>
 
-      {/*
-        Hover-revealed actions. The decorative MessageSquare icon (local) /
-        cinna icon buttons (refresh + open external) sit in the right slot
-        while idle; on hover they hide and the actionable icons take over so
-        the row doesn't get noisy at rest.
-      */}
-      {!hovering && run.type === 'local' && (
-        <span
-          aria-hidden
-          className={`p-1 text-[var(--color-text-muted)] ${
-            rowClickable ? '' : 'opacity-40'
-          }`}
-        >
-          <MessageSquare size={12} />
-        </span>
+      {counts && (counts.comments > 0 || counts.attachments > 0) && (
+        <div className="flex items-center gap-1 shrink-0">
+          {counts.comments > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold
+                bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
+              title={`${counts.comments} comment${counts.comments === 1 ? '' : 's'}`}
+            >
+              <MessageSquare size={10} />
+              {counts.comments}
+            </span>
+          )}
+          {counts.attachments > 0 && (
+            <span
+              className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] font-semibold
+                bg-[var(--color-bg-hover)] text-[var(--color-text-secondary)] border border-[var(--color-border)]"
+              title={`${counts.attachments} attachment${counts.attachments === 1 ? '' : 's'}`}
+            >
+              <Paperclip size={10} />
+              {counts.attachments}
+            </span>
+          )}
+        </div>
       )}
 
-      {!hovering && run.type === 'cinna_task' && (
+      {/* All action icons are static (no hover gate). Cinna runs get
+          Refresh + Open external + Delete; local runs get Move-to-Chats
+          (when the spawned chat is still hidden) + Delete. */}
+      {run.type === 'cinna_task' && (
         <>
           <button
             type="button"
-            onClick={(e) => {
-              e.stopPropagation()
-              refreshCinna.mutate(run.id)
-            }}
-            disabled={refreshCinna.isPending}
-            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40"
+            onClick={handleRefreshClick}
+            disabled={refreshSpinning || refreshCinna.isPending}
+            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40 shrink-0"
             title="Refresh status"
+            aria-label="Refresh status"
           >
             <RefreshCw
               size={12}
-              className={refreshCinna.isPending ? 'animate-spin' : undefined}
+              className={refreshSpinning || refreshCinna.isPending ? 'animate-spin' : undefined}
             />
           </button>
           <button
@@ -190,15 +257,16 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
               void handleOpenCinna()
             }}
             disabled={!cinnaUrl}
-            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
             title={cinnaUrl ? 'Open on Cinna' : 'Cinna URL unavailable'}
+            aria-label="Open on Cinna"
           >
             <ExternalLink size={12} />
           </button>
         </>
       )}
 
-      {hovering && canMoveToChats && (
+      {canMoveToChats && (
         <button
           type="button"
           onClick={handleMoveToChats}
@@ -212,18 +280,16 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         </button>
       )}
 
-      {hovering && (
-        <button
-          type="button"
-          onClick={handleDeleteClick}
-          className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)]
-            hover:text-[var(--color-danger)] transition-colors shrink-0"
-          title="Delete run"
-          aria-label="Delete run"
-        >
-          <Trash2 size={12} />
-        </button>
-      )}
+      <button
+        type="button"
+        onClick={handleDeleteClick}
+        className="p-1 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)]
+          hover:text-[var(--color-danger)] transition-colors shrink-0"
+        title="Delete run"
+        aria-label="Delete run"
+      >
+        <Trash2 size={12} />
+      </button>
     </div>
     {confirming && (
       <DeleteRunConfirm

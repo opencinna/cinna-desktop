@@ -18,7 +18,8 @@ Let users save reusable units of work (title + description + prompt + execution 
 ### Switching between Chats and Jobs
 1. User clicks the icon tab on the sidebar's left edge (speech bubble = Chats, briefcase = Jobs).
 2. Sidebar body swaps from the chat list to the jobs list. The selected tab visually fuses with the sidebar (same surface, no border between them); the other sits as a separate recessed block.
-3. Settings view hides the tab rail entirely (it owns the full sidebar).
+3. **Main area realigns to the first item in the new list.** Switching to Chats opens the first chat (or lands on the New Chat screen when none exist); switching to Jobs opens the first job's detail page (or shows the "Select a job from the sidebar" empty state). This avoids the dissonance of seeing one domain's list while the central pane shows a different domain's content. `activeCinnaRunId` is cleared on every tab switch.
+4. Settings view hides the tab rail entirely (it owns the full sidebar).
 
 ### Creating a job (non-Cinna profile)
 1. User clicks the `+` button in the Jobs sidebar header.
@@ -37,15 +38,16 @@ Let users save reusable units of work (title + description + prompt + execution 
 2. The header shows the job's title, description, a type pill (`Local` / `Cinna Task`), an icon-only **Edit** (pencil) button, and a primary green **Run** button.
 3. Below the header, a summary card shows the prompt verbatim plus a strip of compact **chip-style badges** for *non-default* configuration only (same chip pattern used in the chat composer — `ActiveAgentChip` / `OnDemandMcpChips`):
    - Local: agent chip (Bot icon, accent border), chat-mode chip (color dot tinted with the mode's preset), one MCP chip per attached provider (Wrench icon). Each chip only appears if the field is set.
-   - Cinna Task: Cinna agent chip (Bot — red "No Cinna agent" chip if missing), team chip (Users), assigned-node chip (GitBranch), priority chip (Flag) — each only shown when the field is set (priority only when not `normal`).
+   - Cinna Task: Cinna agent chip (Bot — red "No Cinna agent" chip if missing) and priority chip (Flag, only when not `normal`).
 4. Below the summary, the **Run history** lists the job's runs newest-first; the section is empty when there are no runs.
 
 ### Editing a job
 1. From the Job Detail view, user clicks **Edit** — Main area swaps to the **Job Edit** page (the same form used at creation).
-2. Title, description, prompt, agent, mode (local jobs) or Cinna agent / team / node / priority (Cinna jobs) auto-save on a debounce (~600ms) when changed.
-3. MCP toggles save immediately on click. Auto-save is a no-op while title or prompt are empty.
-4. The header has a **← Back** link (returns to Job Detail; auto-save persistence is already in flight) and a primary **Save** button (flushes pending changes and navigates back to Job Detail).
-5. The job type is fixed at creation — no in-form toggle. Field set switches based on the persisted `job.type`.
+2. Title, description, prompt, agent, mode (local jobs) or Cinna agent / priority (Cinna jobs) auto-save on a debounce (~600ms) when changed.
+3. The **Agent** field (local jobs) and **Cinna Agent** field (Cinna jobs) open a modal `AgentPickerModal` — frosted accent-tinted panel matching the chat agent popup, with a focused search input that filters cards by name/description/type, and the selected card highlighted with the accent gradient. Local picker groups agents by source (My Agents / Shared with Me / People / Local) and includes a "No agent (send to LLM)" card; Cinna picker shows a flat list of Cinna agents tagged "Cinna".
+4. MCP toggles save immediately on click. Auto-save is a no-op while title or prompt are empty.
+5. The header has a **← Back** link (returns to Job Detail; auto-save persistence is already in flight) and a primary **Save** button (flushes pending changes and navigates back to Job Detail).
+6. The job type is fixed at creation — no in-form toggle. Field set switches based on the persisted `job.type`.
 
 ### Running a job from the sidebar (fire-and-forget)
 1. User hovers a job row in the sidebar — a small **green Play-icon pill** appears on the right of the row.
@@ -77,11 +79,15 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Viewing run history
 1. Job Detail's history section lists runs newest-first with a colored status pill.
-2. Local runs:
+2. **All action icons on a run row are static** (no hover-gating). This lets the user scan a job's history and act on any row without first hovering it.
+3. Local runs:
    - The **entire row is a button** — clicking it opens the spawned chat in the chat view *but the sidebar stays on the Jobs tab and the originating job stays highlighted*. The user is "still inside the job"; one click on the job row in the sidebar goes back to the job's detail.
-   - When the spawned chat was deleted (cascade-set-null leaves `localChatId` as null), the row gets a gray **`Deleted`** pill next to the status pill, becomes non-interactive (no hover, no cursor change), and the trailing chat icon is dimmed.
-   - Job-spawned chats are **hidden from the main Chats list by default** so the chat sidebar isn't flooded with every job run. The trailing icons on the run row are **hover-revealed**: at rest the row shows a decorative chat icon; on hover, an **Inbox** ("Move this chat into the Chats list") appears when the chat is still hidden — clicking promotes it into the visible Chats list — and a **Trash** ("Delete run") opens a confirmation that hard-deletes the run and its spawned chat together.
-3. Cinna runs show "Refresh" + "Open on Cinna" as idle icon buttons; on hover those swap to a **Trash** "Delete run" button that removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
+   - When the spawned chat was deleted (cascade-set-null leaves `localChatId` as null), the row gets a gray **`Deleted`** pill next to the status pill and becomes non-interactive (no hover, no cursor change).
+   - Trailing action icons (static): **Inbox** ("Move this chat into the Chats list") — only when the chat is still hidden-from-list; clicking promotes it into the visible Chats list. **Trash** ("Delete run") — opens a confirmation that hard-deletes the run and its spawned chat together. Job-spawned chats are hidden from the main Chats list by default so the chat sidebar isn't flooded with every job run.
+4. Cinna runs:
+   - The **entire row is a button** when `cinnaTaskId` is set — clicking it opens the [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) (comments + attachments fetched from cinna-core). The sidebar stays on the Jobs tab and the originating job stays highlighted.
+   - Two compact pill badges sit just before the action icons (each only rendered when its count is > 0): a `MessageSquare` badge with the comment count (system/status-change/assignment entries excluded) and a `Paperclip` badge with the attachment count. Counts come from the same cinna-core fetch that powers the task view — opening the view warms the cache for the row and vice versa.
+   - Trailing action icons (static): **Refresh** (manual status pull — always hits the network even on terminal runs, with a minimum visible 500ms spin even when the IPC roundtrip is sub-frame); **Open on Cinna** (deep-link to `{cinnaServerUrl}/tasks/{short_code}`); **Trash** ("Delete run") — removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
 
 ### Staying inside the jobs context
 - Opening a run's chat (via the run row) or running a job (via the Run button) sets the chat view as the active main pane but **does not** swap the sidebar tab to Chats and **does not** clear `activeJobId`. The Jobs tab stays open in the sidebar with the job's row still highlighted.
@@ -122,8 +128,15 @@ MainArea (activeView === 'job-detail')
   -> JobDetail  (read-only view)
        -> header (title, type pill, Edit button, Run button)
        -> JobSummary  (prompt + non-default config rows)
-       -> JobRunRow[]  (row click = open chat for local; cinna keeps refresh/open-external buttons)
+       -> JobRunRow[]
+            local  : row click → useOpenChatFromRun
+            cinna  : row click → setActiveCinnaRunId + setActiveView('cinna-task-run')
+            cinna  : count badges via useCinnaTaskView(taskId, { polling: false })
+            (all action icons are static: Refresh / Open-external / Inbox / Trash as applicable)
        -> useCinnaRunPoll  (5s focused / 10s hidden tick while non-terminal cinna runs exist)
+
+MainArea (activeView === 'cinna-task-run')
+  -> CinnaTaskRunView  (see docs/jobs/cinna_task_view/cinna_task_view.md)
 
 MainArea (activeView === 'job-edit')
   -> JobEditPage  (full-page edit screen, opened via "Edit" or on create)
@@ -156,5 +169,6 @@ Run flow (cinna_task)
 - [Agents](../../agents/agents/agents.md) — Local jobs can pin an agent so the run uses A2A streaming instead of the LLM path.
 - [Connections](../../mcp/connections/connections.md) — Job MCP attachments are copied onto the spawned chat's `chat_mcp_providers`.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Cinna Task jobs require an active Cinna OAuth session; reauth bubbles up as `JobError('reauth_required')`.
+- [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — Read-only in-app view of a cinna_task run; reached by clicking a `cinna_task` row in this job's run history. Surfaces comments + attachments fetched from cinna-core.
 - [App Shell](../../ui/app_shell/app_shell.md) — Sidebar gains the icon tab rail; settings view hides it.
 - [Onboarding](../../auth/onboarding/onboarding.md) — JobTypePicker reuses the onboarding welcome-card visual treatment (Sparkles header + 2-card grid).

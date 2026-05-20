@@ -274,11 +274,8 @@ export const jobService = {
 
     const task = await cinnaApiService.createTask(userId, {
       original_message: job.prompt,
-      current_description: job.description ?? job.prompt,
       title: job.title,
       selected_agent_id: job.cinnaAgentId,
-      team_id: job.cinnaTeamId ?? undefined,
-      assigned_node_id: job.cinnaAssignedNodeId ?? undefined,
       priority: job.cinnaPriority ?? 'normal',
       auto_execute: true
     })
@@ -304,23 +301,40 @@ export const jobService = {
 
   /**
    * Poll cinna-core for the current state of a cinna_task run and persist
-   * any status change. No-op for runs that are already terminal or for
-   * non-cinna runs.
+   * any status change. No-op for non-cinna runs. Skips the network call for
+   * already-terminal runs unless `force` is true (manual user refresh).
    */
-  async refreshCinnaRun(userId: string, runId: string): Promise<JobRunRowWithMeta> {
+  async refreshCinnaRun(
+    userId: string,
+    runId: string,
+    options: { force?: boolean } = {}
+  ): Promise<JobRunRowWithMeta> {
     const run = jobRunsRepo.getById(userId, runId)
     if (!run) throw new JobError('not_found', 'Job run not found')
     if (run.type !== 'cinna_task') return enrichRun(userId, run)
     if (!run.cinnaTaskId) return enrichRun(userId, run)
-    if (run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled') {
+    const isTerminal =
+      run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled'
+    if (isTerminal && !options.force) {
       return enrichRun(userId, run)
     }
 
+    logger.info('refreshing cinna run', {
+      runId,
+      cinnaTaskId: run.cinnaTaskId,
+      prevStatus: run.status,
+      force: options.force ?? false
+    })
     const detail = await cinnaApiService.getTaskDetail(userId, run.cinnaTaskId)
     const mapped = mapCinnaStatus(detail.status)
     if (mapped !== run.status) {
       jobRunsRepo.updateStatus(runId, mapped)
     }
+    logger.info('cinna run refreshed', {
+      runId,
+      remoteStatus: detail.status,
+      newStatus: mapped
+    })
     const fresh = jobRunsRepo.getById(userId, runId) ?? run
     return enrichRun(userId, fresh)
   },

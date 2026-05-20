@@ -18,8 +18,6 @@ export interface JobCreateInput {
   agentId?: string | null
   modeId?: string | null
   cinnaAgentId?: string | null
-  cinnaTeamId?: string | null
-  cinnaAssignedNodeId?: string | null
   cinnaPriority?: string | null
   colorPreset?: string | null
   iconName?: string | null
@@ -33,8 +31,6 @@ export interface JobPatch {
   agentId?: string | null
   modeId?: string | null
   cinnaAgentId?: string | null
-  cinnaTeamId?: string | null
-  cinnaAssignedNodeId?: string | null
   cinnaPriority?: string | null
   colorPreset?: string | null
   iconName?: string | null
@@ -80,8 +76,6 @@ export const jobsRepo = {
       agentId: input.agentId ?? null,
       modeId: input.modeId ?? null,
       cinnaAgentId: input.cinnaAgentId ?? null,
-      cinnaTeamId: input.cinnaTeamId ?? null,
-      cinnaAssignedNodeId: input.cinnaAssignedNodeId ?? null,
       cinnaPriority: input.cinnaPriority ?? null,
       colorPreset: input.colorPreset ?? null,
       iconName: input.iconName ?? null,

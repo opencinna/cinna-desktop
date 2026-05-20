@@ -11,6 +11,7 @@ import type {
   JobCreateInputDto,
   JobPatchDto
 } from '../shared/jobs'
+import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type {
   McpRegistryInfo,
   McpRegistrySearchAllResult
@@ -566,7 +567,21 @@ const api = {
       | { success: true; canceled?: false; savedPath: string }
       | { success: true; canceled: true }
       | { success: false; canceled?: false; error: string; code?: string }
-    > => ipcRenderer.invoke('files:download', data)
+    > => ipcRenderer.invoke('files:download', data),
+    /**
+     * Save-as for a TaskAttachment (cinna task-scoped). Distinct from
+     * `download` above because these are not FileUpload rows — their
+     * download URL is task-scoped.
+     */
+    downloadTaskAttachment: (data: {
+      taskId: string
+      attachmentId: string
+      filename: string
+    }): Promise<
+      | { success: true; canceled?: false; savedPath: string }
+      | { success: true; canceled: true }
+      | { success: false; canceled?: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:download-task-attachment', data)
   },
 
   multiAgent: {
@@ -630,23 +645,19 @@ const api = {
       runId: string
     ): Promise<{ success: true; chatId: string | null; chatDeleted: boolean }> =>
       ipcRenderer.invoke('job:delete-run', runId),
-    refreshRun: (runId: string): Promise<JobRunData> =>
-      ipcRenderer.invoke('job:refresh-run', runId),
+    refreshRun: (
+      runId: string,
+      options?: { force?: boolean }
+    ): Promise<JobRunData> => ipcRenderer.invoke('job:refresh-run', runId, options),
     cinnaServerUrl: (): Promise<string> => ipcRenderer.invoke('job:cinna-server-url')
   },
 
   cinna: {
     listAgents: (): Promise<
-      Array<{ id: string; name: string; description: string | null; team_id: string | null }>
+      Array<{ id: string; name: string; description: string | null }>
     > => ipcRenderer.invoke('cinna:list-agents'),
-    listTeams: (): Promise<
-      Array<{
-        id: string
-        name: string
-        task_prefix: string | null
-        nodes: Array<{ id: string; name: string }>
-      }>
-    > => ipcRenderer.invoke('cinna:list-teams')
+    getTaskView: (taskId: string): Promise<CinnaTaskViewDto> =>
+      ipcRenderer.invoke('cinna:get-task-view', taskId)
   },
 
   system: {

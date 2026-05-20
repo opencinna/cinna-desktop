@@ -1,11 +1,12 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Check } from 'lucide-react'
+import { Bot, Check, ChevronDown } from 'lucide-react'
 import type { JobDetailData, JobPatchDto } from '../../../../shared/jobs'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpdateJob, useSetJobMcps } from '../../hooks/useJobs'
-import { useCinnaAgents, useCinnaTeams } from '../../hooks/useCinna'
+import { useCinnaAgents } from '../../hooks/useCinna'
+import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerModal'
 
 interface JobEditFormProps {
   job: JobDetailData
@@ -47,7 +48,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const { data: chatModes } = useChatModes()
   const { data: mcpProviders } = useMcpProviders()
   const { data: cinnaAgents } = useCinnaAgents()
-  const { data: cinnaTeams } = useCinnaTeams()
   const updateJob = useUpdateJob()
   const setJobMcps = useSetJobMcps()
 
@@ -61,8 +61,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const [modeId, setModeId] = useState<string>(job.modeId ?? '')
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set(job.mcpProviderIds))
   const [cinnaAgentId, setCinnaAgentId] = useState<string>(job.cinnaAgentId ?? '')
-  const [cinnaTeamId, setCinnaTeamId] = useState<string>(job.cinnaTeamId ?? '')
-  const [cinnaNodeId, setCinnaNodeId] = useState<string>(job.cinnaAssignedNodeId ?? '')
   const [cinnaPriority, setCinnaPriority] = useState<CinnaPriority>(asPriority(job.cinnaPriority))
 
   // Reset local state when switching jobs
@@ -77,8 +75,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     setModeId(job.modeId ?? '')
     setMcpIds(new Set(job.mcpProviderIds))
     setCinnaAgentId(job.cinnaAgentId ?? '')
-    setCinnaTeamId(job.cinnaTeamId ?? '')
-    setCinnaNodeId(job.cinnaAssignedNodeId ?? '')
     setCinnaPriority(asPriority(job.cinnaPriority))
   }, [job.id, job])
 
@@ -90,8 +86,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     agentId: job.agentId ?? '',
     modeId: job.modeId ?? '',
     cinnaAgentId: job.cinnaAgentId ?? '',
-    cinnaTeamId: job.cinnaTeamId ?? '',
-    cinnaNodeId: job.cinnaAssignedNodeId ?? '',
     cinnaPriority: asPriority(job.cinnaPriority)
   })
 
@@ -103,8 +97,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       agentId: job.agentId ?? '',
       modeId: job.modeId ?? '',
       cinnaAgentId: job.cinnaAgentId ?? '',
-      cinnaTeamId: job.cinnaTeamId ?? '',
-      cinnaNodeId: job.cinnaAssignedNodeId ?? '',
       cinnaPriority: asPriority(job.cinnaPriority)
     }
   }, [job])
@@ -118,8 +110,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     if (agentId !== snap.agentId) patch.agentId = agentId || null
     if (modeId !== snap.modeId) patch.modeId = modeId || null
     if (cinnaAgentId !== snap.cinnaAgentId) patch.cinnaAgentId = cinnaAgentId || null
-    if (cinnaTeamId !== snap.cinnaTeamId) patch.cinnaTeamId = cinnaTeamId || null
-    if (cinnaNodeId !== snap.cinnaNodeId) patch.cinnaAssignedNodeId = cinnaNodeId || null
     if (cinnaPriority !== snap.cinnaPriority) patch.cinnaPriority = cinnaPriority
     return patch
   }
@@ -140,8 +130,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     agentId,
     modeId,
     cinnaAgentId,
-    cinnaTeamId,
-    cinnaNodeId,
     cinnaPriority,
     job.id
   ])
@@ -170,8 +158,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       agentId,
       modeId,
       cinnaAgentId,
-      cinnaTeamId,
-      cinnaNodeId,
       cinnaPriority,
       job.id,
       updateJob
@@ -183,10 +169,48 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     [agents]
   )
 
-  const selectedTeam = useMemo(
-    () => (cinnaTeams ?? []).find((t) => t.id === cinnaTeamId) ?? null,
-    [cinnaTeams, cinnaTeamId]
+  const [agentPickerOpen, setAgentPickerOpen] = useState(false)
+  const [cinnaAgentPickerOpen, setCinnaAgentPickerOpen] = useState(false)
+
+  const localAgentItems = useMemo<AgentPickerItem[]>(() => {
+    const sectionOrder: Record<string, { label: string; rank: number }> = {
+      agent: { label: 'My Agents', rank: 0 },
+      app_mcp_route: { label: 'Shared with Me', rank: 1 },
+      identity: { label: 'People', rank: 2 },
+      local: { label: 'Local', rank: 3 }
+    }
+    const withGroup = enabledAgents.map((a) => {
+      const key = a.source === 'remote' ? (a.remoteTargetType ?? 'agent') : 'local'
+      const group = sectionOrder[key] ?? { label: 'Other', rank: 99 }
+      return {
+        item: {
+          id: a.id,
+          name: a.name,
+          description: a.description,
+          meta: a.protocol ? a.protocol.toUpperCase() : null,
+          group: group.label
+        } as AgentPickerItem,
+        rank: group.rank
+      }
+    })
+    withGroup.sort((a, b) => a.rank - b.rank)
+    return withGroup.map((g) => g.item)
+  }, [enabledAgents])
+
+  const cinnaAgentItems = useMemo<AgentPickerItem[]>(
+    () =>
+      (cinnaAgents ?? []).map((a) => ({
+        id: a.id,
+        name: a.name,
+        description: a.description,
+        meta: 'Cinna',
+        group: null
+      })),
+    [cinnaAgents]
   )
+
+  const selectedAgent = enabledAgents.find((a) => a.id === agentId)
+  const selectedCinnaAgent = (cinnaAgents ?? []).find((a) => a.id === cinnaAgentId)
 
   const toggleMcp = (id: string): void => {
     setMcpIds((prev) => {
@@ -243,18 +267,38 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
             <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
               Agent <span className="text-[var(--color-text-muted)]">(optional)</span>
             </label>
-            <select
-              value={agentId}
-              onChange={(e) => setAgentId(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
+            <button
+              type="button"
+              onClick={() => setAgentPickerOpen(true)}
+              className={`${inputClass} cursor-pointer flex items-center gap-2 text-left`}
             >
-              <option value="">No agent (send to LLM)</option>
-              {enabledAgents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
+              <Bot
+                size={13}
+                className={
+                  selectedAgent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
+                }
+              />
+              <span
+                className={`flex-1 truncate ${
+                  selectedAgent ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
+                }`}
+              >
+                {selectedAgent ? selectedAgent.name : 'No agent (send to LLM)'}
+              </span>
+              <ChevronDown size={13} className="text-[var(--color-text-muted)] shrink-0" />
+            </button>
+            <AgentPickerModal
+              open={agentPickerOpen}
+              title="Select Agent"
+              items={localAgentItems}
+              selectedId={agentId || null}
+              onSelect={(id) => setAgentId(id ?? '')}
+              onClose={() => setAgentPickerOpen(false)}
+              allowNone
+              noneLabel="No agent"
+              noneDescription="Send the prompt straight to the LLM."
+              searchPlaceholder="Search agents…"
+            />
           </div>
 
           {/* Chat mode */}
@@ -314,60 +358,40 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
             <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
               Cinna Agent
             </label>
-            <select
-              value={cinnaAgentId}
-              onChange={(e) => setCinnaAgentId(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
+            <button
+              type="button"
+              onClick={() => setCinnaAgentPickerOpen(true)}
+              className={`${inputClass} cursor-pointer flex items-center gap-2 text-left`}
             >
-              <option value="">Select an agent…</option>
-              {(cinnaAgents ?? []).map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Team */}
-          <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
-              Team <span className="text-[var(--color-text-muted)]">(optional)</span>
-            </label>
-            <select
-              value={cinnaTeamId}
-              onChange={(e) => {
-                setCinnaTeamId(e.target.value)
-                setCinnaNodeId('')
-              }}
-              className={`${inputClass} cursor-pointer`}
-            >
-              <option value="">No team</option>
-              {(cinnaTeams ?? []).map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Assigned node */}
-          <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
-              Assigned Node <span className="text-[var(--color-text-muted)]">(optional)</span>
-            </label>
-            <select
-              value={cinnaNodeId}
-              onChange={(e) => setCinnaNodeId(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
-              disabled={!selectedTeam}
-            >
-              <option value="">Unassigned</option>
-              {selectedTeam?.nodes.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.name}
-                </option>
-              ))}
-            </select>
+              <Bot
+                size={13}
+                className={
+                  selectedCinnaAgent
+                    ? 'text-[var(--color-accent)]'
+                    : 'text-[var(--color-text-muted)]'
+                }
+              />
+              <span
+                className={`flex-1 truncate ${
+                  selectedCinnaAgent
+                    ? 'text-[var(--color-text)]'
+                    : 'text-[var(--color-text-muted)]'
+                }`}
+              >
+                {selectedCinnaAgent ? selectedCinnaAgent.name : 'Select an agent…'}
+              </span>
+              <ChevronDown size={13} className="text-[var(--color-text-muted)] shrink-0" />
+            </button>
+            <AgentPickerModal
+              open={cinnaAgentPickerOpen}
+              title="Select Cinna Agent"
+              items={cinnaAgentItems}
+              selectedId={cinnaAgentId || null}
+              onSelect={(id) => setCinnaAgentId(id ?? '')}
+              onClose={() => setCinnaAgentPickerOpen(false)}
+              searchPlaceholder="Search Cinna agents…"
+              emptyLabel="No Cinna agents available"
+            />
           </div>
 
           {/* Priority */}

@@ -309,6 +309,19 @@
   .markdown-body p:last-child {
     margin-bottom: 0;
   }
+  /* Inline-flavored markdown — for single-line strings (e.g. activity rows)
+     where react-markdown still wraps content in <p>. Collapses paragraphs
+     to inline so the surrounding flex/inline layout doesn't break. */
+  .markdown-inline p,
+  .markdown-inline ul,
+  .markdown-inline ol {
+    display: inline;
+    margin: 0;
+    padding: 0;
+  }
+  .markdown-inline li {
+    display: inline;
+  }
   .markdown-body ul, .markdown-body ol {
     margin: 0.4em 0;
     padding-left: 1.4em;

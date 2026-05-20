@@ -16,8 +16,6 @@ export interface JobData {
   agentId: string | null
   modeId: string | null
   cinnaAgentId: string | null
-  cinnaTeamId: string | null
-  cinnaAssignedNodeId: string | null
   cinnaPriority: string | null
   colorPreset: string | null
   iconName: string | null
@@ -67,8 +65,6 @@ export interface JobCreateInputDto {
   agentId?: string | null
   modeId?: string | null
   cinnaAgentId?: string | null
-  cinnaTeamId?: string | null
-  cinnaAssignedNodeId?: string | null
   cinnaPriority?: string | null
   colorPreset?: string | null
   iconName?: string | null
@@ -82,8 +78,6 @@ export interface JobPatchDto {
   agentId?: string | null
   modeId?: string | null
   cinnaAgentId?: string | null
-  cinnaTeamId?: string | null
-  cinnaAssignedNodeId?: string | null
   cinnaPriority?: string | null
   colorPreset?: string | null
   iconName?: string | null

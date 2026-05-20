@@ -11,20 +11,11 @@ export function useCinnaAgents() {
   })
 }
 
-export function useCinnaTeams() {
-  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
-  return useQuery({
-    queryKey: ['cinna', 'teams'],
-    queryFn: () => window.api.cinna.listTeams(),
-    enabled: isCinnaUser,
-    staleTime: 60_000
-  })
-}
-
 export function useRefreshCinnaRun() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (runId: string) => window.api.jobs.refreshRun(runId),
+    mutationFn: ({ runId, force }: { runId: string; force?: boolean }) =>
+      window.api.jobs.refreshRun(runId, force ? { force: true } : undefined),
     onSuccess: (run) => {
       queryClient.invalidateQueries({ queryKey: ['jobs', run.jobId, 'runs'] })
     }

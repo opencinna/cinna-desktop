@@ -251,8 +251,6 @@ export const jobs = sqliteTable('jobs', {
   agentId: text('agent_id'),
   modeId: text('mode_id'),
   cinnaAgentId: text('cinna_agent_id'),
-  cinnaTeamId: text('cinna_team_id'),
-  cinnaAssignedNodeId: text('cinna_assigned_node_id'),
   cinnaPriority: text('cinna_priority'), // 'low' | 'normal' | 'high' | 'urgent'
   colorPreset: text('color_preset'),
   iconName: text('icon_name'),

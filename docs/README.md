@@ -32,6 +32,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Job** | A reusable, profile-scoped saved spec (title, prompt, execution config). Two execution types: `local` (spawns a chat) or `cinna_task` (creates a remote cinna-core task) |
 | **Job Run** | One execution of a Job. Local runs reference the spawned `chatId`; Cinna runs reference the remote task; status flips via stream completion (local) or polling (cinna) |
 | **Cinna Task Job** | Job variant that calls cinna-core's `POST /api/v1/tasks/`. Only available on Cinna-linked profiles; conversation lives on cinna-core, desktop keeps a pointer |
+| **Task Comment** | Authored content on a cinna task (`comment_type = message \| result`); see also Activity for system-generated entries |
+| **Task Attachment** | A file attached to a cinna task or one of its comments. Distinct from `FileUpload` (chat attachments) — uses a task-scoped download URL (`/api/v1/tasks/{taskId}/attachments/{id}/download`) |
+| **Task Activity** | UI grouping for system-generated comment types (`status_change`, `assignment`, `system`) — shown as a compact collapsible log separate from authored comments |
 
 ## Domain Map
 
@@ -77,6 +80,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### Jobs
 - [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
+- [Cinna Task Run View](jobs/cinna_task_view/cinna_task_view.md) — Read-only in-app view of a `cinna_task` run: comments + standalone/inline attachments fetched from cinna-core, markdown-rendered, with task-scoped attachment download; reached by clicking a cinna_task row in a job's run history
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

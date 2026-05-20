@@ -45,8 +45,6 @@ export function useCreateJob() {
         agentId: input?.agentId ?? null,
         modeId: input?.modeId ?? null,
         cinnaAgentId: input?.cinnaAgentId ?? null,
-        cinnaTeamId: input?.cinnaTeamId ?? null,
-        cinnaAssignedNodeId: input?.cinnaAssignedNodeId ?? null,
         cinnaPriority: input?.cinnaPriority ?? null,
         colorPreset: input?.colorPreset ?? null,
         iconName: input?.iconName ?? null
