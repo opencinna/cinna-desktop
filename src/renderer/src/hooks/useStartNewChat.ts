@@ -10,8 +10,13 @@ import { useUIStore } from '../stores/ui.store'
 export function useStartNewChat(): () => void {
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   return useCallback(() => {
+    // Starting a new chat from the top-bar `+` always leaves any jobs
+    // context behind — the user is creating an ad-hoc chat, not running a
+    // job, so the job sidebar highlight must drop.
+    setActiveJobId(null)
     setActiveChatId(null)
     setActiveView('chat')
-  }, [setActiveChatId, setActiveView])
+  }, [setActiveChatId, setActiveView, setActiveJobId])
 }

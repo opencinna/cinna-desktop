@@ -74,6 +74,16 @@ export const chatService = {
     if (!ok) throw new ChatError('not_found', 'Chat not found')
   },
 
+  /**
+   * Promote a hidden (job-spawned) chat into the main Chats list. No-op if
+   * the chat is already visible; errors out if the chat doesn't exist.
+   */
+  showInList(userId: string, chatId: string): void {
+    requireOwnedChat(userId, chatId)
+    chatRepo.showInList(userId, chatId)
+    logger.info('chat promoted to main list', { chatId })
+  },
+
   addMessage(userId: string, chatId: string, input: AddMessageInput): MessageRow {
     requireOwnedChat(userId, chatId)
     const id = nanoid()

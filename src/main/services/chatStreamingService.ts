@@ -14,6 +14,7 @@ import {
   ToolDefinition
 } from '../llm/types'
 import { ChatError } from '../errors'
+import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('LLM')
@@ -358,6 +359,7 @@ export const chatStreamingService = {
 
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done' })
+      jobService.reportRunCompletion(chatId, 'succeeded')
     } catch (err) {
       if (abortController.signal.aborted) return
       const error = err instanceof Error ? err : new Error(String(err))
@@ -369,6 +371,7 @@ export const chatStreamingService = {
       })
       port.postMessage({ type: 'error', error: parsed.short, errorDetail: parsed.detail })
       messageRepo.saveError({ chatId, short: parsed.short, detail: parsed.detail })
+      jobService.reportRunCompletion(chatId, 'failed', parsed.short)
     }
   }
 }

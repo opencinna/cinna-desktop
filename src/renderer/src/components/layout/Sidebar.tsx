@@ -13,6 +13,8 @@ import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
 import type { SettingsMenu } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
+import { JobsList } from '../jobs/JobsList'
+import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
@@ -38,6 +40,7 @@ export function Sidebar(): React.JSX.Element {
   const setActiveView = useUIStore((s) => s.setActiveView)
   const settingsTab = useUIStore((s) => s.settingsTab)
   const setSettingsMenu = useUIStore((s) => s.setSettingsMenu)
+  const sidebarTab = useUIStore((s) => s.sidebarTab)
   const currentUser = useAuthStore((s) => s.currentUser)
   const isCinnaUser = currentUser?.type === 'cinna_user'
   const profileLabel =
@@ -79,6 +82,7 @@ export function Sidebar(): React.JSX.Element {
 
   return (
     <div className={`app-sidebar-wrap h-full ${sidebarOpen ? '' : 'is-collapsed'}`}>
+      {!isSettings && <SidebarTabs />}
       <div className="app-sidebar overflow-hidden flex flex-col">
         {isSettings ? (
           <>
@@ -134,7 +138,7 @@ export function Sidebar(): React.JSX.Element {
           </>
         ) : (
           <div className="flex-1 overflow-y-auto pt-2">
-            <ChatList />
+            {sidebarTab === 'chats' ? <ChatList /> : <JobsList />}
           </div>
         )}
 

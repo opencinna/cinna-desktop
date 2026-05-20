@@ -16,6 +16,7 @@ export function ChatItem({ chat }: ChatItemProps): React.JSX.Element {
   const activeChatId = useChatStore((s) => s.activeChatId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const deleteChat = useDeleteChat()
   const [hovering, setHovering] = useState(false)
   const isActive = activeChatId === chat.id
@@ -28,6 +29,9 @@ export function ChatItem({ chat }: ChatItemProps): React.JSX.Element {
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
       }`}
       onClick={() => {
+        // Picking a chat from the main Chats list leaves any jobs-context
+        // anchor behind — the user is navigating via chats now.
+        setActiveJobId(null)
         setActiveChatId(chat.id)
         setActiveView('chat')
       }}

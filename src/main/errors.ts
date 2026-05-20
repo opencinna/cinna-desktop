@@ -54,6 +54,20 @@ export type AgentStatusErrorCode =
   | 'remote_unreachable'
   | 'unknown'
 
+export type JobErrorCode =
+  | 'not_found'
+  | 'not_activated'
+  | 'unsupported_type'
+  | 'missing_dependency'
+  | 'invalid_input'
+
+export type CinnaApiErrorCode =
+  | 'not_cinna_user'
+  | 'missing_server_url'
+  | 'reauth_required'
+  | 'request_failed'
+  | 'invalid_response'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -73,6 +87,8 @@ export class ChatModeError extends DomainError<ChatModeErrorCode> {}
 export class AuthError extends DomainError<AuthErrorCode> {}
 export class AgentError extends DomainError<AgentErrorCode> {}
 export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
+export class JobError extends DomainError<JobErrorCode> {}
+export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

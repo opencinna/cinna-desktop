@@ -86,7 +86,8 @@ export function useChatStream(): {
           finishStreaming()
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
-            queryClient.invalidateQueries({ queryKey: ['chats'] })
+            queryClient.invalidateQueries({ queryKey: ['chats'] }),
+            queryClient.invalidateQueries({ queryKey: ['jobs'] })
           ]).finally(() => clearStreamingBlocks())
           break
         case 'error':
@@ -113,7 +114,8 @@ export function useChatStream(): {
           finishStreaming()
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
-            queryClient.invalidateQueries({ queryKey: ['chats'] })
+            queryClient.invalidateQueries({ queryKey: ['chats'] }),
+            queryClient.invalidateQueries({ queryKey: ['jobs'] })
           ]).finally(() => clearStreamingBlocks())
           break
         case 'error':

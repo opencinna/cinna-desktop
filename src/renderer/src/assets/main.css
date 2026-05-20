@@ -150,13 +150,90 @@
     background-color: rgba(255, 255, 255, 0.08);
   }
 
+  /* Diary-book tab rail: sits OUTSIDE the sidebar card's left edge. The
+     sidebar reads as a "page"; tabs are smaller blocks attached to the spine.
+     The active tab visually merges into the page by sharing its surface
+     treatment and removing the seam on its right edge. */
+  /* Tab rail must paint ABOVE the sidebar so the active tab's right-edge
+     extension actually covers the sidebar's left border (DOM order would
+     otherwise put the sidebar on top). */
+  .app-sidebar-tabs {
+    position: absolute;
+    top: calc(var(--topbar-h) + 4px);
+    left: 0;
+    width: var(--sidebar-tab-rail);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding-top: 12px;
+    z-index: 1;
+    pointer-events: auto;
+  }
+  .sidebar-tab {
+    position: relative;
+    width: var(--sidebar-tab-rail);
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--color-border);
+    border-radius: 8px 0 0 8px;
+    /* Inactive — recessed, distinct from the sidebar page. */
+    background-color: var(--color-bg-tertiary);
+    color: var(--color-text-muted);
+    transition: color 120ms ease, background-color 120ms ease;
+    cursor: pointer;
+  }
+  .sidebar-tab:hover {
+    color: var(--color-text-secondary);
+  }
+  [data-theme="dark"] .sidebar-tab {
+    background-color: rgba(0, 0, 0, 0.18);
+    border-color: rgba(255, 255, 255, 0.04);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  /* Active tab: same surface as the sidebar; no right border so it dissolves
+     into the page on its right edge. Width stays at the rail — the
+     "extension" that covers the sidebar's left border is painted as a
+     borderless pseudo-element so the tab's top/bottom borders never bleed
+     into the sidebar's body. */
+  .sidebar-tab[aria-pressed='true'] {
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text);
+    border-right: none;
+    border-top-right-radius: 0;
+    border-bottom-right-radius: 0;
+    z-index: 2;
+  }
+  .sidebar-tab[aria-pressed='true']::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 100%;
+    width: 7px;
+    background-color: var(--color-bg-secondary);
+  }
+  [data-theme="dark"] .sidebar-tab[aria-pressed='true'] {
+    background-color: rgba(0, 0, 0, 0.45);
+    border-color: rgba(255, 255, 255, 0.06);
+  }
+  [data-theme="dark"] .sidebar-tab[aria-pressed='true']::after {
+    background-color: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+
   /* Animated collapse/expand. The wrap reserves layout width (so flex siblings
      reflow correctly) while the inner panel is absolutely positioned — that
      lets its `box-shadow` render outside the wrap's box instead of being
      clipped to a rectangle. On collapse we slide the inner left and fade it,
      so the shadow disappears with it (no residual strip). */
   .app-sidebar-wrap {
-    --sidebar-width: 240px;
+    --sidebar-page-width: 240px;
+    --sidebar-tab-rail: 28px;
+    --sidebar-width: calc(var(--sidebar-page-width) + var(--sidebar-tab-rail));
     position: relative;
     width: var(--sidebar-width);
     transition: width 260ms cubic-bezier(0.2, 0.85, 0.3, 1);
@@ -169,20 +246,28 @@
   .app-sidebar-wrap > .app-sidebar {
     position: absolute;
     /* Offset below the absolutely-positioned TopBar so the card sits under
-       the buttons (matches pre-overlay layout). */
+       the buttons (matches pre-overlay layout). Inset on the left by the tab
+       rail so the SidebarTabs strip lives outside the card. */
     top: calc(var(--topbar-h) + 4px);
-    left: 0;
+    left: var(--sidebar-tab-rail);
     bottom: 0;
-    width: var(--sidebar-width);
+    width: var(--sidebar-page-width);
     transition:
       transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
       opacity 220ms ease-out;
     will-change: transform, opacity;
   }
-  .app-sidebar-wrap.is-collapsed > .app-sidebar {
+  .app-sidebar-wrap.is-collapsed > .app-sidebar,
+  .app-sidebar-wrap.is-collapsed > .app-sidebar-tabs {
     transform: translateX(-100%);
     opacity: 0;
     pointer-events: none;
+  }
+  .app-sidebar-wrap > .app-sidebar-tabs {
+    transition:
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+    will-change: transform, opacity;
   }
 
   /* Draggable strips for the (windowless) macOS title-bar area. */

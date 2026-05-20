@@ -48,6 +48,12 @@ export function registerChatHandlers(): void {
     return { success: true }
   })
 
+  ipcHandle('chat:show-in-list', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    chatService.showInList(getProfileScopeUserId(), chatId)
+    return { success: true }
+  })
+
   ipcHandle(
     'chat:update',
     async (

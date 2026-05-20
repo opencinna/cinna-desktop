@@ -5,6 +5,13 @@ import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
 import type { MessageAttachment } from '../shared/attachments'
 import type {
+  JobData,
+  JobDetailData,
+  JobRunData,
+  JobCreateInputDto,
+  JobPatchDto
+} from '../shared/jobs'
+import type {
   McpRegistryInfo,
   McpRegistrySearchAllResult
 } from '../shared/mcpRegistries'
@@ -219,6 +226,8 @@ const api = {
     permanentDelete: (chatId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:permanent-delete', chatId),
     emptyTrash: (): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:empty-trash'),
+    showInList: (chatId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:show-in-list', chatId),
     update: (
       chatId: string,
       updates: {
@@ -579,6 +588,72 @@ const api = {
       targetAgentId: string
     }): Promise<{ packet: string }> =>
       ipcRenderer.invoke('multiAgent:build-catchup', data)
+  },
+
+  jobs: {
+    list: (): Promise<JobData[]> => ipcRenderer.invoke('job:list'),
+    get: (jobId: string): Promise<JobDetailData> => ipcRenderer.invoke('job:get', jobId),
+    create: (input: JobCreateInputDto): Promise<JobData> =>
+      ipcRenderer.invoke('job:create', input),
+    update: (jobId: string, patch: JobPatchDto): Promise<JobData> =>
+      ipcRenderer.invoke('job:update', jobId, patch),
+    delete: (jobId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('job:delete', jobId),
+    setMcpProviders: (
+      jobId: string,
+      mcpProviderIds: string[]
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('job:set-mcp-providers', jobId, mcpProviderIds),
+    listRuns: (jobId: string): Promise<JobRunData[]> =>
+      ipcRenderer.invoke('job:list-runs', jobId),
+    execute: (
+      jobId: string
+    ): Promise<
+      | {
+          type: 'local'
+          chatId: string
+          runId: string
+          prompt: string
+          agentId: string | null
+          modeId: string | null
+        }
+      | {
+          type: 'cinna_task'
+          runId: string
+          cinnaTaskId: string
+          cinnaShortCode: string | null
+        }
+    > => ipcRenderer.invoke('job:execute', jobId),
+    cancelRun: (runId: string): Promise<JobRunData> =>
+      ipcRenderer.invoke('job:cancel-run', runId),
+    deleteRun: (
+      runId: string
+    ): Promise<{ success: true; chatId: string | null; chatDeleted: boolean }> =>
+      ipcRenderer.invoke('job:delete-run', runId),
+    refreshRun: (runId: string): Promise<JobRunData> =>
+      ipcRenderer.invoke('job:refresh-run', runId),
+    cinnaServerUrl: (): Promise<string> => ipcRenderer.invoke('job:cinna-server-url')
+  },
+
+  cinna: {
+    listAgents: (): Promise<
+      Array<{ id: string; name: string; description: string | null; team_id: string | null }>
+    > => ipcRenderer.invoke('cinna:list-agents'),
+    listTeams: (): Promise<
+      Array<{
+        id: string
+        name: string
+        task_prefix: string | null
+        nodes: Array<{ id: string; name: string }>
+      }>
+    > => ipcRenderer.invoke('cinna:list-teams')
+  },
+
+  system: {
+    openExternal: (
+      url: string
+    ): Promise<{ success: true } | { success: false; error: string }> =>
+      ipcRenderer.invoke('app:open-external', url)
   },
 
   updater: {

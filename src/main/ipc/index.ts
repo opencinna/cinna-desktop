@@ -11,6 +11,8 @@ import { registerLoggerHandlers } from './logger.ipc'
 import { registerUpdaterHandlers } from './updater.ipc'
 import { registerMultiAgentHandlers } from './multi_agent.ipc'
 import { registerFilesHandlers } from './files.ipc'
+import { registerJobHandlers } from './job.ipc'
+import { registerCinnaHandlers } from './cinna.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -26,4 +28,6 @@ export function registerAllIpcHandlers(): void {
   registerUpdaterHandlers()
   registerMultiAgentHandlers()
   registerFilesHandlers()
+  registerJobHandlers()
+  registerCinnaHandlers()
 }

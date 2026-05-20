@@ -50,7 +50,13 @@ export const chatRepo = {
     return getDb()
       .select()
       .from(chats)
-      .where(and(eq(chats.userId, userId), isNull(chats.deletedAt)))
+      .where(
+        and(
+          eq(chats.userId, userId),
+          isNull(chats.deletedAt),
+          eq(chats.hiddenFromList, false)
+        )
+      )
       .orderBy(desc(chats.updatedAt))
       .all()
   },
@@ -64,24 +70,47 @@ export const chatRepo = {
       .all()
   },
 
-  create(userId: string): ChatRow {
+  create(
+    userId: string,
+    init?: {
+      title?: string
+      modelId?: string | null
+      providerId?: string | null
+      modeId?: string | null
+      agentId?: string | null
+      originatingJobRunId?: string | null
+      hiddenFromList?: boolean
+    }
+  ): ChatRow {
     const now = new Date()
     const chat = {
       id: nanoid(),
       userId,
-      title: 'New Chat',
-      modelId: null,
-      providerId: null,
-      modeId: null,
-      agentId: null,
+      title: init?.title ?? 'New Chat',
+      modelId: init?.modelId ?? null,
+      providerId: init?.providerId ?? null,
+      modeId: init?.modeId ?? null,
+      agentId: init?.agentId ?? null,
       activeAgentId: null,
       smartAssistDisabled: false,
+      originatingJobRunId: init?.originatingJobRunId ?? null,
+      hiddenFromList: init?.hiddenFromList ?? false,
       deletedAt: null,
       createdAt: now,
       updatedAt: now
     }
     getDb().insert(chats).values(chat).run()
     return chat
+  },
+
+  /** Promote a hidden (job-spawned) chat into the main chat list. */
+  showInList(userId: string, chatId: string): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ hiddenFromList: false, updatedAt: new Date() })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
   },
 
   softDelete(userId: string, chatId: string): boolean {
@@ -133,6 +162,21 @@ export const chatRepo = {
     const result = getDb()
       .update(chats)
       .set({ ...updates, updatedAt: new Date() })
+      .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
+      .run()
+    return result.changes > 0
+  },
+
+  /**
+   * Wire a chat to the job_runs row that spawned it — the streaming
+   * completion hook reads this back to flip the run's status without
+   * renderer cooperation. Called inside the same transaction as the
+   * chat/run creation in `jobsRepo.createLocalChatAndRun`.
+   */
+  setOriginatingJobRunId(userId: string, chatId: string, runId: string | null): boolean {
+    const result = getDb()
+      .update(chats)
+      .set({ originatingJobRunId: runId })
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0

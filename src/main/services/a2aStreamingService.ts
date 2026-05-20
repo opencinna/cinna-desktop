@@ -16,6 +16,7 @@ import {
   type MessageLike,
   type ArtifactLike
 } from '../agents/streamPartsAccumulator'
+import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('A2A')
@@ -258,6 +259,7 @@ export const a2aStreamingService = {
 
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done' })
+      jobService.reportRunCompletion(chatId, 'succeeded')
     } catch (err) {
       if (!abortController.signal.aborted) {
         const rawError = String(err)
@@ -271,6 +273,7 @@ export const a2aStreamingService = {
         })
         port.postMessage({ type: 'error', error: humanized })
         messageRepo.saveError({ chatId, short: humanized, detail: rawError })
+        jobService.reportRunCompletion(chatId, 'failed', humanized)
       }
     } finally {
       port.close()

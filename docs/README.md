@@ -29,6 +29,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Default Scope** | Shared storage under `__default__` user id — LLM providers, MCP servers, chat modes, and local agents live here and are visible from every profile |
 | **Profile Scope** | Per-account storage under the active user id — chats, remote agents, agent overrides, and Cinna tokens live here and swap on user switch |
 | **Agent Override** | Per-profile boolean (`agent_overrides` table) that overlays a synced agent's `enabled` flag so user toggles survive resync |
+| **Job** | A reusable, profile-scoped saved spec (title, prompt, execution config). Two execution types: `local` (spawns a chat) or `cinna_task` (creates a remote cinna-core task) |
+| **Job Run** | One execution of a Job. Local runs reference the spawned `chatId`; Cinna runs reference the remote task; status flips via stream completion (local) or polling (cinna) |
+| **Cinna Task Job** | Job variant that calls cinna-core's `POST /api/v1/tasks/`. Only available on Cinna-linked profiles; conversation lives on cinna-core, desktop keeps a pointer |
 
 ## Domain Map
 
@@ -38,6 +41,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | [Auth](auth/user_accounts/user_accounts.md) | Local user accounts, login/registration, user-scoped data |
 | [Chat](chat/messaging/messaging.md) | Conversation CRUD, message streaming, tool-call loop |
 | [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
+| [Jobs](jobs/jobs/jobs.md) | Reusable saved work specs (prompt + config) the user can execute repeatedly — local (spawns a chat) or Cinna Task |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
 | [UI](ui/app_shell/app_shell.md) | App shell chrome (top bar, sidebar, footer menus), settings screen, theming |
@@ -70,6 +74,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [A2A Streaming Pipeline](agents/agents/streaming_pipeline.md) — Per-part delta computation, `cinna.content_kind` / `cinna.tool_name` metadata contract, structured `parts[]` persistence
 - [Remote Agents](agents/remote_agents/remote_agents.md) — Auto-sync agents from Cinna backend, categorized display, JWT-based A2A communication
 - [Agent Status](agents/agent_status/agent_status.md) — Title-bar activity indicator + frosted-glass modal surfacing per-agent self-reported status (severity, summary, markdown body) with one-click "Start chat"
+
+### Jobs
+- [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

@@ -64,6 +64,19 @@ export const chats = sqliteTable('chats', {
   smartAssistDisabled: integer('smart_assist_disabled', { mode: 'boolean' })
     .notNull()
     .default(false),
+  /**
+   * When a chat is spawned by a Job's `executeLocal`, this carries the
+   * `job_runs.id` so the stream-completion hook can flip the run's status
+   * without the renderer having to remember the pairing.
+   */
+  originatingJobRunId: text('originating_job_run_id'),
+  /**
+   * When true, the chat does not appear in the main Chats sidebar list.
+   * Used by job-spawned chats so the user's chat list isn't cluttered with
+   * every job run. The user can promote a hidden chat to the list via the
+   * "Move to Chats" button on the run row (which clears this flag).
+   */
+  hiddenFromList: integer('hidden_from_list', { mode: 'boolean' }).notNull().default(false),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -214,6 +227,78 @@ export const messages = sqliteTable('messages', {
   originalText: text('original_text'),
   sourceAgentId: text('source_agent_id'),
   sortOrder: integer('sort_order').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+/**
+ * A Job is a reusable unit of work — a saved spec (title, description, prompt,
+ * execution config) the user can run repeatedly. Profile-scoped (per-account).
+ * Two execution variants:
+ *   - 'local'      → spawns a new chat seeded with the prompt; existing chat
+ *                    pipeline drives the conversation.
+ *   - 'cinna_task' → POSTs to cinna-core /api/v1/tasks/; the conversation lives
+ *                    on cinna-core, desktop keeps a pointer + status.
+ */
+export const jobs = sqliteTable('jobs', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  type: text('type').notNull().default('local'), // 'local' | 'cinna_task'
+  title: text('title').notNull(),
+  description: text('description'),
+  prompt: text('prompt').notNull(),
+  agentId: text('agent_id'),
+  modeId: text('mode_id'),
+  cinnaAgentId: text('cinna_agent_id'),
+  cinnaTeamId: text('cinna_team_id'),
+  cinnaAssignedNodeId: text('cinna_assigned_node_id'),
+  cinnaPriority: text('cinna_priority'), // 'low' | 'normal' | 'high' | 'urgent'
+  colorPreset: text('color_preset'),
+  iconName: text('icon_name'),
+  deletedAt: integer('deleted_at', { mode: 'timestamp' }),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+export const jobMcpProviders = sqliteTable(
+  'job_mcp_providers',
+  {
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    mcpProviderId: text('mcp_provider_id')
+      .notNull()
+      .references(() => mcpProviders.id, { onDelete: 'cascade' })
+  },
+  (table) => [primaryKey({ columns: [table.jobId, table.mcpProviderId] })]
+)
+
+/**
+ * One row per execution of a Job. For local runs `localChatId` points at the
+ * spawned chat. For cinna_task runs `cinnaTaskId` + `cinnaShortCode` point at
+ * the remote task. Status flips to a terminal value when the run finishes
+ * (locally: when the first assistant turn finalizes; cinna: when polling
+ * observes a terminal cinna-core status).
+ */
+export const jobRuns = sqliteTable('job_runs', {
+  id: text('id').primaryKey(),
+  jobId: text('job_id')
+    .notNull()
+    .references(() => jobs.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  type: text('type').notNull(), // 'local' | 'cinna_task'
+  localChatId: text('local_chat_id').references(() => chats.id, { onDelete: 'set null' }),
+  cinnaTaskId: text('cinna_task_id'),
+  cinnaShortCode: text('cinna_short_code'),
+  status: text('status').notNull().default('pending'), // pending | running | succeeded | failed | cancelled
+  errorMessage: text('error_message'),
+  startedAt: integer('started_at', { mode: 'timestamp' }),
+  finishedAt: integer('finished_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

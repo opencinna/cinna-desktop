@@ -54,6 +54,23 @@ export function useTrashList() {
   })
 }
 
+/**
+ * Promote a hidden (job-spawned) chat into the main Chats sidebar list.
+ * Invalidates `['chats']` so the chat appears immediately, and `['jobs']` so
+ * any run row showing the "Move to Chats" button updates to reflect the new
+ * `chatHidden = false` state.
+ */
+export function useShowChatInList() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (chatId: string) => window.api.chat.showInList(chatId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+    }
+  })
+}
+
 export function useRestoreChat() {
   const queryClient = useQueryClient()
   return useMutation({
