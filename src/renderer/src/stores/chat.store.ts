@@ -1,7 +1,7 @@
 import { create } from 'zustand'
-import type { ContentKind } from '../../../shared/messageParts'
+import type { ContentKind, ToolStream } from '../../../shared/messageParts'
 
-export type { ContentKind }
+export type { ContentKind, ToolStream }
 
 export interface ToolCallBlock {
   type: 'tool_call'
@@ -25,6 +25,10 @@ interface TextBlock {
   toolName?: string
   /** Structured tool arguments from `cinna.tool_input` metadata (tool kind). */
   toolInput?: Record<string, unknown>
+  /** Pairing key from `cinna.tool_id` (tool + tool_result kinds). */
+  toolId?: string
+  /** Stream classification from `cinna.tool_stream` (tool_result only). */
+  toolStream?: ToolStream
 }
 
 export type StreamBlock = TextBlock | ToolCallBlock
@@ -52,7 +56,9 @@ interface ChatStore {
     text: string,
     kind?: ContentKind,
     toolName?: string,
-    toolInput?: Record<string, unknown>
+    toolInput?: Record<string, unknown>,
+    toolId?: string,
+    toolStream?: ToolStream
   ) => void
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
@@ -97,21 +103,32 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null
     }),
 
-  appendDelta: (text, kind = 'text', toolName, toolInput) =>
+  appendDelta: (text, kind = 'text', toolName, toolInput, toolId, toolStream) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
-      if (last?.type === 'text' && last.kind === kind && last.toolName === toolName) {
+      // Mirror main-process accumulator: tool_result blocks merge on
+      // (toolId, toolStream); all other text-kinds merge on toolName.
+      const sameKind = last?.type === 'text' && last.kind === kind
+      const isMergeable =
+        sameKind &&
+        (kind === 'tool_result'
+          ? last.toolId === toolId && last.toolStream === toolStream
+          : last.toolName === toolName)
+      if (last?.type === 'text' && isMergeable) {
         blocks[blocks.length - 1] = {
           ...last,
           content: last.content + text,
           segments: [...last.segments, text],
-          toolInput: last.toolInput ?? toolInput
+          toolInput: last.toolInput ?? toolInput,
+          toolId: last.toolId ?? toolId
         }
       } else {
         const next: TextBlock = { type: 'text', kind, content: text, segments: [text] }
         if (toolName) next.toolName = toolName
         if (toolInput) next.toolInput = toolInput
+        if (toolId) next.toolId = toolId
+        if (toolStream) next.toolStream = toolStream
         blocks.push(next)
       }
       return {

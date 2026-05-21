@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useForceRefreshAgentStatus } from './useAgentStatus'
-import type { ContentKind } from '../../../shared/messageParts'
+import type { ContentKind, ToolStream } from '../../../shared/messageParts'
 import type { MessageAttachment } from '../../../shared/attachments'
 
 type LlmEvent = {
@@ -25,6 +25,8 @@ type AgentEvent = {
   kind?: ContentKind
   toolName?: string
   toolInput?: Record<string, unknown>
+  toolId?: string
+  toolStream?: ToolStream
   requestId?: string
   taskId?: string
   contextId?: string
@@ -77,6 +79,9 @@ export function useChatStream(): {
           })
           break
         case 'tool_result':
+          // LLM-side completion event: pairs a tool-use id with its result.
+          // Distinct from the A2A 'tool_result' *content kind* handled by
+          // handleAgent (which streams stdout/stderr text chunks as deltas).
           resolveToolCall(event.id!, event.result)
           break
         case 'tool_error':
@@ -110,7 +115,14 @@ export function useChatStream(): {
           startStreaming(event.requestId ?? '')
           break
         case 'delta':
-          appendDelta(event.text!, event.kind ?? 'text', event.toolName, event.toolInput)
+          appendDelta(
+            event.text!,
+            event.kind ?? 'text',
+            event.toolName,
+            event.toolInput,
+            event.toolId,
+            event.toolStream
+          )
           break
         case 'done':
           finishStreaming()

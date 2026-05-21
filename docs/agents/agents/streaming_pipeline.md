@@ -9,11 +9,13 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 | Term | Definition |
 |------|-----------|
 | **TextPart** | A2A protocol text fragment inside a `Message` or `Artifact`. May carry arbitrary `metadata` |
-| **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, or `'tool'`. Defaults to `'text'` when absent |
+| **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, `'tool'`, or `'tool_result'`. Defaults to `'text'` when absent |
 | **Tool Name** | Value of `metadata['cinna.tool_name']` on a `tool`-kind part — names the tool the agent is narrating about |
 | **Tool Input** | Value of `metadata['cinna.tool_input']` on a `tool`-kind part — structured arguments object (e.g. `{ command: "ls -la" }` for Bash). Used by `ToolNarrationBlock` to render the inline `<ToolCallSummary>` header in verbose mode |
+| **Tool ID** | Value of `metadata['cinna.tool_id']` — pairing key set on `'tool'` parts (identifies the call) and on `'tool_result'` parts (matches them back to the originating call). For CLI commands this is the backend `exec_id`; for LLM tools it is the provider tool-call id |
+| **Tool Stream** | Value of `metadata['cinna.tool_stream']` on `'tool_result'` parts: `'stdout'` or `'stderr'`. Defaults to `'stdout'` when absent — unknown values are coerced server-side |
 | **Per-part delta** | The new substring appended to a TextPart since the last seen snapshot of that part. Keyed by `(messageId, partIndex)` |
-| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName?, toolInput? }` entries persisted on the assistant message row |
+| **Structured parts** | `MessagePart[]` — flat in-order list of `{ kind, text, toolName?, toolInput?, toolId?, toolStream? }` entries persisted on the assistant message row |
 | **Answer text** | Concatenation of `text`-kind parts only — stored in `messages.content` for previews/search/title generation |
 
 ## Cinna Metadata Contract (with the backend)
@@ -22,9 +24,11 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 
 | Metadata key | Type | When set | Purpose |
 |--------------|------|----------|---------|
-| `cinna.content_kind` | `'text' \| 'thinking' \| 'tool'` | Every part | Tells client which block to render this fragment in |
+| `cinna.content_kind` | `'text' \| 'thinking' \| 'tool' \| 'tool_result'` | Every part | Tells client which block to render this fragment in |
 | `cinna.tool_name` | string | Only on `tool`-kind parts | Names the tool being narrated about |
 | `cinna.tool_input` | object | Optional, only on `tool`-kind parts | Structured arguments for the tool call (e.g. `{ command, description }` for Bash). When present, the renderer can show a compact `<ToolCallSummary>` inline header in verbose mode and a structured argument block in the expanded body |
+| `cinna.tool_id` | string | On `tool` and `tool_result` parts | Pairing key: same value on a `tool` part and every `tool_result` chunk that belongs to it. Backend uses `exec_id` for CLI commands and the provider tool-call id for LLM tools |
+| `cinna.tool_stream` | `'stdout' \| 'stderr'` | Only on `tool_result` parts | Stream label for command output. Renderer styles `stderr` chunks in danger color. Unknown/absent values default to `'stdout'` (backend coerces server-side) |
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
@@ -45,10 +49,15 @@ For each event (status-update | artifact-update | message | task):
         if no delta -> skip
         seenPartText.set(key, text)
         kind = metadata['cinna.content_kind'] ?? 'text'
-        toolName  = (kind === 'tool') ? metadata['cinna.tool_name']  : undefined
-        toolInput = (kind === 'tool') ? metadata['cinna.tool_input'] : undefined
-        append to internal parts[] (merge with last only if same kind+toolName)
-        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput })
+        toolName   = (kind === 'tool')                                 ? metadata['cinna.tool_name']   : undefined
+        toolInput  = (kind === 'tool')                                 ? metadata['cinna.tool_input']  : undefined
+        toolId     = (kind === 'tool' || kind === 'tool_result')       ? metadata['cinna.tool_id']     : undefined
+        toolStream = (kind === 'tool_result')                          ? metadata['cinna.tool_stream'] ?? 'stdout' : undefined
+        append to internal parts[] (merge with last only if:
+          - text/thinking: same kind
+          - tool: same kind + toolName
+          - tool_result: same kind + toolId + toolStream)
+        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream })
         if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
   - Forward `{ type: 'status', state, taskId, contextId }` to the renderer
@@ -74,10 +83,12 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | Field | Type | Notes |
 |-------|------|-------|
 | `type` | `'delta'` | Discriminator |
-| `kind` | `ContentKind` | `'text' \| 'thinking' \| 'tool'` |
+| `kind` | `ContentKind` | `'text' \| 'thinking' \| 'tool' \| 'tool_result'` |
 | `text` | string | The fragment to append (already a delta — renderer does not need to dedupe) |
 | `toolName` | string \| undefined | Set only when `kind === 'tool'` and `cinna.tool_name` was present |
 | `toolInput` | object \| undefined | Set only when `kind === 'tool'` and `cinna.tool_input` was a plain object. Carried through `appendDelta` and merged onto the in-flight streaming block so `ToolNarrationBlock` can render the inline tool-call summary as soon as it arrives |
+| `toolId` | string \| undefined | Pairing key from `cinna.tool_id`. Set on `tool` and `tool_result` deltas |
+| `toolStream` | `'stdout' \| 'stderr' \| undefined` | Set only when `kind === 'tool_result'`. Defaulted to `'stdout'` if metadata was absent |
 
 ## Persisted Shape (`messages.parts`)
 
@@ -86,12 +97,13 @@ Stored as JSON on the `messages` row:
 ```
 [
   { "kind": "thinking", "text": "**Considering user request**\n\nI think..." },
-  { "kind": "tool", "text": "Calling search...", "toolName": "web_search", "toolInput": { "query": "weather paris" } },
+  { "kind": "tool", "text": "Calling search...", "toolName": "web_search", "toolInput": { "query": "weather paris" }, "toolId": "exec_123" },
+  { "kind": "tool_result", "text": "Found 3 results...", "toolId": "exec_123", "toolStream": "stdout" },
   { "kind": "text", "text": "Here is the answer..." }
 ]
 ```
 
-`toolInput` is optional — older parts and any backend that doesn't emit `cinna.tool_input` simply omit the field.
+`toolInput`, `toolId`, and `toolStream` are optional — older parts and any backend that doesn't emit the matching metadata simply omit the field. Pairing between a `tool` part and its `tool_result` part(s) is done by matching `toolId`; interleaved `stdout`/`stderr` chunks keep their chronology because the merge rule requires both `toolId` AND `toolStream` to match.
 
 Renderer prefers `parts[]` when present; falls back to `messages.content` (the flat answer text) for legacy/LLM messages with no parts.
 
@@ -102,8 +114,9 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 - `kind: 'text'` → `MessageBubble` (assistant role, full-width markdown, no border)
 - `kind: 'thinking'` → `ThinkingBlock` (collapsible dimmed card with brain icon, italic markdown body)
 - `kind: 'tool'` → `ToolNarrationBlock` (collapsible card with wrench icon). Header is `Tool: <toolName>` in compact mode; in verbose mode and when `toolInput` is present, the header renders an inline `<ToolCallSummary>` (`name(arg: value, …)`). Expanded body always shows the structured `<ToolCallSummary>` block when `toolInput` is present. See [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) for the gating rules
+- `kind: 'tool_result'` → `ToolResultBlock` (collapsible monospace card with terminal icon). Renders the raw stdout/stderr emitted by a tool execution; `stderr` chunks switch to danger-color styling. The block is shown immediately under its originating `tool` part — the in-order parts list places them adjacent naturally, no explicit lookup needed
 
-Streaming blocks merge consecutive deltas only when both `kind` AND `toolName` match — same merge rule as the main-process accumulator.
+Streaming blocks merge consecutive deltas with the same merge rule as the main-process accumulator: `text` / `thinking` merge by kind; `tool` adds `toolName`; `tool_result` requires both `toolId` AND `toolStream` to match.
 
 ## File References
 
@@ -115,13 +128,14 @@ Streaming blocks merge consecutive deltas only when both `kind` AND `toolName` m
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
 - Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleAgent` <!-- nocheck -->
 - Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
-- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`
+- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`
 
 ## Backward Compatibility
 
 - Messages with no `parts` (LLM chats, pre-existing agent chats) render via the existing `MessageBubble` path using `content`
 - A2A servers that don't set `cinna.content_kind` get `kind: 'text'` for every part — identical to pre-pipeline behavior
 - The `content` column is still populated with the concatenated answer text, so chat previews, titles, and search work unchanged
+- Older persisted assistant messages may have `tool` parts without `toolId` — pairing degrades gracefully (each `tool_result` renders on its own; orphaned `tool_result` parts also render in place without crashing)
 
 ## Integration Points
 

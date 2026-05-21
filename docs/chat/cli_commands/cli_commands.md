@@ -28,7 +28,7 @@ Surfaces the shell commands that a Cinna agent exposes via its `CLI_COMMANDS.yam
 - Empty `CLI_COMMANDS.yaml`, missing card, or a card-fetch error all collapse to "no commands" — the `/` trigger is silently disabled.
 - The `/` trigger shares the popup-state slot in `ChatInput` with `@` and `#` — only one popup is open at a time; switching trigger characters replaces the popup's contents.
 - Unlike `#`, there is no pre-input tag cloud — commands only surface via the modal popup.
-- Selecting a command inserts text; the user must still press Enter or click Send to dispatch the message. The backend's `/run:*` routing then executes the shell command without an LLM turn.
+- Selecting a command inserts text; the user must still press Enter or click Send to dispatch the message. The backend's `/run:*` routing then executes the shell command without an LLM turn — stdout and stderr stream back as A2A `tool_result`-kind parts and render in a `ToolResultBlock` directly under the bash tool invocation (see [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) and [Conversation UI](../conversation_ui/conversation_ui.md)).
 - `/` is only recognised as a trigger at the start of input or after whitespace — typing a slash mid-word (e.g. inside a file path) does nothing.
 
 ## Architecture Overview

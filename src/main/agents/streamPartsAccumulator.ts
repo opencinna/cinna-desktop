@@ -2,24 +2,33 @@
  * Accumulates A2A streaming text parts into a structured list, computing
  * per-part deltas and routing each delta to the renderer with its content kind.
  *
- * Each text Part may carry `metadata['cinna.content_kind']` ∈ {text, thinking, tool}
- * and, for `tool` kind, `metadata['cinna.tool_name']`. These metadata keys are
- * the contract with the Cinna backend (see `a2a_event_mapper.py`).
+ * Each text Part may carry `metadata['cinna.content_kind']` ∈
+ * {text, thinking, tool, tool_result}.
  *
- * Consecutive parts merge into a single accumulated entry only when both kind
- * and toolName match, so narration about tool A and tool B stay as separate
- * persisted parts.
+ * - `tool` parts also carry `cinna.tool_name`, optional `cinna.tool_input`,
+ *   and `cinna.tool_id` (pairing key).
+ * - `tool_result` parts carry `cinna.tool_id` (matching the originating tool
+ *   part) and `cinna.tool_stream` ∈ {stdout, stderr}.
  *
- * `answerText()` returns concat of `text`-kind parts only — used as the message
- * preview/fallback content (`messages.content`).
+ * Merge rules:
+ * - Consecutive `text` / `thinking` parts merge into one entry.
+ * - Consecutive `tool` parts merge only when `toolName` matches.
+ * - Consecutive `tool_result` parts merge only when `toolId` AND `toolStream`
+ *   match — preserves interleaved stdout/stderr chronology as separate parts.
+ *
+ * `answerText()` returns concat of `text`-kind parts only — used as the
+ * message preview/fallback content (`messages.content`).
  */
-import type { ContentKind, MessagePart } from '../../shared/messageParts'
+import type { ContentKind, MessagePart, ToolStream } from '../../shared/messageParts'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
 export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
+export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
+export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
 
-const VALID_KINDS: readonly ContentKind[] = ['text', 'thinking', 'tool'] as const
+const VALID_KINDS: readonly ContentKind[] = ['text', 'thinking', 'tool', 'tool_result'] as const
+const VALID_STREAMS: readonly ToolStream[] = ['stdout', 'stderr'] as const
 
 export interface PartLike {
   kind: string
@@ -58,6 +67,19 @@ export function partToolInputOf(part: PartLike): Record<string, unknown> | undef
   const v = part.metadata?.[TOOL_INPUT_METADATA_KEY]
   if (v && typeof v === 'object' && !Array.isArray(v)) {
     return v as Record<string, unknown>
+  }
+  return undefined
+}
+
+export function partToolIdOf(part: PartLike): string | undefined {
+  const v = part.metadata?.[TOOL_ID_METADATA_KEY]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
+}
+
+export function partToolStreamOf(part: PartLike): ToolStream | undefined {
+  const v = part.metadata?.[TOOL_STREAM_METADATA_KEY]
+  if (typeof v === 'string' && (VALID_STREAMS as readonly string[]).includes(v)) {
+    return v as ToolStream
   }
   return undefined
 }
@@ -101,10 +123,26 @@ export class StreamPartsAccumulator {
       if (!delta) return
       this.seenPartText.set(key, text)
       const kind = partKindOf(part)
-      const toolName = kind === 'tool' ? partToolNameOf(part) : undefined
-      const toolInput = kind === 'tool' ? partToolInputOf(part) : undefined
-      this.appendToList(kind, delta, toolName, toolInput)
-      port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput })
+      const isTool = kind === 'tool'
+      const isToolResult = kind === 'tool_result'
+      const toolName = isTool ? partToolNameOf(part) : undefined
+      const toolInput = isTool ? partToolInputOf(part) : undefined
+      const toolId = isTool || isToolResult ? partToolIdOf(part) : undefined
+      // Backend coerces unknown values to 'stdout' server-side; default here
+      // covers the absent-metadata case so the renderer always has a stream label.
+      const toolStream: ToolStream | undefined = isToolResult
+        ? partToolStreamOf(part) ?? 'stdout'
+        : undefined
+      this.appendToList(kind, delta, toolName, toolInput, toolId, toolStream)
+      port.postMessage({
+        type: 'delta',
+        kind,
+        text: delta,
+        toolName,
+        toolInput,
+        toolId,
+        toolStream
+      })
 
       if (toolName && toolInput && !this.loggedToolCalls.has(key)) {
         this.loggedToolCalls.add(key)
@@ -117,18 +155,29 @@ export class StreamPartsAccumulator {
     kind: ContentKind,
     delta: string,
     toolName?: string,
-    toolInput?: Record<string, unknown>
+    toolInput?: Record<string, unknown>,
+    toolId?: string,
+    toolStream?: ToolStream
   ): void {
     const last = this.parts[this.parts.length - 1]
-    if (last && last.kind === kind && last.toolName === toolName) {
+    const sameKind = last && last.kind === kind
+    const mergeable =
+      sameKind &&
+      (kind === 'tool_result'
+        ? last.toolId === toolId && last.toolStream === toolStream
+        : last.toolName === toolName)
+    if (last && mergeable) {
       last.text += delta
-      // Backend may attach `tool_input` only on the first frame of a part —
-      // preserve it once captured rather than overwriting with undefined later.
+      // Backend may attach `tool_input` / `tool_id` only on the first frame of
+      // a part — preserve once captured rather than overwriting with undefined.
       if (toolInput && !last.toolInput) last.toolInput = toolInput
+      if (toolId && !last.toolId) last.toolId = toolId
     } else {
       const next: MessagePart = { kind, text: delta }
       if (toolName) next.toolName = toolName
       if (toolInput) next.toolInput = toolInput
+      if (toolId) next.toolId = toolId
+      if (toolStream) next.toolStream = toolStream
       this.parts.push(next)
     }
     if (kind === 'text') this.answer += delta

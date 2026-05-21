@@ -32,4 +32,4 @@ See `docs/README.md` for the project index, glossary, and domain map. Feature do
 - Model lists are hardcoded in each adapter (`src/main/llm/{anthropic,openai,gemini}.ts`)
 - DB migrations are inline SQL in `src/main/db/client.ts` `runMigrations()` — add ALTER TABLE for schema changes
 - `ipcRenderer.postMessage` sends data as the second argument to the `ipcMain.on` handler (not `event.message`) — see `llm.ipc.ts` handler. Ports are on `event.ports`.
-- When user says "read core" — read `docs/README.md` (the project index with glossary, domain map, and feature registry)
+- When user says "read core", "read docs", or "read about feature ..." — start context discovery from `docs/README.md` (the project index with glossary, domain map, and feature registry), then follow links from there into the relevant `docs/{domain}/{feature}/` folder

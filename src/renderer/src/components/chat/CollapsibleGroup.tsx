@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 
 export type CollapsibleStatus = 'pending' | 'done' | 'error'
-export type CollapsibleKind = 'thinking' | 'tool_narration' | 'tool_call'
+export type CollapsibleKind = 'thinking' | 'tool_narration' | 'tool_call' | 'tool_result'
 
 export interface CollapsibleGroupItem {
   key: string

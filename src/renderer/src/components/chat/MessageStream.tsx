@@ -8,6 +8,7 @@ import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
+import { ToolResultBlock } from './ToolResultBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { CollapsibleGroup, type CollapsibleGroupItem } from './CollapsibleGroup'
 
@@ -226,6 +227,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                             <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
                           )
                         }
+                        if (p.kind === 'tool_result') {
+                          return (
+                            <ToolResultBlock key={k} content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
+                          )
+                        }
                         return (
                           <MessageBubble
                             key={k}
@@ -263,6 +269,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         kind: 'tool_narration',
                         status: 'done',
                         node: <ToolNarrationBlock content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
+                      }
+                    })
+                  } else if (p.kind === 'tool_result') {
+                    renderNodes.push({
+                      slot: 'collapsible',
+                      item: {
+                        key: k,
+                        kind: 'tool_result',
+                        status: p.toolStream === 'stderr' ? 'error' : 'done',
+                        node: <ToolResultBlock content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
                     })
                   } else {
@@ -369,6 +385,39 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                   renderNodes.push({
                     slot: 'collapsible',
                     item: { key: `stream-tool-${i}`, kind: 'tool_narration', status: 'done', isLive: live, node }
+                  })
+                }
+                return
+              }
+              if (block.kind === 'tool_result') {
+                const live = isStreaming && isLastBlock
+                // Tool output is the payload the user is actually waiting on
+                // (especially for `/run:*` CLI commands), so leave it expanded
+                // by default during streaming — unlike tool/thinking blocks
+                // which default collapsed because their content is auxiliary
+                // narration. Persisted reload uses the default collapsed
+                // behavior from ToolResultBlock to keep long outputs from
+                // crowding scrollback.
+                const node = (
+                  <ToolResultBlock
+                    content={block.content}
+                    toolStream={block.toolStream}
+                    isStreaming={live}
+                    defaultExpanded={verboseMode ? undefined : true}
+                  />
+                )
+                if (verboseMode) {
+                  renderNodes.push({ slot: 'plain', key: `stream-result-${i}`, node })
+                } else {
+                  renderNodes.push({
+                    slot: 'collapsible',
+                    item: {
+                      key: `stream-result-${i}`,
+                      kind: 'tool_result',
+                      status: block.toolStream === 'stderr' ? 'error' : 'done',
+                      isLive: live,
+                      node
+                    }
                   })
                 }
                 return

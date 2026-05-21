@@ -11,7 +11,9 @@
  * processes and must not pull in any runtime dependencies.
  */
 
-export type ContentKind = 'text' | 'thinking' | 'tool'
+export type ContentKind = 'text' | 'thinking' | 'tool' | 'tool_result'
+
+export type ToolStream = 'stdout' | 'stderr'
 
 export interface MessagePart {
   kind: ContentKind
@@ -20,4 +22,12 @@ export interface MessagePart {
   toolName?: string
   /** Structured tool arguments from `metadata['cinna.tool_input']`. */
   toolInput?: Record<string, unknown>
+  /**
+   * Pairing key from `metadata['cinna.tool_id']`. Present on `'tool'` parts
+   * (identifies the call) and on `'tool_result'` parts (pairs the result back
+   * to the originating call).
+   */
+  toolId?: string
+  /** Only on `'tool_result'` parts: `'stdout' | 'stderr'`. */
+  toolStream?: ToolStream
 }
