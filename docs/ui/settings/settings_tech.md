@@ -17,6 +17,7 @@
 - `src/renderer/src/components/settings/ChatModeCard.tsx` — Expandable card: name, color, provider/model, MCP bindings
 - `src/renderer/src/components/settings/ChatModeForm.tsx` — New chat mode form: name, color, provider, MCP selection
 - `src/renderer/src/components/settings/UserAccountsSection.tsx` — User accounts list with expandable cards per user
+- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — AI-function toggles (Auto-generate chat titles, etc.); see [Auto Chat Titles](../../chat/auto_titles/auto_titles.md)
 - `src/renderer/src/components/settings/TrashSection.tsx` — Deleted chats management
 
 ### Renderer — Shared UI
@@ -36,6 +37,7 @@
 - `src/renderer/src/hooks/useAgents.ts` — React Query hooks for agent CRUD and testing
 - `src/renderer/src/hooks/useChatModes.ts` — React Query hooks for chat mode CRUD
 - `src/renderer/src/hooks/useAuth.ts` — React Query hooks for user account management
+- `src/renderer/src/hooks/useAppSettings.ts` — React Query hooks for the `app_settings` KV store (`useAppSettings` read, `useSetAppSetting` write with optimistic update + rollback)
 
 ## State Management
 
@@ -44,7 +46,7 @@
 | State | Type | Default | Purpose |
 |-------|------|---------|---------|
 | `activeView` | `'chat' \| 'settings'` | `'chat'` | Controls sidebar mode and main content |
-| `settingsTab` | `'chats' \| 'agents' \| 'llm' \| 'mcp' \| 'accounts' \| 'trash'` | `'chats'` | Active settings section |
+| `settingsTab` | `'chats' \| 'agents' \| 'llm' \| 'mcp' \| 'accounts' \| 'features' \| 'development' \| 'profile-agents' \| 'trash'` | `'chats'` | Active settings section |
 
 ### Section Reset on Tab Switch
 
@@ -60,6 +62,8 @@ Menu items defined as static array:
 - `{ id: 'llm', label: 'LLM Providers', icon: Brain }`
 - `{ id: 'mcp', label: 'MCP Providers', icon: Plug }`
 - `{ id: 'accounts', label: 'User Accounts', icon: Users }`
+- `{ id: 'features', label: 'Features', icon: Sparkles }`
+- `{ id: 'development', label: 'Development', icon: Wrench }`
 
 Active item highlighted with `bg-[var(--color-bg-tertiary)]`. Back button calls `setActiveView('chat')`.
 
@@ -97,3 +101,8 @@ Settings components interact with these IPC channels via `window.api.*`:
 - `mcp.delete(providerId)` — Delete MCP server
 - `mcp.connect(providerId)` — Connect to MCP server
 - `mcp.disconnect(providerId)` — Disconnect from MCP server
+
+### App Settings (`window.api.settings.*`)
+
+- `settings.getAll()` — Snapshot of every known key with defaults applied for missing rows (returns `AppSettingsSchema`)
+- `settings.set(key, value)` — Update one setting; throws `AppSettingsError` (`invalid_key` / `invalid_value`) on validation failure. Backs the Features tab toggles; see [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) for the schema-update pattern.

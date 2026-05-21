@@ -82,6 +82,8 @@ export type FileErrorCode =
   | 'write_failed'
   | 'unsupported_source'
 
+export type AppSettingsErrorCode = 'invalid_key' | 'invalid_value'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -105,6 +107,7 @@ export class JobError extends DomainError<JobErrorCode> {}
 export class NoteError extends DomainError<NoteErrorCode> {}
 export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
 export class FileError extends DomainError<FileErrorCode> {}
+export class AppSettingsError extends DomainError<AppSettingsErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

@@ -33,6 +33,11 @@ import {
   UPDATER_BROADCAST_CHANNEL,
   type UpdaterState
 } from '../shared/updaterState'
+import {
+  CHAT_TITLE_UPDATED_CHANNEL,
+  type AppSettingsSchema,
+  type ChatTitleUpdatedPayload
+} from '../shared/appSettings'
 
 export type { MessageAttachment }
 
@@ -284,7 +289,23 @@ const api = {
       chatId: string,
       mcpProviderId: string
     ): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('chat:on-demand-mcp-remove', chatId, mcpProviderId)
+      ipcRenderer.invoke('chat:on-demand-mcp-remove', chatId, mcpProviderId),
+    /**
+     * Subscribe to background chat-title autogeneration completions. Fires
+     * once per chat (when the auto-title feature is enabled and a first
+     * user message triggers a successful title rewrite). Returns an
+     * unsubscribe function.
+     */
+    onTitleUpdated: (
+      handler: (payload: ChatTitleUpdatedPayload) => void
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        payload: ChatTitleUpdatedPayload
+      ): void => handler(payload)
+      ipcRenderer.on(CHAT_TITLE_UPDATED_CHANNEL, listener)
+      return () => ipcRenderer.off(CHAT_TITLE_UPDATED_CHANNEL, listener)
+    }
   },
 
   providers: {
@@ -837,6 +858,14 @@ const api = {
       ipcRenderer.on(UPDATER_BROADCAST_CHANNEL, listener)
       return () => ipcRenderer.off(UPDATER_BROADCAST_CHANNEL, listener)
     }
+  },
+
+  settings: {
+    getAll: (): Promise<AppSettingsSchema> => ipcRenderer.invoke('settings:get-all'),
+    set: <K extends keyof AppSettingsSchema>(
+      key: K,
+      value: AppSettingsSchema[K]
+    ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value)
   }
 }
 

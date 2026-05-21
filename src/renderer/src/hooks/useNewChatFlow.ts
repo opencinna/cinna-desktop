@@ -9,6 +9,7 @@ import type {
   MessageAttachment,
   PendingAttachment
 } from '../../../shared/attachments'
+import { deriveTitleFromMessage } from '../../../shared/chatTitle'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
@@ -157,7 +158,7 @@ export function useNewChatFlow(): {
         attachments,
         noteIds
       } = opts
-      const title = message.length > 50 ? message.slice(0, 50) + '…' : message
+      const title = deriveTitleFromMessage(message)
 
       let chatId: string | null = null
       try {

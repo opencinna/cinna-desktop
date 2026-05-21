@@ -1,11 +1,64 @@
 import { chatRepo } from '../db/chats'
 import { messageRepo } from '../db/messages'
 import { multiAgentService } from './multiAgentService'
+import { chatTitleService, ChatTitleError } from './chatTitleService'
 import { ChatError } from '../errors'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('routing')
+
+/**
+ * Fire-and-forget background chat-title autogeneration. Called from both
+ * `prepareLlmSend` and `prepareAgentSend` so any first user message —
+ * regardless of which channel it routes to — triggers a title attempt.
+ * The title service guards on its own toggle + first-message check, so
+ * the call is safe to make after every persist. ALL failure modes are
+ * logged here and swallowed; nothing reaches the streaming pipeline.
+ *
+ * Log-level classification:
+ *   - `feature_disabled`, `not_first_message`, `chat_renamed_initial`:
+ *     expected pre-condition misses (fire on every non-first send) →
+ *     debug, so they don't drown out other signal.
+ *   - `chat_renamed_mid_flight`: rare — the user renamed the chat in the
+ *     window between our adapter call starting and finishing → info.
+ *   - everything else (`no_provider`, `llm_failed`, `empty_output`,
+ *     `chat_not_found`): real failures → warn.
+ */
+function fireTitleGenInBackground(userId: string, chatId: string): void {
+  void chatTitleService
+    .autoGenerateForFirstMessage({ userId, chatId })
+    .catch((err) => {
+      if (err instanceof ChatTitleError) {
+        const expected =
+          err.code === 'feature_disabled' ||
+          err.code === 'not_first_message' ||
+          err.code === 'chat_renamed_initial'
+        if (expected) {
+          logger.debug('chat-title autogen skipped', { chatId, code: err.code })
+          return
+        }
+        if (err.code === 'chat_renamed_mid_flight') {
+          logger.info('chat-title autogen lost rename race', {
+            chatId,
+            code: err.code
+          })
+          return
+        }
+        logger.warn('chat-title autogen failed', {
+          chatId,
+          code: err.code,
+          message: err.message,
+          detail: err.detail
+        })
+        return
+      }
+      logger.warn('chat-title autogen failed (unexpected)', {
+        chatId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    })
+}
 
 export interface PrepareAgentSendInput {
   userId: string
@@ -84,6 +137,8 @@ export const messageRoutingService = {
       attachmentCount: attachments?.length ?? 0
     })
 
+    fireTitleGenInBackground(userId, chatId)
+
     return { wireContent, userMessageId }
   },
 
@@ -107,6 +162,8 @@ export const messageRoutingService = {
       hasCatchup: !!catchupPacket,
       attachmentCount: attachments?.length ?? 0
     })
+
+    fireTitleGenInBackground(userId, chatId)
 
     return { wireContent, userMessageId }
   }

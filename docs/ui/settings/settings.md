@@ -7,8 +7,8 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 ## Core Concepts
 
 - **Settings View** — A dedicated app view (`activeView: 'settings'`) that replaces the chat interface
-- **Settings Tab** — A sub-section within settings (`settingsTab: 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'development' | 'profile-agents' | 'trash'`), selected from the sidebar menu
-- **Default Group** — Sidebar section labeled "Default" containing the shared settings (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Development). Always visible.
+- **Settings Tab** — A sub-section within settings (`settingsTab: 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development' | 'profile-agents' | 'trash'`), selected from the sidebar menu
+- **Default Group** — Sidebar section labeled "Default" containing the shared settings (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Features, Development). Always visible.
 - **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings. Only rendered when the active profile has profile-scope content (currently: Cinna users only, with a single "Agents" entry showing remote agents).
 - **Sidebar Menu Mode** — When settings are active, the sidebar replaces the chat list with the two-group vertical settings menu plus a footer "Trash" entry.
 
@@ -18,7 +18,7 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 
 1. User clicks the avatar in the sidebar footer to open the profile dropdown
 2. User clicks the "Settings" entry in the dropdown
-3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the shared menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-only menu items (Agents). A separator + "Trash" entry sits at the bottom.
+3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the shared menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Features, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-only menu items (Agents). A separator + "Trash" entry sits at the bottom.
 4. Main content area shows the active settings section (Chat Modes by default)
 
 ### Navigating Between Sections
@@ -52,7 +52,7 @@ UserMenu (profile dropdown in sidebar footer)
 Sidebar (settings menu mode)
   ├── Back button → setActiveView('chat')
   ├── "Default" header
-  │     └── Menu items → 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'development'
+  │     └── Menu items → 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development'
   ├── "Profile {name}" header (Cinna users only)
   │     └── Menu items → 'profile-agents'
   └── (separator) → 'trash'
@@ -66,6 +66,7 @@ MainArea
         ├── LLMSettingsSection (when tab = 'llm')
         ├── MCPSettingsSection (when tab = 'mcp')
         ├── UserAccountsSection (when tab = 'accounts')
+        ├── FeaturesSettingsSection (when tab = 'features')
         ├── DevelopmentSettingsSection (when tab = 'development')
         └── TrashSection (when tab = 'trash')
 ```
@@ -76,6 +77,7 @@ MainArea
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — defines which menu items belong to the Default vs Profile group
 - [App Shell](../app_shell/app_shell.md) — Hosts the profile dropdown (settings entry) and the sidebar's settings-menu mode
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Chat modes section manages named presets
+- [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — The Features tab hosts the "AI Functions" subsection where this opt-in toggle lives
 - [Agents](../../agents/agents/agents.md) — Agents section (Default group) manages local A2A agent registrations
 - [Remote Agents](../../agents/remote_agents/remote_agents.md) — Agents section (Profile group) lists Cinna-synced remote agents with per-profile enable/disable overrides
 - [Adapters](../../llm/adapters/adapters.md) — LLM settings section manages provider configuration consumed by the adapter layer

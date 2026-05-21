@@ -6,7 +6,8 @@ import {
   MessageSquare,
   Bot,
   Users,
-  Wrench
+  Wrench,
+  Sparkles
 } from 'lucide-react'
 import { useEffect } from 'react'
 import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
@@ -28,6 +29,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[
   { id: 'llm', label: 'LLM Providers', icon: Brain },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
+  { id: 'features', label: 'Features', icon: Sparkles },
   { id: 'development', label: 'Development', icon: Wrench }
 ]
 

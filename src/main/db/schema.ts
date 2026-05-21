@@ -423,3 +423,17 @@ export const chatAgentSessions = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
 )
+
+/**
+ * Installation-global key/value store for user-toggleable feature flags
+ * (e.g. AI-function switches in Settings > Features). Values are stored as
+ * JSON strings so the repo can hand back typed primitives without juggling
+ * schema changes per flag.
+ */
+export const appSettings = sqliteTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})

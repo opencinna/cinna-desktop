@@ -5,6 +5,7 @@ import { AgentsSettingsSection } from './AgentsSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
 import { UserAccountsSection } from './UserAccountsSection'
+import { FeaturesSettingsSection } from './FeaturesSettingsSection'
 import { DevelopmentSettingsSection } from './DevelopmentSettingsSection'
 
 const sectionTitles = {
@@ -13,6 +14,7 @@ const sectionTitles = {
   agents: 'Agents',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
+  features: 'Features',
   development: 'Development',
   'profile-agents': 'Profile Agents',
   trash: 'Trash'
@@ -33,6 +35,7 @@ export function SettingsPage(): React.JSX.Element {
         )}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
         {settingsTab === 'accounts' && <UserAccountsSection key="accounts" />}
+        {settingsTab === 'features' && <FeaturesSettingsSection key="features" />}
         {settingsTab === 'development' && <DevelopmentSettingsSection key="development" />}
         {settingsTab === 'trash' && <TrashSection key="trash" />}
       </div>

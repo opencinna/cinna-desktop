@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { eq, desc } from 'drizzle-orm'
+import { and, asc, eq, desc, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
 import type { MessagePart } from '../../shared/messageParts'
@@ -194,6 +194,35 @@ export const messageRepo = {
       .select()
       .from(messages)
       .where(eq(messages.id, id))
+      .get()
+  },
+
+  /**
+   * COUNT-only check — avoids loading row payloads when callers only need
+   * to know how many messages of a given role exist in a chat. Used by
+   * `chatTitleService` to early-out without scanning the full history.
+   */
+  countByRole(chatId: string, role: string): number {
+    const row = getDb()
+      .select({ cnt: sql<number>`count(*)` })
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.role, role)))
+      .get()
+    return row?.cnt ?? 0
+  },
+
+  /**
+   * Fetch the earliest message of a given role in a chat (by insertion
+   * order). Targeted alternative to filtering the full `listMessages`
+   * result when the caller only needs the first hit.
+   */
+  firstByRole(chatId: string, role: string): MessageRow | undefined {
+    return getDb()
+      .select()
+      .from(messages)
+      .where(and(eq(messages.chatId, chatId), eq(messages.role, role)))
+      .orderBy(asc(messages.sortOrder))
+      .limit(1)
       .get()
   }
 }

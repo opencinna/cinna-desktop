@@ -16,6 +16,7 @@ import { migrateChatAgentSessions } from './migrations/chat-agent-sessions'
 import { migrateChatFiles } from './migrations/chat-files'
 import { migrateJobs } from './migrations/jobs'
 import { migrateNotes } from './migrations/notes'
+import { migrateAppSettings } from './migrations/app-settings'
 import { chatModeRepo } from './chatModes'
 import { createLogger } from '../logger/logger'
 
@@ -81,6 +82,7 @@ function runMigrations(): void {
   // Jobs depend on chats + mcp_providers being present (FK references).
   migrateJobs(sqlite)
   migrateNotes(sqlite)
+  migrateAppSettings(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

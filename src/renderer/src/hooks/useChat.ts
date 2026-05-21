@@ -1,9 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
-import { useCallback } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useChatStream } from './useChatStream'
 
 export function useChatList() {
+  const queryClient = useQueryClient()
+
+  // Subscribe to main-process background chat-title autogen completions so
+  // the sidebar and the active chat header pick up the new title instantly,
+  // without waiting for the next manual refetch.
+  useEffect(() => {
+    return window.api.chat.onTitleUpdated(({ chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+      queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+    })
+  }, [queryClient])
+
   return useQuery({
     queryKey: ['chats'],
     queryFn: () => window.api.chat.list()

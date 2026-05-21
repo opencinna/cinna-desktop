@@ -14,6 +14,7 @@ export type SettingsMenu =
   | 'mcp'
   | 'agents'
   | 'accounts'
+  | 'features'
   | 'development'
   | 'profile-agents'
   | 'trash'

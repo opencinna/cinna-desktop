@@ -14,6 +14,7 @@ import { registerFilesHandlers } from './files.ipc'
 import { registerJobHandlers } from './job.ipc'
 import { registerNoteHandlers } from './note.ipc'
 import { registerCinnaHandlers } from './cinna.ipc'
+import { registerSettingsHandlers } from './settings.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -32,4 +33,5 @@ export function registerAllIpcHandlers(): void {
   registerJobHandlers()
   registerNoteHandlers()
   registerCinnaHandlers()
+  registerSettingsHandlers()
 }
