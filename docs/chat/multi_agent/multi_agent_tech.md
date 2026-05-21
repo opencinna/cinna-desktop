@@ -52,7 +52,7 @@
 | Rewrite failure modal — portaled dialog with per-error-code copy, technical details, Cancel / Disable / Send-anyway | `src/renderer/src/components/chat/RewriteFailureModal.tsx` |
 | Active-agent chip + inline switch-back button | `src/renderer/src/components/chat/ActiveAgentChip.tsx` |
 | Message bubble (agent label + color) | `src/renderer/src/components/chat/MessageBubble.tsx` |
-| Message stream (silently skips legacy `agent_transition` rows; threads `agentName` / `agentId` into bubbles) | `src/renderer/src/components/chat/MessageStream.tsx` |
+| Message stream (renders `agent_transition` rows as muted system messages via `SystemMessage` with `tone="notice"`; threads `agentName` / `agentId` into bubbles) | `src/renderer/src/components/chat/MessageStream.tsx` |
 | Main area (just passes `chatId` to `ChatInput`) | `src/renderer/src/components/layout/MainArea.tsx` |
 | Agent color helper (hash → palette preset) | `src/renderer/src/utils/agentColors.ts` |
 | Shared `@<slug>` parser (slug or id match) used by the composer | `src/renderer/src/utils/agentSlug.ts` |
@@ -78,7 +78,7 @@
 
 Migration: `src/main/db/migrations/messages.ts`.
 
-> The original design also reserved a `role: 'agent_transition'` value. The implementation no longer writes these rows; legacy rows from earlier builds are filtered out at render time and excluded from the LLM history rebuild.
+> `role: 'agent_transition'` is written by the A2A streaming service for `cinna.content_kind: 'notice'` TextParts (see [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md)). These rows render as muted system messages in the transcript and are excluded from catch-up replay + LLM history rebuilds.
 
 ### Additions to `chats`
 
@@ -123,7 +123,7 @@ Streaming channels now use **named-object payloads** (`src/shared/ipcPayloads.ts
 ### Multi-agent service — `src/main/services/multiAgentService.ts`
 
 - `rewriteMessage({ userId, chatId, targetAgentId, userText })` — Verifies chat ownership, looks up the target agent, resolves an adapter via `aiFunctions.resolveAdapterFromChatMode`, composes the Smart Rewrite system prompt (target agent's name + description + the last N user/assistant lines of history + the keep-original sentinel contract), calls `aiFunctions.runSingleShot`. Returns `Promise<string | null>`: the trimmed rewrite, or `null` when the LLM output equals `KEEP_ORIGINAL_SENTINEL` after surrounding-quote/backtick stripping (signals "no rewrite needed — dispatch the original"). Logs `rewrite skipped: message already self-contained` on the sentinel path. Maps `AiFunctionError` codes to `MultiAgentError` codes (`no_provider` → `no_rewrite_provider`, `empty_output` → `rewrite_empty`, `llm_failed` → `rewrite_failed`).
-- `buildCatchupPacket({ userId, chatId, targetAgentId })` — Verifies chat ownership. Reads the cursor from `chat_agent_sessions`. **Returns an empty string when no cursor exists** (the agent's first engagement — rewrite carries the context). Otherwise slices messages from after the cursor, filters to user/assistant rows, caps by `CATCHUP_WINDOW_TURNS` (20), formats as a literal transcript. Logs the build under scope `multi-agent` with `cursor`, `turnCount`, `packetChars`.
+- `buildCatchupPacket({ userId, chatId, targetAgentId })` — Verifies chat ownership. Reads the cursor from `chat_agent_sessions`. **Returns an empty string when no cursor exists** (the agent's first engagement — rewrite carries the context). Otherwise slices messages from after the cursor, filters to user/assistant rows, caps by `CATCHUP_WINDOW_TURNS` (20), formats as a literal transcript. Logs the build under scope `multi-agent` with `cursor`, `turnCount`, `packetChars`. Note: the composer skips calling this entirely when the user message is a CLI command (see *CLI command bypass* in `useChatComposer.dispatchToAgent`).
 - `advanceCatchupCursor({ userId, chatId, targetAgentId, lastMessageId })` — Verifies chat ownership, upserts the cursor. Called by `messageRoutingService.prepareAgentSend` immediately after persisting the user message.
 - `setActiveAgent({ userId, chatId, agentId })` — Verifies chat ownership, calls `chatRepo.updateRouting({ activeAgentId })`. Returns `{ changed }`. No transcript row is inserted.
 - `disableSmartAssist({ userId, chatId })` — Verifies chat ownership, calls `chatRepo.updateRouting({ smartAssistDisabled: true })`.
@@ -158,7 +158,7 @@ See [AI Functions](../../llm/ai_functions/ai_functions.md) for the general-purpo
 
 ### Chat streaming service — `src/main/services/chatStreamingService.ts`
 
-- `stream({ userId, chatId, wireContent, port })` — The user message is already persisted by `messageRoutingService.prepareLlmSend` before this call. The service rebuilds the LLM history from `messages` (filtering `error` and legacy `agent_transition` rows), patches the most recent user turn with `wireContent` so the catch-up packet is in scope only for the current call (never persisted), then runs the tool-call loop.
+- `stream({ userId, chatId, wireContent, port })` — The user message is already persisted by `messageRoutingService.prepareLlmSend` before this call. The service rebuilds the LLM history from `messages` (filtering `error` and `agent_transition` rows — the latter are agent-side system notices and must never reach the LLM), patches the most recent user turn with `wireContent` so the catch-up packet is in scope only for the current call (never persisted), then runs the tool-call loop.
 
 ### Chat repo — `src/main/db/chats.ts`
 
@@ -177,6 +177,7 @@ The single seam between the chat input and the routing/dispatch logic. Lives in 
   - `activeAgent`, `rootAgent`, `rootLabel` — reactive view state for the chip and switch-back button. Subscribes to `useChatDetail` + `useAgents` so it re-renders on cache changes.
   - `switchActiveAgent(agentId | null)` — fires `multiAgent:set-active-agent` (with optimistic cache update — see `useSetActiveAgent` in `useMultiAgent.ts`).
   - `submit(input)` — the single entry point for sending. Reads a *fresh* snapshot from the React Query cache at call time via `queryClient.getQueryData`, so popup-select → quick-Enter routes correctly even before the optimistic update notifies subscribers. Parses optional leading `@<slug>` via the shared `findAgentMention` (in `utils/agentSlug.ts`), resolves target, decides root-vs-agent channel, decides rewrite trigger, dispatches. When the rewrite mutation returns `rewrittenText: null` (keep-original sentinel), dispatches the original text via `dispatchToAgent` and returns `{ kind: 'sent' }` — bypasses the confirmation UI entirely. Returns `{ kind: 'sent' }`, `{ kind: 'rewrite-pending', rewrittenText, pending }`, `{ kind: 'rewrite-failed', code, detail, pending }`, or `{ kind: 'noop' }`.
+  - **CLI command bypass.** `submit` detects `/run:<slug>` invocations via `isCliCommand` (`src/shared/cliCommands.ts`) and forces `needsRewrite = false`. `dispatchToAgent` performs the same check and skips the `multiAgent:build-catchup` IPC call so the literal invocation reaches the agent unmodified — both transformations would otherwise break the cinna-backend's `/run:*` detection (rewrite mangles the syntax; catch-up shifts the invocation off the start of the wire content). The (chat, agent) cursor still advances inside `messageRoutingService.prepareAgentSend` so the next non-CLI engagement sees the correct catch-up window.
   - `confirmRewrite(text, pending)` — second-Enter confirm: dispatches the (possibly edited) rewritten text to the target agent.
   - `sendRaw(pending)` — "Send anyway" in the failure modal: dispatches the original text without rewrite metadata.
   - `disableSmartAssist()` — flips the per-chat flag.
@@ -208,7 +209,7 @@ Owns the Smart Rewrite UX state machine + textarea side-effects so `ChatInput.ts
 - `RewriteFailureModal` (`src/renderer/src/components/chat/RewriteFailureModal.tsx`) — Portaled dialog: friendly copy, per-error-code line, technical-details disclosure, Cancel / Disable Smart Rewrite / Send anyway. Pure props in.
 - `ActiveAgentChip` (`src/renderer/src/components/chat/ActiveAgentChip.tsx`) — Chip + inline "Switch back to `<root>`" button. Pure props in.
 - `MessageBubble` — Assistant bubbles surface the agent's name + color label above the content when `sourceAgentId` is set and differs from the chat's root agent. Color from `presetForAgentId(agentId)` (hashed agent id → `COLOR_PRESETS` palette).
-- `MessageStream` — Silently skips legacy `agent_transition` rows; threads `agentName` / `agentId` into bubbles for each assistant message.
+- `MessageStream` — Renders `agent_transition` rows as muted system messages via the local `SystemMessage` component with `tone="notice"`; threads `agentName` / `agentId` into bubbles for each assistant message.
 - `MainArea` — Does not own any multi-agent state. Just passes `chatId` to `ChatInput`.
 
 ### Shared utilities — `src/renderer/src/utils/agentSlug.ts`

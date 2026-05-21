@@ -170,11 +170,24 @@ export const a2aStreamingService = {
 
         const parts = accumulator.snapshotParts()
         const answerText = accumulator.answerText()
+        const notices = accumulator.snapshotNotices()
         logger.debug('Stream complete', {
           eventsReceived: eventIndex,
           parts: parts.map((p) => ({ kind: p.kind, len: p.text.length })),
-          answerLength: answerText.length
+          answerLength: answerText.length,
+          noticeCount: notices.length
         })
+
+        // Persist notices first so they precede the assistant message in
+        // transcript order — startup pings should sit above the answer they
+        // preceded on the wire.
+        for (const notice of notices) {
+          messageRepo.saveTransition({
+            chatId,
+            content: notice.text,
+            sourceAgentId: agentId
+          })
+        }
 
         if (parts.length > 0) {
           messageRepo.saveAssistant({
@@ -229,10 +242,20 @@ export const a2aStreamingService = {
 
         const parts = accumulator.snapshotParts()
         const answerText = accumulator.answerText()
+        const notices = accumulator.snapshotNotices()
         logger.debug('Non-streaming complete', {
           parts: parts.map((p) => ({ kind: p.kind, len: p.text.length })),
-          answerLength: answerText.length
+          answerLength: answerText.length,
+          noticeCount: notices.length
         })
+
+        for (const notice of notices) {
+          messageRepo.saveTransition({
+            chatId,
+            content: notice.text,
+            sourceAgentId: agentId
+          })
+        }
 
         if (parts.length > 0) {
           messageRepo.saveAssistant({

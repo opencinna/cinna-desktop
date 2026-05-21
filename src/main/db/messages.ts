@@ -45,6 +45,13 @@ export interface SaveErrorMessage {
   detail?: string
 }
 
+export interface SaveTransitionMessage {
+  chatId: string
+  content: string
+  /** The agent that emitted the transition. */
+  sourceAgentId?: string | null
+}
+
 export interface InsertRawMessage {
   id: string
   chatId: string
@@ -124,6 +131,23 @@ export const messageRepo = {
         createdAt: new Date()
       })
       .run()
+  },
+
+  saveTransition(msg: SaveTransitionMessage): string {
+    const id = nanoid()
+    getDb()
+      .insert(messages)
+      .values({
+        id,
+        chatId: msg.chatId,
+        role: 'agent_transition',
+        content: msg.content,
+        sourceAgentId: msg.sourceAgentId ?? null,
+        sortOrder: getNextSortOrder(msg.chatId),
+        createdAt: new Date()
+      })
+      .run()
+    return id
   },
 
   saveError(msg: SaveErrorMessage): void {

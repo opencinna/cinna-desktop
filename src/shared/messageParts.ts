@@ -7,11 +7,17 @@
  *  - a structured `MessagePart[]` list (A2A agent messages where the server
  *    tags each TextPart with `metadata['cinna.content_kind']`).
  *
+ * The `notice` kind is special: it never appears inside an assistant
+ * message's `parts[]`. Notice TextParts are routed by the A2A streaming
+ * service to a separate `role: 'agent_transition'` row so they read as
+ * system messages in the transcript and are excluded from catch-up replay
+ * and LLM history rebuilds.
+ *
  * Keep this file purely type-only — it is imported from both Electron
  * processes and must not pull in any runtime dependencies.
  */
 
-export type ContentKind = 'text' | 'thinking' | 'tool' | 'tool_result'
+export type ContentKind = 'text' | 'thinking' | 'tool' | 'tool_result' | 'notice'
 
 export type ToolStream = 'stdout' | 'stderr'
 

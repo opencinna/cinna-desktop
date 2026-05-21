@@ -45,7 +45,7 @@
 | Table | Purpose | Key columns |
 |-------|---------|-------------|
 | `chats` | Conversations | id, title, model_id, provider_id, created_at, updated_at |
-| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, parts (json — `MessagePart[]`, optional, set by A2A agents with `cinna.content_kind`-tagged parts), sort_order |
+| `messages` | Chat messages | id, chat_id, role (user\|assistant\|tool_call\|error\|agent_transition), content, tool_call_id, tool_name, tool_input (json), tool_calls (json), tool_error (boolean), tool_provider, parts (json — `MessagePart[]`, optional, set by A2A agents with `cinna.content_kind`-tagged parts), source_agent_id, sort_order. `agent_transition` rows hold agent-side system notices (e.g. startup pings) emitted as `cinna.content_kind: 'notice'` parts — never sent back to the LLM and excluded from catch-up replay |
 | `chat_mcp_providers` | Junction: MCP servers active per chat | chat_id, mcp_provider_id (composite PK) |
 
 DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-desktop/cinna.db` on macOS).

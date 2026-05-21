@@ -9,7 +9,8 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 | Term | Definition |
 |------|-----------|
 | **TextPart** | A2A protocol text fragment inside a `Message` or `Artifact`. May carry arbitrary `metadata` |
-| **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, `'tool'`, or `'tool_result'`. Defaults to `'text'` when absent |
+| **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, `'tool'`, `'tool_result'`, or `'notice'`. Defaults to `'text'` when absent |
+| **Notice** | A `'notice'`-kind TextPart — an agent-side system message (e.g. the startup ping "Starting up the agent environment, this may take a moment…"). Never persisted as part of the assistant message — the streaming service saves each notice as its own `role: 'agent_transition'` row so it renders as a muted system message and is excluded from catch-up replay + LLM history rebuilds |
 | **Tool Name** | Value of `metadata['cinna.tool_name']` on a `tool`-kind part — names the tool the agent is narrating about |
 | **Tool Input** | Value of `metadata['cinna.tool_input']` on a `tool`-kind part — structured arguments object (e.g. `{ command: "ls -la" }` for Bash). Used by `ToolNarrationBlock` to render the inline `<ToolCallSummary>` header in verbose mode |
 | **Tool ID** | Value of `metadata['cinna.tool_id']` — pairing key set on `'tool'` parts (identifies the call) and on `'tool_result'` parts (matches them back to the originating call). For CLI commands this is the backend `exec_id`; for LLM tools it is the provider tool-call id |
@@ -24,7 +25,7 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 
 | Metadata key | Type | When set | Purpose |
 |--------------|------|----------|---------|
-| `cinna.content_kind` | `'text' \| 'thinking' \| 'tool' \| 'tool_result'` | Every part | Tells client which block to render this fragment in |
+| `cinna.content_kind` | `'text' \| 'thinking' \| 'tool' \| 'tool_result' \| 'notice'` | Every part | Tells client which block to render this fragment in. `'notice'` parts are routed to a separate `agent_transition` row instead of joining the assistant message |
 | `cinna.tool_name` | string | Only on `tool`-kind parts | Names the tool being narrated about |
 | `cinna.tool_input` | object | Optional, only on `tool`-kind parts | Structured arguments for the tool call (e.g. `{ command, description }` for Bash). When present, the renderer can show a compact `<ToolCallSummary>` inline header in verbose mode and a structured argument block in the expanded body |
 | `cinna.tool_id` | string | On `tool` and `tool_result` parts | Pairing key: same value on a `tool` part and every `tool_result` chunk that belongs to it. Backend uses `exec_id` for CLI commands and the provider tool-call id for LLM tools |
@@ -63,11 +64,18 @@ For each event (status-update | artifact-update | message | task):
   - Forward `{ type: 'status', state, taskId, contextId }` to the renderer
   ↓
 On stream completion:
-  - parts = accumulator.snapshotParts()
-  - answer = accumulator.answerText()    # concat of 'text'-kind parts
+  - parts   = accumulator.snapshotParts()
+  - answer  = accumulator.answerText()    # concat of 'text'-kind parts
+  - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
+  - For each notice: messageRepo.saveTransition({ chatId, content, sourceAgentId })
   - messageRepo.saveAssistant({ chatId, content: answer, parts })
   - a2aSessionRepo.upsert(...)
   - port.postMessage({ type: 'done' })
+
+Notices are persisted *before* the assistant message so transcript ordering
+matches the on-the-wire order — startup pings sit above the answer they
+preceded. Notices never appear in `messages.parts[]`; they live on their own
+`role: 'agent_transition'` rows.
 ```
 
 ## Why per-`(messageId, partIndex)` keying
@@ -89,6 +97,8 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | `toolInput` | object \| undefined | Set only when `kind === 'tool'` and `cinna.tool_input` was a plain object. Carried through `appendDelta` and merged onto the in-flight streaming block so `ToolNarrationBlock` can render the inline tool-call summary as soon as it arrives |
 | `toolId` | string \| undefined | Pairing key from `cinna.tool_id`. Set on `tool` and `tool_result` deltas |
 | `toolStream` | `'stdout' \| 'stderr' \| undefined` | Set only when `kind === 'tool_result'`. Defaulted to `'stdout'` if metadata was absent |
+
+For `kind: 'notice'` deltas, only `text` and `kind` are populated; all `tool*` fields are `undefined`. The renderer appends them as `notice` text blocks in `chat.store.streamingBlocks`, rendered as muted system messages. After the stream completes they're persisted as `role: 'agent_transition'` rows and the streaming block is cleared.
 
 ## Persisted Shape (`messages.parts`)
 
@@ -115,6 +125,7 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 - `kind: 'thinking'` → `ThinkingBlock` (collapsible dimmed card with brain icon, italic markdown body)
 - `kind: 'tool'` → `ToolNarrationBlock` (collapsible card with wrench icon). Header is `Tool: <toolName>` in compact mode; in verbose mode and when `toolInput` is present, the header renders an inline `<ToolCallSummary>` (`name(arg: value, …)`). Expanded body always shows the structured `<ToolCallSummary>` block when `toolInput` is present. See [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) for the gating rules
 - `kind: 'tool_result'` → `ToolResultBlock` (collapsible monospace card with terminal icon). Renders the raw stdout/stderr emitted by a tool execution; `stderr` chunks switch to danger-color styling. The block is shown immediately under its originating `tool` part — the in-order parts list places them adjacent naturally, no explicit lookup needed
+- `kind: 'notice'` → `SystemMessage` with `tone="notice"` (centered, muted border, `Info` icon). Live during streaming via a `notice` block in `chat.store.streamingBlocks`; persisted as a `role: 'agent_transition'` row that renders with the same component. Notices never appear in an assistant message's `parts[]`
 
 Streaming blocks merge consecutive deltas with the same merge rule as the main-process accumulator: `text` / `thinking` merge by kind; `tool` adds `toolName`; `tool_result` requires both `toolId` AND `toolStream` to match.
 
@@ -123,12 +134,12 @@ Streaming blocks merge consecutive deltas with the same merge rule as the main-p
 - Pipeline implementation: `src/main/agents/streamPartsAccumulator.ts`
 - Shared types: `src/shared/messageParts.ts`
 - IPC integration: `src/main/ipc/agent_a2a.ipc.ts:registerA2AHandlers` <!-- nocheck -->
-- Persistence: `src/main/db/messages.ts:messageRepo.saveAssistant` <!-- nocheck -->
+- Persistence: `src/main/db/messages.ts:messageRepo.saveAssistant` <!-- nocheck -->, `src/main/db/messages.ts:messageRepo.saveTransition` <!-- nocheck -->
 - DB column: `src/main/db/migrations/messages.ts` (`parts` JSON column)
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
 - Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleAgent` <!-- nocheck -->
 - Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
-- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`
+- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`. Notice rendering reuses `SystemMessage` (local to `MessageStream.tsx`) with `tone="notice"`
 
 ## Backward Compatibility
 

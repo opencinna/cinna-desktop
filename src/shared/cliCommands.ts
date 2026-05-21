@@ -18,7 +18,19 @@ export interface CliCommand {
 
 const CLI_SKILL_PREFIX = 'cinna.run.'
 const CLI_RUN_TAG = 'cinna-run'
+const CLI_INVOCATION_PREFIX = '/run:'
 const DESC_MAX = 140
+
+/**
+ * Detect whether a user-typed message is a CLI command invocation
+ * (`/run:<slug>` optionally followed by args). CLI commands are literal
+ * strings that the agent backend interprets server-side without an LLM turn,
+ * so callers must bypass Smart Rewrite and catch-up replay — both would
+ * corrupt the wire content and break the backend's `/run:*` detection.
+ */
+export function isCliCommand(text: string): boolean {
+  return text.trimStart().startsWith(CLI_INVOCATION_PREFIX)
+}
 
 function firstLine(s: string): string {
   const trimmed = s.trim()

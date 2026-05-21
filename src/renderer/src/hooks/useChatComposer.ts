@@ -11,6 +11,7 @@ import {
 import { useChatStream } from './useChatStream'
 import { useChatModes } from './useChatModes'
 import { findAgentMention } from '../utils/agentSlug'
+import { isCliCommand } from '../../../shared/cliCommands'
 import type { MessageAttachment } from '../../../shared/attachments'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -139,14 +140,21 @@ export function useChatComposer(chatId: string | null): ComposerView & {
     ): Promise<void> => {
       if (!chatId) return
       let catchupPacket = ''
-      try {
-        const result = await buildCatchupMutation.mutateAsync({
-          chatId,
-          targetAgentId: agentId
-        })
-        catchupPacket = result.packet
-      } catch {
-        catchupPacket = ''
+      // CLI commands (`/run:<slug>`) are literal invocations the agent backend
+      // executes server-side without an LLM turn. Prepending a catch-up
+      // transcript would (a) waste tokens and (b) shift the invocation off
+      // the start of the wire content, breaking the backend's `/run:*`
+      // detection so the request would route to the LLM instead.
+      if (!isCliCommand(text)) {
+        try {
+          const result = await buildCatchupMutation.mutateAsync({
+            chatId,
+            targetAgentId: agentId
+          })
+          catchupPacket = result.packet
+        } catch {
+          catchupPacket = ''
+        }
       }
       // Re-read snapshot post-await — the cache may have moved.
       const snap = readSnapshot()
@@ -215,7 +223,13 @@ export function useChatComposer(chatId: string | null): ComposerView & {
         return { kind: 'sent' }
       }
 
-      const needsRewrite = computeNeedsRewrite(snap.chat, targetAgent.id, rootAgent)
+      // CLI commands have a rigid `/run:<slug>` syntax that the agent backend
+      // parses literally — rewriting them into natural language would destroy
+      // the invocation. Bypass Smart Rewrite entirely (catch-up is also
+      // skipped inside dispatchToAgent for the same reason).
+      const needsRewrite =
+        !isCliCommand(payload) &&
+        computeNeedsRewrite(snap.chat, targetAgent.id, rootAgent)
       if (!needsRewrite) {
         await dispatchToAgent(targetAgent.id, payload, null, null, attachments)
         return { kind: 'sent' }

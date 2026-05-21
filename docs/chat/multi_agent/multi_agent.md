@@ -92,6 +92,7 @@ Let a single chat fluidly involve more than one agent without leaving the conver
   - Same-agent follow-ups (the agent's cursor already exists).
   - Re-engagement of an agent that participated before — catch-up replay covers it instead.
   - "Switch back" to the root counterparty.
+  - CLI command sends (`/run:<slug>` — see [CLI Commands](../cli_commands/cli_commands.md)). The invocation has a rigid syntax the backend parses literally; rewriting it into natural language would destroy it.
 - Per-chat smart-assist disable bypasses rewrite entirely.
 
 ### Routing precedence
@@ -107,6 +108,7 @@ Let a single chat fluidly involve more than one agent without leaving the conver
 - Subsequent engagements: walk messages from the row after the cursor forward; include only user/assistant rows; cap by a sliding window (currently 20 turns); format as a literal transcript.
 - After each successful send to an agent, the cursor advances to the just-persisted user message.
 - The catch-up build is rendered server-side (`buildCatchupPacket`) and prepended to the user content on the wire — not persisted as a separate row, not visible in the transcript.
+- **CLI commands bypass catch-up.** `/run:<slug>` invocations are literal strings the agent backend interprets server-side without an LLM turn (see [CLI Commands](../cli_commands/cli_commands.md)). Prepending a catch-up transcript would shift the invocation off the start of the wire content and break the backend's `/run:*` detection — so the composer skips the catch-up build entirely when the user message is a CLI command. The (chat, agent) cursor still advances so the next non-CLI engagement picks up the right window.
 
 ### Bubble display and persistence
 
@@ -119,7 +121,7 @@ Let a single chat fluidly involve more than one agent without leaving the conver
 - Two affordances live below the textarea:
   1. **Active-agent chip** — `🤖 <agent name>` for the current routing target. Shown whenever the chat has any active agent (root or otherwise).
   2. **Switch-back button** — text + ↺ icon, "Switch back to `<root label>`", rendered next to the chip *only* when the active agent isn't the root.
-- There is no participation strip and no agent-transition messages in the transcript — the chip + switch-back button are the single source of truth. (The original design included a participation strip and transition rows in the transcript; both were removed because the persistent chip provides the same information without crowding the conversation surface.)
+- There is no participation strip. Routing state lives entirely on the chip + switch-back button above the input. (Earlier builds also dropped *routing* transition rows from the transcript; only agent-side system notices — `cinna.content_kind: 'notice'` parts persisted as `agent_transition` rows, e.g. "Starting up the agent environment…" — appear inline now, rendered as muted system messages. See [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md).)
 
 ### Smart-assist disable
 
@@ -178,7 +180,7 @@ Dispatch (composer.confirmRewrite or direct):
 
 ## Integration Points
 
-- [Messaging](../messaging/messaging.md) — Routing tap-in: `composer.submit()` picks between the LLM and agent channels and threads catchup/rewrite metadata through. The LLM stream loop excludes `agent_transition` legacy rows when rebuilding history.
+- [Messaging](../messaging/messaging.md) — Routing tap-in: `composer.submit()` picks between the LLM and agent channels and threads catchup/rewrite metadata through. The LLM stream loop excludes `agent_transition` rows (agent-side system notices) when rebuilding history.
 - [Agents](../../agents/agents/agents.md) — Sub-agent invocations reuse the A2A client and `a2a_sessions` table. Each (chat, agent) pair has its own A2A session; the catch-up packet is sent as part of the user message text on re-engagement.
 - [Chat Modes](../chat_modes/chat_modes.md) — Provides the LLM credentials used by the rewrite step. Resolution order: chat's own chat mode, then the user's default chat mode, then (LLM chats) the chat's own bound provider/model.
 - [Mention Popups](../mention_popups/mention_popups.md) — Reused for the in-chat `@-mention` popup. The popup is now available in active chats as well as new chats; selection in active chats fires the immediate-switch action instead of binding an agent to a new chat.

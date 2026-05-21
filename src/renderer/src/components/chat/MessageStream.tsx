@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronRight } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Info } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
@@ -50,14 +50,31 @@ interface MessageStreamProps {
   bottomPadding?: number
 }
 
-function SystemMessage({ message, detail }: { message: string; detail?: string }): React.JSX.Element {
+function SystemMessage({
+  message,
+  detail,
+  tone = 'error'
+}: {
+  message: string
+  detail?: string
+  /** `'error'` (red border, alert icon) — default. `'notice'` (muted, info icon) for agent transitions / startup pings. */
+  tone?: 'error' | 'notice'
+}): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
+
+  const isNotice = tone === 'notice'
+  const containerClass = isNotice
+    ? 'rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-4 py-2.5 max-w-md text-center'
+    : 'rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-md text-center'
+  const messageClass = isNotice
+    ? 'flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]'
+    : 'flex items-center justify-center gap-2 text-xs text-[var(--color-danger)]'
 
   return (
     <div className="flex justify-center">
-      <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-md text-center">
-        <div className="flex items-center justify-center gap-2 text-xs text-[var(--color-danger)]">
-          <AlertTriangle size={13} />
+      <div className={containerClass}>
+        <div className={messageClass}>
+          {isNotice ? <Info size={13} /> : <AlertTriangle size={13} />}
           <span>{message}</span>
         </div>
         {detail && (
@@ -154,10 +171,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               })
               continue
             }
-            // Legacy `agent_transition` rows (from earlier builds) are skipped
-            // silently — the persistent "Talking to X / Switch back" banner
-            // above the input is now the source of truth for routing state.
+            // `agent_transition` rows are agent-side system messages — the
+            // streaming pipeline persists `cinna.content_kind: 'notice'` parts
+            // here (e.g. "Starting up the agent environment, this may take a
+            // moment..."). They render as muted system messages and are
+            // excluded from catch-up replay + LLM history rebuilds by role.
             if (msg.role === 'agent_transition') {
+              renderNodes.push({
+                slot: 'plain',
+                key: msg.id,
+                node: <SystemMessage message={msg.content} tone="notice" />
+              })
               continue
             }
             if (msg.role === 'tool_call') {
@@ -387,6 +411,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     item: { key: `stream-tool-${i}`, kind: 'tool_narration', status: 'done', isLive: live, node }
                   })
                 }
+                return
+              }
+              if (block.kind === 'notice') {
+                // Live streaming agent-side system message (startup ping etc.).
+                // Persisted post-stream as a `agent_transition` row, which
+                // replaces this streaming block once the chat re-fetches.
+                renderNodes.push({
+                  slot: 'plain',
+                  key: `stream-notice-${i}`,
+                  node: <SystemMessage message={block.content} tone="notice" />
+                })
                 return
               }
               if (block.kind === 'tool_result') {

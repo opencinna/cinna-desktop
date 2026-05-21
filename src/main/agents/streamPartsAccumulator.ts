@@ -3,18 +3,27 @@
  * per-part deltas and routing each delta to the renderer with its content kind.
  *
  * Each text Part may carry `metadata['cinna.content_kind']` ∈
- * {text, thinking, tool, tool_result}.
+ * {text, thinking, tool, tool_result, notice}.
  *
  * - `tool` parts also carry `cinna.tool_name`, optional `cinna.tool_input`,
  *   and `cinna.tool_id` (pairing key).
  * - `tool_result` parts carry `cinna.tool_id` (matching the originating tool
  *   part) and `cinna.tool_stream` ∈ {stdout, stderr}.
+ * - `notice` parts are system-style transitions from the agent (e.g. the
+ *   startup ping "Starting up the agent environment, this may take a
+ *   moment..."). They are NEVER added to the assistant message's `parts[]`
+ *   or `answerText` — instead, the caller iterates `snapshotNotices()` after
+ *   the stream completes and persists each as a separate `agent_transition`
+ *   row. Notice deltas still post to the port so the live UI can render
+ *   them as streaming system messages.
  *
  * Merge rules:
  * - Consecutive `text` / `thinking` parts merge into one entry.
  * - Consecutive `tool` parts merge only when `toolName` matches.
  * - Consecutive `tool_result` parts merge only when `toolId` AND `toolStream`
  *   match — preserves interleaved stdout/stderr chronology as separate parts.
+ * - `notice` parts never merge with surrounding parts; each unique
+ *   `(messageId|artifactId, partIndex)` is one persisted notice row.
  *
  * `answerText()` returns concat of `text`-kind parts only — used as the
  * message preview/fallback content (`messages.content`).
@@ -27,7 +36,13 @@ export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
 export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
 export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
 
-const VALID_KINDS: readonly ContentKind[] = ['text', 'thinking', 'tool', 'tool_result'] as const
+const VALID_KINDS: readonly ContentKind[] = [
+  'text',
+  'thinking',
+  'tool',
+  'tool_result',
+  'notice'
+] as const
 const VALID_STREAMS: readonly ToolStream[] = ['stdout', 'stderr'] as const
 
 export interface PartLike {
@@ -93,11 +108,25 @@ export interface StreamPartsAccumulatorOptions {
   onToolCall?: (call: { partKey: string; name: string; input: Record<string, unknown> }) => void
 }
 
+export interface AccumulatedNotice {
+  /** Stable identifier per notice part — `(messageId|artifactId, partIndex)`. */
+  partKey: string
+  /** Final accumulated text for the notice. */
+  text: string
+}
+
 export class StreamPartsAccumulator {
   private seenPartText = new Map<string, string>()
   private loggedToolCalls = new Set<string>()
   private parts: MessagePart[] = []
   private answer = ''
+  /**
+   * Per-part-key accumulated text for `notice`-kind parts. Insertion order is
+   * the stream-arrival order of each distinct notice part, which is what
+   * `snapshotNotices()` returns — callers persist notices in that order to
+   * keep transcript chronology stable.
+   */
+  private notices = new Map<string, string>()
   private readonly opts: StreamPartsAccumulatorOptions
 
   constructor(opts: StreamPartsAccumulatorOptions = {}) {
@@ -123,6 +152,18 @@ export class StreamPartsAccumulator {
       if (!delta) return
       this.seenPartText.set(key, text)
       const kind = partKindOf(part)
+
+      // Notice parts are agent-side system messages (startup pings, env
+      // transitions). They never become part of the assistant message — the
+      // streaming service persists each notice as its own `agent_transition`
+      // row after the stream completes. Live deltas still post to the port
+      // so the renderer can show a streaming system block during startup.
+      if (kind === 'notice') {
+        this.notices.set(key, (this.notices.get(key) ?? '') + delta)
+        port.postMessage({ type: 'delta', kind, text: delta })
+        return
+      }
+
       const isTool = kind === 'tool'
       const isToolResult = kind === 'tool_result'
       const toolName = isTool ? partToolNameOf(part) : undefined
@@ -189,5 +230,19 @@ export class StreamPartsAccumulator {
 
   answerText(): string {
     return this.answer
+  }
+
+  /**
+   * Notices ingested during this stream, in arrival order. Each entry is one
+   * persisted `agent_transition` row. Returns an empty array when the agent
+   * sent no notice-kind parts (the common case for non-Cinna agents and for
+   * Cinna agents that don't emit startup pings).
+   */
+  snapshotNotices(): AccumulatedNotice[] {
+    const out: AccumulatedNotice[] = []
+    for (const [partKey, text] of this.notices) {
+      if (text) out.push({ partKey, text })
+    }
+    return out
   }
 }
