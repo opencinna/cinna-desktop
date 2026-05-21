@@ -179,7 +179,7 @@ export function useReorderNotes() {
 const AUTOSAVE_DEBOUNCE_MS = 500
 
 /** Empty / whitespace-only titles are normalized to this label before save. */
-const FALLBACK_TITLE = 'Untitled note'
+export const FALLBACK_TITLE = 'Untitled note'
 
 export interface AutosaveNoteHandle {
   title: string

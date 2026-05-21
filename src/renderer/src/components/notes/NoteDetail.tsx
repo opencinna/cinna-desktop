@@ -1,9 +1,9 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { useUIStore } from '../../stores/ui.store'
-import { useAutosaveNote, useNote } from '../../hooks/useNotes'
+import { FALLBACK_TITLE, useAutosaveNote, useNote } from '../../hooks/useNotes'
 import { markdownComponents } from '../../utils/markdownComponents'
 
 /**
@@ -19,6 +19,14 @@ export function NoteDetail(): React.JSX.Element {
   const { title, body, setTitle, setBody, flushNow } = useAutosaveNote(note)
   const [editingBody, setEditingBody] = useState(false)
   const bodyTextareaRef = useRef<HTMLTextAreaElement>(null)
+  // Visually blank the title input on first focus when it still holds the
+  // placeholder default, so the user can type their title without first
+  // deleting "Untitled note". Tracked per-note: reset when the active note
+  // changes, and as soon as the user actually edits the title.
+  const [hideDefaultTitle, setHideDefaultTitle] = useState(false)
+  useEffect(() => {
+    setHideDefaultTitle(false)
+  }, [activeNoteId])
 
   if (!activeNoteId) {
     return (
@@ -58,9 +66,18 @@ export function NoteDetail(): React.JSX.Element {
       <div className="max-w-2xl mx-auto px-6 py-6 space-y-4">
         <input
           type="text"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          onBlur={flushNow}
+          value={hideDefaultTitle ? '' : title}
+          onChange={(e) => {
+            setHideDefaultTitle(false)
+            setTitle(e.target.value)
+          }}
+          onFocus={() => {
+            if (title === FALLBACK_TITLE) setHideDefaultTitle(true)
+          }}
+          onBlur={() => {
+            setHideDefaultTitle(false)
+            flushNow()
+          }}
           placeholder="Untitled note"
           className="w-full bg-transparent text-[var(--color-text)] text-2xl font-semibold
             outline-none border-none placeholder:text-[var(--color-text-muted)]"

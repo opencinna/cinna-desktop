@@ -23,6 +23,7 @@ A lightweight personal note-taking surface inside the desktop client. Notes are 
 1. User clicks the `+` button in the Notes sidebar header.
 2. A note is created with placeholder title `Untitled note` and empty body; the main area opens the **Note Detail** view for the new note.
 3. The title input is focusable immediately; typing starts the autosave loop.
+4. **First-focus clear.** When the user focuses the title input while it still holds the default `Untitled note`, the input is visually blanked so the user can type without deleting the placeholder first. The underlying title state is untouched until the user actually types — focusing-then-blurring with no input restores `Untitled note` and triggers no autosave. The blank-on-focus flag resets per note (switching notes re-arms it) and is cleared as soon as the user types or blurs.
 
 ### Editing a note (inline)
 1. From the sidebar, user clicks a note row. Main area renders the read-rendered detail view: title input on top, rendered markdown body below.
