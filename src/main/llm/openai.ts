@@ -1,5 +1,5 @@
 import OpenAI from 'openai'
-import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, NO_FILE_SUPPORT, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
+import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
 import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
 
 // OpenAI Chat Completions accepts images natively. PDFs and office formats

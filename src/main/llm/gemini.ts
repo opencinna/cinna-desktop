@@ -1,6 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai'
 import { nanoid } from 'nanoid'
-import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, NO_FILE_SUPPORT, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
+import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
 import type {
   Content,
   Part,

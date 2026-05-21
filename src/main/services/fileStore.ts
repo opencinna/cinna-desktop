@@ -76,8 +76,6 @@ export const guessLocalMime = guessMime
 
 function mimeToKind(mime: string): MediaPart['kind'] {
   if (mime.startsWith('image/')) return 'image'
-  if (mime.startsWith('audio/')) return 'audio'
-  if (mime.startsWith('video/')) return 'video'
   return 'document'
 }
 

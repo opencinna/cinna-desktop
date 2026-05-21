@@ -147,7 +147,7 @@ export const cinnaFileService = {
 
     const form = new FormData()
     // `Blob` is a global in modern Node; fetch/undici handles multipart wiring.
-    form.append('file', new Blob([bytes], { type: mimeType }), filename)
+    form.append('file', new Blob([new Uint8Array(bytes)], { type: mimeType }), filename)
 
     const url = `${baseUrl}/api/v1/files/upload`
     logger.debug(`upload → ${url}`, { filename, size, mimeType })

@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, NO_FILE_SUPPORT, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
+import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
 import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
 
 // All Claude 3+ models accept image inputs natively and PDFs as native
