@@ -62,12 +62,17 @@ export function useDeleteNote() {
   return useMutation({
     mutationFn: (noteId: string) => window.api.notes.delete(noteId),
     onSuccess: (_data, noteId) => {
-      queryClient.invalidateQueries({ queryKey: ['notes'] })
-      queryClient.invalidateQueries({ queryKey: ['notes-trash'] })
       const ui = useUIStore.getState()
       if (ui.activeNoteId === noteId) {
         ui.setActiveNoteId(null)
       }
+      // Drop the deleted note's individual cache before invalidating the list,
+      // otherwise the still-mounted `useNote(deletedId)` observer refetches
+      // synchronously (before the active-note clear has re-rendered) and the
+      // main process logs a `not_found` for the soft-deleted row.
+      queryClient.removeQueries({ queryKey: ['notes', noteId] })
+      queryClient.invalidateQueries({ queryKey: ['notes'] })
+      queryClient.invalidateQueries({ queryKey: ['notes-trash'] })
     }
   })
 }
