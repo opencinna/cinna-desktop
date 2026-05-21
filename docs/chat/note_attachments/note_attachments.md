@@ -23,6 +23,14 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 4. Picking the same note again is a silent no-op — duplicates are dropped.
 5. Esc closes without applying. Backspacing past the `?` also closes the popup.
 
+### Expanding a note inline (double-Enter)
+
+1. Right after picking a note from the `?` popup, the user presses Enter again on an empty composer.
+2. The note's *current* body is fetched and dropped into the textarea as plain text; the badge is removed from the pending list so the content isn't also re-attached as a `.md`.
+3. Lets users author reusable prompt templates as notes and slot them into the next chat input with two Enters — "copy-paste my prompt" without leaving the keyboard.
+4. Any typing between the two Enters cancels the gesture: the next Enter sends the message normally, with the note riding the standard `.md` attachment pipeline.
+5. Only the most-recently-selected note is the expansion target. Notes attached earlier stay as `.md` attachments.
+
 ### Previewing a note
 
 1. User clicks anywhere on a note badge.
@@ -55,6 +63,7 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 - **Clearing on success.** Pending notes are cleared on the same outcomes as pending file attachments: `sent`, `rewrite-pending`, the rewrite-confirm second-Enter, and `Send Anyway`. On `rewrite-failed` they remain so the user can retry.
 - **No retroactive editing.** The attached `.md` is a frozen snapshot of the note's body at send time. Later edits to the original note do not propagate to messages that already carry the attachment.
 - **No persistence of pending notes.** Refreshing or switching chats discards the pending list — they aren't stored on the message row until materialization at send.
+- **Double-Enter expansion target.** A note picked via `?` is "armed" as the expansion target. The next Enter on an empty composer (with rewrite state `idle`) replaces the badge with the note's live body inline instead of sending. The arming is cleared by typing anything, removing the targeted badge, picking a different note (which becomes the new target), switching chats, or by the expansion itself. Only one note at a time can be the target — earlier badges remain attached when expansion fires.
 
 ## Architecture Overview
 
@@ -63,10 +72,17 @@ User types `?` in ChatInput
   -> findTriggerToken detects `?` + filter substring
   -> NoteMentionPopup (filtered by title)
        -> selectNote -> useChatNotes.add({ id, title })
+                     -> arm pendingExpansionNoteId = id
 
 Composer renders NoteBadgeList alongside AttachmentList
   -> Click badge -> NotePreviewModal (read-only markdown render)
-  -> X -> useChatNotes.remove(id)
+  -> X -> useChatNotes.remove(id) (also disarms expansion if that id)
+
+Enter on empty composer with armed expansion target
+  -> disarm + useChatNotes.remove(id)   (synchronous, before await)
+  -> useFetchNote(id) via queryClient.fetchQuery(['notes', id])
+  -> setInput(note.body) -> focus + resize
+  -> early-return (no send)
 
 Send pressed
   Active chat:

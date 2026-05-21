@@ -16,7 +16,7 @@ import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
-import { useNoteList, useAttachNotesAsFiles } from '../../hooks/useNotes'
+import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
 import { useChatNotes } from '../../hooks/useChatNotes'
 import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePrompts'
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
@@ -231,15 +231,26 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     clear: clearPendingNotes
   } = useChatNotes(chatId)
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
+  const fetchNote = useFetchNote()
   const [previewNoteId, setPreviewNoteId] = useState<string | null>(null)
   const previewNote = useMemo(
     () => pendingNotes.find((n) => n.id === previewNoteId) ?? null,
     [pendingNotes, previewNoteId]
   )
+  // Double-Enter expansion target. Set the moment a note is picked via the
+  // `?` popup; the very next Enter on an empty composer replaces the badge
+  // with the note's live body (prompt-template shortcut). Any typing,
+  // removing the targeted badge, or a chat switch cancels the gesture.
+  const [pendingExpansionNoteId, setPendingExpansionNoteId] = useState<string | null>(
+    null
+  )
   // Preview is UI-only; reset whenever the chat row swaps so a modal
-  // doesn't bleed into a different chat's composer.
+  // doesn't bleed into a different chat's composer. The expansion target
+  // is also chat-local — `useChatNotes` already wipes the badges on switch,
+  // so a stale id would point at a no-longer-pending note.
   useEffect(() => {
     setPreviewNoteId(null)
+    setPendingExpansionNoteId(null)
   }, [chatId])
 
   const { data: agents } = useAgents()
@@ -545,8 +556,20 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       // Drop the `?token` from the textarea — the badge stands in for it.
       replaceTriggerToken('')
       addPendingNote({ id: note.id, title: note.title || 'Untitled note' })
+      // Arm the double-Enter expansion: the next Enter on an empty composer
+      // swaps this note's badge for its body inline. Any typing clears it
+      // (see `handleInput`).
+      setPendingExpansionNoteId(note.id)
     },
     [replaceTriggerToken, addPendingNote]
+  )
+
+  const handleRemovePendingNote = useCallback(
+    (id: string) => {
+      if (pendingExpansionNoteId === id) setPendingExpansionNoteId(null)
+      removePendingNote(id)
+    },
+    [pendingExpansionNoteId, removePendingNote]
   )
 
   // Menu actions. Today the menu has one entry ("Add files"); the array is
@@ -566,13 +589,51 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const handleSend = useCallback(async () => {
     const trimmed = input.trim()
+    if (isStreaming) return
+
+    // Double-Enter note expansion: right after the user picked a note via
+    // the `?` popup, an Enter on an empty composer means "drop the note's
+    // body into the input as text" — a prompt-template paste, not a send.
+    // Bypass when the rewrite state machine owns Enter (confirming step)
+    // or when the user has already typed text alongside the badges.
+    if (
+      pendingExpansionNoteId &&
+      trimmed.length === 0 &&
+      rewriteUX.state === 'idle'
+    ) {
+      const expandId = pendingExpansionNoteId
+      // Disarm AND detach the note synchronously before awaiting the fetch.
+      // A rapid second Enter that lands during the await must not fall
+      // through to the "attachment-only send" branch and dispatch the note
+      // as a `.md` — clearing the pending list now makes `hasContent` false
+      // for that re-entry. If the fetch fails the user can re-attach via `?`.
+      setPendingExpansionNoteId(null)
+      removePendingNote(expandId)
+      try {
+        const note = await fetchNote(expandId)
+        setInput(note.body)
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (!el) return
+          el.focus()
+          el.style.height = 'auto'
+          el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+          el.setSelectionRange(note.body.length, note.body.length)
+        })
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err)
+        setAttachError(`Note: ${detail}`)
+      }
+      return
+    }
+
     // Allow attachment-only sends (no text) so users can drop a file in and
     // hit send with a quick "look at this" — only for active chats where the
     // composer handles attachments; new chats still require text for title.
     const hasContent =
       trimmed.length > 0 ||
       (chatId !== null && (pendingAttachments.length > 0 || pendingNotes.length > 0))
-    if (!hasContent || isStreaming) return
+    if (!hasContent) return
     const attachmentsToSend =
       targetSupportsAttachments && pendingAttachments.length > 0
         ? [...pendingAttachments]
@@ -659,7 +720,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     targetSupportsAttachments,
     pendingAttachments,
     clearPendingAttachments,
-    clearPendingNotes
+    clearPendingNotes,
+    pendingExpansionNoteId,
+    removePendingNote,
+    fetchNote
   ])
 
   const handleCancel = useCallback(() => {
@@ -789,6 +853,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     const el = e.target
     el.style.height = 'auto'
     el.style.height = Math.min(el.scrollHeight, 180) + 'px'
+
+    // User is typing — they're no longer in the "just picked a note" beat,
+    // so the next Enter should send normally with the note as a `.md`
+    // attachment instead of expanding inline.
+    if (pendingExpansionNoteId) setPendingExpansionNoteId(null)
 
     // Clearing the composer mid-confirm abandons the pending rewrite (so the
     // next typed message starts fresh and re-triggers a rewrite if applicable).
@@ -979,7 +1048,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             />
             <NoteBadgeList
               notes={pendingNotes}
-              onRemove={removePendingNote}
+              onRemove={handleRemovePendingNote}
               onPreview={setPreviewNoteId}
               align="right"
             />

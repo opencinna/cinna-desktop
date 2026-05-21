@@ -26,6 +26,24 @@ export function useNote(noteId: string | null) {
   })
 }
 
+/**
+ * Imperative single-note fetch for event handlers (e.g. the chat composer's
+ * `?` double-Enter expansion). Routes through the same `['notes', id]` cache
+ * key as {@link useNote} so a previously previewed note hits cache instead
+ * of re-roundtripping to the main process.
+ */
+export function useFetchNote(): (noteId: string) => Promise<NoteData> {
+  const queryClient = useQueryClient()
+  return useCallback(
+    (noteId: string) =>
+      queryClient.fetchQuery({
+        queryKey: ['notes', noteId],
+        queryFn: () => window.api.notes.get(noteId)
+      }),
+    [queryClient]
+  )
+}
+
 export function useCreateNote() {
   const queryClient = useQueryClient()
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)

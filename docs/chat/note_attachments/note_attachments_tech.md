@@ -22,7 +22,7 @@
 - `src/renderer/src/components/chat/NoteBadge.tsx` — `NoteBadge`, `NoteBadgeList`
 - `src/renderer/src/components/notes/NotePreviewModal.tsx` — portal-rendered read-only modal (`react-markdown` + `remarkGfm` + `rehypeHighlight`)
 - `src/renderer/src/components/chat/ChatInput.tsx` — trigger plumbing, badge rendering, send-time materialization, rewrite-path clearing
-- `src/renderer/src/hooks/useNotes.ts` — `useAttachNotesAsFiles` (`useMutation` wrapping the IPC)
+- `src/renderer/src/hooks/useNotes.ts` — `useAttachNotesAsFiles` (`useMutation` wrapping the attach IPC), `useFetchNote` (imperative single-note fetcher used by the double-Enter expansion)
 - `src/renderer/src/hooks/useChatNotes.ts` — composer-local note buffer keyed by chatId (mirrors `useChatAttachments`)
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `ingestPendingNotes` (deferred materialize on chat creation)
 
@@ -52,10 +52,12 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
 - `src/renderer/src/components/chat/ChatInput.tsx`:
   - `findTriggerToken` extended to recognize `?` alongside `@`, `#`, `/`.
   - `useChatNotes(chatId)` provides the composer-local buffer; `useAttachNotesAsFiles()` provides the mutation.
-  - `selectNote` drops the `?token` from the textarea and calls `addPendingNote`.
-  - `handleSend`: on active chat, awaits `attachNotesAsync` then concats results into `mergedAttachments` before `composer.submit`; on new chat, threads `noteIds` through `onNewChat`.
+  - `selectNote` drops the `?token` from the textarea, calls `addPendingNote`, and arms `pendingExpansionNoteId` for the double-Enter shortcut.
+  - `pendingExpansionNoteId` is a single-id local state cleared by typing (`handleInput`), removing the targeted badge (`handleRemovePendingNote`), chat switch (the same `useEffect` that resets `previewNoteId`), or the expansion itself.
+  - `handleSend`: first branch is the double-Enter check — when `pendingExpansionNoteId` is armed, `trimmed.length === 0`, and `rewriteUX.state === 'idle'`, **disarms the id and removes the note from the pending buffer synchronously** (so a re-entrant Enter during the fetch can't fall through to the attachment-only send path), then awaits `fetchNote(id)`, calls `setInput(note.body)`, refocuses + resizes the textarea, and returns early. On fetch failure the error surfaces via `setAttachError('Note: …')` and the user can re-attach via `?`. Otherwise on active chat it awaits `attachNotesAsync` then concats results into `mergedAttachments` before `composer.submit`; on new chat, threads `noteIds` through `onNewChat`.
   - `handleSendAnyway`, the rewrite-confirm branch, and the `'sent' | 'rewrite-pending'` success branches all call `clearPendingNotes()` alongside `clearPendingAttachments()`.
 - `src/renderer/src/hooks/useNotes.ts:useAttachNotesAsFiles()` — `useMutation` wrapping `window.api.notes.attachAsFiles`. Rejects with `Error(result.error)` on `success: false` so callers can `try/await`.
+- `src/renderer/src/hooks/useNotes.ts:useFetchNote()` — Imperative single-note fetcher for event handlers. Returns a `(noteId) => Promise<NoteData>` callback that delegates to `queryClient.fetchQuery` against the same `['notes', id]` cache key as `useNote`, so a recently previewed note hits cache. Used by the composer's double-Enter expansion.
 - `src/renderer/src/hooks/useChatNotes.ts:useChatNotes(chatId)` — Mirrors `useChatAttachments` structurally: `{ notes, add, remove, clear }`. `useEffect([chatId])` wipes the buffer on chat switch. `add` dedups by id.
 - `src/renderer/src/hooks/useNewChatFlow.ts:ingestPendingNotes()` — Calls the same `attachNotesAsync` mutation, concatenated with resolved file attachments before `startLlm` / `startAgent`.
 
@@ -72,5 +74,5 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
   3. `fileService.ingest` runs `chatRepo.getOwned(userId, chatId)` for local scope.
 - **No renderer path injection.** Synthetic file paths are generated inside `fileService.ingestSyntheticContent` via `mkdtemp` — the renderer never supplies a path, so the `pathGuard` allowlist is intentionally bypassed.
 - **Filename sanitization.** `safeNoteFilename` strips path separators and shell-hostile characters; `fileService.ingestSyntheticContent` re-applies `basename()` before writing as defense in depth.
-- **Body never leaks to renderer.** Note body bytes travel SQLite → main-process tempfile → ingest pipeline. The renderer only sees the resulting `MessageAttachment` (id, filename, size, mimeType, source) — never the body.
+- **Attach pipeline keeps body in main.** When notes are materialized as `.md` attachments, body bytes travel SQLite → main-process tempfile → ingest pipeline. The renderer only sees the resulting `MessageAttachment` (id, filename, size, mimeType, source) — never the body via that path. The body *is* fetched into the renderer for two intentional flows (`useNote` for the preview modal, `useFetchNote` for the double-Enter inline expansion), both gated by `notesService.requireNote`'s ownership check at the `note:get` IPC.
 - **Tempdir lifecycle.** A failure mid-write still triggers the `finally rm(dir, { recursive: true, force: true })`, so no synthetic bytes persist on disk after an error.
