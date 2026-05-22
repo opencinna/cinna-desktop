@@ -17,8 +17,12 @@ import type { LlmErrorEvent } from '../../shared/llmStreamEvents'
  * enforces the contract.
  */
 
-export function postAgentError(port: MessagePortMain, error: string): void {
-  const event: AgentErrorEvent = { type: 'error', error }
+export function postAgentError(
+  port: MessagePortMain,
+  error: string,
+  code?: string
+): void {
+  const event: AgentErrorEvent = code ? { type: 'error', error, code } : { type: 'error', error }
   port.postMessage(event)
 }
 

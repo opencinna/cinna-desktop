@@ -5,11 +5,16 @@ import {
   createA2AClient,
   buildSendParams,
   humanizeA2AError,
+  A2aHttpError,
   type TaskStatusUpdateEvent,
   type TaskArtifactUpdateEvent,
   type Message,
   type Task
 } from '../agents/a2a-client'
+import {
+  CINNA_REAUTH_REQUIRED_CODE,
+  CINNA_SESSION_EXPIRED_MESSAGE
+} from '../../shared/cinnaErrors'
 import type { A2AClient } from '@a2a-js/sdk/client'
 import {
   StreamPartsAccumulator,
@@ -57,6 +62,27 @@ export interface StreamToAgentInput {
    */
   fileIds?: string[]
   port: StreamPort
+  /**
+   * True when the access token is a Cinna-issued JWT (remote agents synced
+   * from the user's Cinna account). When set, an SDK-level 401/403 mid-stream
+   * is treated as a reauth-required signal — the user gets a clickable
+   * "Re-authenticate" chip rather than a generic auth error. Manually-added
+   * local A2A agents pass `false` here so a 401 stays a plain "token rejected"
+   * (no in-app reauth flow exists for them).
+   */
+  isCinnaTokenAuth?: boolean
+}
+
+/**
+ * Detect an auth-rejection from the SDK's HTTP layer. `buildLoggingFetch`
+ * intercepts 401/403 responses and throws a typed {@link A2aHttpError} —
+ * if the error matches, the SDK call hit the auth gate at the transport
+ * layer (not an application-level error in the response body).
+ */
+function isAuthRejection(err: unknown): err is A2aHttpError {
+  return (
+    err instanceof A2aHttpError && (err.status === 401 || err.status === 403)
+  )
 }
 
 /**
@@ -78,7 +104,8 @@ export const a2aStreamingService = {
       accessToken,
       wireContent,
       fileIds,
-      port
+      port,
+      isCinnaTokenAuth = false
     } = input
     const metadata =
       fileIds && fileIds.length > 0 ? { cinna_file_ids: fileIds } : undefined
@@ -293,16 +320,26 @@ export const a2aStreamingService = {
     } catch (err) {
       if (!abortController.signal.aborted) {
         const rawError = String(err)
-        const humanized = humanizeA2AError(err)
+        const isReauth = isCinnaTokenAuth && isAuthRejection(err)
+        const humanized = isReauth ? CINNA_SESSION_EXPIRED_MESSAGE : humanizeA2AError(err)
+        const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
         logger.error('send-message failed', {
           agentId,
           chatId,
           error: rawError,
           humanized,
+          reauth: isReauth,
           stack: err instanceof Error ? err.stack : undefined
         })
-        port.postMessage({ type: 'error', error: humanized })
-        messageRepo.saveError({ chatId, short: humanized, detail: rawError })
+        port.postMessage(
+          code ? { type: 'error', error: humanized, code } : { type: 'error', error: humanized }
+        )
+        messageRepo.saveError({
+          chatId,
+          short: humanized,
+          detail: rawError,
+          code
+        })
         jobService.reportRunCompletion(chatId, 'failed', humanized)
       }
     } finally {

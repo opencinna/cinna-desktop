@@ -45,6 +45,43 @@ interface SupportedInterface {
   transport?: string
 }
 
+/**
+ * Thrown by `fetchRawCard` when the agent-card endpoint responds with a
+ * non-OK HTTP status. Carries the numeric `status` so callers can classify
+ * the failure (e.g. 401/403 from a Cinna-backed agent ≡ reauth required).
+ */
+export class AgentCardFetchError extends Error {
+  status: number
+  constructor(status: number, statusText: string, url: string) {
+    super(`Failed to fetch Agent Card from ${url}: ${status} ${statusText}`)
+    this.name = 'AgentCardFetchError'
+    this.status = status
+  }
+}
+
+/**
+ * Thrown from {@link buildLoggingFetch} when the SDK's underlying HTTP call
+ * receives a 401/403. Intercepting at the fetch layer (rather than letting
+ * the SDK wrap the response into one of its opaque error shapes) means
+ * callers can detect auth rejection via `instanceof` instead of pattern-
+ * matching on stringified SDK errors.
+ *
+ * Currently scoped to 401/403 because those are the only statuses that
+ * carry a *typed* signal in our app (reauth required for Cinna-backed
+ * agents). Other non-OK statuses are left to the SDK's own error handling,
+ * which may want to read the body for error details.
+ */
+export class A2aHttpError extends Error {
+  status: number
+  url: string
+  constructor(status: number, statusText: string, url: string) {
+    super(`A2A request to ${url} rejected: ${status} ${statusText}`)
+    this.name = 'A2aHttpError'
+    this.status = status
+    this.url = url
+  }
+}
+
 /** Result of resolving protocol compatibility from an agent card. */
 export interface ProtocolResolution {
   /** The URL to use for communication. */
@@ -148,6 +185,17 @@ function buildLoggingFetch(base: typeof fetch): typeof fetch {
       throw err
     }
 
+    // 401/403 bypass SDK error handling and surface as a typed `A2aHttpError`
+    // so callers (`a2aStreamingService`) can detect auth rejection via
+    // `instanceof` rather than pattern-matching stringified SDK errors. Other
+    // non-OK statuses pass through — the SDK may want to read the body for
+    // structured error details.
+    if (response.status === 401 || response.status === 403) {
+      logger.error(`HTTP ${response.status} ${response.statusText} | ${method} ${url}`)
+      void response.body?.cancel().catch(() => {})
+      throw new A2aHttpError(response.status, response.statusText, url)
+    }
+
     const contentType = response.headers.get('content-type') ?? ''
 
     if (contentType.includes('text/event-stream') && response.body) {
@@ -224,9 +272,7 @@ async function fetchRawCard(
     logger.error(`HTTP ${response.status} ${response.statusText} from ${resolvedUrl}`, {
       body: body.slice(0, 2000)
     })
-    throw new Error(
-      `Failed to fetch Agent Card from ${resolvedUrl}: ${response.status} ${response.statusText}`
-    )
+    throw new AgentCardFetchError(response.status, response.statusText, resolvedUrl)
   }
   return (await response.json()) as Record<string, unknown>
 }

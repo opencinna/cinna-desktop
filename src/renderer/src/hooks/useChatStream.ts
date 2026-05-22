@@ -39,7 +39,7 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, setSendError } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
     useChatStore()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const forceRefreshAgentStatus = useForceRefreshAgentStatus()
@@ -81,14 +81,18 @@ export function useChatStream(): {
           ]).finally(() => clearStreamingBlocks())
           break
         case 'error':
+          // The error has already been persisted main-side (`chatStreamingService`
+          // calls `messageRepo.saveError`) and will render as a `SystemMessage`
+          // bubble once `['chat', chatId]` refetches. Don't also call
+          // `setSendError` here — it would duplicate the same text as a
+          // transient banner above the composer.
           console.error('LLM error:', event.error)
-          setSendError(event.error)
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setSendError, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
   )
 
   const handleAgent = useCallback(
@@ -117,14 +121,18 @@ export function useChatStream(): {
           ]).finally(() => clearStreamingBlocks())
           break
         case 'error':
+          // Agent errors are already persisted by `agent_a2a.ipc` /
+          // `a2aStreamingService` as a `SystemMessage` row (with the typed
+          // `code` for the reauth chip when applicable). Don't also surface
+          // them as a transient banner — that would duplicate the in-bubble
+          // error and strip the inline action button.
           console.error('Agent error:', event.error)
-          setSendError(event.error)
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
       }
     },
-    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, setSendError, queryClient]
+    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
   )
 
   const startLlm = useCallback(

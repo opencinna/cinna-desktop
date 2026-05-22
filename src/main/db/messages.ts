@@ -43,6 +43,10 @@ export interface SaveErrorMessage {
   chatId: string
   short: string
   detail?: string
+  /** Machine-readable error code (e.g. `'cinna_reauth_required'`) persisted
+   *  in the row's JSON payload so renderer surfaces can branch type-safely
+   *  instead of substring-matching the user-facing `short` string. */
+  code?: string
 }
 
 export interface SaveTransitionMessage {
@@ -157,7 +161,11 @@ export const messageRepo = {
         id: nanoid(),
         chatId: msg.chatId,
         role: 'error',
-        content: JSON.stringify({ short: msg.short, detail: msg.detail ?? msg.short }),
+        content: JSON.stringify({
+          short: msg.short,
+          detail: msg.detail ?? msg.short,
+          ...(msg.code ? { code: msg.code } : {})
+        }),
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })

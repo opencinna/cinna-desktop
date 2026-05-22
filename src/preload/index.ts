@@ -220,6 +220,8 @@ const api = {
     logout: (): Promise<{ success: boolean }> => ipcRenderer.invoke('auth:logout'),
     cinnaOAuthAbort: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('auth:cinna-oauth-abort'),
+    cinnaReauth: (): Promise<{ success: boolean; user?: UserData; error?: string }> =>
+      ipcRenderer.invoke('auth:cinna-reauth'),
     updateUser: (data: {
       userId: string
       displayName?: string

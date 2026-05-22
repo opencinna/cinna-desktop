@@ -5,6 +5,8 @@ import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import {
   fetchAgentCard,
   resolveProtocol,
+  AgentCardFetchError,
+  A2aHttpError,
   type ProtocolResolution
 } from '../agents/a2a-client'
 import { AgentError } from '../errors'
@@ -98,6 +100,42 @@ function skillsFromCard(
     name: s.name,
     description: s.description
   }))
+}
+
+/**
+ * Remote (Cinna-backed) agents authenticate against the agent card endpoint
+ * with a Cinna-issued JWT. A 401/403 means the server has invalidated that
+ * JWT (token revoked, replay detected, account suspended) even though the
+ * desktop's local copy may still appear valid — surface this as a
+ * `CinnaReauthRequired` so the renderer's reauth chip kicks in.
+ *
+ * Two paths can produce the typed status:
+ *  - `A2aHttpError` from `buildLoggingFetch` (intercepts 401/403 before
+ *    the SDK / `fetchRawCard` wraps the response)
+ *  - `AgentCardFetchError` from `fetchRawCard` (other non-OK statuses on
+ *    the card endpoint — kept for symmetry; 401/403 won't reach it because
+ *    the fetch layer throws `A2aHttpError` first)
+ *
+ * Local (manually-added) A2A agents use a user-supplied static token; a
+ * 401/403 from them just means the configured token is wrong, with no
+ * in-app reauth flow — propagate the original error unchanged.
+ */
+function rethrowAsReauthIfCinna401(err: unknown, agent: AgentRow): never {
+  if (agent.source === 'remote') {
+    const status =
+      err instanceof A2aHttpError
+        ? err.status
+        : err instanceof AgentCardFetchError
+          ? err.status
+          : undefined
+    if (status === 401 || status === 403) {
+      throw new CinnaReauthRequired(
+        `Cinna server rejected the agent card request (${status}). Re-authentication required.`,
+        { cause: err as Error }
+      )
+    }
+  }
+  throw err
 }
 
 function synthesizeRemoteSkills(
@@ -287,7 +325,13 @@ export const agentService = {
     }
 
     const accessToken = await this.resolveAccessToken(userId, agent)
-    const { card, protocol } = await fetchAgentCard(agent.cardUrl, accessToken)
+    let card: AgentCard
+    let protocol: ProtocolResolution
+    try {
+      ;({ card, protocol } = await fetchAgentCard(agent.cardUrl, accessToken))
+    } catch (err) {
+      rethrowAsReauthIfCinna401(err, agent)
+    }
 
     agentRepo.updateCardCache(userId, agentId, {
       cardData: card as unknown as Record<string, unknown>,
@@ -319,7 +363,12 @@ export const agentService = {
     }
 
     const accessToken = await this.resolveAccessToken(userId, agent)
-    const { protocol } = await fetchAgentCard(agent.cardUrl, accessToken)
+    let protocol: ProtocolResolution
+    try {
+      ;({ protocol } = await fetchAgentCard(agent.cardUrl, accessToken))
+    } catch (err) {
+      rethrowAsReauthIfCinna401(err, agent)
+    }
     agentRepo.updateResolvedEndpoint(userId, agent.id, {
       endpointUrl: protocol.url,
       protocolInterfaceUrl: protocol.url,
@@ -335,14 +384,13 @@ export const agentService = {
   /**
    * Resolve the access token for an agent.
    * Remote agents use the user's Cinna JWT; local agents use the decrypted stored token.
+   *
+   * Lets `CinnaReauthRequired` bubble so callers can render an actionable
+   * "Re-authenticate" affordance instead of a generic error string.
    */
   async resolveAccessToken(userId: string, agent: AgentRow): Promise<string | undefined> {
     if (agent.source === 'remote') {
-      try {
-        return await getCinnaAccessToken(userId)
-      } catch {
-        throw new Error('Cinna session expired — please re-authenticate')
-      }
+      return getCinnaAccessToken(userId)
     }
     return agent.accessTokenEncrypted ? decryptApiKey(agent.accessTokenEncrypted) : undefined
   },
@@ -359,7 +407,12 @@ export const agentService = {
     if (agent.protocol !== 'a2a' || !agent.cardUrl) return []
     const accessToken = await this.resolveAccessToken(userId, agent)
     const started = Date.now()
-    const { card } = await fetchAgentCard(agent.cardUrl, accessToken)
+    let card: AgentCard
+    try {
+      ;({ card } = await fetchAgentCard(agent.cardUrl, accessToken))
+    } catch (err) {
+      rethrowAsReauthIfCinna401(err, agent)
+    }
     const commands = extractCliCommands((card as unknown as { skills?: unknown }).skills)
     logger.info('CLI commands fetched', {
       agentId,

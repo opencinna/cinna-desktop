@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
-import { User, ChevronDown, Plus, LogOut, Cloud, AlertTriangle, Settings } from 'lucide-react'
+import { User, ChevronDown, Plus, LogOut, Cloud, AlertTriangle, Settings, RefreshCw } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
-import { useUsers, useLogin, useDeleteUser } from '../../hooks/useAuth'
+import { useUsers, useLogin, useDeleteUser, useCinnaReauth } from '../../hooks/useAuth'
 import { usePopover } from '../ui/usePopover'
 import { RegisterForm } from './RegisterForm'
 import { LoginPrompt } from './LoginPrompt'
@@ -28,6 +28,8 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const { data: users } = useUsers()
   const login = useLogin()
   const deleteUser = useDeleteUser()
+  const cinnaReauth = useCinnaReauth()
+  const [reauthError, setReauthError] = useState<string | null>(null)
   const {
     open,
     setOpen,
@@ -110,9 +112,23 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     }
   }
 
+  const handleReauth = async (): Promise<void> => {
+    if (!currentUser) return
+    setReauthError(null)
+    setOpen(false)
+    const result = await cinnaReauth.mutateAsync()
+    if (!result.success) {
+      setReauthError(result.error ?? 'Re-authentication failed')
+      // Reopen so the user can see the inline error and retry.
+      setOpen(true)
+    }
+  }
+
   const isDefault = currentUser?.id === DEFAULT_USER_ID
   const initial = (currentUser?.cinnaFullName ?? currentUser?.displayName)?.charAt(0).toUpperCase() ?? '?'
   const allUsers = users ?? []
+  const isCinna = currentUser?.type === 'cinna_user'
+  const needsReauth = isCinna && currentUser?.hasCinnaTokens === false
 
   return (
     <div className="relative">
@@ -237,6 +253,31 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
 
           {/* Actions */}
           <div className="border-t border-[var(--color-border)] py-1">
+            {reauthError && (
+              <div className="mx-3 mt-1 mb-1 flex items-start gap-1.5 rounded-md border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-2 py-1.5 text-[10px] text-[var(--color-text-secondary)]">
+                <AlertTriangle size={11} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
+                <span className="break-words">{reauthError}</span>
+              </div>
+            )}
+            {isCinna && (
+              <button
+                onClick={handleReauth}
+                disabled={cinnaReauth.isPending}
+                className={`w-full flex items-center gap-2 px-3 py-2 text-xs transition-colors disabled:opacity-50 ${
+                  needsReauth
+                    ? 'text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]'
+                    : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
+                }`}
+                title={
+                  needsReauth
+                    ? 'Cinna session expired — re-authenticate to restore remote agents'
+                    : 'Re-link this account with a fresh Cinna session'
+                }
+              >
+                <RefreshCw size={14} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+                {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+              </button>
+            )}
             <button
               onClick={() => { setShowRegister(true); setOpen(false) }}
               className="w-full flex items-center gap-2 px-3 py-2 text-xs text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors"

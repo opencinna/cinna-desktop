@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 
 export type RemoteSyncStatus = { error?: 'reauth_required' | 'sync_failed' }
 
-const REMOTE_SYNC_STATUS_KEY = ['agents', 'remote-sync-status'] as const
+export const REMOTE_SYNC_STATUS_KEY = ['agents', 'remote-sync-status'] as const
 
 export function useAgents() {
   const queryClient = useQueryClient()

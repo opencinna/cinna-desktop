@@ -57,6 +57,9 @@ Cinna Accounts let users connect the desktop app to a remote Cinna server (cloud
 2. Server returns new access + refresh tokens (rotation); both are stored
 3. If the server detects replay (old refresh token reused), all tokens are cleared and the user must re-authenticate via OAuth
 
+### Re-authentication (Session Expired)
+When tokens have been cleared (replay detection, manual revoke on the server, refresh token expired), the user can re-link the account in-place — no data loss. Four UI surfaces expose the action. See [Re-authentication](./reauthentication.md) for the full flow.
+
 ## Business Rules
 
 - Cinna Accounts use OAuth 2.0 Authorization Code + PKCE — no client secrets stored on disk
@@ -68,7 +71,7 @@ Cinna Accounts let users connect the desktop app to a remote Cinna server (cloud
 - On user deletion, all Cinna tokens are cleared before cascade-deleting user data
 - Discovery responses are cached per server URL for the session (cleared on app restart)
 - Concurrent token refresh attempts are deduplicated (mutex) to prevent race conditions
-- If token refresh fails with replay detection, all tokens are wiped and the user is forced to re-authenticate
+- If token refresh fails with replay detection, all tokens are wiped and the user must re-authenticate. Re-auth is offered in-app and preserves all local data — see [Re-authentication](./reauthentication.md)
 - The Cloud (opencinna.io) hosting option is currently gated behind an "Under Development" notice in the UI — the Connect button is disabled while Cloud is selected. Self-Hosted is the default and only-reachable path. The underlying OAuth + token machinery treats `cloud` and `self_hosted` identically; lifting the gate is a UI-only change
 - Self-hosted history is stored in `localStorage` under `cinna-selfhosted-history` as a JSON array of URL strings. It is scoped to the renderer profile (shared across OS users of the desktop install — URLs only, no credentials)
 
@@ -101,9 +104,12 @@ Token Refresh (automatic):
                       (On replay → clear tokens → throw CinnaReauthRequired)
 ```
 
+In-place re-authentication (when the user clicks "Re-authenticate" in any of the four UI surfaces) reuses the same OAuth machinery but keeps the existing `users` row. See [Re-authentication](./reauthentication.md) for the full flow.
+
 ## Integration Points
 
 - **[User Accounts](../user_accounts/user_accounts.md)** — Cinna accounts are a user type; same login/switch/delete flows, same data isolation
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — Cinna users go through the same activation gate; providers load on activate
 - **[MCP Connections](../../mcp/connections/connections.md)** — Reuses `oauth-callback.ts` (local HTTP callback server + `findAvailablePort()`) for the OAuth redirect
+- **[Re-authentication](./reauthentication.md)** — In-place token swap when the session expires; preserves all local data
 - **Future: Cinna server features** — `getCinnaAccessToken()` provides the authenticated access token for any future API calls to the Cinna server

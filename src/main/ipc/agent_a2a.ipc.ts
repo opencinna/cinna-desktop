@@ -8,12 +8,17 @@ import { messageRoutingService } from '../services/messageRoutingService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
 import { postAgentError } from './_streamPort'
 import type { CliCommand } from '../../shared/cliCommands'
 import type { AgentSendPayload } from '../../shared/ipcPayloads'
+import {
+  CINNA_REAUTH_REQUIRED_CODE,
+  CINNA_SESSION_EXPIRED_MESSAGE
+} from '../../shared/cinnaErrors'
 
 const logger = createLogger('A2A')
 
@@ -173,13 +178,16 @@ export function registerA2AHandlers(): void {
       try {
         endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
       } catch (err) {
-        const errMsg =
-          err instanceof AgentError
+        const isReauth = err instanceof CinnaReauthRequired
+        const errMsg = isReauth
+          ? CINNA_SESSION_EXPIRED_MESSAGE
+          : err instanceof AgentError
             ? err.message
-            : `Failed to resolve agent endpoint: ${String(err)}`
-        logger.error(errMsg, { agentId, cardUrl: agent.cardUrl })
-        postAgentError(port, errMsg)
-        messageRepo.saveError({ chatId, short: errMsg })
+            : `Failed to resolve agent endpoint: ${err instanceof Error ? err.message : String(err)}`
+        const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
+        logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
+        postAgentError(port, errMsg, code)
+        messageRepo.saveError({ chatId, short: errMsg, code })
         port.close()
         return
       }
@@ -202,10 +210,14 @@ export function registerA2AHandlers(): void {
       try {
         accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
       } catch (err) {
-        const errMsg = `Failed to resolve agent access token: ${String(err)}`
-        logger.error(errMsg, { agentId })
-        postAgentError(port, errMsg)
-        messageRepo.saveError({ chatId, short: errMsg })
+        const isReauth = err instanceof CinnaReauthRequired
+        const errMsg = isReauth
+          ? CINNA_SESSION_EXPIRED_MESSAGE
+          : `Failed to resolve agent access token: ${err instanceof Error ? err.message : String(err)}`
+        const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
+        logger.error(errMsg, { agentId, reauth: isReauth })
+        postAgentError(port, errMsg, code)
+        messageRepo.saveError({ chatId, short: errMsg, code })
         port.close()
         return
       }
@@ -219,7 +231,12 @@ export function registerA2AHandlers(): void {
         accessToken,
         wireContent,
         fileIds,
-        port
+        port,
+        // Remote agents authenticate with a Cinna-issued JWT — a stream-level
+        // 401/403 means the server revoked the session and the user needs to
+        // re-auth. Local A2A agents use a user-supplied static token so a
+        // 401 there is just a wrong-token error, not a reauth signal.
+        isCinnaTokenAuth: agent.source === 'remote'
       })
     }
   )

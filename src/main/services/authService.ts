@@ -49,6 +49,7 @@ export interface CinnaRegisterInput {
   serverUrl?: string
 }
 
+
 export interface LoginInput {
   userId: string
   password?: string
@@ -189,6 +190,62 @@ export const authService = {
     const row = userRepo.get(id)
     if (!row) throw new Error('User disappeared after activation')
     return { user: toDto(row) }
+  },
+
+  /**
+   * Re-link an existing Cinna user with fresh OAuth tokens without deleting
+   * local data. The user row, chats, agents, and settings stay put — we just
+   * swap in a new access/refresh pair.
+   *
+   * Operates on the active profile (passed by the IPC layer) rather than an
+   * arbitrary id from the renderer — prevents a confused-deputy scenario
+   * where a renderer bug targets a non-active account.
+   *
+   * Guards against accidental identity swap by requiring the OAuth-returned
+   * email to match the user's stored username.
+   */
+  async reauthCinna(userId: string): Promise<{ user: UserDto }> {
+    const row = userRepo.get(userId)
+    if (!row) throw new AuthError('not_found', 'User not found')
+    if (row.type !== 'cinna_user' || !row.cinnaServerUrl) {
+      throw new AuthError('invalid_user_type', 'Not a Cinna account')
+    }
+
+    logger.info('cinna reauth: starting OAuth', {
+      userId: row.id,
+      serverUrl: row.cinnaServerUrl
+    })
+
+    let tokens: Awaited<ReturnType<typeof startCinnaOAuthFlow>>
+    try {
+      tokens = await startCinnaOAuthFlow(row.cinnaServerUrl)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'OAuth authentication failed'
+      logger.error('cinna reauth OAuth failed', {
+        userId: row.id,
+        serverUrl: row.cinnaServerUrl,
+        message
+      })
+      throw new AuthError('oauth_failed', message)
+    }
+
+    if (tokens.profile.email !== row.username) {
+      logger.warn('cinna reauth rejected: identity mismatch', {
+        existing: row.username,
+        got: tokens.profile.email
+      })
+      throw new AuthError(
+        'identity_mismatch',
+        `Signed in as ${tokens.profile.email}, but this account is ${row.username}. Sign in with the matching account on the Cinna server.`
+      )
+    }
+
+    storeCinnaTokens(userId, tokens)
+    logger.info('cinna reauth: tokens refreshed', { userId: row.id })
+
+    const refreshed = userRepo.get(userId)
+    if (!refreshed) throw new Error('User disappeared after reauth')
+    return { user: toDto(refreshed) }
   },
 
   async login(input: LoginInput): Promise<{ user: UserDto }> {

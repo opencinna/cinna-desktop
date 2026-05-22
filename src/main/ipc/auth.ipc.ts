@@ -77,6 +77,15 @@ export function registerAuthHandlers(): void {
     return { success: true as const }
   })
 
+  ipcHandle('auth:cinna-reauth', async () => {
+    try {
+      const { user } = await authService.reauthCinna(getProfileScopeUserId())
+      return { success: true as const, user }
+    } catch (err) {
+      return errorResponse(err)
+    }
+  })
+
   ipcHandle(
     'auth:update-user',
     async (

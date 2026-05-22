@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
 import { useChatStore } from '../stores/chat.store'
+import { REMOTE_SYNC_STATUS_KEY, type RemoteSyncStatus } from './useAgents'
 
 export function useUsers() {
   return useQuery({
@@ -102,6 +103,35 @@ export function useLogout() {
 export function useCinnaOAuthAbort() {
   return useMutation({
     mutationFn: () => window.api.auth.cinnaOAuthAbort()
+  })
+}
+
+/**
+ * Re-link the active Cinna profile with fresh OAuth tokens — keeps local
+ * data (chats, agents, settings) intact. The target user is resolved
+ * main-side from the active profile, so the renderer can't target a
+ * different account.
+ *
+ * Refreshes the auth queries and any agent caches so any "session expired"
+ * banners clear automatically.
+ */
+export function useCinnaReauth() {
+  const queryClient = useQueryClient()
+  const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
+
+  return useMutation({
+    mutationFn: () => window.api.auth.cinnaReauth(),
+    onSuccess: (result) => {
+      if (!result.success || !result.user) return
+      const current = useAuthStore.getState().currentUser
+      if (current && current.id === result.user.id) {
+        setCurrentUser(toAuthUser(result.user))
+      }
+      queryClient.invalidateQueries({ queryKey: ['users'] })
+      queryClient.invalidateQueries({ queryKey: ['auth', 'current'] })
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.setQueryData<RemoteSyncStatus>(REMOTE_SYNC_STATUS_KEY, {})
+    }
   })
 }
 

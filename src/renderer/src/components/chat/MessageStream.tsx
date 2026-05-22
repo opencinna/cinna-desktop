@@ -1,9 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronRight } from 'lucide-react'
+import { AlertTriangle, CheckCircle, ChevronRight, RefreshCw } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAgents } from '../../hooks/useAgents'
+import { useAuthStore } from '../../stores/auth.store'
+import { useCinnaReauth } from '../../hooks/useAuth'
+import { CINNA_REAUTH_REQUIRED_CODE } from '../../../../shared/cinnaErrors'
 import { MessageBubble } from './MessageBubble'
 import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
@@ -146,6 +149,26 @@ interface MessageStreamProps {
 
 function SystemMessage({
   message,
+  detail,
+  code
+}: {
+  message: string
+  detail?: string
+  code?: string
+}): React.JSX.Element {
+  // Reauth-required errors get a dedicated bubble that swaps its entire
+  // appearance (danger → success) once the user completes re-auth — leaving
+  // the persisted "Cinna session expired" copy in place after the user has
+  // already fixed the session would be misleading.
+  if (code === CINNA_REAUTH_REQUIRED_CODE) {
+    return <ReauthErrorBubble detail={detail} />
+  }
+
+  return <GenericErrorBubble message={message} detail={detail} />
+}
+
+function GenericErrorBubble({
+  message,
   detail
 }: {
   message: string
@@ -160,6 +183,94 @@ function SystemMessage({
           <AlertTriangle size={13} />
           <span>{message}</span>
         </div>
+        {detail && (
+          <>
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="mt-1.5 inline-flex items-center gap-0.5 text-[10px] text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors"
+            >
+              <ChevronRight size={10} className={`transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`} />
+              Details
+            </button>
+            {expanded && (
+              <pre className="mt-1.5 text-[11px] text-left text-[var(--color-text-secondary)] font-mono whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
+                {detail}
+              </pre>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Bubble dedicated to the "Cinna session expired" error. Owns two states:
+ *  - Pre-reauth: danger-styled, with the original error copy + "Re-authenticate" button
+ *  - Post-reauth: success-styled, replacing the now-stale "expired" message
+ *    with a friendly "session restored" note so the user isn't staring at a
+ *    red bubble after fixing the problem.
+ *
+ * The Cinna-user gate is on the button only, not the bubble itself — a non-
+ * Cinna user (somehow) seeing this error would still see the danger copy
+ * but no action button, matching the generic-error layout.
+ */
+function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
+  const currentUser = useAuthStore((s) => s.currentUser)
+  const cinnaReauth = useCinnaReauth()
+  const [done, setDone] = useState(false)
+  const [reauthError, setReauthError] = useState<string | null>(null)
+  const [expanded, setExpanded] = useState(false)
+  const canReauth = currentUser?.type === 'cinna_user'
+
+  const handleReauth = async (): Promise<void> => {
+    if (!currentUser) return
+    setReauthError(null)
+    const result = await cinnaReauth.mutateAsync()
+    if (result.success) {
+      setDone(true)
+    } else {
+      setReauthError(result.error ?? 'Re-authentication failed')
+    }
+  }
+
+  if (done) {
+    return (
+      <div className="flex justify-center">
+        <div className="rounded-lg border border-[var(--color-success)]/30 bg-[var(--color-success)]/8 px-4 py-2.5 max-w-md text-center">
+          <div className="flex items-center justify-center gap-2 text-xs text-[var(--color-success)]">
+            <CheckCircle size={13} />
+            <span>Authenticated — you can resend your message now.</span>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex justify-center">
+      <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-md text-center">
+        <div className="flex items-center justify-center gap-2 text-xs text-[var(--color-danger)]">
+          <AlertTriangle size={13} />
+          <span>Cinna session expired — please re-authenticate.</span>
+        </div>
+        {canReauth && (
+          <div className="mt-2 flex flex-col items-center gap-1">
+            <button
+              onClick={handleReauth}
+              disabled={cinnaReauth.isPending}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium
+                bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+                disabled:opacity-50"
+            >
+              <RefreshCw size={10} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+              {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+            </button>
+            {reauthError && (
+              <div className="text-[10px] text-[var(--color-danger)] max-w-xs break-words">{reauthError}</div>
+            )}
+          </div>
+        )}
         {detail && (
           <>
             <button
@@ -242,8 +353,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             if (msg.role === 'error') {
               let node: React.JSX.Element
               try {
-                const err = JSON.parse(msg.content) as { short: string; detail?: string }
-                node = <SystemMessage message={err.short} detail={err.detail} />
+                const err = JSON.parse(msg.content) as {
+                  short: string
+                  detail?: string
+                  code?: string
+                }
+                node = <SystemMessage message={err.short} detail={err.detail} code={err.code} />
               } catch {
                 node = <SystemMessage message={msg.content} />
               }

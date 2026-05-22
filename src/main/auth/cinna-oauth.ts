@@ -31,8 +31,8 @@ export interface CinnaOAuthResult {
 }
 
 export class CinnaReauthRequired extends Error {
-  constructor(message = 'Cinna re-authentication required') {
-    super(message)
+  constructor(message = 'Cinna re-authentication required', options?: ErrorOptions) {
+    super(message, options)
     this.name = 'CinnaReauthRequired'
   }
 }

@@ -14,6 +14,8 @@ import {
   Bot
 } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
+import { useAuthStore } from '../../stores/auth.store'
+import { useCinnaReauth } from '../../hooks/useAuth'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import {
   useAgentStatus,
@@ -302,6 +304,45 @@ function DetailView({
 
 const FADE_MS = 350
 
+function ReauthErrorPanel({ onRetry }: { onRetry: () => void }): React.JSX.Element {
+  const currentUser = useAuthStore((s) => s.currentUser)
+  const cinnaReauth = useCinnaReauth()
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  const handleReauth = async (): Promise<void> => {
+    if (!currentUser) return
+    setLocalError(null)
+    const result = await cinnaReauth.mutateAsync()
+    if (result.success) {
+      onRetry()
+    } else {
+      setLocalError(result.error ?? 'Re-authentication failed')
+    }
+  }
+
+  return (
+    <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-6">
+      <AlertTriangle size={20} className="text-[var(--color-danger)]" />
+      <div className="text-xs text-[var(--color-text-secondary)] max-w-sm">
+        Cinna session expired. Re-authenticate to refresh agent status — your chats and settings will be preserved.
+      </div>
+      <button
+        onClick={handleReauth}
+        disabled={cinnaReauth.isPending}
+        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+          bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+          disabled:opacity-50"
+      >
+        <RefreshCw size={12} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+        {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+      </button>
+      {localError && (
+        <div className="text-[10px] text-[var(--color-danger)] max-w-sm">{localError}</div>
+      )}
+    </div>
+  )
+}
+
 export function AgentStatusOverlay(): React.JSX.Element | null {
   const { agentStatusOpen, setAgentStatusOpen, setActiveView, setPendingAgentId } = useUIStore()
   const { data: statuses, isLoading, error, refetch } = useAgentStatus()
@@ -403,11 +444,13 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
 
             <div className="flex-1 overflow-y-auto p-4">
               {error ? (
-                <div className="h-full flex items-center justify-center text-xs text-[var(--color-danger)]">
-                  {error.code === 'reauth_required'
-                    ? 'Session expired — please re-authenticate.'
-                    : error.message}
-                </div>
+                error.code === 'reauth_required' ? (
+                  <ReauthErrorPanel onRetry={refetch} />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-xs text-[var(--color-danger)]">
+                    {error.message}
+                  </div>
+                )
               ) : isLoading && sorted.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
                   Loading…

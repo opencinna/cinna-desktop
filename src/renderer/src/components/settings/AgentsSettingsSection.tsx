@@ -3,6 +3,7 @@ import { Plus, RefreshCw, AlertTriangle } from 'lucide-react'
 import { AgentCard } from './AgentCard'
 import { A2AAgentForm } from './A2AAgentForm'
 import { useAgents, useRemoteSyncStatus, useSyncRemoteAgents } from '../../hooks/useAgents'
+import { useCinnaReauth } from '../../hooks/useAuth'
 import { useAuthStore } from '../../stores/auth.store'
 
 const REMOTE_SECTION_LABELS: Record<string, string> = {
@@ -63,6 +64,20 @@ function ProfileAgentsSection(): React.JSX.Element {
   const syncStatus = useRemoteSyncStatus()
   const currentUser = useAuthStore((s) => s.currentUser)
   const isCinnaUser = currentUser?.type === 'cinna_user'
+  const cinnaReauth = useCinnaReauth()
+  const [reauthError, setReauthError] = useState<string | null>(null)
+
+  const handleReauth = async (): Promise<void> => {
+    if (!currentUser) return
+    setReauthError(null)
+    const result = await cinnaReauth.mutateAsync()
+    if (!result.success) {
+      setReauthError(result.error ?? 'Re-authentication failed')
+      return
+    }
+    // Tokens are back — kick off a fresh remote sync so the agents reappear.
+    syncRemote.mutate()
+  }
 
   const remoteAgents = (agents ?? []).filter((a) => a.source === 'remote')
 
@@ -105,11 +120,30 @@ function ProfileAgentsSection(): React.JSX.Element {
             text-[10px] text-[var(--color-text-secondary)]"
         >
           <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
-          <span>
-            {syncStatus.error === 'reauth_required'
-              ? 'Cinna session expired. Sign out and back in to resume remote agent sync.'
-              : 'Remote agent sync failed. Try again, or check the logger overlay (⌘`) for details.'}
-          </span>
+          <div className="flex-1 min-w-0">
+            <div>
+              {syncStatus.error === 'reauth_required'
+                ? 'Cinna session expired. Re-authenticate to resume remote agent sync — your chats and settings will be preserved.'
+                : 'Remote agent sync failed. Try again, or check the logger overlay (⌘`) for details.'}
+            </div>
+            {syncStatus.error === 'reauth_required' && (
+              <>
+                <button
+                  onClick={handleReauth}
+                  disabled={cinnaReauth.isPending}
+                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium
+                    bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+                    disabled:opacity-50"
+                >
+                  <RefreshCw size={10} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+                  {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+                </button>
+                {reauthError && (
+                  <div className="mt-1.5 text-[10px] text-[var(--color-danger)]">{reauthError}</div>
+                )}
+              </>
+            )}
+          </div>
         </div>
       )}
 

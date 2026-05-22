@@ -71,10 +71,15 @@ export interface AgentDoneEvent {
 /**
  * Stream aborted with an error. `error` is the user-facing short message;
  * full detail (if any) is logged main-side, not sent over the port.
+ *
+ * `code` is an optional machine-readable discriminator (e.g.
+ * `'cinna_reauth_required'`) so renderer surfaces can branch on intent
+ * without substring-matching the user-facing copy.
  */
 export interface AgentErrorEvent {
   type: 'error'
   error: string
+  code?: string
 }
 
 export type AgentStreamEvent =
