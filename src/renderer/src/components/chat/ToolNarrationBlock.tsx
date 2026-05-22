@@ -10,6 +10,13 @@ interface ToolNarrationBlockProps {
   content: string
   toolName?: string
   toolInput?: Record<string, unknown>
+  /**
+   * Slash invocation from `cinna.command_invocation` when this tool part was
+   * synthesized to wrap a `/run:*` execution. Drives narration-echo
+   * suppression: the backend echoes the bare invocation as the text payload,
+   * which is redundant once the parent CommandToolFrame already shows it.
+   */
+  commandInvocation?: string
   isStreaming?: boolean
   defaultExpanded?: boolean
   animate?: boolean
@@ -20,6 +27,7 @@ export function ToolNarrationBlock({
   content,
   toolName,
   toolInput,
+  commandInvocation,
   isStreaming,
   defaultExpanded,
   animate,
@@ -31,6 +39,20 @@ export function ToolNarrationBlock({
   // Compact mode hides structured args in the always-visible header; the
   // expanded body still shows full detail when the user clicks through.
   const showStructuredHeader = hasStructured && verboseMode
+  // Backend echoes the bare slash-command invocation (e.g. "/run:foo") as the
+  // tool's narration text when the call originates from a cinna-core command.
+  // The parent CommandToolFrame already shows the invocation in its header, so
+  // render it here would be pure noise — suppress when content is *only* a
+  // slash slug. Marker-driven when present; regex fallback covers historic
+  // messages persisted before the backend added the metadata. The fallback
+  // requires the `/word:word` colon-separated shape so it matches `/run:foo`
+  // but NOT generic paths like `/etc/hosts` or `/usr/local/bin` that an LLM
+  // might legitimately narrate as a single line.
+  const isSlashCommandEcho =
+    !!content &&
+    ((!!commandInvocation && content.trim() === commandInvocation) ||
+      /^\s*\/[\w\-]+:[\w\-.]+\s*$/.test(content))
+  const showContent = !!content && !isSlashCommandEcho
 
   return (
     <div
@@ -80,7 +102,7 @@ export function ToolNarrationBlock({
           )}
           {/* Keep the model's narration text below the structured summary so
               the user can still read any surrounding prose. */}
-          {content && (
+          {showContent && (
             <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>{content}</Markdown>
           )}
         </div>

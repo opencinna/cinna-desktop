@@ -19,12 +19,20 @@ import { attachmentToMediaPart } from './fileStore'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { MediaPart } from '../llm/types'
+import type { LlmStreamEvent } from '../../shared/llmStreamEvents'
 
 const logger = createLogger('LLM')
 const MAX_TOOL_ROUNDS = 10
 
+/**
+ * Typed stream port. Every event sent to the renderer over this channel
+ * must conform to `LlmStreamEvent` — symmetric to the A2A pipeline's
+ * `StreamPort`, but with a distinct event union (LLM tool calls flow via
+ * `tool_use` / `tool_result` / `tool_error`, not `tool` / `tool_result`
+ * content-kind parts).
+ */
 export interface StreamPort {
-  postMessage(msg: unknown): void
+  postMessage(msg: LlmStreamEvent): void
   close(): void
 }
 

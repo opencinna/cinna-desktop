@@ -6,6 +6,12 @@ import { markdownComponents } from '../../utils/markdownComponents'
 
 interface CommandResultBlockProps {
   content: string
+  /**
+   * Verbatim slash invocation (`cinna.command_invocation` from the backend).
+   * When present, drives the header text "Command: <invocation>" so the user
+   * sees the slug they typed rather than the generic "Command output" label.
+   */
+  commandInvocation?: string
   isStreaming?: boolean
   animate?: boolean
   animateDelay?: number
@@ -21,6 +27,7 @@ interface CommandResultBlockProps {
  */
 export function CommandResultBlock({
   content,
+  commandInvocation,
   isStreaming,
   animate,
   animateDelay
@@ -35,7 +42,15 @@ export function CommandResultBlock({
           text-[var(--color-text-muted)] border-b border-[var(--color-border)]/40"
       >
         <Terminal size={11} />
-        <span className="font-medium">Command output</span>
+        <span className="font-medium">
+          {commandInvocation ? (
+            <>
+              Command: <span className="font-mono">{commandInvocation}</span>
+            </>
+          ) : (
+            'Command output'
+          )}
+        </span>
         {isStreaming && (
           <span className="ml-1 inline-block w-1 h-1 rounded-full bg-[var(--color-accent)] animate-pulse" />
         )}

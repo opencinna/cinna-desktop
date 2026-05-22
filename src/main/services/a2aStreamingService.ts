@@ -18,11 +18,18 @@ import {
 } from '../agents/streamPartsAccumulator'
 import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
+import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
 
 const logger = createLogger('A2A')
 
+/**
+ * Typed stream port. Every event sent to the renderer over this channel must
+ * conform to `AgentStreamEvent` — the discriminated union flows through the
+ * accumulator's `DeltaPort` (narrower), the streaming service itself (full
+ * union), and the renderer's `useChatStream.handleAgent` consumer.
+ */
 export interface StreamPort {
-  postMessage(msg: unknown): void
+  postMessage(msg: AgentStreamEvent): void
   close(): void
 }
 

@@ -10,13 +10,105 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
+import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { CollapsibleGroup, type CollapsibleGroupItem } from './CollapsibleGroup'
+import type { ToolStream } from '../../../../shared/messageParts'
 
 type RenderNode =
   | { slot: 'plain'; key: string; node: React.ReactNode }
   | { slot: 'collapsible'; item: CollapsibleGroupItem }
+
+/**
+ * Pair `tool` parts/blocks (with `cinna.command_invocation`) to their matching
+ * `tool_result` (by `toolId`) so the renderer can wrap each pair in a single
+ * `CommandToolFrame`. Returns the toolIdx → resultIdx map plus the set of
+ * result indices to skip (they're consumed by the wrapper).
+ */
+function pairCommandTools<
+  T extends { kind: string; toolId?: string; commandInvocation?: string }
+>(items: T[]): { pairResultIdx: Map<number, number>; consumed: Set<number> } {
+  const pairResultIdx = new Map<number, number>()
+  const consumed = new Set<number>()
+  items.forEach((item, idx) => {
+    if (item.kind !== 'tool' || !item.commandInvocation || !item.toolId) return
+    const ri = items.findIndex(
+      (q, j) => j > idx && q.kind === 'tool_result' && q.toolId === item.toolId
+    )
+    if (ri !== -1) {
+      pairResultIdx.set(idx, ri)
+      consumed.add(ri)
+    }
+  })
+  return { pairResultIdx, consumed }
+}
+
+/**
+ * Single source of truth for the slash-command-pair JSX. Used by all three
+ * MessageStream render paths (verbose persisted, compact persisted, live
+ * streaming). The inner block defaults are identical across paths — narration
+ * starts collapsed (the parent frame header already shows the invocation),
+ * result starts expanded (the command output is what matters). The frame's
+ * default-expanded and streaming state vary per path and are forwarded by the
+ * caller.
+ */
+function renderCommandToolPair(opts: {
+  key: string
+  commandInvocation: string
+  toolText: string
+  toolName?: string
+  toolInput?: Record<string, unknown>
+  result?: { text: string; toolStream?: ToolStream }
+  frameDefaultExpanded?: boolean
+  frameIsStreaming?: boolean
+  narrationIsStreaming?: boolean
+  resultIsStreaming?: boolean
+  animate?: boolean
+  animateDelay?: number
+}): React.ReactNode {
+  const {
+    key,
+    commandInvocation,
+    toolText,
+    toolName,
+    toolInput,
+    result,
+    frameDefaultExpanded,
+    frameIsStreaming,
+    narrationIsStreaming,
+    resultIsStreaming,
+    animate,
+    animateDelay
+  } = opts
+  return (
+    <CommandToolFrame
+      key={key}
+      commandInvocation={commandInvocation}
+      defaultExpanded={frameDefaultExpanded}
+      isStreaming={frameIsStreaming}
+      animate={animate}
+      animateDelay={animateDelay}
+    >
+      <ToolNarrationBlock
+        content={toolText}
+        toolName={toolName}
+        toolInput={toolInput}
+        commandInvocation={commandInvocation}
+        defaultExpanded={false}
+        isStreaming={narrationIsStreaming}
+      />
+      {result && (
+        <ToolResultBlock
+          content={result.text}
+          toolStream={result.toolStream}
+          isStreaming={resultIsStreaming}
+          defaultExpanded
+        />
+      )}
+    </CommandToolFrame>
+  )
+}
 
 /** Wrap runs of consecutive collapsible nodes (length >= 2) into a CollapsibleGroup. */
 function groupConsecutive(nodes: RenderNode[]): React.ReactNode[] {
@@ -228,6 +320,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 ? agentNameById.get(addressedAgentId) ?? null
                 : null
             if (msg.role === 'assistant' && Array.isArray(parts) && parts.length > 0) {
+              const { pairResultIdx, consumed } = pairCommandTools(parts)
               if (verboseMode) {
                 renderNodes.push({
                   slot: 'plain',
@@ -236,6 +329,24 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     <div className="space-y-2">
                       {parts.map((p, idx) => {
                         const k = `${msg.id}-${idx}`
+                        // tool_result already absorbed into a CommandToolFrame
+                        // alongside its paired tool — skip the standalone render.
+                        if (consumed.has(idx)) return null
+                        if (p.kind === 'tool' && p.commandInvocation) {
+                          const ri = pairResultIdx.get(idx)
+                          const result = ri !== undefined ? parts[ri] : undefined
+                          return renderCommandToolPair({
+                            key: k,
+                            commandInvocation: p.commandInvocation,
+                            toolText: p.text,
+                            toolName: p.toolName,
+                            toolInput: p.toolInput,
+                            result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
+                            frameDefaultExpanded: true,
+                            animate: shouldAnimate,
+                            animateDelay: idx * 80
+                          })
+                        }
                         if (p.kind === 'thinking') {
                           return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                         }
@@ -251,7 +362,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         }
                         if (p.kind === 'command_result') {
                           return (
-                            <CommandResultBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                            <CommandResultBlock
+                              key={k}
+                              content={p.text}
+                              commandInvocation={p.commandInvocation}
+                              animate={shouldAnimate}
+                              animateDelay={idx * 80}
+                            />
                           )
                         }
                         return (
@@ -273,7 +390,28 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               } else {
                 parts.forEach((p, idx) => {
                   const k = `${msg.id}-${idx}`
-                  if (p.kind === 'thinking') {
+                  if (consumed.has(idx)) return
+                  if (p.kind === 'tool' && p.commandInvocation) {
+                    const ri = pairResultIdx.get(idx)
+                    const result = ri !== undefined ? parts[ri] : undefined
+                    // `/run:*` pair — frame as a slash-command UI, not as bare
+                    // tool plumbing. Plain slot (same as command_result) since
+                    // this IS the assistant turn, not auxiliary narration.
+                    renderNodes.push({
+                      slot: 'plain',
+                      key: k,
+                      node: renderCommandToolPair({
+                        key: k,
+                        commandInvocation: p.commandInvocation,
+                        toolText: p.text,
+                        toolName: p.toolName,
+                        toolInput: p.toolInput,
+                        result: result ? { text: result.text, toolStream: result.toolStream } : undefined,
+                        animate: shouldAnimate,
+                        animateDelay: idx * 80
+                      })
+                    })
+                  } else if (p.kind === 'thinking') {
                     renderNodes.push({
                       slot: 'collapsible',
                       item: {
@@ -310,7 +448,14 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     renderNodes.push({
                       slot: 'plain',
                       key: k,
-                      node: <CommandResultBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                      node: (
+                        <CommandResultBlock
+                          content={p.text}
+                          commandInvocation={p.commandInvocation}
+                          animate={shouldAnimate}
+                          animateDelay={idx * 80}
+                        />
+                      )
                     })
                   } else {
                     renderNodes.push({
@@ -377,8 +522,50 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             })
           }
 
+          // Pair streaming `tool` + `tool_result` blocks the same way as
+          // persisted parts so live `/run:*` turns render in a CommandToolFrame
+          // even before the stream finishes.
+          const streamingTextBlocks = streamingBlocks.map((b) =>
+            b.type === 'text'
+              ? { kind: b.kind, toolId: b.toolId, commandInvocation: b.commandInvocation }
+              : { kind: 'tool_call' }
+          )
+          const { pairResultIdx: streamPairResultIdx, consumed: streamConsumed } =
+            pairCommandTools(streamingTextBlocks)
           streamingBlocks.forEach((block, i) => {
             const isLastBlock = i === streamingBlocks.length - 1
+            if (streamConsumed.has(i)) return
+            if (block.type === 'text' && block.kind === 'tool' && block.commandInvocation) {
+              const ri = streamPairResultIdx.get(i)
+              const resultBlock =
+                ri !== undefined && streamingBlocks[ri].type === 'text'
+                  ? (streamingBlocks[ri] as Extract<typeof streamingBlocks[number], { type: 'text' }>)
+                  : undefined
+              // Live: streaming flag rides the whole frame so the header shows
+              // a pulse while either the tool or its paired result is still
+              // arriving (last block in the stream).
+              const live = isStreaming && (isLastBlock || (ri !== undefined && ri === streamingBlocks.length - 1))
+              const key = `stream-cmd-tool-${i}`
+              renderNodes.push({
+                slot: 'plain',
+                key,
+                node: renderCommandToolPair({
+                  key,
+                  commandInvocation: block.commandInvocation,
+                  toolText: block.content,
+                  toolName: block.toolName,
+                  toolInput: block.toolInput,
+                  result: resultBlock
+                    ? { text: resultBlock.content, toolStream: resultBlock.toolStream }
+                    : undefined,
+                  frameDefaultExpanded: true,
+                  frameIsStreaming: live,
+                  narrationIsStreaming: live && !resultBlock,
+                  resultIsStreaming: live && ri === streamingBlocks.length - 1
+                })
+              })
+              return
+            }
             if (block.type === 'text') {
               if (block.kind === 'thinking') {
                 const live = isStreaming && isLastBlock
@@ -439,7 +626,13 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-cmd-${i}`,
-                  node: <CommandResultBlock content={block.content} isStreaming={live} />
+                  node: (
+                    <CommandResultBlock
+                      content={block.content}
+                      commandInvocation={block.commandInvocation}
+                      isStreaming={live}
+                    />
+                  )
                 })
                 return
               }

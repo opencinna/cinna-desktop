@@ -3,6 +3,8 @@ import type { MessagePart } from '../shared/messageParts'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
+import { isAgentStreamEvent, type AgentStreamEvent } from '../shared/agentStreamEvents'
+import { isLlmStreamEvent, type LlmStreamEvent } from '../shared/llmStreamEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
 import type {
   JobData,
@@ -399,15 +401,7 @@ const api = {
       agentId: string,
       chatId: string,
       content: string,
-      onEvent: (event: {
-        type: string
-        text?: string
-        requestId?: string
-        taskId?: string
-        contextId?: string
-        state?: string
-        error?: string
-      }) => void,
+      onEvent: (event: AgentStreamEvent) => void,
       extras?: {
         catchupPacket?: string
         rewrittenText?: string | null
@@ -417,6 +411,13 @@ const api = {
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
+        // Guard at the IPC trust boundary: drop messages that don't match
+        // the contract instead of casting blindly. Logged so a regression
+        // surfaces in dev tools rather than as a silent no-op.
+        if (!isAgentStreamEvent(event.data)) {
+          console.warn('[preload] dropped off-contract agent stream event', event.data)
+          return
+        }
         onEvent(event.data)
       }
       const payload: AgentSendPayload = {
@@ -544,22 +545,15 @@ const api = {
     sendMessage: (
       chatId: string,
       content: string,
-      onEvent: (event: {
-        type: string
-        text?: string
-        id?: string
-        name?: string
-        input?: Record<string, unknown>
-        result?: unknown
-        error?: string
-        errorDetail?: string
-        requestId?: string
-        provider?: string
-      }) => void,
+      onEvent: (event: LlmStreamEvent) => void,
       extras?: { catchupPacket?: string; attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
+        if (!isLlmStreamEvent(event.data)) {
+          console.warn('[preload] dropped off-contract llm stream event', event.data)
+          return
+        }
         onEvent(event.data)
       }
       const payload: LlmSendPayload = {

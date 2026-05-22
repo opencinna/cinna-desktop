@@ -29,6 +29,8 @@ interface TextBlock {
   toolId?: string
   /** Stream classification from `cinna.tool_stream` (tool_result only). */
   toolStream?: ToolStream
+  /** Slash invocation from `cinna.command_invocation` — see MessagePart. */
+  commandInvocation?: string
 }
 
 export type StreamBlock = TextBlock | ToolCallBlock
@@ -58,7 +60,8 @@ interface ChatStore {
     toolName?: string,
     toolInput?: Record<string, unknown>,
     toolId?: string,
-    toolStream?: ToolStream
+    toolStream?: ToolStream,
+    commandInvocation?: string
   ) => void
   addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
   resolveToolCall: (id: string, result: unknown) => void
@@ -103,7 +106,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null
     }),
 
-  appendDelta: (text, kind = 'text', toolName, toolInput, toolId, toolStream) =>
+  appendDelta: (text, kind = 'text', toolName, toolInput, toolId, toolStream, commandInvocation) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
@@ -121,7 +124,8 @@ export const useChatStore = create<ChatStore>((set) => ({
           content: last.content + text,
           segments: [...last.segments, text],
           toolInput: last.toolInput ?? toolInput,
-          toolId: last.toolId ?? toolId
+          toolId: last.toolId ?? toolId,
+          commandInvocation: last.commandInvocation ?? commandInvocation
         }
       } else {
         const next: TextBlock = { type: 'text', kind, content: text, segments: [text] }
@@ -129,6 +133,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (toolInput) next.toolInput = toolInput
         if (toolId) next.toolId = toolId
         if (toolStream) next.toolStream = toolStream
+        if (commandInvocation) next.commandInvocation = commandInvocation
         blocks.push(next)
       }
       return {

@@ -31,6 +31,7 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 | `cinna.tool_input` | object | Optional, only on `tool`-kind parts | Structured arguments for the tool call (e.g. `{ command, description }` for Bash). When present, the renderer can show a compact `<ToolCallSummary>` inline header in verbose mode and a structured argument block in the expanded body |
 | `cinna.tool_id` | string | On `tool` and `tool_result` parts | Pairing key: same value on a `tool` part and every `tool_result` chunk that belongs to it. Backend uses `exec_id` for CLI commands and the provider tool-call id for LLM tools |
 | `cinna.tool_stream` | `'stdout' \| 'stderr'` | Only on `tool_result` parts | Stream label for command output. Renderer styles `stderr` chunks in danger color. Unknown/absent values default to `'stdout'` (backend coerces server-side) |
+| `cinna.command_invocation` | string | Always on `command_result`; on `tool` / `tool_result` only when the pair was synthesized to wrap a `/run:*` execution | Verbatim slash invocation (`/files`, `/agent-status`, `/run:rotate_status`, …). Marks the part as originating from a cinna-core slash command (absent → LLM-initiated tool call). Renderer wraps the affected blocks in a "Command: <invocation>" frame so both flows (synchronous `command_result` and tool-pair `/run:*`) read as a single slash-command UI. See [Command Results](../../chat/command_results/command_results.md) |
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
@@ -55,11 +56,12 @@ For each event (status-update | artifact-update | message | task):
         toolInput  = (kind === 'tool')                                 ? metadata['cinna.tool_input']  : undefined
         toolId     = (kind === 'tool' || kind === 'tool_result')       ? metadata['cinna.tool_id']     : undefined
         toolStream = (kind === 'tool_result')                          ? metadata['cinna.tool_stream'] ?? 'stdout' : undefined
+        commandInvocation = metadata['cinna.command_invocation']  # any kind; present iff cinna-core slash command
         append to internal parts[] (merge with last only if:
           - text/thinking/command_result: same kind
           - tool: same kind + toolName
           - tool_result: same kind + toolId + toolStream)
-        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream })
+        port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream, commandInvocation })
         if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
   - Forward `{ type: 'status', state, taskId, contextId }` to the renderer
@@ -98,6 +100,7 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | `toolInput` | object \| undefined | Set only when `kind === 'tool'` and `cinna.tool_input` was a plain object. Carried through `appendDelta` and merged onto the in-flight streaming block so `ToolNarrationBlock` can render the inline tool-call summary as soon as it arrives |
 | `toolId` | string \| undefined | Pairing key from `cinna.tool_id`. Set on `tool` and `tool_result` deltas |
 | `toolStream` | `'stdout' \| 'stderr' \| undefined` | Set only when `kind === 'tool_result'`. Defaulted to `'stdout'` if metadata was absent |
+| `commandInvocation` | string \| undefined | Verbatim slash invocation from `cinna.command_invocation`. Always set for `kind: 'command_result'`; set on `kind: 'tool' \| 'tool_result'` only when the pair was synthesized to wrap a `/run:*` execution. Absent → LLM-initiated tool call |
 
 For `kind: 'notice'` deltas, only `text` and `kind` are populated; all `tool*` fields are `undefined`. The renderer appends them as `notice` text blocks in `chat.store.streamingBlocks`, rendered as muted system messages. After the stream completes they're persisted as `role: 'agent_transition'` rows and the streaming block is cleared.
 

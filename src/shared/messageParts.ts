@@ -49,4 +49,13 @@ export interface MessagePart {
   toolId?: string
   /** Only on `'tool_result'` parts: `'stdout' | 'stderr'`. */
   toolStream?: ToolStream
+  /**
+   * Verbatim slash invocation from `metadata['cinna.command_invocation']`.
+   * Presence flags the part as originating from a cinna-core slash command
+   * (not an LLM-initiated tool call). Carried on:
+   *  - `'command_result'`: always set (synchronous platform commands).
+   *  - `'tool'` / `'tool_result'`: set only when the pair was synthesized to
+   *     wrap a `/run:*` execution; absent for LLM-initiated tool calls.
+   */
+  commandInvocation?: string
 }

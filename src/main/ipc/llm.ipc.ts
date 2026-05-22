@@ -7,6 +7,7 @@ import { providerService } from '../services/providerService'
 import { type ModelCapability } from '../llm/types'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
+import { postLlmError } from './_streamPort'
 import type { LlmSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('llm-ipc')
@@ -25,10 +26,7 @@ export function registerLlmHandlers(): void {
     port.start()
 
     if (!userActivation.isActivated()) {
-      port.postMessage({
-        type: 'error',
-        error: 'Session not activated — user must authenticate first'
-      })
+      postLlmError(port, 'Session not activated — user must authenticate first')
       port.close()
       return
     }

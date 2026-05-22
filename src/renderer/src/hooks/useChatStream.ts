@@ -3,36 +3,19 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useForceRefreshAgentStatus } from './useAgentStatus'
-import type { ContentKind, ToolStream } from '../../../shared/messageParts'
 import type { MessageAttachment } from '../../../shared/attachments'
+import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { LlmStreamEvent } from '../../../shared/llmStreamEvents'
 
-type LlmEvent = {
-  type: string
-  text?: string
-  id?: string
-  name?: string
-  input?: Record<string, unknown>
-  result?: unknown
-  error?: string
-  errorDetail?: string
-  requestId?: string
-  provider?: string
-}
+// Receiver-side type — defined in `src/shared/llmStreamEvents.ts` and shared
+// with the sender (chatStreamingService) so adding a new event variant or
+// field flags drift at compile time on both sides.
+type LlmEvent = LlmStreamEvent
 
-type AgentEvent = {
-  type: string
-  text?: string
-  kind?: ContentKind
-  toolName?: string
-  toolInput?: Record<string, unknown>
-  toolId?: string
-  toolStream?: ToolStream
-  requestId?: string
-  taskId?: string
-  contextId?: string
-  state?: string
-  error?: string
-}
+// Receiver-side type — defined in `src/shared/agentStreamEvents.ts` and shared
+// with the sender (a2aStreamingService + StreamPartsAccumulator) so adding a
+// new event variant or field flags drift at compile time on both sides.
+type AgentEvent = AgentStreamEvent
 
 export interface StartLlmOptions {
   catchupPacket?: string
@@ -65,16 +48,16 @@ export function useChatStream(): {
     (chatId: string, event: LlmEvent): void => {
       switch (event.type) {
         case 'request-id':
-          startStreaming(event.requestId ?? '')
+          startStreaming(event.requestId)
           break
         case 'delta':
-          appendDelta(event.text!)
+          appendDelta(event.text)
           break
         case 'tool_use':
           addToolCall({
-            id: event.id!,
-            name: event.name!,
-            input: event.input!,
+            id: event.id,
+            name: event.name,
+            input: event.input,
             provider: event.provider
           })
           break
@@ -82,10 +65,10 @@ export function useChatStream(): {
           // LLM-side completion event: pairs a tool-use id with its result.
           // Distinct from the A2A 'tool_result' *content kind* handled by
           // handleAgent (which streams stdout/stderr text chunks as deltas).
-          resolveToolCall(event.id!, event.result)
+          resolveToolCall(event.id, event.result)
           break
         case 'tool_error':
-          failToolCall(event.id!, event.error!)
+          failToolCall(event.id, event.error)
           break
         case 'done':
           // Keep streaming blocks visible (cursor already hidden via isStreaming=false)
@@ -99,7 +82,7 @@ export function useChatStream(): {
           break
         case 'error':
           console.error('LLM error:', event.error)
-          setSendError(event.error ?? 'LLM request failed')
+          setSendError(event.error)
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
@@ -112,16 +95,17 @@ export function useChatStream(): {
     (chatId: string, event: AgentEvent): void => {
       switch (event.type) {
         case 'request-id':
-          startStreaming(event.requestId ?? '')
+          startStreaming(event.requestId)
           break
         case 'delta':
           appendDelta(
-            event.text!,
-            event.kind ?? 'text',
+            event.text,
+            event.kind,
             event.toolName,
             event.toolInput,
             event.toolId,
-            event.toolStream
+            event.toolStream,
+            event.commandInvocation
           )
           break
         case 'done':
@@ -134,7 +118,7 @@ export function useChatStream(): {
           break
         case 'error':
           console.error('Agent error:', event.error)
-          setSendError(event.error ?? 'Agent request failed')
+          setSendError(event.error)
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break

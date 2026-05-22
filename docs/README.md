@@ -118,6 +118,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [UI Guidelines](development/ui_guidelines/ui_guidelines_llm.md) — Color system, expandable card pattern, button layout rules, form conventions (LLM reference)
 - [Logger](development/logger/logger.md) — In-app debug logger with full-window overlay, scoped loggers for main/renderer, ⌘` keyboard shortcut
 - [Main-Process Layering](development/main_layering/main_layering_llm.md) — `db → services → ipc` convention, `ipcHandle()` wrap, DomainError codes, DTO masking (LLM reference)
+- [Stream Event Typing](development/stream_event_typing/stream_event_typing_llm.md) — Wire contract for the two MessagePort channels (agent A2A + LLM): shared `AgentStreamEvent` / `LlmStreamEvent` discriminated unions, typed `StreamPort` / `DeltaPort` interfaces, runtime guards at the contextBridge boundary, typed error helpers for IPC handlers (LLM reference)
 - [Release & Distribution](development/distribution/release.md) — Full release cycle: macOS signing/notarization, Linux build via GitHub Actions, GitHub Releases, in-app auto-update
 - [Auto-Update](development/auto_update/auto_update.md) — Runtime auto-update behavior: state machine, sidebar footer progress indicator, "Check for Updates…" menu, restart prompt
 

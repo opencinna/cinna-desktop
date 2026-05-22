@@ -21,6 +21,12 @@
  *   stream did not run — the command_result IS the assistant turn — so it
  *   joins the assistant message's `parts[]` and contributes to `answerText()`
  *   so chat previews / titles / search show the command output.
+ * - `cinna.command_invocation` (any kind): verbatim slash invocation, e.g.
+ *   "/files" or "/run:rotate_status". Always set on `command_result` parts;
+ *   set on `tool` / `tool_result` parts only when the pair was synthesized to
+ *   wrap a `/run:*` execution (absent for LLM-initiated tool calls). Used by
+ *   the renderer to wrap the affected blocks in a "Command: <invocation>"
+ *   frame so the user sees a slash-command UI instead of bare tool plumbing.
  *
  * Merge rules:
  * - Consecutive `text` / `thinking` / `command_result` parts merge into one
@@ -35,12 +41,14 @@
  * the message preview/fallback content (`messages.content`).
  */
 import type { ContentKind, MessagePart, ToolStream } from '../../shared/messageParts'
+import type { AgentDeltaEvent } from '../../shared/agentStreamEvents'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
 export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
 export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
 export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
+export const COMMAND_INVOCATION_METADATA_KEY = 'cinna.command_invocation'
 
 const VALID_KINDS: readonly ContentKind[] = [
   'text',
@@ -68,8 +76,13 @@ export interface ArtifactLike {
   parts: PartLike[]
 }
 
+/**
+ * Sender-side narrow view of the agent stream port — accepts only delta
+ * events (the only shape the accumulator emits). Any `StreamPort` typed with
+ * the wider `AgentStreamEvent` union is assignable here.
+ */
 export interface DeltaPort {
-  postMessage: (msg: unknown) => void
+  postMessage: (msg: AgentDeltaEvent) => void
 }
 
 export function partKindOf(part: PartLike): ContentKind {
@@ -104,6 +117,11 @@ export function partToolStreamOf(part: PartLike): ToolStream | undefined {
     return v as ToolStream
   }
   return undefined
+}
+
+export function partCommandInvocationOf(part: PartLike): string | undefined {
+  const v = part.metadata?.[COMMAND_INVOCATION_METADATA_KEY]
+  return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
 export interface StreamPartsAccumulatorOptions {
@@ -181,7 +199,11 @@ export class StreamPartsAccumulator {
       const toolStream: ToolStream | undefined = isToolResult
         ? partToolStreamOf(part) ?? 'stdout'
         : undefined
-      this.appendToList(kind, delta, toolName, toolInput, toolId, toolStream)
+      // Presence flags this part as originating from a cinna-core slash
+      // command (`/run:*` synthesized tool calls; all `command_result` parts).
+      // Absent → LLM-initiated tool call, unchanged routing.
+      const commandInvocation = partCommandInvocationOf(part)
+      this.appendToList(kind, delta, toolName, toolInput, toolId, toolStream, commandInvocation)
       port.postMessage({
         type: 'delta',
         kind,
@@ -189,7 +211,8 @@ export class StreamPartsAccumulator {
         toolName,
         toolInput,
         toolId,
-        toolStream
+        toolStream,
+        commandInvocation
       })
 
       if (toolName && toolInput && !this.loggedToolCalls.has(key)) {
@@ -205,7 +228,8 @@ export class StreamPartsAccumulator {
     toolName?: string,
     toolInput?: Record<string, unknown>,
     toolId?: string,
-    toolStream?: ToolStream
+    toolStream?: ToolStream,
+    commandInvocation?: string
   ): void {
     const last = this.parts[this.parts.length - 1]
     const sameKind = last && last.kind === kind
@@ -216,16 +240,19 @@ export class StreamPartsAccumulator {
         : last.toolName === toolName)
     if (last && mergeable) {
       last.text += delta
-      // Backend may attach `tool_input` / `tool_id` only on the first frame of
-      // a part — preserve once captured rather than overwriting with undefined.
+      // Backend may attach `tool_input` / `tool_id` / `command_invocation` only
+      // on the first frame of a part — preserve once captured rather than
+      // overwriting with undefined.
       if (toolInput && !last.toolInput) last.toolInput = toolInput
       if (toolId && !last.toolId) last.toolId = toolId
+      if (commandInvocation && !last.commandInvocation) last.commandInvocation = commandInvocation
     } else {
       const next: MessagePart = { kind, text: delta }
       if (toolName) next.toolName = toolName
       if (toolInput) next.toolInput = toolInput
       if (toolId) next.toolId = toolId
       if (toolStream) next.toolStream = toolStream
+      if (commandInvocation) next.commandInvocation = commandInvocation
       this.parts.push(next)
     }
     // `command_result` is the substantive answer for slash-command turns
