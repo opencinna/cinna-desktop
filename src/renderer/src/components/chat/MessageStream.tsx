@@ -9,6 +9,8 @@ import { ToolCallBlock } from './ToolCallBlock'
 import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
+import { CommandResultBlock } from './CommandResultBlock'
+import { NoticeBlock } from './NoticeBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import { CollapsibleGroup, type CollapsibleGroupItem } from './CollapsibleGroup'
 
@@ -174,13 +176,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             // `agent_transition` rows are agent-side system messages — the
             // streaming pipeline persists `cinna.content_kind: 'notice'` parts
             // here (e.g. "Starting up the agent environment, this may take a
-            // moment..."). They render as muted system messages and are
-            // excluded from catch-up replay + LLM history rebuilds by role.
+            // moment..."). After the live ping has done its job the persisted
+            // row collapses to a small accent dot so it doesn't crowd the
+            // transcript; the user can click it to re-read the original text.
+            // Excluded from catch-up replay + LLM history rebuilds by role.
             if (msg.role === 'agent_transition') {
               renderNodes.push({
                 slot: 'plain',
                 key: msg.id,
-                node: <SystemMessage message={msg.content} tone="notice" />
+                node: <NoticeBlock content={msg.content} />
               })
               continue
             }
@@ -256,6 +260,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                             <ToolResultBlock key={k} content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
                           )
                         }
+                        if (p.kind === 'command_result') {
+                          return (
+                            <CommandResultBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
+                          )
+                        }
                         return (
                           <MessageBubble
                             key={k}
@@ -304,6 +313,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         status: p.toolStream === 'stderr' ? 'error' : 'done',
                         node: <ToolResultBlock content={p.text} toolStream={p.toolStream} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
+                    })
+                  } else if (p.kind === 'command_result') {
+                    // Slash-command output — render inline as the assistant
+                    // turn, default-expanded. Not collapsible-grouped because
+                    // it IS the answer, not auxiliary narration.
+                    renderNodes.push({
+                      slot: 'plain',
+                      key: k,
+                      node: <CommandResultBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                     })
                   } else {
                     renderNodes.push({
@@ -416,11 +434,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               if (block.kind === 'notice') {
                 // Live streaming agent-side system message (startup ping etc.).
                 // Persisted post-stream as a `agent_transition` row, which
-                // replaces this streaming block once the chat re-fetches.
+                // replaces this streaming block once the chat re-fetches and
+                // re-renders via the collapsed `NoticeBlock`.
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-notice-${i}`,
                   node: <SystemMessage message={block.content} tone="notice" />
+                })
+                return
+              }
+              if (block.kind === 'command_result') {
+                const live = isStreaming && isLastBlock
+                renderNodes.push({
+                  slot: 'plain',
+                  key: `stream-cmd-${i}`,
+                  node: <CommandResultBlock content={block.content} isStreaming={live} />
                 })
                 return
               }

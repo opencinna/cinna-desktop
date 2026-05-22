@@ -13,11 +13,24 @@
  * system messages in the transcript and are excluded from catch-up replay
  * and LLM history rebuilds.
  *
+ * The `command_result` kind carries the synchronous output of a platform
+ * slash-command (e.g. `/files`, `/agent-status`, `/run:<name>`). It IS the
+ * substantive answer to the user's turn — the agent stream did not run —
+ * so it is persisted into the assistant message's `parts[]` and contributes
+ * to `messages.content` (for chat previews / titles / search). Rendered in
+ * a terminal-style block to signal "platform output, not LLM voice".
+ *
  * Keep this file purely type-only — it is imported from both Electron
  * processes and must not pull in any runtime dependencies.
  */
 
-export type ContentKind = 'text' | 'thinking' | 'tool' | 'tool_result' | 'notice'
+export type ContentKind =
+  | 'text'
+  | 'thinking'
+  | 'tool'
+  | 'tool_result'
+  | 'notice'
+  | 'command_result'
 
 export type ToolStream = 'stdout' | 'stderr'
 

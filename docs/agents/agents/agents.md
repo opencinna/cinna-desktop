@@ -18,8 +18,8 @@ Universal agent integration that lets users chat with external AI agents through
 | **A2A Session** | A persistent record linking a chat to an A2A agent's remote session — stores the server-assigned `contextId` and `taskId` for conversation continuity across messages |
 | **Context ID** | Server-assigned identifier grouping related interactions into a single conversation context (A2A protocol concept) |
 | **Task ID** | Server-assigned identifier for a task created by the agent in response to user messages; may change across interactions within the same context |
-| **Message Part** | A typed segment of an assistant message — `kind: 'text' \| 'thinking' \| 'tool'`. A2A messages may stream multiple parts that get persisted as a structured `parts[]` list alongside the flat `content` fallback |
-| **Content Kind** | A2A `TextPart.metadata['cinna.content_kind']` value (`text`, `thinking`, `tool`) that tells the client how to route/render the part. Cinna-backend convention — see [Streaming Pipeline](streaming_pipeline.md) |
+| **Message Part** | A typed segment of an assistant message — `kind: 'text' \| 'thinking' \| 'tool' \| 'tool_result' \| 'command_result'`. A2A messages may stream multiple parts that get persisted as a structured `parts[]` list alongside the flat `content` fallback. (The sibling `'notice'` kind never joins `parts[]` — see [Agent Notices](../../chat/agent_notices/agent_notices.md).) |
+| **Content Kind** | A2A `TextPart.metadata['cinna.content_kind']` value (`text`, `thinking`, `tool`, `tool_result`, `notice`, `command_result`) that tells the client how to route/render the part. Cinna-backend convention — see [Streaming Pipeline](streaming_pipeline.md) |
 
 ## User Stories / Flows
 

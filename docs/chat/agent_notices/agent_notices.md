@@ -8,18 +8,20 @@ Renders agent-side system messages — startup pings, environment transitions, a
 
 - **Notice** — A TextPart sent by a Cinna agent with `metadata['cinna.content_kind'] = 'notice'`. Unlike `text` / `thinking` / `tool` / `tool_result` parts, notices do NOT join the assistant message's `parts[]` — they land on their own `agent_transition` row.
 - **`agent_transition` row** — A `messages.role` value reserved for agent-emitted system notices. Excluded by role from the LLM history rebuild and from the catch-up packet builder.
-- **Streaming notice block** — The live counterpart of an `agent_transition` row. While a stream is in flight, notice deltas flow into `chat.store.streamingBlocks` as `text`-type blocks with `kind: 'notice'` and render as muted system messages. Once the stream completes and the chat re-fetches, the streaming block is cleared and the persisted `agent_transition` row takes its place — no visual gap.
+- **Streaming notice block** — The live counterpart of an `agent_transition` row. While a stream is in flight, notice deltas flow into `chat.store.streamingBlocks` as `text`-type blocks with `kind: 'notice'` and render as the expanded muted system-message pill. Once the stream completes and the chat re-fetches, the streaming block is cleared and the persisted `agent_transition` row takes its place — rendered by `NoticeBlock` as a collapsed accent-coloured dot (expand on click).
+- **Collapsed dot** — The persisted-notice visual: a single small accent-coloured dot centred in the transcript. Clicking it expands to the original notice text in a muted system-message pill (same look as the live streaming view). The dot exists so the notice survives reload for inspection without permanently consuming vertical space, since after the in-flight ping has served its purpose the user mostly wants their answer to be the visible content.
 - **Notice persistence ordering** — Each unique `(messageId | artifactId, partIndex)` produces one persisted notice row. Notices are saved before the assistant message they preceded on the wire, so transcript order matches stream order.
 
 ## User Stories / Flows
 
 1. User sends a message to a Cinna agent that needs to spin up an execution environment
 2. Agent immediately emits a notice TextPart: "Starting up the agent environment, this may take a moment…"
-3. Desktop streams the notice live as a muted system message centred between the user bubble and the (yet-to-arrive) answer
+3. Desktop streams the notice live as a muted system message centred between the user bubble and the (yet-to-arrive) answer — the user can see exactly why the answer is taking time
 4. Agent finishes startup and streams the actual answer as ordinary `text`-kind parts
 5. Stream completes — desktop persists the notice as an `agent_transition` row, then the assistant message as a normal `assistant` row
-6. On reload (and after the post-stream cache refetch), the user sees the same muted system message above the agent's answer, identical to the live view
-7. If the user later sends another message to the same agent, the catch-up packet built for that agent does **not** include the prior notice — only user/assistant turns count
+6. The post-stream cache refetch swaps the live notice for the persisted row. The persisted row renders as a small accent-coloured dot above the answer — the notice has done its job, so it stops eating transcript space
+7. On reload the user sees the same dot above the agent's answer. Clicking it expands to the original notice text (same muted system-message pill as the live view) so the context is never lost
+8. If the user later sends another message to the same agent, the catch-up packet built for that agent does **not** include the prior notice — only user/assistant turns count
 
 ## Business Rules
 
@@ -43,9 +45,10 @@ Renders agent-side system messages — startup pings, environment transitions, a
 
 ### Rendering
 
-- Notices render via the `SystemMessage` component with `tone="notice"`: centred pill, muted border, `Info` icon, `--color-text-muted` text. Visually distinct from the danger-styled error system message (`tone="error"`) used for `role: 'error'` rows.
-- Streaming and persisted notices share the same component — there is no UX seam between the live view and the post-refetch view.
-- Notices are not collapsible and do not participate in the `CollapsibleGroup` run-merging used for `thinking` / `tool` / `tool_result` parts.
+- Live (streaming) notices render via the `SystemMessage` component with `tone="notice"`: centred pill, muted border, `Info` icon, `--color-text-muted` text. Visually distinct from the danger-styled error system message (`tone="error"`) used for `role: 'error'` rows.
+- Persisted (post-stream) notices render via `NoticeBlock`: a small centred info-toned dot (`--color-severity-info` at 70% opacity, brightens on hover — blue in both light and dark themes) that expands on click into the same muted system-message pill the live view used. Hovering the collapsed dot exposes a 120-char preview via the native `title` attribute; the click affordance owns the full read.
+- The swap from streaming pill to collapsed dot happens when the chat detail query invalidates after stream `done` — `clearStreamingBlocks()` removes the live block on the next frame, and the now-saved `agent_transition` row renders via `NoticeBlock`.
+- Notices do not participate in the `CollapsibleGroup` run-merging used for `thinking` / `tool` / `tool_result` parts; each notice owns its own dot so the user can disambiguate individual notices when there are multiple in a turn.
 
 ### Verbose mode
 
@@ -77,7 +80,8 @@ Stream completes:
     └─ messageRepo.saveAssistant() for the actual answer
          ↓
   Renderer: 'done' → invalidate ['chat', chatId] → clearStreamingBlocks
-    └─ MessageStream renders agent_transition row via SystemMessage tone='notice' (persisted)
+    └─ MessageStream renders agent_transition row via NoticeBlock
+        (collapsed accent-dot by default; click expands to muted pill)
 ```
 
 ## Integration Points

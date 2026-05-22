@@ -3,7 +3,7 @@
  * per-part deltas and routing each delta to the renderer with its content kind.
  *
  * Each text Part may carry `metadata['cinna.content_kind']` ∈
- * {text, thinking, tool, tool_result, notice}.
+ * {text, thinking, tool, tool_result, notice, command_result}.
  *
  * - `tool` parts also carry `cinna.tool_name`, optional `cinna.tool_input`,
  *   and `cinna.tool_id` (pairing key).
@@ -16,17 +16,23 @@
  *   the stream completes and persists each as a separate `agent_transition`
  *   row. Notice deltas still post to the port so the live UI can render
  *   them as streaming system messages.
+ * - `command_result` parts carry the synchronous output of a platform
+ *   slash-command (`/files`, `/agent-status`, `/run:<name>`, …). The agent
+ *   stream did not run — the command_result IS the assistant turn — so it
+ *   joins the assistant message's `parts[]` and contributes to `answerText()`
+ *   so chat previews / titles / search show the command output.
  *
  * Merge rules:
- * - Consecutive `text` / `thinking` parts merge into one entry.
+ * - Consecutive `text` / `thinking` / `command_result` parts merge into one
+ *   entry when the kind matches.
  * - Consecutive `tool` parts merge only when `toolName` matches.
  * - Consecutive `tool_result` parts merge only when `toolId` AND `toolStream`
  *   match — preserves interleaved stdout/stderr chronology as separate parts.
  * - `notice` parts never merge with surrounding parts; each unique
  *   `(messageId|artifactId, partIndex)` is one persisted notice row.
  *
- * `answerText()` returns concat of `text`-kind parts only — used as the
- * message preview/fallback content (`messages.content`).
+ * `answerText()` returns concat of `text` and `command_result` parts — used as
+ * the message preview/fallback content (`messages.content`).
  */
 import type { ContentKind, MessagePart, ToolStream } from '../../shared/messageParts'
 
@@ -41,7 +47,8 @@ const VALID_KINDS: readonly ContentKind[] = [
   'thinking',
   'tool',
   'tool_result',
-  'notice'
+  'notice',
+  'command_result'
 ] as const
 const VALID_STREAMS: readonly ToolStream[] = ['stdout', 'stderr'] as const
 
@@ -221,7 +228,10 @@ export class StreamPartsAccumulator {
       if (toolStream) next.toolStream = toolStream
       this.parts.push(next)
     }
-    if (kind === 'text') this.answer += delta
+    // `command_result` is the substantive answer for slash-command turns
+    // (the agent stream did not run), so it joins `text` in the preview
+    // string used for chat list snippets and title generation.
+    if (kind === 'text' || kind === 'command_result') this.answer += delta
   }
 
   snapshotParts(): MessagePart[] {

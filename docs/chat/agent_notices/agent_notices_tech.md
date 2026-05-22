@@ -30,7 +30,8 @@
 |------|------|
 | `src/renderer/src/hooks/useChatStream.ts` | `handleAgent` routes every `delta` event through `chat.store.appendDelta` regardless of `kind`. `AgentEvent.kind` is typed as `ContentKind`, which now includes `'notice'` — no per-kind branching needed in the hook. |
 | `src/renderer/src/stores/chat.store.ts` | `appendDelta` accepts `kind: 'notice'` and stores it in `streamingBlocks` as a `TextBlock { kind: 'notice' }`. Consecutive notice deltas with no `toolName` / `toolId` merge into one block via the standard merge rule. Notices clear with `streamingBlocks` on `clearStreamingBlocks()` (fired after the post-stream cache invalidation). |
-| `src/renderer/src/components/chat/MessageStream.tsx` | Local `SystemMessage` component gained a `tone?: 'error' \| 'notice'` prop. `tone='error'` (default) keeps the existing red/`AlertTriangle` styling for `role: 'error'` rows. `tone='notice'` uses `--color-border` / `--color-text-muted` / `Info` for the muted treatment. Two render sites: `role === 'agent_transition'` rows render `<SystemMessage message={msg.content} tone="notice" />`; live streaming blocks with `block.kind === 'notice'` render the same component. |
+| `src/renderer/src/components/chat/MessageStream.tsx` | Local `SystemMessage` component gained a `tone?: 'error' \| 'notice'` prop. `tone='error'` (default) keeps the existing red/`AlertTriangle` styling for `role: 'error'` rows. `tone='notice'` uses `--color-border` / `--color-text-muted` / `Info` for the muted treatment. Two render sites use different components: live streaming blocks with `block.kind === 'notice'` render `<SystemMessage tone="notice" />` (expanded pill so the user can read the in-flight ping); persisted `role === 'agent_transition'` rows render `<NoticeBlock content={msg.content} />` (collapsed accent dot, expand-on-click). |
+| `src/renderer/src/components/chat/NoticeBlock.tsx` | Persisted-notice component. Default state is a centred `w-2 h-2 rounded-full bg-[var(--color-severity-info)]/70` dot inside a hover-highlighted button (with a 120-char-truncated `title` for hover preview). Expanded state reuses the same muted-pill styling as the live `SystemMessage tone="notice"`. Local `useState` toggle — no global expand/collapse coordination. The info-tone token reads as blue in both light and dark themes (the brand accent flips to orange in light), so the dot stays semantically "info" across themes. |
 
 ## Database Schema
 
@@ -58,7 +59,8 @@ The accumulator deliberately omits the tool* fields for notice deltas so the ren
 
 ## Renderer Components
 
-- `src/renderer/src/components/chat/MessageStream.tsx` — `SystemMessage({ message, detail?, tone? })`. The `tone='notice'` variant uses `border-[var(--color-border)]` and `bg-[var(--color-bg-secondary)]/40` with `text-[var(--color-text-muted)]` and the `Info` icon from `lucide-react`. No additional props or context.
+- `src/renderer/src/components/chat/MessageStream.tsx` — `SystemMessage({ message, detail?, tone? })`. The `tone='notice'` variant uses `border-[var(--color-border)]` and `bg-[var(--color-bg-secondary)]/40` with `text-[var(--color-text-muted)]` and the `Info` icon from `lucide-react`. Used for live (streaming) notice blocks; persisted rows go through `NoticeBlock` instead.
+- `src/renderer/src/components/chat/NoticeBlock.tsx` — `NoticeBlock({ content })`. Centred button containing either (a) a `w-2 h-2 rounded-full bg-[var(--color-accent)]/60` accent dot (default), or (b) the same muted pill as `SystemMessage tone="notice"` (when expanded). Toggle is local `useState`; clicking the dot opens, clicking the pill closes. No props beyond `content`.
 
 ## Configuration
 
