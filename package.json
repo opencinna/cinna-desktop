@@ -1,6 +1,6 @@
 {
   "name": "cinna-desktop",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Desktop client for remote agents (MCP, A2A, OpenCinna)",
   "author": "Evgenii Leksunin <evgeny-l@opencinna.io>",
   "homepage": "https://opencinna.io",
