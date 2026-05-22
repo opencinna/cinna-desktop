@@ -45,14 +45,16 @@ Renders agent-side system messages — startup pings, environment transitions, a
 
 ### Rendering
 
-- Live (streaming) notices render via the `SystemMessage` component with `tone="notice"`: centred pill, muted border, `Info` icon, `--color-text-muted` text. Visually distinct from the danger-styled error system message (`tone="error"`) used for `role: 'error'` rows.
-- Persisted (post-stream) notices render via `NoticeBlock`: a small centred info-toned dot (`--color-severity-info` at 70% opacity, brightens on hover — blue in both light and dark themes) that expands on click into the same muted system-message pill the live view used. Hovering the collapsed dot exposes a 120-char preview via the native `title` attribute; the click affordance owns the full read.
-- The swap from streaming pill to collapsed dot happens when the chat detail query invalidates after stream `done` — `clearStreamingBlocks()` removes the live block on the next frame, and the now-saved `agent_transition` row renders via `NoticeBlock`.
+- Both live and persisted notices render through `NoticeBlock`. Left-aligned in the transcript column (not centred), so visually they sit alongside the green collapsible-group dots from `thinking` / `tool` / `tool_result` parts rather than floating in the middle.
+- **Live (streaming):** `<NoticeBlock content={…} live />` — forced expanded view, no collapse affordance, since the user is actively waiting on the in-flight ping. Renders as a left-aligned `Info`+text row in `--color-text-muted`.
+- **Persisted (compact mode):** `<NoticeBlock content={…} defaultExpanded={false} />` — collapses to a small info-toned dot (`--color-severity-info` at 70% opacity, brightens on hover — blue in both light and dark themes). Hovering the dot exposes a 120-char preview via the native `title` attribute; clicking expands to the same `Info`+text row the live view used; clicking again collapses back.
+- **Persisted (verbose mode):** `<NoticeBlock content={…} defaultExpanded={true} />` — stays expanded inline, matching the rest of verbose mode's surfaced meta. Clicking still toggles back to the collapsed dot.
+- The swap from live row to persisted view happens when the chat detail query invalidates after stream `done` — `clearStreamingBlocks()` removes the live block on the next frame, and the now-saved `agent_transition` row renders via `NoticeBlock` with `defaultExpanded={verboseMode}`. The shared expanded styling means the verbose-mode swap is seamless; in compact mode the row collapses to a dot.
 - Notices do not participate in the `CollapsibleGroup` run-merging used for `thinking` / `tool` / `tool_result` parts; each notice owns its own dot so the user can disambiguate individual notices when there are multiple in a turn.
 
 ### Verbose mode
 
-- Verbose mode does not change notice rendering — notices are always shown, never gated.
+- Verbose mode keeps the persisted notice row expanded inline (`defaultExpanded={true}` to `NoticeBlock`). Compact mode collapses it to a dot. Either way the live (streaming) view stays expanded.
 - Notice rows do not carry a `MessageMetaFooter` (no timestamp / kind label) because they are not authored content.
 
 ### Legacy compatibility
@@ -72,7 +74,7 @@ Renderer:
   useChatStream.handleAgent → chat.store.appendDelta(text, 'notice')
     └─ streamingBlocks: TextBlock{ kind:'notice' }
          ↓
-  MessageStream → SystemMessage tone='notice' (live)
+  MessageStream → NoticeBlock live (forced-expanded Info+text row)
 
 Stream completes:
   Main: a2aStreamingService.streamToAgent
@@ -81,7 +83,8 @@ Stream completes:
          ↓
   Renderer: 'done' → invalidate ['chat', chatId] → clearStreamingBlocks
     └─ MessageStream renders agent_transition row via NoticeBlock
-        (collapsed accent-dot by default; click expands to muted pill)
+        defaultExpanded={verboseMode}
+        (compact: collapsed info-tone dot; verbose: expanded Info+text row)
 ```
 
 ## Integration Points
@@ -89,5 +92,5 @@ Stream completes:
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — Owns the `cinna.content_kind` metadata contract, the per-part delta keying, and the accumulator that separates notices from message parts.
 - [Messaging](../messaging/messaging.md) — Defines the `messages` table that backs `agent_transition` rows.
 - [Multi-Agent Chats](../multi_agent/multi_agent.md) — Catch-up replay excludes `agent_transition` rows so notices from one engagement do not leak into the next.
-- [Conversation UI](../conversation_ui/conversation_ui.md) — Hosts the `SystemMessage` component (`tone="error"` for `role: 'error'` rows, `tone="notice"` for `agent_transition` rows) and the surrounding transcript renderer.
+- [Conversation UI](../conversation_ui/conversation_ui.md) — Hosts the surrounding transcript renderer. `role: 'error'` rows render via the local `SystemMessage` (centred danger card); `agent_transition` rows render via `NoticeBlock` (left-aligned, info-tone dot or expanded Info+text row depending on verbose mode).
 - [CLI Commands](../cli_commands/cli_commands.md) — Notices commonly precede `/run:*` CLI command output when the agent is bootstrapping its environment before executing the shell command.

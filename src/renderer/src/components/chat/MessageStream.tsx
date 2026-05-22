@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, ChevronRight, Info } from 'lucide-react'
+import { AlertTriangle, ChevronRight } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
@@ -54,29 +54,18 @@ interface MessageStreamProps {
 
 function SystemMessage({
   message,
-  detail,
-  tone = 'error'
+  detail
 }: {
   message: string
   detail?: string
-  /** `'error'` (red border, alert icon) — default. `'notice'` (muted, info icon) for agent transitions / startup pings. */
-  tone?: 'error' | 'notice'
 }): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
 
-  const isNotice = tone === 'notice'
-  const containerClass = isNotice
-    ? 'rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-4 py-2.5 max-w-md text-center'
-    : 'rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-md text-center'
-  const messageClass = isNotice
-    ? 'flex items-center justify-center gap-2 text-xs text-[var(--color-text-muted)]'
-    : 'flex items-center justify-center gap-2 text-xs text-[var(--color-danger)]'
-
   return (
     <div className="flex justify-center">
-      <div className={containerClass}>
-        <div className={messageClass}>
-          {isNotice ? <Info size={13} /> : <AlertTriangle size={13} />}
+      <div className="rounded-lg border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/8 px-4 py-2.5 max-w-md text-center">
+        <div className="flex items-center justify-center gap-2 text-xs text-[var(--color-danger)]">
+          <AlertTriangle size={13} />
           <span>{message}</span>
         </div>
         {detail && (
@@ -176,15 +165,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             // `agent_transition` rows are agent-side system messages — the
             // streaming pipeline persists `cinna.content_kind: 'notice'` parts
             // here (e.g. "Starting up the agent environment, this may take a
-            // moment..."). After the live ping has done its job the persisted
-            // row collapses to a small accent dot so it doesn't crowd the
-            // transcript; the user can click it to re-read the original text.
-            // Excluded from catch-up replay + LLM history rebuilds by role.
+            // moment..."). In compact mode the persisted row collapses to a
+            // small info-toned dot so it doesn't crowd the transcript; in
+            // verbose mode it stays inline alongside the rest of the surfaced
+            // meta. Excluded from catch-up replay + LLM history rebuilds by role.
             if (msg.role === 'agent_transition') {
               renderNodes.push({
                 slot: 'plain',
                 key: msg.id,
-                node: <NoticeBlock content={msg.content} />
+                node: <NoticeBlock content={msg.content} defaultExpanded={verboseMode} />
               })
               continue
             }
@@ -433,13 +422,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               }
               if (block.kind === 'notice') {
                 // Live streaming agent-side system message (startup ping etc.).
-                // Persisted post-stream as a `agent_transition` row, which
-                // replaces this streaming block once the chat re-fetches and
-                // re-renders via the collapsed `NoticeBlock`.
+                // Renders through NoticeBlock with `live` so the layout matches
+                // the expanded persisted form (left-aligned Info+text row).
+                // After the stream completes, the persisted `agent_transition`
+                // row takes over via the same component without `live`, which
+                // switches it to the collapsed-dot default.
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-notice-${i}`,
-                  node: <SystemMessage message={block.content} tone="notice" />
+                  node: <NoticeBlock content={block.content} live />
                 })
                 return
               }

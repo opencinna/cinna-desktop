@@ -35,6 +35,13 @@ A global UI preference that toggles between a **compact** (default) chat view �
 2. **Compact mode**: each streaming `ThinkingBlock` / `ToolNarrationBlock` mounts collapsed. User can click the header to expand manually. Content still streams in live behind the header; the pulsing accent dot indicates activity.
 3. **Verbose mode**: the currently-last streaming block auto-expands so the user sees reasoning as it arrives (legacy behaviour). When the stream completes and the persisted message re-renders, the block collapses again.
 
+### Agent notice rows (`agent_transition`)
+
+1. The agent emits a `cinna.content_kind: 'notice'` part (e.g. "Starting up the agent environment…") — see [Agent Notices](../../chat/agent_notices/agent_notices.md)
+2. **Live (both modes)**: the streaming notice renders as a left-aligned `Info`+text row so the user can see the in-flight ping
+3. **Compact mode (persisted)**: once the stream completes and the row persists, the notice collapses to a small info-toned blue dot. Click expands to the same `Info`+text row.
+4. **Verbose mode (persisted)**: the persisted notice row stays expanded inline, matching the rest of verbose mode's surfaced meta. Click still toggles back to the collapsed dot.
+
 ### Tool narration headers (A2A structured tool input)
 
 1. The Cinna backend tags `tool`-kind parts with `cinna.tool_name` and (optionally) `cinna.tool_input` — see [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md)

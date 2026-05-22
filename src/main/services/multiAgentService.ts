@@ -207,8 +207,16 @@ export const multiAgentService = {
 
     const slice = all
       .slice(startIdx)
-      // Errors and transitions are noise.
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
+      .filter((m) => {
+        // Errors and transitions are noise.
+        if (m.role !== 'user' && m.role !== 'assistant') return false
+        // Skip the target agent's own prior outputs — the cursor only advances
+        // on user-message-send, so the slice after it includes the agent's
+        // own reply that followed. Replaying it back as "the user's exchange
+        // with another assistant" would feed the agent its own words.
+        if (m.sourceAgentId === targetAgentId) return false
+        return true
+      })
 
     if (slice.length === 0) return ''
 
