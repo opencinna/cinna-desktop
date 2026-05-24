@@ -6,7 +6,7 @@ import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const inputClass =
-  'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+  'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
 interface UserCardProps {
   user: {
@@ -108,7 +108,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
           {isDefault ? (
             <User size={14} className={isCurrentUser ? 'text-white' : ''} />
           ) : (
-            <span className={`text-xs font-bold ${isCurrentUser ? 'text-white' : ''}`}>
+            <span className={`text-[14px] font-bold ${isCurrentUser ? 'text-white' : ''}`}>
               {user.displayName.charAt(0).toUpperCase()}
             </span>
           )}
@@ -116,23 +116,23 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-[var(--color-text)] truncate">
+            <span className="text-[14px] font-medium text-[var(--color-text)] truncate">
               {user.displayName}
             </span>
             {isDefault && (
-              <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
                 Guest
               </span>
             )}
             {isCurrentUser && !isDefault && (
-              <span className="shrink-0 px-1.5 py-0.5 rounded text-[9px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+              <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
                 Active
               </span>
             )}
           </div>
           <div className="flex items-center gap-2 mt-0.5">
             <TypeIcon size={10} className="text-[var(--color-text-muted)] shrink-0" />
-            <span className="text-[10px] text-[var(--color-text-muted)] truncate">
+            <span className="text-[12px] text-[var(--color-text-muted)] truncate">
               {isCinna
                 ? `Cinna · ${user.cinnaHostingType === 'cloud' ? 'Cloud' : user.cinnaServerUrl ?? 'Self-hosted'}`
                 : isDefault
@@ -159,44 +159,44 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
           {/* Cinna account details (read-only) */}
           {isCinna && (
             <div className="space-y-2 pb-2 border-b border-[var(--color-border)]">
-              <h3 className="text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
+              <h3 className="text-[12px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
                 Cinna Server Details
               </h3>
               <div className="grid grid-cols-2 gap-2">
                 {user.cinnaFullName && (
                   <div className="col-span-2">
-                    <div className="text-[10px] text-[var(--color-text-muted)]">Full Name</div>
-                    <div className="text-xs text-[var(--color-text)]">{user.cinnaFullName}</div>
+                    <div className="text-[12px] text-[var(--color-text-muted)]">Full Name</div>
+                    <div className="text-[14px] text-[var(--color-text)]">{user.cinnaFullName}</div>
                   </div>
                 )}
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Email</div>
-                  <div className="text-xs text-[var(--color-text)] truncate">{user.username}</div>
+                  <div className="text-[12px] text-[var(--color-text-muted)]">Email</div>
+                  <div className="text-[14px] text-[var(--color-text)] truncate">{user.username}</div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Connection</div>
-                  <div className="text-xs text-[var(--color-text)]">
+                  <div className="text-[12px] text-[var(--color-text-muted)]">Connection</div>
+                  <div className="text-[14px] text-[var(--color-text)]">
                     {user.hasCinnaTokens ? 'Connected' : 'Not connected'}
                   </div>
                 </div>
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Host</div>
+                  <div className="text-[12px] text-[var(--color-text-muted)]">Host</div>
                   {user.cinnaServerUrl ? (
                     <button
                       onClick={() => window.open(user.cinnaServerUrl, '_blank')}
-                      className="text-xs text-[var(--color-accent)] hover:underline text-left"
+                      className="text-[14px] text-[var(--color-accent)] hover:underline text-left"
                     >
                       {user.cinnaHostingType === 'cloud'
                         ? 'opencinna.io (Cloud)'
                         : user.cinnaServerUrl}
                     </button>
                   ) : (
-                    <div className="text-xs text-[var(--color-text)]">Unknown</div>
+                    <div className="text-[14px] text-[var(--color-text)]">Unknown</div>
                   )}
                 </div>
                 <div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">Hosting</div>
-                  <div className="text-xs text-[var(--color-text)]">
+                  <div className="text-[12px] text-[var(--color-text-muted)]">Hosting</div>
+                  <div className="text-[14px] text-[var(--color-text)]">
                     {user.cinnaHostingType === 'cloud' ? 'Cloud' : 'Self-Hosted'}
                   </div>
                 </div>
@@ -207,7 +207,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
           {/* Editable fields */}
           {!isCinna && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Display Name</label>
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Display Name</label>
               <input
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
@@ -218,7 +218,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
 
           {/* Password section */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
               {user.hasPassword ? 'Change Password' : 'Set Password'}
             </label>
             <input
@@ -230,7 +230,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
             />
           </div>
 
-          {error && <div className="text-[10px] text-red-400">{error}</div>}
+          {error && <div className="text-[12px] text-red-400">{error}</div>}
 
           {/* Action buttons */}
           <div className="flex items-center gap-2">
@@ -248,7 +248,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
               <button
                 onClick={handleRemovePassword}
                 disabled={updateUser.isPending}
-                className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               >
                 Remove Password
               </button>
@@ -257,7 +257,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
             <button
               onClick={handleSave}
               disabled={updateUser.isPending}
-              className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
+              className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
             >
               {updateUser.isPending ? 'Saving...' : 'Save Changes'}
             </button>
@@ -266,11 +266,11 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
           {/* Delete confirmation */}
           {showDeleteConfirm && (
             <div className="rounded-md border border-red-400/30 bg-red-400/5 p-3 space-y-2">
-              <div className="flex items-center gap-2 text-xs font-medium text-red-400">
+              <div className="flex items-center gap-2 text-[14px] font-medium text-red-400">
                 <AlertTriangle size={14} />
                 Delete Account
               </div>
-              <p className="text-[10px] text-[var(--color-text-muted)]">
+              <p className="text-[12px] text-[var(--color-text-muted)]">
                 This will permanently delete this account and all associated data
                 (chats, providers, agents, settings).
                 {isCinna && ' The Cinna cloud account will not be affected.'}
@@ -287,19 +287,19 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
                 />
               )}
 
-              {error && <div className="text-[10px] text-red-400">{error}</div>}
+              {error && <div className="text-[12px] text-red-400">{error}</div>}
 
               <div className="flex justify-end gap-2">
                 <button
                   onClick={() => { setShowDeleteConfirm(false); setDeletePassword(''); setError('') }}
-                  className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                  className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleDelete}
                   disabled={deleteUser.isPending}
-                  className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
+                  className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
                 >
                   {deleteUser.isPending ? 'Deleting...' : 'Delete Account'}
                 </button>
@@ -319,7 +319,7 @@ export function UserAccountsSection(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-[var(--color-text-muted)] -mt-1 mb-3">
+      <p className="text-[14px] text-[var(--color-text-muted)] -mt-1 mb-3">
         Manage local user accounts. Each account has its own chats, providers, agents, and settings.
       </p>
 

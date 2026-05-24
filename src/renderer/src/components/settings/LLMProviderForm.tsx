@@ -78,12 +78,12 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
   }
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   return (
     <div className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)]">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-        <span className="font-medium text-xs">Add LLM Provider</span>
+        <span className="font-medium text-[14px]">Add LLM Provider</span>
         <button
           type="button"
           onClick={onClose}
@@ -96,7 +96,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
       <div className="px-4 py-3 space-y-2.5">
         {/* Provider type selector */}
         <div ref={dropdownRef} className="relative">
-          <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
             Provider Type
           </label>
           {selectedType && !dropdownOpen ? (
@@ -130,7 +130,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
               {dropdownOpen && (
                 <div className="absolute z-10 w-full mt-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] shadow-lg overflow-hidden">
                   {filtered.length === 0 ? (
-                    <div className="px-3 py-2 text-[10px] text-[var(--color-text-muted)]">
+                    <div className="px-3 py-2 text-[12px] text-[var(--color-text-muted)]">
                       No providers match
                     </div>
                   ) : (
@@ -150,8 +150,8 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
                           selectedType === p.type ? 'bg-[var(--color-bg-hover)]' : ''
                         }`}
                       >
-                        <div className="text-xs font-medium">{p.name}</div>
-                        <div className="text-[10px] text-[var(--color-text-muted)]">
+                        <div className="text-[14px] font-medium">{p.name}</div>
+                        <div className="text-[12px] text-[var(--color-text-muted)]">
                           {p.description}
                         </div>
                       </button>
@@ -167,7 +167,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
         {selectedType && !dropdownOpen && (
           <>
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 API Key
               </label>
               <div className="relative">
@@ -191,12 +191,12 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
 
             {/* Test result */}
             {testKey.isPending && (
-              <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+              <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
                 <Loader2 size={10} className="animate-spin" /> Validating key...
               </div>
             )}
             {testKey.data && (
-              <div className="flex items-center gap-1.5 text-[10px]">
+              <div className="flex items-center gap-1.5 text-[12px]">
                 {testKey.data.success ? (
                   <>
                     <CheckCircle size={10} className="text-[var(--color-success)]" />
@@ -216,7 +216,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
             {/* Default model selector - shown after successful test */}
             {testKey.data?.success && testKey.data.models && testKey.data.models.length > 0 && (
               <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                   Default Model
                 </label>
                 <select
@@ -236,7 +236,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
 
             {/* Error display */}
             {saveError && (
-              <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
+              <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
                 <XCircle size={10} />
                 <span>{saveError}</span>
               </div>
@@ -247,7 +247,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
               <button
                 type="button"
                 onClick={onClose}
-                className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-muted)]
                   hover:text-[var(--color-text-secondary)] transition-colors"
               >
                 Cancel
@@ -256,7 +256,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
                 type="button"
                 onClick={handleTest}
                 disabled={!apiKey || testKey.isPending}
-                className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)]
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)]
                   text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
                   disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
@@ -266,7 +266,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
                 type="button"
                 onClick={handleSave}
                 disabled={!apiKey || upsert.isPending}
-                className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
                   text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 {upsert.isPending ? (

@@ -100,7 +100,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
   }
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
@@ -109,7 +109,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         onClick={() => setExpanded(!expanded)}
       >
         <Circle size={6} className={`fill-current ${statusColor}`} />
-        <span className="flex-1 font-medium text-xs">{provider.name}</span>
+        <span className="flex-1 font-medium text-[14px]">{provider.name}</span>
 
         {provider.hasAuth && (
           <Shield size={12} className="text-[var(--color-accent)]" aria-label="OAuth authenticated" />
@@ -145,13 +145,13 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
       <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Name</label>
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
           </div>
 
           {transportType === 'stdio' && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
               <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
                 <option value="stdio">stdio</option>
                 <option value="sse">SSE</option>
@@ -163,15 +163,15 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
           {transportType === 'stdio' ? (
             <>
               <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Command</label>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Command</label>
                 <input value={command} onChange={(e) => setCommand(e.target.value)} placeholder="e.g., npx" className={inputClass} />
               </div>
               <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Arguments</label>
                 <input value={args} onChange={(e) => setArgs(e.target.value)} placeholder="space separated" className={inputClass} />
               </div>
               <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Env Vars (KEY=VALUE per line)</label>
                 <textarea
                   value={envStr}
                   onChange={(e) => setEnvStr(e.target.value)}
@@ -183,7 +183,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             </>
           ) : (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">URL</label>
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
               <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
             </div>
           )}
@@ -192,7 +192,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             {provider.status === 'connected' ? (
               <button
                 onClick={handleDisconnect}
-                className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
               >
                 Disconnect
               </button>
@@ -200,7 +200,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
               <button
                 onClick={handleReconnect}
                 disabled={connectMcp.isPending}
-                className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               >
                 {connectMcp.isPending ? 'Connecting...' : 'Reconnect'}
               </button>
@@ -208,14 +208,14 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
 
             <button
               onClick={handleSave}
-              className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
+              className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
             >
               Save
             </button>
           </div>
 
           {statusLabel && (
-            <p className={`text-[10px] ${
+            <p className={`text-[12px] ${
               provider.status === 'awaiting-auth' ? 'text-[var(--color-warning)]' : 'text-[var(--color-danger)]'
             }`}>
               {statusLabel}
@@ -224,12 +224,12 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
 
           {provider.tools.length > 0 && (
             <div>
-              <p className="text-[10px] text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
+              <p className="text-[12px] text-[var(--color-text-muted)] mb-1 flex items-center gap-1">
                 <Wrench size={10} /> {provider.tools.length} tools
               </p>
               <div className="space-y-0.5">
                 {provider.tools.map((tool) => (
-                  <div key={tool.name} className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--color-bg)] text-[10px]">
+                  <div key={tool.name} className="flex items-center gap-1.5 px-1.5 py-0.5 rounded bg-[var(--color-bg)] text-[12px]">
                     <span className="font-mono text-[var(--color-accent)]">{tool.name}</span>
                     <span className="text-[var(--color-text-muted)] truncate">{tool.description}</span>
                   </div>

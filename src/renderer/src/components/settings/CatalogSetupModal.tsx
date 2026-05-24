@@ -98,8 +98,8 @@ export function CatalogSetupModal({
       >
         <div className="flex items-start gap-2 px-4 py-3 border-b border-[var(--color-border)]">
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-semibold">Finish setting up {agentName}</div>
-            <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+            <div className="text-[16px] font-semibold">Finish setting up {agentName}</div>
+            <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
               {totalSpecs > 0 ? (
                 <>
                   {totalSpecs} credential{totalSpecs === 1 ? '' : 's'} need
@@ -123,7 +123,7 @@ export function CatalogSetupModal({
 
         <div className="px-4 py-3 space-y-2">
           {status.isLoading && !status.data && (
-            <div className="text-[10px] text-[var(--color-text-muted)] py-3 text-center">
+            <div className="text-[12px] text-[var(--color-text-muted)] py-3 text-center">
               Loading status…
             </div>
           )}
@@ -132,7 +132,7 @@ export function CatalogSetupModal({
             <div
               className="flex items-start gap-2 px-2.5 py-2 rounded-md
                 border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
-                text-[10px] text-[var(--color-text-secondary)]"
+                text-[12px] text-[var(--color-text-secondary)]"
             >
               <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
               <span>Couldn&apos;t check setup status. Retrying every 3 seconds…</span>
@@ -148,7 +148,7 @@ export function CatalogSetupModal({
           ))}
 
           {status.data && rows.length === 0 && status.data.status !== 'ready' && (
-            <div className="text-[10px] text-[var(--color-text-muted)] py-3 text-center">
+            <div className="text-[12px] text-[var(--color-text-muted)] py-3 text-center">
               Waiting for the server to finalize setup…
             </div>
           )}
@@ -157,7 +157,7 @@ export function CatalogSetupModal({
             <div
               className="flex items-start gap-2 px-2.5 py-2 rounded-md
                 border border-[var(--color-border)] bg-[var(--color-bg)]
-                text-[10px] text-[var(--color-text-secondary)]"
+                text-[12px] text-[var(--color-text-secondary)]"
             >
               <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-warning)]" />
               <div>
@@ -177,14 +177,14 @@ export function CatalogSetupModal({
         </div>
 
         <div className="px-4 py-3 border-t border-[var(--color-border)] flex items-center gap-2">
-          <span className="text-[10px] text-[var(--color-text-muted)]">
+          <span className="text-[12px] text-[var(--color-text-muted)]">
             Auto-refreshing every 3 seconds
           </span>
           <div className="flex-1" />
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-xs font-medium
+            className="px-3 py-1.5 rounded-md text-[14px] font-medium
               border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]
               text-[var(--color-text-secondary)] transition-colors"
           >
@@ -194,7 +194,7 @@ export function CatalogSetupModal({
             <button
               type="button"
               onClick={() => openHref(installFallbackHref)}
-              className="flex items-center gap-1 px-3 py-1.5 rounded-md text-xs font-medium
+              className="flex items-center gap-1 px-3 py-1.5 rounded-md text-[14px] font-medium
                 bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors"
             >
               <ExternalLink size={11} />
@@ -237,15 +237,15 @@ function CredentialStatusCard({ row, onOpen }: CredentialStatusCardProps): React
     >
       <Circle size={8} className={`fill-current shrink-0 ${dotColor}`} />
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium truncate">
+        <div className="text-[14px] font-medium truncate">
           {row.name}
           {row.isAi && (
-            <span className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
+            <span className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)]">
               AI
             </span>
           )}
         </div>
-        <div className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+        <div className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
           {row.type} · {statusLabel}
         </div>
       </div>

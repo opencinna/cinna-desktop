@@ -77,7 +77,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
   }
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   const cardData = fetchCard.data?.card as
     | {
@@ -97,7 +97,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
   return (
     <div className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)]">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-        <span className="font-medium text-xs">Add A2A Agent</span>
+        <span className="font-medium text-[14px]">Add A2A Agent</span>
         <button
           type="button"
           onClick={onClose}
@@ -110,7 +110,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
       <div className="px-4 py-3 space-y-2.5">
         {/* Card URL */}
         <div>
-          <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
             Agent Card URL
           </label>
           <input
@@ -125,7 +125,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
 
         {/* Access Token (optional) */}
         <div>
-          <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
             Access Token <span className="text-[var(--color-text-muted)]">(optional)</span>
           </label>
           <div className="relative">
@@ -148,7 +148,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
 
         {/* Test result */}
         {fetchCard.isPending && (
-          <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+          <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
             <Loader2 size={10} className="animate-spin" /> Fetching agent card...
           </div>
         )}
@@ -156,20 +156,20 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
           <div>
             {fetchCard.data.success ? (
               <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-[10px]">
+                <div className="flex items-center gap-1.5 text-[12px]">
                   <CheckCircle size={10} className="text-[var(--color-success)]" />
                   <span className="text-[var(--color-success)]">Connected</span>
                 </div>
                 {cardData && (
                   <div className="rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] px-3 py-2 space-y-1">
-                    <div className="text-xs font-medium">{cardData.name}</div>
+                    <div className="text-[14px] font-medium">{cardData.name}</div>
                     {cardData.description && (
-                      <div className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">
+                      <div className="text-[12px] text-[var(--color-text-muted)] line-clamp-2">
                         {cardData.description}
                       </div>
                     )}
                     {cardData.version && (
-                      <div className="text-[10px] text-[var(--color-text-muted)]">
+                      <div className="text-[12px] text-[var(--color-text-muted)]">
                         Agent version: v{cardData.version}
                       </div>
                     )}
@@ -179,7 +179,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
                       )
                       const transport = matchedIface?.protocolBinding ?? matchedIface?.transport ?? 'JSONRPC'
                       return (
-                        <div className="text-[10px] text-[var(--color-text-muted)]">
+                        <div className="text-[12px] text-[var(--color-text-muted)]">
                           Protocol: A2A v{protocolData.version} · {transport}
                           {cardData.protocolVersions && cardData.protocolVersions.length > 1 && (
                             <span> (supports: {cardData.protocolVersions.join(', ')})</span>
@@ -188,17 +188,17 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
                       )
                     })()}
                     {protocolData?.url && (
-                      <div className="text-[10px] text-[var(--color-text-muted)]">
+                      <div className="text-[12px] text-[var(--color-text-muted)]">
                         Endpoint: <span className="text-[var(--color-text-secondary)]">{protocolData.url}</span>
                       </div>
                     )}
                     {cardData.capabilities?.streaming && (
-                      <div className="text-[10px] text-[var(--color-success)]">
+                      <div className="text-[12px] text-[var(--color-success)]">
                         Streaming supported
                       </div>
                     )}
                     {cardData.skills && cardData.skills.length > 0 && (
-                      <div className="text-[10px] text-[var(--color-text-muted)]">
+                      <div className="text-[12px] text-[var(--color-text-muted)]">
                         {cardData.skills.length} skill{cardData.skills.length > 1 ? 's' : ''}:{' '}
                         {cardData.skills.map((s) => s.name).join(', ')}
                       </div>
@@ -207,7 +207,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
                 )}
               </div>
             ) : (
-              <div className="flex items-center gap-1.5 text-[10px]">
+              <div className="flex items-center gap-1.5 text-[12px]">
                 <XCircle size={10} className="text-[var(--color-danger)]" />
                 <span className="text-[var(--color-danger)] truncate">{fetchCard.data.error}</span>
               </div>
@@ -217,7 +217,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
 
         {/* Save error */}
         {saveError && (
-          <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
+          <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
             <XCircle size={10} />
             <span>{saveError}</span>
           </div>
@@ -228,7 +228,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
+            className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-muted)]
               hover:text-[var(--color-text-secondary)] transition-colors"
           >
             Cancel
@@ -237,7 +237,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
             type="button"
             onClick={handleTest}
             disabled={!cardUrl || fetchCard.isPending}
-            className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)]
+            className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)]
               text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
               disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
@@ -247,7 +247,7 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
             type="button"
             onClick={handleSave}
             disabled={!cardUrl || upsert.isPending}
-            className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+            className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
               text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
           >
             {upsert.isPending ? (

@@ -10,7 +10,7 @@ export function ChatModesSection(): React.JSX.Element {
 
   return (
     <div className="space-y-3">
-      <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+      <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">
         Chat modes let you define presets for different workflows — choose an LLM provider, model,
         and MCP tools for each mode, then start new chats in one click.
       </p>
@@ -25,7 +25,7 @@ export function ChatModesSection(): React.JSX.Element {
         <button
           onClick={() => setShowAdd(true)}
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg
-            border border-dashed border-[var(--color-border)] text-xs
+            border border-dashed border-[var(--color-border)] text-[14px]
             text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]
             hover:border-[var(--color-text-muted)] transition-colors"
         >

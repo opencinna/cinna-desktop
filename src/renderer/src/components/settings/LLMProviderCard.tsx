@@ -112,7 +112,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
       : 'text-[var(--color-danger)]'
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
@@ -122,8 +122,8 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
       >
         <Circle size={6} className={`fill-current ${statusColor}`} />
         <div className="flex-1 min-w-0">
-          <span className="font-medium text-xs">{provider.name}</span>
-          <span className="text-[10px] text-[var(--color-text-muted)] ml-1.5">
+          <span className="font-medium text-[14px]">{provider.name}</span>
+          <span className="text-[12px] text-[var(--color-text-muted)] ml-1.5">
             {PROVIDER_LABELS[provider.type] ?? provider.type}
           </span>
         </div>
@@ -158,7 +158,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
       <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
               API Key {provider.hasApiKey && <span className="text-[var(--color-success)]">(saved)</span>}
             </label>
             <div className="flex gap-1.5">
@@ -183,7 +183,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
                   type="button"
                   onClick={handleTestKey}
                   disabled={testKey.isPending}
-                  className="px-3 py-1.5 rounded-md text-xs font-medium border border-[var(--color-border)]
+                  className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)]
                     text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
                     disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                 >
@@ -194,7 +194,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
                 type="button"
                 onClick={handleSave}
                 disabled={!apiKey || upsert.isPending}
-                className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
                   text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
               >
                 Save
@@ -204,12 +204,12 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
           {/* Test result for new key */}
           {testKey.isPending && (
-            <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
               <Loader2 size={10} className="animate-spin" /> Validating key...
             </div>
           )}
           {testKey.data && (
-            <div className="flex items-center gap-1.5 text-[10px]">
+            <div className="flex items-center gap-1.5 text-[12px]">
               {testKey.data.success ? (
                 <>
                   <CheckCircle size={10} className="text-[var(--color-success)]" />
@@ -226,7 +226,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
           {/* Save error */}
           {saveError && (
-            <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
               <XCircle size={10} />
               <span>{saveError}</span>
             </div>
@@ -239,7 +239,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
                 type="button"
                 onClick={handleTestSaved}
                 disabled={testProvider.isPending && !showModelSelector}
-                className="text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
+                className="text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
               >
                 {testProvider.isPending && !showModelSelector ? (
                   <span className="flex items-center gap-1">
@@ -254,7 +254,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
                 type="button"
                 onClick={handleSelectModel}
                 disabled={testProvider.isPending && showModelSelector}
-                className="text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
+                className="text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
               >
                 {testProvider.isPending && showModelSelector ? (
                   <span className="flex items-center gap-1">
@@ -267,7 +267,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
               {/* Test connection result (only when not loading models) */}
               {testProvider.data && !showModelSelector && (
-                <span className="flex items-center gap-1 text-[10px]">
+                <span className="flex items-center gap-1 text-[12px]">
                   {testProvider.data.success ? (
                     <>
                       <CheckCircle size={10} className="text-[var(--color-success)]" />
@@ -288,7 +288,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
           {/* Model selector (shown after clicking Select Model) */}
           {showModelSelector && testProvider.data && !testProvider.data.success && (
-            <div className="flex items-center gap-1.5 text-[10px]">
+            <div className="flex items-center gap-1.5 text-[12px]">
               <XCircle size={10} className="text-[var(--color-danger)]" />
               <span className="text-[var(--color-danger)] truncate">
                 Failed to load models: {testProvider.data.error}
@@ -297,7 +297,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
           )}
           {availableModels && availableModels.length > 0 && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 Default Model
               </label>
               <select
@@ -317,7 +317,7 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
 
           {/* Show current default model when model selector not open */}
           {!availableModels && provider.defaultModelId && (
-            <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-text-muted)]">
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
               Default model: <span className="text-[var(--color-text-secondary)]">{provider.defaultModelId}</span>
             </div>
           )}

@@ -83,7 +83,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
       : 'text-[var(--color-text-muted)]'
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   const cardData = agent.cardData as
     | {
@@ -105,19 +105,19 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
       >
         <Circle size={6} className={`fill-current ${statusColor}`} />
         <div className="flex-1 min-w-0">
-          <span className="font-medium text-xs">{agent.name}</span>
-          <span className="text-[10px] text-[var(--color-text-muted)] ml-1.5">
+          <span className="font-medium text-[14px]">{agent.name}</span>
+          <span className="text-[12px] text-[var(--color-text-muted)] ml-1.5">
             {PROTOCOL_LABELS[agent.protocol] ?? agent.protocol}
             {agent.protocolInterfaceVersion && ` v${agent.protocolInterfaceVersion}`}
           </span>
           {isRemote && (
-            <span className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium">
+            <span className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium">
               Remote
             </span>
           )}
           {isBundleInstall && (
             <span
-              className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium"
+              className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium"
               title="Installed from the catalog"
             >
               Bundle
@@ -163,13 +163,13 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           {/* Agent details */}
           {agent.description && (
-            <div className="text-[10px] text-[var(--color-text-muted)]">
+            <div className="text-[12px] text-[var(--color-text-muted)]">
               {agent.description}
             </div>
           )}
 
           {agent.cardUrl && (
-            <div className="text-[10px] text-[var(--color-text-muted)]">
+            <div className="text-[12px] text-[var(--color-text-muted)]">
               Card URL: <span className="text-[var(--color-text-secondary)]">{agent.cardUrl}</span>
             </div>
           )}
@@ -182,7 +182,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               )
               const transport = matchedIface?.protocolBinding ?? matchedIface?.transport ?? 'JSONRPC'
               return (
-                <div className="text-[10px] text-[var(--color-text-muted)]">
+                <div className="text-[12px] text-[var(--color-text-muted)]">
                   Protocol:{' '}
                   <span className="text-[var(--color-text-secondary)]">
                     A2A v{agent.protocolInterfaceVersion}
@@ -198,12 +198,12 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               )
             })()}
             {agent.protocolInterfaceUrl && (
-              <div className="text-[10px] text-[var(--color-text-muted)]">
+              <div className="text-[12px] text-[var(--color-text-muted)]">
                 Endpoint: <span className="text-[var(--color-text-secondary)]">{agent.protocolInterfaceUrl}</span>
               </div>
             )}
             {cardData?.version && (
-              <div className="text-[10px] text-[var(--color-text-muted)]">
+              <div className="text-[12px] text-[var(--color-text-muted)]">
                 Agent version: <span className="text-[var(--color-text-secondary)]">v{cardData.version}</span>
               </div>
             )}
@@ -211,7 +211,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
 
           {/* Capabilities */}
           {cardData?.capabilities?.streaming && (
-            <div className="text-[10px] text-[var(--color-success)]">
+            <div className="text-[12px] text-[var(--color-success)]">
               Streaming supported
             </div>
           )}
@@ -219,12 +219,12 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
           {/* Skills */}
           {agent.skills && agent.skills.length > 0 && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 Skills ({agent.skills.length})
               </label>
               <div className="space-y-0.5">
                 {agent.skills.map((s) => (
-                  <div key={s.id} className="text-[10px] text-[var(--color-text-secondary)]">
+                  <div key={s.id} className="text-[12px] text-[var(--color-text-secondary)]">
                     {s.name}
                     {s.description && (
                       <span className="text-[var(--color-text-muted)]"> — {s.description}</span>
@@ -239,7 +239,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
           {!isRemote && (
             <>
               <div>
-                <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                   Access Token{' '}
                   {agent.hasAccessToken && (
                     <span className="text-[var(--color-success)]">(saved)</span>
@@ -267,7 +267,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                       type="button"
                       onClick={handleSaveToken}
                       disabled={upsert.isPending}
-                      className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+                      className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
                         text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
                     >
                       Save
@@ -277,7 +277,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               </div>
 
               {saveError && (
-                <div className="flex items-center gap-1.5 text-[10px] text-[var(--color-danger)]">
+                <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
                   <XCircle size={10} />
                   <span>{saveError}</span>
                 </div>
@@ -291,7 +291,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               type="button"
               onClick={handleTest}
               disabled={testAgent.isPending}
-              className="text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
+              className="text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
             >
               {testAgent.isPending ? (
                 <span className="flex items-center gap-1">
@@ -303,7 +303,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
             </button>
 
             {testAgent.data && (
-              <span className="flex items-center gap-1 text-[10px]">
+              <span className="flex items-center gap-1 text-[12px]">
                 {testAgent.data.success ? (
                   <>
                     <CheckCircle size={10} className="text-[var(--color-success)]" />

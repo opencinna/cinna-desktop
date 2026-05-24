@@ -21,21 +21,21 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <section>
-        <h2 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
+        <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
           AI Functions
         </h2>
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
           <div className="flex items-start gap-3">
             <div className="flex-1">
-              <div className="text-xs font-medium text-[var(--color-text)]">
+              <div className="text-[14px] font-medium text-[var(--color-text)]">
                 Auto-generate chat titles
               </div>
-              <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+              <div className="text-[13px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
                 Generates a short title from your first message in a new chat.
                 Uses your default chat mode’s LLM provider — consumes tokens.
               </div>
               {isError && (
-                <div className="text-[11px] text-[var(--color-danger)] mt-1.5">
+                <div className="text-[13px] text-[var(--color-danger)] mt-1.5">
                   Couldn’t load settings — try reopening this page.
                 </div>
               )}

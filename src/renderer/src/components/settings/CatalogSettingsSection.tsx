@@ -43,7 +43,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
 
   if (!isCinnaUser) {
     return (
-      <div className="text-xs text-[var(--color-text-muted)]">
+      <div className="text-[14px] text-[var(--color-text-muted)]">
         The bundles catalog is available when signed in to a Cinna account.
       </div>
     )
@@ -115,13 +115,13 @@ export function CatalogSettingsSection(): React.JSX.Element {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] text-[var(--color-text-muted)]">
+        <span className="text-[12px] text-[var(--color-text-muted)]">
           Published bundles on your Cinna account
         </span>
         <button
           onClick={() => catalog.refetch()}
           disabled={catalog.isFetching}
-          className="flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
+          className="flex items-center gap-1 text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
         >
           <RefreshCw size={10} className={catalog.isFetching ? 'animate-spin' : ''} />
           {catalog.isFetching ? 'Refreshing…' : 'Refresh'}
@@ -132,7 +132,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
         <div
           className="flex items-start gap-2 px-2.5 py-2 mb-2 rounded-md
             border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
-            text-[10px] text-[var(--color-text-secondary)]"
+            text-[12px] text-[var(--color-text-secondary)]"
         >
           <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
           <div className="flex-1 min-w-0">
@@ -146,7 +146,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
                 <button
                   onClick={handleReauth}
                   disabled={cinnaReauth.isPending}
-                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium
+                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium
                     bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
                     disabled:opacity-50"
                 >
@@ -154,7 +154,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
                   {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
                 </button>
                 {reauthError && (
-                  <div className="mt-1.5 text-[10px] text-[var(--color-danger)]">{reauthError}</div>
+                  <div className="mt-1.5 text-[12px] text-[var(--color-danger)]">{reauthError}</div>
                 )}
               </>
             )}
@@ -163,11 +163,11 @@ export function CatalogSettingsSection(): React.JSX.Element {
       )}
 
       {catalog.isLoading && (
-        <div className="text-[10px] text-[var(--color-text-muted)] py-2">Loading catalog…</div>
+        <div className="text-[12px] text-[var(--color-text-muted)] py-2">Loading catalog…</div>
       )}
 
       {!catalog.isLoading && !catalog.error && entries.length === 0 && (
-        <div className="text-[10px] text-[var(--color-text-muted)] py-2">
+        <div className="text-[12px] text-[var(--color-text-muted)] py-2">
           No bundles are visible to your account yet.
         </div>
       )}
@@ -186,7 +186,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
 
       {toast && (
         <div
-          className={`fixed bottom-4 right-4 px-3 py-2 rounded-md text-xs shadow-lg border z-40 ${
+          className={`fixed bottom-4 right-4 px-3 py-2 rounded-md text-[14px] shadow-lg border z-40 ${
             toast.kind === 'ok'
               ? 'border-[var(--color-success)]/40 bg-[var(--color-success)]/15 text-[var(--color-text-secondary)]'
               : 'border-[var(--color-danger)]/40 bg-[var(--color-danger)]/15 text-[var(--color-text-secondary)]'

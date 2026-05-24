@@ -62,7 +62,7 @@ export function TrashSection(): React.JSX.Element {
           <button
             onClick={handleEmptyAll}
             disabled={emptying}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[14px] font-medium
               text-[var(--color-danger)] hover:bg-[var(--color-danger)]/10 transition-colors"
           >
             <Trash2 size={13} />
@@ -72,14 +72,14 @@ export function TrashSection(): React.JSX.Element {
       )}
 
       {isLoading && (
-        <p className="text-xs text-[var(--color-text-muted)]">Loading...</p>
+        <p className="text-[14px] text-[var(--color-text-muted)]">Loading...</p>
       )}
 
       {!isLoading && !hasItems && (
         <div className="text-center py-12">
           <Trash2 size={32} className="mx-auto mb-3 text-[var(--color-text-muted)] opacity-40" />
-          <p className="text-sm text-[var(--color-text-muted)]">Trash is empty</p>
-          <p className="text-xs text-[var(--color-text-muted)] mt-1">
+          <p className="text-[16px] text-[var(--color-text-muted)]">Trash is empty</p>
+          <p className="text-[14px] text-[var(--color-text-muted)] mt-1">
             Deleted chats and notes will appear here for 30 days
           </p>
         </div>
@@ -101,10 +101,10 @@ export function TrashSection(): React.JSX.Element {
               >
                 <Icon size={14} className="shrink-0 text-[var(--color-text-muted)]" />
                 <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-[var(--color-text)] truncate">
+                  <p className="text-[14px] font-medium text-[var(--color-text)] truncate">
                     {row.title}
                   </p>
-                  <p className="text-[10px] text-[var(--color-text-muted)] mt-0.5">
+                  <p className="text-[12px] text-[var(--color-text-muted)] mt-0.5">
                     {daysLeft > 0
                       ? `Auto-deletes in ${daysLeft} day${daysLeft !== 1 ? 's' : ''}`
                       : 'Will be deleted on next launch'}

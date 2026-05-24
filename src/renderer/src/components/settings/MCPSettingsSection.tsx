@@ -14,7 +14,7 @@ export function MCPSettingsSection(): React.JSX.Element {
 
   const buttonClass =
     'flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg ' +
-    'border border-dashed border-[var(--color-border)] text-xs ' +
+    'border border-dashed border-[var(--color-border)] text-[14px] ' +
     'text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] ' +
     'hover:border-[var(--color-text-muted)] transition-colors'
 

@@ -46,15 +46,15 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
   }
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] pl-7 pr-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] pl-7 pr-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium">Browse MCP Registry</p>
+        <p className="text-[14px] font-medium">Browse MCP Registry</p>
         <button
           onClick={onClose}
-          className="text-xs text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+          className="text-[14px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
         >
           Close
         </button>
@@ -81,7 +81,7 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
             return (
               <div
                 key={err.registryId}
-                className="flex items-center gap-1.5 text-[10px] text-[var(--color-warning)]"
+                className="flex items-center gap-1.5 text-[12px] text-[var(--color-warning)]"
               >
                 <AlertTriangle size={10} className="shrink-0" />
                 <span>
@@ -95,14 +95,14 @@ export function MCPRegistryPicker({ onClose }: Props): React.JSX.Element {
 
       <div className="max-h-80 overflow-y-auto -mx-1 px-1 space-y-1.5">
         {search.isLoading && (
-          <div className="flex items-center justify-center gap-2 py-6 text-[10px] text-[var(--color-text-muted)]">
+          <div className="flex items-center justify-center gap-2 py-6 text-[12px] text-[var(--color-text-muted)]">
             <Loader2 size={12} className="animate-spin" />
             Loading…
           </div>
         )}
 
         {!search.isLoading && entries.length === 0 && errors.length === 0 && (
-          <div className="text-[10px] text-[var(--color-text-muted)] py-3 px-1">
+          <div className="text-[12px] text-[var(--color-text-muted)] py-3 px-1">
             No servers found.
           </div>
         )}
@@ -147,45 +147,45 @@ function RegistryEntryRow({
               href={entry.websiteUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs font-medium truncate text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline"
+              className="text-[14px] font-medium truncate text-[var(--color-text)] hover:text-[var(--color-accent)] hover:underline"
             >
               {displayName}
             </a>
           ) : (
-            <span className="text-xs font-medium truncate">{displayName}</span>
+            <span className="text-[14px] font-medium truncate">{displayName}</span>
           )}
           {registry?.homepage ? (
             <a
               href={registry.homepage}
               target="_blank"
               rel="noopener noreferrer"
-              className="px-1.5 py-px rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-[9px] font-medium shrink-0 hover:bg-[var(--color-accent)]/25"
+              className="px-1.5 py-px rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-[11px] font-medium shrink-0 hover:bg-[var(--color-accent)]/25"
             >
               {registryLabel}
             </a>
           ) : (
-            <span className="px-1.5 py-px rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-[9px] font-medium shrink-0">
+            <span className="px-1.5 py-px rounded bg-[var(--color-accent)]/15 text-[var(--color-accent)] text-[11px] font-medium shrink-0">
               {registryLabel}
             </span>
           )}
           {entry.version && (
-            <span className="text-[9px] text-[var(--color-text-muted)] shrink-0">
+            <span className="text-[11px] text-[var(--color-text-muted)] shrink-0">
               v{entry.version}
             </span>
           )}
           {remote?.requiresAuth && (
-            <span className="text-[9px] text-[var(--color-warning)] shrink-0">
+            <span className="text-[11px] text-[var(--color-warning)] shrink-0">
               auth required
             </span>
           )}
         </div>
         {entry.description && (
-          <p className="text-[10px] text-[var(--color-text-muted)] line-clamp-2">
+          <p className="text-[12px] text-[var(--color-text-muted)] line-clamp-2">
             {entry.description}
           </p>
         )}
         {remote?.url && (
-          <div className="mt-1 text-[9px]">
+          <div className="mt-1 text-[11px]">
             <a
               href={remote.url}
               target="_blank"
@@ -200,7 +200,7 @@ function RegistryEntryRow({
       <button
         onClick={onAdd}
         disabled={adding || !remote}
-        className="self-center px-2.5 py-1 rounded-md text-[10px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50 shrink-0"
+        className="self-center px-2.5 py-1 rounded-md text-[12px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50 shrink-0"
       >
         {adding ? 'Connecting…' : 'Connect'}
       </button>

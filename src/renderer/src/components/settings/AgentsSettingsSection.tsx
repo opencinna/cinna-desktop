@@ -63,7 +63,7 @@ function DefaultAgentsSection(): React.JSX.Element {
         <button
           onClick={() => setShowAdd(true)}
           className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg
-            border border-dashed border-[var(--color-border)] text-xs
+            border border-dashed border-[var(--color-border)] text-[14px]
             text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]
             hover:border-[var(--color-text-muted)] transition-colors"
         >
@@ -108,7 +108,7 @@ function ProfileAgentsSection(): React.JSX.Element {
 
   if (!isCinnaUser) {
     return (
-      <div className="text-xs text-[var(--color-text-muted)]">
+      <div className="text-[14px] text-[var(--color-text-muted)]">
         Remote agents are available when signed in to a Cinna account.
       </div>
     )
@@ -117,13 +117,13 @@ function ProfileAgentsSection(): React.JSX.Element {
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
-        <span className="text-[10px] text-[var(--color-text-muted)]">
+        <span className="text-[12px] text-[var(--color-text-muted)]">
           Synced from your Cinna account
         </span>
         <button
           onClick={() => syncRemote.mutate()}
           disabled={syncRemote.isPending}
-          className="flex items-center gap-1 text-[10px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
+          className="flex items-center gap-1 text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
         >
           <RefreshCw size={10} className={syncRemote.isPending ? 'animate-spin' : ''} />
           {syncRemote.isPending ? 'Syncing...' : 'Sync'}
@@ -134,7 +134,7 @@ function ProfileAgentsSection(): React.JSX.Element {
         <div
           className="flex items-start gap-2 px-2.5 py-2 mb-2 rounded-md
             border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
-            text-[10px] text-[var(--color-text-secondary)]"
+            text-[12px] text-[var(--color-text-secondary)]"
         >
           <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
           <div className="flex-1 min-w-0">
@@ -148,7 +148,7 @@ function ProfileAgentsSection(): React.JSX.Element {
                 <button
                   onClick={handleReauth}
                   disabled={cinnaReauth.isPending}
-                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-medium
+                  className="mt-1.5 inline-flex items-center gap-1 px-2 py-1 rounded-md text-[12px] font-medium
                     bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
                     disabled:opacity-50"
                 >
@@ -156,7 +156,7 @@ function ProfileAgentsSection(): React.JSX.Element {
                   {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
                 </button>
                 {reauthError && (
-                  <div className="mt-1.5 text-[10px] text-[var(--color-danger)]">{reauthError}</div>
+                  <div className="mt-1.5 text-[12px] text-[var(--color-danger)]">{reauthError}</div>
                 )}
               </>
             )}
@@ -165,7 +165,7 @@ function ProfileAgentsSection(): React.JSX.Element {
       )}
 
       {remoteAgents.length === 0 ? (
-        <div className="text-[10px] text-[var(--color-text-muted)] py-2">
+        <div className="text-[12px] text-[var(--color-text-muted)] py-2">
           No remote agents found. Click Sync to fetch from your Cinna account.
         </div>
       ) : (
@@ -182,12 +182,12 @@ function ProfileAgentsSection(): React.JSX.Element {
                 const installed = rows.filter(isCatalogInstall)
                 return (
                   <div key={type} className="space-y-3">
-                    <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
+                    <div className="text-[12px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
                       {REMOTE_SECTION_LABELS[type]}
                     </div>
                     {own.length > 0 && (
                       <div>
-                        <div className="text-[10px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
+                        <div className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
                           Created by me
                         </div>
                         <div className="space-y-2">
@@ -199,7 +199,7 @@ function ProfileAgentsSection(): React.JSX.Element {
                     )}
                     {installed.length > 0 && (
                       <div>
-                        <div className="text-[10px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
+                        <div className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
                           Installed from catalog ({installed.length})
                         </div>
                         <div className="space-y-2">
@@ -214,7 +214,7 @@ function ProfileAgentsSection(): React.JSX.Element {
               }
               return (
                 <div key={type}>
-                  <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
+                  <div className="text-[12px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
                     {REMOTE_SECTION_LABELS[type] ?? type}
                   </div>
                   <div className="space-y-2">

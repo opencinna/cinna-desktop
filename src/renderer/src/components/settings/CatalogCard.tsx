@@ -45,21 +45,21 @@ export function CatalogCard({
         <Circle size={6} className={`fill-current ${statusColor}`} />
 
         <div className="flex-1 min-w-0">
-          <span className="font-medium text-xs">{entry.displayName}</span>
+          <span className="font-medium text-[14px]">{entry.displayName}</span>
           {versionLabel && (
-            <span className="text-[10px] text-[var(--color-text-muted)] ml-1.5">
+            <span className="text-[12px] text-[var(--color-text-muted)] ml-1.5">
               {versionLabel}
             </span>
           )}
           {entry.isInstalled && (
-            <span className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium">
+            <span className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium">
               Active
             </span>
           )}
         </div>
 
         {entry.isInstalled ? (
-          <span className="flex items-center gap-1 text-[10px] text-[var(--color-text-muted)] shrink-0 px-2">
+          <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-muted)] shrink-0 px-2">
             <CheckCircle2 size={12} className="text-[var(--color-success)]" />
             Installed
           </span>
@@ -71,7 +71,7 @@ export function CatalogCard({
               onInstall()
             }}
             disabled={installing || disabled}
-            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[10px] font-medium
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium
               bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
               disabled:opacity-50 disabled:cursor-not-allowed transition-colors shrink-0"
           >
@@ -101,30 +101,30 @@ export function CatalogCard({
       <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
           {entry.description && (
-            <div className="text-[10px] text-[var(--color-text-muted)]">{entry.description}</div>
+            <div className="text-[12px] text-[var(--color-text-muted)]">{entry.description}</div>
           )}
 
-          <div className="text-[10px] text-[var(--color-text-muted)]">
+          <div className="text-[12px] text-[var(--color-text-muted)]">
             Publisher:{' '}
             <span className="text-[var(--color-text-secondary)]">
               {entry.publisherName ?? entry.publisherEmail ?? entry.publisherHandle ?? 'unknown'}
             </span>
           </div>
 
-          <div className="text-[10px] text-[var(--color-text-muted)] font-mono">
+          <div className="text-[12px] text-[var(--color-text-muted)] font-mono">
             {entry.bundleId}
           </div>
 
           {entry.requiredCredentialSpecs.length > 0 && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">
                 Required credentials ({entry.requiredCredentialSpecs.length})
               </label>
               <div className="space-y-0.5">
                 {entry.requiredCredentialSpecs.map((s) => (
                   <div
                     key={s.name}
-                    className="flex items-center gap-2 text-[10px] text-[var(--color-text-secondary)]"
+                    className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]"
                   >
                     {s.providedBy === 'user' ? (
                       <AlertCircle size={10} className="text-[var(--color-text-muted)]" />

@@ -51,7 +51,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   }
 
   const inputClass =
-    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
+    'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
@@ -64,7 +64,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
           style={{ backgroundColor: preset.border }}
         />
         <div className="flex-1 min-w-0">
-          <span className="font-medium text-xs">{mode.name}</span>
+          <span className="font-medium text-[14px]">{mode.name}</span>
         </div>
 
         <button
@@ -97,7 +97,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-3">
           {/* Name */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">Name</label>
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Name</label>
             <input
               value={nameDraft}
               onChange={(e) => setNameDraft(e.target.value)}
@@ -110,7 +110,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
           {/* Color preset */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">Color</label>
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">Color</label>
             <div className="flex flex-wrap gap-1.5">
               {COLOR_PRESETS.map((p) => (
                 <button
@@ -129,7 +129,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
           {/* LLM Provider */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
               LLM Provider
             </label>
             <select
@@ -149,7 +149,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
           {/* Model */}
           {mode.providerId && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 Model
               </label>
               <select
@@ -170,7 +170,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
           {/* MCP Providers */}
           {(mcpProviders ?? []).length > 0 && (
             <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">
+              <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">
                 MCP Providers
               </label>
               <div className="space-y-1">
@@ -179,7 +179,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
                     key={mcp.id}
                     type="button"
                     onClick={() => toggleMcp(mcp.id)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md text-xs
+                    className="w-full text-left px-2.5 py-1.5 rounded-md text-[14px]
                       hover:bg-[var(--color-bg-hover)] transition-colors flex items-center gap-2"
                   >
                     <div
