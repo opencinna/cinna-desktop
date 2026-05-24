@@ -12,6 +12,18 @@ export interface RemoteAgentMetadata {
   session_mode: string | null
   ui_color_preset: string | null
   protocol_versions: string[]
+  /**
+   * Bundle membership flags, only present for `target_type='agent'`:
+   *   - `bundle_uuid` is the cinna-server `AgentBundle.id` this install
+   *     descends from (null for unpublished agents).
+   *   - `is_publisher_install` distinguishes the publisher's working copy
+   *     (`true`) from a foreign install obtained via the catalog (`false`).
+   * Together: `bundle_uuid != null && !is_publisher_install` ⇒ installed
+   * from the catalog.
+   */
+  bundle_id?: string | null
+  bundle_uuid?: string | null
+  is_publisher_install?: boolean | null
   /** Carries through any extra fields the backend attaches under `metadata`. */
   [key: string]: unknown
 }

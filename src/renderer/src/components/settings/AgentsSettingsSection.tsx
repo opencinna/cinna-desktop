@@ -12,6 +12,23 @@ const REMOTE_SECTION_LABELS: Record<string, string> = {
   identity: 'People'
 }
 
+type RemoteAgent = NonNullable<ReturnType<typeof useAgents>['data']>[number]
+
+/**
+ * Within the "My Agents" group (target_type='agent'), a row can be either
+ * an agent the user authored themselves (publisher install or an
+ * unpublished agent) or a bundle install obtained through the catalog. The
+ * cinna-server `/external/agents` response carries `bundle_uuid` and
+ * `is_publisher_install` under `metadata` so we can split them locally.
+ */
+function isCatalogInstall(agent: RemoteAgent): boolean {
+  const meta = agent.remoteMetadata ?? null
+  if (!meta) return false
+  const bundleUuid = meta.bundle_uuid
+  const isPublisher = meta.is_publisher_install === true
+  return typeof bundleUuid === 'string' && bundleUuid.length > 0 && !isPublisher
+}
+
 interface Props {
   /**
    * 'default' — shared local A2A agents (settings → Default group).
@@ -155,18 +172,59 @@ function ProfileAgentsSection(): React.JSX.Element {
         <div className="space-y-3">
           {remoteTypeOrder
             .filter((type) => remoteByType[type]?.length)
-            .map((type) => (
-              <div key={type}>
-                <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
-                  {REMOTE_SECTION_LABELS[type] ?? type}
+            .map((type) => {
+              const rows = remoteByType[type]
+              // For target_type='agent' split into "Created by me" vs
+              // "Installed from catalog" so the user can see at a glance
+              // which agents originate from a bundle install.
+              if (type === 'agent') {
+                const own = rows.filter((a) => !isCatalogInstall(a))
+                const installed = rows.filter(isCatalogInstall)
+                return (
+                  <div key={type} className="space-y-3">
+                    <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
+                      {REMOTE_SECTION_LABELS[type]}
+                    </div>
+                    {own.length > 0 && (
+                      <div>
+                        <div className="text-[10px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
+                          Created by me
+                        </div>
+                        <div className="space-y-2">
+                          {own.map((agent) => (
+                            <AgentCard key={agent.id} agent={agent} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {installed.length > 0 && (
+                      <div>
+                        <div className="text-[10px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
+                          Installed from catalog ({installed.length})
+                        </div>
+                        <div className="space-y-2">
+                          {installed.map((agent) => (
+                            <AgentCard key={agent.id} agent={agent} />
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              }
+              return (
+                <div key={type}>
+                  <div className="text-[10px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
+                    {REMOTE_SECTION_LABELS[type] ?? type}
+                  </div>
+                  <div className="space-y-2">
+                    {rows.map((agent) => (
+                      <AgentCard key={agent.id} agent={agent} />
+                    ))}
+                  </div>
                 </div>
-                <div className="space-y-2">
-                  {remoteByType[type].map((agent) => (
-                    <AgentCard key={agent.id} agent={agent} />
-                  ))}
-                </div>
-              </div>
-            ))}
+              )
+            })}
         </div>
       )}
     </div>

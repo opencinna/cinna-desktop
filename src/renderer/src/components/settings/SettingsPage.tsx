@@ -7,6 +7,8 @@ import { ChatModesSection } from './ChatModesSection'
 import { UserAccountsSection } from './UserAccountsSection'
 import { FeaturesSettingsSection } from './FeaturesSettingsSection'
 import { DevelopmentSettingsSection } from './DevelopmentSettingsSection'
+import { CatalogSettingsSection } from './CatalogSettingsSection'
+import { ConnectionSettingsSection } from './ConnectionSettingsSection'
 
 const sectionTitles = {
   chats: 'Chat Modes',
@@ -17,6 +19,8 @@ const sectionTitles = {
   features: 'Features',
   development: 'Development',
   'profile-agents': 'Profile Agents',
+  'profile-catalog': 'Catalog',
+  'profile-connection': 'Connection',
   trash: 'Trash'
 } as const
 
@@ -32,6 +36,10 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'agents' && <AgentsSettingsSection key="agents" scope="default" />}
         {settingsTab === 'profile-agents' && (
           <AgentsSettingsSection key="profile-agents" scope="profile" />
+        )}
+        {settingsTab === 'profile-catalog' && <CatalogSettingsSection key="profile-catalog" />}
+        {settingsTab === 'profile-connection' && (
+          <ConnectionSettingsSection key="profile-connection" />
         )}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
         {settingsTab === 'accounts' && <UserAccountsSection key="accounts" />}

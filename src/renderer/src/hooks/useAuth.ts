@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
+import { useReauthStore } from '../stores/reauth.store'
 import { useChatStore } from '../stores/chat.store'
 import { REMOTE_SYNC_STATUS_KEY, type RemoteSyncStatus } from './useAgents'
 
@@ -123,6 +124,10 @@ export function useCinnaReauth() {
     mutationFn: () => window.api.auth.cinnaReauth(),
     onSuccess: (result) => {
       if (!result.success || !result.user) return
+      // Session restored — drop the global "session expired" prompt no matter
+      // which surface (modal, catalog banner, Connection card) triggered it,
+      // and clear any prior dismissal so a future expiry can prompt again.
+      useReauthStore.getState().clearReauth()
       const current = useAuthStore.getState().currentUser
       if (current && current.id === result.user.id) {
         setCurrentUser(toAuthUser(result.user))

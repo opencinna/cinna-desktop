@@ -258,23 +258,25 @@ export async function refreshCinnaTokens(
     const body = await resp.text().catch(() => '')
     logger.warn(`Token refresh HTTP ${resp.status}`, { body: body.slice(0, 1000) })
 
-    // Replay detection or revoked token — need full re-auth
+    // A 400/401 on a refresh_token grant means the stored refresh token is
+    // dead — revoked, expired, rotated away, or replay-detected — and the only
+    // recovery is a full re-auth. The reason field differs by server version:
+    // the OAuth standard uses `error`, but the Cinna (FastAPI) server returns
+    // `{"detail":"invalid_grant"}`. Parse both purely for the message; the
+    // status alone decides reauth, so a field mismatch can't downgrade this to
+    // a generic error that never reaches the reauth flow.
     if (resp.status === 400 || resp.status === 401) {
+      let reason = 'unknown'
       try {
-        const err = JSON.parse(body) as { error?: string }
-        if (
-          err.error === 'invalid_grant' ||
-          err.error === 'token_reuse_detected' ||
-          err.error === 'unauthorized'
-        ) {
-          logger.error(`Re-auth required: ${err.error}`)
-          throw new CinnaReauthRequired(
-            `Token refresh rejected: ${err.error}. Full re-authentication required.`
-          )
-        }
-      } catch (e) {
-        if (e instanceof CinnaReauthRequired) throw e
+        const parsed = JSON.parse(body) as { error?: string; detail?: unknown }
+        reason = parsed.error ?? (typeof parsed.detail === 'string' ? parsed.detail : reason)
+      } catch {
+        // non-JSON body — keep 'unknown'
       }
+      logger.error(`Re-auth required: ${reason}`)
+      throw new CinnaReauthRequired(
+        `Token refresh rejected (${reason}). Full re-authentication required.`
+      )
     }
 
     throw new Error(`Token refresh failed: HTTP ${resp.status} — ${body}`)

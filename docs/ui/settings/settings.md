@@ -7,9 +7,9 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 ## Core Concepts
 
 - **Settings View** — A dedicated app view (`activeView: 'settings'`) that replaces the chat interface
-- **Settings Tab** — A sub-section within settings (`settingsTab: 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development' | 'profile-agents' | 'trash'`), selected from the sidebar menu
+- **Settings Tab** — A sub-section within settings (`settingsTab: 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development' | 'profile-agents' | 'profile-catalog' | 'profile-connection' | 'trash'`), selected from the sidebar menu
 - **Default Group** — Sidebar section labeled "Default" containing the shared settings (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Features, Development). Always visible.
-- **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings. Only rendered when the active profile has profile-scope content (currently: Cinna users only, with a single "Agents" entry showing remote agents).
+- **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings. Only rendered when the active profile has profile-scope content (currently: Cinna users only — "Agents" (remote agents), "Catalog" (bundle catalog), and "Connection" (Cinna re-authentication)).
 - **Sidebar Menu Mode** — When settings are active, the sidebar replaces the chat list with the two-group vertical settings menu plus a footer "Trash" entry.
 
 ## User Stories / Flows
@@ -18,7 +18,7 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 
 1. User clicks the avatar in the sidebar footer to open the profile dropdown
 2. User clicks the "Settings" entry in the dropdown
-3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the shared menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Features, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-only menu items (Agents). A separator + "Trash" entry sits at the bottom.
+3. Sidebar transforms: chat list replaced by settings menu with "Back" button, a "Default" header followed by the shared menu items (Chats, Agents, LLM Providers, MCP Providers, User Accounts, Features, Development), and — for Cinna users — a "Profile {name}" header followed by the profile-only menu items (Agents, Catalog, Connection). A separator + "Trash" entry sits at the bottom.
 4. Main content area shows the active settings section (Chat Modes by default)
 
 ### Navigating Between Sections
@@ -54,7 +54,7 @@ Sidebar (settings menu mode)
   ├── "Default" header
   │     └── Menu items → 'chats' | 'agents' | 'llm' | 'mcp' | 'accounts' | 'features' | 'development'
   ├── "Profile {name}" header (Cinna users only)
-  │     └── Menu items → 'profile-agents'
+  │     └── Menu items → 'profile-agents' | 'profile-catalog' | 'profile-connection'
   └── (separator) → 'trash'
 
 MainArea
@@ -63,6 +63,8 @@ MainArea
         ├── ChatModesSection (when tab = 'chats')
         ├── AgentsSettingsSection scope="default" (when tab = 'agents')
         ├── AgentsSettingsSection scope="profile" (when tab = 'profile-agents')
+        ├── CatalogSettingsSection (when tab = 'profile-catalog')
+        ├── ConnectionSettingsSection (when tab = 'profile-connection')
         ├── LLMSettingsSection (when tab = 'llm')
         ├── MCPSettingsSection (when tab = 'mcp')
         ├── UserAccountsSection (when tab = 'accounts')

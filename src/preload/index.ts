@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
+import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import type { RemoteAgentMetadata } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
@@ -27,6 +28,12 @@ import type {
   NoteAttachAsFilesResultDto
 } from '../shared/notes'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
+import type {
+  CatalogEntryDto,
+  CatalogInstallResultDto,
+  SetupCredentialSummaryDto,
+  SetupStatusDto
+} from '../shared/catalog'
 import type {
   McpRegistryInfo,
   McpRegistrySearchAllResult
@@ -233,7 +240,19 @@ const api = {
       userId: string
       password?: string
     }): Promise<{ success: boolean; error?: string }> =>
-      ipcRenderer.invoke('auth:delete-user', data)
+      ipcRenderer.invoke('auth:delete-user', data),
+    /**
+     * Fired by the main process whenever an IPC handler signals the active
+     * Cinna session is gone (token revoked/expired → 401/403), whether the
+     * handler threw or returned an error shape. Drives the global reauth modal;
+     * the payload names the account/connection. Returns an unsubscribe function.
+     */
+    onReauthRequired: (handler: (event: ReauthRequiredEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: ReauthRequiredEvent): void =>
+        handler(payload)
+      ipcRenderer.on(CINNA_REAUTH_REQUIRED_CHANNEL, listener)
+      return () => ipcRenderer.off(CINNA_REAUTH_REQUIRED_CHANNEL, listener)
+    }
   },
 
   chat: {
@@ -836,6 +855,17 @@ const api = {
     > => ipcRenderer.invoke('cinna:list-agents'),
     getTaskView: (taskId: string): Promise<CinnaTaskViewDto> =>
       ipcRenderer.invoke('cinna:get-task-view', taskId)
+  },
+
+  catalog: {
+    list: (): Promise<CatalogEntryDto[]> => ipcRenderer.invoke('catalog:list'),
+    quickInstall: (bundleId: string): Promise<CatalogInstallResultDto> =>
+      ipcRenderer.invoke('catalog:quick-install', bundleId),
+    setupStatus: (installId: string): Promise<SetupStatusDto> =>
+      ipcRenderer.invoke('catalog:setup-status', installId),
+    setupCredentials: (installId: string): Promise<SetupCredentialSummaryDto[]> =>
+      ipcRenderer.invoke('catalog:setup-credentials', installId),
+    serverUrl: (): Promise<string> => ipcRenderer.invoke('catalog:server-url')
   },
 
   system: {

@@ -17,6 +17,8 @@ export type SettingsMenu =
   | 'features'
   | 'development'
   | 'profile-agents'
+  | 'profile-catalog'
+  | 'profile-connection'
   | 'trash'
 
 /**
@@ -24,7 +26,11 @@ export type SettingsMenu =
  * profile renders that group (currently: Cinna users). Switching to a profile
  * without them should snap the sidebar back to a default-scope tab.
  */
-export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = ['profile-agents']
+export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
+  'profile-agents',
+  'profile-catalog',
+  'profile-connection'
+]
 export type Theme = 'dark' | 'light'
 
 const VERBOSE_KEY = 'cinna-verbose-mode'

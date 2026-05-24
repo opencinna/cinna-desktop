@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/layout/Sidebar'
 import { TopBar } from './components/layout/TopBar'
 import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { OnboardingScreen } from './components/auth/OnboardingScreen'
+import { ReauthModal } from './components/auth/ReauthModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { useAuthStore } from './stores/auth.store'
+import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import {
   consumeForceOnboarding,
@@ -15,7 +17,16 @@ import {
   markOnboardingDismissed
 } from './constants/onboarding'
 
+// Any Cinna-backed query/mutation that fails with a reauth-required code
+// raises the global ReauthModal — one prompt for all surfaces (catalog,
+// agent status, remote sync). Inline banners still work independently.
 const queryClient = new QueryClient({
+  queryCache: new QueryCache({
+    onError: (error) => flagReauthFromError(error)
+  }),
+  mutationCache: new MutationCache({
+    onError: (error) => flagReauthFromError(error)
+  }),
   defaultOptions: {
     queries: {
       staleTime: 5000,
@@ -111,6 +122,7 @@ function App(): React.JSX.Element {
         </OnboardingGate>
         <LogsOverlay />
         <AgentStatusOverlay />
+        <ReauthModal />
       </AuthGate>
     </QueryClientProvider>
   )

@@ -66,6 +66,16 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
   }
 
   const isRemote = agent.source === 'remote'
+  // For remote agents originating from a catalog bundle install. Publisher
+  // working copies (`is_publisher_install=true`) and unpublished agents
+  // (`bundle_uuid=null`) render without the pill — they are the user's own.
+  const bundleUuid = agent.remoteMetadata?.bundle_uuid
+  const isPublisherInstall = agent.remoteMetadata?.is_publisher_install === true
+  const isBundleInstall =
+    isRemote &&
+    typeof bundleUuid === 'string' &&
+    bundleUuid.length > 0 &&
+    !isPublisherInstall
 
   const statusColor =
     agent.enabled
@@ -103,6 +113,14 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
           {isRemote && (
             <span className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-accent)]/10 text-[var(--color-accent)] font-medium">
               Remote
+            </span>
+          )}
+          {isBundleInstall && (
+            <span
+              className="text-[9px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-success)]/15 text-[var(--color-success)] font-medium"
+              title="Installed from the catalog"
+            >
+              Bundle
             </span>
           )}
         </div>
