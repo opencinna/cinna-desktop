@@ -14,6 +14,17 @@ export function registerCatalogHandlers(): void {
     return catalogService.quickInstall(getProfileScopeUserId(), bundleId)
   })
 
+  ipcHandle('catalog:install-context', async (_event, bundleId: string) => {
+    userActivation.requireActivated()
+    return catalogService.getInstallContext(getProfileScopeUserId(), bundleId)
+  })
+
+  ipcHandle('catalog:uninstall', async (_event, installId: string) => {
+    userActivation.requireActivated()
+    await catalogService.uninstall(getProfileScopeUserId(), installId)
+    return { success: true }
+  })
+
   ipcHandle('catalog:setup-status', async (_event, installId: string) => {
     userActivation.requireActivated()
     return catalogService.getSetupStatus(getProfileScopeUserId(), installId)

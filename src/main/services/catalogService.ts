@@ -15,6 +15,9 @@ import type {
   CatalogEntryDto,
   CatalogCredentialSpec,
   CatalogInstallResultDto,
+  InstallContextDto,
+  InstallContextPublisherSummaryDto,
+  InstallContextSpecDto,
   SetupStatusDto,
   SetupMissingItemDto,
   SetupCredentialSummaryDto
@@ -51,6 +54,30 @@ async function resolveAuthHeader(userId: string): Promise<string> {
   }
 }
 
+/**
+ * Best-effort extraction of a human-readable error message from a cinna-server
+ * response body. FastAPI surfaces failures as `{ detail: "<message>" }`, our
+ * own handlers sometimes use `{ message: "..." }`; everything else falls back
+ * to the raw body slice so we never accidentally suppress server-supplied
+ * context.
+ */
+function extractErrorDetail(text: string): string {
+  const trimmed = text.trim()
+  if (!trimmed) return ''
+  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+    try {
+      const parsed = JSON.parse(trimmed) as Record<string, unknown>
+      const detail = parsed.detail
+      if (typeof detail === 'string' && detail) return detail
+      const message = parsed.message
+      if (typeof message === 'string' && message) return message
+    } catch {
+      // JSON-shaped but not valid JSON; fall through to raw text.
+    }
+  }
+  return trimmed.slice(0, 200)
+}
+
 async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = {}): Promise<T> {
   const baseUrl = resolveBaseUrl(userId)
   const authHeader = await resolveAuthHeader(userId)
@@ -82,10 +109,8 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
     if (response.status === 401 || response.status === 403) {
       throw new CinnaApiError('reauth_required', `Cinna ${response.status}`)
     }
-    throw new CinnaApiError(
-      'request_failed',
-      `Cinna API ${response.status}: ${text.slice(0, 200) || response.statusText}`
-    )
+    const detail = extractErrorDetail(text) || response.statusText
+    throw new CinnaApiError('request_failed', `Cinna API ${response.status}: ${detail}`)
   }
   try {
     return (await response.json()) as T
@@ -143,6 +168,129 @@ interface ServerSetupCredentialSummary {
   template_private_fields?: string[]
 }
 
+interface ServerInstallContextSpec {
+  name: string
+  type: string
+  description?: string | null
+  provided_by?: 'user' | 'publisher' | 'template'
+  suggested_credential_id?: string | null
+  suggested_credential_name?: string | null
+  template_private_fields?: string[]
+}
+
+interface ServerInstallContextPublisherSummary {
+  name: string
+  type: string
+}
+
+interface ServerInstallContextAIPublisherSummaries {
+  conversation?: ServerInstallContextPublisherSummary | null
+  building?: ServerInstallContextPublisherSummary | null
+}
+
+interface ServerInstallContext {
+  ai_provided_by_publisher: boolean
+  ai_publisher_credential_summaries?: ServerInstallContextAIPublisherSummaries | null
+  service_specs: ServerInstallContextSpec[]
+}
+
+function projectPublisherSummary(
+  s: ServerInstallContextPublisherSummary | null | undefined
+): InstallContextPublisherSummaryDto | null {
+  if (!s || typeof s.name !== 'string' || typeof s.type !== 'string') return null
+  return { name: s.name, type: s.type }
+}
+
+/**
+ * Shared between `quickInstall` (consumes the raw shape to build the install
+ * body) and `getInstallContext` (re-projects it into the public DTO). Kept
+ * private so the renderer never sees `suggested_credential_id` UUIDs — only
+ * the `hasSuggestedMatch` boolean reaches the IPC boundary.
+ */
+async function fetchServerInstallContext(
+  userId: string,
+  bundleId: string
+): Promise<ServerInstallContext> {
+  return cinnaFetch<ServerInstallContext>(
+    userId,
+    `/api/v1/catalog/${encodeURIComponent(bundleId)}/install-context`
+  )
+}
+
+function projectInstallContextSpec(s: ServerInstallContextSpec): InstallContextSpecDto {
+  const providedBy =
+    s.provided_by === 'publisher' || s.provided_by === 'template' ? s.provided_by : 'user'
+  return {
+    name: s.name,
+    type: s.type,
+    providedBy,
+    hasSuggestedMatch: Boolean(s.suggested_credential_id),
+    templatePrivateFields: s.template_private_fields ?? []
+  }
+}
+
+type CredentialSelection =
+  | { mode: 'publisher_provides' }
+  | { mode: 'use_existing'; credential_id: string }
+  | { mode: 'skip' }
+
+interface AICredentialSelections {
+  conversation_credential_id: string | null
+  building_credential_id: string | null
+  use_publisher_ai: boolean
+}
+
+interface InstallRequestBody {
+  credentials: Record<string, CredentialSelection> | null
+  ai_credential_selections: AICredentialSelections | null
+}
+
+/**
+ * Mirrors `frontend/src/components/Install/useQuickInstall.ts` in cinna-core:
+ * for each spec in the install context, pick the default the install form
+ * would submit unchanged — PBP → `publisher_provides`, PBU/PBT with a server
+ * auto-prefill suggestion → `use_existing` (linking the user's existing
+ * credential), otherwise → `skip`. Without this the server would skip
+ * everything and materialise fresh placeholder/template rows even when the
+ * installer already owns a matching credential.
+ */
+function buildDefaultCredentialsPayload(
+  context: ServerInstallContext,
+  bundleId: string
+): Record<string, CredentialSelection> | null {
+  const payload: Record<string, CredentialSelection> = {}
+  for (const spec of context.service_specs) {
+    // Bundle-author / cinna-core invariant: spec names are unique per
+    // revision. Log a warning if the invariant breaks so we notice instead
+    // of silently overwriting one selection with another.
+    if (payload[spec.name]) {
+      logger.warn('duplicate spec name in install-context', { bundleId, name: spec.name })
+    }
+    if (spec.provided_by === 'publisher') {
+      payload[spec.name] = { mode: 'publisher_provides' }
+    } else if (spec.suggested_credential_id) {
+      payload[spec.name] = {
+        mode: 'use_existing',
+        credential_id: spec.suggested_credential_id
+      }
+    } else {
+      payload[spec.name] = { mode: 'skip' }
+    }
+  }
+  return Object.keys(payload).length > 0 ? payload : null
+}
+
+function buildDefaultAISelections(
+  context: ServerInstallContext
+): AICredentialSelections | null {
+  if (!context.ai_provided_by_publisher) return null
+  return {
+    conversation_credential_id: null,
+    building_credential_id: null,
+    use_publisher_ai: true
+  }
+}
+
 function projectSpec(s: ServerCatalogEntry['required_credential_specs'][number]): CatalogCredentialSpec {
   const providedBy = s.provided_by === 'publisher' || s.provided_by === 'template'
     ? s.provided_by
@@ -191,25 +339,110 @@ export const catalogService = {
   },
 
   /**
-   * Quick install — submits an empty payload. The server applies the same
-   * defaults the install form would use unchanged (PBP → publisher_provides,
-   * suggested credentials → use_existing, otherwise → skip; publisher AI
-   * credentials accepted when offered).
+   * Quick install — two-step flow mirroring cinna-core's frontend
+   * `useQuickInstall` hook:
+   *   1. GET /catalog/{bundleId}/install-context — server runs the
+   *      auto-prefill matcher and returns `suggested_credential_id` for
+   *      every PBU/PBT spec that matches one of the installer's existing
+   *      or shared credentials.
+   *   2. POST /catalog/{bundleId}/install with a constructed body that
+   *      links those suggestions as `use_existing` (instead of materialising
+   *      duplicates), forwards `publisher_provides` for PBP specs, and
+   *      forwards `use_publisher_ai` when the bundle offers it.
+   * The empty-body shortcut we used before told the server "skip
+   * everything", which created a fresh placeholder/template row even when
+   * the installer already owned a matching credential.
    */
   async quickInstall(userId: string, bundleId: string): Promise<CatalogInstallResultDto> {
-    const data = await cinnaFetch<Record<string, unknown>>(
-      userId,
-      `/api/v1/catalog/${encodeURIComponent(bundleId)}/install`,
-      { method: 'POST', body: {} }
-    )
-    const installId = String(data.id ?? '')
-    if (!installId) {
-      throw new CinnaApiError('invalid_response', 'Install response missing id')
+    try {
+      const context = await fetchServerInstallContext(userId, bundleId)
+      const credentials = buildDefaultCredentialsPayload(context, bundleId)
+      const aiCredentialSelections = buildDefaultAISelections(context)
+      // Count-only summary — no credential UUIDs / names cross the log
+      // boundary. Lets us trace from a user report ("wrong credential got
+      // linked") back to the exact payload shape the desktop submitted.
+      const selections = Object.values(credentials ?? {})
+      logger.info('quick install start', {
+        bundleId,
+        specCount: context.service_specs.length,
+        useExistingCount: selections.filter((s) => s.mode === 'use_existing').length,
+        publisherProvidesCount: selections.filter((s) => s.mode === 'publisher_provides').length,
+        skipCount: selections.filter((s) => s.mode === 'skip').length,
+        usePublisherAi: aiCredentialSelections?.use_publisher_ai ?? false
+      })
+      const body: InstallRequestBody = {
+        credentials,
+        ai_credential_selections: aiCredentialSelections
+      }
+      const data = await cinnaFetch<Record<string, unknown>>(
+        userId,
+        `/api/v1/catalog/${encodeURIComponent(bundleId)}/install`,
+        { method: 'POST', body }
+      )
+      const installId = String(data.id ?? '')
+      if (!installId) {
+        throw new CinnaApiError('invalid_response', 'Install response missing id')
+      }
+      const agentName = typeof data.name === 'string' ? data.name : 'Agent'
+      logger.info('quick install done', { bundleId, installId, agentName })
+      return { installId, bundleId, agentName }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const code = err instanceof CinnaApiError ? err.code : undefined
+      logger.error('quick install failed', { bundleId, code, error: message })
+      throw err
     }
+  },
+
+  /**
+   * Per-bundle install preview surfaced to the renderer's catalog card so
+   * each required-credential row can render the right affordance: "already
+   * covered" (publisher-shared, or your existing credential matches), "fill
+   * template fields on next visit" (template spec with no matching
+   * credential), or "you'll provide this" (user spec with no match). The
+   * matcher itself runs on cinna-server; the desktop only forwards the
+   * per-spec verdict — never the matched credential's UUID.
+   */
+  async getInstallContext(userId: string, bundleId: string): Promise<InstallContextDto> {
+    const context = await fetchServerInstallContext(userId, bundleId)
+    const aiSummaries = context.ai_publisher_credential_summaries ?? {}
     return {
-      installId,
-      bundleId,
-      agentName: typeof data.name === 'string' ? data.name : 'Agent'
+      specs: (context.service_specs ?? []).map(projectInstallContextSpec),
+      aiProvidedByPublisher: Boolean(context.ai_provided_by_publisher),
+      aiPublisherSummaries: {
+        conversation: projectPublisherSummary(aiSummaries.conversation),
+        building: projectPublisherSummary(aiSummaries.building)
+      }
+    }
+  },
+
+  /**
+   * Uninstall — POST /api/v1/agents/{install_id}/uninstall. Server contract
+   * (see `workflow-runner-core/backend/app/api/routes/installs.py`):
+   *   - Returns `{ status: 'uninstalled' }` on success
+   *   - Stops the environment and removes the Agent row; per-user app-data
+   *     volumes are preserved (re-attached automatically on reinstall)
+   *   - Rejects publisher installs with HTTP 400 — surfaced to the renderer
+   *     as `CinnaApiError('request_failed', ...)` with the server's message
+   *
+   * The mutation hook layers `useRefreshCatalogState()` on top so the
+   * catalog card flips back to uninstalled and the remote-agent sync drops
+   * the row without waiting for the periodic tick.
+   */
+  async uninstall(userId: string, installId: string): Promise<void> {
+    logger.info('uninstall start', { installId })
+    try {
+      await cinnaFetch<Record<string, unknown>>(
+        userId,
+        `/api/v1/agents/${encodeURIComponent(installId)}/uninstall`,
+        { method: 'POST', body: {} }
+      )
+      logger.info('uninstall done', { installId })
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      const code = err instanceof CinnaApiError ? err.code : undefined
+      logger.error('uninstall failed', { installId, code, error: message })
+      throw err
     }
   },
 

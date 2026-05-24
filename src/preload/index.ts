@@ -31,6 +31,7 @@ import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
+  InstallContextDto,
   SetupCredentialSummaryDto,
   SetupStatusDto
 } from '../shared/catalog'
@@ -861,6 +862,10 @@ const api = {
     list: (): Promise<CatalogEntryDto[]> => ipcRenderer.invoke('catalog:list'),
     quickInstall: (bundleId: string): Promise<CatalogInstallResultDto> =>
       ipcRenderer.invoke('catalog:quick-install', bundleId),
+    installContext: (bundleId: string): Promise<InstallContextDto> =>
+      ipcRenderer.invoke('catalog:install-context', bundleId),
+    uninstall: (installId: string): Promise<{ success: true }> =>
+      ipcRenderer.invoke('catalog:uninstall', installId),
     setupStatus: (installId: string): Promise<SetupStatusDto> =>
       ipcRenderer.invoke('catalog:setup-status', installId),
     setupCredentials: (installId: string): Promise<SetupCredentialSummaryDto[]> =>

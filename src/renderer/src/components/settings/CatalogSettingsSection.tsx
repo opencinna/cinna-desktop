@@ -11,7 +11,11 @@
  */
 import { useEffect, useState } from 'react'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
-import { useCatalog, useQuickInstallBundle } from '../../hooks/useCatalog'
+import {
+  useCatalog,
+  useQuickInstallBundle,
+  useRefreshCatalogState
+} from '../../hooks/useCatalog'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useQueryClient } from '@tanstack/react-query'
@@ -29,6 +33,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
   const catalog = useCatalog()
   const queryClient = useQueryClient()
   const quickInstall = useQuickInstallBundle()
+  const refreshCatalogState = useRefreshCatalogState()
   const cinnaReauth = useCinnaReauth()
   const [reauthError, setReauthError] = useState<string | null>(null)
   const [pendingBundleId, setPendingBundleId] = useState<string | null>(null)
@@ -105,8 +110,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
     if (!activeSetup) return
     setToast({ kind: 'ok', text: `${activeSetup.agentName} is ready` })
     setActiveSetup(null)
-    queryClient.invalidateQueries({ queryKey: ['catalog'] })
-    queryClient.invalidateQueries({ queryKey: ['agents'] })
+    refreshCatalogState()
   }
 
   const entries = catalog.data ?? []
@@ -119,7 +123,7 @@ export function CatalogSettingsSection(): React.JSX.Element {
           Published bundles on your Cinna account
         </span>
         <button
-          onClick={() => catalog.refetch()}
+          onClick={() => refreshCatalogState()}
           disabled={catalog.isFetching}
           className="flex items-center gap-1 text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors disabled:opacity-50"
         >

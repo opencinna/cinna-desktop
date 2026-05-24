@@ -1,7 +1,19 @@
+/**
+ * Single catalog entry card — header (status dot, name, version, install /
+ * installed button, expand chevron) plus an expandable body composed of two
+ * self-contained children: `CatalogCardCredentials` for the install-context-
+ * driven required/AI sections and `CatalogCardFooter` for installed-bundle
+ * actions (Uninstall + Open Agent + confirmation modal).
+ *
+ * The card itself only owns the `expanded` UI state; everything else lives
+ * with the subcomponent that consumes it.
+ */
 import { useState } from 'react'
-import { ChevronDown, Circle, Loader2, Download, CheckCircle2, AlertCircle } from 'lucide-react'
+import { ChevronDown, Circle, Loader2, Download, CheckCircle2 } from 'lucide-react'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import type { CatalogEntryDto } from '../../../../shared/catalog'
+import { CatalogCardCredentials } from './CatalogCardCredentials'
+import { CatalogCardFooter } from './CatalogCardFooter'
 
 interface CatalogCardProps {
   entry: CatalogEntryDto
@@ -10,12 +22,6 @@ interface CatalogCardProps {
   /** Disabled when another card's install is still pending. */
   disabled?: boolean
   onInstall: () => void
-}
-
-const PROVIDED_BY_LABEL: Record<string, string> = {
-  user: 'You provide',
-  publisher: 'Shared by publisher',
-  template: 'Template'
 }
 
 export function CatalogCard({
@@ -109,39 +115,20 @@ export function CatalogCard({
             <span className="text-[var(--color-text-secondary)]">
               {entry.publisherName ?? entry.publisherEmail ?? entry.publisherHandle ?? 'unknown'}
             </span>
+            {entry.publisherName && entry.publisherEmail && (
+              <span className="ml-1">&lt;{entry.publisherEmail}&gt;</span>
+            )}
           </div>
 
-          <div className="text-[12px] text-[var(--color-text-muted)] font-mono">
-            {entry.bundleId}
+          <div>
+            <span className="inline-block text-[12px] font-mono px-1.5 py-0.5 rounded bg-[var(--color-bg)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
+              {entry.bundleId}
+            </span>
           </div>
 
-          {entry.requiredCredentialSpecs.length > 0 && (
-            <div>
-              <label className="block text-[12px] text-[var(--color-text-muted)] mb-1">
-                Required credentials ({entry.requiredCredentialSpecs.length})
-              </label>
-              <div className="space-y-0.5">
-                {entry.requiredCredentialSpecs.map((s) => (
-                  <div
-                    key={s.name}
-                    className="flex items-center gap-2 text-[12px] text-[var(--color-text-secondary)]"
-                  >
-                    {s.providedBy === 'user' ? (
-                      <AlertCircle size={10} className="text-[var(--color-text-muted)]" />
-                    ) : (
-                      <CheckCircle2 size={10} className="text-[var(--color-success)]" />
-                    )}
-                    <span>{s.name}</span>
-                    <span className="text-[var(--color-text-muted)]">({s.type})</span>
-                    <span className="text-[var(--color-text-muted)] ml-auto">
-                      {PROVIDED_BY_LABEL[s.providedBy] ?? s.providedBy}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          <CatalogCardCredentials entry={entry} enabled={expanded && !entry.isInstalled} />
         </div>
+        {entry.isInstalled && <CatalogCardFooter entry={entry} />}
       </AnimatedCollapse>
     </div>
   )
