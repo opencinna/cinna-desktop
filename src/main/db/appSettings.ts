@@ -56,7 +56,7 @@ export const appSettingsRepo = {
     for (const r of rows) {
       if (!(r.key in DEFAULTS)) continue
       try {
-        ;(out as Record<string, unknown>)[r.key] = JSON.parse(r.value)
+        out[r.key as AppSettingKey] = JSON.parse(r.value)
       } catch {
         /* keep default */
       }

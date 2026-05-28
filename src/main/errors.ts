@@ -36,6 +36,8 @@ export type AuthErrorCode =
   | 'default_user_immutable'
   | 'oauth_failed'
   | 'missing_server_url'
+  | 'invalid_user_type'
+  | 'identity_mismatch'
 
 export type AgentErrorCode =
   | 'not_found'
