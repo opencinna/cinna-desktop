@@ -118,7 +118,7 @@
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
   [data-theme="dark"] .app-sidebar {
-    background-color: rgba(0, 0, 0, 0.45);
+    background-color: rgba(0, 0, 0, 0.82);
     backdrop-filter: blur(10px);
     -webkit-backdrop-filter: blur(10px);
     border-color: rgba(255, 255, 255, 0.06);
@@ -128,13 +128,16 @@
   /* Frosted-glass surface for modals/popovers (profile dropdown, register
      modal, sign-out confirm, interface toggles). Mirrors the sidebar treatment
      so floating UI feels consistent over the wallpaper. */
+  /* Alpha is kept high enough to stay legible when backdrop-filter does NOT
+     composite (e.g. x64 build under Rosetta, where Chromium blocklists the
+     GPU path). Where the blur works it still reads as frosted glass. */
   .app-popover-surface {
-    background-color: rgba(245, 245, 245, 0.72);
+    background-color: rgba(245, 245, 245, 0.9);
     backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
   }
   [data-theme="dark"] .app-popover-surface {
-    background-color: rgba(20, 20, 20, 0.6);
+    background-color: rgba(20, 20, 20, 0.9);
     backdrop-filter: blur(14px) saturate(140%);
     -webkit-backdrop-filter: blur(14px) saturate(140%);
     border-color: rgba(255, 255, 255, 0.06);

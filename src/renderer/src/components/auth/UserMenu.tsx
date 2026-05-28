@@ -164,7 +164,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
         >
           {/* Profiles */}
           {allUsers.length > 0 && (
-          <div className="py-1 max-h-48 overflow-y-auto">
+          <div className="py-1">
             <div className="px-3 py-1 text-[10px] font-medium uppercase tracking-wider text-[var(--color-text-muted)]">
               Profiles
             </div>
