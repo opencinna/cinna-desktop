@@ -10,7 +10,7 @@ import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { NoteMentionPopup } from './NoteMentionPopup'
-import { useAgents } from '../../hooks/useAgents'
+import { useAgents, useAddOnDemandAgent } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
@@ -27,6 +27,9 @@ import { RewriteHintBar } from './RewriteHintBar'
 import { RewriteFailureModal } from './RewriteFailureModal'
 import { ActiveAgentChip } from './ActiveAgentChip'
 import { OnDemandMcpChips } from './OnDemandMcpChips'
+import { OnDemandAgentChips } from './OnDemandAgentChips'
+import { CommPatternBadge } from './CommPatternBadge'
+import type { CommPattern } from '../../utils/commPattern'
 import { AttachmentList } from './AttachmentBadge'
 import { NoteBadgeList } from './NoteBadge'
 import { AttachMenuPopup, type AttachMenuItem } from './AttachMenuPopup'
@@ -46,7 +49,6 @@ interface ChatInputProps {
   ) => void
   leftSlot?: ReactNode
   modeColor?: ColorPreset | null
-  onSelectAgent?: (agent: AgentData | null) => void
   /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
   selectedAgent?: AgentData | null
   /**
@@ -58,6 +60,21 @@ interface ChatInputProps {
   pendingMcpIds?: string[]
   onTogglePendingMcp?: (mcpProviderId: string) => void
   onRemovePendingMcp?: (mcpProviderId: string) => void
+  /**
+   * New-chat agent engagement buffer — symmetric to `pendingMcpIds`. The `@`
+   * popup routes *every* agent pick here (orchestrated-mode tool set). The
+   * buffer is flushed onto `chat_on_demand_agents` (or bound as the A2A root
+   * when it's the sole selection with no MCPs) inside `startNewChat`.
+   */
+  pendingAgentIds?: string[]
+  onTogglePendingAgent?: (agentId: string) => void
+  onRemovePendingAgent?: (agentId: string) => void
+  /**
+   * Communication-pattern badge state for the new-chat composer (A2A vs
+   * orchestrated AI). Rendered immediately left of the chat-mode Cog. Absent
+   * ⇒ no badge (e.g. nothing selected yet, or an active chat).
+   */
+  commPatternInfo?: { pattern: CommPattern; agentName?: string; modelName?: string }
   /** Fired when the user presses ESC twice in quick succession with no popup open. */
   onDoubleEscape?: () => void
   /**
@@ -111,11 +128,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onNewChat,
     leftSlot,
     modeColor,
-    onSelectAgent,
     selectedAgent,
     pendingMcpIds,
     onTogglePendingMcp,
     onRemovePendingMcp,
+    pendingAgentIds,
+    onTogglePendingAgent,
+    onRemovePendingAgent,
+    commPatternInfo,
     onDoubleEscape,
     tildeModePopup
   },
@@ -268,6 +288,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [allMcps]
   )
   const addOnDemandMcp = useAddOnDemandMcp()
+  const addOnDemandAgent = useAddOnDemandAgent()
+
+  // Orchestrated chats (created with agents-as-tools) route an in-chat
+  // `@`-agent pick to *add another tool* rather than the multi-agent
+  // switchboard switch (which only makes sense when talking to one agent at a
+  // time). Read off the persisted chat flag so the gesture stays stable even
+  // if the user removes every agent chip.
+  const isOrchestratedChat = !!chatId && chatData?.orchestrated === true
 
   const boundAgent = useMemo(
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
@@ -456,7 +484,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // surfaces both an "Agents" and an "MCP" section in either context — the
   // distinction is just where selections are routed.
   const newChatHasContent = !chatId && (
-    (!!onSelectAgent && enabledAgents.length > 0) ||
+    (!!onTogglePendingAgent && enabledAgents.length > 0) ||
     (!!onTogglePendingMcp && enabledMcps.length > 0)
   )
   const activeChatHasContent = !!chatId && (enabledAgents.length > 0 || enabledMcps.length > 0)
@@ -492,20 +520,27 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const selectAgent = useCallback(
     (agent: AgentData) => {
       if (chatId) {
-        // In-chat mention: selecting from the popup is the *switch* action.
-        // Drop the `@token` from the composer and flip the chat's active
-        // agent. The chip below the input updates via the composer hook's
-        // reactive subscription. The next Enter routes via the same hook —
-        // there's no separate "active agent" state to keep in sync.
         replaceTriggerToken('')
+        if (isOrchestratedChat) {
+          // Orchestrated chat: an in-chat `@`-agent pick attaches another
+          // agent as a tool (persists via `chat:on-demand-agent-add`); the
+          // chip appears below the composer and the next send unions it.
+          void addOnDemandAgent.mutateAsync({ chatId, agentId: agent.id })
+          return
+        }
+        // Otherwise this is the multi-agent *switch* action: flip the chat's
+        // active agent. The chip below the input updates via the composer
+        // hook's reactive subscription; the next Enter routes via that hook.
         void composer.switchActiveAgent(agent.id)
         return
       }
-      // New-chat agent picker: drop the @token; agent binding happens via callback.
+      // New-chat agent picker: drop the @token; every pick adds to the
+      // orchestrated-mode buffer (mirror of the MCP buffer). Routing (A2A vs
+      // orchestrated) is decided at send time from the combined selection.
       replaceTriggerToken('')
-      onSelectAgent?.(agent)
+      onTogglePendingAgent?.(agent.id)
     },
-    [replaceTriggerToken, onSelectAgent, chatId, composer]
+    [replaceTriggerToken, onTogglePendingAgent, chatId, composer, isOrchestratedChat, addOnDemandAgent]
   )
 
   /**
@@ -883,9 +918,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
 
     // Gate each trigger by context.
-    // `@` opens the combined agent + MCP picker in both new-chat (agent picker
-    // routes via `onSelectAgent`, MCP picks buffer in `pendingMcpIds`) and
-    // active chats (in-chat agent mention + DB-backed MCP attach).
+    // `@` opens the combined agent + MCP picker in both new-chat (agent picks
+    // buffer in `pendingAgentIds`, MCP picks in `pendingMcpIds`) and active
+    // chats (in-chat agent mention + DB-backed MCP attach).
     const agentGate = token.char === '@' && (newChatHasContent || activeChatHasContent)
     const promptGate = token.char === '#' && examplePrompts.length > 0
     const commandGate = token.char === '/' && commands.length > 0
@@ -1115,6 +1150,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <ChatControls chatId={chatId} inline />
           ) : null}
           {chatId ? (
+            <OnDemandAgentChips chatId={chatId} />
+          ) : pendingAgentIds && onRemovePendingAgent ? (
+            <OnDemandAgentChips
+              pendingIds={pendingAgentIds}
+              onRemovePending={onRemovePendingAgent}
+            />
+          ) : null}
+          {chatId ? (
             <OnDemandMcpChips chatId={chatId} />
           ) : pendingMcpIds && onRemovePendingMcp ? (
             <OnDemandMcpChips
@@ -1125,6 +1168,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         </div>
 
         <div className="flex items-center gap-1.5">
+          {!chatId && commPatternInfo && (
+            <CommPatternBadge
+              pattern={commPatternInfo.pattern}
+              agentName={commPatternInfo.agentName}
+              modelName={commPatternInfo.modelName}
+            />
+          )}
           {canShowAttachButton && !isStreaming && (
             <div className="relative">
               <button

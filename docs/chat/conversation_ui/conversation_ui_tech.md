@@ -11,7 +11,8 @@
 | `src/renderer/src/components/chat/ThinkingBlock.tsx` | Collapsible dimmed card for `thinking`-kind parts. Brain icon header, italic markdown body. `isStreaming` prop adds a pulsing accent dot in the header and defaults the card to expanded; persisted thinking parts default to collapsed. |
 | `src/renderer/src/components/chat/ToolNarrationBlock.tsx` | Collapsible dimmed card for `tool`-kind parts. Wrench icon header; markdown body. Header label is verbose-aware (see [Verbose Mode tech](../../ui/verbose_mode/verbose_mode_tech.md)): in compact mode reads `Tool: <toolName>` (toolName from `cinna.tool_name` metadata); in verbose mode renders `<ToolCallSummary>` inline when `cinna.tool_input` metadata is also present. Expanded body always shows the structured `<ToolCallSummary variant="block">` when input is present. Same expand/streaming behaviour as ThinkingBlock. |
 | `src/renderer/src/components/chat/ToolResultBlock.tsx` | Collapsible card for `tool_result`-kind parts. Terminal icon + `Output` header for stdout; switches to `AlertTriangle` + `stderr` header and `--color-danger` colouring when `toolStream === 'stderr'`. Body is a `<pre>` with `font-mono`, `whitespace-pre-wrap`, `max-h-96 overflow-y-auto`. `defaultExpanded` falls back to `!!isStreaming` like ThinkingBlock — streaming callers (MessageStream) pass `defaultExpanded=true` in compact mode so the output the user is waiting on is visible without a click, while persisted reload uses the default-collapsed behaviour to keep long outputs from crowding scrollback. |
-| `src/renderer/src/components/chat/ToolCallBlock.tsx` | Collapsible MCP tool-call row (distinct from ToolNarrationBlock and ToolResultBlock). Borderless when collapsed, bordered on hover/expand. Parses MCP content-block arrays and JSON for structured result display. |
+| `src/renderer/src/components/chat/ToolCallBlock.tsx` | Tool-call row (distinct from ToolNarrationBlock and ToolResultBlock). Borderless badge line (chevron + provider/tool badge + status icon); the detail card (method/input/result) renders in a rounded, bordered block **below** the badge line on expand. Icon: connector `Plug` + provider badge for MCP (provider present), `Wrench` fallback for a generic/local tool (e.g. `bash`). Parses MCP content-block arrays and JSON for structured result display. |
+| `src/renderer/src/components/chat/AgentToolSubThread.tsx` / `AgentContribution.tsx` | Orchestrated agent-backed tool call rendered as an expandable nested sub-thread — see [Orchestrated Agents tech](../orchestrated_agents/orchestrated_agents_tech.md). |
 | `src/renderer/src/assets/main.css` | CSS variable definitions (`--color-user-bubble`, `--color-border`, `--color-danger`, etc.) and entry-animation keyframes: `user-bubble-pop`, `user-bubble-content-in`, `assistant-reveal` (mask-based block reveal used by `.anim-assistant-bubble`), and `chunk-reveal` (opacity + blur fade used by `.anim-chunk` for per-delta streaming spans). |
 
 ### State
@@ -55,10 +56,11 @@ For persisted assistant messages with `msg.parts`, `MessageStream` maps each `Me
 ### ToolCallBlock
 
 - `src/renderer/src/components/chat/ToolCallBlock.tsx`
-- Outer container uses conditional border: `border-transparent` when collapsed, `border-[var(--color-border)]` on hover (`hover:border-...`) or when `expanded` state is true.
-- Status icon (`Loader2` / `Check` / `X`) renders inline right after the tool name.
-- Progress bar: a shimmer animation (`animate-[shimmer_...]`) at the top of the block while status is `pending`.
+- **Badge line above, card below.** The clickable header (chevron + badge + status icon) is a borderless row with a left→right gradient hover (`hover:bg-gradient-to-r hover:from-[var(--color-bg-hover)] hover:to-transparent`). The detail (method/input/result) renders in a separate rounded, bordered card (`mt-1 rounded-lg border bg-[var(--color-bg-secondary)]`) **below** the badge line, revealed on expand.
+- **Icon convention:** MCP tool calls (a `provider` name is present) show a connector `Plug` (size 10) inside an accent pill badge; a tool with no provider (generic/local, e.g. `bash`) shows a `Wrench` (size 11). `Wrench` is reserved for generic/local tools across the app; `Plug` denotes MCP everywhere (matches the Sidebar "MCP Providers" nav and on-demand-MCP chips).
+- Status icon (`Loader2` while pending, `X` on error) renders inline right after the badge. (The old top shimmer progress bar was dropped with the restructure; the spinning `Loader2` carries the pending affordance.)
 - Expand/collapse uses CSS grid row transition (`grid-template-rows: 0fr -> 1fr`).
+- `AgentToolSubThread` mirrors this badge-line/card structure for orchestrated agent-backed tool calls.
 
 ### SystemMessage (inline in MessageStream)
 

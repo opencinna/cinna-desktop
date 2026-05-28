@@ -122,28 +122,24 @@ export function ToolCallBlock({
   const contentRef = useRef<HTMLDivElement>(null)
 
   return (
-    <div className={`rounded-lg border overflow-hidden text-xs relative transition-colors ${expanded ? 'border-[var(--color-border)] bg-[var(--color-bg-secondary)]' : 'border-transparent hover:border-[var(--color-border)] hover:bg-[var(--color-bg-secondary)]'}`}>
-      {/* Progress bar for pending state */}
-      {isPending && (
-        <div className="absolute top-0 left-0 right-0 h-[2px] overflow-hidden">
-          <div className="h-full w-1/3 bg-[var(--color-accent)] rounded-full animate-[shimmer_1.2s_ease-in-out_infinite]" />
-        </div>
-      )}
-
+    <div className="text-xs">
+      {/* Badge line — sits above the content block, not inside a border box. */}
       <button
         onClick={() => setExpanded(!expanded)}
-        className="w-full flex items-center gap-1.5 px-2.5 py-1.5 hover:bg-[var(--color-bg-hover)] transition-colors min-w-0 text-left"
+        className="flex items-center gap-1.5 px-1.5 py-1 rounded-md hover:bg-gradient-to-r hover:from-[var(--color-bg-hover)] hover:to-transparent transition-colors min-w-0 text-left"
       >
         <ChevronRight
           size={12}
           className={`text-[var(--color-text-muted)] shrink-0 transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
         />
         {provider ? (
+          // MCP tool call — connector icon + provider badge.
           <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-[var(--color-accent)]/15 text-[11px] font-semibold text-[var(--color-accent)] shrink-0">
             <Plug size={10} />
             {provider}
           </span>
         ) : (
+          // Generic / local tool (e.g. bash) — wrench.
           <Wrench size={11} className="text-[var(--color-text-muted)] shrink-0" />
         )}
         {isPending && (
@@ -164,7 +160,7 @@ export function ToolCallBlock({
         style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
       >
         <div className="overflow-hidden">
-          <div ref={contentRef} className="border-t border-[var(--color-border)] px-2.5 py-2 space-y-2">
+          <div ref={contentRef} className="mt-1 rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-2 space-y-2">
             <div>
               <p className="text-[10px] font-medium text-[var(--color-text-muted)] uppercase tracking-wide mb-1">Method</p>
               <div className="font-mono text-[11px] text-[var(--color-accent)]">{name}</div>

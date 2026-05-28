@@ -2,10 +2,12 @@ import { nanoid } from 'nanoid'
 import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
 import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
+import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
+import { agentService } from './agentService'
 import { getSettingsScopeUserId } from '../auth/scope'
-import { ChatError, McpError } from '../errors'
+import { ChatError, McpError, AgentError } from '../errors'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('chat')
@@ -126,6 +128,37 @@ export const chatService = {
     requireOwnedChat(userId, chatId)
     chatOnDemandMcpRepo.remove(chatId, mcpProviderId)
     logger.info('on-demand MCP removed', { chatId, mcpProviderId })
+  },
+
+  /**
+   * On-demand agent attachments for a chat: user-engaged agents from the
+   * in-chat `@-mention` flow. The orchestrator (local LLM) exposes each as an
+   * emulated MCP tool. Mirrors the on-demand MCP methods above.
+   */
+  listOnDemandAgents(
+    userId: string,
+    chatId: string
+  ): Array<{ agentId: string; pendingAnnounce: boolean }> {
+    requireOwnedChat(userId, chatId)
+    return chatOnDemandAgentRepo
+      .list(chatId)
+      .map((r) => ({ agentId: r.agentId, pendingAnnounce: r.pendingAnnounce }))
+  },
+
+  addOnDemandAgent(userId: string, chatId: string, agentId: string): void {
+    requireOwnedChat(userId, chatId)
+    // Agents live in two scopes: local in default (settings) scope, remote in
+    // the active profile. `findAgent` resolves across both.
+    const located = agentService.findAgent(getSettingsScopeUserId(), userId, agentId)
+    if (!located) throw new AgentError('not_found', 'Agent not found')
+    chatOnDemandAgentRepo.add(chatId, agentId)
+    logger.info('on-demand agent added', { chatId, agentId, agentName: located.row.name })
+  },
+
+  removeOnDemandAgent(userId: string, chatId: string, agentId: string): void {
+    requireOwnedChat(userId, chatId)
+    chatOnDemandAgentRepo.remove(chatId, agentId)
+    logger.info('on-demand agent removed', { chatId, agentId })
   },
 
   setMcpProviders(userId: string, chatId: string, mcpProviderIds: string[]): void {

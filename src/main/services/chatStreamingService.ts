@@ -2,11 +2,14 @@ import { nanoid } from 'nanoid'
 import { chatRepo } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
 import { chatOnDemandMcpRepo } from '../db/chatOnDemandMcp'
+import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { messageRepo } from '../db/messages'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { getAdapter } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
+import { McpToolProvider, type ToolProvider } from '../llm/toolProvider'
+import { A2AAsMcpProvider, buildAgentToolProviders } from './a2aAsMcpProvider'
 import {
   ChatMessage,
   LLMAdapter,
@@ -19,6 +22,8 @@ import { attachmentToMediaPart } from './fileStore'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { MediaPart } from '../llm/types'
+import type { MessagePart } from '../../shared/messageParts'
+import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
 import type { LlmStreamEvent } from '../../shared/llmStreamEvents'
 
 const logger = createLogger('LLM')
@@ -55,32 +60,68 @@ export interface StreamHandle {
 
 const activeAbortControllers = new Map<string, AbortController>()
 
+interface ResolvedAnnounce {
+  /** MCP provider ids whose pending flag to clear after the prefix is consumed. */
+  mcpIds: string[]
+  /** Agent ids whose pending flag to clear after the prefix is consumed. */
+  agentIds: string[]
+  prefix: string
+}
+
 /**
- * Resolve the on-demand MCPs that still owe an announcement for this chat,
- * along with the silent "user just enabled MCP X, Y, Z" prefix that should
- * be prepended to the wire content. The flag is NOT flipped here — that
+ * Resolve the on-demand MCPs **and** on-demand agents that still owe an
+ * announcement for this chat, along with the silent "user just enabled X, Y,
+ * Z" prefix prepended to the wire content. Flags are NOT flipped here — that
  * happens after the adapter actually consumes the prefix, so a pre-flight
  * failure does not silently burn the one-shot announcement.
+ *
+ * Agent names come from the providers already built for this turn, so an
+ * attached-but-unresolvable agent (no card URL) is never announced.
  */
-function resolvePendingAnnounce(chatId: string): { ids: string[]; names: string[]; prefix: string } {
-  const ids = chatOnDemandMcpRepo.peekPending(chatId)
-  if (ids.length === 0) return { ids: [], names: [], prefix: '' }
+function resolvePendingAnnounce(
+  chatId: string,
+  agentProviders: A2AAsMcpProvider[]
+): ResolvedAnnounce {
   const settingsUserId = getSettingsScopeUserId()
-  const resolvedIds: string[] = []
-  const names: string[] = []
-  for (const id of ids) {
+
+  const mcpResolvedIds: string[] = []
+  const mcpNames: string[] = []
+  for (const id of chatOnDemandMcpRepo.peekPending(chatId)) {
     const row = mcpProviderRepo.getOwned(settingsUserId, id)
     if (row) {
-      resolvedIds.push(id)
-      names.push(row.name)
+      mcpResolvedIds.push(id)
+      mcpNames.push(row.name)
     }
   }
-  if (names.length === 0) return { ids: [], names: [], prefix: '' }
-  const formatted = names.map((n) => `"${n}"`).join(', ')
+
+  const agentProviderById = new Map(agentProviders.map((p) => [p.agentId, p]))
+  const agentResolvedIds: string[] = []
+  const agentNames: string[] = []
+  for (const id of chatOnDemandAgentRepo.peekPending(chatId)) {
+    const p = agentProviderById.get(id)
+    if (p) {
+      agentResolvedIds.push(id)
+      agentNames.push(p.displayName)
+    }
+  }
+
+  if (mcpNames.length === 0 && agentNames.length === 0) {
+    return { mcpIds: [], agentIds: [], prefix: '' }
+  }
+
+  const clauses: string[] = []
+  if (mcpNames.length > 0) {
+    const formatted = mcpNames.map((n) => `"${n}"`).join(', ')
+    clauses.push(`MCP server${mcpNames.length > 1 ? 's' : ''} ${formatted}`)
+  }
+  if (agentNames.length > 0) {
+    const formatted = agentNames.map((n) => `"${n}"`).join(', ')
+    clauses.push(`agent${agentNames.length > 1 ? 's' : ''} ${formatted}`)
+  }
   const prefix =
-    `[System note: For this message the user specifically enabled the MCP server${names.length > 1 ? 's' : ''} ${formatted}. ` +
-    `Use ${names.length > 1 ? 'them' : 'it'} when appropriate to fulfil the request below.]\n\n`
-  return { ids: resolvedIds, names, prefix }
+    `[System note: For this message the user specifically enabled the ${clauses.join(' and the ')}. ` +
+    `Use the corresponding tools when appropriate to fulfil the request below.]\n\n`
+  return { mcpIds: mcpResolvedIds, agentIds: agentResolvedIds, prefix }
 }
 
 export const chatStreamingService = {
@@ -129,27 +170,55 @@ export const chatStreamingService = {
 
     // Union of the chat-mode-driven MCP set and any on-demand MCPs the user
     // has `@-mention`ed into this chat. De-duplicate so a provider that
-    // appears in both lists is only contributed once.
+    // appears in both lists is only contributed once. One `McpToolProvider`
+    // per connected provider.
     const baseMcpIds = chatMcpRepo.listProviderIds(chatId)
     const onDemandMcpIds = chatOnDemandMcpRepo.listProviderIds(chatId)
     const mcpProviderIds = Array.from(new Set([...baseMcpIds, ...onDemandMcpIds]))
-    const tools: ToolDefinition[] = mcpManager.getToolsForProviders(mcpProviderIds)
 
-    const toolProviderMap = new Map<string, string>()
-    const toolProviderNameMap = new Map<string, string>()
-    for (const t of tools) {
-      toolProviderMap.set(t.name, t.mcpProviderId)
-      const conn = mcpManager.getConnection(t.mcpProviderId)
-      if (conn) toolProviderNameMap.set(t.name, conn.config.name)
+    const providers: ToolProvider[] = []
+    for (const id of mcpProviderIds) {
+      const conn = mcpManager.getConnection(id)
+      if (conn && conn.status === 'connected') {
+        providers.push(new McpToolProvider(id, conn.config.name))
+      }
+    }
+
+    // Agent tools (orchestrated mode): one emulated MCP tool per on-demand
+    // agent, unioned with the real MCP tools. Agent slugs avoid any name an
+    // MCP tool already took.
+    const reservedNames = new Set<string>()
+    for (const p of providers) for (const t of p.getTools()) reservedNames.add(t.name)
+    const agentProviders = buildAgentToolProviders(
+      chatId,
+      getSettingsScopeUserId(),
+      userId,
+      reservedNames
+    )
+    providers.push(...agentProviders)
+
+    // Union all providers' tools + build the name→provider routing map,
+    // de-duping by LLM-facing name (first wins).
+    const tools: ToolDefinition[] = []
+    const toolRouting = new Map<string, ToolProvider>()
+    for (const p of providers) {
+      for (const t of p.getTools()) {
+        if (toolRouting.has(t.name)) {
+          logger.warn('duplicate tool name dropped from union', { name: t.name })
+          continue
+        }
+        toolRouting.set(t.name, p)
+        tools.push(t)
+      }
     }
 
     // Resolve any owed on-demand announcements: builds a one-line
-    // system-style prefix letting the LLM know which MCPs the user just
-    // engaged for this turn. The flag flip is deferred to `_runStreamLoop`
-    // so a pre-flight failure (auth error, network down) does not silently
-    // burn the one-shot announcement — the user can retry and the LLM will
-    // still see the prefix.
-    const announce = resolvePendingAnnounce(chatId)
+    // system-style prefix letting the LLM know which MCPs / agents the user
+    // just engaged for this turn. The flag flip is deferred to
+    // `_runStreamLoop` so a pre-flight failure (auth error, network down)
+    // does not silently burn the one-shot announcement — the user can retry
+    // and the LLM will still see the prefix.
+    const announce = resolvePendingAnnounce(chatId, agentProviders)
     const augmentedWireContent = announce.prefix
       ? `${announce.prefix}${wireContent}`
       : wireContent
@@ -168,14 +237,17 @@ export const chatStreamingService = {
       providerType: adapter.providerType,
       toolCount: tools.length,
       onDemandMcpCount: onDemandMcpIds.length,
-      announceMcpCount: announce.names.length
+      agentToolCount: agentProviders.length,
+      announceMcpCount: announce.mcpIds.length,
+      announceAgentCount: announce.agentIds.length
     }
 
-    if (announce.names.length > 0) {
-      logger.debug('on-demand mcp prefix queued', {
+    if (announce.mcpIds.length > 0 || announce.agentIds.length > 0) {
+      logger.debug('on-demand announce prefix queued', {
         requestId,
         chatId,
-        mcpNames: announce.names
+        mcpIds: announce.mcpIds,
+        agentIds: announce.agentIds
       })
     }
 
@@ -188,13 +260,13 @@ export const chatStreamingService = {
       chatId,
       adapter,
       tools,
-      toolProviderMap,
-      toolProviderNameMap,
+      toolRouting,
       abortController,
       port,
       baseLog,
       augmentedWireContent,
-      announce.ids
+      announce.mcpIds,
+      announce.agentIds
     ).finally(() => {
       port.close()
       activeAbortControllers.delete(requestId)
@@ -213,8 +285,7 @@ export const chatStreamingService = {
     chatId: string,
     adapter: LLMAdapter,
     tools: ToolDefinition[],
-    toolProviderMap: Map<string, string>,
-    toolProviderNameMap: Map<string, string>,
+    toolRouting: Map<string, ToolProvider>,
     abortController: AbortController,
     port: StreamPort,
     baseLog: Record<string, unknown>,
@@ -226,7 +297,9 @@ export const chatStreamingService = {
      * (i.e. the first adapter response completes). Empty when no announce was
      * owed for this turn.
      */
-    pendingAnnounceMcpIds: string[]
+    pendingAnnounceMcpIds: string[],
+    /** On-demand agent ids whose `pendingAnnounce` to clear — same timing. */
+    pendingAnnounceAgentIds: string[]
   ): Promise<void> {
     try {
       const dbMessages = chatRepo.listMessages(chatId)
@@ -310,12 +383,20 @@ export const chatStreamingService = {
         // response resolves successfully — at this point the LLM has seen
         // the prefix, so a later failure (mid-tool-loop, abort) doesn't
         // re-announce on retry. Guard so we only fire on the first round.
-        if (round === 0 && pendingAnnounceMcpIds.length > 0) {
-          chatOnDemandMcpRepo.clearPending(chatId, pendingAnnounceMcpIds)
-          logger.debug('on-demand mcp announce consumed', {
-            ...baseLog,
-            mcpIds: pendingAnnounceMcpIds
-          })
+        if (round === 0) {
+          if (pendingAnnounceMcpIds.length > 0) {
+            chatOnDemandMcpRepo.clearPending(chatId, pendingAnnounceMcpIds)
+          }
+          if (pendingAnnounceAgentIds.length > 0) {
+            chatOnDemandAgentRepo.clearPending(chatId, pendingAnnounceAgentIds)
+          }
+          if (pendingAnnounceMcpIds.length > 0 || pendingAnnounceAgentIds.length > 0) {
+            logger.debug('on-demand announce consumed', {
+              ...baseLog,
+              mcpIds: pendingAnnounceMcpIds,
+              agentIds: pendingAnnounceAgentIds
+            })
+          }
         }
 
         logger.info('stream response', {
@@ -344,38 +425,78 @@ export const chatStreamingService = {
         for (const tc of result.toolCalls) {
           if (abortController.signal.aborted) break
 
-          const mcpProviderId = toolProviderMap.get(tc.name) ?? ''
-          const mcpProviderName = toolProviderNameMap.get(tc.name) ?? ''
+          const provider = toolRouting.get(tc.name)
+          const providerName = provider?.displayName ?? ''
+          const isAgent = provider?.providerType === 'agent'
+          const providerAgentId = provider?.agentId
 
           port.postMessage({
             type: 'tool_use',
             id: tc.id,
             name: tc.name,
             input: tc.input,
-            provider: mcpProviderName
+            provider: providerName,
+            providerType: provider?.providerType,
+            providerAgentId
           })
 
           let toolContent: string
           let toolError = false
+          let toolParts: MessagePart[] | null = null
           const toolStarted = Date.now()
           try {
-            logger.info('tool call', { ...baseLog, tool: tc.name, mcpProviderId })
-            const toolResult = await mcpManager.callTool(mcpProviderId, tc.name, tc.input)
-            toolContent = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult)
-            logger.info('tool result', {
+            if (!provider) throw new Error(`Unknown tool: ${tc.name}`)
+            logger.info('tool call', {
               ...baseLog,
               tool: tc.name,
-              mcpProviderId,
-              duration: Date.now() - toolStarted
+              provider: providerName,
+              providerType: provider.providerType
             })
-            port.postMessage({ type: 'tool_result', id: tc.id, result: toolResult })
+
+            // Agent tools forward each A2A stream event into the chat port as
+            // a `tool_subevent` keyed by this tool-call id, so the renderer
+            // can stream the agent's work into a nested sub-thread. MCP tools
+            // ignore the sink. The orchestrator's `AbortController` is threaded
+            // through so aborting cancels the in-flight agent sub-turn.
+            const onEvent = isAgent
+              ? (event: AgentStreamEvent): void => {
+                  port.postMessage({ type: 'tool_subevent', toolCallId: tc.id, event })
+                }
+              : undefined
+
+            const exec = await provider.callTool(tc.name, tc.input, {
+              onEvent,
+              signal: abortController.signal
+            })
+            if (exec.parts && exec.parts.length > 0) toolParts = exec.parts
+            toolContent =
+              typeof exec.content === 'string' ? exec.content : JSON.stringify(exec.content)
+
+            if (exec.isError) {
+              toolError = true
+              logger.warn('tool returned error', {
+                ...baseLog,
+                tool: tc.name,
+                provider: providerName,
+                duration: Date.now() - toolStarted
+              })
+              port.postMessage({ type: 'tool_error', id: tc.id, error: toolContent })
+            } else {
+              logger.info('tool result', {
+                ...baseLog,
+                tool: tc.name,
+                provider: providerName,
+                duration: Date.now() - toolStarted
+              })
+              port.postMessage({ type: 'tool_result', id: tc.id, result: exec.content })
+            }
           } catch (err) {
             toolContent = err instanceof Error ? err.message : String(err)
             toolError = true
             logger.error('tool failed', {
               ...baseLog,
               tool: tc.name,
-              mcpProviderId,
+              provider: providerName,
               duration: Date.now() - toolStarted,
               error: toolContent
             })
@@ -398,7 +519,9 @@ export const chatStreamingService = {
             toolName: tc.name,
             toolInput: tc.input,
             toolError,
-            toolProvider: mcpProviderName || undefined
+            toolProvider: providerName || undefined,
+            toolAgentId: providerAgentId,
+            parts: toolParts
           })
 
           currentMessages.push(toolMsg)

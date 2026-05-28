@@ -20,6 +20,7 @@ import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders, useSetChatMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
+import { derivePattern } from '../../utils/commPattern'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
@@ -48,6 +49,10 @@ export function MainArea(): React.JSX.Element {
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
   const [pendingMcpIds, setPendingMcpIds] = useState<string[]>([])
+  // On-demand agent buffer — symmetric to `pendingMcpIds`. The `@` popup
+  // routes every agent pick here; the AgentSelector dropdown's primary pick
+  // (`selectedAgent`) is unioned with this at send time.
+  const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([])
 
   const togglePendingMcp = useCallback((mcpId: string) => {
     setPendingMcpIds((curr) => (curr.includes(mcpId) ? curr : [...curr, mcpId]))
@@ -55,6 +60,16 @@ export function MainArea(): React.JSX.Element {
 
   const removePendingMcp = useCallback((mcpId: string) => {
     setPendingMcpIds((curr) => curr.filter((id) => id !== mcpId))
+  }, [])
+
+  const togglePendingAgent = useCallback((agentId: string) => {
+    setPendingAgentIds((curr) =>
+      curr.includes(agentId) ? curr.filter((id) => id !== agentId) : [...curr, agentId]
+    )
+  }, [])
+
+  const removePendingAgent = useCallback((agentId: string) => {
+    setPendingAgentIds((curr) => curr.filter((id) => id !== agentId))
   }, [])
   const examplePrompts = useMemo(() => extractExamplePrompts(selectedAgent), [selectedAgent])
   const chatInputRef = useRef<ChatInputHandle>(null)
@@ -92,6 +107,30 @@ export function MainArea(): React.JSX.Element {
   const effectiveMcpIds = activeMode?.mcpProviderIds?.length
     ? new Set(activeMode.mcpProviderIds)
     : defaultMcpIds
+
+  // The full agent set for the new chat = AgentSelector primary (if any)
+  // unioned with every `@`-mentioned agent, de-duped. Drives both the routing
+  // decision and the badge.
+  const combinedAgentIds = useMemo(() => {
+    const ids: string[] = []
+    if (selectedAgent) ids.push(selectedAgent.id)
+    for (const id of pendingAgentIds) if (!ids.includes(id)) ids.push(id)
+    return ids
+  }, [selectedAgent, pendingAgentIds])
+
+  const commPatternInfo = useMemo(() => {
+    if (combinedAgentIds.length === 0 && pendingMcpIds.length === 0) return undefined
+    const pattern = derivePattern(combinedAgentIds, pendingMcpIds)
+    const agentName =
+      combinedAgentIds.length === 1
+        ? (agentList ?? []).find((a) => a.id === combinedAgentIds[0])?.name
+        : undefined
+    const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
+    const modelName = resolvedModelId
+      ? (allModels ?? []).find((m) => m.id === resolvedModelId)?.name ?? resolvedModelId
+      : undefined
+    return { pattern, agentName, modelName }
+  }, [combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setActiveMode(mode)
@@ -166,20 +205,26 @@ export function MainArea(): React.JSX.Element {
       attachments?: ComposerAttachment[],
       noteIds?: string[]
     ) => {
-      const resolvedModelId = selectedAgent
-        ? null
-        : resolveModel(activeMode, effectiveProviderId, providers, allModels)
-      const hasDestination = !!selectedAgent || (!!effectiveProviderId && !!resolvedModelId)
+      // A2A (one agent, no on-demand MCPs) binds the agent as root and needs
+      // no local model. Everything else — orchestrated (agents + tools) or a
+      // plain LLM chat — runs through the local model, so it requires a
+      // resolvable provider+model.
+      const isA2A = combinedAgentIds.length === 1 && pendingMcpIds.length === 0
+      const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
+      const hasModel = !!effectiveProviderId && !!resolvedModelId
+      const hasDestination = isA2A || hasModel
       if (!hasDestination) {
         setSendError(
-          "Can't send message — no agent, chat mode, or LLM provider is configured. Pick an agent or set a default chat mode in Settings."
+          combinedAgentIds.length > 0
+            ? 'Orchestrated mode needs a local model — pick a chat mode or set a default in Settings.'
+            : "Can't send message — no agent, chat mode, or LLM provider is configured. Pick an agent or set a default chat mode in Settings."
         )
         return
       }
       setSendError(null)
       await startNewChat({
         message,
-        agent: selectedAgent,
+        agentIds: combinedAgentIds,
         mode: activeMode,
         providerId: effectiveProviderId,
         providers,
@@ -192,10 +237,11 @@ export function MainArea(): React.JSX.Element {
       setSelectedAgent(null)
       setActiveMode(null)
       setPendingMcpIds([])
+      setPendingAgentIds([])
     },
     [
       startNewChat,
-      selectedAgent,
+      combinedAgentIds,
       activeMode,
       effectiveProviderId,
       providers,
@@ -334,12 +380,15 @@ export function MainArea(): React.JSX.Element {
           chatId={null}
           onNewChat={handleNewChat}
           modeColor={modeColorPreset}
-          onSelectAgent={(agent) => { setSelectedAgent(agent); setSendError(null) }}
           selectedAgent={selectedAgent}
           pendingMcpIds={pendingMcpIds}
           onTogglePendingMcp={togglePendingMcp}
           onRemovePendingMcp={removePendingMcp}
-          onDoubleEscape={() => setSelectedAgent(null)}
+          pendingAgentIds={pendingAgentIds}
+          onTogglePendingAgent={togglePendingAgent}
+          onRemovePendingAgent={removePendingAgent}
+          commPatternInfo={commPatternInfo}
+          onDoubleEscape={() => { setSelectedAgent(null); setPendingAgentIds([]) }}
           tildeModePopup={
             availableModes.length > 0
               ? {

@@ -22,7 +22,7 @@
 - `src/renderer/src/components/layout/MainArea.tsx` — owns the `pendingMcpIds` state for the new-chat screen and the toggle/remove callbacks passed into ChatInput
 - `src/renderer/src/components/chat/ChatInput.tsx` — owns trigger detection, filtered agent + MCP lists, combined keyboard nav; routes MCP selections to either the DB mutation (active chat) or the parent's pending buffer (new chat)
 - `src/renderer/src/components/chat/AgentMcpMentionPopup.tsx` — listbox with `role="group"` sections per "Agents" and "MCP"
-- `src/renderer/src/components/chat/OnDemandMcpChips.tsx` — removable strip rendered alongside `ActiveAgentChip` below the composer; two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props)
+- `src/renderer/src/components/chat/OnDemandMcpChips.tsx` — removable strip rendered alongside `ActiveAgentChip` below the composer; two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`
 
 ## Database Schema
 

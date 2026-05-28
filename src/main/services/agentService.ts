@@ -14,7 +14,7 @@ import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { createLogger } from '../logger/logger'
 import type { AgentCard } from '../agents/a2a-client'
-import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
+import type { RemoteAgentMetadata, CinnaMcpDescriptor } from '../../shared/agentMetadata'
 import { extractCliCommands, type CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('agents')
@@ -162,6 +162,8 @@ interface ExternalTarget {
   agent_card_url: string
   protocol_versions: string[]
   metadata: Record<string, unknown>
+  /** The agent's `cinna.mcp` descriptor (agents-as-MCP wrapper). */
+  mcp?: CinnaMcpDescriptor
 }
 
 export const agentService = {
@@ -483,7 +485,11 @@ export const agentService = {
           session_mode: t.session_mode,
           ui_color_preset: t.ui_color_preset,
           protocol_versions: t.protocol_versions,
-          ...t.metadata
+          ...t.metadata,
+          // Carry the agents-as-MCP descriptor when the backend supplied one.
+          // Spread `t.metadata` first so an explicit top-level `mcp` wins over
+          // any stray `cinna_mcp` already nested in metadata.
+          ...(t.mcp ? { cinna_mcp: t.mcp } : {})
         }
       })
     }

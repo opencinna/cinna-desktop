@@ -18,6 +18,8 @@ export interface McpTool {
   description: string
   inputSchema: Record<string, unknown>
   mcpProviderId: string
+  /** Always `'mcp'` — kept structurally compatible with `ToolDefinition`. */
+  providerType: 'mcp'
 }
 
 export interface McpConnection {

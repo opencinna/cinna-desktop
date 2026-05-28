@@ -211,7 +211,8 @@ class MCPManager {
       name: t.name,
       description: t.description ?? '',
       inputSchema: t.inputSchema as Record<string, unknown>,
-      mcpProviderId: providerId
+      mcpProviderId: providerId,
+      providerType: 'mcp' as const
     }))
   }
 

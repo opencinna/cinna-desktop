@@ -19,6 +19,8 @@ export interface ChatMetaUpdate {
   providerId?: string
   modeId?: string | null
   agentId?: string
+  /** Set once at creation for orchestrated (agents-as-MCP) chats. */
+  orchestrated?: boolean
 }
 
 /** Routing fields — write only via `multiAgentService`, never via `chat:update`. */
@@ -93,6 +95,7 @@ export const chatRepo = {
       agentId: init?.agentId ?? null,
       activeAgentId: null,
       smartAssistDisabled: false,
+      orchestrated: false,
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
       deletedAt: null,

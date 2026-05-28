@@ -1,5 +1,5 @@
-import { useMemo } from 'react'
-import { Wrench, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Plug, X } from 'lucide-react'
 import {
   useChatOnDemandMcps,
   useMcpProviders,
@@ -38,9 +38,12 @@ export function OnDemandMcpChips(
       .map((id) => {
         const mcp = byId.get(id)
         if (!mcp) return null
-        return { id: mcp.id, name: mcp.name, status: mcp.status }
+        return { id: mcp.id, name: mcp.name, status: mcp.status, error: mcp.error }
       })
-      .filter((x): x is { id: string; name: string; status: string } => x !== null)
+      .filter(
+        (x): x is { id: string; name: string; status: string; error: string | undefined } =>
+          x !== null
+      )
   }, [ids, mcps])
 
   if (rows.length === 0) return null
@@ -56,25 +59,23 @@ export function OnDemandMcpChips(
   return (
     <>
       {rows.map((m) => {
+        // Fixed MCP color (matches the in-transcript tool badge). Connection
+        // health is signalled separately by a red dot — shown only when the
+        // tool is offline / errored — so the chip color stays consistent.
         const isConnected = m.status === 'connected'
-        // Keep the warning subtle — `awaiting-auth` / `error` mean the user
-        // still sees their engagement, but the chip surfaces that the tool
-        // won't actually be callable yet.
-        const tone = isConnected
-          ? 'text-[var(--color-success)] border-[var(--color-success)]/40 bg-[var(--color-success)]/10'
-          : 'text-[var(--color-warning)] border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10'
+        const statusDetail = m.error
+          ? `${m.name}: ${m.error}`
+          : `MCP "${m.name}" is not connected (${m.status}) — its tools won't be callable until it reconnects.`
         return (
           <div
             key={m.id}
-            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border ${tone}`}
-            title={
-              isConnected
-                ? `MCP "${m.name}" engaged for this chat`
-                : `MCP "${m.name}" engaged but not connected (${m.status})`
-            }
+            className="flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border
+              text-[var(--color-accent)] border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10"
+            title={`MCP "${m.name}" engaged for this chat`}
           >
-            <Wrench size={12} className="shrink-0" />
+            <Plug size={12} className="shrink-0" />
             <span className="text-[11px] font-medium whitespace-nowrap">{m.name}</span>
+            {!isConnected && <McpStatusDot detail={statusDetail} />}
             <button
               type="button"
               onClick={() => handleRemove(m.id)}
@@ -87,5 +88,36 @@ export function OnDemandMcpChips(
         )
       })}
     </>
+  )
+}
+
+/**
+ * Red connection-health dot shown after an offline/errored MCP's name. On
+ * hover it reveals a small card with the specifics — same hover-card pattern
+ * as `CommPatternBadge`, so the detail appears instantly (vs a native title).
+ */
+function McpStatusDot({ detail }: { detail: string }): React.JSX.Element {
+  const [hovered, setHovered] = useState(false)
+  return (
+    <span
+      className="relative ml-0.5 flex items-center"
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <span
+        className="w-1.5 h-1.5 rounded-full bg-[var(--color-danger)] shrink-0 cursor-help"
+        aria-label={detail}
+      />
+      {hovered && (
+        <span
+          className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 z-50 w-56 rounded-lg
+            border border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
+            shadow-xl px-2.5 py-1.5 text-[11px] font-normal leading-relaxed text-left
+            whitespace-normal text-[var(--color-text-secondary)]"
+        >
+          {detail}
+        </span>
+      )}
+    </span>
   )
 }

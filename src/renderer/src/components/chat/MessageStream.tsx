@@ -13,6 +13,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
+import { AgentToolSubThread } from './AgentToolSubThread'
 import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
@@ -385,6 +386,36 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               continue
             }
             if (msg.role === 'tool_call') {
+              // Agent-backed tool call (orchestrated mode): the rich agent
+              // `parts[]` were persisted on the row — render the nested,
+              // expandable sub-thread instead of the bare tool block. Plain
+              // slot (not collapsible-grouped) since it's a substantial thread.
+              const subParts = msg.parts
+              if (Array.isArray(subParts) && subParts.length > 0) {
+                const askMessage =
+                  msg.toolInput && typeof (msg.toolInput as Record<string, unknown>).message === 'string'
+                    ? ((msg.toolInput as Record<string, unknown>).message as string)
+                    : undefined
+                renderNodes.push({
+                  slot: 'plain',
+                  key: msg.id,
+                  node: (
+                    <>
+                      <AgentToolSubThread
+                        agentName={msg.toolProvider ?? msg.toolName ?? 'Agent'}
+                        agentId={msg.toolAgentId}
+                        parts={subParts}
+                        askMessage={askMessage}
+                        status={msg.toolError ? 'error' : 'done'}
+                        errorText={msg.toolError ? msg.content : undefined}
+                        verbose={verboseMode}
+                      />
+                      {footer}
+                    </>
+                  )
+                })
+                continue
+              }
               const toolBlock = (
                 <ToolCallBlock
                   name={msg.toolName ?? 'unknown'}
@@ -798,6 +829,29 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm align-middle" />
                     )}
                   </div>
+                )
+              })
+              return
+            }
+            // Agent-backed tool call: render the live sub-thread, streaming the
+            // agent's parts into an expandable block keyed by this tool call.
+            if (block.providerType === 'agent') {
+              const askMessage =
+                typeof block.input.message === 'string' ? block.input.message : undefined
+              renderNodes.push({
+                slot: 'plain',
+                key: `stream-agent-${block.id}`,
+                node: (
+                  <AgentToolSubThread
+                    agentName={block.provider ?? block.name}
+                    agentId={block.agentId}
+                    parts={block.subParts ?? []}
+                    askMessage={askMessage}
+                    status={block.status}
+                    isStreaming={block.status === 'pending'}
+                    errorText={block.error}
+                    verbose={verboseMode}
+                  />
                 )
               })
               return

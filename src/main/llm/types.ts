@@ -74,6 +74,12 @@ export interface ToolDefinition {
   description: string
   inputSchema: Record<string, unknown>
   mcpProviderId: string
+  /**
+   * Which tool-source backs this definition. `'mcp'` tools execute via
+   * `mcpManager.callTool`; `'agent'` tools are emulated MCP wrappers around a
+   * remote A2A agent (orchestrated mode) and execute via `A2AAsMcpProvider`.
+   */
+  providerType: 'mcp' | 'agent'
 }
 
 export interface ToolUseEvent {

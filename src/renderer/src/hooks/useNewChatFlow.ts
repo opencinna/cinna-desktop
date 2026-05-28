@@ -11,13 +11,18 @@ import type {
 } from '../../../shared/attachments'
 import { deriveTitleFromMessage } from '../../../shared/chatTitle'
 
-type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
 type ModelData = Awaited<ReturnType<typeof window.api.providers.listModels>>[number]
 
 export interface NewChatOptions {
   message: string
-  agent: AgentData | null
+  /**
+   * Full agent selection (AgentSelector primary + every `@`-mentioned agent),
+   * de-duped. Decides routing: exactly one agent with no on-demand MCPs binds
+   * that agent as the chat root (direct A2A); anything else creates an
+   * LLM-root chat and exposes each agent as an orchestrated tool.
+   */
+  agentIds: string[]
   mode: ChatModeData | null
   providerId: string | null
   providers: ProviderData[] | undefined
@@ -148,7 +153,7 @@ export function useNewChatFlow(): {
     async (opts: NewChatOptions): Promise<void> => {
       const {
         message,
-        agent,
+        agentIds,
         mode,
         providerId,
         providers,
@@ -159,26 +164,27 @@ export function useNewChatFlow(): {
         noteIds
       } = opts
       const title = deriveTitleFromMessage(message)
+      const onDemandMcpSnapshot = onDemandMcpIds ? Array.from(onDemandMcpIds) : []
+      const agentSnapshot = agentIds ?? []
+      // The decision rule: exactly one agent and no on-demand MCPs → direct
+      // A2A (bind the agent as root). Anything else → orchestrated/LLM-root.
+      const isA2A = agentSnapshot.length === 1 && onDemandMcpSnapshot.length === 0
 
       let chatId: string | null = null
       try {
         const chat = await createChat.mutateAsync()
         chatId = chat.id
 
-        // Flush the new-chat MCP buffer before either channel kicks off. The
-        // LLM stream loop reads `chat_on_demand_mcps` at setup time, so the
-        // rows must exist by the moment `startLlm` fires. For agent-bound
-        // chats we still persist (MCPs are LLM-only at send time, but the
-        // user may switch to the LLM root later via multi-agent routing).
-        const onDemandSnapshot = onDemandMcpIds ? Array.from(onDemandMcpIds) : []
-        for (const mcpId of onDemandSnapshot) {
-          await window.api.chat.addOnDemandMcp(chat.id, mcpId)
-        }
-
-        if (agent) {
+        if (isA2A) {
+          // Still flush the on-demand MCP buffer (empty in the A2A case, but
+          // kept for symmetry): the user may later switch to the LLM root via
+          // multi-agent routing, where these MCPs become relevant.
+          for (const mcpId of onDemandMcpSnapshot) {
+            await window.api.chat.addOnDemandMcp(chat.id, mcpId)
+          }
           await updateChat.mutateAsync({
             chatId: chat.id,
-            updates: { title, agentId: agent.id }
+            updates: { title, agentId: agentSnapshot[0] }
           })
           // Remote and local agents both ingest as Cinna-scoped today —
           // the cinna upload service is the only A2A-friendly backend,
@@ -186,10 +192,20 @@ export function useNewChatFlow(): {
           const resolved = await resolvePendingAttachments(chat.id, 'cinna', attachments)
           const noteAttachments = await ingestPendingNotes(chat.id, 'cinna', noteIds)
           useChatStore.getState().setActiveChatId(chat.id)
-          startAgent(agent.id, chat.id, message, {
+          startAgent(agentSnapshot[0], chat.id, message, {
             attachments: [...resolved, ...noteAttachments]
           })
           return
+        }
+
+        // Orchestrated or plain LLM: LLM-root chat. Flush on-demand MCPs AND
+        // on-demand agents before the first send so the stream loop reads
+        // both at setup time (and emits the one-shot announce prefix).
+        for (const mcpId of onDemandMcpSnapshot) {
+          await window.api.chat.addOnDemandMcp(chat.id, mcpId)
+        }
+        for (const agentId of agentSnapshot) {
+          await window.api.chat.addOnDemandAgent(chat.id, agentId)
         }
 
         const resolvedModelId = resolveModel(mode, providerId, providers, allModels)
@@ -198,12 +214,17 @@ export function useNewChatFlow(): {
           providerId?: string
           modelId?: string
           modeId?: string
+          orchestrated?: boolean
         } = { title }
         if (providerId && resolvedModelId) {
           updates.providerId = providerId
           updates.modelId = resolvedModelId
         }
         if (mode) updates.modeId = mode.id
+        // Mark the chat orchestrated when it's created with agents-as-tools, so
+        // the in-chat `@`-agent gesture keeps adding tools even if the user
+        // later removes every agent chip.
+        if (agentSnapshot.length > 0) updates.orchestrated = true
 
         await updateChat.mutateAsync({ chatId: chat.id, updates })
 

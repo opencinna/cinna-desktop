@@ -11,6 +11,7 @@
  * Pure type-only module: imported from both Electron processes and the
  * renderer; no runtime dependencies.
  */
+import type { AgentStreamEvent } from './agentStreamEvents'
 
 /** Emitted exactly once before any other event so the renderer can track the request id (used by `cancel`). */
 export interface LlmRequestIdEvent {
@@ -35,6 +36,14 @@ export interface LlmToolUseEvent {
   name: string
   input: Record<string, unknown>
   provider?: string
+  /**
+   * Tool source. `'agent'` tools render as an expandable sub-thread (their
+   * `AgentStreamEvent`s arrive as `tool_subevent`s keyed by `id`); `'mcp'`
+   * tools render as the ordinary tool-call block.
+   */
+  providerType?: 'mcp' | 'agent'
+  /** Agent id backing an agent tool — drives the sub-thread's hash color. */
+  providerAgentId?: string
 }
 
 /** Tool call resolved successfully — pairs with the originating `tool_use` by `id`. */
@@ -49,6 +58,20 @@ export interface LlmToolErrorEvent {
   type: 'tool_error'
   id: string
   error: string
+}
+
+/**
+ * A nested A2A stream event from an agent-backed tool call (orchestrated
+ * mode). When the orchestrator LLM calls an agent tool, the agent's own
+ * `AgentStreamEvent`s (thinking / tool / tool_result / status deltas) are
+ * wrapped here keyed by the orchestrator's `toolCallId`, so the renderer can
+ * stream them into an expandable sub-thread under that tool-call block. The
+ * orchestrator's own tool result stays compact — this is UI-only fidelity.
+ */
+export interface LlmToolSubEvent {
+  type: 'tool_subevent'
+  toolCallId: string
+  event: AgentStreamEvent
 }
 
 /** Stream terminated cleanly. */
@@ -73,6 +96,7 @@ export type LlmStreamEvent =
   | LlmToolUseEvent
   | LlmToolResultEvent
   | LlmToolErrorEvent
+  | LlmToolSubEvent
   | LlmDoneEvent
   | LlmErrorEvent
 
@@ -90,6 +114,7 @@ export function isLlmStreamEvent(x: unknown): x is LlmStreamEvent {
     t === 'tool_use' ||
     t === 'tool_result' ||
     t === 'tool_error' ||
+    t === 'tool_subevent' ||
     t === 'done' ||
     t === 'error'
   )

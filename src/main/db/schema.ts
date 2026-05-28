@@ -65,6 +65,14 @@ export const chats = sqliteTable('chats', {
     .notNull()
     .default(false),
   /**
+   * True when this LLM-root chat was created in orchestrated mode (the local
+   * model conducts and calls attached agents as tools). Stable across chip
+   * add/remove so the in-chat `@`-agent gesture keeps adding tools rather than
+   * reverting to the multi-agent switchboard. Always false for agent-rooted
+   * and plain LLM chats.
+   */
+  orchestrated: integer('orchestrated', { mode: 'boolean' }).notNull().default(false),
+  /**
    * When a chat is spawned by a Job's `executeLocal`, this carries the
    * `job_runs.id` so the stream-completion hook can flip the run's status
    * without the renderer having to remember the pairing.
@@ -166,6 +174,35 @@ export const agents = sqliteTable('agents', {
 })
 
 /**
+ * On-demand agent attachments: agents the user `@-mentions` into a specific
+ * chat so the orchestrator (local LLM) can call them as emulated MCP tools.
+ * Mirrors {@link chatOnDemandMcps} exactly — lives separately from chat-mode
+ * config so per-chat engagements don't tangle with the mode's baseline set.
+ *
+ * `pendingAnnounce = true` means the silent "User specifically enabled agent X"
+ * prefix is still owed on the next send — flipped to false after the prefix
+ * is consumed so follow-up turns don't repeat the announcement.
+ */
+export const chatOnDemandAgents = sqliteTable(
+  'chat_on_demand_agents',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    pendingAnnounce: integer('pending_announce', { mode: 'boolean' })
+      .notNull()
+      .default(true),
+    createdAt: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
+)
+
+/**
  * Per-profile enable/disable preference for synced agents. Sync owns the
  * `agents` row content (name, skills, etc.), so user-controllable state is
  * kept here — survives sync without being clobbered, and only affects whether
@@ -218,6 +255,9 @@ export const messages = sqliteTable('messages', {
   >(),
   toolError: integer('tool_error', { mode: 'boolean' }),
   toolProvider: text('tool_provider'),
+  /** Agent id backing an orchestrated agent tool-call (drives the sub-thread's
+   *  per-agent hash color); null for MCP tool calls and non-tool rows. */
+  toolAgentId: text('tool_agent_id'),
   parts: text('parts', { mode: 'json' }).$type<MessagePart[]>(),
   /** File attachments persisted on user messages — drives badge rendering. */
   attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),

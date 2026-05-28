@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { Play, Loader2, Pencil, Bot, Wrench, Flag } from 'lucide-react'
+import { Play, Loader2, Pencil, Bot, Plug, Flag } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import { useJob, useJobRuns, useExecuteJob } from '../../hooks/useJobs'
 import { useCinnaRunPoll } from '../../hooks/useCinnaRunPoll'
@@ -267,7 +267,7 @@ function ModeChip({
 }
 
 function McpChip({ name }: { name: string }): React.JSX.Element {
-  return <Chip icon={<Wrench size={12} />} label={name} title={`MCP: ${name}`} />
+  return <Chip icon={<Plug size={12} />} label={name} title={`MCP: ${name}`} />
 }
 
 function PriorityChip({ priority }: { priority: string }): React.JSX.Element {

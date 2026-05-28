@@ -60,6 +60,7 @@ export interface ChatData {
   agentId: string | null
   activeAgentId: string | null
   smartAssistDisabled: boolean
+  orchestrated: boolean
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -75,6 +76,8 @@ export interface MessageData {
   toolInput?: Record<string, unknown>
   toolError?: boolean
   toolProvider?: string
+  /** Agent id backing an agent tool call — drives the sub-thread hash color. */
+  toolAgentId?: string | null
   parts?: MessagePart[] | null
   /** Multi-agent: agent the user message was routed to (null when sent to LLM root). */
   addressedAgentId?: string | null
@@ -279,6 +282,7 @@ const api = {
         providerId?: string
         modeId?: string | null
         agentId?: string
+        orchestrated?: boolean
       }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
@@ -314,6 +318,20 @@ const api = {
       mcpProviderId: string
     ): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:on-demand-mcp-remove', chatId, mcpProviderId),
+    listOnDemandAgents: (
+      chatId: string
+    ): Promise<Array<{ agentId: string; pendingAnnounce: boolean }>> =>
+      ipcRenderer.invoke('chat:on-demand-agent-list', chatId),
+    addOnDemandAgent: (
+      chatId: string,
+      agentId: string
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:on-demand-agent-add', chatId, agentId),
+    removeOnDemandAgent: (
+      chatId: string,
+      agentId: string
+    ): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:on-demand-agent-remove', chatId, agentId),
     /**
      * Subscribe to background chat-title autogeneration completions. Fires
      * once per chat (when the auto-title feature is enabled and a first

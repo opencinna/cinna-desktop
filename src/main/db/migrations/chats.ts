@@ -25,6 +25,14 @@ export function migrateChats(sqlite: Database.Database): void {
       created_at INTEGER NOT NULL,
       PRIMARY KEY (chat_id, mcp_provider_id)
     );
+
+    CREATE TABLE IF NOT EXISTS chat_on_demand_agents (
+      chat_id TEXT NOT NULL REFERENCES chats(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      pending_announce INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (chat_id, agent_id)
+    );
   `)
 
   if (!hasColumn(sqlite, 'chats', 'deleted_at')) {
@@ -47,6 +55,10 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(
       `ALTER TABLE chats ADD COLUMN smart_assist_disabled INTEGER NOT NULL DEFAULT 0`
     )
+  }
+
+  if (!hasColumn(sqlite, 'chats', 'orchestrated')) {
+    sqlite.exec(`ALTER TABLE chats ADD COLUMN orchestrated INTEGER NOT NULL DEFAULT 0`)
   }
 
   // Cleanup: permanently delete chats that have been in trash for over 30 days.

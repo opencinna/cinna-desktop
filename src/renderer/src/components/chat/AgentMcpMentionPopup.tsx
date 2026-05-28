@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react'
-import { Bot, Wrench } from 'lucide-react'
+import { Bot, Plug } from 'lucide-react'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 type McpData = Awaited<ReturnType<typeof window.api.mcp.list>>[number]
@@ -180,7 +180,7 @@ export function AgentMcpMentionPopup({
                       : 'disconnected'
               return renderRow(
                 flatIndex,
-                Wrench,
+                Plug,
                 m.name,
                 secondary,
                 m.transportType,

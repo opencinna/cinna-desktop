@@ -1,5 +1,8 @@
 import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { createLogger } from '../stores/logger.store'
+
+const onDemandLog = createLogger('on-demand-agent')
 
 export type RemoteSyncStatus = { error?: 'reauth_required' | 'sync_failed' }
 
@@ -116,6 +119,56 @@ export function useTestAgent() {
     mutationFn: (agentId: string) => window.api.agents.test(agentId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
+  })
+}
+
+/**
+ * On-demand agents the user has `@-mentioned` into the current chat — the
+ * orchestrated-mode tool set. Mirrors [[useChatOnDemandMcps]]; lives in its
+ * own cache key because its lifecycle differs from the bound/active agent.
+ */
+export function useChatOnDemandAgents(chatId: string | null) {
+  return useQuery({
+    queryKey: ['chat-on-demand-agent', chatId],
+    queryFn: () =>
+      chatId ? window.api.chat.listOnDemandAgents(chatId) : Promise.resolve([]),
+    enabled: !!chatId
+  })
+}
+
+export function useAddOnDemandAgent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, agentId }: { chatId: string; agentId: string }) =>
+      window.api.chat.addOnDemandAgent(chatId, agentId),
+    onSuccess: (_data, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
+    },
+    onError: (error, { chatId, agentId }) => {
+      onDemandLog.error('add failed', {
+        chatId,
+        agentId,
+        error: error instanceof Error ? error.message : String(error)
+      })
+    }
+  })
+}
+
+export function useRemoveOnDemandAgent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ chatId, agentId }: { chatId: string; agentId: string }) =>
+      window.api.chat.removeOnDemandAgent(chatId, agentId),
+    onSuccess: (_data, { chatId }) => {
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
+    },
+    onError: (error, { chatId, agentId }) => {
+      onDemandLog.error('remove failed', {
+        chatId,
+        agentId,
+        error: error instanceof Error ? error.message : String(error)
+      })
     }
   })
 }

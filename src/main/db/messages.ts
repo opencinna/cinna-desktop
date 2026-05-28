@@ -37,6 +37,15 @@ export interface SaveToolCallMessage {
   toolInput: Record<string, unknown>
   toolError: boolean
   toolProvider?: string
+  /** Agent id backing an agent tool call — drives the sub-thread hash color. */
+  toolAgentId?: string | null
+  /**
+   * Full-fidelity agent sub-thread parts for agent-backed tool calls
+   * (orchestrated mode). Persisted on the same `parts` column assistant
+   * messages use, so the renderer can replay the nested sub-thread. Null for
+   * ordinary MCP tool calls.
+   */
+  parts?: MessagePart[] | null
 }
 
 export interface SaveErrorMessage {
@@ -131,6 +140,8 @@ export const messageRepo = {
         toolInput: msg.toolInput,
         toolError: msg.toolError,
         toolProvider: msg.toolProvider ?? null,
+        toolAgentId: msg.toolAgentId ?? null,
+        parts: msg.parts ?? null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()
       })

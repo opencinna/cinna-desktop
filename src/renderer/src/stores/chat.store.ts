@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import type { ContentKind, ToolStream } from '../../../shared/messageParts'
+import type { ContentKind, MessagePart, ToolStream } from '../../../shared/messageParts'
+import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 
 export type { ContentKind, ToolStream }
 
@@ -12,6 +13,62 @@ export interface ToolCallBlock {
   error?: string
   provider?: string
   status: 'pending' | 'done' | 'error'
+  /** Tool source — `'agent'` tools accumulate a `subParts` sub-thread. */
+  providerType?: 'mcp' | 'agent'
+  /** Agent id backing an agent tool — drives the sub-thread hash color. */
+  agentId?: string
+  /**
+   * Live agent sub-thread (orchestrated mode): the agent's `parts[]` built up
+   * from `tool_subevent` deltas keyed by this block's `id`. Rendered as a
+   * nested `<AgentContribution>` inside the tool-call block.
+   */
+  subParts?: MessagePart[]
+}
+
+/**
+ * Apply one A2A delta to a `MessagePart[]`, mirroring the main-process
+ * `StreamPartsAccumulator.appendToList` merge rules so the live sub-thread
+ * matches what gets persisted on the tool_call row.
+ */
+function appendAgentDeltaPart(
+  parts: MessagePart[],
+  delta: {
+    kind: ContentKind
+    text: string
+    toolName?: string
+    toolInput?: Record<string, unknown>
+    toolId?: string
+    toolStream?: ToolStream
+    commandInvocation?: string
+  }
+): MessagePart[] {
+  const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation } = delta
+  const out = parts.slice()
+  const last = out[out.length - 1]
+  const sameKind = last && last.kind === kind
+  const mergeable =
+    sameKind &&
+    (kind === 'tool_result'
+      ? last.toolId === toolId && last.toolStream === toolStream
+      : last.toolName === toolName)
+  if (last && mergeable) {
+    out[out.length - 1] = {
+      ...last,
+      text: last.text + text,
+      toolInput: last.toolInput ?? toolInput,
+      toolId: last.toolId ?? toolId,
+      commandInvocation: last.commandInvocation ?? commandInvocation
+    }
+  } else {
+    const next: MessagePart = { kind, text }
+    if (toolName) next.toolName = toolName
+    if (toolInput) next.toolInput = toolInput
+    if (toolId) next.toolId = toolId
+    if (toolStream) next.toolStream = toolStream
+    if (commandInvocation) next.commandInvocation = commandInvocation
+    out.push(next)
+  }
+  return out
 }
 
 interface TextBlock {
@@ -63,9 +120,18 @@ interface ChatStore {
     toolStream?: ToolStream,
     commandInvocation?: string
   ) => void
-  addToolCall: (tc: { id: string; name: string; input: Record<string, unknown>; provider?: string }) => void
+  addToolCall: (tc: {
+    id: string
+    name: string
+    input: Record<string, unknown>
+    provider?: string
+    providerType?: 'mcp' | 'agent'
+    agentId?: string
+  }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
+  /** Accumulate one nested A2A stream event into an agent tool's sub-thread. */
+  appendToolSubEvent: (toolCallId: string, event: AgentStreamEvent) => void
   finishStreaming: () => void
   clearStreamingBlocks: () => void
   stopStreaming: () => void
@@ -150,6 +216,33 @@ export const useChatStore = create<ChatStore>((set) => ({
       ],
       streamedIncrementallyChatId: state.activeChatId
     })),
+
+  appendToolSubEvent: (toolCallId, event) =>
+    set((state) => {
+      // Only `delta` events carry parts. Notices are agent-side system pings,
+      // excluded from the persisted `parts[]` — skip them here too so the live
+      // sub-thread matches the reloaded one.
+      if (event.type !== 'delta' || event.kind === 'notice') return state
+      return {
+        streamingBlocks: state.streamingBlocks.map((b) =>
+          b.type === 'tool_call' && b.id === toolCallId
+            ? {
+                ...b,
+                subParts: appendAgentDeltaPart(b.subParts ?? [], {
+                  kind: event.kind,
+                  text: event.text,
+                  toolName: event.toolName,
+                  toolInput: event.toolInput,
+                  toolId: event.toolId,
+                  toolStream: event.toolStream,
+                  commandInvocation: event.commandInvocation
+                })
+              }
+            : b
+        ),
+        streamedIncrementallyChatId: state.activeChatId
+      }
+    }),
 
   resolveToolCall: (id, result) =>
     set((state) => ({

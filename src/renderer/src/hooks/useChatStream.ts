@@ -39,7 +39,7 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
     useChatStore()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const forceRefreshAgentStatus = useForceRefreshAgentStatus()
@@ -58,7 +58,9 @@ export function useChatStream(): {
             id: event.id,
             name: event.name,
             input: event.input,
-            provider: event.provider
+            provider: event.provider,
+            providerType: event.providerType,
+            agentId: event.providerAgentId
           })
           break
         case 'tool_result':
@@ -69,6 +71,11 @@ export function useChatStream(): {
           break
         case 'tool_error':
           failToolCall(event.id, event.error)
+          break
+        case 'tool_subevent':
+          // Nested A2A event from an agent-backed tool call (orchestrated
+          // mode) — accumulate into that tool's live sub-thread.
+          appendToolSubEvent(event.toolCallId, event.event)
           break
         case 'done':
           // Keep streaming blocks visible (cursor already hidden via isStreaming=false)
@@ -92,7 +99,7 @@ export function useChatStream(): {
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
   )
 
   const handleAgent = useCallback(

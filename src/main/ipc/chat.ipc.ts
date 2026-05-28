@@ -65,6 +65,7 @@ export function registerChatHandlers(): void {
         providerId?: string
         modeId?: string | null
         agentId?: string
+        orchestrated?: boolean
       }
     ) => {
       userActivation.requireActivated()
@@ -127,6 +128,29 @@ export function registerChatHandlers(): void {
     async (_event, chatId: string, mcpProviderId: string) => {
       userActivation.requireActivated()
       chatService.removeOnDemandMcp(getProfileScopeUserId(), chatId, mcpProviderId)
+      return { success: true }
+    }
+  )
+
+  ipcHandle('chat:on-demand-agent-list', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    return chatService.listOnDemandAgents(getProfileScopeUserId(), chatId)
+  })
+
+  ipcHandle(
+    'chat:on-demand-agent-add',
+    async (_event, chatId: string, agentId: string) => {
+      userActivation.requireActivated()
+      chatService.addOnDemandAgent(getProfileScopeUserId(), chatId, agentId)
+      return { success: true }
+    }
+  )
+
+  ipcHandle(
+    'chat:on-demand-agent-remove',
+    async (_event, chatId: string, agentId: string) => {
+      userActivation.requireActivated()
+      chatService.removeOnDemandAgent(getProfileScopeUserId(), chatId, agentId)
       return { success: true }
     }
   )

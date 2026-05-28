@@ -19,7 +19,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 1. User is on the default new-chat screen (no chat exists yet). They want their first message to use the GitHub MCP.
 2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry alongside any agents.
-3. User selects the entry. The `@gith` token disappears and a green "GitHub" chip appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
+3. User selects the entry. The `@gith` token disappears and a "GitHub" chip (connector/`Plug` icon, fixed accent color) appears next to whichever other selectors (agent picker, chat-mode chip) are visible.
 4. User types their first message and presses Enter.
 5. `useNewChatFlow.startNewChat` creates the chat row, flushes the buffered MCP onto it via `chat:on-demand-mcp-add` (which sets `pendingAnnounce = true`), then kicks off the stream as usual. The LLM sees the silent announce prefix on this very first send.
 6. The buffer is cleared so a return trip to the new-chat screen starts fresh.
@@ -28,7 +28,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 1. User is in a regular chat (LLM root, no MCP attached) and realises they need GitHub access for the next message.
 2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry.
-3. User selects the entry with Enter / click. The `@gith` token disappears from the composer; a green "GitHub" chip appears next to the active-agent chip.
+3. User selects the entry with Enter / click. The `@gith` token disappears from the composer; a "GitHub" chip appears next to the active-agent chip.
 4. User types `list my pull requests` and presses Enter.
 5. The LLM stream loop attaches the GitHub MCP tools to this send AND silently prepends `[System note: For this message the user specifically enabled the MCP server "GitHub"...]` to the user content so the model understands why the new tools are present.
 6. The LLM uses the new tools to answer. The GitHub chip stays in place for follow-up turns — the announce prefix is *not* re-sent.
@@ -52,7 +52,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 ### Engaging an MCP that's disconnected
 
 1. User selects an MCP whose connection status isn't `connected` (e.g. OAuth pending, errored).
-2. The chip renders in the warning tone instead of green. The MCP is still attached to the chat, but the stream loop won't be able to pull any tools from it until the connection recovers — the LLM simply won't see new tools for that send.
+2. The chip keeps its fixed color but grows a small **red status dot** after the name; hovering the dot shows a card with the specifics (the connection error, or `not connected ({status})`). The MCP is still attached to the chat, but the stream loop won't be able to pull any tools from it until the connection recovers — the LLM simply won't see new tools for that send. The dot clears live when the connection recovers.
 
 ## Business Rules
 
@@ -63,6 +63,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - The silent announcement is built once per engagement: the moment the user picks the MCP, `pendingAnnounce = true`; the next stream consumes it and flips it false; only re-adding the MCP (via the popup) re-arms it.
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.
 - Only MCPs with `enabled = true` in settings appear in the popup. Disabled MCPs can't connect and would just engage a dead chip.
+- The chip color is **fixed** (accent, matching the in-transcript MCP tool badge) — it no longer encodes connection status. Connection health is surfaced separately and only when there's a problem: a red status dot (with hover detail) after the name for any non-`connected` status.
 - The stream loop unions the baseline set with the on-demand set and de-duplicates by provider id, so a chat mode that already includes the MCP doesn't double-list tools.
 - The `@` popup keyboard nav indexes the flattened agent-then-MCP list: ArrowUp/Down moves across both sections; Enter / Tab selects the highlighted row regardless of section.
 
