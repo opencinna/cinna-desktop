@@ -129,15 +129,7 @@ export function registerA2AHandlers(): void {
   ipcMain.on(
     'agent:send-message',
     async (event, payload: AgentSendPayload) => {
-      const {
-        agentId,
-        chatId,
-        content: userContent,
-        catchupPacket = '',
-        rewrittenText = null,
-        originalText = null,
-        attachments
-      } = payload
+      const { agentId, chatId, content: userContent, attachments } = payload
       const fileIds = attachments?.map((a) => a.id)
       const port = event.ports?.[0]
       if (!port) return
@@ -192,17 +184,14 @@ export function registerA2AHandlers(): void {
         return
       }
 
-      // Persist user message + advance catch-up cursor + assemble wire content
-      // in one place. Service throws ChatError on ownership mismatch (already
-      // re-checked above; this is defense-in-depth).
+      // Persist the user message + fire title generation in one place. Service
+      // throws ChatError on ownership mismatch (already re-checked above; this
+      // is defense-in-depth).
       const { wireContent } = messageRoutingService.prepareAgentSend({
         userId: profileUserId,
         chatId,
         agentId,
         userContent,
-        rewrittenText,
-        originalText,
-        catchupPacket,
         attachments
       })
 

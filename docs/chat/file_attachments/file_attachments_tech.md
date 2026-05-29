@@ -60,13 +60,13 @@
   - `window.api.files.download({ fileId, filename, source? })`
   - `window.api.files.getPathForFile(file)` — wraps `webUtils.getPathForFile`; fire-and-forget `ipcRenderer.send('files:track-path', path)` as a side-effect so the path-guard allowlist auto-populates
   - `window.api.llm.getModelCapability({ providerId, modelId })`
-  - `window.api.llm.sendMessage(..., extras?: { catchupPacket?, attachments? })`
+  - `window.api.llm.sendMessage(..., extras?: { attachments? })`
 
 ### Renderer
 - `src/renderer/src/stores/fileDownload.store.ts` — `useFileDownloadStore`: `downloadingIds: Set<string>`, `error`, `errorFileId`, `download(attachment)`. Passes `attachment.source ?? 'cinna'` to the download IPC
 - `src/renderer/src/hooks/useChatAttachments.ts` — composer buffer keyed by chatId. Returns `ComposerAttachment[]`. Deferred mode (`chatId === null`) routes to `files:pick-paths` / `files:resolve-paths` instead of immediate ingest. `remove(attachment)` skips the IPC for `source === 'pending'`. Generation counter for staleness
 - `src/renderer/src/hooks/useModelCapability.ts` — React Query hook over `llm:get-model-capability`. 5-min stale time. Returns `NO_FILE_SUPPORT` shape while loading or when ids are absent
-- `src/renderer/src/hooks/useChatComposer.ts` — `submit(input, attachments?: MessageAttachment[])`; `dispatchToAgent` / `dispatchToRoot` forward through; `PendingRewrite.attachments` survives Smart Rewrite confirm
+- `src/renderer/src/hooks/useChatComposer.ts` — `submit(input, attachments?: MessageAttachment[])` reads the chat snapshot and forwards attachments to `startAgent` (direct A2A) or `startLlm` (orchestrator)
 - `src/renderer/src/hooks/useChatStream.ts` — `StartLlmOptions.attachments?: MessageAttachment[]`, `StartAgentOptions.attachments?: MessageAttachment[]`; types unified on shared `MessageAttachment`
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `NewChatOptions.attachments?: ComposerAttachment[]`. `resolvePendingAttachments(chatId, scope, attachments)` ingests pending entries via `files:ingest-paths`, preserves order, throws on failure. Outer try/catch surfaces error via `useChatStore.setSendError` and deletes the orphan chat via `window.api.chat.delete`
 - `src/renderer/src/components/chat/AttachmentBadge.tsx` — `AttachmentBadgeData` is the visual subset (no `source`). `AttachmentList<T extends AttachmentBadgeData>` is generic so callers retain their concrete type through `onClick`

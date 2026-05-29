@@ -38,7 +38,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 ### Viewing a job
 1. User opens a job from the sidebar — Main area renders the read-only **Job Detail** view.
 2. The header shows the job's title, description, a type pill (`Local` / `Cinna Task`), an icon-only **Edit** (pencil) button, and a primary green **Run** button.
-3. Below the header, a summary card shows the prompt verbatim plus a strip of compact **chip-style badges** for *non-default* configuration only (same chip pattern used in the chat composer — `ActiveAgentChip` / `OnDemandMcpChips`):
+3. Below the header, a summary card shows the prompt verbatim plus a strip of compact **chip-style badges** for *non-default* configuration only (same chip pattern used in the chat composer — `OnDemandAgentChips` / `OnDemandMcpChips`):
    - Local: agent chip (Bot icon, accent border), chat-mode chip (color dot tinted with the mode's preset), one MCP chip per attached provider (Wrench icon). Each chip only appears if the field is set.
    - Cinna Task: Cinna agent chip (Bot — red "No Cinna agent" chip if missing) and priority chip (Flag, only when not `normal`).
 4. Below the summary, the **Run history** lists the job's runs newest-first; the section is empty when there are no runs.

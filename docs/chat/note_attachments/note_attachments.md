@@ -42,8 +42,7 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 1. With one or more note badges present, the user types text and hits Enter / Send.
 2. **Active chat:** each pending note's current body is fetched on the main side, written as `<safe-title>.md` into a fresh tempdir, and routed through `fileService.ingest` under the chat's destination scope. The resulting `MessageAttachment[]` is merged with any file attachments and dispatched.
 3. **New chat:** the note ids are deferred alongside file attachments. After the chat row is created and the destination scope is decided, the same materialization runs.
-4. After a successful send (or a "Send Anyway" out of a failed rewrite), both note badges and file attachment badges clear from the composer.
-5. On a `rewrite-failed` outcome, the badges stay so the user can adjust and retry; on `rewrite-pending`, they clear (the materialized attachments are owned by the pending-rewrite state at that point).
+4. After the send dispatches, both note badges and file attachment badges clear from the composer.
 
 ### Removing a note
 
@@ -59,11 +58,11 @@ Attach existing profile notes to a chat message via the composer's `?` mention p
 - **Ownership.** `notesService.materializeAsAttachments` fetches each note via `requireNote`, which enforces profile ownership and rejects deleted notes. A single missing or cross-profile id aborts the whole call before any temp file is created.
 - **Empty notes are valid.** A note with an empty body still attaches as an empty `.md`. The user is in control.
 - **Filename safety.** Note titles are sanitized to `<allowlist>.md` (alphanumerics, space, dash, underscore, dot) and capped at 80 characters; empty results fall back to `note.md`. `basename()` is re-applied inside `fileService.ingestSyntheticContent` as defense in depth.
-- **Scope routing.** Scope mirrors the chat's destination: Cinna-uploaded for any chat with a bound or active remote agent, local-store for raw LLM chats. The new-chat composer defers the decision until the chat row exists.
-- **Clearing on success.** Pending notes are cleared on the same outcomes as pending file attachments: `sent`, `rewrite-pending`, the rewrite-confirm second-Enter, and `Send Anyway`. On `rewrite-failed` they remain so the user can retry.
+- **Scope routing.** Scope mirrors the chat's destination: Cinna-uploaded for a chat bound to a remote agent (direct A2A), local-store for orchestrated / raw LLM chats. The new-chat composer defers the decision until the chat row exists.
+- **Clearing on send.** Pending notes are cleared alongside pending file attachments once the send dispatches.
 - **No retroactive editing.** The attached `.md` is a frozen snapshot of the note's body at send time. Later edits to the original note do not propagate to messages that already carry the attachment.
 - **No persistence of pending notes.** Refreshing or switching chats discards the pending list — they aren't stored on the message row until materialization at send.
-- **Double-Enter expansion target.** A note picked via `?` is "armed" as the expansion target. The next Enter on an empty composer (with rewrite state `idle`) replaces the badge with the note's live body inline instead of sending. The arming is cleared by typing anything, removing the targeted badge, picking a different note (which becomes the new target), switching chats, or by the expansion itself. Only one note at a time can be the target — earlier badges remain attached when expansion fires.
+- **Double-Enter expansion target.** A note picked via `?` is "armed" as the expansion target. The next Enter on an empty composer replaces the badge with the note's live body inline instead of sending. The arming is cleared by typing anything, removing the targeted badge, picking a different note (which becomes the new target), switching chats, or by the expansion itself. Only one note at a time can be the target — earlier badges remain attached when expansion fires.
 
 ## Architecture Overview
 

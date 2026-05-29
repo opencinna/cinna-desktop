@@ -27,7 +27,7 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 6. Adapter emits provider-native content blocks (image, document) or inlines extracted text as a `<file name="…" type="…">…</file>` prefix on the user message.
 
 ### Attaching a file in a chat bound to a Cinna remote agent
-1. User is in a chat whose bound or active agent is a Cinna-source remote agent.
+1. User is in a chat bound to a Cinna-source remote agent (direct A2A).
 2. `[+]` appears for Cinna users.
 3. Picked/dropped files stream to the Cinna backend (`POST /api/v1/files/upload`).
 4. On send, the A2A request carries `metadata.cinna_file_ids` — bytes are referenced, not retransmitted.
@@ -113,7 +113,7 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Staleness on chat switch
 - The composer's pending list is scoped to a chat. Switching chats while an upload is in flight drops the resolving file via a generation counter in `useChatAttachments`.
-- Switching scopes mid-chat (e.g., active agent flips from remote to LLM) clears already-queued attachments.
+- Switching scopes mid-chat (e.g., a direct-A2A chat is promoted to orchestrated, flipping the upload scope from Cinna to local) clears already-queued attachments.
 
 ## Architecture Overview
 
@@ -182,7 +182,7 @@ Download:
 - [Agents](../../agents/agents/agents.md) — A2A streaming + endpoint resolution for Cinna-scoped attachments.
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — `buildSendParams` forwards `cinna_file_ids` as message metadata.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Cinna uploads use the user's auto-refreshed access token.
-- [Multi-Agent Chats](../multi_agent/multi_agent.md) — Attach button + scope re-evaluate when the composer's `activeAgent` changes.
+- [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md) — Promoting a direct-A2A chat to orchestrated flips the upload scope (Cinna → local); the attach button + scope re-evaluate when the chat's `agentId`/`orchestrated` state changes.
 
 ## Backend Dependency
 

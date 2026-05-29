@@ -10,6 +10,7 @@ import { getAdapter } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { McpToolProvider, type ToolProvider } from '../llm/toolProvider'
 import { A2AAsMcpProvider, buildAgentToolProviders } from './a2aAsMcpProvider'
+import { agentService } from './agentService'
 import {
   ChatMessage,
   LLMAdapter,
@@ -310,6 +311,41 @@ export const chatStreamingService = {
       const capability = adapter.modelCapability(modelId)
       const supportsMedia = capability.acceptedMimeTypes.length > 0
 
+      // Map attached agents → their LLM-facing tool name (the `toolRouting`
+      // key) + display name. Prior direct-A2A turns persist as assistant rows
+      // carrying `sourceAgentId`; when such a chat is promoted to orchestrated,
+      // those answers came from a specialist the orchestrator can now call as a
+      // tool — not from itself. We reframe them with attribution below so the
+      // model understands the handoff and re-delegates instead of answering
+      // from stale context. (Orchestrator-authored turns have no sourceAgentId
+      // and are left untouched; agent tool outputs are `tool_call` rows.)
+      const agentToolByAgentId = new Map<string, { name: string; toolName: string }>()
+      for (const [toolName, p] of toolRouting) {
+        if (p.providerType === 'agent' && p.agentId) {
+          agentToolByAgentId.set(p.agentId, { name: p.displayName, toolName })
+        }
+      }
+      const settingsUserId = getSettingsScopeUserId()
+      // Cache fallback name lookups so a long chat with repeated turns from the
+      // same detached agent doesn't re-hit `findAgent` per turn.
+      const fallbackNameCache = new Map<string, string>()
+      const attributeAgentTurn = (sourceAgentId: string, content: string): string => {
+        const attached = agentToolByAgentId.get(sourceAgentId)
+        if (attached) {
+          return `[From the "${attached.name}" agent — available to you as the \`${attached.toolName}\` tool]\n${content}`
+        }
+        // Detached agent (e.g. a tool the user later removed): attribute by name
+        // only, since there is no live tool to point the model at.
+        let name = fallbackNameCache.get(sourceAgentId)
+        if (name === undefined) {
+          name =
+            agentService.findAgent(settingsUserId, userId, sourceAgentId)?.row.name ??
+            'another agent'
+          fallbackNameCache.set(sourceAgentId, name)
+        }
+        return `[From the "${name}" agent]\n${content}`
+      }
+
       const currentMessages: ChatMessage[] = []
       let resolvedMediaCount = 0
       let droppedMediaCount = 0
@@ -333,9 +369,13 @@ export const chatStreamingService = {
             resolvedMediaCount += media.length
           }
         }
+        const content =
+          m.role === 'assistant' && m.sourceAgentId
+            ? attributeAgentTurn(m.sourceAgentId, m.content)
+            : m.content
         currentMessages.push({
           role: m.role as ChatMessage['role'],
-          content: m.content,
+          content,
           media,
           toolCalls: (m.toolCalls as ToolCallInfo[] | null) ?? undefined,
           toolCallId: m.toolCallId ?? undefined,

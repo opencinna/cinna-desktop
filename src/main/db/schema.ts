@@ -60,16 +60,13 @@ export const chats = sqliteTable('chats', {
   providerId: text('provider_id'),
   modeId: text('mode_id'),
   agentId: text('agent_id'),
-  activeAgentId: text('active_agent_id'),
-  smartAssistDisabled: integer('smart_assist_disabled', { mode: 'boolean' })
-    .notNull()
-    .default(false),
   /**
-   * True when this LLM-root chat was created in orchestrated mode (the local
-   * model conducts and calls attached agents as tools). Stable across chip
-   * add/remove so the in-chat `@`-agent gesture keeps adding tools rather than
-   * reverting to the multi-agent switchboard. Always false for agent-rooted
-   * and plain LLM chats.
+   * True when the local model conducts this chat, calling attached agents/MCPs
+   * as tools. Set at creation (multi-counterparty new chat) or at in-chat
+   * promotion (a second counterparty `@`-mentioned into a direct-A2A or plain
+   * LLM chat). Stable across chip add/remove so the chat never silently reverts
+   * to direct routing. Always false for single-agent (direct A2A) and plain
+   * LLM chats.
    */
   orchestrated: integer('orchestrated', { mode: 'boolean' }).notNull().default(false),
   /**
@@ -261,10 +258,9 @@ export const messages = sqliteTable('messages', {
   parts: text('parts', { mode: 'json' }).$type<MessagePart[]>(),
   /** File attachments persisted on user messages — drives badge rendering. */
   attachments: text('attachments', { mode: 'json' }).$type<MessageAttachment[]>(),
-  // Multi-agent routing metadata
+  /** Agent a user turn was routed to in a direct-A2A chat (null for LLM root). */
   addressedAgentId: text('addressed_agent_id'),
-  rewrittenText: text('rewritten_text'),
-  originalText: text('original_text'),
+  /** Agent that produced an assistant turn in a direct-A2A chat (null for LLM root). */
   sourceAgentId: text('source_agent_id'),
   sortOrder: integer('sort_order').notNull(),
   createdAt: integer('created_at', { mode: 'timestamp' })
@@ -443,26 +439,6 @@ export const noteFolders = sqliteTable('note_folders', {
     .notNull()
     .$defaultFn(() => new Date())
 })
-
-export const chatAgentSessions = sqliteTable(
-  'chat_agent_sessions',
-  {
-    chatId: text('chat_id')
-      .notNull()
-      .references(() => chats.id, { onDelete: 'cascade' }),
-    agentId: text('agent_id')
-      .notNull()
-      .references(() => agents.id, { onDelete: 'cascade' }),
-    lastReplayedMessageId: text('last_replayed_message_id').notNull(),
-    createdAt: integer('created_at', { mode: 'timestamp' })
-      .notNull()
-      .$defaultFn(() => new Date()),
-    updatedAt: integer('updated_at', { mode: 'timestamp' })
-      .notNull()
-      .$defaultFn(() => new Date())
-  },
-  (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
-)
 
 /**
  * Installation-global key/value store for user-toggleable feature flags

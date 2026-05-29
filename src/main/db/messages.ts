@@ -10,12 +10,8 @@ export type { MessagePart }
 export interface SaveUserMessage {
   chatId: string
   content: string
-  /** Multi-agent: agent the message was routed to (null when sent to LLM root). */
+  /** Agent a user turn was routed to in a direct-A2A chat (null for LLM root). */
   addressedAgentId?: string | null
-  /** Multi-agent: Smart Rewrite output that was actually sent. */
-  rewrittenText?: string | null
-  /** Multi-agent: user's literal input before rewrite (preserved for audit / learning). */
-  originalText?: string | null
   /** File attachments shipped with this user turn (Cinna agents only). */
   attachments?: MessageAttachment[] | null
 }
@@ -100,8 +96,6 @@ export const messageRepo = {
         role: 'user',
         content: msg.content,
         addressedAgentId: msg.addressedAgentId ?? null,
-        rewrittenText: msg.rewrittenText ?? null,
-        originalText: msg.originalText ?? null,
         attachments: msg.attachments && msg.attachments.length > 0 ? msg.attachments : null,
         sortOrder: getNextSortOrder(msg.chatId),
         createdAt: new Date()

@@ -16,7 +16,7 @@ export function registerLlmHandlers(): void {
   // ipcRenderer.postMessage passes the payload as the 2nd arg to the listener
   // and the MessagePort on event.ports — see CLAUDE.md.
   ipcMain.on('llm:send-message', async (event, payload: LlmSendPayload) => {
-    const { chatId, content: userContent, catchupPacket = '', attachments } = payload
+    const { chatId, content: userContent, attachments } = payload
     const port = event.ports?.[0]
     if (!port) {
       logger.error('No MessagePort received for llm:send-message')
@@ -36,7 +36,6 @@ export function registerLlmHandlers(): void {
         userId: getProfileScopeUserId(),
         chatId,
         userContent,
-        catchupPacket,
         attachments
       })
       await chatStreamingService.stream({

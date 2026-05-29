@@ -1,8 +1,13 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createLogger } from '../stores/logger.store'
+import { usePromoteToOrchestrated } from './useChat'
+import { useChatStore } from '../stores/chat.store'
+import { unwrapIpcError } from '../utils/ipcError'
 
 const onDemandLog = createLogger('on-demand-agent')
+
+type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 
 export type RemoteSyncStatus = { error?: 'reauth_required' | 'sync_failed' }
 
@@ -153,6 +158,43 @@ export function useAddOnDemandAgent() {
       })
     }
   })
+}
+
+/**
+ * The in-chat `@`-agent gesture: attach an agent to the current chat as an
+ * orchestrated tool. Encapsulates the full sequence so the composer/view stays
+ * declarative:
+ *
+ *  - Re-picking the sole bound agent of a direct-A2A chat is a no-op (it's
+ *    already the conversation partner — orchestration starts at the *second*
+ *    counterparty).
+ *  - A chat that isn't orchestrated yet is promoted first (optimistically, so a
+ *    fast pick-then-Enter doesn't route the send to the old root agent).
+ *  - The agent is then added to the on-demand set.
+ *  - Any failure (e.g. promotion refused for lack of a model) surfaces via the
+ *    chat send-error banner.
+ */
+export function useAttachAgentToChat(chatId: string | null): (agentId: string) => Promise<void> {
+  const queryClient = useQueryClient()
+  const promote = usePromoteToOrchestrated()
+  const addAgent = useAddOnDemandAgent()
+  const setSendError = useChatStore((s) => s.setSendError)
+  return useCallback(
+    async (agentId: string): Promise<void> => {
+      if (!chatId) return
+      const chat = queryClient.getQueryData<CachedChat>(['chat', chatId])
+      if (chat && !chat.orchestrated && chat.agentId === agentId) return
+      try {
+        if (!chat?.orchestrated) {
+          await promote.mutateAsync(chatId)
+        }
+        await addAgent.mutateAsync({ chatId, agentId })
+      } catch (err) {
+        setSendError(unwrapIpcError(err, 'Could not add agent'))
+      }
+    },
+    [chatId, queryClient, promote, addAgent, setSendError]
+  )
 }
 
 export function useRemoveOnDemandAgent() {

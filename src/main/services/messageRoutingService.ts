@@ -1,6 +1,5 @@
 import { chatRepo } from '../db/chats'
 import { messageRepo } from '../db/messages'
-import { multiAgentService } from './multiAgentService'
 import { chatTitleService, ChatTitleError } from './chatTitleService'
 import { ChatError } from '../errors'
 import { createLogger } from '../logger/logger'
@@ -65,9 +64,6 @@ export interface PrepareAgentSendInput {
   chatId: string
   agentId: string
   userContent: string
-  rewrittenText?: string | null
-  originalText?: string | null
-  catchupPacket?: string
   attachments?: MessageAttachment[]
 }
 
@@ -75,12 +71,11 @@ export interface PrepareLlmSendInput {
   userId: string
   chatId: string
   userContent: string
-  catchupPacket?: string
   attachments?: MessageAttachment[]
 }
 
 export interface PreparedSend {
-  /** What goes on the wire to the LLM / agent (catch-up packet prepended). */
+  /** What goes on the wire to the LLM / agent. */
   wireContent: string
   /** Id of the user message just persisted to `messages`. */
   userMessageId: string
@@ -88,68 +83,45 @@ export interface PreparedSend {
 
 /**
  * Single chokepoint for "the user just sent a routed message" — owns
- * persistence of the user row (with all multi-agent metadata), assembly of
- * the wire content (catch-up prepend), and the (chat, agent) cursor advance.
+ * persistence of the user row and fires background title generation.
  *
  * Both streaming IPC handlers (`agent:send-message`, `llm:send-message`) go
  * through here so the side-effects stay consistent regardless of channel.
  */
 export const messageRoutingService = {
   prepareAgentSend(input: PrepareAgentSendInput): PreparedSend {
-    const {
-      userId,
-      chatId,
-      agentId,
-      userContent,
-      rewrittenText,
-      originalText,
-      catchupPacket,
-      attachments
-    } = input
+    const { userId, chatId, agentId, userContent, attachments } = input
 
     if (!chatRepo.getOwned(userId, chatId)) {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const wireContent = catchupPacket ? `${catchupPacket}${userContent}` : userContent
     const userMessageId = messageRepo.saveUser({
       chatId,
       content: userContent,
       addressedAgentId: agentId,
-      rewrittenText: rewrittenText ?? null,
-      originalText: originalText ?? null,
       attachments: attachments && attachments.length > 0 ? attachments : null
-    })
-
-    multiAgentService.advanceCatchupCursor({
-      userId,
-      chatId,
-      targetAgentId: agentId,
-      lastMessageId: userMessageId
     })
 
     logger.debug('prepared agent send', {
       chatId,
       agentId,
       userMessageId,
-      hasCatchup: !!catchupPacket,
-      hasRewrite: !!rewrittenText,
       attachmentCount: attachments?.length ?? 0
     })
 
     fireTitleGenInBackground(userId, chatId)
 
-    return { wireContent, userMessageId }
+    return { wireContent: userContent, userMessageId }
   },
 
   prepareLlmSend(input: PrepareLlmSendInput): PreparedSend {
-    const { userId, chatId, userContent, catchupPacket, attachments } = input
+    const { userId, chatId, userContent, attachments } = input
 
     if (!chatRepo.getOwned(userId, chatId)) {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const wireContent = catchupPacket ? `${catchupPacket}${userContent}` : userContent
     const userMessageId = messageRepo.saveUser({
       chatId,
       content: userContent,
@@ -159,12 +131,11 @@ export const messageRoutingService = {
     logger.debug('prepared llm send', {
       chatId,
       userMessageId,
-      hasCatchup: !!catchupPacket,
       attachmentCount: attachments?.length ?? 0
     })
 
     fireTitleGenInBackground(userId, chatId)
 
-    return { wireContent, userMessageId }
+    return { wireContent: userContent, userMessageId }
   }
 }

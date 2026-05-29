@@ -122,9 +122,49 @@ export function useUpdateChat() {
       updates
     }: {
       chatId: string
-      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string; modeId?: string | null; orchestrated?: boolean }
+      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; orchestrated?: boolean }
     }) => window.api.chat.update(chatId, updates),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chats'] })
+    }
+  })
+}
+
+/**
+ * Promote a chat to orchestrated mode (local model conducts agents-as-tools).
+ * Used by the in-chat `@`-agent gesture when adding a second counterparty to a
+ * direct-A2A or plain LLM chat. Invalidates the chat detail (root agent detach
+ * + orchestrated flag), its on-demand agent set (former root re-added as a
+ * tool), and the chat list (model/title surfaces).
+ */
+export function usePromoteToOrchestrated() {
+  const queryClient = useQueryClient()
+  type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
+  return useMutation({
+    mutationFn: (chatId: string) => window.api.chat.promoteToOrchestrated(chatId),
+    // Optimistically flip the cached chat to orchestrated (and detach the root
+    // agent) before the round-trip resolves. Without this, picking an agent
+    // then immediately pressing Enter races the refetch — `composer.submit`
+    // would read the pre-promotion snapshot and route the send to the old root
+    // agent over direct A2A instead of the orchestrator.
+    onMutate: async (chatId) => {
+      await queryClient.cancelQueries({ queryKey: ['chat', chatId] })
+      const prev = queryClient.getQueryData<CachedChat>(['chat', chatId])
+      if (prev) {
+        queryClient.setQueryData<CachedChat>(['chat', chatId], {
+          ...prev,
+          orchestrated: true,
+          agentId: null
+        })
+      }
+      return { prev }
+    },
+    onError: (_err, chatId, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(['chat', chatId], ctx.prev)
+    },
+    onSettled: (_data, _err, chatId) => {
+      queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
+      queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
       queryClient.invalidateQueries({ queryKey: ['chats'] })
     }
   })

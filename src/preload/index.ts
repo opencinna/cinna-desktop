@@ -58,8 +58,6 @@ export interface ChatData {
   providerId: string | null
   modeId: string | null
   agentId: string | null
-  activeAgentId: string | null
-  smartAssistDisabled: boolean
   orchestrated: boolean
   deletedAt: Date | null
   createdAt: Date
@@ -79,13 +77,9 @@ export interface MessageData {
   /** Agent id backing an agent tool call — drives the sub-thread hash color. */
   toolAgentId?: string | null
   parts?: MessagePart[] | null
-  /** Multi-agent: agent the user message was routed to (null when sent to LLM root). */
+  /** Agent a user turn was routed to in a direct-A2A chat (null for LLM root). */
   addressedAgentId?: string | null
-  /** Multi-agent: Smart Rewrite output, when rewrite happened. */
-  rewrittenText?: string | null
-  /** Multi-agent: user's literal pre-rewrite text. */
-  originalText?: string | null
-  /** Multi-agent: agent that produced an assistant turn (null for LLM root). */
+  /** Agent that produced an assistant turn in a direct-A2A chat (null for LLM root). */
   sourceAgentId?: string | null
   /** File attachments persisted on user turns (badges below the bubble). */
   attachments?: MessageAttachment[] | null
@@ -281,7 +275,7 @@ const api = {
         modelId?: string
         providerId?: string
         modeId?: string | null
-        agentId?: string
+        agentId?: string | null
         orchestrated?: boolean
       }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
@@ -332,6 +326,8 @@ const api = {
       agentId: string
     ): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:on-demand-agent-remove', chatId, agentId),
+    promoteToOrchestrated: (chatId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:promote-to-orchestrated', chatId),
     /**
      * Subscribe to background chat-title autogeneration completions. Fires
      * once per chat (when the auto-title feature is enabled and a first
@@ -442,12 +438,7 @@ const api = {
       chatId: string,
       content: string,
       onEvent: (event: AgentStreamEvent) => void,
-      extras?: {
-        catchupPacket?: string
-        rewrittenText?: string | null
-        originalText?: string | null
-        attachments?: MessageAttachment[]
-      }
+      extras?: { attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
@@ -464,9 +455,6 @@ const api = {
         agentId,
         chatId,
         content,
-        catchupPacket: extras?.catchupPacket,
-        rewrittenText: extras?.rewrittenText,
-        originalText: extras?.originalText,
         attachments: extras?.attachments
       }
       ipcRenderer.postMessage('agent:send-message', payload, [channel.port2])
@@ -586,7 +574,7 @@ const api = {
       chatId: string,
       content: string,
       onEvent: (event: LlmStreamEvent) => void,
-      extras?: { catchupPacket?: string; attachments?: MessageAttachment[] }
+      extras?: { attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
@@ -599,7 +587,6 @@ const api = {
       const payload: LlmSendPayload = {
         chatId,
         content,
-        catchupPacket: extras?.catchupPacket,
         attachments: extras?.attachments
       }
       ipcRenderer.postMessage('llm:send-message', payload, [channel.port2])
@@ -733,27 +720,6 @@ const api = {
       | { success: true; canceled: true }
       | { success: false; canceled?: false; error: string; code?: string }
     > => ipcRenderer.invoke('files:download-task-attachment', data)
-  },
-
-  multiAgent: {
-    rewrite: (data: {
-      chatId: string
-      targetAgentId: string
-      userText: string
-    }): Promise<{ rewrittenText: string | null }> =>
-      ipcRenderer.invoke('multiAgent:rewrite', data),
-    setActiveAgent: (data: {
-      chatId: string
-      agentId: string | null
-    }): Promise<{ changed: boolean }> =>
-      ipcRenderer.invoke('multiAgent:set-active-agent', data),
-    disableSmartAssist: (data: { chatId: string }): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('multiAgent:disable-smart-assist', data),
-    buildCatchup: (data: {
-      chatId: string
-      targetAgentId: string
-    }): Promise<{ packet: string }> =>
-      ipcRenderer.invoke('multiAgent:build-catchup', data)
   },
 
   jobs: {

@@ -64,14 +64,11 @@ export function registerChatHandlers(): void {
         modelId?: string
         providerId?: string
         modeId?: string | null
-        agentId?: string
+        agentId?: string | null
         orchestrated?: boolean
       }
     ) => {
       userActivation.requireActivated()
-      // The service signature is `ChatMetaUpdate` only — routing fields
-      // (activeAgentId, smartAssistDisabled) are a compile-time error here
-      // and must go through the `multiAgent:*` channels.
       chatService.update(getProfileScopeUserId(), chatId, updates)
       return { success: true }
     }
@@ -154,4 +151,10 @@ export function registerChatHandlers(): void {
       return { success: true }
     }
   )
+
+  ipcHandle('chat:promote-to-orchestrated', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    chatService.promoteToOrchestrated(getProfileScopeUserId(), chatId)
+    return { success: true }
+  })
 }

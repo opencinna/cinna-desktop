@@ -22,7 +22,7 @@
 - `src/renderer/src/components/layout/MainArea.tsx` — owns the `pendingMcpIds` state for the new-chat screen and the toggle/remove callbacks passed into ChatInput
 - `src/renderer/src/components/chat/ChatInput.tsx` — owns trigger detection, filtered agent + MCP lists, combined keyboard nav; routes MCP selections to either the DB mutation (active chat) or the parent's pending buffer (new chat)
 - `src/renderer/src/components/chat/AgentMcpMentionPopup.tsx` — listbox with `role="group"` sections per "Agents" and "MCP"
-- `src/renderer/src/components/chat/OnDemandMcpChips.tsx` — removable strip rendered alongside `ActiveAgentChip` below the composer; two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`
+- `src/renderer/src/components/chat/OnDemandMcpChips.tsx` — removable strip rendered alongside `OnDemandAgentChips` below the composer; two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`
 
 ## Database Schema
 
@@ -76,4 +76,4 @@ None. No env vars, no settings. The feature is always available inside an active
 
 - **Why peek + clear instead of a single consume**: a transactional read-and-flip would lose the one-shot announcement to any pre-flight failure (provider auth bad, network down). Splitting lets `_runStreamLoop` flip only after the LLM has actually consumed the prefix in its first round.
 - **Why a second listbox component instead of extending `MentionPopup`**: `MentionPopup<T>` is a flat single-section primitive used by four call sites (agents, prompts, commands, chat modes). Adding grouping to it would complicate every caller; `AgentMcpMentionPopup` inlines the same surface treatment with section grouping local to itself.
-- **Wire-content patching**: `_runStreamLoop` patches the most recent in-memory `user` message with the prefix-augmented `wireContent` so the LLM sees the prefix while the persisted `messages` row keeps the user's original text untouched (same approach used for catch-up packets in multi-agent).
+- **Wire-content patching**: `_runStreamLoop` patches the most recent in-memory `user` message with the prefix-augmented `wireContent` so the LLM sees the announce prefix while the persisted `messages` row keeps the user's original text untouched.

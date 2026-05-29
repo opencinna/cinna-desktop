@@ -2,12 +2,12 @@
 
 ## Purpose
 
-Renders agent-side system messages — startup pings, environment transitions, and other status-style updates the agent itself emits during a turn — as muted system messages inside the chat transcript, distinct from the agent's actual answer bubbles. Notices are excluded from catch-up replay and from the LLM history rebuild so they never feed back into the model.
+Renders agent-side system messages — startup pings, environment transitions, and other status-style updates the agent itself emits during a turn — as muted system messages inside the chat transcript, distinct from the agent's actual answer bubbles. Notices are excluded from the LLM history rebuild so they never feed back into the model.
 
 ## Core Concepts
 
 - **Notice** — A TextPart sent by a Cinna agent with `metadata['cinna.content_kind'] = 'notice'`. Unlike `text` / `thinking` / `tool` / `tool_result` parts, notices do NOT join the assistant message's `parts[]` — they land on their own `agent_transition` row.
-- **`agent_transition` row** — A `messages.role` value reserved for agent-emitted system notices. Excluded by role from the LLM history rebuild and from the catch-up packet builder.
+- **`agent_transition` row** — A `messages.role` value reserved for agent-emitted system notices. Excluded by role from the LLM history rebuild.
 - **Streaming notice block** — The live counterpart of an `agent_transition` row. While a stream is in flight, notice deltas flow into `chat.store.streamingBlocks` as `text`-type blocks with `kind: 'notice'` and render as the expanded muted system-message pill. Once the stream completes and the chat re-fetches, the streaming block is cleared and the persisted `agent_transition` row takes its place — rendered by `NoticeBlock` as a collapsed accent-coloured dot (expand on click).
 - **Collapsed dot** — The persisted-notice visual: a single small accent-coloured dot centred in the transcript. Clicking it expands to the original notice text in a muted system-message pill (same look as the live streaming view). The dot exists so the notice survives reload for inspection without permanently consuming vertical space, since after the in-flight ping has served its purpose the user mostly wants their answer to be the visible content.
 - **Notice persistence ordering** — Each unique `(messageId | artifactId, partIndex)` produces one persisted notice row. Notices are saved before the assistant message they preceded on the wire, so transcript order matches stream order.
@@ -21,7 +21,7 @@ Renders agent-side system messages — startup pings, environment transitions, a
 5. Stream completes — desktop persists the notice as an `agent_transition` row, then the assistant message as a normal `assistant` row
 6. The post-stream cache refetch swaps the live notice for the persisted row. The persisted row renders as a small accent-coloured dot above the answer — the notice has done its job, so it stops eating transcript space
 7. On reload the user sees the same dot above the agent's answer. Clicking it expands to the original notice text (same muted system-message pill as the live view) so the context is never lost
-8. If the user later sends another message to the same agent, the catch-up packet built for that agent does **not** include the prior notice — only user/assistant turns count
+8. If the agent is engaged again later, the prior notice is never fed back to the model — `agent_transition` rows are excluded from the orchestrator's history rebuild
 
 ## Business Rules
 
@@ -37,11 +37,9 @@ Renders agent-side system messages — startup pings, environment transitions, a
 - Notice rows carry `source_agent_id` (the agent that emitted them) so the transcript can attribute them if needed; they do not carry `parts[]`.
 - Notices are persisted **before** the assistant message of the same turn so `sort_order` matches wire chronology.
 
-### Exclusion from agent inputs
+### Exclusion from model inputs
 
-- The catch-up replay packet built when the user re-engages an agent (`multiAgentService.buildCatchupPacket`) walks user/assistant rows only. `agent_transition` rows are skipped — the agent never re-receives its own startup ping as part of a replay window.
-- The LLM history rebuild (`chatStreamingService._runStreamLoop`) skips `agent_transition` rows for the same reason. An LLM chat that previously was an agent chat will never see notice text in its conversation history.
-- The `(chat, agent)` catch-up cursor still advances past notice rows naturally because the cursor tracks the latest user message, not assistant turns.
+- The LLM history rebuild (`chatStreamingService._runStreamLoop`) skips `agent_transition` rows by role, so a notice never enters the orchestrator's context. A chat that previously talked directly to an agent will never see notice text in its conversation history after promotion to orchestrated.
 
 ### Rendering
 
@@ -91,6 +89,5 @@ Stream completes:
 
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — Owns the `cinna.content_kind` metadata contract, the per-part delta keying, and the accumulator that separates notices from message parts.
 - [Messaging](../messaging/messaging.md) — Defines the `messages` table that backs `agent_transition` rows.
-- [Multi-Agent Chats](../multi_agent/multi_agent.md) — Catch-up replay excludes `agent_transition` rows so notices from one engagement do not leak into the next.
 - [Conversation UI](../conversation_ui/conversation_ui.md) — Hosts the surrounding transcript renderer. `role: 'error'` rows render via the local `SystemMessage` (centred danger card); `agent_transition` rows render via `NoticeBlock` (left-aligned, info-tone dot or expanded Info+text row depending on verbose mode).
 - [CLI Commands](../cli_commands/cli_commands.md) — Notices commonly precede `/run:*` CLI command output when the agent is bootstrapping its environment before executing the shell command.

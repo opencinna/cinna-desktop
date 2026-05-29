@@ -23,7 +23,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 1. User types in the input box and presses Send
 2. Renderer creates a MessageChannel, sends port2 + a typed `LlmSendPayload` to main via `postMessage`
 3. `llm:send-message` IPC handler calls `messageRoutingService.prepareLlmSend()` (persists the user row + assembles `wireContent`), then hands off to `chatStreamingService.stream()`
-4. The streaming service loads full chat history, patches the most recent user turn with `wireContent` (so any catch-up packet is in scope for this call only, never persisted), and gathers MCP tools for the chat
+4. The streaming service loads full chat history, patches the most recent user turn with `wireContent` (so the on-demand announce prefix is in scope for this call only, never persisted), and gathers MCP + agent tools for the chat
 5. The service enters the tool-call loop (up to 10 rounds):
    - Calls the LLM adapter's `stream()` — adapter returns a `StreamResult` (content + tool calls)
    - Saves assistant message to DB (with `toolCalls` if any)
@@ -61,7 +61,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ```
 User -> ChatInput (renderer) -> useChatStream.startLlm()
   -> MessageChannel -> ipcMain.on('llm:send-message')  (LlmSendPayload)
-  -> messageRoutingService.prepareLlmSend({ userId, chatId, userContent, catchupPacket? })
+  -> messageRoutingService.prepareLlmSend({ userId, chatId, userContent })
      -> chatRepo.getOwned() (verify ownership)
      -> messageRepo.saveUser()
      -> returns { wireContent }

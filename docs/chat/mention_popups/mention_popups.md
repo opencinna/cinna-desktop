@@ -18,7 +18,7 @@ Trigger-driven floating picker family that appears above the chat input when the
 
 1. User types `@` at the start of the input or after a space.
 2. **New chat**: popup lists enabled agents matching the filter. Selection binds the agent to the new chat.
-3. **Active chat**: popup gains a second section labelled "MCP" alongside the agent section. Selecting an agent row switches the chat's active agent (see [Multi-Agent Chats](../multi_agent/multi_agent.md)). Selecting an MCP row attaches that MCP to the chat's on-demand set (see [On-Demand MCP](../../mcp/on_demand/on_demand.md)).
+3. **Active chat**: popup gains a second section labelled "MCP" alongside the agent section. Selecting an agent row attaches it as an on-demand orchestrated tool — promoting a direct-A2A or plain LLM chat to orchestrated on the first such pick (see [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md)). Selecting an MCP row attaches that MCP to the chat's on-demand set (see [On-Demand MCP](../../mcp/on_demand/on_demand.md)).
 4. Arrow keys traverse the flattened list across both sections; Enter / Tab applies the highlighted row and removes the `@token` from the input; Esc closes without applying.
 
 ### `#` — Example prompt picker

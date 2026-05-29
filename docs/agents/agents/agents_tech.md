@@ -16,7 +16,7 @@
 | IPC handlers (CRUD) | `src/main/ipc/agent.ipc.ts` — thin handlers delegating to `agentService` |
 | IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` — fetch-card, test, send-message (MessagePort), cancel-message, get-session. `send-message` is a thin controller — delegates persistence to `messageRoutingService` and the A2A pump to `a2aStreamingService` |
 | A2A streaming service | `src/main/services/a2aStreamingService.ts` — A2A client init, stream pump, session save, cancel registry |
-| Message routing service | `src/main/services/messageRoutingService.ts` — single chokepoint for user-message persistence + wire-content assembly + catch-up cursor advance, used by both `agent:send-message` and `llm:send-message` |
+| Message routing service | `src/main/services/messageRoutingService.ts` — single chokepoint for user-message persistence + background title generation, used by both `agent:send-message` and `llm:send-message` |
 | IPC wrap | `src/main/ipc/_wrap.ts` — `ipcHandle()` used by all `agent:*` channels |
 | IPC registration | `src/main/ipc/index.ts` — `registerAgentHandlers()` |
 | DB schema (agents) | `src/main/db/schema.ts` — `agents` table |
@@ -93,7 +93,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 | `agent:delete` | handle | `agentId: string` | `{ success }` |
 | `agent:fetch-card` | handle | `{ cardUrl, accessToken? }` | `{ success, card?, protocol?: { url, version }, error? }` |
 | `agent:test` | handle | `agentId: string` | `{ success, card?, error? }` — also updates DB cached metadata + protocol interface |
-| `agent:send-message` | on (MessagePort) | `AgentSendPayload = { agentId, chatId, content, catchupPacket?, rewrittenText?, originalText? }` (from `src/shared/ipcPayloads.ts`) | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
+| `agent:send-message` | on (MessagePort) | `AgentSendPayload = { agentId, chatId, content, attachments? }` (from `src/shared/ipcPayloads.ts`) | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
 | `agent:cancel-message` | handle | `requestId: string` | `{ success }` |
 | `agent:get-session` | handle | `chatId: string` | `{ id, chatId, agentId, contextId, taskId, taskState } \| null` |
 
@@ -132,7 +132,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 
 - `registerA2AHandlers()` — Registers A2A protocol-specific channels (fetch-card, test, send-message, cancel-message, get-session).
 - `agent:send-message` handler — Thin streaming controller via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Uses `agentService.resolveEndpointIfNeeded()` and `agentService.resolveAccessToken()`. Then delegates the work to two services:
-  - `messageRoutingService.prepareAgentSend({ userId, chatId, agentId, userContent, rewrittenText, originalText, catchupPacket })` persists the user message with all multi-agent metadata, assembles `wireContent` (catch-up prepended), and advances the `chat_agent_sessions` cursor for this (chat, agent) pair. Returns `{ wireContent, userMessageId }`. See [Multi-Agent Chats — Tech](../../chat/multi_agent/multi_agent_tech.md).
+  - `messageRoutingService.prepareAgentSend({ userId, chatId, agentId, userContent, attachments })` persists the user message (stamping `addressedAgentId`) and fires background title generation. Returns `{ wireContent, userMessageId }` where `wireContent === userContent`.
   - `a2aStreamingService.streamToAgent({ chatId, agentId, agentName, endpointUrl, cardUrl, accessToken, wireContent, port })` owns the entire A2A pump (see next section).
 - `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
 - `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.

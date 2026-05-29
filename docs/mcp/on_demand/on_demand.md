@@ -10,8 +10,8 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - **On-Demand MCP** — An MCP server the user `@-mentions` inside the chat composer. Attached to the chat in a separate table (`chat_on_demand_mcps`) so the user's per-chat engagements don't tangle with the chat mode's baseline.
 - **Engagement** — Picking an MCP from the `@` popup. Persists for the rest of the chat session until the user removes it via the chip.
 - **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement.
-- **MCP Chip** — A removable pill rendered next to the active-agent chip below the composer. One per on-demand MCP; clicking the `×` detaches that MCP from the chat.
-- **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it instead of switching the active agent.
+- **MCP Chip** — A removable pill rendered with the other capability chips below the composer. One per on-demand MCP; clicking the `×` detaches that MCP from the chat.
+- **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it for the chat (an agent row instead attaches an on-demand agent).
 
 ## User Stories / Flows
 
@@ -28,7 +28,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 1. User is in a regular chat (LLM root, no MCP attached) and realises they need GitHub access for the next message.
 2. User types `@gith` in the composer. The popup opens with an "MCP" section containing the matching GitHub MCP entry.
-3. User selects the entry with Enter / click. The `@gith` token disappears from the composer; a "GitHub" chip appears next to the active-agent chip.
+3. User selects the entry with Enter / click. The `@gith` token disappears from the composer; a "GitHub" chip appears in the composer's capability-chip strip.
 4. User types `list my pull requests` and presses Enter.
 5. The LLM stream loop attaches the GitHub MCP tools to this send AND silently prepends `[System note: For this message the user specifically enabled the MCP server "GitHub"...]` to the user content so the model understands why the new tools are present.
 6. The LLM uses the new tools to answer. The GitHub chip stays in place for follow-up turns — the announce prefix is *not* re-sent.
@@ -47,7 +47,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 ### Engaging an MCP that's also in the chat mode baseline
 
 1. The current chat mode already includes the GitHub MCP. The user `@-mentions` GitHub anyway.
-2. The on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) but the LLM still receives the silent announcement that the user just emphasised this server. The chip appears next to the active-agent chip alongside the baseline.
+2. The on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) but the LLM still receives the silent announcement that the user just emphasised this server. The chip appears in the capability-chip strip alongside the baseline.
 
 ### Engaging an MCP that's disconnected
 
@@ -56,7 +56,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ## Business Rules
 
-- On-demand MCPs apply to LLM-channel sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them. (Picks made on the new-chat screen still persist onto the chat row, so a later "switch back to LLM root" in a multi-agent chat picks them up.)
+- On-demand MCPs apply to LLM-channel (orchestrator) sends only. A2A agent turns have their own tool set and bypass `chatStreamingService` — the on-demand list does not affect them. (Picks made on the new-chat screen still persist onto the chat row, so an orchestrated chat picks them up on its first send.)
 - The on-demand set is persisted per chat (`chat_on_demand_mcps`) and survives reload, app restart, and chat reopen. It is intentionally *not* per-message.
 - New-chat screen picks live in a renderer-only buffer until the chat is created. `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.

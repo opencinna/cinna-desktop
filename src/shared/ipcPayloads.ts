@@ -12,12 +12,6 @@ export interface AgentSendPayload {
   agentId: string
   chatId: string
   content: string
-  /** Catch-up replay packet to prepend to wire content. Empty when unused. */
-  catchupPacket?: string
-  /** Smart Rewrite output (persisted on the user message). */
-  rewrittenText?: string | null
-  /** User's literal pre-rewrite text (persisted on the user message). */
-  originalText?: string | null
   /**
    * File attachments to ship with this user turn. Persisted on the user
    * message (so the bubble can re-render badges from history) and forwarded
@@ -29,8 +23,6 @@ export interface AgentSendPayload {
 export interface LlmSendPayload {
   chatId: string
   content: string
-  /** Catch-up replay packet to prepend to wire content. Empty when unused. */
-  catchupPacket?: string
   /**
    * File attachments to ship with this user turn. Persisted on the user
    * message and resolved by the chat-streaming service into provider-native

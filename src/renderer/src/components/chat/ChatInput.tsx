@@ -10,7 +10,7 @@ import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { NoteMentionPopup } from './NoteMentionPopup'
-import { useAgents, useAddOnDemandAgent } from '../../hooks/useAgents'
+import { useAgents, useAttachAgentToChat } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
@@ -22,10 +22,6 @@ import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePr
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
-import { useRewriteUX } from '../../hooks/useRewriteUX'
-import { RewriteHintBar } from './RewriteHintBar'
-import { RewriteFailureModal } from './RewriteFailureModal'
-import { ActiveAgentChip } from './ActiveAgentChip'
 import { OnDemandMcpChips } from './OnDemandMcpChips'
 import { OnDemandAgentChips } from './OnDemandAgentChips'
 import { CommPatternBadge } from './CommPatternBadge'
@@ -172,9 +168,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // targets, local for raw LLM chats.
   const attachScope: 'cinna' | 'local' = useMemo(() => {
     if (!chatId) return 'cinna'
-    if (chatData?.agentId || chatData?.activeAgentId) return 'cinna'
+    // Direct-A2A chats (agent root, not orchestrated) upload to the Cinna
+    // backend; orchestrated and plain LLM chats use the local store.
+    if (chatData?.agentId && !chatData?.orchestrated) return 'cinna'
     return 'local'
-  }, [chatId, chatData?.agentId, chatData?.activeAgentId])
+  }, [chatId, chatData?.agentId, chatData?.orchestrated])
   const {
     attachments: pendingAttachments,
     isUploading,
@@ -185,9 +183,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     clear: clearPendingAttachments,
     setError: setAttachError
   } = useChatAttachments(chatId, attachScope)
-  // Single source of truth for everything multi-agent: routing decisions,
-  // active-agent switching, Smart Rewrite, dispatch. Read fresh snapshots
-  // internally at every action so there is no closure-staleness window.
+  // Routing chokepoint: decides direct-A2A vs orchestrated/LLM dispatch from a
+  // fresh cache snapshot at submit time.
   const composer = useChatComposer(chatId)
 
   const clearComposer = useCallback(() => {
@@ -197,10 +194,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       textareaRef.current.style.height = 'auto'
     }
   }, [clearPendingAttachments])
-
-  // Hook owns rewrite state machine + textarea side-effects (resize, focus,
-  // selection). ChatInput just calls into it from key/change/submit handlers.
-  const rewriteUX = useRewriteUX({ textareaRef, setInput, clearComposer })
 
   // Local kbd-nav index for the `~` chat-mode popup. Reset to the active mode
   // (or the first row) whenever the popup is freshly opened so navigation
@@ -288,14 +281,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [allMcps]
   )
   const addOnDemandMcp = useAddOnDemandMcp()
-  const addOnDemandAgent = useAddOnDemandAgent()
-
-  // Orchestrated chats (created with agents-as-tools) route an in-chat
-  // `@`-agent pick to *add another tool* rather than the multi-agent
-  // switchboard switch (which only makes sense when talking to one agent at a
-  // time). Read off the persisted chat flag so the gesture stays stable even
-  // if the user removes every agent chip.
-  const isOrchestratedChat = !!chatId && chatData?.orchestrated === true
+  // In-chat `@`-agent gesture: attach the agent as an orchestrated tool,
+  // promoting a direct-A2A or plain LLM chat on the first pick. Owns the
+  // promote→add→error sequence so the view stays declarative.
+  const attachAgent = useAttachAgentToChat(chatId)
 
   const boundAgent = useMemo(
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
@@ -319,7 +308,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
    * the moment the user pivots to an incompatible target.
    */
   const attachmentTargetAgent: AgentData | null = chatId
-    ? composer.activeAgent ?? boundAgent ?? null
+    ? boundAgent ?? null
     : selectedAgent ?? null
   const targetIsRemote = attachmentTargetAgent?.source === 'remote'
 
@@ -519,28 +508,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const selectAgent = useCallback(
     (agent: AgentData) => {
+      replaceTriggerToken('')
       if (chatId) {
-        replaceTriggerToken('')
-        if (isOrchestratedChat) {
-          // Orchestrated chat: an in-chat `@`-agent pick attaches another
-          // agent as a tool (persists via `chat:on-demand-agent-add`); the
-          // chip appears below the composer and the next send unions it.
-          void addOnDemandAgent.mutateAsync({ chatId, agentId: agent.id })
-          return
-        }
-        // Otherwise this is the multi-agent *switch* action: flip the chat's
-        // active agent. The chip below the input updates via the composer
-        // hook's reactive subscription; the next Enter routes via that hook.
-        void composer.switchActiveAgent(agent.id)
+        // Active chat: attach as an orchestrated tool (promoting + guarding the
+        // sole-bound-agent no-op + error handling are owned by the hook).
+        void attachAgent(agent.id)
         return
       }
-      // New-chat agent picker: drop the @token; every pick adds to the
-      // orchestrated-mode buffer (mirror of the MCP buffer). Routing (A2A vs
-      // orchestrated) is decided at send time from the combined selection.
-      replaceTriggerToken('')
+      // New-chat agent picker: every pick adds to the orchestrated-mode buffer
+      // (mirror of the MCP buffer). Routing (A2A vs orchestrated) is decided at
+      // send time from the combined selection.
       onTogglePendingAgent?.(agent.id)
     },
-    [replaceTriggerToken, onTogglePendingAgent, chatId, composer, isOrchestratedChat, addOnDemandAgent]
+    [replaceTriggerToken, onTogglePendingAgent, chatId, attachAgent]
   )
 
   /**
@@ -629,13 +609,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // Double-Enter note expansion: right after the user picked a note via
     // the `?` popup, an Enter on an empty composer means "drop the note's
     // body into the input as text" — a prompt-template paste, not a send.
-    // Bypass when the rewrite state machine owns Enter (confirming step)
-    // or when the user has already typed text alongside the badges.
-    if (
-      pendingExpansionNoteId &&
-      trimmed.length === 0 &&
-      rewriteUX.state === 'idle'
-    ) {
+    // Bypassed when the user has already typed text alongside the badges.
+    if (pendingExpansionNoteId && trimmed.length === 0) {
       const expandId = pendingExpansionNoteId
       // Disarm AND detach the note synchronously before awaiting the fetch.
       // A rapid second Enter that lands during the await must not fall
@@ -688,16 +663,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       return
     }
 
-    // Second Enter while confirming a rewrite — fire the (possibly edited)
-    // rewritten text via the composer.
-    const confirm = rewriteUX.beginConfirmDispatch()
-    if (confirm) {
-      await composer.confirmRewrite(confirm.text, confirm.pending)
-      clearPendingAttachments()
-      clearPendingNotes()
-      return
-    }
-
     // Convert any pending notes into real .md attachments via the IPC
     // ingest path so they ride the same code-path as user-attached files
     // for the rest of the send. Scope mirrors the file pipeline: Cinna
@@ -717,13 +682,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
 
-    // Hand off to the composer hook, which decides everything from a fresh
-    // cache snapshot: parse mentions, resolve target, build catch-up,
-    // optionally rewrite, dispatch on the right channel. The active-chat
-    // composer only ever holds already-ingested attachments — `pending`
-    // is gated to the new-chat path by `useChatAttachments` — so the
-    // type narrow below is safe.
-    rewriteUX.beginRewriting()
+    // Hand off to the composer hook, which decides direct-A2A vs
+    // orchestrated/LLM dispatch from a fresh cache snapshot. The active-chat
+    // composer only ever holds already-ingested attachments — `pending` is
+    // gated to the new-chat path by `useChatAttachments` — so the type narrow
+    // below is safe.
     const persistedAttachments = attachmentsToSend?.filter(
       (a): a is MessageAttachment => a.source !== 'pending'
     )
@@ -731,22 +694,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       noteAttachments.length > 0
         ? [...(persistedAttachments ?? []), ...noteAttachments]
         : persistedAttachments
-    const result = await composer.submit(trimmed, mergedAttachments)
-    rewriteUX.handleSubmitResult(result)
-    if (result.kind === 'sent' || result.kind === 'rewrite-pending') {
-      // Sent: drop the attachments now that they live on the message row.
-      // Rewrite-pending: pending.attachments owns them; clear the composer's
-      // copy so a second send (after rewrite confirmation) doesn't double-attach.
-      clearPendingAttachments()
-      clearPendingNotes()
-    }
+    await composer.submit(trimmed, mergedAttachments)
+    clearPendingAttachments()
+    clearPendingNotes()
   }, [
     input,
     isStreaming,
     chatId,
     onNewChat,
     composer,
-    rewriteUX,
     pendingNotes,
     attachScope,
     attachNotesAsync,
@@ -851,12 +807,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
     }
 
-    // Esc during rewrite confirmation: revert to the user's original text.
-    if (e.key === 'Escape' && rewriteUX.handleEscape()) {
-      e.preventDefault()
-      return
-    }
-
     if (e.key === 'Escape' && onDoubleEscape) {
       e.preventDefault()
       const now = Date.now()
@@ -870,11 +820,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     }
 
     if (e.key === 'Enter' && !e.shiftKey) {
-      // Block Enter while a rewrite call is in flight to prevent double-send.
-      if (rewriteUX.state === 'rewriting') {
-        e.preventDefault()
-        return
-      }
       e.preventDefault()
       void handleSend()
     }
@@ -893,10 +838,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     // so the next Enter should send normally with the note as a `.md`
     // attachment instead of expanding inline.
     if (pendingExpansionNoteId) setPendingExpansionNoteId(null)
-
-    // Clearing the composer mid-confirm abandons the pending rewrite (so the
-    // next typed message starts fresh and re-triggers a rewrite if applicable).
-    rewriteUX.handleComposerCleared(value)
 
     // `~` shortcut — opens the mode popup only when it's the first and only
     // character typed. Continuing to type closes the popup and leaves the `~`
@@ -935,22 +876,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setTriggerStart(token.start)
     setTriggerIndex(0)
   }
-
-  const handleSendAnyway = useCallback((): void => {
-    const pending = rewriteUX.consumePendingForSendAnyway()
-    if (pending) {
-      void composer.sendRaw(pending)
-      // pending.attachments already carries the materialized notes — drop
-      // the composer's badges so the next send doesn't re-ingest them.
-      clearPendingAttachments()
-      clearPendingNotes()
-    }
-  }, [composer, rewriteUX, clearPendingAttachments, clearPendingNotes])
-
-  const handleDisableRewrite = useCallback((): void => {
-    rewriteUX.dismissError()
-    void composer.disableSmartAssist()
-  }, [composer, rewriteUX])
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
@@ -1026,8 +951,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           getSecondary={tildeModePopup.composeSecondary}
         />
       )}
-
-      <RewriteHintBar state={rewriteUX.state} />
 
       <div
         className="relative rounded-2xl bg-[var(--color-bg-input)] border overflow-hidden transition-colors duration-200"
@@ -1108,16 +1031,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         </div>
       )}
 
-      {rewriteUX.error && rewriteUX.pending && (
-        <RewriteFailureModal
-          error={rewriteUX.error}
-          pending={rewriteUX.pending}
-          onCancel={rewriteUX.dismissError}
-          onDisable={handleDisableRewrite}
-          onSendAnyway={handleSendAnyway}
-        />
-      )}
-
       {previewNote && (
         <NotePreviewModal
           noteId={previewNote.id}
@@ -1129,14 +1042,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       <div className="flex items-center justify-between px-1 pt-2">
         <div className="flex items-center gap-1.5 flex-wrap">
           {leftSlot}
-          {chatId && composer.activeAgent ? (
-            <ActiveAgentChip
-              activeAgent={composer.activeAgent}
-              rootAgent={composer.rootAgent}
-              rootLabel={composer.rootLabel}
-              onSwitchBack={(target) => void composer.switchActiveAgent(target)}
-            />
-          ) : chatId && boundAgent ? (
+          {chatId && boundAgent ? (
             <div
               className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border
                 text-[var(--color-accent)] border-[var(--color-accent)] bg-[var(--color-accent)]/10"

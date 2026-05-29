@@ -15,8 +15,7 @@
 | `src/main/agents/streamPartsAccumulator.ts` | `StreamPartsAccumulator` recognises `'notice'` in `VALID_KINDS`. Inside `ingest()`, notice parts short-circuit before the `appendToList` call: deltas accumulate into a private `notices: Map<partKey, string>` and post to the port (`{type:'delta', kind:'notice', text}`) but never join `parts[]` or `answer`. `snapshotNotices()` returns `AccumulatedNotice[]` in insertion order. |
 | `src/main/services/a2aStreamingService.ts` | After each stream completes (both the streaming and non-streaming branches of `streamToAgent`), iterates `accumulator.snapshotNotices()` and persists each via `messageRepo.saveTransition` **before** the `messageRepo.saveAssistant` call, so `sort_order` matches wire order. Logs `noticeCount` on `Stream complete` / `Non-streaming complete`. |
 | `src/main/db/messages.ts` | `messageRepo.saveTransition({ chatId, content, sourceAgentId })` writes a row with `role: 'agent_transition'`. Returns the new row id. `SaveTransitionMessage` interface exposed alongside `SaveAssistantMessage` / `SaveErrorMessage`. |
-| `src/main/services/chatStreamingService.ts` | LLM history rebuild already filters `m.role === 'agent_transition'` — notices written by the A2A path are therefore invisible to subsequent LLM-channel sends in the same chat. |
-| `src/main/services/multiAgentService.ts` | `turnLineForCatchup` returns `null` for any role that is not `'user'` or `'assistant'`, so `agent_transition` rows are already excluded from catch-up replay. |
+| `src/main/services/chatStreamingService.ts` | LLM history rebuild already filters `m.role === 'agent_transition'` — notices written by the A2A path are therefore invisible to subsequent LLM-channel (orchestrator) sends in the same chat. |
 
 ### Preload
 
@@ -73,7 +72,7 @@ No settings, env vars, or feature flags. The contract is purely the `cinna.conte
 ## Security
 
 - Notice content is treated as untrusted text from the agent — same trust boundary as ordinary `text` parts. Rendered through the same React text path; no `dangerouslySetInnerHTML`.
-- Notices never feed back into the LLM (role-filtered out of history rebuild) or into other agents (role-filtered out of catch-up replay). A compromised or misbehaving agent cannot use a notice to slip text into another LLM/agent's input.
+- Notices never feed back into the LLM — they are role-filtered out of the history rebuild. A compromised or misbehaving agent cannot use a notice to slip text into the orchestrator's input.
 - `agent_transition` rows are scoped to the chat that received them; no cross-chat exposure.
 
 ## Backend Coordination

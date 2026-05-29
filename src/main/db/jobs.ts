@@ -444,8 +444,6 @@ export const jobRunsRepo = {
           providerId: input.providerId,
           modeId: input.modeId,
           agentId: input.agentId,
-          activeAgentId: null,
-          smartAssistDisabled: false,
           originatingJobRunId: null,
           // Job-spawned chats are hidden from the chat list by default; the
           // user can promote them via the "Move to Chats" button on the run.

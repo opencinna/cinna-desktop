@@ -12,7 +12,6 @@ import { migrateAgents } from './migrations/agents'
 import { migrateA2aSessions } from './migrations/a2a-sessions'
 import { migrateAgentOverrides } from './migrations/agent-overrides'
 import { migrateUsers, migrateUserIdColumns } from './migrations/users'
-import { migrateChatAgentSessions } from './migrations/chat-agent-sessions'
 import { migrateChatFiles } from './migrations/chat-files'
 import { migrateJobs } from './migrations/jobs'
 import { migrateNotes } from './migrations/notes'
@@ -77,7 +76,6 @@ function runMigrations(): void {
   migrateAgents(sqlite)
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)
-  migrateChatAgentSessions(sqlite)
   migrateChatFiles(sqlite)
   // Jobs depend on chats + mcp_providers being present (FK references).
   migrateJobs(sqlite)

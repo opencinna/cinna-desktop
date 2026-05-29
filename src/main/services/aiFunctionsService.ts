@@ -90,6 +90,58 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
 }
 
 /**
+ * Build the ordered provider/model candidate list for a chat: its own chat
+ * mode, then the user's default chat mode, then (LLM chats) the chat's bound
+ * provider/model. Shared by the adapter resolver and the provider/model-pair
+ * resolver so both honor the same precedence.
+ */
+function buildChatModeCandidates(
+  userId: string,
+  chatId: string
+): Array<{ source: string } & ProviderModelPair> {
+  const chat = chatRepo.getOwned(userId, chatId)
+  if (!chat) {
+    throw new AiFunctionError('no_provider', 'Chat not found for AI-function adapter resolution')
+  }
+  // Chat modes are scoped to the settings (shared) user, not the active profile.
+  const settingsUserId = getSettingsScopeUserId()
+
+  const candidates: Array<{ source: string } & ProviderModelPair> = []
+  if (chat.modeId) {
+    const mode = chatModeRepo.getOwned(settingsUserId, chat.modeId)
+    if (mode) {
+      candidates.push({ source: 'chat-mode', providerId: mode.providerId, modelId: mode.modelId })
+    }
+  }
+  const defaultMode = chatModeRepo.list(settingsUserId).find((m) => m.isDefault)
+  if (defaultMode) {
+    candidates.push({
+      source: 'default-mode',
+      providerId: defaultMode.providerId,
+      modelId: defaultMode.modelId
+    })
+  }
+  if (chat.providerId && chat.modelId) {
+    candidates.push({ source: 'chat-bound', providerId: chat.providerId, modelId: chat.modelId })
+  }
+
+  logger.debug('resolve adapter candidates', {
+    chatId,
+    profileUserId: userId,
+    settingsUserId,
+    chatModeId: chat.modeId,
+    defaultModeId: defaultMode?.id ?? null,
+    candidates: candidates.map((c) => ({
+      source: c.source,
+      providerId: c.providerId,
+      modelId: c.modelId
+    }))
+  })
+
+  return candidates
+}
+
+/**
  * One-shot LLM utilities shared across features that need to run a short,
  * non-streaming, non-tool LLM call — Smart Rewrite (multi-agent), future
  * chat-title autogeneration, future chat-summary, etc.
@@ -104,88 +156,29 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
  */
 export const aiFunctions = {
   /**
-   * Resolve an adapter to use for AI-function calls scoped to a specific
-   * chat. Tries, in order:
-   *   1. The chat's own chat mode (if set and configured)
-   *   2. The user's default chat mode
-   *   3. The chat's bound provider/model (LLM chats only)
-   * Throws `AiFunctionError('no_provider')` when none yield a usable adapter.
+   * Resolve the provider/model pair an orchestrated chat should run on, using
+   * the same precedence as the adapter resolver (chat mode → default mode →
+   * chat-bound). Each candidate is validated via {@link tryResolve} so a
+   * provider that is missing, disabled, or has no key is skipped. Throws
+   * `AiFunctionError('no_provider')` when none are usable — the caller maps
+   * this to the "configure a model" refusal when promoting a chat.
    */
-  resolveAdapterFromChatMode(userId: string, chatId: string): ResolvedAdapter {
-    const chat = chatRepo.getOwned(userId, chatId)
-    if (!chat) {
-      throw new AiFunctionError(
-        'no_provider',
-        'Chat not found for AI-function adapter resolution'
-      )
-    }
-
-    // Chat modes are scoped to the settings (shared) user, not the active
-    // profile — see provider.ipc.ts / chatmode.ipc.ts.
-    const settingsUserId = getSettingsScopeUserId()
-
-    const candidates: Array<{ source: string } & ProviderModelPair> = []
-    if (chat.modeId) {
-      const mode = chatModeRepo.getOwned(settingsUserId, chat.modeId)
-      if (mode) {
-        candidates.push({
-          source: 'chat-mode',
-          providerId: mode.providerId,
-          modelId: mode.modelId
-        })
-      }
-    }
-    const allModes = chatModeRepo.list(settingsUserId)
-    const defaultMode = allModes.find((m) => m.isDefault)
-    if (defaultMode) {
-      candidates.push({
-        source: 'default-mode',
-        providerId: defaultMode.providerId,
-        modelId: defaultMode.modelId
-      })
-    }
-    if (chat.providerId && chat.modelId) {
-      candidates.push({
-        source: 'chat-bound',
-        providerId: chat.providerId,
-        modelId: chat.modelId
-      })
-    }
-
-    logger.debug('resolve adapter candidates', {
-      chatId,
-      profileUserId: userId,
-      settingsUserId,
-      chatModeId: chat.modeId,
-      modesAvailable: allModes.length,
-      defaultModeId: defaultMode?.id ?? null,
-      candidates: candidates.map((c) => ({
-        source: c.source,
-        providerId: c.providerId,
-        modelId: c.modelId
-      }))
-    })
-
+  resolveProviderModelFromChatMode(
+    userId: string,
+    chatId: string
+  ): { providerId: string; modelId: string } {
+    const candidates = buildChatModeCandidates(userId, chatId)
     for (const candidate of candidates) {
-      const resolved = tryResolve(candidate)
-      if (resolved) {
-        logger.info('resolved adapter', {
+      if (candidate.providerId && candidate.modelId && tryResolve(candidate)) {
+        logger.info('resolved provider/model', {
           source: candidate.source,
           providerId: candidate.providerId,
           modelId: candidate.modelId
         })
-        return resolved
+        return { providerId: candidate.providerId, modelId: candidate.modelId }
       }
     }
-    logger.warn('no adapter resolved', {
-      chatId,
-      profileUserId: userId,
-      settingsUserId,
-      modesAvailable: allModes.length,
-      defaultModeFound: !!defaultMode,
-      defaultModeHasProvider: !!defaultMode?.providerId,
-      defaultModeHasModel: !!defaultMode?.modelId
-    })
+    logger.warn('no provider/model resolved', { chatId, profileUserId: userId })
     throw new AiFunctionError(
       'no_provider',
       'No chat mode with a configured LLM provider is available for this AI function'

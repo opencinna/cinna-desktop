@@ -41,12 +41,14 @@ export function migrateMessages(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE messages ADD COLUMN addressed_agent_id TEXT`)
   }
 
-  if (!hasColumn(sqlite, 'messages', 'rewritten_text')) {
-    sqlite.exec(`ALTER TABLE messages ADD COLUMN rewritten_text TEXT`)
+  // Smart Rewrite removed with the multi-agent switchboard — the orchestrator
+  // authors each agent's message, so the pre-rewrite/rewritten text columns
+  // are obsolete.
+  if (hasColumn(sqlite, 'messages', 'rewritten_text')) {
+    sqlite.exec(`ALTER TABLE messages DROP COLUMN rewritten_text`)
   }
-
-  if (!hasColumn(sqlite, 'messages', 'original_text')) {
-    sqlite.exec(`ALTER TABLE messages ADD COLUMN original_text TEXT`)
+  if (hasColumn(sqlite, 'messages', 'original_text')) {
+    sqlite.exec(`ALTER TABLE messages DROP COLUMN original_text`)
   }
 
   if (!hasColumn(sqlite, 'messages', 'source_agent_id')) {

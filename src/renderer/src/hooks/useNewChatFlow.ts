@@ -10,6 +10,7 @@ import type {
   PendingAttachment
 } from '../../../shared/attachments'
 import { deriveTitleFromMessage } from '../../../shared/chatTitle'
+import { unwrapIpcError } from '../utils/ipcError'
 
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
 type ModelData = Awaited<ReturnType<typeof window.api.providers.listModels>>[number]
@@ -241,11 +242,10 @@ export function useNewChatFlow(): {
         useChatStore.getState().setActiveChatId(chat.id)
         startLlm(chat.id, message, { attachments: [...resolved, ...noteAttachments] })
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
         // Surface the error so the user knows the send didn't go through
         // — without this, a failed ingest leaves an empty chat row and a
         // cleared composer with no feedback.
-        setSendError(msg || 'Could not start new chat')
+        setSendError(unwrapIpcError(err, 'Could not start new chat'))
         // Best-effort cleanup of the orphan chat. The user can retry
         // without dragging accumulated empty rows along.
         if (chatId) {

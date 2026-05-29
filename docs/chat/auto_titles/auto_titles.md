@@ -132,10 +132,9 @@ Renderer (useChatList effect)
 
 ## Integration Points
 
-- [AI Functions](../../llm/ai_functions/ai_functions.md) — Underlying one-shot LLM primitive. The title service is the second consumer (after [Multi-Agent Chats](../multi_agent/multi_agent.md)'s Smart Rewrite).
+- [AI Functions](../../llm/ai_functions/ai_functions.md) — Underlying one-shot LLM primitive. The title service is the primary consumer of `runSingleShot`.
 - [Chat Modes](../chat_modes/chat_modes.md) — The user's default chat mode supplies the provider/model used for the title LLM call (`resolveAdapterFromDefaultMode`).
-- [Messaging](../messaging/messaging.md) — Defines the `messages` table the COUNT/first-message queries target, and the `prepareLlmSend` chokepoint where the trigger fires.
-- [Multi-Agent Chats](../multi_agent/multi_agent.md) — Title generation also fires on `prepareAgentSend`, so agent-routed first messages get titles too.
+- [Messaging](../messaging/messaging.md) — Defines the `messages` table the COUNT/first-message queries target. The trigger fires from both `prepareLlmSend` and `prepareAgentSend`, so the first message gets a title whether it routes to the orchestrator or directly to an agent.
 - [Settings](../../ui/settings/settings.md) — The Features tab hosts the toggle.
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — `app_settings` is installation-global (no `user_id` column), matching the scope of Chat Modes and LLM Providers.
 
