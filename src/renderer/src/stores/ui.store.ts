@@ -47,6 +47,8 @@ interface UIStore {
   theme: Theme
   logsOpen: boolean
   agentStatusOpen: boolean
+  /** Agent whose status detail the overlay should show (null = grid view). */
+  agentStatusDetailId: string | null
   pendingAgentId: string | null
   verboseMode: boolean
   setActiveView: (view: ActiveView) => void
@@ -59,6 +61,7 @@ interface UIStore {
   toggleTheme: () => void
   setLogsOpen: (open: boolean) => void
   setAgentStatusOpen: (open: boolean) => void
+  setAgentStatusDetailId: (id: string | null) => void
   setPendingAgentId: (id: string | null) => void
   toggleVerboseMode: () => void
 }
@@ -74,6 +77,7 @@ export const useUIStore = create<UIStore>((set) => ({
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   logsOpen: false,
   agentStatusOpen: false,
+  agentStatusDetailId: null,
   pendingAgentId: null,
   verboseMode: localStorage.getItem(VERBOSE_KEY) === '1',
   setActiveView: (view) => set({ activeView: view }),
@@ -93,6 +97,7 @@ export const useUIStore = create<UIStore>((set) => ({
     }),
   setLogsOpen: (open) => set({ logsOpen: open }),
   setAgentStatusOpen: (open) => set({ agentStatusOpen: open }),
+  setAgentStatusDetailId: (id) => set({ agentStatusDetailId: id }),
   setPendingAgentId: (id) => set({ pendingAgentId: id }),
   toggleVerboseMode: () =>
     set((state) => {

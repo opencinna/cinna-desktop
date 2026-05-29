@@ -30,7 +30,8 @@ export function useAgentStatus(): {
   data: AgentStatusSnapshot[]
   isLoading: boolean
   error: AgentStatusRequestError | null
-  refetch: () => void
+  /** Resolves `true` when the refetch succeeded, `false` on any error. */
+  refetch: () => Promise<boolean>
 } {
   const currentUser = useAuthStore((s) => s.currentUser)
   const enabled = currentUser?.type === 'cinna_user'
@@ -57,7 +58,14 @@ export function useAgentStatus(): {
     data: query.data ?? [],
     isLoading: query.isLoading,
     error: query.error instanceof AgentStatusRequestError ? query.error : null,
-    refetch: () => query.refetch()
+    refetch: async () => {
+      try {
+        const r = await query.refetch()
+        return !r.isError
+      } catch {
+        return false
+      }
+    }
   }
 }
 

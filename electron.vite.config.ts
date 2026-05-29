@@ -27,6 +27,14 @@ export default defineConfig({
         '@renderer': resolve('src/renderer/src')
       }
     },
+    build: {
+      rollupOptions: {
+        input: {
+          index: resolve('src/renderer/index.html'),
+          trayPanel: resolve('src/renderer/trayPanel.html')
+        }
+      }
+    },
     plugins: [react(), tailwindcss()]
   }
 })

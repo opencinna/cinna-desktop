@@ -80,4 +80,5 @@ App
 - [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md) — ⌘\` opens the logs overlay regardless of the Console toggle.
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — Profile dropdown lists local accounts and triggers account switching / sign-out.
 - [Agent Status](../../agents/agent_status/agent_status.md) — Sidebar-footer status indicator and overlay.
+- [Menu-Bar Tray](../tray/tray.md) — macOS menu-bar icon + popover; created when the main window opens and destroyed when it closes.
 - [Logger](../../development/logger/logger.md) — Console toggle and overlay.

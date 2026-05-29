@@ -15,6 +15,7 @@ import { registerNoteHandlers } from './note.ipc'
 import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
 import { registerSettingsHandlers } from './settings.ipc'
+import { registerTrayHandlers } from './tray.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -34,4 +35,5 @@ export function registerAllIpcHandlers(): void {
   registerCinnaHandlers()
   registerCatalogHandlers()
   registerSettingsHandlers()
+  registerTrayHandlers()
 }

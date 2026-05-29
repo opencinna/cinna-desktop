@@ -47,6 +47,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Task Activity** | UI grouping for system-generated comment types (`status_change`, `assignment`, `system`) — shown as a compact collapsible log separate from authored comments |
 | **Note** | A profile-scoped markdown document (title + body) the user inline-edits in the Notes tab. Autosaves on debounce; rendered with the same `react-markdown` stack used for chat bubbles |
 | **Note Folder** | User-defined sidebar grouping for notes (profile-scoped, name + collapsed-state + sort position). Mirrors Job Folder semantics — a thin collapsible separator that owns ordering, not content |
+| **Tray Popup** | Menu-bar (status-bar) popover window listing agent statuses; opens from the macOS menu-bar tray icon, shows a worst-severity dot, and redirects the main window on click |
 
 ## Domain Map
 
@@ -120,6 +121,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Settings](ui/settings/settings.md) — Settings screen with sidebar navigation, LLM provider and MCP server configuration
 - [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, streaming block auto-expand, and structured tool-call headers in tool narration
 - [Keyboard Shortcuts](ui/keyboard_shortcuts/keyboard_shortcuts.md) — Registry of every shortcut: global menu accelerators (⌘`), context-scoped ESC, chord patterns (double-ESC) and input-popup navigation
+- [Menu-Bar Tray](ui/tray/tray.md) — macOS menu-bar (status-bar) icon with a severity dot + frosted popover listing agent statuses; renderer-pushed icon, separate popup window, redirects the main window on click
 
 ### Development
 - [Setup](development/setup/setup.md) — Dev commands, tech stack, gotchas, project status

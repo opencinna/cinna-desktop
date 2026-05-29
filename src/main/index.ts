@@ -8,6 +8,7 @@ import { mcpManager } from './mcp/manager'
 import { initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
+import { trayService } from './services/trayService'
 import { createLogger } from './logger/logger'
 
 let mainWindow: BrowserWindow | null = null
@@ -121,6 +122,15 @@ function createWindow(): void {
 
   mainWindow.on('ready-to-show', () => {
     mainWindow!.show()
+  })
+
+  // The menu-bar tray lives only while a main window exists. Closing the window
+  // (macOS keeps the app alive) tears it down; `activate` rebuilds both.
+  trayService.create({ getMainWindow })
+
+  mainWindow.on('closed', () => {
+    trayService.destroy()
+    mainWindow = null
   })
 
   mainWindow.webContents.on('render-process-gone', (_event, details) => {

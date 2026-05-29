@@ -133,4 +133,5 @@ Renderer
 - [Agents](../agents/agents.md) — The "Start Chat" action uses the existing `pendingAgentId` → `MainArea` → `AgentSelector` flow to preselect the agent and start an A2A chat.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Authenticates via `getCinnaAccessToken()` for every request; a `reauth_required` code is surfaced as a re-auth hint in the overlay's error state.
 - [UI — Settings / Theming](../../ui/settings/settings.md) — Severity and frosted-glass overlay tokens live in `src/renderer/src/assets/main.css` alongside the existing `--color-*` palette and adapt per theme.
+- [Menu-Bar Tray](../../ui/tray/tray.md) — A third surface for agent status: a macOS menu-bar icon with a worst-severity dot and a popover list; clicking a card redirects into this overlay's detail view, and clicking chat starts a chat with the agent.
 - [Logger](../../development/logger/logger.md) — Each outbound request, response, non-OK status, and network error is logged via the `agent-status` scoped logger; visible in the in-app logger overlay.

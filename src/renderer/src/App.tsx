@@ -11,6 +11,7 @@ import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
+import { useTrayIcon } from './hooks/useTrayIcon'
 import {
   consumeForceOnboarding,
   isOnboardingDismissed,
@@ -74,6 +75,8 @@ function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Elemen
 }
 
 function Shell(): React.JSX.Element {
+  // Drives the menu-bar tray icon (severity dot) and the popup's Start-Chat flow.
+  useTrayIcon()
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.

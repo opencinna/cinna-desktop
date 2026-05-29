@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Cinna Status</title>
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
+    <style>
+      html,
+      body {
+        background: transparent;
+        margin: 0;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/trayPanel.tsx"></script>
+  </body>
+</html>

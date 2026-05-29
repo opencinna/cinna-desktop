@@ -28,6 +28,20 @@ export const SEVERITY_DOT: Record<Severity, string> = {
   unknown: 'bg-[var(--color-severity-unknown)]'
 }
 
+/**
+ * Raw hex per severity for canvas painting (tray icon dot). Tailwind/CSS-var
+ * classes can't be read from a `<canvas>` 2d context, so we keep vivid values
+ * that read on both light and dark menu bars. Mirrors the dark-theme palette in
+ * `main.css`.
+ */
+export const SEVERITY_HEX: Record<Severity, string> = {
+  error: '#ef4444',
+  warning: '#fbbf24',
+  info: '#38bdf8',
+  ok: '#10b981',
+  unknown: '#9ca3af'
+}
+
 /** Foreground text uses the `-text` variant for contrast tuning. */
 export const SEVERITY_TEXT: Record<Severity, string> = {
   error: 'text-[var(--color-severity-error-text)]',

@@ -888,6 +888,37 @@ const api = {
       key: K,
       value: AppSettingsSchema[K]
     ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value)
+  },
+
+  tray: {
+    /** Push a PNG data URL (rendered in the renderer) as the menu-bar icon. */
+    setImage: (dataUrl: string, tooltip: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('tray:set-image', { dataUrl, tooltip }),
+    /** From the tray popup: raise the main window and open a chat with this agent. */
+    startChat: (agentId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('tray:start-chat', { agentId }),
+    /** From the tray popup: raise the main window and open this agent's status detail. */
+    openStatusDetail: (agentId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('tray:open-status', { agentId }),
+    closePopup: (): Promise<{ success: boolean }> => ipcRenderer.invoke('tray:close-popup'),
+    /**
+     * Main-window listener for the tray popup's "Start Chat" action. Fires with
+     * the agent id so the renderer can drive its `pendingAgentId` preselect flow.
+     * Returns an unsubscribe function.
+     */
+    onFocusChat: (handler: (data: { agentId: string }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, data: { agentId: string }): void =>
+        handler(data)
+      ipcRenderer.on('tray:focus-chat', listener)
+      return () => ipcRenderer.off('tray:focus-chat', listener)
+    },
+    /** Main-window listener for the tray popup's "view details" action. */
+    onFocusStatus: (handler: (data: { agentId: string }) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, data: { agentId: string }): void =>
+        handler(data)
+      ipcRenderer.on('tray:focus-status', listener)
+      return () => ipcRenderer.off('tray:focus-status', listener)
+    }
   }
 }
 
