@@ -21,6 +21,7 @@ import { agentRepo } from '../db/agents'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
 import { derivePattern } from '../../shared/commPattern'
+import type { JobRunOrigin } from '../../shared/jobs'
 import { cinnaApiService } from './cinnaApiService'
 import { createLogger } from '../logger/logger'
 
@@ -160,6 +161,19 @@ export const jobService = {
   listRuns(userId: string, jobId: string): JobRunRowWithMeta[] {
     requireJob(userId, jobId)
     return jobRunsRepo.listByJob(userId, jobId)
+  },
+
+  /**
+   * Resolve a run id back to its originating job (id + title) for the chat-page
+   * "from job" banner. Returns null when the run is unknown, or its job is
+   * missing/soft-deleted — the banner shouldn't link to a job that's gone.
+   */
+  getRunOrigin(userId: string, runId: string): JobRunOrigin | null {
+    const run = jobRunsRepo.getById(userId, runId)
+    if (!run) return null
+    const job = jobsRepo.getById(userId, run.jobId)
+    if (!job || job.deletedAt) return null
+    return { jobId: job.id, jobTitle: job.title }
   },
 
   /**

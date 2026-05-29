@@ -12,6 +12,7 @@ import { createPortal } from 'react-dom'
 import type { JobRunData, JobRunStatus } from '../../../../shared/jobs'
 import { useOpenChatFromRun, useDeleteJobRun } from '../../hooks/useJobs'
 import { useRefreshCinnaRun, useCinnaServerUrl } from '../../hooks/useCinna'
+import { useOpenExternal } from '../../hooks/useSystem'
 import { useCinnaTaskView } from '../../hooks/useCinnaTaskView'
 import { useShowChatInList } from '../../hooks/useChat'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
@@ -47,6 +48,7 @@ const STATUS_LABEL: Record<JobRunStatus, string> = {
 export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
   const openChatFromRun = useOpenChatFromRun()
   const refreshCinna = useRefreshCinnaRun()
+  const openExternal = useOpenExternal()
   const showChatInList = useShowChatInList()
   const deleteRun = useDeleteJobRun()
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
@@ -89,7 +91,7 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
   const handleOpenCinna = async (): Promise<void> => {
     if (!cinnaUrl) return
     setOpenError(null)
-    const res = await window.api.system.openExternal(cinnaUrl)
+    const res = await openExternal(cinnaUrl)
     if (!res.success) setOpenError(res.error)
   }
 
@@ -232,9 +234,11 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         </div>
       )}
 
-      {/* All action icons are static (no hover gate). Cinna runs get
-          Refresh + Open external + Delete; local runs get Move-to-Chats
-          (when the spawned chat is still hidden) + Delete. */}
+      {/* Action icons reveal on row hover (focus-within keeps them reachable
+          for keyboard users). Cinna runs get Refresh + Open external +
+          Delete; local runs get Move-to-Chats (when the spawned chat is
+          still hidden) + Delete. */}
+      <div className="flex items-center gap-2 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
       {run.type === 'cinna_task' && (
         <>
           <button
@@ -246,7 +250,7 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
             aria-label="Refresh status"
           >
             <RefreshCw
-              size={12}
+              size={16}
               className={refreshSpinning || refreshCinna.isPending ? 'animate-spin' : undefined}
             />
           </button>
@@ -261,7 +265,7 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
             title={cinnaUrl ? 'Open on Cinna' : 'Cinna URL unavailable'}
             aria-label="Open on Cinna"
           >
-            <ExternalLink size={12} />
+            <ExternalLink size={16} />
           </button>
         </>
       )}
@@ -271,12 +275,12 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
           type="button"
           onClick={handleMoveToChats}
           disabled={showChatInList.isPending}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]
-            hover:text-[var(--color-text)] transition-colors disabled:opacity-40 shrink-0"
+          className="p-1 rounded hover:bg-[var(--color-accent)]/20 text-[var(--color-text-muted)]
+            hover:text-[var(--color-accent)] transition-colors disabled:opacity-40 shrink-0"
           title="Move this chat into the Chats list"
           aria-label="Move chat into the Chats list"
         >
-          <Inbox size={12} />
+          <Inbox size={16} />
         </button>
       )}
 
@@ -288,8 +292,9 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         title="Delete run"
         aria-label="Delete run"
       >
-        <Trash2 size={12} />
+        <Trash2 size={16} />
       </button>
+      </div>
     </div>
     {confirming && (
       <DeleteRunConfirm

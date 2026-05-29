@@ -36,6 +36,19 @@ export function useJobRuns(jobId: string | null) {
   })
 }
 
+/**
+ * Resolve a job run id back to its originating job (id + title). Powers the
+ * chat-page banner that links a job-spawned chat back to its job. Returns null
+ * when the run or its job no longer exists (or the job was deleted).
+ */
+export function useJobRunOrigin(runId: string | null) {
+  return useQuery({
+    queryKey: ['job-run-origin', runId],
+    queryFn: () => (runId ? window.api.jobs.runOrigin(runId) : null),
+    enabled: !!runId
+  })
+}
+
 export function useCreateJob() {
   const queryClient = useQueryClient()
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
@@ -72,6 +85,9 @@ export function useUpdateJob() {
     onSuccess: (_data, { jobId }) => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       queryClient.invalidateQueries({ queryKey: ['jobs', jobId] })
+      // The chat-page job-origin banner reads the job title off a separate
+      // query key; refresh it so a rename shows up there too.
+      queryClient.invalidateQueries({ queryKey: ['job-run-origin'] })
     }
   })
 }
@@ -82,6 +98,9 @@ export function useDeleteJob() {
     mutationFn: (jobId: string) => window.api.jobs.delete(jobId),
     onSuccess: (_data, jobId) => {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      // A deleted job's getRunOrigin now returns null — drop the banner for any
+      // open job-spawned chat by refreshing the origin lookups.
+      queryClient.invalidateQueries({ queryKey: ['job-run-origin'] })
       // Read fresh store state at completion — the activeJobId at hook-call
       // time can be stale if the user navigated between firing the mutation
       // and the server roundtrip resolving.

@@ -11,6 +11,7 @@ import type {
   JobData,
   JobDetailData,
   JobRunData,
+  JobRunOrigin,
   JobCreateInputDto,
   JobPatchDto,
   JobFolderData,
@@ -59,6 +60,8 @@ export interface ChatData {
   modeId: string | null
   agentId: string | null
   orchestrated: boolean
+  /** The job run that spawned this chat, if any (drives the chat-page job-origin banner). */
+  originatingJobRunId: string | null
   deletedAt: Date | null
   createdAt: Date
   updatedAt: Date
@@ -740,6 +743,8 @@ const api = {
       ipcRenderer.invoke('job:set-agents', jobId, agentIds),
     listRuns: (jobId: string): Promise<JobRunData[]> =>
       ipcRenderer.invoke('job:list-runs', jobId),
+    runOrigin: (runId: string): Promise<JobRunOrigin | null> =>
+      ipcRenderer.invoke('job:run-origin', runId),
     execute: (
       jobId: string
     ): Promise<

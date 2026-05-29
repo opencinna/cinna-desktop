@@ -105,18 +105,19 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Viewing run history
 1. Job Detail's history section lists runs newest-first with a colored status pill.
-2. **All action icons on a run row are static** (no hover-gating). This lets the user scan a job's history and act on any row without first hovering it.
+2. **The trailing action icons reveal on row hover** (the cluster is `opacity-0` and fades in via `group-hover`; `focus-within` keeps them reachable for keyboard users). The status pill, run label, timestamp, and the cinna comment/attachment count badges stay visible at all times.
 3. Local runs:
    - The **entire row is a button** — clicking it opens the spawned chat in the chat view *but the sidebar stays on the Jobs tab and the originating job stays highlighted*. The user is "still inside the job"; one click on the job row in the sidebar goes back to the job's detail.
    - When the spawned chat was deleted (cascade-set-null leaves `localChatId` as null), the row gets a gray **`Deleted`** pill next to the status pill and becomes non-interactive (no hover, no cursor change).
-   - Trailing action icons (static): **Inbox** ("Move this chat into the Chats list") — only when the chat is still hidden-from-list; clicking promotes it into the visible Chats list. **Trash** ("Delete run") — opens a confirmation that hard-deletes the run and its spawned chat together. Job-spawned chats are hidden from the main Chats list by default so the chat sidebar isn't flooded with every job run.
+   - Trailing action icons (hover-revealed): **Inbox** ("Move this chat into the Chats list") — only when the chat is still hidden-from-list; clicking promotes it into the visible Chats list. **Trash** ("Delete run") — opens a confirmation that hard-deletes the run and its spawned chat together. Job-spawned chats are hidden from the main Chats list by default so the chat sidebar isn't flooded with every job run.
 4. Cinna runs:
    - The **entire row is a button** when `cinnaTaskId` is set — clicking it opens the [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) (comments + attachments fetched from cinna-core). The sidebar stays on the Jobs tab and the originating job stays highlighted.
    - Two compact pill badges sit just before the action icons (each only rendered when its count is > 0): a `MessageSquare` badge with the comment count (system/status-change/assignment entries excluded) and a `Paperclip` badge with the attachment count. Counts come from the same cinna-core fetch that powers the task view — opening the view warms the cache for the row and vice versa.
-   - Trailing action icons (static): **Refresh** (manual status pull — always hits the network even on terminal runs, with a minimum visible 500ms spin even when the IPC roundtrip is sub-frame); **Open on Cinna** (deep-link to `{cinnaServerUrl}/tasks/{short_code}`); **Trash** ("Delete run") — removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
+   - Trailing action icons (hover-revealed): **Refresh** (manual status pull — always hits the network even on terminal runs, with a minimum visible 500ms spin even when the IPC roundtrip is sub-frame); **Open on Cinna** (deep-link to `{cinnaServerUrl}/tasks/{short_code}`); **Trash** ("Delete run") — removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
 
 ### Staying inside the jobs context
 - Opening a run's chat (via the run row) or running a job (via the Run button) sets the chat view as the active main pane but **does not** swap the sidebar tab to Chats and **does not** clear `activeJobId`. The Jobs tab stays open in the sidebar with the job's row still highlighted.
+- **Job-origin banner.** When the open chat was spawned by a local job run (`chats.originating_job_run_id` is set), a small slightly-transparent pill (`JobOriginBanner`) sits at the right of the title-bar band showing **"From job · {title}"**. Clicking it jumps to that job's detail page (`setActiveJobId(jobId)` + `setActiveView('job-detail')`). It resolves the run id → `{ jobId, title }` via the `job:run-origin` IPC (`jobService.getRunOrigin`), gates on `activeView === 'chat'`, and renders nothing if the chat wasn't job-spawned or the job was deleted. This is the in-chat counterpart to the sidebar highlight — it works even after the chat is promoted into the main Chats list (where the Jobs-tab highlight no longer applies). Two non-obvious placement constraints: (1) it is rendered as a child of the `TopBar` drag strip so a button nested in `.app-drag-strip` inherits `-webkit-app-region: no-drag` and stays clickable — an element that only *overlaps* the strip from another DOM subtree has its clicks eaten by the OS window-drag region; (2) it is right-aligned (`ml-auto`) rather than window-centered so it sits over the chat area regardless of the sidebar's width or collapsed state.
 - The job's row also stays highlighted while viewing its detail and edit screens.
 - Picking a chat from the main Chats list, starting a fresh chat from the top-bar `+`, or switching profiles drops the jobs anchor (`activeJobId` is cleared), so the highlight only sticks while the user is genuinely working inside that job.
 
@@ -187,6 +188,13 @@ MainArea (activeView === 'job-detail')
             cinna  : count badges via useCinnaTaskView(taskId, { polling: false })
             (all action icons are static: Refresh / Open-external / Inbox / Trash as applicable)
        -> useCinnaRunPoll  (5s focused / 10s hidden tick while non-terminal cinna runs exist)
+
+TopBar (always mounted)
+  -> JobOriginBanner  (right-aligned no-drag pill; renders only when activeView==='chat'
+                       and the active chat has originatingJobRunId)
+       useChatDetail(activeChatId).originatingJobRunId
+         -> useJobRunOrigin(runId) -> job:run-origin -> { jobId, title }
+       click -> setActiveJobId(jobId) + setActiveView('job-detail')
 
 MainArea (activeView === 'cinna-task-run')
   -> CinnaTaskRunView  (see docs/jobs/cinna_task_view/cinna_task_view.md)

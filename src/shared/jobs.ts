@@ -80,6 +80,16 @@ export interface JobRunData {
   chatHidden: boolean
 }
 
+/**
+ * Minimal job pointer resolved from a job run id. Powers the chat-page banner
+ * that links a job-spawned chat back to its originating job. Null when the run
+ * (or its job) no longer exists, or the job was deleted.
+ */
+export interface JobRunOrigin {
+  jobId: string
+  jobTitle: string
+}
+
 export interface JobDetailData extends JobData {
   /**
    * Agents attached to the job. Replaces the legacy single `agentId`. At run
