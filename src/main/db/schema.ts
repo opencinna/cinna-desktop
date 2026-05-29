@@ -345,6 +345,25 @@ export const jobMcpProviders = sqliteTable(
 )
 
 /**
+ * Agents attached to a job. Replaces the single `jobs.agent_id` column so a
+ * job can carry multiple counterparties (the orchestration model): at run time
+ * `derivePattern(agentIds, mcpIds)` decides direct A2A (one agent, no MCPs) vs.
+ * an orchestrated LLM-root chat. Mirrors {@link jobMcpProviders}.
+ */
+export const jobAgents = sqliteTable(
+  'job_agents',
+  {
+    jobId: text('job_id')
+      .notNull()
+      .references(() => jobs.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' })
+  },
+  (table) => [primaryKey({ columns: [table.jobId, table.agentId] })]
+)
+
+/**
  * One row per execution of a Job. For local runs `localChatId` points at the
  * spawned chat. For cinna_task runs `cinnaTaskId` + `cinnaShortCode` point at
  * the remote task. Status flips to a terminal value when the run finishes

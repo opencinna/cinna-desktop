@@ -82,4 +82,30 @@ export function migrateJobs(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'jobs', 'position')) {
     sqlite.exec(`ALTER TABLE jobs ADD COLUMN position INTEGER NOT NULL DEFAULT 0`)
   }
+
+  // Multi-agent jobs: a job can attach several agents (orchestration model)
+  // rather than the single `jobs.agent_id`. Create the join table and migrate
+  // any existing single-agent jobs into it. The `agent_id` column is left in
+  // place (dormant) — the repo reads `job_agents` exclusively after this.
+  sqlite.exec(`
+    CREATE TABLE IF NOT EXISTS job_agents (
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE CASCADE,
+      PRIMARY KEY (job_id, agent_id)
+    );
+  `)
+  // One-time backfill: copy each job's legacy single agent into job_agents,
+  // then null the legacy column so the backfill can't re-run. Without the
+  // UPDATE this would re-insert the old agent on every boot, resurrecting an
+  // agent the user removed via the multi-agent UI (which only writes
+  // job_agents). The `IN (SELECT id FROM agents)` guard skips dangling refs so
+  // the FK insert can't throw (foreign_keys is ON); nulling a skipped dangling
+  // ref is harmless since the agent doesn't exist.
+  sqlite.exec(`
+    INSERT OR IGNORE INTO job_agents (job_id, agent_id)
+    SELECT id, agent_id FROM jobs
+    WHERE agent_id IS NOT NULL
+      AND agent_id IN (SELECT id FROM agents);
+    UPDATE jobs SET agent_id = NULL WHERE agent_id IS NOT NULL;
+  `)
 }

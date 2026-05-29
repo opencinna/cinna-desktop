@@ -81,6 +81,12 @@ export interface JobRunData {
 }
 
 export interface JobDetailData extends JobData {
+  /**
+   * Agents attached to the job. Replaces the legacy single `agentId`. At run
+   * time `derivePattern(agentIds, mcpProviderIds)` decides direct A2A (one
+   * agent, no MCPs) vs. an orchestrated LLM-root chat.
+   */
+  agentIds: string[]
   mcpProviderIds: string[]
   recentRuns: JobRunData[]
 }

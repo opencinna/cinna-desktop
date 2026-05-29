@@ -45,6 +45,12 @@ export function registerJobHandlers(): void {
     }
   )
 
+  ipcHandle('job:set-agents', async (_event, jobId: string, agentIds: string[]) => {
+    userActivation.requireActivated()
+    jobService.setAgents(getProfileScopeUserId(), jobId, agentIds)
+    return { success: true }
+  })
+
   ipcHandle('job:list-runs', async (_event, jobId: string) => {
     userActivation.requireActivated()
     return jobService.listRuns(getProfileScopeUserId(), jobId)

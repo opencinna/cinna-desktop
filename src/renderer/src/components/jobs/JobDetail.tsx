@@ -8,6 +8,8 @@ import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useCinnaAgents } from '../../hooks/useCinna'
 import { getPreset } from '../../constants/chatModeColors'
+import { derivePattern } from '../../../../shared/commPattern'
+import { CommPatternBadge } from '../chat/CommPatternBadge'
 import { JobRunRow } from './JobRunRow'
 import type { JobDetailData } from '../../../../shared/jobs'
 
@@ -139,9 +141,12 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
   const { data: mcpProviders } = useMcpProviders()
   const { data: cinnaAgents } = useCinnaAgents()
 
-  const agentName = useMemo(
-    () => (job.agentId ? (agents ?? []).find((a) => a.id === job.agentId)?.name ?? null : null),
-    [agents, job.agentId]
+  const agentNames = useMemo(
+    () =>
+      job.agentIds.map(
+        (id) => (agents ?? []).find((a) => a.id === id)?.name ?? 'Unknown agent'
+      ),
+    [agents, job.agentIds]
   )
   const mode = useMemo(
     () => (job.modeId ? (chatModes ?? []).find((m) => m.id === job.modeId) ?? null : null),
@@ -162,12 +167,14 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
     [cinnaAgents, job.cinnaAgentId]
   )
 
+  const localPattern = derivePattern(job.agentIds, job.mcpProviderIds)
+
   const chips: React.ReactNode[] = []
 
   if (job.type === 'local') {
-    if (agentName) {
-      chips.push(<AgentChip key="agent" name={agentName} />)
-    }
+    agentNames.forEach((name, idx) => {
+      chips.push(<AgentChip key={`agent-${idx}`} name={name} />)
+    })
     if (mode) {
       chips.push(<ModeChip key="mode" name={mode.name} colorPreset={mode.colorPreset} />)
     }
@@ -198,8 +205,11 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
         </div>
       </div>
 
-      {chips.length > 0 && (
+      {(chips.length > 0 || job.type === 'local') && (
         <div className="border-t border-[var(--color-border)] pt-3 flex flex-wrap items-center gap-1.5">
+          {job.type === 'local' && (
+            <CommPatternBadge pattern={localPattern} tooltipPlacement="bottom-right" />
+          )}
           {chips}
         </div>
       )}

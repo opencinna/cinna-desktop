@@ -98,7 +98,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Agent Status](agents/agent_status/agent_status.md) — Title-bar activity indicator + frosted-glass modal surfacing per-agent self-reported status (severity, summary, markdown body) with one-click "Start chat"
 
 ### Jobs
-- [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agent/mode/MCP config) with a sidebar Chats/Jobs tab strip and drag-and-drop folders for organising jobs; local runs spawn a chat, Cinna Task runs hit cinna-core and poll for status
+- [Jobs](jobs/jobs/jobs.md) — Reusable saved work specs (prompt + agents/mode/MCP config) with a sidebar Chats/Jobs tab strip and drag-and-drop folders for organising jobs; local runs route through the shared `derivePattern` (single agent → direct A2A, otherwise an orchestrated LLM-root chat) and spawn a chat, Cinna Task runs hit cinna-core and poll for status
 - [Cinna Task Run View](jobs/cinna_task_view/cinna_task_view.md) — Read-only in-app view of a `cinna_task` run: comments + standalone/inline attachments fetched from cinna-core, markdown-rendered, with task-scoped attachment download; reached by clicking a cinna_task row in a job's run history
 
 ### Notes

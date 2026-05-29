@@ -1,12 +1,16 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
-import { Bot, Check, ChevronDown } from 'lucide-react'
+import { Bot, ChevronDown, Plug, Plus, X } from 'lucide-react'
 import type { JobDetailData, JobPatchDto } from '../../../../shared/jobs'
+import { derivePattern } from '../../../../shared/commPattern'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
-import { useUpdateJob, useSetJobMcps } from '../../hooks/useJobs'
+import { useUpdateJob, useSetJobMcps, useSetJobAgents } from '../../hooks/useJobs'
 import { useCinnaAgents } from '../../hooks/useCinna'
 import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerModal'
+import { CommPatternBadge } from '../chat/CommPatternBadge'
+import { presetForAgentId } from '../../utils/agentColors'
+import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
 
 interface JobEditFormProps {
   job: JobDetailData
@@ -50,6 +54,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const { data: cinnaAgents } = useCinnaAgents()
   const updateJob = useUpdateJob()
   const setJobMcps = useSetJobMcps()
+  const setJobAgents = useSetJobAgents()
 
   // Type is set once at creation (via the JobsList type-picker) and is
   // read-only afterwards — render-time branching keys off `job.type` directly.
@@ -57,7 +62,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   const [title, setTitle] = useState(job.title)
   const [description, setDescription] = useState(job.description ?? '')
   const [prompt, setPrompt] = useState(job.prompt)
-  const [agentId, setAgentId] = useState<string>(job.agentId ?? '')
+  const [agentIds, setAgentIds] = useState<Set<string>>(new Set(job.agentIds))
   const [modeId, setModeId] = useState<string>(job.modeId ?? '')
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set(job.mcpProviderIds))
   const [cinnaAgentId, setCinnaAgentId] = useState<string>(job.cinnaAgentId ?? '')
@@ -71,19 +76,20 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     setTitle(job.title)
     setDescription(job.description ?? '')
     setPrompt(job.prompt)
-    setAgentId(job.agentId ?? '')
+    setAgentIds(new Set(job.agentIds))
     setModeId(job.modeId ?? '')
     setMcpIds(new Set(job.mcpProviderIds))
     setCinnaAgentId(job.cinnaAgentId ?? '')
     setCinnaPriority(asPriority(job.cinnaPriority))
   }, [job.id, job])
 
-  // Snapshot of last-persisted values so we only PATCH what changed.
+  // Snapshot of last-persisted values so we only PATCH what changed. Agents
+  // and MCPs are not here — they persist immediately on toggle via their own
+  // mutations (setJobAgents / setJobMcps), like the chat composer's chips.
   const snapshotRef = useRef({
     title: job.title,
     description: job.description ?? '',
     prompt: job.prompt,
-    agentId: job.agentId ?? '',
     modeId: job.modeId ?? '',
     cinnaAgentId: job.cinnaAgentId ?? '',
     cinnaPriority: asPriority(job.cinnaPriority)
@@ -94,7 +100,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       title: job.title,
       description: job.description ?? '',
       prompt: job.prompt,
-      agentId: job.agentId ?? '',
       modeId: job.modeId ?? '',
       cinnaAgentId: job.cinnaAgentId ?? '',
       cinnaPriority: asPriority(job.cinnaPriority)
@@ -107,7 +112,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     if (title !== snap.title) patch.title = title
     if (description !== snap.description) patch.description = description || null
     if (prompt !== snap.prompt) patch.prompt = prompt
-    if (agentId !== snap.agentId) patch.agentId = agentId || null
     if (modeId !== snap.modeId) patch.modeId = modeId || null
     if (cinnaAgentId !== snap.cinnaAgentId) patch.cinnaAgentId = cinnaAgentId || null
     if (cinnaPriority !== snap.cinnaPriority) patch.cinnaPriority = cinnaPriority
@@ -127,7 +131,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     title,
     description,
     prompt,
-    agentId,
     modeId,
     cinnaAgentId,
     cinnaPriority,
@@ -155,7 +158,6 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       title,
       description,
       prompt,
-      agentId,
       modeId,
       cinnaAgentId,
       cinnaPriority,
@@ -169,7 +171,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     [agents]
   )
 
-  const [agentPickerOpen, setAgentPickerOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
   const [cinnaAgentPickerOpen, setCinnaAgentPickerOpen] = useState(false)
 
   const localAgentItems = useMemo<AgentPickerItem[]>(() => {
@@ -209,8 +211,59 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     [cinnaAgents]
   )
 
-  const selectedAgent = enabledAgents.find((a) => a.id === agentId)
+  // MCP providers as picker cards in their own "Connectors" section, unioned
+  // with the agent cards in the single Agents & Connectors modal.
+  const mcpItems = useMemo<AgentPickerItem[]>(
+    () =>
+      (mcpProviders ?? []).map((m) => ({
+        id: m.id,
+        name: m.name,
+        description: null,
+        meta: 'MCP',
+        group: 'Connectors',
+        iconKind: 'connector' as const
+      })),
+    [mcpProviders]
+  )
+  const capabilityItems = useMemo(
+    () => [...localAgentItems, ...mcpItems],
+    [localAgentItems, mcpItems]
+  )
+  // Membership set the modal reads to draw checkmarks across both kinds. Agent
+  // and MCP ids share no namespace, so a single set is unambiguous.
+  const selectedCapabilityIds = useMemo(
+    () => new Set<string>([...agentIds, ...mcpIds]),
+    [agentIds, mcpIds]
+  )
+  const mcpIdSet = useMemo(
+    () => new Set((mcpProviders ?? []).map((m) => m.id)),
+    [mcpProviders]
+  )
+
+  // Routing preview: one agent + no MCPs runs direct A2A; anything else is
+  // orchestrated by the chat-mode model — same rule the new-chat composer uses.
+  const pattern = useMemo(
+    () => derivePattern(Array.from(agentIds), Array.from(mcpIds)),
+    [agentIds, mcpIds]
+  )
+
   const selectedCinnaAgent = (cinnaAgents ?? []).find((a) => a.id === cinnaAgentId)
+
+  const persistAgents = (next: Set<string>): void => {
+    setAgentIds(next)
+    setJobAgents.mutate({ jobId: job.id, agentIds: Array.from(next) })
+  }
+  const toggleAgent = (id: string): void => {
+    const next = new Set(agentIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    persistAgents(next)
+  }
+  const removeAgent = (id: string): void => {
+    const next = new Set(agentIds)
+    next.delete(id)
+    persistAgents(next)
+  }
 
   const toggleMcp = (id: string): void => {
     setMcpIds((prev) => {
@@ -220,6 +273,12 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
       setJobMcps.mutate({ jobId: job.id, mcpProviderIds: Array.from(next) })
       return next
     })
+  }
+
+  // The modal toggles by id; route to the right setter by id namespace.
+  const toggleCapability = (id: string): void => {
+    if (mcpIdSet.has(id)) toggleMcp(id)
+    else toggleAgent(id)
   }
 
   return (
@@ -262,94 +321,107 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
 
       {type === 'local' ? (
         <>
-          {/* Agent */}
+          {/* Agents & Connectors + routing preview */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
-              Agent <span className="text-[var(--color-text-muted)]">(optional)</span>
+            <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">
+              Agents &amp; Connectors{' '}
+              <span className="text-[var(--color-text-muted)]">(optional)</span>
             </label>
-            <button
-              type="button"
-              onClick={() => setAgentPickerOpen(true)}
-              className={`${inputClass} cursor-pointer flex items-center gap-2 text-left`}
-            >
-              <Bot
-                size={13}
-                className={
-                  selectedAgent ? 'text-[var(--color-accent)]' : 'text-[var(--color-text-muted)]'
-                }
-              />
-              <span
-                className={`flex-1 truncate ${
-                  selectedAgent ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
-                }`}
+            <div className="flex flex-wrap items-center gap-1.5">
+              {Array.from(agentIds).map((id) => {
+                const name = (agents ?? []).find((a) => a.id === id)?.name ?? 'Unknown agent'
+                const color = presetForAgentId(id)
+                return (
+                  <div
+                    key={id}
+                    className="flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border"
+                    style={{ color: color.border, borderColor: color.border, backgroundColor: color.bg }}
+                  >
+                    <Bot size={12} className="shrink-0" />
+                    <span className="text-[11px] font-medium whitespace-nowrap">{name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeAgent(id)}
+                      className="ml-0.5 p-0.5 rounded hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
+                      aria-label={`Remove agent ${name}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                )
+              })}
+              {Array.from(mcpIds).map((id) => {
+                const name = (mcpProviders ?? []).find((m) => m.id === id)?.name ?? 'Unknown connector'
+                return (
+                  <div
+                    key={id}
+                    className="flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border
+                      border-[var(--color-border)] bg-[var(--color-bg)] text-[var(--color-text-secondary)]"
+                  >
+                    <Plug size={12} className="shrink-0" />
+                    <span className="text-[11px] font-medium whitespace-nowrap">{name}</span>
+                    <button
+                      type="button"
+                      onClick={() => toggleMcp(id)}
+                      className="ml-0.5 p-0.5 rounded hover:bg-[var(--color-bg-hover)] transition-colors"
+                      aria-label={`Remove connector ${name}`}
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                )
+              })}
+              <button
+                type="button"
+                onClick={() => setPickerOpen(true)}
+                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-dashed
+                  border-[var(--color-border)] text-[11px] text-[var(--color-text-muted)]
+                  hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/50 transition-colors"
               >
-                {selectedAgent ? selectedAgent.name : 'No agent (send to LLM)'}
-              </span>
-              <ChevronDown size={13} className="text-[var(--color-text-muted)] shrink-0" />
-            </button>
+                <Plus size={12} /> Add
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
+              {pattern === 'A2A'
+                ? 'One agent, no connectors — the run talks directly to the agent.'
+                : 'The chat-mode model orchestrates the selected agents and connectors as it runs.'}
+            </p>
             <AgentPickerModal
-              open={agentPickerOpen}
-              title="Select Agent"
-              items={localAgentItems}
-              selectedId={agentId || null}
-              onSelect={(id) => setAgentId(id ?? '')}
-              onClose={() => setAgentPickerOpen(false)}
-              allowNone
-              noneLabel="No agent"
-              noneDescription="Send the prompt straight to the LLM."
-              searchPlaceholder="Search agents…"
+              open={pickerOpen}
+              title="Agents & Connectors"
+              multiSelect
+              items={capabilityItems}
+              selectedIds={selectedCapabilityIds}
+              onToggle={toggleCapability}
+              onClose={() => setPickerOpen(false)}
+              searchPlaceholder="Search agents and connectors…"
+              emptyLabel="Nothing to add"
             />
           </div>
 
-          {/* Chat mode */}
+          {/* Chat mode (color pills) */}
           <div>
-            <label className="block text-[10px] text-[var(--color-text-muted)] mb-0.5">
+            <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">
               Chat Mode <span className="text-[var(--color-text-muted)]">(optional)</span>
             </label>
-            <select
-              value={modeId}
-              onChange={(e) => setModeId(e.target.value)}
-              className={`${inputClass} cursor-pointer`}
-            >
-              <option value="">Use default chat mode</option>
+            <div className="flex flex-wrap gap-1.5">
+              <ModePill
+                label="Default"
+                color={null}
+                selected={modeId === ''}
+                onClick={() => setModeId('')}
+              />
               {(chatModes ?? []).map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
-                </option>
+                <ModePill
+                  key={m.id}
+                  label={m.name}
+                  color={getPreset(m.colorPreset ?? 'slate')}
+                  selected={modeId === m.id}
+                  onClick={() => setModeId(m.id)}
+                />
               ))}
-            </select>
-          </div>
-
-          {/* MCPs */}
-          {(mcpProviders ?? []).length > 0 && (
-            <div>
-              <label className="block text-[10px] text-[var(--color-text-muted)] mb-1">
-                MCP Providers
-              </label>
-              <div className="space-y-1">
-                {(mcpProviders ?? []).map((mcp) => (
-                  <button
-                    key={mcp.id}
-                    type="button"
-                    onClick={() => toggleMcp(mcp.id)}
-                    className="w-full text-left px-2.5 py-1.5 rounded-md text-xs
-                      hover:bg-[var(--color-bg-hover)] transition-colors flex items-center gap-2"
-                  >
-                    <div
-                      className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${
-                        mcpIds.has(mcp.id)
-                          ? 'bg-[var(--color-accent)] border-[var(--color-accent)]'
-                          : 'border-[var(--color-border)]'
-                      }`}
-                    >
-                      {mcpIds.has(mcp.id) && <Check size={9} className="text-white" />}
-                    </div>
-                    <span className="text-[var(--color-text)]">{mcp.name}</span>
-                  </button>
-                ))}
-              </div>
             </div>
-          )}
+          </div>
         </>
       ) : (
         <>
@@ -413,6 +485,66 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
           </div>
         </>
       )}
+
+      {/* Routing badge pinned to the form's bottom-right corner. Default
+          tooltip placement (opens upward) keeps it clear of the form edge. */}
+      {type === 'local' && (
+        <div className="flex justify-end pt-1">
+          <CommPatternBadge pattern={pattern} />
+        </div>
+      )}
     </div>
   )
 })
+
+/**
+ * Chat-mode selector pill. Selected pills adopt the mode's color preset
+ * (border + tinted bg + dot); the "Default" pill (no preset) uses the accent.
+ * Unselected pills are muted but keep a color dot so the mode's scheme reads
+ * at a glance.
+ */
+function ModePill({
+  label,
+  color,
+  selected,
+  onClick
+}: {
+  label: string
+  color: ColorPreset | null
+  selected: boolean
+  onClick: () => void
+}): React.JSX.Element {
+  const base =
+    'flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors'
+  if (selected) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={`${base} ${
+          color ? '' : 'border-[var(--color-accent)] bg-[var(--color-accent)]/10 text-[var(--color-accent)]'
+        }`}
+        style={color ? { borderColor: color.border, backgroundColor: color.bg, color: color.border } : undefined}
+      >
+        <span
+          className="w-2.5 h-2.5 rounded-full shrink-0"
+          style={{ backgroundColor: color ? color.border : 'var(--color-accent)' }}
+        />
+        {label}
+      </button>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`${base} border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:border-[var(--color-accent)]/40`}
+    >
+      <span
+        className="w-2.5 h-2.5 rounded-full shrink-0"
+        style={{ backgroundColor: color ? color.border : 'var(--color-text-muted)' }}
+      />
+      {label}
+    </button>
+  )
+}

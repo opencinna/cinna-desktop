@@ -5,9 +5,11 @@ import {
   jobs,
   jobFolders,
   jobMcpProviders,
+  jobAgents,
   jobRuns,
   chats,
-  chatMcpProviders
+  chatOnDemandAgents,
+  chatOnDemandMcps
 } from './schema'
 
 export type JobRow = typeof jobs.$inferSelect
@@ -324,10 +326,35 @@ export const jobMcpRepo = {
 
   setProviderIds(jobId: string, ids: string[]): void {
     const db = getDb()
+    // Dedup so a repeated id can't hit the (jobId, mcpProviderId) PK mid-txn.
+    const unique = [...new Set(ids)]
     db.transaction((tx) => {
       tx.delete(jobMcpProviders).where(eq(jobMcpProviders.jobId, jobId)).run()
-      for (const mcpProviderId of ids) {
+      for (const mcpProviderId of unique) {
         tx.insert(jobMcpProviders).values({ jobId, mcpProviderId }).run()
+      }
+    })
+  }
+}
+
+export const jobAgentRepo = {
+  listAgentIds(jobId: string): string[] {
+    return getDb()
+      .select({ id: jobAgents.agentId })
+      .from(jobAgents)
+      .where(eq(jobAgents.jobId, jobId))
+      .all()
+      .map((r) => r.id)
+  },
+
+  setAgentIds(jobId: string, ids: string[]): void {
+    const db = getDb()
+    // Dedup so a repeated id can't hit the (jobId, agentId) PK mid-txn.
+    const unique = [...new Set(ids)]
+    db.transaction((tx) => {
+      tx.delete(jobAgents).where(eq(jobAgents.jobId, jobId)).run()
+      for (const agentId of unique) {
+        tx.insert(jobAgents).values({ jobId, agentId }).run()
       }
     })
   }
@@ -426,11 +453,27 @@ export const jobRunsRepo = {
     jobId: string
     title: string
     prompt: string
-    agentId: string | null
+    /**
+     * Bound root agent for direct-A2A runs (one agent, no MCPs). Null for
+     * orchestrated / plain-LLM runs, where agents are attached on-demand.
+     */
+    rootAgentId: string | null
+    /** True when the local model conducts attached agents/MCPs as tools. */
+    orchestrated: boolean
     modeId: string | null
     providerId: string | null
     modelId: string | null
-    mcpProviderIds: string[]
+    /**
+     * Agents the orchestrator should call as tools — written to
+     * `chat_on_demand_agents` (empty in the direct-A2A case).
+     */
+    onDemandAgentIds: string[]
+    /**
+     * MCPs the chat should engage — written to `chat_on_demand_mcps` so they
+     * count toward the orchestration decision and get the one-shot announce,
+     * matching the new-chat flow (not the chat-mode baseline set).
+     */
+    onDemandMcpIds: string[]
   }): { chatId: string; runId: string } {
     return getDb().transaction((tx) => {
       const now = new Date()
@@ -443,7 +486,8 @@ export const jobRunsRepo = {
           modelId: input.modelId,
           providerId: input.providerId,
           modeId: input.modeId,
-          agentId: input.agentId,
+          agentId: input.rootAgentId,
+          orchestrated: input.orchestrated,
           originatingJobRunId: null,
           // Job-spawned chats are hidden from the chat list by default; the
           // user can promote them via the "Move to Chats" button on the run.
@@ -454,8 +498,15 @@ export const jobRunsRepo = {
         })
         .run()
 
-      for (const mcpProviderId of input.mcpProviderIds) {
-        tx.insert(chatMcpProviders).values({ chatId, mcpProviderId }).run()
+      for (const agentId of input.onDemandAgentIds) {
+        tx.insert(chatOnDemandAgents)
+          .values({ chatId, agentId, pendingAnnounce: true })
+          .run()
+      }
+      for (const mcpProviderId of input.onDemandMcpIds) {
+        tx.insert(chatOnDemandMcps)
+          .values({ chatId, mcpProviderId, pendingAnnounce: true })
+          .run()
       }
 
       const runId = nanoid()

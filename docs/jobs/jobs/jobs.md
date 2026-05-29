@@ -6,8 +6,8 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ## Core Concepts
 
-- **Job** — A profile-scoped saved spec (title, description, prompt, agent/mode/MCP attachments, color/icon). Two execution types, set once at creation and not editable afterwards:
-  - **Local Job** — Runs against the user's local agent / chat mode / MCPs. Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
+- **Job** — A profile-scoped saved spec (title, description, prompt, agents/mode/MCP attachments, color/icon). Two execution types, set once at creation and not editable afterwards:
+  - **Local Job** — Runs against the user's local agents / chat mode / MCPs. A job can attach **any number of agents** plus MCPs (`job_agents` + `job_mcp_providers` join tables); at run time `derivePattern(agentIds, mcpIds)` — the same helper the new-chat composer uses (`src/shared/commPattern.ts`) — decides routing: exactly one agent and no MCPs spawns a **direct-A2A** chat, anything else spawns an **orchestrated** LLM-root chat that calls each agent/MCP as a tool (see [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md)). Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run calls cinna-core's `POST /api/v1/tasks/`; the conversation lives on cinna-core and the desktop keeps a pointer (`cinnaTaskId` + `cinnaShortCode`).
 - **Job Run** — One execution of a job. Local runs reference the spawned `chatId`; Cinna runs reference the remote task. Status moves through `pending → running → succeeded | failed | cancelled`.
 - **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config. A job lives either in exactly one folder or at the root level.
@@ -39,17 +39,18 @@ Let users save reusable units of work (title + description + prompt + execution 
 1. User opens a job from the sidebar — Main area renders the read-only **Job Detail** view.
 2. The header shows the job's title, description, a type pill (`Local` / `Cinna Task`), an icon-only **Edit** (pencil) button, and a primary green **Run** button.
 3. Below the header, a summary card shows the prompt verbatim plus a strip of compact **chip-style badges** for *non-default* configuration only (same chip pattern used in the chat composer — `OnDemandAgentChips` / `OnDemandMcpChips`):
-   - Local: agent chip (Bot icon, accent border), chat-mode chip (color dot tinted with the mode's preset), one MCP chip per attached provider (Wrench icon). Each chip only appears if the field is set.
+   - Local: a **CommPattern badge** (`A2A` / `AI`) previewing how the job will run, one agent chip per attached agent (Bot icon, accent border), a chat-mode chip (color dot tinted with the mode's preset), and one MCP chip per attached provider (Wrench icon). Each config chip only appears if the field is set; the badge always shows for local jobs.
    - Cinna Task: Cinna agent chip (Bot — red "No Cinna agent" chip if missing) and priority chip (Flag, only when not `normal`).
 4. Below the summary, the **Run history** lists the job's runs newest-first; the section is empty when there are no runs.
 
 ### Editing a job
 1. From the Job Detail view, user clicks **Edit** — Main area swaps to the **Job Edit** page (the same form used at creation).
 2. Title, description, prompt, agent, mode (local jobs) or Cinna agent / priority (Cinna jobs) auto-save on a debounce (~600ms) when changed.
-3. The **Agent** field (local jobs) and **Cinna Agent** field (Cinna jobs) open a modal `AgentPickerModal` — frosted accent-tinted panel matching the chat agent popup, with a focused search input that filters cards by name/description/type, and the selected card highlighted with the accent gradient. Local picker groups agents by source (My Agents / Shared with Me / People / Local) and includes a "No agent (send to LLM)" card; Cinna picker shows a flat list of Cinna agents tagged "Cinna".
-4. MCP toggles save immediately on click. Auto-save is a no-op while title or prompt are empty.
-5. The header has a **← Back** link (returns to Job Detail; auto-save persistence is already in flight) and a primary **Save** button (flushes pending changes and navigates back to Job Detail).
-6. The job type is fixed at creation — no in-form toggle. Field set switches based on the persisted `job.type`.
+3. **Agents & Connectors (local jobs)** share one control: attached agents (Bot chips) and MCPs (Plug chips) render as a row of removable chips with a single **"Add"** button that opens the **"Agents & Connectors"** picker — one frosted, searchable modal listing agents (grouped My Agents / Shared with Me / People / Local) and a **Connectors** section for available MCPs. It is **multi-select** (click toggles a checkmark, the modal stays open). A live **CommPattern badge** above the chips previews `A2A` vs `AI`. The **Cinna Agent** field (Cinna jobs) keeps its single-select picker.
+4. **Chat Mode (local jobs)** is a row of color **pills** — one per chat mode tinted with the mode's preset color, plus a "Default" pill — instead of a dropdown. Selecting a pill sets the mode.
+5. Agent and MCP changes **persist immediately** (via `job:set-agents` / `job:set-mcp-providers`), not through the debounced patch. Auto-save of title/description/prompt/mode is a no-op while title or prompt are empty.
+6. The header has a **← Back** link (returns to Job Detail; auto-save persistence is already in flight) and a primary **Save** button (flushes pending changes and navigates back to Job Detail).
+7. The job type is fixed at creation — no in-form toggle. Field set switches based on the persisted `job.type`.
 
 ### Running a job from the sidebar (fire-and-forget)
 1. User hovers a job row in the sidebar — a small **green Play-icon pill** appears on the right of the row.
@@ -89,8 +90,10 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Running a local job
 1. User clicks "Run" on the job detail view.
-2. Backend atomically creates: a chat seeded with title/mode/agent/provider/model, the job's MCP attachments, and a `job_runs` row with status `running` linked to the chat. The spawned chat is marked `hidden_from_list = 1` so it does not appear in the main Chats list.
-3. Renderer resolves provider/model the same way the new-chat flow does (falling back to the workspace's default chat mode when the job left `modeId` null), navigates into the spawned chat without leaving the Jobs sidebar tab, and kicks off the existing LLM / agent stream pipeline with the prompt.
+2. Backend reads the job's attached agents + MCPs, drops stale references, and runs `derivePattern` to choose the routing. It then atomically creates (one transaction): the chat seeded with title/mode/provider/model, the `job_runs` row (`running`), and the `chat.originating_job_run_id` back-pointer. The spawned chat is marked `hidden_from_list = 1`. Depending on the pattern:
+   - **Direct A2A** (one agent, no MCPs): the chat is agent-rooted (`agent_id` set, `orchestrated = 0`); no on-demand rows.
+   - **Orchestrated / plain-LLM** (everything else): the chat is LLM-rooted (`agent_id = null`), `orchestrated` is set when ≥1 agent is attached, and the agents/MCPs are written to `chat_on_demand_agents` / `chat_on_demand_mcps` (with `pending_announce = 1`) — matching the new-chat flow rather than the chat-mode baseline.
+3. The `execute` result carries `agentId` (non-null ⇒ A2A, null ⇒ orchestrated/LLM), so the renderer dispatches `startAgent` vs `startLlm` with the existing logic. For the LLM path it resolves provider/model the same way the new-chat flow does (falling back to the workspace's default chat mode when the job left `modeId` null), then navigates into the spawned chat without leaving the Jobs sidebar tab and kicks off the stream with the prompt.
 4. When the chat's stream finalizes (`done`), the run flips to `succeeded`; on stream error, it flips to `failed` with the error message.
 
 ### Running a Cinna Task job
@@ -123,9 +126,10 @@ Let users save reusable units of work (title + description + prompt + execution 
 - **Validation.** `title` and `prompt` must be non-empty; `type` must be `local` or `cinna_task`. Updates that would null these out are rejected with `JobError('invalid_input', ...)`.
 - **Type chosen once.** The picker only runs for Cinna users on the `+` click. Non-Cinna profiles skip the picker and always create a `local` job. Once stored, `job.type` is treated as immutable by the UI (the edit form has no toggle).
 - **Delete always confirms.** There is no one-click delete from the sidebar — every delete goes through the `DeleteJobConfirm` modal.
-- **Local job dependencies.** Running a local job validates that any referenced agent / chat mode still exists. Missing references throw `JobError('missing_dependency', ...)` and surface as an inline run error — no auto-fallback.
+- **Run routing.** `derivePattern(agentIds, mcpIds)` (shared `src/shared/commPattern.ts`, used by both the new-chat composer and `jobService.executeLocal`) decides A2A vs orchestrated. A job's attached MCPs are treated as **on-demand** (not chat-mode baseline) so they count toward the decision and the orchestrator unions them — a job with one agent + MCPs is orchestrated, not direct A2A.
+- **Local job dependencies.** Running a local job validates that **every** attached agent and the chat mode still exist. A missing agent or mode throws `JobError('missing_dependency', ...)` and surfaces as an inline run error — no auto-fallback. (The edit form's `set-agents` save filters stale ids silently; a hard run is stricter.)
 - **Stale MCP refs.** MCP provider IDs attached to a job that no longer exist are silently filtered before the chat is created (an MCP delete elsewhere shouldn't crash a run).
-- **Atomic local execution.** Chat row (with `hidden_from_list = 1`), MCP attachments, job_runs row, and the chat's `originating_job_run_id` back-pointer all write in one transaction. A crash mid-way leaves the DB unchanged.
+- **Atomic local execution.** Chat row (with `hidden_from_list = 1`), on-demand agent/MCP attachments, job_runs row, and the chat's `originating_job_run_id` back-pointer all write in one transaction. A crash mid-way leaves the DB unchanged.
 - **Hidden-from-list chats.** Job-spawned chats are marked `hidden_from_list = 1` and excluded from `chatRepo.list` (the main Chats sidebar). The user opts each chat into the visible Chats list explicitly via the "Move to Chats" button on the run row, which clears the flag. Hidden chats are otherwise fully functional — they still appear in run-history rows, still receive streaming updates, and are not in the trash (only soft delete hides a chat from the trash filter, not from this flag).
 - **Stream-completion hook.** Local runs are finalized by the chat streaming layer reading `chats.originating_job_run_id` and calling `jobService.reportRunCompletion(...)`. No renderer cooperation required; survives renderer restart.
 - **Concurrent runs.** Running the same job multiple times in parallel is allowed — each invocation creates its own chat + run.
@@ -197,9 +201,16 @@ MainArea (activeView === 'job-edit')
 Run flow (local)
   Run button -> useExecuteJob -> window.api.jobs.execute(jobId)
      -> jobService.execute() -> executeLocal()
+        -> read job_agents + job_mcp_providers, drop stale refs
+        -> derivePattern(agentIds, mcpIds) -> A2A | AI
         -> jobRunsRepo.createLocalChatAndRun() [single transaction]
-              chat + chat_mcp_providers + job_runs + chat.originating_job_run_id
-  -> renderer resolves provider/model, navigates, fires LLM / agent stream
+              A2A : chat(agent_id=rootAgent, orchestrated=0)
+              AI  : chat(agent_id=null, orchestrated=agents>0)
+                    + chat_on_demand_agents + chat_on_demand_mcps
+              + job_runs + chat.originating_job_run_id
+  -> execute result.agentId  (non-null=A2A, null=AI) drives renderer dispatch
+  -> renderer (AI) resolves provider/model, navigates, fires startLlm
+     renderer (A2A) navigates, fires startAgent
   -> chatStreamingService / a2aStreamingService -> jobService.reportRunCompletion()
 
 Run flow (cinna_task)
@@ -214,9 +225,10 @@ Run flow (cinna_task)
 ## Integration Points
 
 - [Messaging](../../chat/messaging/messaging.md) — Local runs spawn a chat that the existing send pipeline drives end-to-end.
+- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — A job's agents+MCPs route through the same `derivePattern` decision and on-demand-attachment model; a multi-counterparty job spawns an orchestrated LLM-root chat that calls each agent/MCP as a tool. `derivePattern` lives in `src/shared/commPattern.ts`, shared by the composer and the job runner.
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Local jobs reference a chat mode by id for provider/model/MCP defaults.
-- [Agents](../../agents/agents/agents.md) — Local jobs can pin an agent so the run uses A2A streaming instead of the LLM path.
-- [Connections](../../mcp/connections/connections.md) — Job MCP attachments are copied onto the spawned chat's `chat_mcp_providers`.
+- [Agents](../../agents/agents/agents.md) — Local jobs can attach one or more agents; a single agent with no MCPs runs over direct A2A, otherwise agents are exposed to the orchestrator as tools.
+- [Connections](../../mcp/connections/connections.md) — Job MCP attachments are written to the spawned chat's `chat_on_demand_mcps` (on-demand, so they count toward the routing decision).
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Cinna Task jobs require an active Cinna OAuth session; reauth bubbles up as `JobError('reauth_required')`.
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — Read-only in-app view of a cinna_task run; reached by clicking a `cinna_task` row in this job's run history. Surfaces comments + attachments fetched from cinna-core.
 - [App Shell](../../ui/app_shell/app_shell.md) — Sidebar gains the icon tab rail; settings view hides it.

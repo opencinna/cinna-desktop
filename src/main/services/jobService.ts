@@ -2,6 +2,7 @@ import {
   jobsRepo,
   jobFoldersRepo,
   jobMcpRepo,
+  jobAgentRepo,
   jobRunsRepo,
   type JobRow,
   type JobFolderRow,
@@ -19,14 +20,28 @@ import { chatModeRepo } from '../db/chatModes'
 import { agentRepo } from '../db/agents'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
+import { derivePattern } from '../../shared/commPattern'
 import { cinnaApiService } from './cinnaApiService'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
 
 export interface JobDetail extends JobRow {
+  agentIds: string[]
   mcpProviderIds: string[]
   recentRuns: JobRunRowWithMeta[]
+}
+
+/**
+ * Resolve a set of agent ids against the active lookup scopes (local agents
+ * live in the settings scope, remote in the active profile), returning only
+ * the ids that still exist. Used to filter stale references before a write or
+ * a run.
+ */
+function filterExistingAgents(agentIds: string[]): string[] {
+  if (agentIds.length === 0) return []
+  const scopes = getAgentLookupScope()
+  return agentIds.filter((id) => scopes.some((scope) => !!agentRepo.getOwned(scope, id)))
 }
 
 const RECENT_RUNS_LIMIT = 10
@@ -76,11 +91,12 @@ export const jobService = {
 
   getDetail(userId: string, jobId: string): JobDetail {
     const job = requireJob(userId, jobId)
+    const agentIds = jobAgentRepo.listAgentIds(jobId)
     const mcpProviderIds = jobMcpRepo.listProviderIds(jobId)
     const recentRuns = jobRunsRepo
       .listByJob(userId, jobId)
       .slice(0, RECENT_RUNS_LIMIT)
-    return { ...job, mcpProviderIds, recentRuns }
+    return { ...job, agentIds, mcpProviderIds, recentRuns }
   },
 
   create(userId: string, input: JobCreateInput): JobRow {
@@ -125,6 +141,19 @@ export const jobService = {
       logger.warn('setMcpProviders: dropped stale ids', { jobId, dropped })
     }
     jobMcpRepo.setProviderIds(jobId, filtered)
+    jobsRepo.touch(userId, jobId)
+  },
+
+  setAgents(userId: string, jobId: string, agentIds: string[]): void {
+    requireJob(userId, jobId)
+    // Drop ids that no longer resolve (an agent removed elsewhere shouldn't
+    // wedge the form) — mirrors setMcpProviders' stale-id filter.
+    const filtered = filterExistingAgents(agentIds)
+    if (filtered.length !== agentIds.length) {
+      const dropped = agentIds.filter((id) => !filtered.includes(id))
+      logger.warn('setAgents: dropped stale ids', { jobId, dropped })
+    }
+    jobAgentRepo.setAgentIds(jobId, filtered)
     jobsRepo.touch(userId, jobId)
   },
 
@@ -173,6 +202,14 @@ export const jobService = {
    * for kicking off the actual stream (LLM or agent) — this method only sets
    * up the persisted state so the stream-completion hook can flip the run
    * status when the first assistant turn finishes.
+   *
+   * The same `derivePattern` decision the new-chat composer uses routes the
+   * run: exactly one agent and no MCPs → direct A2A (the agent is bound as the
+   * chat root, returned as `agentId` so the renderer calls `startAgent`).
+   * Anything else → an LLM-root chat (agents/MCPs attached on-demand,
+   * `orchestrated` set when agents are present, `agentId` null so the renderer
+   * calls `startLlm`). The return contract is unchanged: a non-null `agentId`
+   * means A2A, null means orchestrated/plain-LLM.
    */
   executeLocal(
     userId: string,
@@ -189,14 +226,12 @@ export const jobService = {
       throw new JobError('unsupported_type', 'executeLocal called on non-local job')
     }
 
-    if (job.agentId) {
-      const agentScope = getAgentLookupScope()
-      const found = agentScope
-        .map((scope) => agentRepo.getOwned(scope, job.agentId!))
-        .find((row) => !!row)
-      if (!found) {
-        throw new JobError('missing_dependency', 'Agent referenced by job no longer exists')
-      }
+    // Attached agents (multi). A missing reference is a hard dependency break,
+    // matching the single-agent contract — surfaced as an inline run error.
+    const agentIds = jobAgentRepo.listAgentIds(jobId)
+    const existingAgentIds = filterExistingAgents(agentIds)
+    if (existingAgentIds.length !== agentIds.length) {
+      throw new JobError('missing_dependency', 'Agent referenced by job no longer exists')
     }
 
     const mode = job.modeId
@@ -220,25 +255,36 @@ export const jobService = {
       }
     }
 
+    const isA2A = derivePattern(existingAgentIds, filteredMcpIds) === 'A2A'
+
     const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({
       userId,
       jobId,
       title: job.title,
       prompt: job.prompt,
-      agentId: job.agentId,
+      rootAgentId: isA2A ? existingAgentIds[0] : null,
+      orchestrated: !isA2A && existingAgentIds.length > 0,
       modeId: job.modeId,
       providerId: mode?.providerId ?? null,
       modelId: mode?.modelId ?? null,
-      mcpProviderIds: filteredMcpIds
+      onDemandAgentIds: isA2A ? [] : existingAgentIds,
+      onDemandMcpIds: isA2A ? [] : filteredMcpIds
     })
 
-    logger.info('job executed (local)', { jobId, chatId, runId })
+    logger.info('job executed (local)', {
+      jobId,
+      chatId,
+      runId,
+      pattern: isA2A ? 'A2A' : 'AI',
+      agents: existingAgentIds.length,
+      mcps: filteredMcpIds.length
+    })
 
     return {
       chatId,
       runId,
       prompt: job.prompt,
-      agentId: job.agentId,
+      agentId: isA2A ? existingAgentIds[0] : null,
       modeId: job.modeId
     }
   },

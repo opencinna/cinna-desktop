@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, Check, Search, X } from 'lucide-react'
+import { Bot, Check, Plug, Search, X } from 'lucide-react'
 
 export interface AgentPickerItem {
   id: string
@@ -10,21 +10,33 @@ export interface AgentPickerItem {
   meta?: string | null
   /** Optional group/section label for visual grouping. */
   group?: string | null
+  /** Card glyph. `'connector'` renders a Plug (MCP); default is a Bot (agent). */
+  iconKind?: 'agent' | 'connector'
 }
 
 interface AgentPickerModalProps {
   open: boolean
   title?: string
   items: AgentPickerItem[]
-  selectedId: string | null
-  onSelect: (id: string | null) => void
   onClose: () => void
-  /** Renders a leading "no agent" card. */
+  searchPlaceholder?: string
+  emptyLabel?: string
+  /**
+   * Multi-select mode: clicking an item toggles it via `onToggle` and the modal
+   * stays open; selected items keep their checkmark. When false (default) the
+   * modal is single-pick — `onSelect` fires and the modal closes.
+   */
+  multiSelect?: boolean
+  // --- single-select props ---
+  selectedId?: string | null
+  onSelect?: (id: string | null) => void
+  /** Renders a leading "no agent" card (single-select only). */
   allowNone?: boolean
   noneLabel?: string
   noneDescription?: string
-  searchPlaceholder?: string
-  emptyLabel?: string
+  // --- multi-select props ---
+  selectedIds?: Set<string>
+  onToggle?: (id: string) => void
 }
 
 interface NoneEntry {
@@ -49,14 +61,17 @@ export function AgentPickerModal({
   open,
   title = 'Select Agent',
   items,
-  selectedId,
-  onSelect,
   onClose,
+  searchPlaceholder = 'Search agents…',
+  emptyLabel = 'No agents match',
+  multiSelect = false,
+  selectedId = null,
+  onSelect,
   allowNone = false,
   noneLabel = 'No agent',
   noneDescription,
-  searchPlaceholder = 'Search agents…',
-  emptyLabel = 'No agents match'
+  selectedIds,
+  onToggle
 }: AgentPickerModalProps): React.ReactPortal | null {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -77,12 +92,16 @@ export function AgentPickerModal({
 
   const entries: Entry[] = useMemo(() => {
     const list: Entry[] = []
-    if (allowNone && (query === '' || matches({ id: '__none__', name: noneLabel, description: noneDescription }, query))) {
+    if (
+      allowNone &&
+      !multiSelect &&
+      (query === '' || matches({ id: '__none__', name: noneLabel, description: noneDescription }, query))
+    ) {
       list.push({ kind: 'none' })
     }
     for (const item of filtered) list.push({ kind: 'agent', item })
     return list
-  }, [allowNone, filtered, noneDescription, noneLabel, query])
+  }, [allowNone, multiSelect, filtered, noneDescription, noneLabel, query])
 
   // Group agent entries by group label, preserving order of first appearance.
   const grouped = useMemo(() => {
@@ -133,8 +152,17 @@ export function AgentPickerModal({
   if (!open) return null
 
   const handlePick = (entry: Entry): void => {
-    if (entry.kind === 'none') onSelect(null)
-    else onSelect(entry.item.id)
+    if (entry.kind === 'none') {
+      onSelect?.(null)
+      onClose()
+      return
+    }
+    if (multiSelect) {
+      // Toggle and keep the modal open so the user can pick several.
+      onToggle?.(entry.item.id)
+      return
+    }
+    onSelect?.(entry.item.id)
     onClose()
   }
 
@@ -232,7 +260,11 @@ export function AgentPickerModal({
                       const isActive = index === activeIndex
                       const isSelected = isNone
                         ? selectedId === null
-                        : entry.item.id === selectedId
+                        : multiSelect
+                          ? !!selectedIds?.has(entry.item.id)
+                          : entry.item.id === selectedId
+                      const ItemIcon =
+                        !isNone && entry.item.iconKind === 'connector' ? Plug : Bot
 
                       const name = isNone ? noneLabel : entry.item.name
                       const description = isNone ? noneDescription : entry.item.description
@@ -277,41 +309,41 @@ export function AgentPickerModal({
                           type="button"
                           onMouseEnter={() => setActiveIndex(index)}
                           onClick={() => handlePick(entry)}
-                          className={`relative text-left p-3 rounded-lg border transition-colors ${cardClass}`}
+                          className={`relative flex flex-col text-left p-3 rounded-lg border transition-colors ${cardClass}`}
                         >
                           {isSelected && (
                             <span className="absolute top-2 right-2 inline-flex items-center justify-center w-4 h-4 rounded-full bg-[var(--color-on-accent)]/20 text-[var(--color-on-accent)]">
                               <Check size={10} />
                             </span>
                           )}
-                          <div className="flex items-start gap-2">
+                          {/* Icon + title share one top header row so they
+                              line up; description/meta flow below it. */}
+                          <div className="flex items-center gap-2">
                             <div
                               className={`shrink-0 w-7 h-7 rounded-md flex items-center justify-center ${iconWrapClass}`}
                             >
-                              <Bot size={14} />
+                              <ItemIcon size={14} />
                             </div>
-                            <div className="min-w-0 flex-1 pr-4">
-                              <div className="flex items-center gap-1.5">
-                                <span className={`text-xs font-medium truncate ${primaryTextClass}`}>
-                                  {name}
-                                </span>
-                              </div>
-                              {description && (
-                                <div className={`mt-0.5 text-[10px] line-clamp-2 ${secondaryTextClass}`}>
-                                  {description}
-                                </div>
-                              )}
-                              {meta && (
-                                <div className="mt-1.5">
-                                  <span
-                                    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider border ${metaPillClass}`}
-                                  >
-                                    {meta}
-                                  </span>
-                                </div>
-                              )}
-                            </div>
+                            <span
+                              className={`min-w-0 flex-1 truncate text-xs font-medium pr-4 ${primaryTextClass}`}
+                            >
+                              {name}
+                            </span>
                           </div>
+                          {description && (
+                            <div className={`mt-1.5 text-[10px] line-clamp-2 ${secondaryTextClass}`}>
+                              {description}
+                            </div>
+                          )}
+                          {meta && (
+                            <div className="mt-1.5">
+                              <span
+                                className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-semibold uppercase tracking-wider border ${metaPillClass}`}
+                              >
+                                {meta}
+                              </span>
+                            </div>
+                          )}
                         </button>
                       )
                     })}

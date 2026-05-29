@@ -142,6 +142,17 @@ export function useSetJobMcps() {
   })
 }
 
+export function useSetJobAgents() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: ({ jobId, agentIds }: { jobId: string; agentIds: string[] }) =>
+      window.api.jobs.setAgents(jobId, agentIds),
+    onSuccess: (_data, { jobId }) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs', jobId] })
+    }
+  })
+}
+
 export interface ExecuteJobInput {
   jobId: string
   /**

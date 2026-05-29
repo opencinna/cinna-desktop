@@ -736,6 +736,8 @@ const api = {
       mcpProviderIds: string[]
     ): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('job:set-mcp-providers', jobId, mcpProviderIds),
+    setAgents: (jobId: string, agentIds: string[]): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('job:set-agents', jobId, agentIds),
     listRuns: (jobId: string): Promise<JobRunData[]> =>
       ipcRenderer.invoke('job:list-runs', jobId),
     execute: (

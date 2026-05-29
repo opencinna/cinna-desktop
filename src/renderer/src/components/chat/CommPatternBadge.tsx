@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Radio, Workflow } from 'lucide-react'
-import type { CommPattern } from '../../utils/commPattern'
+import type { CommPattern } from '../../../../shared/commPattern'
 
 interface CommPatternBadgeProps {
   pattern: CommPattern
@@ -8,6 +8,14 @@ interface CommPatternBadgeProps {
   agentName?: string
   /** Chat-mode model name for the AI tooltip ("{model} runs the conversation"). */
   modelName?: string
+  /**
+   * Where the explainer tooltip opens. Default `'top'` (above the badge,
+   * right-aligned) suits the composer, which sits at the bottom of the screen.
+   * Use `'bottom-right'` (below the badge, extending right) where the default
+   * would be clipped by surrounding chrome — e.g. the job detail footer, where
+   * an above-left tooltip slides under the floating sidebar.
+   */
+  tooltipPlacement?: 'top' | 'bottom-right'
 }
 
 /**
@@ -19,11 +27,14 @@ interface CommPatternBadgeProps {
 export function CommPatternBadge({
   pattern,
   agentName,
-  modelName
+  modelName,
+  tooltipPlacement = 'top'
 }: CommPatternBadgeProps): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
 
   const isA2A = pattern === 'A2A'
+  const tooltipPos =
+    tooltipPlacement === 'bottom-right' ? 'top-full mt-1.5 left-0' : 'bottom-full mb-1.5 right-0'
   const tone = isA2A
     ? 'text-[var(--color-accent)] border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10'
     : 'text-[var(--color-warning)] border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10'
@@ -48,9 +59,9 @@ export function CommPatternBadge({
 
       {hovered && (
         <div
-          className="absolute bottom-full mb-1.5 right-0 z-50 w-72 rounded-lg border
+          className={`absolute ${tooltipPos} z-50 w-72 rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
-            shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]"
+            shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >
           {isA2A ? (
             <>
