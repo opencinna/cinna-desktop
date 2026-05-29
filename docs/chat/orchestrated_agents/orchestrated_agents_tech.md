@@ -30,12 +30,13 @@
 - `src/preload/index.ts` — `window.api.chat.{listOnDemandAgents,addOnDemandAgent,removeOnDemandAgent}`; `MessageData.toolAgentId`
 
 ### Renderer
-- `src/renderer/src/utils/commPattern.ts` — `derivePattern(agentIds, mcpIds): 'A2A' | 'AI'` (single source of truth)
+- `src/shared/commPattern.ts` — `derivePattern(agentIds, mcpIds): 'A2A' | 'AI'` (single source of truth, shared by renderer + main; moved here from the renderer util so the job runner can import it too)
 - `src/renderer/src/components/chat/CommPatternBadge.tsx` — badge + hover tooltip, left of the Cog
 - `src/renderer/src/components/chat/OnDemandAgentChips.tsx` — removable agent chips, two modes: DB-backed (`chatId` prop, active chat) and buffer-backed (`pendingIds` + `onRemovePending`, new chat) — mirrors `OnDemandMcpChips`
 - `src/renderer/src/hooks/useAgents.ts` — `useChatOnDemandAgents`, `useAddOnDemandAgent`, `useRemoveOnDemandAgent` (React Query hooks, cache key `['chat-on-demand-agent', chatId]`, scoped `on-demand-agent` logger on error)
-- `src/renderer/src/components/chat/AgentContribution.tsx` — reusable parts renderer (name label + hash color + thinking/tool/tool_result/text/command_result blocks)
-- `src/renderer/src/components/chat/AgentToolSubThread.tsx` — expandable wrapper (header `{agent} · {n} steps · {status}`, hash-colored inset, auto-expand/collapse)
+- `src/renderer/src/components/chat/AgentContribution.tsx` — reusable parts renderer (name label + hash color + thinking/tool/tool_result/text/command_result blocks). Builds a `RenderNode[]` and runs it through the shared `groupConsecutiveCollapsibles` (from `CollapsibleGroup.tsx`) so consecutive auxiliary steps fold into dots in compact mode; renders every part inline in verbose. Takes a `verbose` prop threaded from `AgentToolSubThread`.
+- `src/renderer/src/components/chat/CollapsibleGroup.tsx` — dots-group component + shared `RenderNode` type and `groupConsecutiveCollapsibles` helper, used by both this sub-thread and the main transcript (`MessageStream`)
+- `src/renderer/src/components/chat/AgentToolSubThread.tsx` — expandable wrapper (header: agent badge, `· {n} steps · {status}` appended in verbose mode; hash-colored inset, auto-expand/collapse). Threads `verbose` into `AgentContribution`.
 - `src/renderer/src/components/chat/MessageStream.tsx` — renders `AgentToolSubThread` for persisted tool_call rows with `parts` and for streaming blocks with `providerType === 'agent'`
 - `src/renderer/src/components/chat/ChatInput.tsx` — `@`-mention agent picks route to `onTogglePendingAgent`; renders chips + badge (new-chat)
 - `src/renderer/src/components/layout/MainArea.tsx` — owns `pendingAgentIds`, computes `combinedAgentIds` + `commPatternInfo`, applies the destination check
@@ -84,8 +85,8 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 - `useChatComposer.submit` — reads the chat snapshot and dispatches: agent-rooted + not orchestrated → `startAgent` (direct A2A); otherwise → `startLlm` (orchestrator)
 - `useNewChatFlow.startNewChat` — `isA2A = agentIds.length === 1 && onDemandMcpIds.length === 0`; A2A binds `agentId` + `startAgent`; else flushes `addOnDemandMcp` + `addOnDemandAgent` then `startLlm`
 - `chat.store.appendToolSubEvent(toolCallId, event)` — only `delta` events (skips `notice`); merges into `ToolCallBlock.subParts` via `appendAgentDeltaPart` (mirrors the main accumulator's `appendToList` merge rules)
-- `AgentToolSubThread` — colors by `presetForAgentId(agentId ?? agentName)`; `useEffect` collapses on the live→done transition (verbose keeps open); renders `AgentContribution` or a "Working…" placeholder when `parts` empty + pending
-- `AgentContribution` — maps `MessagePart[]` to block components; optional name label + `askMessage` first line; streaming cursor on the last part
+- `AgentToolSubThread` — colors by `presetForAgentId(agentId ?? agentName)`; `useEffect` collapses on the live→done transition (verbose keeps open); renders `AgentContribution` (passing `verbose`) or a "Working…" placeholder when `parts` empty + pending
+- `AgentContribution` — maps `MessagePart[]` to block components, then `groupConsecutiveCollapsibles` folds consecutive thinking/tool/tool_result into dots (compact) / renders inline (verbose); optional name label + `askMessage` first line; streaming cursor on the last part
 
 ## Configuration
 

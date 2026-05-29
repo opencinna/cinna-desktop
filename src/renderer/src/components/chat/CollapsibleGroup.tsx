@@ -80,3 +80,40 @@ export function CollapsibleGroup({ items }: CollapsibleGroupProps): React.JSX.El
     </div>
   )
 }
+
+/**
+ * A render slot: either a standalone block (`plain`) or a collapsible block
+ * (`collapsible`) that {@link groupConsecutiveCollapsibles} may fold into a
+ * dots group. Shared by the main transcript ({@link MessageStream}) and the
+ * agent sub-thread ({@link AgentContribution}) so both collapse consecutive
+ * auxiliary steps identically.
+ */
+export type RenderNode =
+  | { slot: 'plain'; key: string; node: React.ReactNode }
+  | { slot: 'collapsible'; item: CollapsibleGroupItem }
+
+/** Wrap runs of consecutive collapsible nodes (length >= 2) into a CollapsibleGroup. */
+export function groupConsecutiveCollapsibles(nodes: RenderNode[]): React.ReactNode[] {
+  const out: React.ReactNode[] = []
+  let i = 0
+  while (i < nodes.length) {
+    const n = nodes[i]
+    if (n.slot !== 'collapsible') {
+      out.push(<div key={n.key}>{n.node}</div>)
+      i++
+      continue
+    }
+    let j = i
+    while (j < nodes.length && nodes[j].slot === 'collapsible') j++
+    const run = nodes.slice(i, j) as Extract<RenderNode, { slot: 'collapsible' }>[]
+    if (run.length >= 2) {
+      out.push(
+        <CollapsibleGroup key={`group-${run[0].item.key}`} items={run.map((r) => r.item)} />
+      )
+    } else {
+      out.push(<div key={run[0].item.key}>{run[0].item.node}</div>)
+    }
+    i = j
+  }
+  return out
+}

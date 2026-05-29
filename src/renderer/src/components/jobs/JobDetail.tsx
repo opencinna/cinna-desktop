@@ -207,10 +207,12 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
 
       {(chips.length > 0 || job.type === 'local') && (
         <div className="border-t border-[var(--color-border)] pt-3 flex flex-wrap items-center gap-1.5">
-          {job.type === 'local' && (
-            <CommPatternBadge pattern={localPattern} tooltipPlacement="bottom-right" />
-          )}
           {chips}
+          {job.type === 'local' && (
+            <div className="ml-auto">
+              <CommPatternBadge pattern={localPattern} />
+            </div>
+          )}
         </div>
       )}
     </section>

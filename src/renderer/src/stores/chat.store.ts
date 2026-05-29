@@ -75,10 +75,6 @@ interface TextBlock {
   type: 'text'
   kind: ContentKind
   content: string
-  // One entry per received delta — rendered as separate animated spans so each
-  // arriving chunk fades in with the same reveal animation used for a full
-  // assistant message, instead of silently growing the content string.
-  segments: string[]
   toolName?: string
   /** Structured tool arguments from `cinna.tool_input` metadata (tool kind). */
   toolInput?: Record<string, unknown>
@@ -188,13 +184,12 @@ export const useChatStore = create<ChatStore>((set) => ({
         blocks[blocks.length - 1] = {
           ...last,
           content: last.content + text,
-          segments: [...last.segments, text],
           toolInput: last.toolInput ?? toolInput,
           toolId: last.toolId ?? toolId,
           commandInvocation: last.commandInvocation ?? commandInvocation
         }
       } else {
-        const next: TextBlock = { type: 'text', kind, content: text, segments: [text] }
+        const next: TextBlock = { type: 'text', kind, content: text }
         if (toolName) next.toolName = toolName
         if (toolInput) next.toolInput = toolInput
         if (toolId) next.toolId = toolId

@@ -17,12 +17,11 @@ import { AgentToolSubThread } from './AgentToolSubThread'
 import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
 import { MessageMetaFooter } from './MessageMetaFooter'
-import { CollapsibleGroup, type CollapsibleGroupItem } from './CollapsibleGroup'
+import {
+  type RenderNode,
+  groupConsecutiveCollapsibles
+} from './CollapsibleGroup'
 import type { ToolStream } from '../../../../shared/messageParts'
-
-type RenderNode =
-  | { slot: 'plain'; key: string; node: React.ReactNode }
-  | { slot: 'collapsible'; item: CollapsibleGroupItem }
 
 /**
  * Pair `tool` parts/blocks (with `cinna.command_invocation`) to their matching
@@ -112,35 +111,6 @@ function renderCommandToolPair(opts: {
       )}
     </CommandToolFrame>
   )
-}
-
-/** Wrap runs of consecutive collapsible nodes (length >= 2) into a CollapsibleGroup. */
-function groupConsecutive(nodes: RenderNode[]): React.ReactNode[] {
-  const out: React.ReactNode[] = []
-  let i = 0
-  while (i < nodes.length) {
-    const n = nodes[i]
-    if (n.slot !== 'collapsible') {
-      out.push(<div key={n.key}>{n.node}</div>)
-      i++
-      continue
-    }
-    let j = i
-    while (j < nodes.length && nodes[j].slot === 'collapsible') j++
-    const run = nodes.slice(i, j) as Extract<RenderNode, { slot: 'collapsible' }>[]
-    if (run.length >= 2) {
-      out.push(
-        <CollapsibleGroup
-          key={`group-${run[0].item.key}`}
-          items={run.map((r) => r.item)}
-        />
-      )
-    } else {
-      out.push(<div key={run[0].item.key}>{run[0].item.node}</div>)
-    }
-    i = j
-  }
-  return out
 }
 
 interface MessageStreamProps {
@@ -815,20 +785,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 }
                 return
               }
+              // Render the live assistant text through the same MessageBubble /
+              // react-markdown path as the persisted message so markdown (bold,
+              // lists, tables) renders progressively while streaming — not as
+              // raw `**…**` that only snaps to formatted once the stream ends.
+              // (Trade-off: drops the per-chunk fade since markdown re-parses the
+              // whole string each chunk; the cursor is owned by MessageBubble.)
               renderNodes.push({
                 slot: 'plain',
                 key: `stream-text-${i}`,
                 node: (
-                  <div className="text-sm leading-relaxed text-[var(--color-text)] whitespace-pre-wrap">
-                    {block.segments.map((seg, si) => (
-                      <span key={si} className="anim-chunk">
-                        {seg}
-                      </span>
-                    ))}
-                    {isStreaming && isLastBlock && (
-                      <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm align-middle" />
-                    )}
-                  </div>
+                  <MessageBubble
+                    role="assistant"
+                    content={block.content}
+                    isStreaming={isStreaming && isLastBlock}
+                  />
                 )
               })
               return
@@ -876,7 +847,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             }
           })
 
-          return groupConsecutive(renderNodes)
+          return groupConsecutiveCollapsibles(renderNodes)
         })()}
 
         {/* Persistent streaming indicator — stays at the bottom of all blocks

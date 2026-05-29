@@ -122,6 +122,7 @@ export function AgentToolSubThread({
                 agentId={agentId ?? agentName}
                 askMessage={askMessage}
                 isStreaming={isStreaming}
+                verbose={verbose}
               />
             )}
             {errorText && (

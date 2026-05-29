@@ -1,10 +1,38 @@
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { Info, Bot, ArrowRight, X } from 'lucide-react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
 import { MetaPopup } from './MetaPopup'
 import { markdownComponents } from '../../utils/markdownComponents'
+
+/**
+ * Memoized markdown renderer. Two reasons it's split out:
+ *  - `React.memo` skips re-parsing when the surrounding transcript re-renders
+ *    (e.g. a *different* message is streaming) but this bubble's content is
+ *    unchanged.
+ *  - `highlight={false}` drops `rehype-highlight` while a message is still
+ *    streaming — re-highlighting every fenced block on every token is the main
+ *    streaming-jank source, and highlighting an incomplete code block isn't
+ *    useful anyway. The full pass runs once the turn finalizes.
+ */
+const MarkdownContent = memo(function MarkdownContent({
+  content,
+  highlight
+}: {
+  content: string
+  highlight: boolean
+}): React.JSX.Element {
+  return (
+    <Markdown
+      remarkPlugins={[remarkGfm]}
+      rehypePlugins={highlight ? [rehypeHighlight] : []}
+      components={markdownComponents}
+    >
+      {content}
+    </Markdown>
+  )
+})
 import { presetForAgentId } from '../../utils/agentColors'
 import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
@@ -74,9 +102,7 @@ export function MessageBubble({
             className={`rounded-xl px-3 py-2 text-sm leading-relaxed markdown-body bg-[var(--color-user-bubble)] text-[var(--color-text)] ${animate ? 'anim-user-bubble-pop' : ''}`}
           >
             <div className={animate ? 'anim-user-bubble-content' : ''}>
-              <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-                {content}
-              </Markdown>
+              <MarkdownContent content={content} highlight />
             </div>
             {addressedAgentName && (
               <div className="mt-0.5 flex justify-end">
@@ -133,9 +159,7 @@ export function MessageBubble({
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >
-        <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]} components={markdownComponents}>
-          {content}
-        </Markdown>
+        <MarkdownContent content={content} highlight={!isStreaming} />
         {isStreaming && (
           <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm" />
         )}

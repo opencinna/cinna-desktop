@@ -6,6 +6,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
+import { type RenderNode, groupConsecutiveCollapsibles } from './CollapsibleGroup'
 
 interface AgentContributionProps {
   /** The agent's full-fidelity parts (thinking / tool / tool_result / text). */
@@ -21,6 +22,12 @@ interface AgentContributionProps {
   askMessage?: string
   /** Show a streaming cursor on the last part. */
   isStreaming?: boolean
+  /**
+   * Verbose mode renders every part inline; compact (default) folds runs of
+   * consecutive auxiliary blocks (thinking / tool / tool_result) into a dots
+   * group — the same treatment the main transcript uses.
+   */
+  verbose?: boolean
 }
 
 /**
@@ -37,10 +44,77 @@ export function AgentContribution({
   agentId,
   agentName,
   askMessage,
-  isStreaming
+  isStreaming,
+  verbose
 }: AgentContributionProps): React.JSX.Element {
   const color = agentName || agentId ? presetForAgentId(agentId ?? agentName ?? '') : null
   const lastIdx = parts.length - 1
+
+  const renderNodes: RenderNode[] = []
+  parts.forEach((p, idx) => {
+    const k = `part-${idx}`
+    const live = isStreaming && idx === lastIdx
+    if (p.kind === 'thinking') {
+      const node = <ThinkingBlock content={p.text} isStreaming={live} defaultExpanded={false} />
+      renderNodes.push(
+        verbose
+          ? { slot: 'plain', key: k, node }
+          : { slot: 'collapsible', item: { key: k, kind: 'thinking', status: 'done', isLive: live, node } }
+      )
+    } else if (p.kind === 'tool') {
+      const node = (
+        <ToolNarrationBlock
+          content={p.text}
+          toolName={p.toolName}
+          toolInput={p.toolInput}
+          isStreaming={live}
+          defaultExpanded={false}
+        />
+      )
+      renderNodes.push(
+        verbose
+          ? { slot: 'plain', key: k, node }
+          : { slot: 'collapsible', item: { key: k, kind: 'tool_narration', status: 'done', isLive: live, node } }
+      )
+    } else if (p.kind === 'tool_result') {
+      const node = (
+        <ToolResultBlock
+          content={p.text}
+          toolStream={p.toolStream}
+          isStreaming={live}
+          defaultExpanded={false}
+        />
+      )
+      renderNodes.push(
+        verbose
+          ? { slot: 'plain', key: k, node }
+          : {
+              slot: 'collapsible',
+              item: {
+                key: k,
+                kind: 'tool_result',
+                status: p.toolStream === 'stderr' ? 'error' : 'done',
+                isLive: live,
+                node
+              }
+            }
+      )
+    } else if (p.kind === 'command_result') {
+      renderNodes.push({
+        slot: 'plain',
+        key: k,
+        node: (
+          <CommandResultBlock content={p.text} commandInvocation={p.commandInvocation} isStreaming={live} />
+        )
+      })
+    } else {
+      renderNodes.push({
+        slot: 'plain',
+        key: k,
+        node: <MessageBubble role="assistant" content={p.text} isStreaming={live} />
+      })
+    }
+  })
 
   return (
     <div className="space-y-2">
@@ -61,47 +135,7 @@ export function AgentContribution({
         </div>
       )}
 
-      {parts.map((p, idx) => {
-        const k = `part-${idx}`
-        const live = isStreaming && idx === lastIdx
-        if (p.kind === 'thinking') {
-          return <ThinkingBlock key={k} content={p.text} isStreaming={live} defaultExpanded={false} />
-        }
-        if (p.kind === 'tool') {
-          return (
-            <ToolNarrationBlock
-              key={k}
-              content={p.text}
-              toolName={p.toolName}
-              toolInput={p.toolInput}
-              isStreaming={live}
-              defaultExpanded={false}
-            />
-          )
-        }
-        if (p.kind === 'tool_result') {
-          return (
-            <ToolResultBlock
-              key={k}
-              content={p.text}
-              toolStream={p.toolStream}
-              isStreaming={live}
-              defaultExpanded={false}
-            />
-          )
-        }
-        if (p.kind === 'command_result') {
-          return (
-            <CommandResultBlock
-              key={k}
-              content={p.text}
-              commandInvocation={p.commandInvocation}
-              isStreaming={live}
-            />
-          )
-        }
-        return <MessageBubble key={k} role="assistant" content={p.text} isStreaming={live} />
-      })}
+      {groupConsecutiveCollapsibles(renderNodes)}
     </div>
   )
 }
