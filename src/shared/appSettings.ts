@@ -10,6 +10,11 @@ export interface AppSettingsSchema {
    * after the first user message in a chat.
    */
   autoChatTitles: boolean
+  /**
+   * When true, the macOS menu-bar (status-bar) tray icon is created alongside
+   * the main window. Toggling at runtime creates or destroys the tray live.
+   */
+  enableTrayIcon: boolean
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

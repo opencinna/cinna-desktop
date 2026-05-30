@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { useAgentStatus } from './useAgentStatus'
 import { useUIStore } from '../stores/ui.store'
 import { SEVERITY_HEX, worstSeverity, type Severity } from '../constants/agentSeverity'
@@ -33,11 +33,6 @@ function renderTrayIcon(worst: Severity | null, systemDark: boolean): string {
   if (worst) {
     const cx = SIZE - 7
     const cy = 7
-    // Halo gap in the glyph color so the dot reads even when it touches a stroke.
-    ctx.beginPath()
-    ctx.arc(cx, cy, 6.5, 0, Math.PI * 2)
-    ctx.fillStyle = systemDark ? '#000000' : '#ffffff'
-    ctx.fill()
     ctx.beginPath()
     ctx.arc(cx, cy, 5, 0, Math.PI * 2)
     ctx.fillStyle = SEVERITY_HEX[worst]
@@ -69,16 +64,28 @@ export function useTrayIcon(): void {
       ? 'Cinna — agent status'
       : `Cinna — ${statuses.length} agent${statuses.length === 1 ? '' : 's'}${worst ? ` · worst: ${worst}` : ''}`
 
+  // Keep the latest push function in a ref so the request-icon listener (mounted
+  // once) always re-pushes with the current severity/tooltip.
+  const pushRef = useRef<() => void>(() => {})
+
   useEffect(() => {
     const mql = window.matchMedia('(prefers-color-scheme: dark)')
     const push = (): void => {
       const dataUrl = renderTrayIcon(worst, mql.matches)
       if (dataUrl) window.api.tray.setImage(dataUrl, tooltip)
     }
+    pushRef.current = push
     push()
     mql.addEventListener('change', push)
     return () => mql.removeEventListener('change', push)
   }, [worst, tooltip])
+
+  // Main fires `tray:request-icon` after (re-)creating the Tray — e.g. when the
+  // user toggles "Enable Tray Icon" back on at runtime. Re-push so the fresh
+  // Tray gets the activity glyph instead of the placeholder image.
+  useEffect(() => {
+    return window.api.tray.onRequestIcon(() => pushRef.current())
+  }, [])
 
   useEffect(() => {
     return window.api.tray.onFocusChat(({ agentId }) => {

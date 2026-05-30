@@ -14,7 +14,8 @@ import type { AppSettingKey, AppSettingsSchema } from '../../shared/appSettings'
  */
 
 export const DEFAULTS: AppSettingsSchema = {
-  autoChatTitles: false
+  autoChatTitles: false,
+  enableTrayIcon: true
 }
 
 export const appSettingsRepo = {

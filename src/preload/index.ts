@@ -918,6 +918,16 @@ const api = {
         handler(data)
       ipcRenderer.on('tray:focus-status', listener)
       return () => ipcRenderer.off('tray:focus-status', listener)
+    },
+    /**
+     * Main fires this after (re-)creating the Tray so the renderer can
+     * re-push the canvas-rendered icon — otherwise a freshly-created tray
+     * sits on the placeholder image until the next severity/theme change.
+     */
+    onRequestIcon: (handler: () => void): (() => void) => {
+      const listener = (): void => handler()
+      ipcRenderer.on('tray:request-icon', listener)
+      return () => ipcRenderer.off('tray:request-icon', listener)
     }
   }
 }

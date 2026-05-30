@@ -121,7 +121,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Settings](ui/settings/settings.md) — Settings screen with sidebar navigation, LLM provider and MCP server configuration
 - [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, streaming block auto-expand, and structured tool-call headers in tool narration
 - [Keyboard Shortcuts](ui/keyboard_shortcuts/keyboard_shortcuts.md) — Registry of every shortcut: global menu accelerators (⌘`), context-scoped ESC, chord patterns (double-ESC) and input-popup navigation
-- [Menu-Bar Tray](ui/tray/tray.md) — macOS menu-bar (status-bar) icon with a severity dot + frosted popover listing agent statuses; renderer-pushed icon, separate popup window, redirects the main window on click
+- [Menu-Bar Tray](ui/tray/tray.md) — macOS menu-bar (status-bar) icon with a severity dot + frosted popover listing agent statuses; renderer-pushed icon, separate popup window, redirects the main window on click. Lifecycle gated by the `enableTrayIcon` setting (Settings → Features → Interface), togglable live
 
 ### Development
 - [Setup](development/setup/setup.md) — Dev commands, tech stack, gotchas, project status

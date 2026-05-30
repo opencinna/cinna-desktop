@@ -9,6 +9,7 @@ import { initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
 import { trayService } from './services/trayService'
+import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
 
 let mainWindow: BrowserWindow | null = null
@@ -124,9 +125,10 @@ function createWindow(): void {
     mainWindow!.show()
   })
 
-  // The menu-bar tray lives only while a main window exists. Closing the window
-  // (macOS keeps the app alive) tears it down; `activate` rebuilds both.
-  trayService.create({ getMainWindow })
+  // The menu-bar tray lives only while a main window exists AND the user has
+  // it enabled in Settings → Features → Interface. Closing the window (macOS
+  // keeps the app alive) tears it down; `activate` rebuilds both.
+  syncTrayFromSettings()
 
   mainWindow.on('closed', () => {
     trayService.destroy()

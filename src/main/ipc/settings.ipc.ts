@@ -1,5 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { appSettingsService } from '../services/appSettingsService'
+import { syncTrayFromSettings } from '../services/traySync'
 import type { AppSettingsSchema } from '../../shared/appSettings'
 import { ipcHandle } from './_wrap'
 
@@ -26,6 +27,9 @@ export function registerSettingsHandlers(): void {
     async (_event, key: string, value: unknown): Promise<{ success: true }> => {
       userActivation.requireActivated()
       appSettingsService.set(key, value)
+      // Settings that gate a main-process side effect run their sync here, so
+      // the renderer toggle is enough to drive the change without restart.
+      if (key === 'enableTrayIcon') syncTrayFromSettings()
       return { success: true }
     }
   )

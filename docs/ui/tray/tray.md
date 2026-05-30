@@ -38,7 +38,7 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 
 ## Business Rules
 
-- **Tray lifetime = main-window lifetime.** The tray is created when the main window opens and destroyed when it closes. On macOS the app stays alive with no window, in which case there is no tray icon; reactivating the app rebuilds both.
+- **Tray lifetime = main-window lifetime ∧ Enable Tray Icon setting.** The tray is created when the main window opens *and* the `enableTrayIcon` app setting (Settings → Features → Interface) is on, and destroyed when either condition flips. On macOS the app stays alive with no window, in which case there is no tray icon; reactivating the app rebuilds both. Toggling the setting at runtime creates or destroys the tray live without restart; after a fresh create the main process pings the renderer with `tray:request-icon` so the canvas-rendered glyph replaces the placeholder image immediately.
 - **No main-process polling.** Severity is pushed from the main window's existing agent-status poll. With no main window there is no tray, so this is sufficient.
 - **Cinna-gated content.** Agent statuses exist only for `cinna_user` accounts. Non-cinna users (or users with no reporting agents) see the base icon with no dot and an empty popup.
 - **Own store/query instances.** The popup is a separate renderer; it re-hydrates the active user on window focus and relies on focus-refetch to refresh statuses each time it is shown.
@@ -49,6 +49,11 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 ## Architecture Overview
 
 ```
+Settings → Features → Interface → Enable Tray Icon
+   [settings:set] → Main writes setting → syncTrayFromSettings()
+       enabled  → trayService.create() → [tray:request-icon] → Renderer re-pushes icon
+       disabled → trayService.destroy()
+
 Main window renderer (useTrayIcon)
    worst severity → canvas image → [tray:set-image] → Main (Tray.setImage)
 
@@ -62,4 +67,5 @@ Menu-bar Tray click → trayService.toggle() → Tray Popup window (trayPanel.ht
 
 - [Agent Status](../../agents/agent_status/agent_status.md) — Data source and the in-app overlay the popup redirects into; the card/detail views are shared components.
 - [App Shell](../app_shell/app_shell.md) — The sidebar-footer status button is the in-app sibling surface; the main-window lifecycle owns tray creation/destruction.
+- [Settings](../settings/settings.md) — The Features tab's "Interface" group hosts the `enableTrayIcon` toggle; the settings IPC handler calls `syncTrayFromSettings` to create or destroy the tray live on write.
 - [Logger](../../development/logger/logger.md) — The `tray` scoped logger traces tray create/destroy and icon-set failures.
