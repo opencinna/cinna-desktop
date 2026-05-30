@@ -1,7 +1,12 @@
-import { MessageSquarePlus, Bot } from 'lucide-react'
+import { MessageCircle, Bot } from 'lucide-react'
 import type { AgentStatusSnapshot } from '../../hooks/useAgentStatus'
-import { formatRelative } from '../agents/statusViews'
-import { SEVERITY_DOT, SEVERITY_CARD_BORDER, type Severity } from '../../constants/agentSeverity'
+import { formatRelative, SeverityIcon } from '../agents/statusViews'
+import {
+  SEVERITY_CARD_BORDER,
+  SEVERITY_LABEL,
+  SEVERITY_TEXT,
+  type Severity
+} from '../../constants/agentSeverity'
 
 interface Props {
   snapshot: AgentStatusSnapshot
@@ -11,9 +16,11 @@ interface Props {
 }
 
 /**
- * Compact, two-line agent status row for the menu-bar popup. Severity is carried
- * by the dot + border tint only (no label) to fit the narrow window. Distinct
- * from the roomier `StatusCard` used in the in-app overlay grid.
+ * Compact agent status card for the menu-bar popup. Mirrors the layout of the
+ * in-app `StatusCard` (title row + summary + footer with timestamp & action)
+ * but with tray-tight spacing and type sizes. Drops the per-card refresh on
+ * purpose — at this density the panel header's refresh-all is enough, and an
+ * extra button would crowd the footer.
  */
 export function TrayStatusCard({
   snapshot,
@@ -30,27 +37,32 @@ export function TrayStatusCard({
 
   return (
     <div
-      className={`flex items-stretch rounded-lg border ${SEVERITY_CARD_BORDER[severity]} bg-[color-mix(in_srgb,var(--color-bg-tertiary)_45%,transparent)] hover:bg-[var(--color-bg-hover)] transition-colors`}
+      className={`flex flex-col rounded-lg border ${SEVERITY_CARD_BORDER[severity]} bg-[color-mix(in_srgb,var(--color-bg-tertiary)_45%,transparent)] hover:bg-[var(--color-bg-hover)] transition-colors`}
     >
       <button
         type="button"
         onClick={onViewDetails}
-        className="flex-1 min-w-0 text-left pl-2.5 pr-1 py-2 flex items-start gap-2 cursor-pointer"
+        className="text-left px-2.5 pt-2 pb-1 cursor-pointer"
       >
-        <span className={`mt-1 w-2 h-2 shrink-0 rounded-full ${SEVERITY_DOT[severity]}`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-1 min-w-0">
-            <Bot size={13} className="shrink-0 text-[var(--color-text-secondary)]" />
-            <span className="text-[12px] font-medium text-[var(--color-text)] truncate leading-tight">
-              {snapshot.name}
+        <div className="flex items-center gap-1.5 min-w-0">
+          <Bot size={13} className="shrink-0 text-[var(--color-text-secondary)]" />
+          <span className="flex-1 min-w-0 text-[12px] font-medium text-[var(--color-text)] truncate leading-tight">
+            {snapshot.name}
+          </span>
+          <span className="flex items-center gap-1 shrink-0">
+            <SeverityIcon severity={severity} />
+            <span
+              className={`text-[9px] font-semibold uppercase tracking-wider ${SEVERITY_TEXT[severity]}`}
+            >
+              {SEVERITY_LABEL[severity]}
             </span>
-          </div>
-          <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-snug line-clamp-1 break-words">
-            {summary}
-          </p>
+          </span>
         </div>
+        <p className="mt-1 text-[11px] text-[var(--color-text-secondary)] leading-snug line-clamp-2 break-words">
+          {summary}
+        </p>
       </button>
-      <div className="flex flex-col items-end justify-between py-1.5 pr-1.5 shrink-0 gap-1">
+      <div className="flex items-center justify-between px-2.5 pb-1.5">
         <span
           className="text-[9px] text-[var(--color-text-muted)] whitespace-nowrap"
           title={reported ? reported.toLocaleString() : undefined}
@@ -63,7 +75,7 @@ export function TrayStatusCard({
           className="w-6 h-6 rounded-md flex items-center justify-center border border-transparent text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-accent)] transition-colors"
           title="Start a chat with this agent"
         >
-          <MessageSquarePlus size={12} />
+          <MessageCircle size={12} />
         </button>
       </div>
     </div>

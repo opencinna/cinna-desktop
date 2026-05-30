@@ -5,6 +5,7 @@ import {
   RefreshCw,
   ArrowLeft,
   MessageSquarePlus,
+  MessageCircle,
   AlertTriangle,
   CheckCircle2,
   Info as InfoIcon,
@@ -89,19 +90,17 @@ export function StatusCard({
         className="flex-1 text-left p-3 cursor-pointer"
       >
         <div className="flex items-center gap-2 mb-2 min-w-0">
-          <div className="w-7 h-7 shrink-0 rounded-md bg-[var(--color-bg-tertiary)] flex items-center justify-center text-[var(--color-text-secondary)]">
-            <Bot size={15} />
-          </div>
-          <span className="flex-1 text-sm font-semibold text-[var(--color-text)] truncate">
+          <Bot size={16} className="shrink-0 text-[var(--color-text-secondary)]" />
+          <span className="flex-1 min-w-0 text-sm font-semibold text-[var(--color-text)] truncate">
             {snapshot.name}
           </span>
-        </div>
-        <div className="flex items-center gap-1.5 mb-1">
-          <SeverityIcon severity={severity} />
-          <span
-            className={`text-[10px] font-semibold uppercase tracking-wider ${SEVERITY_TEXT[severity]}`}
-          >
-            {SEVERITY_LABEL[severity]}
+          <span className="flex items-center gap-1.5 shrink-0">
+            <SeverityIcon severity={severity} />
+            <span
+              className={`text-[10px] font-semibold uppercase tracking-wider ${SEVERITY_TEXT[severity]}`}
+            >
+              {SEVERITY_LABEL[severity]}
+            </span>
           </span>
         </div>
         <p className="text-xs text-[var(--color-text-secondary)] leading-snug line-clamp-3 break-words">
@@ -132,29 +131,29 @@ export function StatusCard({
           )}
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onRefresh()
-          }}
-          disabled={refreshing}
-          className="w-7 h-7 rounded-md flex items-center justify-center border border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-50"
-          title="Force refresh from running environment (rate-limited to 1/30s)"
-        >
-          <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
-        </button>
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation()
-            onStartChat()
-          }}
-          className="w-7 h-7 rounded-md flex items-center justify-center border border-transparent text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-accent)] transition-colors"
-          title="Start a chat with this agent"
-        >
-          <MessageSquarePlus size={12} />
-        </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onRefresh()
+            }}
+            disabled={refreshing}
+            className="w-7 h-7 rounded-md flex items-center justify-center border border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-50"
+            title="Force refresh from running environment (rate-limited to 1/30s)"
+          >
+            <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onStartChat()
+            }}
+            className="w-7 h-7 rounded-md flex items-center justify-center border border-transparent text-[var(--color-accent)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-accent)] transition-colors"
+            title="Start a chat with this agent"
+          >
+            <MessageCircle size={12} />
+          </button>
         </div>
       </div>
     </div>
