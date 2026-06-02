@@ -6,6 +6,7 @@ import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { ReauthModal } from './components/auth/ReauthModal'
+import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
 import { useAuthStore } from './stores/auth.store'
@@ -126,6 +127,7 @@ function App(): React.JSX.Element {
         <LogsOverlay />
         <AgentStatusOverlay />
         <ReauthModal />
+        <SyncSetupModal />
       </AuthGate>
     </QueryClientProvider>
   )

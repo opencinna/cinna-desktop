@@ -135,6 +135,18 @@ export const syncRepo = {
       .run(deviceId, userId)
   },
 
+  /** Drop this device's keypair — used by the "remove device" sign-out path so
+   *  the next login can no longer silently unwrap the UMK (needs recovery/pairing). */
+  deleteDeviceKey(userId: string): void {
+    getRawSqlite().prepare(`DELETE FROM sync_device_key WHERE user_id = ?`).run(userId)
+  },
+
+  /** Drop the local sync bookkeeping row entirely (remove-device sign-out).
+   *  Init state then re-derives from the server on next activation. */
+  deleteState(userId: string): void {
+    getRawSqlite().prepare(`DELETE FROM sync_state WHERE user_id = ?`).run(userId)
+  },
+
   // ---- sync_tombstone ----
 
   addTombstone(

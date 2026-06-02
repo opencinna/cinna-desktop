@@ -107,7 +107,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Notes](notes/notes/notes.md) — Inline-edit markdown notes with folder organisation, drag-drop ordering, soft-delete to trash, and shared 30-day retention with chats
 
 ### Sync
-- [Native Client Data Sync](sync/data_sync/data_sync.md) — Cross-device, end-to-end-encrypted sync of profile data (Phase 1: notes, note folders, jobs, job folders) through the zero-knowledge Cinna backend. UMK + device/recovery/passphrase unlock, QR/SAS pairing, LWW conflict resolution, tombstones; keys never leave the main process
+- [Native Client Data Sync](sync/data_sync/data_sync.md) — Cross-device, end-to-end-encrypted sync of profile data (Phase 1: notes, note folders, jobs, job folders) through the zero-knowledge Cinna backend. UMK + device/recovery/passphrase unlock, QR/SAS pairing, LWW conflict resolution, tombstones; keys never leave the main process. Seamless onboarding: a login-time prompt (`SyncSetupModal`) enables sync on a first device (toggle ON by default) or restores on a new/wiped one; sign-out is non-destructive for Cinna profiles with a "remove this device" toggle that decides whether the next sign-in re-syncs automatically or needs recovery
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

@@ -1,11 +1,13 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import {
   RefreshCw,
   ShieldCheck,
-  Lock,
+  Pause,
+  Play,
   Unlock,
   KeyRound,
   Smartphone,
+  Laptop,
   Trash2,
   Copy,
   Check
@@ -18,11 +20,9 @@ import {
   useSyncUnlock,
   useSyncLock,
   useSyncNow,
-  usePairingStart,
   usePairingScan,
   useRevokeDevice,
-  useSyncWipe,
-  pollPairing
+  useSyncWipe
 } from '../../hooks/useSync'
 import type { SyncState, SyncInitResult } from '../../../../shared/sync'
 
@@ -105,7 +105,7 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
                 </PrimaryButton>
               ) : state.locked ? (
                 <span className="inline-flex items-center gap-1.5 text-[13px] text-[var(--color-text-muted)]">
-                  <Lock size={13} /> Locked
+                  <Pause size={13} /> Paused
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-[13px] text-[var(--color-accent)]">
@@ -130,7 +130,7 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
                   onClick={() => handle(() => lock.mutateAsync())}
                   busy={lock.isPending}
                 >
-                  <Lock size={12} /> Lock
+                  <Pause size={12} /> Pause sync
                 </SecondaryButton>
               )}
             </div>
@@ -208,7 +208,7 @@ function UnlockControls({ onError }: { onError: (msg: string) => void }): React.
     return (
       <>
         <SecondaryButton onClick={unlockDevice} busy={unlock.isPending}>
-          <Unlock size={12} /> Unlock
+          <Play size={12} /> Resume sync
         </SecondaryButton>
         <SecondaryButton onClick={() => setMode('recovery')}>
           <KeyRound size={12} /> Recovery key
@@ -237,60 +237,19 @@ function UnlockControls({ onError }: { onError: (msg: string) => void }): React.
   )
 }
 
-const PAIRING_POLL_INTERVAL_MS = 2000
-const PAIRING_POLL_MAX_ATTEMPTS = 90 // ~3 minutes, then the code is treated as expired
-
+/**
+ * "Add a device" — the **sealer** half of pairing only. This card renders solely
+ * on an already-unlocked device (gated by `initialized && !locked` upstream),
+ * which always holds the UMK, so its only useful pairing role is to seal the key
+ * to a joiner. The **joiner** half (showing a pairing code) lives in
+ * `SyncSetupModal`'s restore flow on the new/locked device — the device that
+ * actually lacks the key.
+ */
 function PairingCard(): React.JSX.Element {
-  const pairingStart = usePairingStart()
   const pairingScan = usePairingScan()
-
-  const [offer, setOffer] = useState<Awaited<ReturnType<typeof pairingStart.mutateAsync>> | null>(
-    null
-  )
-  const [joined, setJoined] = useState(false)
-  const [expired, setExpired] = useState(false)
   const [scanCode, setScanCode] = useState('')
   const [scanSas, setScanSas] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
-
-  // Poll the relay while showing a join offer, with a bounded lifetime.
-  useEffect(() => {
-    if (!offer) return
-    let attempts = 0
-    pollRef.current = setInterval(async () => {
-      attempts += 1
-      if (attempts > PAIRING_POLL_MAX_ATTEMPTS) {
-        if (pollRef.current) clearInterval(pollRef.current)
-        setExpired(true)
-        setOffer(null)
-        return
-      }
-      try {
-        if (await pollPairing(offer.code)) {
-          if (pollRef.current) clearInterval(pollRef.current)
-          setJoined(true)
-          setOffer(null)
-        }
-      } catch {
-        /* transient — keep polling until the attempt cap */
-      }
-    }, PAIRING_POLL_INTERVAL_MS)
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current)
-    }
-  }, [offer])
-
-  const start = async (): Promise<void> => {
-    setError(null)
-    setJoined(false)
-    setExpired(false)
-    try {
-      setOffer(await pairingStart.mutateAsync())
-    } catch (err) {
-      setError(toMessage(err))
-    }
-  }
 
   const scan = async (): Promise<void> => {
     setError(null)
@@ -307,70 +266,30 @@ function PairingCard(): React.JSX.Element {
     <section>
       <SectionTitle>Add a device</SectionTitle>
       <Card>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <div className="text-[13px] font-medium text-[var(--color-text)] mb-1">
-              This is the new device
-            </div>
-            <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-2">
-              Show this code (or QR) to a device that already has sync unlocked.
-            </p>
-            {offer ? (
-              <div className="space-y-2">
-                <img
-                  src={offer.qrDataUrl}
-                  alt="Pairing QR"
-                  className="w-40 h-40 rounded-md bg-white p-1"
-                />
-                <div className="text-[12px] text-[var(--color-text-muted)]">
-                  Code: <code className="text-[var(--color-text)] break-all">{offer.code}</code>
-                </div>
-                <div className="text-[13px]">
-                  Verification:{' '}
-                  <span className="font-mono text-[var(--color-accent)]">{offer.sas}</span>
-                </div>
-              </div>
-            ) : (
-              <PrimaryButton busy={pairingStart.isPending} onClick={start}>
-                <Smartphone size={12} /> Show pairing code
-              </PrimaryButton>
-            )}
-            {joined && (
-              <div className="text-[13px] text-[var(--color-accent)] mt-2">
-                This device is now paired.
-              </div>
-            )}
-            {expired && (
-              <div className="text-[13px] text-[var(--color-text-muted)] mt-2">
-                Pairing code expired — generate a new one.
-              </div>
-            )}
-          </div>
-
-          <div>
-            <div className="text-[13px] font-medium text-[var(--color-text)] mb-1">
-              This device is already set up
-            </div>
-            <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-2">
-              Paste the code from the new device, then confirm the verification numbers match.
-            </p>
-            <input
-              value={scanCode}
-              onChange={(e) => setScanCode(e.target.value)}
-              placeholder="Paste pairing code"
-              className="w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)] mb-2"
-            />
-            <PrimaryButton busy={pairingScan.isPending} onClick={scan}>
-              Send key
-            </PrimaryButton>
-            {scanSas && (
-              <div className="text-[13px] mt-2">
-                Confirm these match the other device:{' '}
-                <span className="font-mono text-[var(--color-accent)]">{scanSas}</span>
-              </div>
-            )}
-          </div>
+        <div className="text-[13px] font-medium text-[var(--color-text)] mb-1">
+          Authorize a new device
         </div>
+        <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-2">
+          On the new device, sign in and choose <strong>Pair with another device</strong>. Paste the
+          code it shows here, then confirm the verification numbers match on both devices.
+        </p>
+        <div className="flex gap-2 max-w-md">
+          <input
+            value={scanCode}
+            onChange={(e) => setScanCode(e.target.value)}
+            placeholder="Paste pairing code"
+            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
+          />
+          <PrimaryButton busy={pairingScan.isPending} onClick={scan}>
+            Authorize device
+          </PrimaryButton>
+        </div>
+        {scanSas && (
+          <div className="text-[13px] mt-2">
+            Confirm these match the other device:{' '}
+            <span className="font-mono text-[var(--color-accent)]">{scanSas}</span>
+          </div>
+        )}
         {error && <div className="text-[13px] text-[var(--color-danger)] mt-3">{error}</div>}
       </Card>
     </section>
@@ -387,14 +306,18 @@ function DevicesCard({ state }: { state: SyncState }): React.JSX.Element {
           <div className="text-[13px] text-[var(--color-text-muted)]">No other devices yet.</div>
         ) : (
           <ul className="divide-y divide-[var(--color-border)]">
-            {state.devices.map((d) => (
+            {state.devices.map((d) => {
+              const DeviceIcon = deviceIcon(d.name)
+              return (
               <li key={d.id} className="flex items-center gap-3 py-2 first:pt-0 last:pb-0">
-                <Smartphone size={14} className="text-[var(--color-text-muted)]" />
+                <DeviceIcon size={14} className="text-[var(--color-text-muted)]" />
                 <div className="flex-1">
                   <div className="text-[13px] text-[var(--color-text)]">
                     {d.name}
                     {d.current && (
-                      <span className="ml-2 text-[11px] text-[var(--color-accent)]">this device</span>
+                      <span className="ml-2 inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-[var(--color-accent)]/15 text-[var(--color-accent)]">
+                        this device
+                      </span>
                     )}
                   </div>
                   {d.lastSeenAt && (
@@ -414,7 +337,8 @@ function DevicesCard({ state }: { state: SyncState }): React.JSX.Element {
                   </button>
                 )}
               </li>
-            ))}
+              )
+            })}
           </ul>
         )}
       </Card>
@@ -625,6 +549,16 @@ function SecondaryButton({
       {children}
     </button>
   )
+}
+
+/**
+ * Pick a device icon from its label. There's no device-type field on
+ * `SyncDeviceInfo` — the desktop client labels itself "<host> (desktop)", so we
+ * infer from keywords: mobile labels → phone, everything else (desktop/laptop or
+ * unknown) → laptop.
+ */
+function deviceIcon(name: string): typeof Smartphone {
+  return /mobile|phone|android|ios|iphone|ipad|tablet/i.test(name) ? Smartphone : Laptop
 }
 
 function formatBytes(n: number): string {

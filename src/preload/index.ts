@@ -248,6 +248,8 @@ const api = {
     deleteUser: (data: {
       userId: string
       password?: string
+      signOut?: boolean
+      removeDevice?: boolean
     }): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('auth:delete-user', data),
     /**

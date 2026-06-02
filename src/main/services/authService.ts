@@ -8,6 +8,7 @@ import {
   CinnaReauthRequired
 } from '../auth/cinna-oauth'
 import { storeCinnaTokens, clearCinnaTokens } from '../auth/cinna-tokens'
+import { syncService } from './syncService'
 import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
@@ -65,6 +66,22 @@ export interface UpdateUserInput {
 export interface DeleteAccountInput {
   userId: string
   password?: string
+  /**
+   * Non-destructive sign-out (UserMenu) vs. full account removal (Settings →
+   * User Accounts). When true, a Cinna profile's row is KEPT (tokens cleared)
+   * so a later re-login rebinds to it; only local profile-scoped data is wiped.
+   * When false/absent, the profile is fully deleted. Ignored for local
+   * profiles, which are always fully deleted (no server copy to restore from).
+   */
+  signOut?: boolean
+  /**
+   * Cinna sign-out only. When true (the default), also removes this device from
+   * the account — the local sync keypair is dropped and the device is revoked
+   * server-side, so the next sign-in must restore via recovery key or pairing.
+   * When false, the device stays trusted and the next sign-in re-syncs
+   * automatically. A full delete (`signOut !== true`) always removes the device.
+   */
+  removeDevice?: boolean
 }
 
 export interface StartupResult {
@@ -155,9 +172,35 @@ export const authService = {
     }
 
     const username = tokens.profile.email
-    if (userRepo.getByUsername(username)) {
-      logger.warn('cinna register rejected: account already exists', { username })
-      throw new AuthError('username_taken', `Account already exists for ${username}`)
+    const existing = userRepo.getByUsername(username)
+    if (existing) {
+      if (existing.type !== 'cinna_user') {
+        logger.warn('cinna register rejected: name collides with a local account', { username })
+        throw new AuthError('username_taken', `Account already exists for ${username}`)
+      }
+      // Rebind: a previously signed-out Cinna profile is signing back in. Reuse
+      // the existing profile row (so its kept device key + synced data line up
+      // again) instead of minting a new id and orphaning everything. Refresh
+      // identity fields + tokens, then reactivate — activation silently
+      // auto-unlocks if the device was kept, or surfaces needs-unlock if it was
+      // removed at sign-out.
+      //
+      // A local password on the row (the device-level profile-switch lock) is
+      // intentionally NOT re-checked here: a completed OAuth flow proves control
+      // of the Cinna identity (email matches `existing.username`), which is a
+      // stronger assertion than the local password. Mirrors `reauthCinna`.
+      userRepo.updateCinnaProfile(existing.id, {
+        displayName: tokens.profile.displayName,
+        cinnaFullName: tokens.profile.fullName,
+        cinnaServerUrl: serverUrl,
+        cinnaHostingType: input.hostingType ?? 'cloud'
+      })
+      storeCinnaTokens(existing.id, tokens)
+      await userActivation.activate(existing.id)
+      logger.info('user.rebound', { userId: existing.id, username, type: 'cinna_user' })
+      const reboundRow = userRepo.get(existing.id)
+      if (!reboundRow) throw new Error('User disappeared after rebind')
+      return { user: toDto(reboundRow) }
     }
 
     const id = nanoid()
@@ -329,16 +372,47 @@ export const authService = {
     }
 
     const wasCurrent = getCurrentUserId() === row.id
+    const signOut = input.signOut === true
 
-    if (wasCurrent) {
-      await userActivation.deactivate()
+    if (row.type === 'cinna_user') {
+      // A sign-out may keep the device trusted; a full delete always removes it.
+      const removeDevice = signOut ? (input.removeDevice ?? true) : true
+      // Clean up server/local sync material first (revoke + drop keys, and for
+      // the active profile flush a final cycle while the UMK is still in memory).
+      // Runs regardless of `wasCurrent` so removing a non-active profile from
+      // Settings still revokes its device and clears its sync keys.
+      await syncService.signOutCleanup(input.userId, { removeDevice })
+      if (wasCurrent) {
+        await userActivation.deactivate()
+      }
+      clearCinnaTokens(input.userId)
+      userActivation.forgetUnlock(input.userId)
+
+      if (signOut) {
+        // Non-destructive: keep the profile row (re-login rebinds to it), wipe
+        // only the local profile-scoped data — synced collections re-pull.
+        userRepo.wipeProfileData(input.userId)
+        logger.info('user.signed_out', {
+          userId: input.userId,
+          username: row.username,
+          removeDevice
+        })
+      } else {
+        // Destructive: remove the profile entirely. Server-side synced data is
+        // untouched and recoverable by re-linking the Cinna account.
+        userRepo.deleteWithCascade(input.userId)
+        logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
+      }
+    } else {
+      // Local profiles have no server copy — always a destructive delete.
+      if (wasCurrent) {
+        await userActivation.deactivate()
+      }
+      clearCinnaTokens(input.userId)
+      userActivation.forgetUnlock(input.userId)
+      userRepo.deleteWithCascade(input.userId)
+      logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
     }
-
-    clearCinnaTokens(input.userId)
-    userActivation.forgetUnlock(input.userId)
-    userRepo.deleteWithCascade(input.userId)
-
-    logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
 
     if (wasCurrent) {
       await userActivation.activate(DEFAULT_USER_ID)

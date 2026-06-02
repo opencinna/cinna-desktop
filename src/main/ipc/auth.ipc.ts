@@ -108,7 +108,10 @@ export function registerAuthHandlers(): void {
 
   ipcHandle(
     'auth:delete-user',
-    async (_event, data: { userId: string; password?: string }) => {
+    async (
+      _event,
+      data: { userId: string; password?: string; signOut?: boolean; removeDevice?: boolean }
+    ) => {
       try {
         await authService.deleteAccount(data)
         return { success: true as const }

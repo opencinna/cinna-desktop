@@ -14,7 +14,7 @@ import type {
  * the live event subscription. Mirrors the `useChat` pattern.
  */
 
-const SYNC_KEY = ['sync', 'state'] as const
+export const SYNC_KEY = ['sync', 'state'] as const
 
 /** Map a synced collection to the React Query key(s) its data lives under. */
 const COLLECTION_QUERY_KEYS: Record<SyncCollection, string[]> = {

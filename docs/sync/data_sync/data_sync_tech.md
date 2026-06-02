@@ -23,7 +23,7 @@
 - `crypto/scure-bip39.d.ts` — type shim for the `@scure/bip39` english wordlist subpath.
 
 **Services**
-- `services/syncService.ts` — orchestration: `getState`, `ensureActivated`, `tryAutoUnlock`, `initEncryption`, `unlock`, `addPassphrase`, `lock`, `syncNow`, `markDirty`, pairing (`startPairing`/`pollPairing`/`scanPairing`), `revokeDevice`, `wipe`, `onProfileSwitch`. Owns the renderer broadcast (`sync:event`) and per-profile timers.
+- `services/syncService.ts` — orchestration: `getState`, `ensureActivated`, `tryAutoUnlock`, `initEncryption`, `unlock`, `addPassphrase`, `lock`, `syncNow`, `markDirty`, pairing (`startPairing`/`pollPairing`/`scanPairing`), `revokeDevice`, `wipe`, `signOutCleanup`, `onProfileSwitch`. Owns the renderer broadcast (`sync:event`) and per-profile timers. `lock` is surfaced as **Pause sync**: it adds the profile to an in-memory `pausedUserIds` set so `ensureActivated`/`tryAutoUnlock` won't silently re-unlock it and `runCycleNow` short-circuits (the periodic timer + "Sync now" stay quiet — no `needs-unlock` churn) (any `unlock`/pairing resumes + logs `sync.resumed`; cleared on profile switch; `lock` logs `sync.paused`). `signOutCleanup(userId, {removeDevice})` is the sign-out hook called by `authService.deleteAccount`: flushes a final cycle (active+unlocked only), resets the cursor + clears tombstones (so the upcoming local wipe stays a tombstone-free raw delete), and — when `removeDevice` — revokes the device server-side + drops the local keypair/state.
 - `services/syncApi.ts` — HTTP client for `/api/v1/app-sync*`; owns the on-wire field names and maps cinna-core's raw responses to engine-facing shapes (`PushRecordWire`, `PullRecordWire`, `PushResultWire`, `EncryptionStateWire`, `SyncStateWire`, `DeviceWire`).
 - `services/cinnaApiService.ts` — `cinnaApiFetch()` / `getCinnaServerUrl()` exported for `syncApi` to reuse Bearer auth + `reauth_required` detection + logging; `cinnaFetch` tolerates empty response bodies.
 
@@ -31,12 +31,15 @@
 - `db/migrations/sync.ts` — `runSyncMigrations()`: creates `sync_state`, `sync_device_key`, `sync_tombstone`.
 - `db/migrations/sync-deps.ts` — `runSyncDepsMigrations()`: idempotent column adds `jobs.sync_deps` (JSON manifest), `mcp_providers.created_by_sync`, `agents.created_by_sync`.
 - `db/client.ts` — registers `runSyncMigrations()` then `runSyncDepsMigrations()` (after notes/jobs) in `runMigrations()`; exposes `getRawSqlite()`.
-- `db/sync.ts` — `syncRepo`: bookkeeping CRUD (state, device key, tombstones) over raw SQLite.
+- `db/sync.ts` — `syncRepo`: bookkeeping CRUD (state, device key, tombstones) over raw SQLite. `deleteDeviceKey`/`deleteState` back the remove-device sign-out (drop the keypair + bookkeeping so init re-derives from the server and auto-unlock can no longer succeed).
+- `db/users.ts` — `userRepo.wipeProfileData(userId)`: raw, tombstone-free delete of profile-scoped tables (chats, jobs, job folders, notes, note folders, profile agents/overrides) keeping the user row — backs the non-destructive Cinna sign-out. `deleteWithCascade` (full delete) also covers those collection tables. `updateCinnaProfile(id, …)` refreshes identity fields on a re-login rebind.
 - `db/notes.ts` — `notesRepo` / `noteFoldersRepo` sync helpers: `listChangedSince`, `maxUpdatedAt`, `upsertFromSync`, `deleteOwned` / `deleteOwnedWithDetach`. Hard-delete paths emit tombstones.
 - `db/jobs.ts` — `jobsRepo` / `jobFoldersRepo` sync helpers: same set plus `listRefs`, `setSyncDeps` (write the manifest without bumping `updatedAt`), `setRefsFromSync` (materialize resolved join rows). `upsertFromSync` carries the peer's `updatedAt` + stores `sync_deps`. Folder delete emits a tombstone.
 
 **Auth / lifecycle**
 - `auth/activation.ts` — activates sync (`ensureActivated`) for Cinna users on login; `onProfileSwitch()` (UMK zero + timer clear) on deactivate.
+- `services/authService.ts` — `deleteAccount({signOut, removeDevice})` splits sign-out (non-destructive, keeps the Cinna row → `signOutCleanup` + `wipeProfileData`) from full delete (destructive, always `removeDevice` + `deleteWithCascade`); both branches run `signOutCleanup` regardless of `wasCurrent`. `registerCinna` rebinds to an existing Cinna profile (refresh tokens + `updateCinnaProfile`, reactivate) instead of minting a new local id, so a kept device key + synced data line up on re-login.
+- `ipc/auth.ipc.ts` — `auth:delete-user` accepts `{userId, password?, signOut?, removeDevice?}`.
 - `errors.ts` — `SyncError` / `SyncErrorCode`.
 
 **Mutation hooks (dirty signals)**
@@ -47,9 +50,10 @@
 - `preload/index.ts` — `window.api.sync.*` bindings.
 
 ### Renderer (`src/renderer/src/`)
-- `hooks/useSync.ts` — React Query layer: `useSyncState`, `useSyncEvents`, mutations (`useSyncInit/Unlock/Lock/Now`, `useAddPassphrase`, `usePairingStart/Scan`, `useRevokeDevice`, `useSyncWipe`), `pollPairing`.
+- `hooks/useSync.ts` — React Query layer: exported `SYNC_KEY`, `useSyncState`, `useSyncEvents`, mutations (`useSyncInit/Unlock/Lock/Now`, `useAddPassphrase`, `usePairingStart/Scan`, `useRevokeDevice`, `useSyncWipe`), `pollPairing`.
+- `components/sync/SyncSetupModal.tsx` — app-level login-time prompt (mounted in `App.tsx` beside `ReauthModal`). Evaluates once per profile per session via `queryClient.fetchQuery(SYNC_KEY, …)`: not-initialized → "Enable sync" (toggle ON by default → `useSyncInit` → recovery backup); initialized+locked+online → "Restore your data" (inline pairing / recovery / passphrase via the `useSync` hooks); initialized+unlocked → nothing.
 - `hooks/useJobs.ts` `useJobDependencyStatus(jobId)` — per-dependency resolution status (`job:dep-status`), nested under `['jobs', jobId]` so job edits / sync apply refresh it. `components/jobs/JobDetail.tsx` renders the amber/grey "finish setup on this device" surface; `components/jobs/JobItem.tsx` shows a sidebar badge from `JobData.needsSetup`.
-- `components/settings/CloudSyncSettingsSection.tsx` — the Cloud Sync card and its sub-components (unlock controls, pairing, devices, storage, danger zone, recovery-backup screen).
+- `components/settings/CloudSyncSettingsSection.tsx` — the Cloud Sync card and its sub-components (unlock controls, pairing **sealer** only, devices, storage, danger zone, recovery-backup screen). The **joiner** half (show pairing code + poll) lives in `SyncSetupModal`, on the device that lacks the key.
 - `components/settings/SettingsPage.tsx` — renders the `profile-sync` tab.
 - `components/layout/Sidebar.tsx` — `profile-sync` nav item ("Cloud Sync").
 - `stores/ui.store.ts` — `SettingsMenu` union + `PROFILE_SCOPE_TABS` include `profile-sync`.
@@ -108,14 +112,16 @@ Base path `/api/v1/app-sync` (see `services/syncApi.ts`; shapes mirror cinna-cor
 
 ## Renderer Components
 
-- `CloudSyncSettingsSection.tsx` — top-level card; gates on `cinna_user`; shows the forced recovery-backup screen after `init`. Sub-components: `UnlockControls`, `PairingCard` (bounded poll, ~3 min expiry), `DevicesCard`, `StorageCard`, `DangerCard`, `RecoveryBackupScreen`.
-- All data flows through `hooks/useSync.ts`; the component never calls `window.api.sync` directly.
+- `CloudSyncSettingsSection.tsx` — top-level card; gates on `cinna_user`; shows the forced recovery-backup screen after `init`. Sub-components: `UnlockControls`, `PairingCard` (**sealer** only — paste a joiner's code, seal the UMK), `DevicesCard`, `StorageCard`, `DangerCard`, `RecoveryBackupScreen`.
+- `SyncSetupModal.tsx` — login-time enable/restore prompt (see File Locations). Self-contained enable/restore/recovery/pairing panes reusing the `useSync` hooks.
+- `components/auth/UserMenu.tsx` — the sign-out modal; for `cinna_user` it shows the "Remove this device from my account" switch (ON by default) and the reworded warning, and sends `{signOut: true, removeDevice}`. Local profiles keep "Remove Account".
+- All data flows through `hooks/useSync.ts` (the settings card never calls `window.api.sync` directly; the modal's single login read goes through `fetchQuery`).
 
 ## Configuration
 
 - Dependencies: `libsodium-wrappers-sumo` (full API — see `crypto/sodium.ts`), `@scure/bip39`, `qrcode` (+ `@types/libsodium-wrappers-sumo`).
 - Engine constants in `syncEngine.ts`: `MAX_RECORDS_PER_PUSH` (500), `MAX_PAYLOAD_BYTES` (1 MiB), `PULL_PAGE` (200).
-- Timing in `syncService.ts`: `PERIODIC_MS` (60s), `DEBOUNCE_MS` (1.5s). Pairing poll cadence/cap in `CloudSyncSettingsSection.tsx`.
+- Timing in `syncService.ts`: `PERIODIC_MS` (60s), `DEBOUNCE_MS` (1.5s). Pairing poll cadence/cap (the joiner side) live in `components/sync/SyncSetupModal.tsx`.
 
 ## Security
 

@@ -20,6 +20,9 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
   const [signOutPassword, setSignOutPassword] = useState('')
   const [signOutError, setSignOutError] = useState('')
+  // Cinna sign-out only: removing the device drops the local sync key so the
+  // next sign-in needs a recovery key/pairing. Privacy-first default = on.
+  const [removeDevice, setRemoveDevice] = useState(true)
   const [loginUserId, setLoginUserId] = useState<string | null>(null)
   const signOutModalRef = useRef<HTMLDivElement>(null)
   const currentUser = useAuthStore((s) => s.currentUser)
@@ -86,6 +89,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     setShowSignOutConfirm(true)
     setSignOutPassword('')
     setSignOutError('')
+    setRemoveDevice(true)
   }
 
   const handleConfirmSignOut = async (): Promise<void> => {
@@ -93,24 +97,27 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     setSignOutError('')
 
     if (currentUser.hasPassword && !signOutPassword) {
-      setSignOutError('Password is required to remove this account')
+      setSignOutError('Password is required to confirm')
       return
     }
 
     const result = await deleteUser.mutateAsync({
       userId: currentUser.id,
-      password: signOutPassword || undefined
+      password: signOutPassword || undefined,
+      signOut: true,
+      removeDevice: isCinnaUser ? removeDevice : undefined
     })
 
     if (result.success) {
       setShowSignOutConfirm(false)
       setSignOutPassword('')
     } else {
-      setSignOutError(result.error ?? 'Failed to remove account')
+      setSignOutError(result.error ?? 'Failed to sign out')
     }
   }
 
   const isDefault = currentUser?.id === DEFAULT_USER_ID
+  const isCinnaUser = currentUser?.type === 'cinna_user'
   const initial = (currentUser?.cinnaFullName ?? currentUser?.displayName)?.charAt(0).toUpperCase() ?? '?'
   const allUsers = users ?? []
 
@@ -277,13 +284,49 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               Sign Out — {currentUser.cinnaFullName ?? currentUser.displayName}
             </div>
 
-            <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
-              This will remove the account from this device. All <strong className="text-[var(--color-text)]">local</strong> chat
-              history, providers, agents, and settings for this account will be permanently erased.
-              {currentUser.type === 'cinna_user' && (
-                <> Your Cinna cloud account will not be affected.</>
-              )}
-            </p>
+            {isCinnaUser ? (
+              <>
+                <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  Your <strong className="text-[var(--color-text)]">chats and job runs</strong> on this
+                  device will be permanently deleted — they are not synced and cannot be restored.
+                  Your notes, jobs, and folder structure are synced and will return when you sign back
+                  in. Your Cinna cloud account is not affected.
+                </p>
+
+                <label className="flex items-start gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 cursor-pointer">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={removeDevice}
+                    onClick={() => setRemoveDevice((v) => !v)}
+                    className={`mt-0.5 shrink-0 relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
+                      removeDevice ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-bg-tertiary)]'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
+                        removeDevice ? 'translate-x-3.5' : 'translate-x-0.5'
+                      }`}
+                    />
+                  </button>
+                  <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                    <span className="text-[var(--color-text)] font-medium">
+                      Remove this device from my account
+                    </span>
+                    <br />
+                    {removeDevice
+                      ? "You'll need your recovery key or another signed-in device to restore your data next time you sign in."
+                      : 'This device stays trusted — your data will re-sync automatically next time you sign in.'}
+                  </span>
+                </label>
+              </>
+            ) : (
+              <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                This will remove the account from this device. All{' '}
+                <strong className="text-[var(--color-text)]">local</strong> chat history, providers,
+                agents, and settings for this account will be permanently erased.
+              </p>
+            )}
 
             {currentUser.hasPassword && (
               <div>
@@ -317,7 +360,13 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
                 disabled={deleteUser.isPending}
                 className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
               >
-                {deleteUser.isPending ? 'Removing...' : 'Remove Account'}
+                {deleteUser.isPending
+                  ? isCinnaUser
+                    ? 'Signing out...'
+                    : 'Removing...'
+                  : isCinnaUser
+                    ? 'Sign Out'
+                    : 'Remove Account'}
               </button>
             </div>
           </div>

@@ -58,6 +58,12 @@ interface DeviceMaterial {
 const debounceTimers = new Map<string, NodeJS.Timeout>()
 const periodicTimers = new Map<string, NodeJS.Timeout>()
 const pairingEphemerals = new Map<string, PairingEphemeral>() // code -> ephemeral
+// Profiles the user explicitly **paused** this session. While paused, the
+// per-launch silent auto-unlock is suppressed — otherwise the very next
+// `getState()` would re-unlock a trusted device and the UI would flap between
+// Paused/Active. Cleared on resume (any unlock) and on profile switch. Pause is
+// intentionally session-scoped: a relaunch auto-unlocks as usual.
+const pausedUserIds = new Set<string>()
 let lastStatus: SyncStatus = 'idle'
 
 function broadcast(event: SyncEvent): void {
@@ -247,6 +253,7 @@ async function pushState(userId: string): Promise<SyncState> {
 
 async function runCycleNow(userId: string): Promise<void> {
   if (!isCinnaProfile(userId)) return
+  if (pausedUserIds.has(userId)) return // paused — stay quiet (no needs-unlock churn)
   const local = syncRepo.getState(userId)
   if (!local || local.activeUmkVersion === 0) {
     broadcast({ type: 'needs-setup' })
@@ -300,7 +307,8 @@ export const syncService = {
    */
   async ensureActivated(userId: string): Promise<void> {
     if (!isCinnaProfile(userId)) return
-    if (!vault.isUnlocked(userId)) {
+    // Respect an explicit pause — don't silently re-unlock until the user resumes.
+    if (!vault.isUnlocked(userId) && !pausedUserIds.has(userId)) {
       let initialized = (syncRepo.getState(userId)?.activeUmkVersion ?? 0) > 0
       if (!initialized) {
         // Local state may be behind the server (e.g. init persisted server-side
@@ -411,6 +419,7 @@ export const syncService = {
     if (!isCinnaProfile(userId)) {
       throw new CinnaApiError('not_cinna_user', 'Sync requires a Cinna-linked profile')
     }
+    pausedUserIds.delete(userId) // resume
     const enc = await syncApi.getEncryptionState(userId)
     const version = enc.active_umk_version
     const keys = await syncApi.listKeys(userId, version)
@@ -436,6 +445,7 @@ export const syncService = {
 
     vault.setUmk(userId, umk, version)
     syncRepo.patchState(userId, { activeUmkVersion: version })
+    logger.info('sync.resumed', { userId, method: req.method })
 
     // A non-device unlock on a new device → register a device envelope so the
     // next launch unlocks silently.
@@ -458,8 +468,12 @@ export const syncService = {
     await pushState(userId)
   },
 
+  /** Pause sync: zero the in-memory UMK and flag the profile so auto-unlock
+   *  doesn't immediately resume it. Resumed by any `unlock` (incl. device). */
   async lock(userId: string): Promise<void> {
+    pausedUserIds.add(userId)
     await vault.lock(userId)
+    logger.info('sync.paused', { userId })
     broadcast({ type: 'needs-unlock' })
     await pushState(userId)
   },
@@ -504,6 +518,7 @@ export const syncService = {
   async pollPairing(userId: string, code: string): Promise<boolean> {
     const ephemeral = pairingEphemerals.get(code)
     if (!ephemeral) throw new SyncError('bad_request', 'No active pairing for this code')
+    pausedUserIds.delete(userId) // pairing resumes sync
     const res = await syncApi.pairingGet(userId, code)
     if (!res || res.status !== 'completed' || !res.sealed_umk) return false
     const sealed = await deviceKeyCodec.from(res.sealed_umk)
@@ -551,6 +566,49 @@ export const syncService = {
     await pushState(userId)
   },
 
+  /**
+   * Sign-out hook (called by `authService.deleteAccount` for Cinna profiles
+   * BEFORE the session is deactivated, while the UMK is still in memory).
+   *
+   * - Flushes one final sync cycle so edits made just before sign-out (still
+   *   inside the debounce window) reach the server before we wipe them locally.
+   * - Resets the local cursor + clears tombstones so (a) the upcoming local data
+   *   wipe is a *raw* delete that never propagates as a tombstone (which would
+   *   delete the user's data server-side), and (b) the next login re-pulls every
+   *   collection from scratch.
+   * - When `removeDevice` (the default), revokes this device server-side and
+   *   drops the local device keypair + state so the next login can no longer
+   *   silently auto-unlock — it must restore via recovery key or pairing.
+   */
+  async signOutCleanup(userId: string, opts: { removeDevice: boolean }): Promise<void> {
+    if (!isCinnaProfile(userId)) return
+    if (vault.isUnlocked(userId)) {
+      try {
+        await runCycleNow(userId)
+      } catch (err) {
+        logger.warn('sign-out: final sync flush failed (continuing)', {
+          userId,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+    // Reset cursor + clear tombstones regardless of the device choice.
+    syncRepo.wipe(userId)
+    if (opts.removeDevice) {
+      const deviceId = syncRepo.getState(userId)?.deviceId
+      if (deviceId) {
+        await syncApi.revokeDevice(userId, deviceId).catch((err) =>
+          logger.warn('sign-out: server device revoke failed (continuing)', {
+            userId,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        )
+      }
+      syncRepo.deleteDeviceKey(userId)
+      syncRepo.deleteState(userId)
+    }
+  },
+
   // ---- lifecycle ----
 
   /** Called on profile switch / logout: zero all UMKs and clear timers. */
@@ -561,5 +619,6 @@ export const syncService = {
     debounceTimers.clear()
     periodicTimers.clear()
     pairingEphemerals.clear()
+    pausedUserIds.clear()
   }
 }

@@ -170,8 +170,12 @@ export function useDeleteUser() {
   const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
 
   return useMutation({
-    mutationFn: (data: { userId: string; password?: string }) =>
-      window.api.auth.deleteUser(data),
+    mutationFn: (data: {
+      userId: string
+      password?: string
+      signOut?: boolean
+      removeDevice?: boolean
+    }) => window.api.auth.deleteUser(data),
     onSuccess: async (result) => {
       if (result.success) {
         // Refresh current user (may have switched to default)
