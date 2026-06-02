@@ -32,6 +32,13 @@ export interface JobData {
    * spinner on rows whose runs are still working. Defaults to 0.
    */
   inProgressRunsCount: number
+  /**
+   * True when this job synced in with a dependency (MCP/agent/mode) that isn't
+   * fully set up on this device. Drives the sidebar "finish setup" badge.
+   * Defaults to false. Only `job:list` populates it; `job:get` (JobDetailData)
+   * leaves it false and the detail view derives richer per-dep status instead.
+   */
+  needsSetup: boolean
 }
 
 /**

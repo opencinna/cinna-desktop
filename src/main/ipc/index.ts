@@ -16,6 +16,7 @@ import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
 import { registerSettingsHandlers } from './settings.ipc'
 import { registerTrayHandlers } from './tray.ipc'
+import { registerSyncHandlers } from './sync.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -36,4 +37,5 @@ export function registerAllIpcHandlers(): void {
   registerCatalogHandlers()
   registerSettingsHandlers()
   registerTrayHandlers()
+  registerSyncHandlers()
 }

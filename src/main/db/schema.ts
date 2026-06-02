@@ -2,6 +2,7 @@ import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite
 import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
+import type { JobSyncManifest } from '../../shared/sync'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -47,6 +48,13 @@ export const mcpProviders = sqliteTable('mcp_providers', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   authTokensEncrypted: blob('auth_tokens_enc', { mode: 'buffer' }),
   clientInfo: text('client_info', { mode: 'json' }).$type<Record<string, unknown>>(),
+  /**
+   * True when this provider was auto-created from a synced job dependency
+   * descriptor (disabled "finish setup" shell). Lets the UI mark it amber and
+   * cleanup tools distinguish it from user-created providers. Never
+   * auto-connected — the user finishes setup (creds/env) before it runs.
+   */
+  createdBySync: integer('created_by_sync', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
@@ -165,6 +173,12 @@ export const agents = sqliteTable('agents', {
   remoteTargetType: text('remote_target_type'), // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: text('remote_target_id'), // UUID from Cinna backend
   remoteMetadata: text('remote_metadata', { mode: 'json' }).$type<RemoteAgentMetadata>(), // entrypoint_prompt, example_prompts, etc.
+  /**
+   * True when this (local) agent was auto-created from a synced job dependency
+   * descriptor — a disabled shell carrying just the card URL. The user enables
+   * + configures it to finish setup; card fetch/token happen then.
+   */
+  createdBySync: integer('created_by_sync', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
@@ -303,6 +317,13 @@ export const jobs = sqliteTable('jobs', {
    * without renumbering, but the move handler still rewrites the full set.
    */
   position: integer('position').notNull().default(0),
+  /**
+   * Portable dependency manifest ({modeName, deps[]}) — the synced truth for a
+   * job's agents/MCPs/mode. The `jobAgents`/`jobMcpProviders` join rows +
+   * `modeId` are the materialized resolvable subset. See `shared/sync.ts`
+   * `JobSyncManifest` and `src/main/sync/manifest.ts`.
+   */
+  syncDeps: text('sync_deps', { mode: 'json' }).$type<JobSyncManifest>(),
   deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()

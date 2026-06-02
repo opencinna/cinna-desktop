@@ -21,6 +21,8 @@ export interface CreateAgentInput {
   cardData?: Record<string, unknown> | null
   skills?: Array<{ id: string; name: string; description?: string }> | null
   enabled?: boolean
+  /** Marks a local agent auto-created from a synced job dependency descriptor. */
+  createdBySync?: boolean
 }
 
 export interface UpdateAgentInput {
@@ -99,6 +101,7 @@ export const agentRepo = {
         skills: input.skills ?? null,
         enabled: input.enabled ?? true,
         source: 'local',
+        createdBySync: input.createdBySync ?? false,
         createdAt: new Date()
       })
       .run()

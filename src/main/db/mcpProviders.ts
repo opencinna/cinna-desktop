@@ -14,6 +14,8 @@ export interface UpsertInput {
   url?: string | null
   env?: Record<string, string> | null
   enabled?: boolean
+  /** Set on insert only — marks a provider auto-created from a synced job dep. */
+  createdBySync?: boolean
 }
 
 export interface UpsertResult {
@@ -81,6 +83,7 @@ export const mcpProviderRepo = {
             url: input.url ?? null,
             env: input.env ?? null,
             enabled: input.enabled ?? true,
+            createdBySync: input.createdBySync ?? false,
             createdAt: new Date()
           })
           .run()

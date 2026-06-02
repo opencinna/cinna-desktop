@@ -16,6 +16,8 @@ import { migrateChatFiles } from './migrations/chat-files'
 import { migrateJobs } from './migrations/jobs'
 import { migrateNotes } from './migrations/notes'
 import { migrateAppSettings } from './migrations/app-settings'
+import { runSyncMigrations } from './migrations/sync'
+import { runSyncDepsMigrations } from './migrations/sync-deps'
 import { chatModeRepo } from './chatModes'
 import { createLogger } from '../logger/logger'
 
@@ -81,6 +83,10 @@ function runMigrations(): void {
   migrateJobs(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)
+  // Sync bookkeeping tables (must come after notes/jobs exist).
+  runSyncMigrations(sqlite)
+  // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).
+  runSyncDepsMigrations(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)
@@ -88,4 +94,9 @@ function runMigrations(): void {
 
 export function getDb(): BetterSQLite3Database<typeof schema> {
   return db
+}
+
+/** Raw better-sqlite3 handle, for repos that issue hand-written SQL (sync). */
+export function getRawSqlite(): Database.Database {
+  return sqlite
 }

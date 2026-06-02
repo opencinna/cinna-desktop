@@ -9,7 +9,8 @@ import {
   Wrench,
   Sparkles,
   Package,
-  Cloud
+  Cloud,
+  RefreshCw
 } from 'lucide-react'
 import { useEffect } from 'react'
 import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
@@ -38,7 +39,8 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
   { id: 'profile-agents', label: 'Agents', icon: Bot },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
-  { id: 'profile-connection', label: 'Connection', icon: Cloud }
+  { id: 'profile-connection', label: 'Connection', icon: Cloud },
+  { id: 'profile-sync', label: 'Cloud Sync', icon: RefreshCw }
 ]
 
 export function Sidebar(): React.JSX.Element {

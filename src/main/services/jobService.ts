@@ -23,6 +23,18 @@ import { JobError } from '../errors'
 import { derivePattern } from '../../shared/commPattern'
 import type { JobRunOrigin } from '../../shared/jobs'
 import { cinnaApiService } from './cinnaApiService'
+import { syncService } from './syncService'
+import { rebuildJobManifest } from '../sync/manifest'
+import {
+  resolveMode,
+  resolveRemoteAgent,
+  profileServerUrl,
+  findMcp,
+  findLocalAgent,
+  buildResolveIndex,
+  manifestNeedsSetup
+} from '../sync/resolvers'
+import type { JobDependencyStatus } from '../../shared/sync'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
@@ -31,6 +43,12 @@ export interface JobDetail extends JobRow {
   agentIds: string[]
   mcpProviderIds: string[]
   recentRuns: JobRunRowWithMeta[]
+  /**
+   * Whether any synced dependency isn't fully resolved here. Kept on the DTO
+   * for type honesty (`JobDetailData` declares it); the detail view itself uses
+   * the richer per-dependency `job:dep-status` query for the setup surface.
+   */
+  needsSetup: boolean
 }
 
 /**
@@ -81,13 +99,28 @@ export interface JobListItem extends JobRow {
    * see at a glance which jobs are still working.
    */
   inProgressRunsCount: number
+  /**
+   * True when the job's synced dependency manifest has at least one dependency
+   * that isn't fully resolved on this device (auto-created/disabled MCP/agent,
+   * foreign remote agent, or a missing mode with no default). Drives the
+   * sidebar "finish setup" badge.
+   */
+  needsSetup: boolean
 }
 
 export const jobService = {
   list(userId: string): JobListItem[] {
     const rows = jobsRepo.list(userId)
     const counts = jobRunsRepo.countInProgressByJob(userId)
-    return rows.map((j) => ({ ...j, inProgressRunsCount: counts.get(j.id) ?? 0 }))
+    // Only build the resolution index (4 table scans) when at least one job
+    // actually carries a synced manifest — non-Cinna / never-synced workspaces
+    // skip the work entirely.
+    const index = rows.some((j) => j.syncDeps) ? buildResolveIndex(userId) : null
+    return rows.map((j) => ({
+      ...j,
+      inProgressRunsCount: counts.get(j.id) ?? 0,
+      needsSetup: index ? manifestNeedsSetup(j.syncDeps, index) : false
+    }))
   },
 
   getDetail(userId: string, jobId: string): JobDetail {
@@ -97,13 +130,20 @@ export const jobService = {
     const recentRuns = jobRunsRepo
       .listByJob(userId, jobId)
       .slice(0, RECENT_RUNS_LIMIT)
-    return { ...job, agentIds, mcpProviderIds, recentRuns }
+    const needsSetup = job.syncDeps
+      ? manifestNeedsSetup(job.syncDeps, buildResolveIndex(userId))
+      : false
+    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup }
   },
 
   create(userId: string, input: JobCreateInput): JobRow {
     validateCreate(input)
     const job = jobsRepo.create(userId, input)
+    // Seed the portable dependency manifest from initial state (mode only —
+    // agents/MCPs are attached afterwards via setAgents/setMcpProviders).
+    rebuildJobManifest(userId, job.id)
     logger.info('job created', { jobId: job.id, type: job.type })
+    syncService.markDirty(userId)
     return job
   },
 
@@ -122,6 +162,10 @@ export const jobService = {
     if (!ok) throw new JobError('not_found', 'Job not found')
     const updated = jobsRepo.getById(userId, jobId)
     if (!updated) throw new JobError('not_found', 'Job not found after update')
+    // A mode change alters the manifest's `modeName`; rebuild so the synced
+    // truth tracks the local edit.
+    if (patch.modeId !== undefined) rebuildJobManifest(userId, jobId)
+    syncService.markDirty(userId)
     return updated
   },
 
@@ -129,6 +173,7 @@ export const jobService = {
     const ok = jobsRepo.softDelete(userId, jobId)
     if (!ok) throw new JobError('not_found', 'Job not found')
     logger.info('job deleted', { jobId })
+    syncService.markDirty(userId)
   },
 
   setMcpProviders(userId: string, jobId: string, mcpProviderIds: string[]): void {
@@ -143,6 +188,8 @@ export const jobService = {
     }
     jobMcpRepo.setProviderIds(jobId, filtered)
     jobsRepo.touch(userId, jobId)
+    rebuildJobManifest(userId, jobId)
+    syncService.markDirty(userId)
   },
 
   setAgents(userId: string, jobId: string, agentIds: string[]): void {
@@ -156,11 +203,73 @@ export const jobService = {
     }
     jobAgentRepo.setAgentIds(jobId, filtered)
     jobsRepo.touch(userId, jobId)
+    rebuildJobManifest(userId, jobId)
+    syncService.markDirty(userId)
   },
 
   listRuns(userId: string, jobId: string): JobRunRowWithMeta[] {
     requireJob(userId, jobId)
     return jobRunsRepo.listByJob(userId, jobId)
+  },
+
+  /**
+   * Resolve a job's portable dependency manifest against this device's current
+   * local state (plan §8). Drives the "finish setup on this device" UX:
+   * `resolved` (seamless), `needs-setup` (amber — auto-created/disabled MCP or
+   * agent), `unavailable` (grey — can't resolve here, e.g. a remote agent from a
+   * server this profile isn't on). Empty when the job has no synced manifest.
+   */
+  getDependencyStatus(userId: string, jobId: string): JobDependencyStatus[] {
+    const job = jobsRepo.getById(userId, jobId)
+    const manifest = job?.syncDeps
+    if (!job || !manifest) return []
+
+    const out: JobDependencyStatus[] = []
+
+    if (manifest.modeName) {
+      const modeId = resolveMode(manifest.modeName)
+      out.push({
+        key: `mode:${manifest.modeName}`,
+        kind: 'mode',
+        label: manifest.modeName,
+        state: modeId ? 'resolved' : 'unavailable',
+        localId: modeId
+      })
+    }
+
+    manifest.deps.forEach((desc, i) => {
+      if (desc.kind === 'mcp') {
+        const row = findMcp(desc)
+        out.push({
+          key: `mcp:${i}`,
+          kind: 'mcp',
+          label: row?.name ?? desc.name,
+          state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'needs-setup',
+          localId: row?.id ?? null,
+          transport: desc.transport
+        })
+      } else if (desc.source === 'remote') {
+        const id = resolveRemoteAgent(userId, desc, profileServerUrl(userId))
+        out.push({
+          key: `agent:${i}`,
+          kind: 'agent',
+          label: desc.name ?? 'Remote agent',
+          state: id ? 'resolved' : 'unavailable',
+          localId: id
+        })
+      } else {
+        const row = findLocalAgent(desc)
+        out.push({
+          key: `agent:${i}`,
+          kind: 'agent',
+          label: row?.name ?? desc.name ?? 'Agent',
+          state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'needs-setup',
+          localId: row?.id ?? null
+        })
+      }
+    })
+
+    return out
   },
 
   /**
@@ -460,6 +569,7 @@ export const jobService = {
     if (!name) throw new JobError('invalid_input', 'Folder name is required')
     const folder = jobFoldersRepo.create(userId, { name })
     logger.info('job folder created', { folderId: folder.id })
+    syncService.markDirty(userId)
     return folder
   },
 
@@ -481,6 +591,7 @@ export const jobService = {
     if (!ok) throw new JobError('not_found', 'Folder not found')
     const updated = jobFoldersRepo.getById(userId, folderId)
     if (!updated) throw new JobError('not_found', 'Folder not found after update')
+    syncService.markDirty(userId)
     return updated
   },
 
@@ -489,6 +600,7 @@ export const jobService = {
     if (!existing) throw new JobError('not_found', 'Folder not found')
     jobFoldersRepo.delete(userId, folderId)
     logger.info('job folder deleted', { folderId })
+    syncService.markDirty(userId)
   },
 
   reorderFolders(userId: string, orderedIds: string[]): void {
@@ -500,6 +612,7 @@ export const jobService = {
     }
     jobFoldersRepo.reorder(userId, orderedIds)
     logger.info('folders reordered', { count: orderedIds.length })
+    syncService.markDirty(userId)
   },
 
   /**
@@ -531,6 +644,7 @@ export const jobService = {
       targetFolderId,
       count: orderedJobIds.length
     })
+    syncService.markDirty(userId)
   }
 }
 

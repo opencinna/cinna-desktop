@@ -3,6 +3,7 @@ import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
+import { syncService } from '../services/syncService'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 
@@ -54,6 +55,8 @@ class UserActivation {
     if (user?.type === 'cinna_user' && user.cinnaServerUrl) {
       void runSyncOnce(userId)
       startPeriodicSync(userId)
+      // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
+      void syncService.ensureActivated(userId)
     }
   }
 
@@ -61,6 +64,8 @@ class UserActivation {
   async deactivate(): Promise<void> {
     this._activated = false
     stopPeriodicSync()
+    // Zero all UMKs + clear sync timers on profile switch / sign-out.
+    void syncService.onProfileSwitch()
     clearAllAdapters()
     await mcpManager.disconnectAll()
     setCurrentUser(DEFAULT_USER_ID)

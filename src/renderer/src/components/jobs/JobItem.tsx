@@ -124,6 +124,21 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
     >
       <span className="flex-1 truncate">{job.title}</span>
       {/*
+        "Finish setup" indicator for a job that synced from another device with
+        a dependency not yet resolved here. Suppressed while running (the run
+        spinner takes the trailing slot) and while hovering an idle row (the
+        run-now button does).
+      */}
+      {job.needsSetup && !isRunning && !hovering && (
+        <span
+          className="inline-flex items-center justify-center w-4 h-4 shrink-0 text-[var(--color-warning)]"
+          title="A dependency needs setup on this device"
+          aria-label="Needs setup"
+        >
+          <AlertTriangle size={11} />
+        </span>
+      )}
+      {/*
         Running state takes precedence and is shown UNCONDITIONALLY (not gated
         on hover) so the user can scan the sidebar at a glance for in-progress
         jobs. Idle state only shows the run-now button on hover so resting

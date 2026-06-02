@@ -59,6 +59,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | [Agents](agents/agents/agents.md) | External AI agent integration (A2A protocol), agent discovery, chat routing |
 | [Jobs](jobs/jobs/jobs.md) | Reusable saved work specs (prompt + config) the user can execute repeatedly — local (spawns a chat) or Cinna Task |
 | [Notes](notes/notes/notes.md) | Profile-scoped markdown notes with inline edit, folder organisation, and shared trash retention |
+| [Sync](sync/data_sync/data_sync.md) | End-to-end-encrypted cross-device sync of profile data (notes, jobs, folders) through the zero-knowledge Cinna store |
 | [LLM](llm/adapters/adapters.md) | Provider management, adapter abstraction, model selection |
 | [MCP](mcp/connections/connections.md) | MCP server connections, tool aggregation, OAuth DCR |
 | [UI](ui/app_shell/app_shell.md) | App shell chrome (top bar, sidebar, footer menus), settings screen, theming |
@@ -104,6 +105,9 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### Notes
 - [Notes](notes/notes/notes.md) — Inline-edit markdown notes with folder organisation, drag-drop ordering, soft-delete to trash, and shared 30-day retention with chats
+
+### Sync
+- [Native Client Data Sync](sync/data_sync/data_sync.md) — Cross-device, end-to-end-encrypted sync of profile data (Phase 1: notes, note folders, jobs, job folders) through the zero-knowledge Cinna backend. UMK + device/recovery/passphrase unlock, QR/SAS pairing, LWW conflict resolution, tombstones; keys never leave the main process
 
 ### LLM
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters

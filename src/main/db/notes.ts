@@ -1,7 +1,8 @@
 import { nanoid } from 'nanoid'
-import { and, asc, desc, eq, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { notes, noteFolders } from './schema'
+import { syncRepo } from './sync'
 
 export type NoteRow = typeof notes.$inferSelect
 export type NoteFolderRow = typeof noteFolders.$inferSelect
@@ -23,6 +24,27 @@ export interface NoteFolderCreateInput {
 export interface NoteFolderPatch {
   name?: string
   collapsed?: boolean
+}
+
+/** Decoded row delivered by the sync engine (see `src/main/sync/collections.ts`). */
+export interface NoteSyncValues {
+  id: string
+  title: string
+  body: string
+  folderId: string | null
+  position: number
+  /** Peer's client timestamp — applied verbatim so a replica never re-wins LWW. */
+  updatedAt: Date
+  deletedAt: Date | null
+}
+
+export interface NoteFolderSyncValues {
+  id: string
+  name: string
+  collapsed: boolean
+  position: number
+  /** Peer's client timestamp — applied verbatim so a replica never re-wins LWW. */
+  updatedAt: Date
 }
 
 export const notesRepo = {
@@ -117,6 +139,8 @@ export const notesRepo = {
   },
 
   permanentDelete(userId: string, noteId: string): boolean {
+    // Tombstone BEFORE the hard delete so the delete propagates to peers.
+    syncRepo.addTombstone(userId, 'note', noteId, Date.now())
     const result = getDb()
       .delete(notes)
       .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
@@ -125,6 +149,13 @@ export const notesRepo = {
   },
 
   emptyTrash(userId: string): number {
+    const trashed = getDb()
+      .select({ id: notes.id })
+      .from(notes)
+      .where(and(eq(notes.userId, userId), isNotNull(notes.deletedAt)))
+      .all()
+    const now = Date.now()
+    for (const { id } of trashed) syncRepo.addTombstone(userId, 'note', id, now)
     const result = getDb()
       .delete(notes)
       .where(and(eq(notes.userId, userId), isNotNull(notes.deletedAt)))
@@ -173,6 +204,74 @@ export const notesRepo = {
           .run()
       })
     })
+  },
+
+  // ---- Data-sync engine helpers ------------------------------------------
+  // These back `src/main/sync/collections.ts`. Distinct from `list()` because
+  // sync must include soft-deleted rows (they propagate as `deleted=true`) and
+  // every write is scoped to the owning user (cross-profile defence in depth).
+
+  /** Rows changed since `sinceMs` (exclusive), INCLUDING soft-deleted ones. */
+  listChangedSince(userId: string, sinceMs: number): NoteRow[] {
+    return getDb()
+      .select()
+      .from(notes)
+      .where(and(eq(notes.userId, userId), gt(notes.updatedAt, new Date(sinceMs))))
+      .all()
+  },
+
+  /** Highest `updatedAt` (ms epoch) across the user's notes; 0 if none. */
+  maxUpdatedAt(userId: string): number {
+    const rows = getDb()
+      .select({ u: notes.updatedAt })
+      .from(notes)
+      .where(eq(notes.userId, userId))
+      .all()
+    return rows.reduce((m, r) => Math.max(m, r.u ? r.u.getTime() : 0), 0)
+  },
+
+  /**
+   * Upsert a row delivered by the sync engine. Scoped: if a row with this id
+   * already exists under a DIFFERENT user, the write is refused (the engine
+   * only ever runs for the active profile, so a colliding id means trouble).
+   */
+  upsertFromSync(userId: string, values: NoteSyncValues): void {
+    const db = getDb()
+    const existing = db
+      .select({ uid: notes.userId })
+      .from(notes)
+      .where(eq(notes.id, values.id))
+      .get()
+    if (existing && existing.uid !== userId) return
+    const row = {
+      id: values.id,
+      userId,
+      title: values.title,
+      body: values.body,
+      folderId: values.folderId,
+      position: values.position,
+      deletedAt: values.deletedAt,
+      updatedAt: values.updatedAt
+    }
+    db.insert(notes)
+      .values(row)
+      .onConflictDoUpdate({
+        target: notes.id,
+        set: {
+          title: row.title,
+          body: row.body,
+          folderId: row.folderId,
+          position: row.position,
+          deletedAt: row.deletedAt,
+          updatedAt: row.updatedAt
+        }
+      })
+      .run()
+  },
+
+  /** Hard-delete a row, scoped to the owning user. */
+  deleteOwned(userId: string, noteId: string): void {
+    getDb().delete(notes).where(and(eq(notes.id, noteId), eq(notes.userId, userId))).run()
   }
 }
 
@@ -234,7 +333,7 @@ export const noteFoldersRepo = {
    * same transaction so a folder delete never loses notes.
    */
   delete(userId: string, folderId: string): boolean {
-    return getDb().transaction((tx) => {
+    const ok = getDb().transaction((tx) => {
       tx.update(notes)
         .set({ folderId: null })
         .where(and(eq(notes.userId, userId), eq(notes.folderId, folderId)))
@@ -245,6 +344,8 @@ export const noteFoldersRepo = {
         .run()
       return result.changes > 0
     })
+    if (ok) syncRepo.addTombstone(userId, 'note_folder', folderId, Date.now())
+    return ok
   },
 
   /**
@@ -272,6 +373,71 @@ export const noteFoldersRepo = {
           .where(and(eq(noteFolders.id, id), eq(noteFolders.userId, userId)))
           .run()
       })
+    })
+  },
+
+  // ---- Data-sync engine helpers ------------------------------------------
+
+  listChangedSince(userId: string, sinceMs: number): NoteFolderRow[] {
+    return getDb()
+      .select()
+      .from(noteFolders)
+      .where(and(eq(noteFolders.userId, userId), gt(noteFolders.updatedAt, new Date(sinceMs))))
+      .all()
+  },
+
+  maxUpdatedAt(userId: string): number {
+    const rows = getDb()
+      .select({ u: noteFolders.updatedAt })
+      .from(noteFolders)
+      .where(eq(noteFolders.userId, userId))
+      .all()
+    return rows.reduce((m, r) => Math.max(m, r.u ? r.u.getTime() : 0), 0)
+  },
+
+  upsertFromSync(userId: string, values: NoteFolderSyncValues): void {
+    const db = getDb()
+    const existing = db
+      .select({ uid: noteFolders.userId })
+      .from(noteFolders)
+      .where(eq(noteFolders.id, values.id))
+      .get()
+    if (existing && existing.uid !== userId) return
+    const row = {
+      id: values.id,
+      userId,
+      name: values.name,
+      collapsed: values.collapsed,
+      position: values.position,
+      updatedAt: values.updatedAt
+    }
+    db.insert(noteFolders)
+      .values(row)
+      .onConflictDoUpdate({
+        target: noteFolders.id,
+        set: {
+          name: row.name,
+          collapsed: row.collapsed,
+          position: row.position,
+          updatedAt: row.updatedAt
+        }
+      })
+      .run()
+  },
+
+  /**
+   * Hard-delete a folder delivered by sync: detach this user's child notes back
+   * to root, then remove the folder. All clauses scoped to the owning user.
+   */
+  deleteOwnedWithDetach(userId: string, folderId: string): void {
+    getDb().transaction((tx) => {
+      tx.update(notes)
+        .set({ folderId: null })
+        .where(and(eq(notes.userId, userId), eq(notes.folderId, folderId)))
+        .run()
+      tx.delete(noteFolders)
+        .where(and(eq(noteFolders.id, folderId), eq(noteFolders.userId, userId)))
+        .run()
     })
   }
 }

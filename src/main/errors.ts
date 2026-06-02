@@ -86,6 +86,18 @@ export type FileErrorCode =
 
 export type AppSettingsErrorCode = 'invalid_key' | 'invalid_value'
 
+export type SyncErrorCode =
+  | 'not_cinna_user'
+  | 'not_initialized'
+  | 'already_initialized'
+  | 'locked'
+  | 'no_device_key'
+  | 'no_recovery_key'
+  | 'no_passphrase'
+  | 'invalid_recovery'
+  | 'pairing_failed'
+  | 'bad_request'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -110,6 +122,7 @@ export class NoteError extends DomainError<NoteErrorCode> {}
 export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
 export class FileError extends DomainError<FileErrorCode> {}
 export class AppSettingsError extends DomainError<AppSettingsErrorCode> {}
+export class SyncError extends DomainError<SyncErrorCode> {}
 
 export interface IpcErrorShape {
   code: string

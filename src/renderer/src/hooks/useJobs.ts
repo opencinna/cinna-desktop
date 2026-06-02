@@ -37,6 +37,21 @@ export function useJobRuns(jobId: string | null) {
 }
 
 /**
+ * Per-dependency resolution status for a job, derived on the main side from the
+ * synced manifest + this device's local resolution. Powers the "finish setup on
+ * this device" surface (amber/grey chips, deep-links). The query key nests under
+ * `['jobs', jobId]` so the existing `['jobs', jobId]` invalidations (edits, sync
+ * apply) refresh it for free.
+ */
+export function useJobDependencyStatus(jobId: string | null) {
+  return useQuery({
+    queryKey: ['jobs', jobId, 'dep-status'],
+    queryFn: () => (jobId ? window.api.jobs.depStatus(jobId) : []),
+    enabled: !!jobId
+  })
+}
+
+/**
  * Resolve a job run id back to its originating job (id + title). Powers the
  * chat-page banner that links a job-spawned chat back to its job. Returns null
  * when the run or its job no longer exists (or the job was deleted).

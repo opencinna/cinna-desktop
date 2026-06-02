@@ -126,13 +126,34 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
     )
   }
 
+  // Tolerate empty bodies (204 No Content, empty 200) — some endpoints
+  // (e.g. DELETE /app-sync) return nothing.
+  const raw = await response.text()
+  if (!raw) return undefined as T
   try {
-    return (await response.json()) as T
+    return JSON.parse(raw) as T
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('invalid response', { url, method, error: msg })
     throw new CinnaApiError('invalid_response', msg)
   }
+}
+
+/**
+ * Low-level authenticated fetch against the configured Cinna server. Exposed so
+ * sibling services (app-sync) reuse the same Bearer-auth + `reauth_required`
+ * detection + logging without re-implementing it. Tolerates empty bodies.
+ */
+export async function cinnaApiFetch<T>(
+  userId: string,
+  path: string,
+  opts: FetchOptions = {}
+): Promise<T> {
+  return cinnaFetch<T>(userId, path, opts)
+}
+
+export function getCinnaServerUrl(userId: string): string {
+  return resolveBaseUrl(userId)
 }
 
 export const cinnaApiService = {

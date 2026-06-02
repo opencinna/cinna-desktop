@@ -1,7 +1,12 @@
 import { useMemo } from 'react'
-import { Play, Loader2, Pencil, Bot, Plug, Flag } from 'lucide-react'
+import { Play, Loader2, Pencil, Bot, Plug, Flag, AlertTriangle, ArrowRight } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
-import { useJob, useJobRuns, useExecuteJob } from '../../hooks/useJobs'
+import {
+  useJob,
+  useJobRuns,
+  useExecuteJob,
+  useJobDependencyStatus
+} from '../../hooks/useJobs'
 import { useCinnaRunPoll } from '../../hooks/useCinnaRunPoll'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
@@ -115,6 +120,8 @@ export function JobDetail(): React.JSX.Element {
         )}
 
         <JobSummary job={job} />
+
+        <JobDependencyStatus jobId={job.id} />
 
         <section>
           <h2 className="text-xs font-semibold text-[var(--color-text-secondary)] mb-2">
@@ -289,4 +296,83 @@ function PriorityChip({ priority }: { priority: string }): React.JSX.Element {
 
 function MissingChip({ label }: { label: string }): React.JSX.Element {
   return <Chip icon={<Bot size={12} />} label={label} tone="danger" />
+}
+
+/**
+ * "Finish setup on this device" — surfaces a synced job's dependencies that
+ * didn't fully resolve here: `needs-setup` (amber — an MCP/agent shell was
+ * auto-created but is disabled and missing credentials) and `unavailable`
+ * (grey — can't resolve here, e.g. a remote agent from a server this profile
+ * isn't on). The seamless path renders nothing.
+ */
+function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | null {
+  const { data: deps } = useJobDependencyStatus(jobId)
+  const setActiveView = useUIStore((s) => s.setActiveView)
+  const setSettingsMenu = useUIStore((s) => s.setSettingsMenu)
+
+  const pending = useMemo(
+    () => (deps ?? []).filter((d) => d.state !== 'resolved'),
+    [deps]
+  )
+  if (pending.length === 0) return null
+
+  const openSetup = (kind: 'agent' | 'mcp' | 'mode'): void => {
+    setActiveView('settings')
+    setSettingsMenu(kind === 'mcp' ? 'mcp' : 'agents')
+  }
+
+  return (
+    <section
+      className="rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/5
+        px-4 py-3 space-y-2"
+    >
+      <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-warning)]">
+        <AlertTriangle size={13} />
+        Finish setup on this device
+      </div>
+      <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+        This job synced from another device. These dependencies need attention here
+        before it can run as configured.
+      </p>
+      <div className="space-y-1.5 pt-0.5">
+        {pending.map((d) => {
+          const amber = d.state === 'needs-setup'
+          const icon =
+            d.kind === 'mcp' ? <Plug size={12} /> : <Bot size={12} />
+          return (
+            <div
+              key={d.key}
+              className="flex items-center gap-2 text-[11px]"
+            >
+              <span
+                className="w-1.5 h-1.5 rounded-full shrink-0"
+                style={{
+                  backgroundColor: amber
+                    ? 'var(--color-warning)'
+                    : 'var(--color-text-muted)'
+                }}
+              />
+              <span className="shrink-0 text-[var(--color-text-secondary)]">{icon}</span>
+              <span className="text-[var(--color-text)] truncate">{d.label}</span>
+              <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
+                {amber ? 'needs setup' : 'unavailable'}
+              </span>
+              {amber && d.kind !== 'mode' && (
+                <button
+                  type="button"
+                  onClick={() => openSetup(d.kind)}
+                  className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+                    text-[10px] font-medium text-[var(--color-accent)]
+                    hover:bg-[var(--color-bg-hover)] transition-colors"
+                >
+                  Set up
+                  <ArrowRight size={10} />
+                </button>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
 }

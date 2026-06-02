@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
-import { and, asc, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
+import { syncRepo } from './sync'
 import {
   jobs,
   jobFolders,
@@ -9,8 +10,11 @@ import {
   jobRuns,
   chats,
   chatOnDemandAgents,
-  chatOnDemandMcps
+  chatOnDemandMcps,
+  agents,
+  mcpProviders
 } from './schema'
+import type { JobSyncManifest } from '../../shared/sync'
 
 export type JobRow = typeof jobs.$inferSelect
 export type JobFolderRow = typeof jobFolders.$inferSelect
@@ -115,6 +119,7 @@ export const jobsRepo = {
       iconName: input.iconName ?? null,
       folderId: null,
       position,
+      syncDeps: null,
       deletedAt: null,
       createdAt: now,
       updatedAt: now
@@ -194,6 +199,161 @@ export const jobsRepo = {
           .run()
       })
     })
+  },
+
+  // ---- Data-sync engine helpers ------------------------------------------
+  // Back `src/main/sync/collections.ts`. Include soft-deleted rows and scope
+  // every write to the owning user (cross-profile defence in depth).
+
+  /** Jobs changed since `sinceMs` (exclusive), INCLUDING soft-deleted ones. */
+  listChangedSince(userId: string, sinceMs: number): JobRow[] {
+    return getDb()
+      .select()
+      .from(jobs)
+      .where(and(eq(jobs.userId, userId), gt(jobs.updatedAt, new Date(sinceMs))))
+      .all()
+  },
+
+  maxUpdatedAt(userId: string): number {
+    const rows = getDb()
+      .select({ u: jobs.updatedAt })
+      .from(jobs)
+      .where(eq(jobs.userId, userId))
+      .all()
+    return rows.reduce((m, r) => Math.max(m, r.u ? r.u.getTime() : 0), 0)
+  },
+
+  /** Attached agent + MCP reference ids for a job (the sync payload's refs). */
+  listRefs(jobId: string): { agentRefs: string[]; mcpRefs: string[] } {
+    const db = getDb()
+    const agentRefs = db
+      .select({ id: jobAgents.agentId })
+      .from(jobAgents)
+      .where(eq(jobAgents.jobId, jobId))
+      .all()
+      .map((r) => r.id)
+    const mcpRefs = db
+      .select({ id: jobMcpProviders.mcpProviderId })
+      .from(jobMcpProviders)
+      .where(eq(jobMcpProviders.jobId, jobId))
+      .all()
+      .map((r) => r.id)
+    return { agentRefs, mcpRefs }
+  },
+
+  upsertFromSync(userId: string, values: JobSyncValues): void {
+    const db = getDb()
+    const existing = db
+      .select({ uid: jobs.userId })
+      .from(jobs)
+      .where(eq(jobs.id, values.id))
+      .get()
+    if (existing && existing.uid !== userId) return
+    const row = {
+      id: values.id,
+      userId,
+      type: values.type,
+      title: values.title,
+      description: values.description,
+      prompt: values.prompt,
+      modeId: values.modeId,
+      cinnaAgentId: values.cinnaAgentId,
+      cinnaPriority: values.cinnaPriority,
+      colorPreset: values.colorPreset,
+      iconName: values.iconName,
+      folderId: values.folderId,
+      position: values.position,
+      syncDeps: values.syncDeps,
+      deletedAt: values.deletedAt,
+      // Carry the peer's client timestamp verbatim so an applied copy stays a
+      // passive replica and never spuriously wins the next LWW round.
+      updatedAt: values.updatedAt
+    }
+    db.insert(jobs)
+      .values(row)
+      .onConflictDoUpdate({
+        target: jobs.id,
+        set: {
+          type: row.type,
+          title: row.title,
+          description: row.description,
+          prompt: row.prompt,
+          modeId: row.modeId,
+          cinnaAgentId: row.cinnaAgentId,
+          cinnaPriority: row.cinnaPriority,
+          colorPreset: row.colorPreset,
+          iconName: row.iconName,
+          folderId: row.folderId,
+          position: row.position,
+          syncDeps: row.syncDeps,
+          deletedAt: row.deletedAt,
+          updatedAt: row.updatedAt
+        }
+      })
+      .run()
+  },
+
+  /**
+   * Persist a job's portable dependency manifest WITHOUT bumping `updatedAt`.
+   * Called by the service layer after a local edit (set-agents / set-mcps /
+   * mode change) — the edit already bumped `updatedAt`, so the manifest is just
+   * captured alongside it; double-bumping would risk a re-sync loop.
+   */
+  setSyncDeps(userId: string, jobId: string, manifest: JobSyncManifest): void {
+    getDb()
+      .update(jobs)
+      .set({ syncDeps: manifest })
+      .where(and(eq(jobs.id, jobId), eq(jobs.userId, userId)))
+      .run()
+  },
+
+  /** Hard-delete a job, scoped to the owning user. */
+  deleteOwned(userId: string, jobId: string): void {
+    getDb().delete(jobs).where(and(eq(jobs.id, jobId), eq(jobs.userId, userId))).run()
+  },
+
+  /**
+   * Materialize a job's agent/MCP join rows from the *resolved* local ids the
+   * sync apply path produced (see `src/main/sync/resolvers.ts`). Replaces the
+   * legacy drop-on-miss `rebuildRefsFromSync`: ids here are already resolved or
+   * auto-created, so the only filter is a defensive existence check. No-op
+   * unless the job belongs to `userId`, so a refused cross-profile upsert can't
+   * graft joins onto another user's job.
+   */
+  setRefsFromSync(
+    userId: string,
+    jobId: string,
+    agentIds: string[],
+    mcpIds: string[]
+  ): void {
+    const db = getDb()
+    const owned = db
+      .select({ id: jobs.id })
+      .from(jobs)
+      .where(and(eq(jobs.id, jobId), eq(jobs.userId, userId)))
+      .get()
+    if (!owned) return
+    db.delete(jobAgents).where(eq(jobAgents.jobId, jobId)).run()
+    db.delete(jobMcpProviders).where(eq(jobMcpProviders.jobId, jobId)).run()
+    for (const ref of agentIds) {
+      const exists = db.select({ id: agents.id }).from(agents).where(eq(agents.id, ref)).get()
+      if (exists) {
+        db.insert(jobAgents).values({ jobId, agentId: ref }).onConflictDoNothing().run()
+      }
+    }
+    for (const ref of mcpIds) {
+      const exists = db
+        .select({ id: mcpProviders.id })
+        .from(mcpProviders)
+        .where(eq(mcpProviders.id, ref))
+        .get()
+      if (exists) {
+        db.insert(jobMcpProviders)
+          .values({ jobId, mcpProviderId: ref })
+          .onConflictDoNothing()
+          .run()
+      }
+    }
   }
 }
 
@@ -204,6 +364,36 @@ export interface JobFolderCreateInput {
 export interface JobFolderPatch {
   name?: string
   collapsed?: boolean
+}
+
+/** Decoded job row delivered by the sync engine (see `src/main/sync/collections.ts`). */
+export interface JobSyncValues {
+  id: string
+  type: string
+  title: string
+  description: string | null
+  prompt: string
+  modeId: string | null
+  cinnaAgentId: string | null
+  cinnaPriority: string | null
+  colorPreset: string | null
+  iconName: string | null
+  folderId: string | null
+  position: number
+  /** Portable dependency manifest, stored verbatim from the wire payload. */
+  syncDeps: JobSyncManifest | null
+  /** The peer's client timestamp — applied verbatim (no `new Date()` bump). */
+  updatedAt: Date
+  deletedAt: Date | null
+}
+
+export interface JobFolderSyncValues {
+  id: string
+  name: string
+  collapsed: boolean
+  position: number
+  /** Peer's client timestamp — applied verbatim so a replica never re-wins LWW. */
+  updatedAt: Date
 }
 
 export const jobFoldersRepo = {
@@ -270,7 +460,7 @@ export const jobFoldersRepo = {
    * their previous order; the user can re-tidy if they want.
    */
   delete(userId: string, folderId: string): boolean {
-    return getDb().transaction((tx) => {
+    const ok = getDb().transaction((tx) => {
       tx.update(jobs)
         .set({ folderId: null })
         .where(and(eq(jobs.userId, userId), eq(jobs.folderId, folderId)))
@@ -281,6 +471,10 @@ export const jobFoldersRepo = {
         .run()
       return result.changes > 0
     })
+    // Tombstone the hard-deleted folder so peers purge it (children are
+    // detached to root on both sides).
+    if (ok) syncRepo.addTombstone(userId, 'job_folder', folderId, Date.now())
+    return ok
   },
 
   /**
@@ -310,6 +504,68 @@ export const jobFoldersRepo = {
           .where(and(eq(jobFolders.id, id), eq(jobFolders.userId, userId)))
           .run()
       })
+    })
+  },
+
+  // ---- Data-sync engine helpers ------------------------------------------
+
+  listChangedSince(userId: string, sinceMs: number): JobFolderRow[] {
+    return getDb()
+      .select()
+      .from(jobFolders)
+      .where(and(eq(jobFolders.userId, userId), gt(jobFolders.updatedAt, new Date(sinceMs))))
+      .all()
+  },
+
+  maxUpdatedAt(userId: string): number {
+    const rows = getDb()
+      .select({ u: jobFolders.updatedAt })
+      .from(jobFolders)
+      .where(eq(jobFolders.userId, userId))
+      .all()
+    return rows.reduce((m, r) => Math.max(m, r.u ? r.u.getTime() : 0), 0)
+  },
+
+  upsertFromSync(userId: string, values: JobFolderSyncValues): void {
+    const db = getDb()
+    const existing = db
+      .select({ uid: jobFolders.userId })
+      .from(jobFolders)
+      .where(eq(jobFolders.id, values.id))
+      .get()
+    if (existing && existing.uid !== userId) return
+    const row = {
+      id: values.id,
+      userId,
+      name: values.name,
+      collapsed: values.collapsed,
+      position: values.position,
+      updatedAt: values.updatedAt
+    }
+    db.insert(jobFolders)
+      .values(row)
+      .onConflictDoUpdate({
+        target: jobFolders.id,
+        set: {
+          name: row.name,
+          collapsed: row.collapsed,
+          position: row.position,
+          updatedAt: row.updatedAt
+        }
+      })
+      .run()
+  },
+
+  /** Hard-delete a folder from sync: detach this user's child jobs, then remove. */
+  deleteOwnedWithDetach(userId: string, folderId: string): void {
+    getDb().transaction((tx) => {
+      tx.update(jobs)
+        .set({ folderId: null })
+        .where(and(eq(jobs.userId, userId), eq(jobs.folderId, folderId)))
+        .run()
+      tx.delete(jobFolders)
+        .where(and(eq(jobFolders.id, folderId), eq(jobFolders.userId, userId)))
+        .run()
     })
   }
 }

@@ -9,6 +9,7 @@ import { FeaturesSettingsSection } from './FeaturesSettingsSection'
 import { DevelopmentSettingsSection } from './DevelopmentSettingsSection'
 import { CatalogSettingsSection } from './CatalogSettingsSection'
 import { ConnectionSettingsSection } from './ConnectionSettingsSection'
+import { CloudSyncSettingsSection } from './CloudSyncSettingsSection'
 
 const sectionTitles = {
   chats: 'Chat Modes',
@@ -21,6 +22,7 @@ const sectionTitles = {
   'profile-agents': 'Profile Agents',
   'profile-catalog': 'Catalog',
   'profile-connection': 'Connection',
+  'profile-sync': 'Cloud Sync',
   trash: 'Trash'
 } as const
 
@@ -41,6 +43,7 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'profile-connection' && (
           <ConnectionSettingsSection key="profile-connection" />
         )}
+        {settingsTab === 'profile-sync' && <CloudSyncSettingsSection key="profile-sync" />}
         {settingsTab === 'mcp' && <MCPSettingsSection key="mcp" />}
         {settingsTab === 'accounts' && <UserAccountsSection key="accounts" />}
         {settingsTab === 'features' && <FeaturesSettingsSection key="features" />}

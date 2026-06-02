@@ -19,6 +19,7 @@ export type SettingsMenu =
   | 'profile-agents'
   | 'profile-catalog'
   | 'profile-connection'
+  | 'profile-sync'
   | 'trash'
 
 /**
@@ -29,7 +30,8 @@ export type SettingsMenu =
 export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
   'profile-agents',
   'profile-catalog',
-  'profile-connection'
+  'profile-connection',
+  'profile-sync'
 ]
 export type Theme = 'dark' | 'light'
 

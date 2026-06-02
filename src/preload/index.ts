@@ -49,6 +49,14 @@ import {
   type AppSettingsSchema,
   type ChatTitleUpdatedPayload
 } from '../shared/appSettings'
+import type {
+  SyncState,
+  SyncInitResult,
+  SyncUnlockRequest,
+  PairingOffer,
+  SyncEvent,
+  JobDependencyStatus
+} from '../shared/sync'
 
 export type { MessageAttachment }
 
@@ -743,6 +751,8 @@ const api = {
       ipcRenderer.invoke('job:set-agents', jobId, agentIds),
     listRuns: (jobId: string): Promise<JobRunData[]> =>
       ipcRenderer.invoke('job:list-runs', jobId),
+    depStatus: (jobId: string): Promise<JobDependencyStatus[]> =>
+      ipcRenderer.invoke('job:dep-status', jobId),
     runOrigin: (runId: string): Promise<JobRunOrigin | null> =>
       ipcRenderer.invoke('job:run-origin', runId),
     execute: (
@@ -928,6 +938,31 @@ const api = {
       const listener = (): void => handler()
       ipcRenderer.on('tray:request-icon', listener)
       return () => ipcRenderer.off('tray:request-icon', listener)
+    }
+  },
+
+  sync: {
+    getState: (): Promise<SyncState> => ipcRenderer.invoke('sync:get-state'),
+    init: (): Promise<SyncInitResult> => ipcRenderer.invoke('sync:init'),
+    unlock: (req: SyncUnlockRequest): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:unlock', req),
+    lock: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:lock'),
+    syncNow: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:sync-now'),
+    addPassphrase: (passphrase: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:add-passphrase', passphrase),
+    pairingStart: (): Promise<PairingOffer> => ipcRenderer.invoke('sync:pairing-start'),
+    pairingPoll: (code: string): Promise<boolean> =>
+      ipcRenderer.invoke('sync:pairing-poll', code),
+    pairingScan: (code: string): Promise<{ sas: string }> =>
+      ipcRenderer.invoke('sync:pairing-scan', code),
+    revokeDevice: (deviceId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:device-revoke', deviceId),
+    wipe: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:wipe'),
+    /** Subscribe to engine status/state/needs-unlock/quota events. */
+    onEvent: (handler: (event: SyncEvent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, event: SyncEvent): void => handler(event)
+      ipcRenderer.on('sync:event', listener)
+      return () => ipcRenderer.off('sync:event', listener)
     }
   }
 }

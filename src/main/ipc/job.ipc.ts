@@ -56,6 +56,11 @@ export function registerJobHandlers(): void {
     return jobService.listRuns(getProfileScopeUserId(), jobId)
   })
 
+  ipcHandle('job:dep-status', async (_event, jobId: string) => {
+    userActivation.requireActivated()
+    return jobService.getDependencyStatus(getProfileScopeUserId(), jobId)
+  })
+
   ipcHandle('job:run-origin', async (_event, runId: string) => {
     userActivation.requireActivated()
     return jobService.getRunOrigin(getProfileScopeUserId(), runId)
