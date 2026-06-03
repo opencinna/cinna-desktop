@@ -1,6 +1,7 @@
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
 import { createLogger } from '../logger/logger'
 import { DomainError } from '../errors'
+import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { broadcastReauthRequired } from '../auth/reauth-notify'
 import { REAUTH_REQUIRED_CODE, CINNA_REAUTH_REQUIRED_CODE } from '../../shared/cinnaErrors'
 
@@ -64,6 +65,11 @@ export function ipcHandle<T>(channel: string, fn: IpcHandler<T>): void {
         if (err.detail !== undefined) outbound.detail = err.detail
         throw outbound
       }
+      // A raw `CinnaReauthRequired` (e.g. straight from `getCinnaAccessToken`,
+      // not yet normalized into a `CinnaApiError` by the api layer) still means
+      // the session is dead — fire the global modal so it's not swallowed as a
+      // generic per-screen error.
+      if (err instanceof CinnaReauthRequired) broadcastReauthRequired(channel)
       logger.error(`${channel} failed`, err)
       throw err
     }

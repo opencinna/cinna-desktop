@@ -55,9 +55,21 @@ export function registerSyncHandlers(): void {
     return syncService.pollPairing(getProfileScopeUserId(), code)
   })
 
-  ipcHandle('sync:pairing-scan', async (_e, code: string) => {
+  ipcHandle('sync:pairing-prepare-scan', async (_e, code: string) => {
     userActivation.requireActivated()
-    return syncService.scanPairing(getProfileScopeUserId(), code)
+    return syncService.prepareScan(getProfileScopeUserId(), code)
+  })
+
+  ipcHandle('sync:pairing-confirm-scan', async (_e, code: string) => {
+    userActivation.requireActivated()
+    await syncService.confirmScan(getProfileScopeUserId(), code)
+    return { success: true }
+  })
+
+  ipcHandle('sync:pairing-cancel-scan', async (_e, code: string) => {
+    userActivation.requireActivated()
+    syncService.cancelScan(getProfileScopeUserId(), code)
+    return { success: true }
   })
 
   ipcHandle('sync:device-revoke', async (_e, deviceId: string) => {

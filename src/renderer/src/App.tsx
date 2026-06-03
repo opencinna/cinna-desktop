@@ -13,6 +13,7 @@ import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import { useTrayIcon } from './hooks/useTrayIcon'
+import { useSyncEvents, useSyncOnTabOpen } from './hooks/useSync'
 import {
   consumeForceOnboarding,
   isOnboardingDismissed,
@@ -78,6 +79,12 @@ function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Elemen
 function Shell(): React.JSX.Element {
   // Drives the menu-bar tray icon (severity dot) and the popup's Start-Chat flow.
   useTrayIcon()
+  // App-level sync wiring (Cinna profiles only). `useSyncEvents` keeps the
+  // note/job caches fresh from peer changes no matter which screen is open;
+  // `useSyncOnTabOpen` pings the server when the Notes/Jobs screen is opened.
+  const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  useSyncEvents(isCinnaUser)
+  useSyncOnTabOpen(isCinnaUser)
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.

@@ -112,9 +112,12 @@ export const notesRepo = {
   },
 
   softDelete(userId: string, noteId: string): boolean {
+    // Bump `updatedAt` too: the sync engine selects the push batch via
+    // `listChangedSince` (updatedAt > cursor) and uses it as the LWW timestamp,
+    // so a trash/restore that left it stale would never propagate to peers.
     const result = getDb()
       .update(notes)
-      .set({ deletedAt: new Date() })
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
       .run()
     return result.changes > 0
@@ -130,9 +133,10 @@ export const notesRepo = {
   },
 
   restore(userId: string, noteId: string): boolean {
+    // Bump `updatedAt` so the un-delete propagates (see `softDelete`).
     const result = getDb()
       .update(notes)
-      .set({ deletedAt: null })
+      .set({ deletedAt: null, updatedAt: new Date() })
       .where(and(eq(notes.id, noteId), eq(notes.userId, userId)))
       .run()
     return result.changes > 0
@@ -196,10 +200,13 @@ export const notesRepo = {
     orderedNoteIds: string[]
   ): void {
     const db = getDb()
+    const now = new Date()
     db.transaction((tx) => {
       orderedNoteIds.forEach((id, idx) => {
+        // `folderId`/`position` are synced fields — bump `updatedAt` so the
+        // reorder/move is picked up by `listChangedSince` and reaches peers.
         tx.update(notes)
-          .set({ folderId: targetFolderId, position: idx })
+          .set({ folderId: targetFolderId, position: idx, updatedAt: now })
           .where(and(eq(notes.id, id), eq(notes.userId, userId)))
           .run()
       })

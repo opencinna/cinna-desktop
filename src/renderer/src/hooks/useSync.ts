@@ -7,6 +7,7 @@ import type {
   PairingOffer,
   SyncCollection
 } from '../../../shared/sync'
+import { useUIStore } from '../stores/ui.store'
 
 /**
  * React Query layer for Cloud Sync. The renderer never touches `window.api.sync`
@@ -65,6 +66,42 @@ export function useSyncEvents(enabled: boolean): void {
   }, [enabled, queryClient])
 }
 
+/**
+ * Synced screens (Notes / Jobs) whose open should trigger a pull. A `chats`
+ * open doesn't sync (chats aren't a synced collection in Phase 1).
+ */
+const SYNCED_TABS = new Set(['jobs', 'notes'])
+
+/**
+ * Coalesce rapid tab toggles into at most one server ping per window — the
+ * steady-state 60s periodic timer already covers anything missed. Module-level
+ * so it survives remounts (the timestamp is process-global, not per-component).
+ */
+const VIEW_PULL_THROTTLE_MS = 8_000
+let lastViewPullAt = 0
+
+/**
+ * Ping the server for peer changes whenever the user opens a synced screen
+ * (Notes / Jobs). Fires a full sync cycle (`syncNow` = push pending edits +
+ * pull peer changes); the main process gates it to **active, unlocked Cinna
+ * profiles**, so it's an inexpensive no-op otherwise. Throttled so flipping
+ * between tabs doesn't hammer the backend.
+ *
+ * Pulled-in rows surface live via {@link useSyncEvents} (`data-changed` →
+ * cache invalidation), which must be mounted app-level for this to be visible.
+ */
+export function useSyncOnTabOpen(enabled: boolean): void {
+  const sidebarTab = useUIStore((s) => s.sidebarTab)
+  useEffect(() => {
+    if (!enabled) return
+    if (!SYNCED_TABS.has(sidebarTab)) return
+    const now = Date.now()
+    if (now - lastViewPullAt < VIEW_PULL_THROTTLE_MS) return
+    lastViewPullAt = now
+    void window.api.sync.syncNow()
+  }, [enabled, sidebarTab])
+}
+
 export function useSyncInit(): ReturnType<typeof useMutation<SyncInitResult, Error, void>> {
   const queryClient = useQueryClient()
   return useMutation({
@@ -113,13 +150,32 @@ export function usePairingStart(): ReturnType<typeof useMutation<PairingOffer, E
   return useMutation({ mutationFn: () => window.api.sync.pairingStart() })
 }
 
-export function usePairingScan(): ReturnType<
+/** Pairing step 1 (sealer): fetch the joiner key + SAS to show, without sealing. */
+export function usePairingPrepareScan(): ReturnType<
   typeof useMutation<{ sas: string }, Error, string>
+> {
+  return useMutation({
+    mutationFn: (code: string) => window.api.sync.pairingPrepareScan(code)
+  })
+}
+
+/** Pairing step 2 (sealer): seal + relay the UMK after the user confirms the SAS. */
+export function usePairingConfirmScan(): ReturnType<
+  typeof useMutation<{ success: boolean }, Error, string>
 > {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (code: string) => window.api.sync.pairingScan(code),
+    mutationFn: (code: string) => window.api.sync.pairingConfirmScan(code),
     onSettled: () => queryClient.invalidateQueries({ queryKey: SYNC_KEY })
+  })
+}
+
+/** Discard a prepared-but-unconfirmed scan, freeing the stashed joiner key. */
+export function usePairingCancelScan(): ReturnType<
+  typeof useMutation<{ success: boolean }, Error, string>
+> {
+  return useMutation({
+    mutationFn: (code: string) => window.api.sync.pairingCancelScan(code)
   })
 }
 

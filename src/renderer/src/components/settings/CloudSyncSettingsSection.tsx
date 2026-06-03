@@ -15,12 +15,13 @@ import {
 import { useAuthStore } from '../../stores/auth.store'
 import {
   useSyncState,
-  useSyncEvents,
   useSyncInit,
   useSyncUnlock,
   useSyncLock,
   useSyncNow,
-  usePairingScan,
+  usePairingPrepareScan,
+  usePairingConfirmScan,
+  usePairingCancelScan,
   useRevokeDevice,
   useSyncWipe
 } from '../../hooks/useSync'
@@ -37,7 +38,8 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
   const isCinnaUser = currentUser?.type === 'cinna_user'
 
   const { data: state } = useSyncState(isCinnaUser)
-  useSyncEvents(isCinnaUser)
+  // `useSyncEvents` is mounted app-level (App.tsx → Shell) so note/job caches
+  // and the sync-state read stay live regardless of which screen is open.
 
   const init = useSyncInit()
   const lock = useSyncLock()
@@ -143,9 +145,12 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
           <PairingCard />
           <DevicesCard state={state} />
           <StorageCard state={state} />
-          <DangerCard />
         </>
       )}
+
+      {/* Reset is available even while locked — a device that can't unlock (e.g.
+          untrusted after a reset elsewhere) still needs a way to start over. */}
+      {state?.initialized && <DangerCard locked={state.locked} />}
 
       <MandatoryNotice />
     </div>
@@ -246,20 +251,47 @@ function UnlockControls({ onError }: { onError: (msg: string) => void }): React.
  * actually lacks the key.
  */
 function PairingCard(): React.JSX.Element {
-  const pairingScan = usePairingScan()
+  const pairingPrepareScan = usePairingPrepareScan()
+  const pairingConfirmScan = usePairingConfirmScan()
+  const pairingCancelScan = usePairingCancelScan()
   const [scanCode, setScanCode] = useState('')
-  const [scanSas, setScanSas] = useState<string | null>(null)
+  // Once prepared, hold the SAS + the code awaiting out-of-band confirmation.
+  const [pendingScan, setPendingScan] = useState<{ code: string; sas: string } | null>(null)
+  const [scanDone, setScanDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // Step 1: fetch the joiner's SAS to compare — the key is NOT sealed yet.
   const scan = async (): Promise<void> => {
     setError(null)
+    setScanDone(false)
+    const code = scanCode.trim()
     try {
-      const { sas } = await pairingScan.mutateAsync(scanCode.trim())
-      setScanSas(sas)
+      const { sas } = await pairingPrepareScan.mutateAsync(code)
+      setPendingScan({ code, sas })
       setScanCode('')
     } catch (err) {
       setError(toMessage(err))
     }
+  }
+
+  // Step 2: the user confirmed the numbers match — seal + relay the key now.
+  const confirmScan = async (): Promise<void> => {
+    if (!pendingScan) return
+    setError(null)
+    try {
+      await pairingConfirmScan.mutateAsync(pendingScan.code)
+      setPendingScan(null)
+      setScanDone(true)
+    } catch (err) {
+      setError(toMessage(err))
+    }
+  }
+
+  // Abandon a prepared scan — free the stashed joiner key in the main process.
+  const cancelScan = (): void => {
+    if (pendingScan) void pairingCancelScan.mutate(pendingScan.code)
+    setPendingScan(null)
+    setError(null)
   }
 
   return (
@@ -273,21 +305,35 @@ function PairingCard(): React.JSX.Element {
           On the new device, sign in and choose <strong>Pair with another device</strong>. Paste the
           code it shows here, then confirm the verification numbers match on both devices.
         </p>
-        <div className="flex gap-2 max-w-md">
-          <input
-            value={scanCode}
-            onChange={(e) => setScanCode(e.target.value)}
-            placeholder="Paste pairing code"
-            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
-          />
-          <PrimaryButton busy={pairingScan.isPending} onClick={scan}>
-            Authorize device
-          </PrimaryButton>
-        </div>
-        {scanSas && (
-          <div className="text-[13px] mt-2">
-            Confirm these match the other device:{' '}
-            <span className="font-mono text-[var(--color-accent)]">{scanSas}</span>
+        {pendingScan ? (
+          <div className="space-y-2 max-w-md">
+            <div className="text-[13px]">
+              Check the verification number on the new device. Only authorize if it matches:{' '}
+              <span className="font-mono text-[var(--color-accent)]">{pendingScan.sas}</span>
+            </div>
+            <div className="flex gap-2">
+              <PrimaryButton busy={pairingConfirmScan.isPending} onClick={confirmScan}>
+                Numbers match — authorize
+              </PrimaryButton>
+              <SecondaryButton onClick={cancelScan}>Cancel</SecondaryButton>
+            </div>
+          </div>
+        ) : (
+          <div className="flex gap-2 max-w-md">
+            <input
+              value={scanCode}
+              onChange={(e) => setScanCode(e.target.value)}
+              placeholder="Paste pairing code"
+              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
+            />
+            <PrimaryButton busy={pairingPrepareScan.isPending} onClick={scan}>
+              Authorize device
+            </PrimaryButton>
+          </div>
+        )}
+        {scanDone && (
+          <div className="text-[13px] mt-2 text-[var(--color-text-muted)]">
+            Device authorized — it will finish syncing on its own.
           </div>
         )}
         {error && <div className="text-[13px] text-[var(--color-danger)] mt-3">{error}</div>}
@@ -369,9 +415,10 @@ function StorageCard({ state }: { state: SyncState }): React.JSX.Element | null 
   )
 }
 
-function DangerCard(): React.JSX.Element {
+function DangerCard({ locked }: { locked: boolean }): React.JSX.Element {
   const wipe = useSyncWipe()
   const [confirm, setConfirm] = useState(false)
+  const [error, setError] = useState('')
   return (
     <section>
       <SectionTitle>Danger zone</SectionTitle>
@@ -379,10 +426,12 @@ function DangerCard(): React.JSX.Element {
         <div className="flex items-center gap-3">
           <div className="flex-1">
             <div className="text-[13px] font-medium text-[var(--color-text)]">
-              Delete synced data
+              {locked ? 'Reset sync' : 'Delete synced data'}
             </div>
             <div className="text-[12px] text-[var(--color-text-muted)]">
-              Removes all encrypted data from Cinna. Local copies on your devices are kept.
+              {locked
+                ? "This device can't unlock sync. Reset to delete the account's encrypted data and start fresh — you'll set sync up again from scratch. Local data on this device is kept."
+                : 'Deletes all encrypted data from Cinna and turns sync off on this device. Local data on this device is kept; you can set sync up again anytime.'}
             </div>
           </div>
           {confirm ? (
@@ -391,12 +440,17 @@ function DangerCard(): React.JSX.Element {
                 type="button"
                 disabled={wipe.isPending}
                 onClick={async () => {
-                  await wipe.mutateAsync().catch(() => {})
-                  setConfirm(false)
+                  setError('')
+                  try {
+                    await wipe.mutateAsync()
+                    setConfirm(false)
+                  } catch (err) {
+                    setError(toMessage(err))
+                  }
                 }}
                 className="px-3 py-1.5 rounded-md text-[13px] font-medium bg-[var(--color-danger)] text-white disabled:opacity-50"
               >
-                Confirm delete
+                {locked ? 'Confirm reset' : 'Confirm delete'}
               </button>
               <SecondaryButton onClick={() => setConfirm(false)}>Cancel</SecondaryButton>
             </div>
@@ -406,10 +460,11 @@ function DangerCard(): React.JSX.Element {
               onClick={() => setConfirm(true)}
               className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium border border-[var(--color-danger)] text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white transition-colors"
             >
-              <Trash2 size={12} /> Delete
+              <Trash2 size={12} /> {locked ? 'Reset' : 'Delete'}
             </button>
           )}
         </div>
+        {error && <div className="text-[12px] text-[var(--color-danger)] mt-2">{error}</div>}
       </Card>
     </section>
   )

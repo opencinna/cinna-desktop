@@ -955,8 +955,12 @@ const api = {
     pairingStart: (): Promise<PairingOffer> => ipcRenderer.invoke('sync:pairing-start'),
     pairingPoll: (code: string): Promise<boolean> =>
       ipcRenderer.invoke('sync:pairing-poll', code),
-    pairingScan: (code: string): Promise<{ sas: string }> =>
-      ipcRenderer.invoke('sync:pairing-scan', code),
+    pairingPrepareScan: (code: string): Promise<{ sas: string }> =>
+      ipcRenderer.invoke('sync:pairing-prepare-scan', code),
+    pairingConfirmScan: (code: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:pairing-confirm-scan', code),
+    pairingCancelScan: (code: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:pairing-cancel-scan', code),
     revokeDevice: (deviceId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('sync:device-revoke', deviceId),
     wipe: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:wipe'),

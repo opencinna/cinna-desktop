@@ -189,12 +189,19 @@ export const syncRepo = {
       .run(userId, collection, clientEntityId)
   },
 
+  /** Drop all tombstones for a profile. Used by the local sync teardown so a
+   *  reset/re-enable doesn't replay stale hard-deletes onto the fresh account. */
+  deleteTombstones(userId: string): void {
+    getRawSqlite().prepare(`DELETE FROM sync_tombstone WHERE user_id = ?`).run(userId)
+  },
+
   /** Reset all sync state for a profile (used by "delete synced data"). */
   wipe(userId: string): void {
-    const db = getRawSqlite()
-    db.prepare(`DELETE FROM sync_tombstone WHERE user_id = ?`).run(userId)
-    db.prepare(`UPDATE sync_state SET cursor = 0, last_pushed_at = NULL, last_pulled_at = NULL WHERE user_id = ?`).run(
-      userId
-    )
+    this.deleteTombstones(userId)
+    getRawSqlite()
+      .prepare(
+        `UPDATE sync_state SET cursor = 0, last_pushed_at = NULL, last_pulled_at = NULL WHERE user_id = ?`
+      )
+      .run(userId)
   }
 }

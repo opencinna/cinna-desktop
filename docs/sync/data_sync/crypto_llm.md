@@ -11,7 +11,8 @@ Project-specific crypto conventions for the sync feature. Library = `libsodium-w
 ## Payload encryption (`crypto/umk.ts`)
 - Cipher: `crypto_aead_xchacha20poly1305_ietf`, 24-byte random nonce per write.
 - Plaintext bytes = `canonicalBytes(obj)` (NOT `JSON.stringify`).
-- AAD = UTF-8 of `` `${userId} ${collection} ${clientEntityId} ${umkVersion}` `` (space-separated).
+- AAD = UTF-8 of `` `${userId} ${collection} ${clientEntityId} ${umkVersion}` `` (space-separated). **`userId` here = the subject id (backend user id / JWT `sub`), NOT the device-local profile id** — same value on every device/app for an account, so peers decrypt each other (desktop↔mobile). The engine passes `subjectId` into the `userId` field; `syncService.resolveSubject` derives it via `decodeAccessTokenSubject` (`auth/cinna-tokens.ts`), cached per session.
+- Decrypt failures (AAD/UMK mismatch — usually legacy pre-switch data) are non-fatal: `applyServerRecord` returns `'undecryptable'`, the record is skipped, the cursor still advances, and `CycleResult.decryptSkipped` is tallied (a fully-undecryptable page logs at `error`).
 - Wire envelope (then base64'd whole): `{ v:1, alg:"xchacha20poly1305", umk:<version>, n:<b64 nonce>, ct:<b64 ciphertext> }`.
 - `decryptPayload` reads `umk` version from the envelope for the AAD (mixed versions can coexist mid-rotation).
 

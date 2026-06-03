@@ -21,28 +21,44 @@ export interface CycleResult {
   pulled: number
   conflicts: number
   skipped: number
+  /**
+   * Records the server returned that we could NOT decrypt (AAD/UMK mismatch).
+   * Expected to be small/zero in steady state — a non-zero value usually means
+   * legacy data written before the crypto-identity switch. A cycle that pulls a
+   * page but decrypts *none* of it points at a systemic identity bug, so the
+   * caller escalates the log level when this is set. See `applyServerRecord`.
+   */
+  decryptSkipped: number
   quotaFull: boolean
   conflictKeys: Array<{ collection: PullRecordWire['collection']; clientEntityId: string }>
   /** Collections whose local tables were actually mutated by an apply. */
   changedCollections: SyncCollection[]
 }
 
+/** Outcome of applying one server record locally. */
+type ApplyOutcome = 'applied' | 'skipped' | 'undecryptable'
+
 /**
  * Apply one decrypted/decoded record from the server into local tables. Records
  * the touched collection in `changed` so the caller can scope renderer cache
  * invalidation to exactly what moved.
+ *
+ * `userId` is the local profile id (DB/repo scoping); `subjectId` is the backend
+ * user id (JWT `sub`) used ONLY as the AEAD AAD identity so peers on the same
+ * account decrypt each other's payloads. See `crypto/umk.ts:buildAad`.
  */
 async function applyServerRecord(
   userId: string,
+  subjectId: string,
   umk: Uint8Array,
   rec: PullRecordWire,
   cache: ResolveCache,
   changed: Set<SyncCollection>
-): Promise<void> {
+): Promise<ApplyOutcome> {
   const mapper = MAPPERS_BY_COLLECTION[rec.collection]
   if (!mapper) {
     logger.warn('unknown collection in pull, skipping', { collection: rec.collection })
-    return
+    return 'skipped'
   }
   // Carry the server timestamp onto the row (no `new Date()` bump) so an applied
   // copy stays a passive replica and never re-wins the next LWW round. (The
@@ -53,22 +69,43 @@ async function applyServerRecord(
     // Hard-delete tombstone.
     mapper.apply(userId, rec.client_entity_id, null, true, ctx)
     changed.add(rec.collection)
-    return
+    return 'applied'
   }
-  const plaintext = (await decryptPayload({
-    umk,
-    userId,
-    collection: rec.collection,
-    clientEntityId: rec.client_entity_id,
-    envelopeB64: rec.payload_ciphertext
-  })) as Record<string, unknown>
+  let plaintext: Record<string, unknown>
+  try {
+    plaintext = (await decryptPayload({
+      umk,
+      userId: subjectId,
+      collection: rec.collection,
+      clientEntityId: rec.client_entity_id,
+      envelopeB64: rec.payload_ciphertext
+    })) as Record<string, unknown>
+  } catch (err) {
+    // Undecryptable record — the AAD identity or UMK generation doesn't match
+    // ours. Almost always legacy data written before the crypto-identity switch
+    // (old device-local id in the AAD; see `crypto/umk.ts:buildAad`). Skip it
+    // instead of stalling the whole pull cycle: the cursor still advances, the
+    // owning device can re-encrypt it via any edit, and the account can re-init
+    // E2E to fully migrate. Never let one bad row block every other peer delta.
+    // The caller tallies these and escalates if a whole page fails (see
+    // `pullLoop`) so a systemic identity bug can't hide as routine legacy skips.
+    logger.warn('skipping undecryptable record (AAD/UMK mismatch)', {
+      collection: rec.collection,
+      clientEntityId: rec.client_entity_id,
+      umkVersion: rec.enc_umk_version,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return 'undecryptable'
+  }
   mapper.apply(userId, rec.client_entity_id, plaintext, rec.deleted, ctx)
   changed.add(rec.collection)
+  return 'applied'
 }
 
 /** Build the encrypted push batch from dirty rows + tombstones. */
 async function buildPushBatch(
   userId: string,
+  subjectId: string,
   umk: Uint8Array,
   umkVersion: number,
   sinceMs: number
@@ -91,7 +128,7 @@ async function buildPushBatch(
       const ciphertext = await encryptPayload({
         umk,
         umkVersion,
-        userId,
+        userId: subjectId,
         collection: dirty.collection,
         clientEntityId: dirty.clientEntityId,
         plaintext: dirty.plaintext
@@ -144,24 +181,44 @@ function chunk<T>(arr: T[], size: number): T[][] {
 /** Drain pull pages from the current cursor until the server has no more. */
 async function pullLoop(
   userId: string,
+  subjectId: string,
   umk: Uint8Array,
   cache: ResolveCache,
   changed: Set<SyncCollection>
-): Promise<number> {
+): Promise<{ pulled: number; decryptSkipped: number }> {
   let pulled = 0
+  let decryptSkipped = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
     const state = syncRepo.ensureState(userId)
     const res = await syncApi.pull(userId, { cursor: state.cursor, limit: PULL_PAGE })
+    let pageApplied = 0
+    let pageUndecryptable = 0
     for (const rec of res.changes) {
-      await applyServerRecord(userId, umk, rec, cache, changed)
-      pulled++
+      const outcome = await applyServerRecord(userId, subjectId, umk, rec, cache, changed)
+      if (outcome === 'applied') pageApplied++
+      else if (outcome === 'undecryptable') pageUndecryptable++
+    }
+    pulled += pageApplied
+    decryptSkipped += pageUndecryptable
+    // A page where every payload failed to decrypt (and none applied) is the
+    // signature of a systemic identity/UMK mismatch rather than a few stray
+    // legacy rows — escalate so it surfaces in the logger UI instead of hiding
+    // among routine `warn`s. We still advance the cursor: blocking here would
+    // permanently stall a device whose backlog legitimately is all-legacy.
+    if (pageUndecryptable > 0 && pageApplied === 0) {
+      logger.error('pull page fully undecryptable — possible identity/UMK mismatch', {
+        userId,
+        cursor: state.cursor,
+        records: res.changes.length,
+        undecryptable: pageUndecryptable
+      })
     }
     syncRepo.patchState(userId, { cursor: res.next_cursor, lastPulledAt: Date.now() })
     if (!res.has_more) break
     if (res.changes.length === 0) break // safety: avoid infinite loop on a stuck cursor
   }
-  return pulled
+  return { pulled, decryptSkipped }
 }
 
 /**
@@ -170,6 +227,7 @@ async function pullLoop(
  */
 export async function runSyncCycle(
   userId: string,
+  subjectId: string,
   umk: Uint8Array,
   umkVersion: number
 ): Promise<CycleResult> {
@@ -178,6 +236,7 @@ export async function runSyncCycle(
     pulled: 0,
     conflicts: 0,
     skipped: 0,
+    decryptSkipped: 0,
     quotaFull: false,
     conflictKeys: [],
     changedCollections: []
@@ -191,7 +250,7 @@ export async function runSyncCycle(
   // Collections mutated by an apply this cycle — drives scoped renderer cache
   // invalidation in syncService.
   const changed = new Set<SyncCollection>()
-  const { records, skipped } = await buildPushBatch(userId, umk, umkVersion, sinceMs)
+  const { records, skipped } = await buildPushBatch(userId, subjectId, umk, umkVersion, sinceMs)
   result.skipped = skipped
 
   // Push-only upload (POST /push). The returned cursor is NOT a safe pull
@@ -213,7 +272,15 @@ export async function runSyncCycle(
           result.conflictKeys.push({ collection: r.collection, clientEntityId: r.client_entity_id })
           if (r.server_record) {
             // LWW loser reconciles by overwriting local with the winner.
-            await applyServerRecord(userId, umk, r.server_record, cache, changed)
+            const outcome = await applyServerRecord(
+              userId,
+              subjectId,
+              umk,
+              r.server_record,
+              cache,
+              changed
+            )
+            if (outcome === 'undecryptable') result.decryptSkipped++
           }
           break
         case 'rejected':
@@ -225,7 +292,9 @@ export async function runSyncCycle(
   }
 
   // Drain server changes (covers steady-state peer deltas + bootstrap).
-  result.pulled += await pullLoop(userId, umk, cache, changed)
+  const drained = await pullLoop(userId, subjectId, umk, cache, changed)
+  result.pulled += drained.pulled
+  result.decryptSkipped += drained.decryptSkipped
 
   // Advance the dirty watermark from the max *post-apply* updatedAt. Apply no
   // longer bumps updatedAt, so freshly-pulled replicas carry the peer's
@@ -246,9 +315,14 @@ export async function runSyncCycle(
  * Fresh-login bootstrap: drain everything from cursor 0 before the first push,
  * so a brand-new device hydrates rather than racing its own empty state up.
  */
-export async function bootstrap(userId: string, umk: Uint8Array): Promise<number> {
+export async function bootstrap(
+  userId: string,
+  subjectId: string,
+  umk: Uint8Array
+): Promise<number> {
   syncRepo.patchState(userId, { cursor: 0 })
   // Deliberately leave `lastPushedAt` untouched so the first cycle still pushes
   // any local rows that predate this device's sync (recovery case).
-  return pullLoop(userId, umk, newResolveCache(), new Set())
+  const { pulled } = await pullLoop(userId, subjectId, umk, newResolveCache(), new Set())
+  return pulled
 }

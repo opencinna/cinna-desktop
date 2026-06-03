@@ -18,7 +18,7 @@
  * only ever sees the high-level SyncState and drives the same `useSync` hooks
  * the settings screen uses.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck, KeyRound, Smartphone, Check, Copy, RefreshCw, X } from 'lucide-react'
 import { useAuthStore } from '../../stores/auth.store'
@@ -27,7 +27,9 @@ import {
   useSyncInit,
   useSyncUnlock,
   usePairingStart,
-  usePairingScan,
+  usePairingPrepareScan,
+  usePairingConfirmScan,
+  usePairingCancelScan,
   pollPairing
 } from '../../hooks/useSync'
 import type { SyncInitResult, UnlockMethod } from '../../../../shared/sync'
@@ -311,13 +313,17 @@ function PairPane({
   onBack: () => void
 }): React.JSX.Element {
   const pairingStart = usePairingStart()
-  const pairingScan = usePairingScan()
+  const pairingPrepareScan = usePairingPrepareScan()
+  const pairingConfirmScan = usePairingConfirmScan()
+  const pairingCancelScan = usePairingCancelScan()
   const [offer, setOffer] = useState<Awaited<ReturnType<typeof pairingStart.mutateAsync>> | null>(
     null
   )
   const [expired, setExpired] = useState(false)
   const [scanCode, setScanCode] = useState('')
-  const [scanSas, setScanSas] = useState<string | null>(null)
+  // Sealer flow: once prepared, hold the SAS + the code awaiting confirmation.
+  const [pendingScan, setPendingScan] = useState<{ code: string; sas: string } | null>(null)
+  const [scanDone, setScanDone] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   // Start an offer immediately so the QR/code shows without an extra click.
@@ -361,16 +367,50 @@ function PairPane({
     return () => clearInterval(timer)
   }, [offer, onPaired])
 
+  // Step 1: fetch the joiner's SAS without releasing the key.
   const scan = async (): Promise<void> => {
     setError(null)
+    setScanDone(false)
+    const code = scanCode.trim()
     try {
-      const { sas } = await pairingScan.mutateAsync(scanCode.trim())
-      setScanSas(sas)
+      const { sas } = await pairingPrepareScan.mutateAsync(code)
+      setPendingScan({ code, sas })
       setScanCode('')
     } catch (err) {
       setError(toMessage(err))
     }
   }
+
+  // Step 2: the user confirmed the numbers match — now seal + relay the key.
+  const confirmScan = async (): Promise<void> => {
+    if (!pendingScan) return
+    setError(null)
+    try {
+      await pairingConfirmScan.mutateAsync(pendingScan.code)
+      setPendingScan(null)
+      setScanDone(true)
+    } catch (err) {
+      setError(toMessage(err))
+    }
+  }
+
+  // Abandon a prepared scan — free the stashed joiner key in the main process.
+  const cancelScan = (): void => {
+    if (pendingScan) void pairingCancelScan.mutate(pendingScan.code)
+    setPendingScan(null)
+    setError(null)
+  }
+
+  // If the pane unmounts (modal closed) with a scan still prepared but never
+  // confirmed, free the stashed joiner key too. A ref mirrors the pending code
+  // so the unmount cleanup doesn't capture a stale closure value.
+  const pendingCodeRef = useRef<string | null>(null)
+  pendingCodeRef.current = pendingScan?.code ?? null
+  useEffect(() => {
+    return () => {
+      if (pendingCodeRef.current) void window.api.sync.pairingCancelScan(pendingCodeRef.current)
+    }
+  }, [])
 
   return (
     <div className="mt-3">
@@ -403,21 +443,39 @@ function PairPane({
           Or, if this device is the one that&apos;s already set up elsewhere, paste a code shown by a
           new device:
         </div>
-        <div className="flex gap-2">
-          <input
-            value={scanCode}
-            onChange={(e) => setScanCode(e.target.value)}
-            placeholder="Paste pairing code"
-            className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
-          />
-          <PrimaryButton onClick={scan} busy={pairingScan.isPending} disabled={!scanCode.trim()}>
-            Authorize device
-          </PrimaryButton>
-        </div>
-        {scanSas && (
-          <div className="text-[12px] mt-2">
-            Confirm these match the other device:{' '}
-            <span className="font-mono text-[var(--color-accent)]">{scanSas}</span>
+        {pendingScan ? (
+          <div className="space-y-2">
+            <div className="text-[12px]">
+              Check the verification number on the new device. Only confirm if it matches:{' '}
+              <span className="font-mono text-[var(--color-accent)]">{pendingScan.sas}</span>
+            </div>
+            <div className="flex gap-2">
+              <PrimaryButton onClick={confirmScan} busy={pairingConfirmScan.isPending}>
+                Numbers match — authorize
+              </PrimaryButton>
+              <SecondaryButton onClick={cancelScan}>Cancel</SecondaryButton>
+            </div>
+          </div>
+        ) : (
+          <div className="flex gap-2">
+            <input
+              value={scanCode}
+              onChange={(e) => setScanCode(e.target.value)}
+              placeholder="Paste pairing code"
+              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
+            />
+            <PrimaryButton
+              onClick={scan}
+              busy={pairingPrepareScan.isPending}
+              disabled={!scanCode.trim()}
+            >
+              Authorize device
+            </PrimaryButton>
+          </div>
+        )}
+        {scanDone && (
+          <div className="text-[12px] mt-2 text-[var(--color-success,var(--color-accent))]">
+            Device authorized — it will finish syncing on its own.
           </div>
         )}
       </div>

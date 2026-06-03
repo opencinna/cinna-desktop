@@ -9,6 +9,8 @@ import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { syncRepo } from '../db/sync'
 import { syncApi } from './syncApi'
 import { runSyncCycle } from '../sync/syncEngine'
+import { getCinnaAccessToken, decodeAccessTokenSubject } from '../auth/cinna-tokens'
+import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import * as vault from '../sync/umkVault'
 import { generateUmk } from '../sync/crypto/umk'
 import { generateDeviceKeypair, deviceKeyCodec } from '../sync/crypto/deviceKey'
@@ -58,6 +60,10 @@ interface DeviceMaterial {
 const debounceTimers = new Map<string, NodeJS.Timeout>()
 const periodicTimers = new Map<string, NodeJS.Timeout>()
 const pairingEphemerals = new Map<string, PairingEphemeral>() // code -> ephemeral
+// Sealer side: joiner public keys awaiting the user's out-of-band SAS
+// confirmation. The UMK is sealed only after `confirmScan`, so a substituted
+// key is caught (mismatching SAS) before the secret ever leaves this device.
+const pendingSeals = new Map<string, Uint8Array>() // code -> joiner public key
 // Profiles the user explicitly **paused** this session. While paused, the
 // per-launch silent auto-unlock is suppressed — otherwise the very next
 // `getState()` would re-unlock a trusted device and the UI would flap between
@@ -80,6 +86,49 @@ function emitStatus(status: SyncStatus): void {
 function isCinnaProfile(userId: string): boolean {
   const user = userRepo.get(userId)
   return !!user && user.type === 'cinna_user'
+}
+
+// ---- crypto identity (JWT `sub`) ----
+//
+// The AEAD AAD is keyed by the *backend* user id (the access token's `sub`
+// claim), NOT the device-local profile id. That id is identical on every
+// device/app linked to one account, so peers can decrypt each other's payloads
+// (desktop↔desktop, desktop↔mobile). The local profile id keeps scoping the DB,
+// token storage, and `sync_state` — only the crypto identity switches. Mobile
+// derives the same value the same way (`syncService.resolveSubject`).
+
+const subjectIds = new Map<string, string>() // profile userId -> JWT sub
+
+/** Resolve the backend user id (JWT `sub`) for a profile, cached per session. */
+async function resolveSubject(userId: string): Promise<string> {
+  const cached = subjectIds.get(userId)
+  if (cached) return cached
+  const token = await getCinnaAccessToken(userId)
+  const sub = decodeAccessTokenSubject(token)
+  subjectIds.set(userId, sub)
+  return sub
+}
+
+/**
+ * Drop this device's local sync enrollment: zero the in-memory UMK, delete the
+ * device keypair + `sync_state`, and clear the cached subject + pause flag.
+ *
+ * Used by the full reset (`wipe`) and — crucially — whenever the server reports
+ * the account is no longer E2E-initialized (a reset performed here or on a
+ * peer). Without this, stale local `sync_state` (`activeUmkVersion > 0`) keeps
+ * the UI stuck on "Paused/Resume" (a device unlock that can only fail with "not
+ * trusted") and trips `initEncryption`'s already-initialized guard, leaving the
+ * user unable to re-enable sync.
+ */
+async function forgetLocalEnrollment(userId: string): Promise<void> {
+  await vault.lock(userId)
+  syncRepo.deleteDeviceKey(userId)
+  syncRepo.deleteState(userId)
+  // Drop the delete-propagation queue too — a reset/re-enable must not replay
+  // stale hard-deletes (tied to the old key generation) onto the fresh account.
+  syncRepo.deleteTombstones(userId)
+  subjectIds.delete(userId)
+  pausedUserIds.delete(userId)
 }
 
 // ---- device key material ----
@@ -230,7 +279,10 @@ async function buildStateDto(userId: string): Promise<SyncState> {
   }
 
   return {
-    initialized: initialized || !!enc?.initialized,
+    // `/encryption` is authoritative for init state when reachable; only fall
+    // back to the local flag when offline (`enc == null`). Using an OR would
+    // keep a device that the server has reset stuck on a stale "initialized".
+    initialized: enc ? enc.initialized : initialized,
     locked,
     cursor: local?.cursor ?? 0,
     status,
@@ -266,7 +318,8 @@ async function runCycleNow(userId: string): Promise<void> {
   }
   emitStatus('syncing')
   try {
-    const result = await runSyncCycle(userId, entry.umk, entry.version)
+    const subjectId = await resolveSubject(userId)
+    const result = await runSyncCycle(userId, subjectId, entry.umk, entry.version)
     if (result.quotaFull) broadcast({ type: 'quota-full' })
     for (const c of result.conflictKeys) {
       broadcast({ type: 'conflict-applied', collection: c.collection, clientEntityId: c.clientEntityId })
@@ -281,8 +334,14 @@ async function runCycleNow(userId: string): Promise<void> {
     await pushState(userId)
     logger.info('sync cycle complete', { userId, ...result })
   } catch (err) {
-    if (err instanceof CinnaApiError && err.code === 'reauth_required') {
-      // Global reauth modal handles re-auth; pause quietly.
+    // Reauth can surface either normalized (CinnaApiError from the api layer) or
+    // raw (CinnaReauthRequired straight from `getCinnaAccessToken`, e.g. via
+    // `resolveSubject` before any api call). Treat both as the quiet reauth path
+    // — the global reauth modal drives re-auth; don't show a sync error toast.
+    if (
+      (err instanceof CinnaApiError && err.code === 'reauth_required') ||
+      err instanceof CinnaReauthRequired
+    ) {
       emitStatus('error')
       return
     }
@@ -307,20 +366,33 @@ export const syncService = {
    */
   async ensureActivated(userId: string): Promise<void> {
     if (!isCinnaProfile(userId)) return
-    // Respect an explicit pause — don't silently re-unlock until the user resumes.
-    if (!vault.isUnlocked(userId) && !pausedUserIds.has(userId)) {
-      let initialized = (syncRepo.getState(userId)?.activeUmkVersion ?? 0) > 0
-      if (!initialized) {
-        // Local state may be behind the server (e.g. init persisted server-side
-        // but a desktop crash lost the local flag). Ask the server so a trusted
-        // device still auto-unlocks instead of being stuck "locked".
-        const enc = await syncApi.getEncryptionState(userId).catch(() => null)
-        if (enc?.initialized) {
+    if (!vault.isUnlocked(userId)) {
+      // `/encryption` is the source of truth for init state — reconcile local
+      // enrollment against it in BOTH directions, and even while paused (a reset
+      // must be able to un-stick the device).
+      const enc = await syncApi.getEncryptionState(userId).catch(() => null)
+      if (enc && !enc.initialized) {
+        // Account was reset (here or on a peer). Drop stale local enrollment so
+        // the UI offers a fresh "Enable" instead of a dead "Resume", and clear
+        // any pause flag that would otherwise keep it pinned.
+        const hadLocal = (syncRepo.getState(userId)?.activeUmkVersion ?? 0) > 0
+        await forgetLocalEnrollment(userId)
+        if (hadLocal) {
+          logger.info('sync: account reset server-side, cleared local enrollment', { userId })
+          broadcast({ type: 'needs-setup' })
+        }
+      } else if (!pausedUserIds.has(userId)) {
+        // Respect an explicit pause — don't silently re-unlock until resume.
+        let initialized = (syncRepo.getState(userId)?.activeUmkVersion ?? 0) > 0
+        if (!initialized && enc?.initialized) {
+          // Local state behind the server (e.g. init persisted server-side but a
+          // desktop crash lost the local flag) — adopt the server's version so a
+          // trusted device still auto-unlocks instead of being stuck "locked".
           initialized = true
           syncRepo.patchState(userId, { activeUmkVersion: enc.active_umk_version })
         }
+        if (initialized) await this.tryAutoUnlock(userId, enc)
       }
-      if (initialized) await this.tryAutoUnlock(userId)
     }
     if (!periodicTimers.has(userId)) {
       const timer = setInterval(() => void runCycleNow(userId), PERIODIC_MS)
@@ -329,9 +401,14 @@ export const syncService = {
     }
   },
 
-  async tryAutoUnlock(userId: string): Promise<boolean> {
+  async tryAutoUnlock(
+    userId: string,
+    prefetchedEnc?: Awaited<ReturnType<typeof syncApi.getEncryptionState>> | null
+  ): Promise<boolean> {
     try {
-      const enc = await syncApi.getEncryptionState(userId)
+      // Reuse the encryption state the caller already fetched (ensureActivated)
+      // instead of round-tripping again.
+      const enc = prefetchedEnc ?? (await syncApi.getEncryptionState(userId))
       if (!enc.initialized) {
         broadcast({ type: 'needs-setup' })
         return false
@@ -537,8 +614,15 @@ export const syncService = {
     return true
   },
 
-  /** Unlocked device: seal the UMK to the joiner's code. Returns the SAS to compare. */
-  async scanPairing(userId: string, code: string): Promise<{ sas: string }> {
+  /**
+   * Pairing step 1 (sealer): fetch the joiner's public key from the relay and
+   * compute the SAS to show the user. The UMK is NOT sealed here — the joiner
+   * key is stashed until `confirmScan`. This is what makes the SAS binding: the
+   * user compares the verification numbers on both devices FIRST, so a
+   * server-substituted key (which yields a mismatching SAS) is caught before
+   * the secret leaves this device.
+   */
+  async prepareScan(userId: string, code: string): Promise<{ sas: string }> {
     const entry = vault.getUmk(userId)
     if (!entry) throw new SyncError('locked', 'Unlock sync on this device first')
     // Fetch the joiner's public key from the relay (the code identifies it).
@@ -546,9 +630,34 @@ export const syncService = {
     if (!relay) throw new SyncError('bad_request', 'Pairing request not found or expired')
     const joinerPub = await decodePairingPublicKey(relay.new_device_pubkey)
     const sas = await computeSas(joinerPub)
+    pendingSeals.set(code, joinerPub)
+    return { sas }
+  },
+
+  /**
+   * Pairing step 2 (sealer): the user confirmed the SAS matches on both
+   * devices, so seal the UMK to the stashed joiner key and relay it. Only now
+   * does the secret leave this device.
+   */
+  async confirmScan(userId: string, code: string): Promise<void> {
+    const entry = vault.getUmk(userId)
+    if (!entry) throw new SyncError('locked', 'Unlock sync on this device first')
+    const joinerPub = pendingSeals.get(code)
+    if (!joinerPub) {
+      throw new SyncError('bad_request', 'No pairing awaiting confirmation — re-enter the code')
+    }
     const sealed = await sealUmkForJoiner(entry.umk, joinerPub)
     await syncApi.pairingComplete(userId, code, await deviceKeyCodec.to(sealed))
-    return { sas }
+    pendingSeals.delete(code)
+  },
+
+  /**
+   * Discard a scan prepared but never confirmed (the user hit Cancel, or closed
+   * the pane). Drops the stashed joiner key so it doesn't linger in main-process
+   * memory until the next profile switch. No-op if nothing was pending.
+   */
+  cancelScan(_userId: string, code: string): void {
+    pendingSeals.delete(code)
   },
 
   // ---- devices ----
@@ -560,9 +669,74 @@ export const syncService = {
 
   // ---- destructive ----
 
+  /**
+   * "Delete synced data" (Settings → Danger zone): delete this account's data
+   * from the server AND fully turn sync OFF on this device.
+   *
+   * The old behaviour only tombstoned the server records, leaving this device
+   * enrolled and unlocked — so the very next cycle re-pushed every local row and
+   * the deletion silently undid itself. A full reset returns the whole account
+   * to the un-initialized "first device" state:
+   *  1. Tombstone server records (peers observe the deletion on their next pull).
+   *  2. Reset E2E server-side (`resetEncryption`): delete all key envelopes +
+   *     devices and set `active_umk_version` back to 0, so `get_encryption_state`
+   *     reports `initialized = false` again and `init` is allowed.
+   *  3. Lock the in-memory UMK and drop the local device key + sync_state, so
+   *     `runCycleNow` early-returns (no UMK → no push) and the UI shows **Enable**
+   *     (a fresh first-device setup, new UMK + recovery key).
+   *
+   * Local app data (chats/notes/jobs) is intentionally kept.
+   *
+   * The E2E reset is the REQUIRED step and is done first: it's what returns the
+   * account to the un-initialized "Enable" state. If it fails (offline / backend
+   * error) we throw so the UI surfaces it, and we DON'T tear down locally —
+   * otherwise the device would drop into a half-reset state that just re-locks
+   * on the next server reconcile (the exact "stuck on Resume" trap). Tombstoning
+   * records is best-effort (they're orphaned under the dead key generation
+   * anyway).
+   */
   async wipe(userId: string): Promise<void> {
-    await syncApi.wipe(userId)
-    syncRepo.wipe(userId)
+    if (!isCinnaProfile(userId)) return
+
+    // Un-initialize E2E for the account FIRST: delete every device + envelope and
+    // set active_umk_version=0. Log + re-throw on failure so it's traceable in
+    // the logger UI AND surfaced to the renderer — a failed reset must not
+    // masquerade as success and loop back to "Paused".
+    try {
+      await syncApi.resetEncryption(userId)
+    } catch (err) {
+      logger.error('delete-synced-data: E2E reset failed', {
+        userId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+      throw err
+    }
+
+    // Records are now under a dead key generation — tombstone them (best-effort;
+    // peers observe the deletion on their next pull).
+    await syncApi.wipe(userId).catch((err) =>
+      logger.warn('delete-synced-data: server record wipe failed (continuing)', {
+        userId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    )
+
+    // Stop this profile's timers so neither a pending debounce nor the periodic
+    // tick fires a cycle against the UMK we're about to zero. Then drop local
+    // enrollment so the device is a clean first-device → UI shows **Enable**.
+    const debounce = debounceTimers.get(userId)
+    if (debounce) {
+      clearTimeout(debounce)
+      debounceTimers.delete(userId)
+    }
+    const periodic = periodicTimers.get(userId)
+    if (periodic) {
+      clearInterval(periodic)
+      periodicTimers.delete(userId)
+    }
+
+    await forgetLocalEnrollment(userId)
+
     await pushState(userId)
   },
 
@@ -594,6 +768,9 @@ export const syncService = {
     }
     // Reset cursor + clear tombstones regardless of the device choice.
     syncRepo.wipe(userId)
+    // Drop the cached crypto identity — a later rebind of this profile id to a
+    // different account would otherwise reuse the old `sub`.
+    subjectIds.delete(userId)
     if (opts.removeDevice) {
       const deviceId = syncRepo.getState(userId)?.deviceId
       if (deviceId) {
@@ -619,6 +796,8 @@ export const syncService = {
     debounceTimers.clear()
     periodicTimers.clear()
     pairingEphemerals.clear()
+    pendingSeals.clear()
     pausedUserIds.clear()
+    subjectIds.clear()
   }
 }

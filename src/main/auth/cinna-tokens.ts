@@ -92,3 +92,29 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 export function clearCinnaTokens(userId: string): void {
   userRepo.clearCinnaTokens(userId)
 }
+
+/**
+ * Decode the `sub` claim (the Cinna backend user UUID) from an access token.
+ *
+ * The signature is intentionally NOT verified: this is our own access token —
+ * fetched over TLS and stored via `safeStorage` — and we read `sub` only as an
+ * identifier (e.g. the E2E crypto identity), never as a trust/authorization
+ * decision. The backend remains the sole authority on token validity.
+ *
+ * A malformed token or a missing `sub` almost always means the stored session
+ * is unusable, so we throw `CinnaReauthRequired` — that's the one error class
+ * the sync cycle and the IPC wrapper already route into the quiet global reauth
+ * flow, rather than surfacing an opaque `SyntaxError` as a sync toast.
+ */
+export function decodeAccessTokenSubject(token: string): string {
+  try {
+    const seg = token.split('.')[1] ?? ''
+    const json = Buffer.from(seg, 'base64url').toString('utf8')
+    const sub = (JSON.parse(json) as { sub?: string }).sub
+    if (!sub) throw new CinnaReauthRequired('access token missing sub claim')
+    return String(sub)
+  } catch (err) {
+    if (err instanceof CinnaReauthRequired) throw err
+    throw new CinnaReauthRequired('access token could not be decoded', { cause: err })
+  }
+}

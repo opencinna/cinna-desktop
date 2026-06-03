@@ -11,6 +11,7 @@ import {
 import { NoteError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { fileService, type FileScope } from './fileService'
+import { syncService } from './syncService'
 import type { MessageAttachment } from '../../shared/attachments'
 
 const logger = createLogger('note')
@@ -49,6 +50,7 @@ export const notesService = {
   create(userId: string, input: NoteCreateInput): NoteRow {
     const note = notesRepo.create(userId, input)
     logger.info('note created', { noteId: note.id })
+    syncService.markDirty(userId)
     return note
   },
 
@@ -61,6 +63,7 @@ export const notesService = {
     if (!ok) throw new NoteError('not_found', 'Note not found')
     const updated = notesRepo.getById(userId, noteId)
     if (!updated) throw new NoteError('not_found', 'Note not found after update')
+    syncService.markDirty(userId)
     return updated
   },
 
@@ -68,6 +71,7 @@ export const notesService = {
     const ok = notesRepo.softDelete(userId, noteId)
     if (!ok) throw new NoteError('not_found', 'Note not found')
     logger.info('note moved to trash', { noteId })
+    syncService.markDirty(userId)
   },
 
   listTrash(userId: string): NoteRow[] {
@@ -78,17 +82,20 @@ export const notesService = {
     const ok = notesRepo.restore(userId, noteId)
     if (!ok) throw new NoteError('not_found', 'Note not found')
     logger.info('note restored', { noteId })
+    syncService.markDirty(userId)
   },
 
   permanentDelete(userId: string, noteId: string): void {
     const ok = notesRepo.permanentDelete(userId, noteId)
     if (!ok) throw new NoteError('not_found', 'Note not found')
     logger.info('note permanently deleted', { noteId })
+    syncService.markDirty(userId)
   },
 
   emptyTrash(userId: string): void {
     const removed = notesRepo.emptyTrash(userId)
     logger.info('notes trash emptied', { removed })
+    syncService.markDirty(userId)
   },
 
   // ---- Folders ------------------------------------------------------------
@@ -102,6 +109,7 @@ export const notesService = {
     if (!name) throw new NoteError('invalid_input', 'Folder name is required')
     const folder = noteFoldersRepo.create(userId, { name })
     logger.info('note folder created', { folderId: folder.id })
+    syncService.markDirty(userId)
     return folder
   },
 
@@ -123,6 +131,7 @@ export const notesService = {
     if (!ok) throw new NoteError('not_found', 'Folder not found')
     const updated = noteFoldersRepo.getById(userId, folderId)
     if (!updated) throw new NoteError('not_found', 'Folder not found after update')
+    syncService.markDirty(userId)
     return updated
   },
 
@@ -131,6 +140,7 @@ export const notesService = {
     if (!existing) throw new NoteError('not_found', 'Folder not found')
     noteFoldersRepo.delete(userId, folderId)
     logger.info('note folder deleted', { folderId })
+    syncService.markDirty(userId)
   },
 
   reorderFolders(userId: string, orderedIds: string[]): void {
@@ -142,6 +152,7 @@ export const notesService = {
     }
     noteFoldersRepo.reorder(userId, orderedIds)
     logger.info('note folders reordered', { count: orderedIds.length })
+    syncService.markDirty(userId)
   },
 
   /**
@@ -200,5 +211,6 @@ export const notesService = {
       targetFolderId,
       count: orderedNoteIds.length
     })
+    syncService.markDirty(userId)
   }
 }

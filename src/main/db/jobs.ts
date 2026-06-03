@@ -146,9 +146,12 @@ export const jobsRepo = {
   },
 
   softDelete(userId: string, jobId: string): boolean {
+    // Bump `updatedAt` too: the sync engine selects the push batch via
+    // `listChangedSince` (updatedAt > cursor) and uses it as the LWW timestamp,
+    // so a trash that left it stale would never propagate to peers.
     const result = getDb()
       .update(jobs)
-      .set({ deletedAt: new Date() })
+      .set({ deletedAt: new Date(), updatedAt: new Date() })
       .where(and(eq(jobs.id, jobId), eq(jobs.userId, userId)))
       .run()
     return result.changes > 0
@@ -191,10 +194,13 @@ export const jobsRepo = {
     orderedJobIds: string[]
   ): void {
     const db = getDb()
+    const now = new Date()
     db.transaction((tx) => {
       orderedJobIds.forEach((id, idx) => {
+        // `folderId`/`position` are synced fields — bump `updatedAt` so the
+        // reorder/move is picked up by `listChangedSince` and reaches peers.
         tx.update(jobs)
-          .set({ folderId: targetFolderId, position: idx })
+          .set({ folderId: targetFolderId, position: idx, updatedAt: now })
           .where(and(eq(jobs.id, id), eq(jobs.userId, userId)))
           .run()
       })

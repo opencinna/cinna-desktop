@@ -213,6 +213,12 @@ export const syncApi = {
     return cinnaApiFetch<void>(userId, `${BASE}/`, { method: 'DELETE' })
   },
 
+  /** Tear E2E back down (delete envelopes/devices, reset to v0) so the account
+   *  can be set up fresh. Pairs with `wipe()` for a full reset. */
+  resetEncryption(userId: string): Promise<void> {
+    return cinnaApiFetch<void>(userId, `${BASE}/encryption`, { method: 'DELETE' })
+  },
+
   // ---- devices ----
 
   registerDevice(userId: string, body: DeviceInputWire): Promise<DeviceWire> {
