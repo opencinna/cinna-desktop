@@ -55,20 +55,26 @@ export function registerSyncHandlers(): void {
     return syncService.pollPairing(getProfileScopeUserId(), code)
   })
 
-  ipcHandle('sync:pairing-prepare-scan', async (_e, code: string) => {
+  ipcHandle('sync:pairing-inbox', async () => {
     userActivation.requireActivated()
-    return syncService.prepareScan(getProfileScopeUserId(), code)
+    return syncService.pairingInbox(getProfileScopeUserId())
   })
 
-  ipcHandle('sync:pairing-confirm-scan', async (_e, code: string) => {
+  ipcHandle('sync:pairing-begin-verify', async (_e, id: string) => {
     userActivation.requireActivated()
-    await syncService.confirmScan(getProfileScopeUserId(), code)
+    await syncService.beginVerify(getProfileScopeUserId(), id)
     return { success: true }
   })
 
-  ipcHandle('sync:pairing-cancel-scan', async (_e, code: string) => {
+  ipcHandle('sync:pairing-confirm-verify', async (_e, id: string, sas: string) => {
     userActivation.requireActivated()
-    syncService.cancelScan(getProfileScopeUserId(), code)
+    await syncService.confirmVerify(getProfileScopeUserId(), id, sas)
+    return { success: true }
+  })
+
+  ipcHandle('sync:pairing-cancel-verify', async (_e, id: string) => {
+    userActivation.requireActivated()
+    syncService.cancelVerify(getProfileScopeUserId(), id)
     return { success: true }
   })
 
@@ -78,9 +84,14 @@ export function registerSyncHandlers(): void {
     return { success: true }
   })
 
-  ipcHandle('sync:wipe', async () => {
+  ipcHandle('sync:disconnect', async () => {
     userActivation.requireActivated()
-    await syncService.wipe(getProfileScopeUserId())
+    return syncService.disconnect(getProfileScopeUserId())
+  })
+
+  ipcHandle('sync:reconnect', async () => {
+    userActivation.requireActivated()
+    await syncService.reconnect(getProfileScopeUserId())
     return { success: true }
   })
 }

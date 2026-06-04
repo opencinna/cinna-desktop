@@ -1,14 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import {
   RefreshCw,
   ShieldCheck,
   Pause,
   Play,
   Unlock,
+  Lock,
   KeyRound,
   Smartphone,
   Laptop,
-  Trash2,
+  CloudOff,
   Copy,
   Check
 } from 'lucide-react'
@@ -19,13 +21,16 @@ import {
   useSyncUnlock,
   useSyncLock,
   useSyncNow,
-  usePairingPrepareScan,
-  usePairingConfirmScan,
-  usePairingCancelScan,
+  usePairingInbox,
+  usePairingBeginVerify,
+  usePairingConfirmVerify,
+  usePairingCancelVerify,
   useRevokeDevice,
-  useSyncWipe
+  useSyncDisconnect,
+  useSyncReconnect
 } from '../../hooks/useSync'
-import type { SyncState, SyncInitResult } from '../../../../shared/sync'
+import { PairJoinPane } from '../sync/PairJoinPane'
+import type { SyncState, SyncInitResult, IncomingPairing } from '../../../../shared/sync'
 
 /**
  * Settings → Profile → Cloud Sync. End-to-end-encrypted cross-device sync of
@@ -44,6 +49,7 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
   const init = useSyncInit()
   const lock = useSyncLock()
   const syncNow = useSyncNow()
+  const reconnect = useSyncReconnect()
 
   const [error, setError] = useState<string | null>(null)
   const [initResult, setInitResult] = useState<SyncInitResult | null>(null)
@@ -101,13 +107,28 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
               {error && <div className="text-[13px] text-[var(--color-danger)] mt-1.5">{error}</div>}
             </div>
             <div className="shrink-0">
-              {!state?.initialized ? (
+              {state?.disconnected ? (
+                <PrimaryButton
+                  onClick={() => handle(() => reconnect.mutateAsync())}
+                  busy={reconnect.isPending}
+                >
+                  Connect
+                </PrimaryButton>
+              ) : !state?.initialized ? (
                 <PrimaryButton onClick={handleInit} busy={init.isPending}>
                   Enable
                 </PrimaryButton>
               ) : state.locked ? (
                 <span className="inline-flex items-center gap-1.5 text-[13px] text-[var(--color-text-muted)]">
-                  <Pause size={13} /> Paused
+                  {state.paused ? (
+                    <>
+                      <Pause size={13} /> Paused
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={13} /> Locked
+                    </>
+                  )}
                 </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-[13px] text-[var(--color-accent)]">
@@ -119,21 +140,28 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
 
           {state?.initialized && (
             <div className="mt-3 flex flex-wrap gap-2">
-              <SecondaryButton
-                onClick={() => handle(() => syncNow.mutateAsync())}
-                busy={syncNow.isPending}
-              >
-                <RefreshCw size={12} className={syncNow.isPending ? 'animate-spin' : ''} /> Sync now
-              </SecondaryButton>
               {state.locked ? (
-                <UnlockControls onError={setError} />
+                // A user-initiated **pause** resumes via device-unlock; any other
+                // locked state means this device can't auto-unlock (new/wiped, or
+                // the account was reset + re-initialized on a peer) → it must
+                // **restore** via pairing or recovery, not a dead "Resume".
+                <UnlockControls variant={state.paused ? 'paused' : 'restore'} onError={setError} />
               ) : (
-                <SecondaryButton
-                  onClick={() => handle(() => lock.mutateAsync())}
-                  busy={lock.isPending}
-                >
-                  <Pause size={12} /> Pause sync
-                </SecondaryButton>
+                <>
+                  <SecondaryButton
+                    onClick={() => handle(() => syncNow.mutateAsync())}
+                    busy={syncNow.isPending}
+                  >
+                    <RefreshCw size={12} className={syncNow.isPending ? 'animate-spin' : ''} /> Sync
+                    now
+                  </SecondaryButton>
+                  <SecondaryButton
+                    onClick={() => handle(() => lock.mutateAsync())}
+                    busy={lock.isPending}
+                  >
+                    <Pause size={12} /> Pause sync
+                  </SecondaryButton>
+                </>
               )}
             </div>
           )}
@@ -148,9 +176,10 @@ export function CloudSyncSettingsSection(): React.JSX.Element {
         </>
       )}
 
-      {/* Reset is available even while locked — a device that can't unlock (e.g.
-          untrusted after a reset elsewhere) still needs a way to start over. */}
-      {state?.initialized && <DangerCard locked={state.locked} />}
+      {/* Disconnect is offered whenever this device participates (active, paused,
+          or locked-untrusted) — it's per-device and reversible. Hidden once
+          already disconnected (the header shows **Connect** instead). */}
+      {state?.initialized && <DisconnectSyncCard onError={setError} />}
 
       <MandatoryNotice />
     </div>
@@ -167,8 +196,9 @@ function toMessage(err: unknown): string {
 
 function StatusLine({ state }: { state: SyncState | null }): React.JSX.Element | null {
   if (!state) return null
-  const label =
-    state.status === 'syncing'
+  const label = state.disconnected
+    ? 'Online sync is off on this device — your data is still here. Connect to sync again.'
+    : state.status === 'syncing'
       ? 'Syncing…'
       : state.status === 'error'
         ? 'Sync error'
@@ -180,9 +210,25 @@ function StatusLine({ state }: { state: SyncState | null }): React.JSX.Element |
   return <div className="text-[12px] text-[var(--color-text-muted)] mt-1.5">{label}</div>
 }
 
-function UnlockControls({ onError }: { onError: (msg: string) => void }): React.JSX.Element {
+/**
+ * Locked-state controls. Two variants:
+ *  - `paused` — the user paused a **trusted** device; "Resume sync" re-unlocks it
+ *    via the device key (recovery / passphrase remain as fallbacks).
+ *  - `restore` — this device can't auto-unlock (new/wiped, or the account was
+ *    reset + re-initialized on a peer). Device-unlock would only ever fail, so we
+ *    offer **Pair with another device** instead, plus recovery / passphrase. This
+ *    is what unsticks the "Locked" trap that a plain "Resume" left behind.
+ */
+function UnlockControls({
+  variant,
+  onError
+}: {
+  variant: 'paused' | 'restore'
+  onError: (msg: string) => void
+}): React.JSX.Element {
+  const queryClient = useQueryClient()
   const unlock = useSyncUnlock()
-  const [mode, setMode] = useState<'idle' | 'recovery' | 'passphrase'>('idle')
+  const [mode, setMode] = useState<'idle' | 'recovery' | 'passphrase' | 'pair'>('idle')
   const [value, setValue] = useState('')
 
   const submit = async (): Promise<void> => {
@@ -209,12 +255,35 @@ function UnlockControls({ onError }: { onError: (msg: string) => void }): React.
     }
   }
 
+  if (mode === 'pair') {
+    return (
+      <div className="w-full">
+        <PairJoinPane
+          onPaired={() => {
+            // The sealed UMK arrived → pull synced data back into view.
+            void queryClient.invalidateQueries()
+            setMode('idle')
+          }}
+        />
+        <div className="mt-2">
+          <SecondaryButton onClick={() => setMode('idle')}>Cancel</SecondaryButton>
+        </div>
+      </div>
+    )
+  }
+
   if (mode === 'idle') {
     return (
       <>
-        <SecondaryButton onClick={unlockDevice} busy={unlock.isPending}>
-          <Play size={12} /> Resume sync
-        </SecondaryButton>
+        {variant === 'paused' ? (
+          <SecondaryButton onClick={unlockDevice} busy={unlock.isPending}>
+            <Play size={12} /> Resume sync
+          </SecondaryButton>
+        ) : (
+          <SecondaryButton onClick={() => setMode('pair')}>
+            <Smartphone size={12} /> Pair with another device
+          </SecondaryButton>
+        )}
         <SecondaryButton onClick={() => setMode('recovery')}>
           <KeyRound size={12} /> Recovery key
         </SecondaryButton>
@@ -249,50 +318,15 @@ function UnlockControls({ onError }: { onError: (msg: string) => void }): React.
  * to a joiner. The **joiner** half (showing a pairing code) lives in
  * `SyncSetupModal`'s restore flow on the new/locked device — the device that
  * actually lacks the key.
+ *
+ * Discovery is automatic: while this (foregrounded, unlocked) device is active,
+ * the main process polls its pairing inbox and surfaces incoming requests here —
+ * no routing code to transfer. The user opts in per request, then transcribes
+ * the 6-digit code shown on the new device (commit-then-reveal: a tampered
+ * request aborts before any code is accepted).
  */
 function PairingCard(): React.JSX.Element {
-  const pairingPrepareScan = usePairingPrepareScan()
-  const pairingConfirmScan = usePairingConfirmScan()
-  const pairingCancelScan = usePairingCancelScan()
-  const [scanCode, setScanCode] = useState('')
-  // Once prepared, hold the SAS + the code awaiting out-of-band confirmation.
-  const [pendingScan, setPendingScan] = useState<{ code: string; sas: string } | null>(null)
-  const [scanDone, setScanDone] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // Step 1: fetch the joiner's SAS to compare — the key is NOT sealed yet.
-  const scan = async (): Promise<void> => {
-    setError(null)
-    setScanDone(false)
-    const code = scanCode.trim()
-    try {
-      const { sas } = await pairingPrepareScan.mutateAsync(code)
-      setPendingScan({ code, sas })
-      setScanCode('')
-    } catch (err) {
-      setError(toMessage(err))
-    }
-  }
-
-  // Step 2: the user confirmed the numbers match — seal + relay the key now.
-  const confirmScan = async (): Promise<void> => {
-    if (!pendingScan) return
-    setError(null)
-    try {
-      await pairingConfirmScan.mutateAsync(pendingScan.code)
-      setPendingScan(null)
-      setScanDone(true)
-    } catch (err) {
-      setError(toMessage(err))
-    }
-  }
-
-  // Abandon a prepared scan — free the stashed joiner key in the main process.
-  const cancelScan = (): void => {
-    if (pendingScan) void pairingCancelScan.mutate(pendingScan.code)
-    setPendingScan(null)
-    setError(null)
-  }
+  const { incoming, dismiss } = usePairingInbox(true)
 
   return (
     <section>
@@ -302,43 +336,150 @@ function PairingCard(): React.JSX.Element {
           Authorize a new device
         </div>
         <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed mb-2">
-          On the new device, sign in and choose <strong>Pair with another device</strong>. Paste the
-          code it shows here, then confirm the verification numbers match on both devices.
+          On the new device, sign in and choose <strong>Pair with another device</strong>. Its
+          request appears here automatically — verify it by entering the 6-digit code it shows.
         </p>
-        {pendingScan ? (
-          <div className="space-y-2 max-w-md">
-            <div className="text-[13px]">
-              Check the verification number on the new device. Only authorize if it matches:{' '}
-              <span className="font-mono text-[var(--color-accent)]">{pendingScan.sas}</span>
-            </div>
-            <div className="flex gap-2">
-              <PrimaryButton busy={pairingConfirmScan.isPending} onClick={confirmScan}>
-                Numbers match — authorize
-              </PrimaryButton>
-              <SecondaryButton onClick={cancelScan}>Cancel</SecondaryButton>
-            </div>
+        {incoming.length === 0 ? (
+          <div className="text-[12px] text-[var(--color-text-muted)]">
+            No incoming requests. Waiting for a new device…
           </div>
         ) : (
-          <div className="flex gap-2 max-w-md">
-            <input
-              value={scanCode}
-              onChange={(e) => setScanCode(e.target.value)}
-              placeholder="Paste pairing code"
-              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] text-[var(--color-text)]"
-            />
-            <PrimaryButton busy={pairingPrepareScan.isPending} onClick={scan}>
-              Authorize device
-            </PrimaryButton>
-          </div>
+          <ul className="space-y-2">
+            {incoming.map((req) => (
+              <IncomingPairingRow key={req.id} request={req} onDone={() => dismiss(req.id)} />
+            ))}
+          </ul>
         )}
-        {scanDone && (
-          <div className="text-[13px] mt-2 text-[var(--color-text-muted)]">
-            Device authorized — it will finish syncing on its own.
-          </div>
-        )}
-        {error && <div className="text-[13px] text-[var(--color-danger)] mt-3">{error}</div>}
       </Card>
     </section>
+  )
+}
+
+/**
+ * One incoming pairing request: the user opts in (`Verify`), the handshake runs
+ * ("Establishing secure channel…"), then they enter the new device's 6-digit
+ * code to authorize. A mismatch/tamper shows inline and never seals the key.
+ */
+function IncomingPairingRow({
+  request,
+  onDone
+}: {
+  request: IncomingPairing
+  onDone: () => void
+}): React.JSX.Element {
+  const beginVerify = usePairingBeginVerify()
+  const confirmVerify = usePairingConfirmVerify()
+  const cancelVerify = usePairingCancelVerify()
+  const [phase, setPhase] = useState<'idle' | 'verifying' | 'enter' | 'done'>('idle')
+  const [sas, setSas] = useState('')
+  const [error, setError] = useState<string | null>(null)
+  // True once the handshake reached a terminal outcome (explicit cancel or a
+  // successful seal) — so the unmount cleanup doesn't redundantly cancel again.
+  const handledRef = useRef(false)
+
+  const start = async (): Promise<void> => {
+    setError(null)
+    setPhase('verifying')
+    try {
+      await beginVerify.mutateAsync(request.id)
+      setPhase('enter')
+    } catch (err) {
+      setError(toMessage(err))
+      setPhase('idle')
+    }
+  }
+
+  const confirm = async (): Promise<void> => {
+    setError(null)
+    try {
+      await confirmVerify.mutateAsync({ id: request.id, sas })
+      handledRef.current = true
+      setPhase('done')
+      setTimeout(onDone, 2500)
+    } catch (err) {
+      setError(toMessage(err))
+    }
+  }
+
+  const cancel = (): void => {
+    handledRef.current = true
+    void cancelVerify.mutate(request.id)
+    onDone()
+  }
+
+  // If the row unmounts mid-handshake (e.g. Settings closed while
+  // "Establishing secure channel…"), abandon the verification so the
+  // main-process poll bails and the stashed joiner key is freed. A ref mirrors
+  // the phase so the cleanup doesn't capture a stale value; a successful seal or
+  // an explicit cancel (`handledRef`) is left alone.
+  const phaseRef = useRef(phase)
+  phaseRef.current = phase
+  useEffect(() => {
+    return () => {
+      if (
+        !handledRef.current &&
+        (phaseRef.current === 'verifying' || phaseRef.current === 'enter')
+      ) {
+        void window.api.sync.pairingCancelVerify(request.id)
+      }
+    }
+  }, [request.id])
+
+  const label = request.deviceLabel || 'New device'
+
+  return (
+    <li className="rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-3">
+      <div className="flex items-center gap-2">
+        <Smartphone size={14} className="text-[var(--color-text-muted)]" />
+        <span className="text-[13px] text-[var(--color-text)] flex-1">{label}</span>
+        {phase === 'idle' && (
+          <>
+            <PrimaryButton onClick={start}>Verify</PrimaryButton>
+            <SecondaryButton onClick={onDone}>Dismiss</SecondaryButton>
+          </>
+        )}
+      </div>
+
+      {phase === 'verifying' && (
+        <div className="text-[12px] text-[var(--color-text-muted)] mt-2 inline-flex items-center gap-1.5">
+          <RefreshCw size={12} className="animate-spin" /> Establishing secure channel…
+        </div>
+      )}
+
+      {phase === 'enter' && (
+        <div className="mt-2 space-y-2 max-w-md">
+          <div className="text-[12px] text-[var(--color-text-muted)]">
+            Enter the 6-digit code shown on <strong>{label}</strong>:
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={sas}
+              onChange={(e) => setSas(e.target.value)}
+              autoFocus
+              inputMode="numeric"
+              placeholder="123 456"
+              className="flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-1.5 text-[13px] font-mono tracking-widest text-[var(--color-text)]"
+            />
+            <PrimaryButton
+              busy={confirmVerify.isPending}
+              disabled={sas.replace(/\D/g, '').length < 6}
+              onClick={confirm}
+            >
+              Authorize
+            </PrimaryButton>
+            <SecondaryButton onClick={cancel}>Cancel</SecondaryButton>
+          </div>
+        </div>
+      )}
+
+      {phase === 'done' && (
+        <div className="text-[12px] mt-2 text-[var(--color-text-muted)]">
+          Device authorized — it will finish syncing on its own.
+        </div>
+      )}
+
+      {error && <div className="text-[12px] text-[var(--color-danger)] mt-2">{error}</div>}
+    </li>
   )
 }
 
@@ -415,42 +556,55 @@ function StorageCard({ state }: { state: SyncState }): React.JSX.Element | null 
   )
 }
 
-function DangerCard({ locked }: { locked: boolean }): React.JSX.Element {
-  const wipe = useSyncWipe()
+/**
+ * "Disconnect online sync" — opts THIS device out of online sync (like deleting a
+ * git remote): it's revoked from the account's authorized-devices list and stops
+ * syncing here, while the account, every OTHER device, and all local data stay
+ * intact. Reversible via **Connect**. Nothing — local or remote — is deleted.
+ */
+function DisconnectSyncCard({ onError }: { onError: (msg: string) => void }): React.JSX.Element {
+  const disconnect = useSyncDisconnect()
   const [confirm, setConfirm] = useState(false)
   const [error, setError] = useState('')
   return (
     <section>
-      <SectionTitle>Danger zone</SectionTitle>
+      <SectionTitle>Online sync</SectionTitle>
       <Card>
         <div className="flex items-center gap-3">
           <div className="flex-1">
             <div className="text-[13px] font-medium text-[var(--color-text)]">
-              {locked ? 'Reset sync' : 'Delete synced data'}
+              Disconnect this device
             </div>
             <div className="text-[12px] text-[var(--color-text-muted)]">
-              {locked
-                ? "This device can't unlock sync. Reset to delete the account's encrypted data and start fresh — you'll set sync up again from scratch. Local data on this device is kept."
-                : 'Deletes all encrypted data from Cinna and turns sync off on this device. Local data on this device is kept; you can set sync up again anytime.'}
+              Stops online sync on <strong>this device only</strong> and removes it from your
+              trusted-devices list. Your notes and jobs stay here, and your other devices keep
+              syncing untouched. You can reconnect anytime.
             </div>
           </div>
           {confirm ? (
             <div className="flex gap-2">
               <button
                 type="button"
-                disabled={wipe.isPending}
+                disabled={disconnect.isPending}
                 onClick={async () => {
                   setError('')
                   try {
-                    await wipe.mutateAsync()
+                    const { deviceRemoved } = await disconnect.mutateAsync()
                     setConfirm(false)
+                    // The card unmounts now (state flips to disconnected), so a
+                    // partial-failure note must go to the parent's header slot.
+                    if (!deviceRemoved) {
+                      onError(
+                        "Disconnected on this device. It couldn't be removed from your trusted-devices list right now (offline) — revoke it from another device."
+                      )
+                    }
                   } catch (err) {
                     setError(toMessage(err))
                   }
                 }}
-                className="px-3 py-1.5 rounded-md text-[13px] font-medium bg-[var(--color-danger)] text-white disabled:opacity-50"
+                className="px-3 py-1.5 rounded-md text-[13px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white disabled:opacity-50"
               >
-                {locked ? 'Confirm reset' : 'Confirm delete'}
+                Confirm disconnect
               </button>
               <SecondaryButton onClick={() => setConfirm(false)}>Cancel</SecondaryButton>
             </div>
@@ -458,9 +612,9 @@ function DangerCard({ locked }: { locked: boolean }): React.JSX.Element {
             <button
               type="button"
               onClick={() => setConfirm(true)}
-              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium border border-[var(--color-danger)] text-[var(--color-danger)] hover:bg-[var(--color-danger)] hover:text-white transition-colors"
+              className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[13px] font-medium border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
             >
-              <Trash2 size={12} /> {locked ? 'Reset' : 'Delete'}
+              <CloudOff size={12} /> Disconnect
             </button>
           )}
         </div>

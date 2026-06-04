@@ -15,11 +15,12 @@ Cross-device, end-to-end-encrypted sync of profile data (Phase 1: notes, note fo
 - **Cursor** — a per-profile integer marking how far this device has pulled from the server's change log.
 - **Trusted device** — a device with a registered `device` unlock envelope; it can decrypt and sync silently and appears in the device list.
 - **Pairing** — onboarding a new device by sealing the UMK to it directly (QR / code + Short Authentication String), without exposing the recovery key.
-- **SAS (Short Authentication String)** — a 6-digit code derived from the joining device's key, compared out-of-band by the user to defeat a server-substituted key during pairing.
+- **SAS (Short Authentication String)** — a grind-proof 6-digit code over the full pairing transcript (`pubkey ‖ nonce_J ‖ nonce_S`); the user reads it off the joining device and types it into the trusted one to authorize the UMK transfer. See [Device Pairing](device_pairing.md).
 
-> For the state-centric view (device states, transitions, the server-authoritative
-> reconcile, and how a device recovers from "stuck/can't re-enable"), see
-> [Device Lifecycle & State Machine](lifecycle.md).
+> For the pairing protocol (commit-then-reveal, auto-discovery, joiner/sealer
+> flow) see [Device Pairing](device_pairing.md). For the state-centric view
+> (device states, transitions, server-authoritative reconcile, disconnect/reconnect,
+> recovery) see [Device Lifecycle & State Machine](lifecycle.md).
 
 ## User Stories / Flows
 
@@ -69,7 +70,7 @@ There is no separate non-destructive sign-out — the profile menu's sign-out IS
 ### Manage / wind down
 - **Pause sync** clears the in-memory UMK (the underlying `lock` op) and flags the profile as paused so the per-launch silent auto-unlock won't immediately re-resume it (otherwise the next `getState` would re-unlock and the UI would flap). The pause flag is **session-scoped** (in-memory `pausedUserIds`, cleared on resume / profile switch) — a relaunch auto-unlocks as usual. On a trusted device **Resume sync** silently re-unlocks via the device key (recovery key / passphrase remain as fallbacks for an untrusted device). The "Active"/"Paused" pill reflects the state.
 - **Revoke** removes another device's trust.
-- **Delete synced data / Reset sync** (Danger zone) is a **full reset back to the un-initialized "Enable" state**. It **resets E2E server-side first** (deletes every key envelope + device and sets `active_umk_version` back to 0 via `DELETE /app-sync/encryption`) — the required step, surfaced as an error if it fails rather than silently leaving the device half-reset — then tombstones the account's records (best-effort) and locally clears timers, zeroes the in-memory UMK, and deletes the local device key + `sync_state`. Afterwards the account reports *not initialized*, so the card shows **Enable** and a fresh first-device setup (new UMK + recovery key) works. The control is available **even while locked** (relabeled "Reset sync") so a device that can't unlock — e.g. untrusted after a reset elsewhere — still has a way to start over. Local app data (chats/notes/jobs) is kept.
+- **Disconnect online sync** is **per-device** (like deleting a git remote): it opts **only this device** out — nothing account-wide, nothing destructive. `syncService.disconnect` (1) revokes THIS device server-side (`revokeDevice` → deletes only its device envelope + marks its row revoked, so it drops off the authorized-devices list; the account stays initialized and **every other device keeps syncing untouched**), and (2) tears down local enrollment (zero UMK, drop the device keypair + tombstone queue, reset cursor) while setting a **persistent `disconnected` flag** in `sync_state`. The flag keeps the device OFF across relaunches — `ensureActivated`/`runCycleNow` short-circuit and the login `SyncSetupModal` skips its prompt — so the card shows a calm **Connect** affordance instead of "Locked/restore". **No data is deleted — local or on any other device.** It deliberately does **NOT** call `resetEncryption` (account-wide un-init → would drop every peer to "Enable") or the record-wipe (`DELETE /`, which tombstones records → hard-deletes peers' local data). The server-side revoke is best-effort: offline, the device still disconnects locally (key dropped + flag set) and `disconnect` returns `{ deviceRemoved: false }` so the card surfaces "couldn't remove from your devices list — revoke it from another device" (no sync cycle runs while disconnected to retry it). **Connect** (`reconnect`) discards tombstones queued while off (deletes made on the disconnected device don't replay onto peers; the bootstrap pull re-materializes the server's copies), clears the flag, and re-runs activation → **Locked → pair/restore** if the account is still initialized (a fresh device key must re-enroll), or **Enable** if it isn't.
 
 ## Business Rules
 

@@ -96,6 +96,11 @@ export type SyncErrorCode =
   | 'no_passphrase'
   | 'invalid_recovery'
   | 'pairing_failed'
+  // Pairing commit-then-reveal handshake (sealer side):
+  | 'cancelled'
+  | 'timeout'
+  | 'tampered'
+  | 'sas_mismatch'
   | 'bad_request'
 
 export class DomainError<TCode extends string = string> extends Error {

@@ -209,12 +209,22 @@ export const syncApi = {
     return { results: (res.applied ?? []).map(mapResult) }
   },
 
+  /**
+   * DANGER — server `DELETE /` converts every record to a `deleted=true`
+   * tombstone with a fresh seq, which propagates as a **hard local delete** to
+   * any device that pulls it (a peer, or this device on a later cursor-0
+   * bootstrap). It is NOT a server-only purge. Nothing in the app calls this —
+   * `syncService.disconnect` is per-device (revoke + local teardown only) and the
+   * UI has no account-wide "delete". Do not wire this into any flow without the
+   * delete-propagation in mind.
+   */
   wipe(userId: string): Promise<void> {
     return cinnaApiFetch<void>(userId, `${BASE}/`, { method: 'DELETE' })
   },
 
   /** Tear E2E back down (delete envelopes/devices, reset to v0) so the account
-   *  can be set up fresh. Pairs with `wipe()` for a full reset. */
+   *  can be set up fresh — this alone makes the server's stored ciphertext
+   *  unrecoverable (its wrapping key is deleted), with no delete-propagation. */
   resetEncryption(userId: string): Promise<void> {
     return cinnaApiFetch<void>(userId, `${BASE}/encryption`, { method: 'DELETE' })
   },
@@ -235,11 +245,18 @@ export const syncApi = {
     })
   },
 
-  // ---- pairing relay ----
+  // ---- pairing relay (commit-then-reveal) ----
+  //
+  // Joiner endpoints are keyed by the secret `code`; sealer endpoints by the row
+  // `id` discovered from the inbox. The relay only stores/forwards opaque blobs
+  // (commitment, nonces, sealed_umk) and enforces the state machine — it never
+  // verifies the commitment (the sealer does).
+
+  // -- joiner-facing (keyed by code) --
 
   pairingStart(
     userId: string,
-    body: { new_device_pubkey: string; device_label: string | null }
+    body: { new_device_pubkey: string; commitment: string; device_label: string | null }
   ): Promise<{ pairing_code: string; expires_at: string }> {
     return cinnaApiFetch(userId, `${BASE}/pairing/start`, { method: 'POST', body })
   },
@@ -251,6 +268,7 @@ export const syncApi = {
     new_device_pubkey: string
     device_label: string | null
     status: string
+    sealer_nonce: string | null
     sealed_umk: string | null
     expires_at: string
   } | null> {
@@ -258,15 +276,68 @@ export const syncApi = {
       new_device_pubkey: string
       device_label: string | null
       status: string
+      sealer_nonce: string | null
       sealed_umk: string | null
       expires_at: string
     }>(userId, `${BASE}/pairing/${encodeURIComponent(code)}`).catch(() => null)
   },
 
-  pairingComplete(userId: string, code: string, sealedUmk: string): Promise<void> {
+  /** Joiner reveals its nonce last (`sealer_nonce_set` → `revealed`). */
+  pairingReveal(userId: string, code: string, joinerNonce: string): Promise<void> {
     return cinnaApiFetch<void>(
       userId,
-      `${BASE}/pairing/${encodeURIComponent(code)}/complete`,
+      `${BASE}/pairing/${encodeURIComponent(code)}/reveal`,
+      { method: 'POST', body: { joiner_nonce: joinerNonce } }
+    )
+  },
+
+  // -- sealer-facing (keyed by row id) --
+
+  /** List the caller's own non-terminal pairing rows (discovery metadata only). */
+  pairingInbox(
+    userId: string
+  ): Promise<
+    Array<{ id: string; device_label: string | null; status: string; expires_at: string }>
+  > {
+    return cinnaApiFetch(userId, `${BASE}/pairing/inbox`)
+  },
+
+  /** Sealer reads pubkey/commitment/nonces for one of its own rows (no sealed_umk). */
+  pairingInboxGet(
+    userId: string,
+    id: string
+  ): Promise<{
+    new_device_pubkey: string
+    commitment: string
+    sealer_nonce: string | null
+    joiner_nonce: string | null
+    status: string
+    expires_at: string
+  } | null> {
+    return cinnaApiFetch<{
+      new_device_pubkey: string
+      commitment: string
+      sealer_nonce: string | null
+      joiner_nonce: string | null
+      status: string
+      expires_at: string
+    }>(userId, `${BASE}/pairing/inbox/${encodeURIComponent(id)}`).catch(() => null)
+  },
+
+  /** Sealer posts its nonce (`pending` → `sealer_nonce_set`). */
+  pairingSetSealerNonce(userId: string, id: string, sealerNonce: string): Promise<void> {
+    return cinnaApiFetch<void>(
+      userId,
+      `${BASE}/pairing/inbox/${encodeURIComponent(id)}/sealer-nonce`,
+      { method: 'POST', body: { sealer_nonce: sealerNonce } }
+    )
+  },
+
+  /** Sealer posts the UMK sealed to the joiner (`revealed` → `completed`). */
+  pairingCompleteById(userId: string, id: string, sealedUmk: string): Promise<void> {
+    return cinnaApiFetch<void>(
+      userId,
+      `${BASE}/pairing/inbox/${encodeURIComponent(id)}/complete`,
       { method: 'POST', body: { sealed_umk: sealedUmk } }
     )
   }

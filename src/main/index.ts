@@ -8,6 +8,7 @@ import { mcpManager } from './mcp/manager'
 import { initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
+import { syncService } from './services/syncService'
 import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
@@ -125,12 +126,19 @@ function createWindow(): void {
     mainWindow!.show()
   })
 
+  // Sync auto-discovery (P4): poll the pairing inbox only while the window is
+  // focused, so a trusted, foregrounded device surfaces incoming pairing
+  // requests without the user transferring a routing code. Stops on blur.
+  mainWindow.on('focus', () => syncService.setWindowFocused(true))
+  mainWindow.on('blur', () => syncService.setWindowFocused(false))
+
   // The menu-bar tray lives only while a main window exists AND the user has
   // it enabled in Settings → Features → Interface. Closing the window (macOS
   // keeps the app alive) tears it down; `activate` rebuilds both.
   syncTrayFromSettings()
 
   mainWindow.on('closed', () => {
+    syncService.setWindowFocused(false)
     trayService.destroy()
     mainWindow = null
   })

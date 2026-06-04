@@ -54,6 +54,8 @@ import type {
   SyncInitResult,
   SyncUnlockRequest,
   PairingOffer,
+  PairingPollResult,
+  IncomingPairing,
   SyncEvent,
   JobDependencyStatus
 } from '../shared/sync'
@@ -953,17 +955,27 @@ const api = {
     addPassphrase: (passphrase: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('sync:add-passphrase', passphrase),
     pairingStart: (): Promise<PairingOffer> => ipcRenderer.invoke('sync:pairing-start'),
-    pairingPoll: (code: string): Promise<boolean> =>
+    pairingPoll: (code: string): Promise<PairingPollResult> =>
       ipcRenderer.invoke('sync:pairing-poll', code),
-    pairingPrepareScan: (code: string): Promise<{ sas: string }> =>
-      ipcRenderer.invoke('sync:pairing-prepare-scan', code),
-    pairingConfirmScan: (code: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('sync:pairing-confirm-scan', code),
-    pairingCancelScan: (code: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('sync:pairing-cancel-scan', code),
+    /** Sealer: list the active profile's pending incoming pairing requests. */
+    pairingInbox: (): Promise<IncomingPairing[]> => ipcRenderer.invoke('sync:pairing-inbox'),
+    /** Sealer step 1: drive the handshake + verify the commitment for one row. */
+    pairingBeginVerify: (id: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:pairing-begin-verify', id),
+    /** Sealer step 2: match the transcribed SAS, then seal + relay the UMK. */
+    pairingConfirmVerify: (id: string, sas: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:pairing-confirm-verify', id, sas),
+    /** Sealer: abandon a verification begun but not confirmed. */
+    pairingCancelVerify: (id: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('sync:pairing-cancel-verify', id),
     revokeDevice: (deviceId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('sync:device-revoke', deviceId),
-    wipe: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:wipe'),
+    /** Disconnect THIS device from online sync (revoke + local teardown; keeps
+     *  the account + all other devices + all local data). `deviceRemoved` is
+     *  false if the server-side revoke couldn't complete (offline). */
+    disconnect: (): Promise<{ deviceRemoved: boolean }> => ipcRenderer.invoke('sync:disconnect'),
+    /** Undo a prior disconnect on this device. */
+    reconnect: (): Promise<{ success: boolean }> => ipcRenderer.invoke('sync:reconnect'),
     /** Subscribe to engine status/state/needs-unlock/quota events. */
     onEvent: (handler: (event: SyncEvent) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, event: SyncEvent): void => handler(event)

@@ -36,10 +36,13 @@ Project-specific crypto conventions for the sync feature. Library = `libsodium-w
 - BIP39, 256-bit → 24 words, `@scure/bip39` english wordlist (subpath needs `crypto/scure-bip39.d.ts` shim for tsc).
 - Mnemonic normalized lowercase/trim/collapse-space before validate/derive. Shown once at init.
 
-## Pairing (`crypto/pairing.ts`)
+## Pairing (`crypto/pairing.ts`) — commit-then-reveal
 - Joiner makes ephemeral X25519 keypair; public key → base64url code (`URLSAFE_NO_PADDING`) + QR.
-- SAS: `crypto_generichash(8, ephemeralPub, null)`, fold first 4 bytes → 6-digit decimal, formatted `"NNN NNN"`. Both sides compute independently from the same key.
-- Sealer: `crypto_box_seal(UMK, joinerPub)` → relayed via `POST /pairing`; joiner opens with ephemeral keypair.
+- **Nonces:** `randomNonce()` = 16 CSPRNG bytes (joiner `nonce_J`, sealer `nonce_S`).
+- **Commitment:** `pairingCommitment(pub, nonce)` = `to_base64(crypto_generichash(32, pub‖nonce), ORIGINAL)` (standard padded b64). Joiner posts it at `start`; the **sealer** verifies it after the reveal (the relay never inspects it).
+- **SAS:** `computeSas(transcript)` over the full transcript `pub‖nonce_J‖nonce_S` (`sasTranscript(...)` builds it) — `crypto_generichash(8, …)`, fold first 4 bytes → 6-digit decimal `"NNN NNN"`. Only the input changed from the pre-hardening version (was just `pub`); the fold is untouched, so it stays **byte-identical to mobile** (`@noble` blake2b) — verified vector: `pub=0..31, nonceJ=100..115, nonceS=200..215` → commitment `GFVObsMb4xC+8gMDVQReutJZRIvBpjmGdrmdSE2jhjE=`, SAS `918 320`.
+- **Ordering (why 6 digits stay safe vs. a malicious relay):** joiner commits `nonce_J` first → sealer reveals `nonce_S` before seeing `nonce_J` → joiner reveals `nonce_J` last. A substituting relay has no grindable handle; MITM collapses to a blind 1-in-10⁶ guess. The sealer aborts on `commitment != H(pub‖nonce_J)` **before** any SAS is accepted.
+- Sealer: `crypto_box_seal(UMK, joinerPub)` → relayed via `POST /pairing/inbox/{id}/complete`; joiner opens with ephemeral keypair.
 
 ## Memory rules
 - Plaintext UMK only in `sync/umkVault.ts` (Map keyed by userId). `memzero` on lock/switch/logout.

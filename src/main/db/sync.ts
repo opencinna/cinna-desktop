@@ -16,6 +16,8 @@ export interface SyncStateRow {
   lastPushedAt: number | null
   lastPulledAt: number | null
   deviceId: string | null
+  /** This device opted out of online sync (revoked + torn down locally). */
+  disconnected: boolean
   updatedAt: number
 }
 
@@ -50,6 +52,7 @@ export const syncRepo = {
       lastPushedAt: (row.last_pushed_at as number) ?? null,
       lastPulledAt: (row.last_pulled_at as number) ?? null,
       deviceId: (row.device_id as string) ?? null,
+      disconnected: ((row.disconnected as number) ?? 0) === 1,
       updatedAt: (row.updated_at as number) ?? 0
     }
   },
@@ -79,13 +82,15 @@ export const syncRepo = {
       e2eInitializedAt: 'e2e_initialized_at',
       lastPushedAt: 'last_pushed_at',
       lastPulledAt: 'last_pulled_at',
-      deviceId: 'device_id'
+      deviceId: 'device_id',
+      disconnected: 'disconnected'
     }
     for (const [k, v] of Object.entries(patch)) {
       const col = map[k]
       if (!col) continue
       cols.push(`${col} = ?`)
-      vals.push(v)
+      // better-sqlite3 won't bind JS booleans — store the flag as 0/1.
+      vals.push(typeof v === 'boolean' ? (v ? 1 : 0) : v)
     }
     if (!cols.length) return
     cols.push(`updated_at = strftime('%s','now')`)

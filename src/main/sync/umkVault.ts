@@ -14,8 +14,14 @@ interface VaultEntry {
 const vault = new Map<string, VaultEntry>()
 
 export function setUmk(userId: string, umk: Uint8Array, version: number): void {
-  // Replace any prior entry, zeroing it first.
-  lock(userId)
+  // Swap the entry synchronously. Two deliberate choices:
+  //  - Do NOT route through the async `lock()`: its deferred `vault.delete(userId)`
+  //    continuation can land *after* we set the new entry and silently wipe it,
+  //    flapping the unlock state under concurrent getState/syncNow/auto-unlock.
+  //  - Do NOT memzero the replaced buffer here: a replacement carries the SAME
+  //    secret value, and a concurrent in-flight cycle may still be reading the
+  //    prior bytes — zeroing them mid-use would corrupt that cycle. Deliberate
+  //    teardown (`lock`/`lockAll`) still memzeros the live key.
   vault.set(userId, { umk, version })
 }
 

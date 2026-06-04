@@ -1,10 +1,12 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type {
   SyncState,
   SyncInitResult,
   SyncUnlockRequest,
   PairingOffer,
+  PairingPollResult,
+  IncomingPairing,
   SyncCollection
 } from '../../../shared/sync'
 import { useUIStore } from '../stores/ui.store'
@@ -150,33 +152,84 @@ export function usePairingStart(): ReturnType<typeof useMutation<PairingOffer, E
   return useMutation({ mutationFn: () => window.api.sync.pairingStart() })
 }
 
-/** Pairing step 1 (sealer): fetch the joiner key + SAS to show, without sealing. */
-export function usePairingPrepareScan(): ReturnType<
-  typeof useMutation<{ sas: string }, Error, string>
+/**
+ * Sealer step 1: drive the commit-then-reveal handshake for one inbox request —
+ * post the sealer nonce, await the joiner's reveal, verify the commitment, and
+ * compute the expected SAS (held in the main process). Resolves once the SAS is
+ * ready for the user to transcribe; rejects on tamper/timeout/cancel.
+ */
+export function usePairingBeginVerify(): ReturnType<
+  typeof useMutation<{ success: boolean }, Error, string>
 > {
   return useMutation({
-    mutationFn: (code: string) => window.api.sync.pairingPrepareScan(code)
+    mutationFn: (id: string) => window.api.sync.pairingBeginVerify(id)
   })
 }
 
-/** Pairing step 2 (sealer): seal + relay the UMK after the user confirms the SAS. */
-export function usePairingConfirmScan(): ReturnType<
-  typeof useMutation<{ success: boolean }, Error, string>
+/**
+ * Sealer step 2: submit the SAS the user transcribed from the new device. The
+ * main process matches it against the computed SAS and only then seals + relays
+ * the UMK; a mismatch rejects without sealing.
+ */
+export function usePairingConfirmVerify(): ReturnType<
+  typeof useMutation<{ success: boolean }, Error, { id: string; sas: string }>
 > {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (code: string) => window.api.sync.pairingConfirmScan(code),
+    mutationFn: ({ id, sas }: { id: string; sas: string }) =>
+      window.api.sync.pairingConfirmVerify(id, sas),
     onSettled: () => queryClient.invalidateQueries({ queryKey: SYNC_KEY })
   })
 }
 
-/** Discard a prepared-but-unconfirmed scan, freeing the stashed joiner key. */
-export function usePairingCancelScan(): ReturnType<
+/** Abandon a verification begun but never confirmed, freeing the stashed key. */
+export function usePairingCancelVerify(): ReturnType<
   typeof useMutation<{ success: boolean }, Error, string>
 > {
   return useMutation({
-    mutationFn: (code: string) => window.api.sync.pairingCancelScan(code)
+    mutationFn: (id: string) => window.api.sync.pairingCancelVerify(id)
   })
+}
+
+/**
+ * Sealer-side discovery: the list of incoming pairing requests a foregrounded,
+ * unlocked trusted device has auto-discovered. Seeds from the inbox on mount
+ * (and whenever `enabled` flips) and appends live `pairing-incoming` events.
+ * `dismiss(id)` removes one once handled.
+ */
+export function usePairingInbox(enabled: boolean): {
+  incoming: IncomingPairing[]
+  dismiss: (id: string) => void
+} {
+  const [incoming, setIncoming] = useState<IncomingPairing[]>([])
+
+  const dismiss = useCallback((id: string) => {
+    setIncoming((list) => list.filter((p) => p.id !== id))
+  }, [])
+
+  useEffect(() => {
+    if (!enabled) {
+      setIncoming([])
+      return
+    }
+    let cancelled = false
+    const upsert = (p: IncomingPairing): void =>
+      setIncoming((list) => (list.some((x) => x.id === p.id) ? list : [...list, p]))
+
+    void window.api.sync.pairingInbox().then((items) => {
+      if (!cancelled) for (const p of items) upsert(p)
+    })
+
+    const off = window.api.sync.onEvent((event) => {
+      if (event.type === 'pairing-incoming') upsert(event.pairing)
+    })
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [enabled])
+
+  return { incoming, dismiss }
 }
 
 export function useRevokeDevice(): ReturnType<
@@ -189,19 +242,36 @@ export function useRevokeDevice(): ReturnType<
   })
 }
 
-export function useSyncWipe(): ReturnType<typeof useMutation<{ success: boolean }, Error, void>> {
+/** Disconnect THIS device from online sync (per-device; account + peers + local
+ *  data all untouched). Resolves `{ deviceRemoved }` — false if the server-side
+ *  revoke couldn't complete (offline). */
+export function useSyncDisconnect(): ReturnType<
+  typeof useMutation<{ deviceRemoved: boolean }, Error, void>
+> {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: () => window.api.sync.wipe(),
+    mutationFn: () => window.api.sync.disconnect(),
+    onSettled: () => queryClient.invalidateQueries({ queryKey: SYNC_KEY })
+  })
+}
+
+/** Reconnect this device (undo a prior disconnect → pair/restore or enable). */
+export function useSyncReconnect(): ReturnType<
+  typeof useMutation<{ success: boolean }, Error, void>
+> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: () => window.api.sync.reconnect(),
     onSettled: () => queryClient.invalidateQueries({ queryKey: SYNC_KEY })
   })
 }
 
 /**
- * One-shot pairing-relay poll. Not a query — the joiner device drives it on its
- * own interval and resolves once the sealed UMK arrives. Exposed here so the
+ * One-shot pairing-relay poll (joiner side). Not a query — the joiner drives it
+ * on its own interval. Surfaces the SAS once the handshake reaches the reveal
+ * step, and `done: true` once the sealed UMK arrives. Exposed here so the
  * component never reaches into `window.api` directly.
  */
-export function pollPairing(code: string): Promise<boolean> {
+export function pollPairing(code: string): Promise<PairingPollResult> {
   return window.api.sync.pairingPoll(code)
 }

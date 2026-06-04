@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { hasColumn } from './helpers'
 
 /**
  * Native Client Data Sync schema (plan §5). Idempotent — slotted into
@@ -43,4 +44,13 @@ export function runSyncMigrations(sqlite: Database.Database): void {
       PRIMARY KEY (user_id, collection, client_entity_id)
     )
   `)
+
+  // `disconnected` — this device opted OUT of online sync ("Disconnect online
+  // sync"): its server device row was revoked and local enrollment torn down,
+  // but the account stays initialized for other devices. The flag persists so
+  // the device doesn't auto-reconcile/auto-unlock or nag to restore on relaunch;
+  // it's cleared by an explicit "Connect".
+  if (!hasColumn(sqlite, 'sync_state', 'disconnected')) {
+    sqlite.exec('ALTER TABLE sync_state ADD COLUMN disconnected INTEGER NOT NULL DEFAULT 0')
+  }
 }

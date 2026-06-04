@@ -35,6 +35,23 @@ export interface SyncState {
   initialized: boolean
   /** Whether the UMK is currently held in main-process memory. */
   locked: boolean
+  /**
+   * True only when `locked` is the result of an explicit user **Pause** on a
+   * trusted device (device-unlock can resume it). False when locked because this
+   * device couldn't auto-unlock — a new/wiped/untrusted device (e.g. the account
+   * was reset + re-initialized on a peer), which must **restore** via pairing or
+   * recovery rather than "Resume". Lets the UI avoid a dead "Resume" trap.
+   */
+  paused: boolean
+  /**
+   * This device explicitly **disconnected** from online sync ("Disconnect online
+   * sync") — its server device row was revoked and local enrollment torn down,
+   * but the account stays initialized for other devices and no local data was
+   * touched. It stays off (no auto-reconcile / no restore prompt) until the user
+   * taps **Connect**. When true the UI shows an "off → Connect" state regardless
+   * of `initialized`/`locked`.
+   */
+  disconnected: boolean
   /** Local pull cursor. */
   cursor: number
   status: SyncStatus
@@ -68,8 +85,33 @@ export interface PairingOffer {
   code: string
   /** Data-URL PNG QR encoding the full offer for camera-based joins. */
   qrDataUrl: string
-  /** Short Authentication String to compare out-of-band (defeats key substitution). */
-  sas: string
+}
+
+/**
+ * Result of one joiner-side pairing poll. The SAS only exists once the sealer
+ * has posted its nonce (commit-then-reveal) — `null` until then. `done` flips
+ * true when the sealed UMK has arrived and this device is unlocked.
+ */
+export interface PairingPollResult {
+  /** Short Authentication String, shown for the user to transcribe to the
+   *  trusted device. `null` until the handshake reaches the reveal step. */
+  sas: string | null
+  /** True once the UMK has been received and this device unlocked. */
+  done: boolean
+}
+
+/**
+ * An incoming pairing request a trusted (foregrounded + unlocked) device
+ * auto-discovered from its inbox. Surfaced so the user can opt in to verifying;
+ * the handshake never starts without that explicit action.
+ */
+export interface IncomingPairing {
+  /** Relay row id — addresses the sealer-facing handshake endpoints. */
+  id: string
+  /** Label the joining device chose for itself (e.g. "host (desktop)"). */
+  deviceLabel: string | null
+  /** ms epoch the request expires, if known. */
+  expiresAt: number | null
 }
 
 // ---- Portable job dependency descriptors (plan: data-sync-portable-deps) ----
@@ -172,4 +214,10 @@ export type SyncEvent =
    * status) instead of waiting for a manual refetch.
    */
   | { type: 'data-changed'; collections: SyncCollection[] }
+  /**
+   * A trusted, foregrounded device auto-discovered an incoming pairing request
+   * from its inbox. The renderer surfaces a prompt; verification is never
+   * auto-started (the user must opt in and transcribe the SAS).
+   */
+  | { type: 'pairing-incoming'; pairing: IncomingPairing }
   | { type: 'error'; message: string }
