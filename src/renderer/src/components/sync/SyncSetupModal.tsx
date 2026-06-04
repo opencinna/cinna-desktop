@@ -28,6 +28,12 @@ import type { SyncInitResult, UnlockMethod } from '../../../../shared/sync'
 
 type Mode = 'enable' | 'restore'
 
+// TEMP (re-enable later): suppress the post-login "Enable Cloud Sync" prompt.
+// The restore flow (for devices that already have sync initialized) stays on —
+// only the proactive enable-onboarding nag is paused. Flip back to `true` (or
+// remove this flag and its use below) to bring the enable prompt back.
+const SHOW_ENABLE_PROMPT = false
+
 /** Evaluate at most once per profile per app session (StrictMode-safe). */
 const evaluatedUserIds = new Set<string>()
 
@@ -67,8 +73,9 @@ export function SyncSetupModal(): React.JSX.Element | null {
         // enable/restore. It re-engages only via an explicit "Connect" in Settings.
         if (state.disconnected) return
         setMethods(state.unlockMethods)
-        if (!state.initialized) setMode('enable')
-        else if (state.locked && state.status !== 'offline') setMode('restore')
+        if (!state.initialized) {
+          if (SHOW_ENABLE_PROMPT) setMode('enable')
+        } else if (state.locked && state.status !== 'offline') setMode('restore')
       } catch {
         // Offline or not ready — skip; the Settings → Cloud Sync card still works.
       }

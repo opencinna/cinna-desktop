@@ -164,28 +164,6 @@ export const userRepo = {
     })
   },
 
-  /**
-   * Wipe all PROFILE-scoped data for a user while KEEPING the user row — used by
-   * the non-destructive Cinna sign-out. Default-scope resources (LLM providers,
-   * MCP servers, chat modes) live under `__default__` and are deliberately
-   * untouched. Deletes are raw (no sync tombstones): chats cascade their
-   * messages/sessions/files/on-demand rows, and jobs cascade their runs + join
-   * rows, all via FKs. Synced collections (notes/jobs/folders) re-pull from the
-   * server on next sign-in; chats and job runs are not synced and are gone.
-   */
-  wipeProfileData(id: string): void {
-    const db = getDb()
-    db.transaction((tx) => {
-      tx.delete(chats).where(eq(chats.userId, id)).run() // → messages, a2a_sessions, chat_files, on-demand
-      tx.delete(jobs).where(eq(jobs.userId, id)).run() // → job_runs, job_agents, job_mcp_providers
-      tx.delete(jobFolders).where(eq(jobFolders.userId, id)).run()
-      tx.delete(notes).where(eq(notes.userId, id)).run()
-      tx.delete(noteFolders).where(eq(noteFolders.userId, id)).run()
-      tx.delete(agentOverrides).where(eq(agentOverrides.userId, id)).run()
-      tx.delete(agents).where(eq(agents.userId, id)).run()
-    })
-  },
-
   /** Refresh a Cinna profile's identity fields on rebind (re-login). */
   updateCinnaProfile(
     id: string,

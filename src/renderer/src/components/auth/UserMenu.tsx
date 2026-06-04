@@ -4,6 +4,7 @@ import { User, ChevronDown, Plus, LogOut, Cloud, AlertTriangle, Settings } from 
 import { useAuthStore } from '../../stores/auth.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useUsers, useLogin, useDeleteUser } from '../../hooks/useAuth'
+import { useSyncState } from '../../hooks/useSync'
 import { usePopover } from '../ui/usePopover'
 import { RegisterForm } from './RegisterForm'
 import { LoginPrompt } from './LoginPrompt'
@@ -20,12 +21,30 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   const [showSignOutConfirm, setShowSignOutConfirm] = useState(false)
   const [signOutPassword, setSignOutPassword] = useState('')
   const [signOutError, setSignOutError] = useState('')
-  // Cinna sign-out only: removing the device drops the local sync key so the
-  // next sign-in needs a recovery key/pairing. Privacy-first default = on.
-  const [removeDevice, setRemoveDevice] = useState(true)
   const [loginUserId, setLoginUserId] = useState<string | null>(null)
   const signOutModalRef = useRef<HTMLDivElement>(null)
   const currentUser = useAuthStore((s) => s.currentUser)
+  const isCinnaUser = currentUser?.type === 'cinna_user'
+  // App-sync is "on" only when E2E is initialized for this profile and this
+  // device hasn't disconnected. Signing out of a sync-active profile always
+  // removes this device from the account (no "keep trusted" option — staying
+  // signed in while keeping the device makes no sense), so the modal shows a
+  // device-removal warning rather than a toggle. When sync is off there's no
+  // enrollment to remove, so the warning is hidden.
+  const syncQuery = useSyncState(isCinnaUser)
+  const syncState = syncQuery.data
+  // If the state query errored (no data, not loading), `syncActive` falls to
+  // false and the sign-out skips the server-side device revoke. That's a safe
+  // degradation: the local profile is still fully removed, the synced data is
+  // untouched on the server, and the stale device can be revoked from another
+  // device. `getState` rarely hard-errors (offline it falls back to the local
+  // flag), so this is an edge, not the norm.
+  const syncActive = isCinnaUser && !!syncState?.initialized && !syncState.disconnected
+  // The query is disabled for non-Cinna users, so `isLoading` is only true while
+  // a Cinna profile's sync-state is still resolving. We must not act on a cold
+  // load: `syncActive` defaults false until it lands, which would mis-route the
+  // sign-out to the destructive (no-sync) path — so block the confirm until known.
+  const syncStateLoading = syncQuery.isLoading
   const activeView = useUIStore((s) => s.activeView)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const { data: users } = useUsers()
@@ -89,7 +108,6 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
     setShowSignOutConfirm(true)
     setSignOutPassword('')
     setSignOutError('')
-    setRemoveDevice(true)
   }
 
   const handleConfirmSignOut = async (): Promise<void> => {
@@ -105,7 +123,12 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
       userId: currentUser.id,
       password: signOutPassword || undefined,
       signOut: true,
-      removeDevice: isCinnaUser ? removeDevice : undefined
+      // Sync active → always revoke this device server-side (next sign-in must
+      // restore via recovery key/pairing). Sync off → undefined tells the backend
+      // there's no enrollment to revoke. Either way the profile row is fully
+      // deleted (the account leaves the switcher); re-login mints a fresh profile
+      // and re-pulls synced data from the cloud.
+      removeDevice: syncActive ? true : undefined
     })
 
     if (result.success) {
@@ -117,7 +140,6 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
   }
 
   const isDefault = currentUser?.id === DEFAULT_USER_ID
-  const isCinnaUser = currentUser?.type === 'cinna_user'
   const initial = (currentUser?.cinnaFullName ?? currentUser?.displayName)?.charAt(0).toUpperCase() ?? '?'
   const allUsers = users ?? []
 
@@ -289,36 +311,25 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
                 <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
                   Your <strong className="text-[var(--color-text)]">chats and job runs</strong> on this
                   device will be permanently deleted — they are not synced and cannot be restored.
-                  Your notes, jobs, and folder structure are synced and will return when you sign back
-                  in. Your Cinna cloud account is not affected.
+                  {syncActive
+                    ? ' Your notes, jobs, and folder structure are synced and will return when you sign back in.'
+                    : ''}{' '}
+                  Your Cinna cloud account is not affected.
                 </p>
 
-                <label className="flex items-start gap-2.5 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] p-2.5 cursor-pointer">
-                  <button
-                    type="button"
-                    role="switch"
-                    aria-checked={removeDevice}
-                    onClick={() => setRemoveDevice((v) => !v)}
-                    className={`mt-0.5 shrink-0 relative inline-flex h-4 w-7 items-center rounded-full transition-colors ${
-                      removeDevice ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-bg-tertiary)]'
-                    }`}
-                  >
-                    <span
-                      className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${
-                        removeDevice ? 'translate-x-3.5' : 'translate-x-0.5'
-                      }`}
-                    />
-                  </button>
-                  <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-                    <span className="text-[var(--color-text)] font-medium">
-                      Remove this device from my account
+                {syncActive && (
+                  <div className="flex items-start gap-2.5 rounded-md border border-red-500/30 bg-red-500/10 p-2.5">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-red-400" />
+                    <span className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+                      <span className="text-red-400 font-medium">
+                        This device will be removed from your account.
+                      </span>
+                      <br />
+                      You&apos;ll need your recovery key or another signed-in device to restore your
+                      data next time you sign in.
                     </span>
-                    <br />
-                    {removeDevice
-                      ? "You'll need your recovery key or another signed-in device to restore your data next time you sign in."
-                      : 'This device stays trusted — your data will re-sync automatically next time you sign in.'}
-                  </span>
-                </label>
+                  </div>
+                )}
               </>
             ) : (
               <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
@@ -357,7 +368,7 @@ export function UserMenu({ compact = false }: UserMenuProps = {}): React.JSX.Ele
               </button>
               <button
                 onClick={handleConfirmSignOut}
-                disabled={deleteUser.isPending}
+                disabled={deleteUser.isPending || syncStateLoading}
                 className="px-3 py-1.5 rounded-md text-xs font-medium bg-red-500 hover:bg-red-600 text-white transition-colors disabled:opacity-50"
               >
                 {deleteUser.isPending

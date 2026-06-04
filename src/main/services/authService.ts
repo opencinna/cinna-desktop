@@ -375,10 +375,20 @@ export const authService = {
     const signOut = input.signOut === true
 
     if (row.type === 'cinna_user') {
-      // A sign-out may keep the device trusted; a full delete always removes it.
-      const removeDevice = signOut ? (input.removeDevice ?? true) : true
-      // Clean up server/local sync material first (revoke + drop keys, and for
-      // the active profile flush a final cycle while the UMK is still in memory).
+      // Sign-out and full delete both **remove every local trace** of the profile
+      // (the user row included, so it leaves the account switcher) and revoke
+      // THIS device server-side — but they NEVER touch the remote synced records.
+      // Every other device keeps its data, and a later sign-in restores from the
+      // cloud via recovery key / pairing. `signOutCleanup` flushes a final push
+      // first (while the UMK is still in memory) so edits made inside the debounce
+      // window aren't lost, then drops the local sync keys/state; it calls only
+      // `revokeDevice` (this device's envelope), never the delete-propagating
+      // `wipe`/`resetEncryption`. The local profile delete is raw (tombstone-free)
+      // so it likewise can't propagate as a peer delete.
+      //
+      // `removeDevice` is true whenever sync is active: on sign-out the renderer
+      // sends it defined iff sync is on; a full delete always removes the device.
+      const removeDevice = signOut ? input.removeDevice !== undefined : true
       // Runs regardless of `wasCurrent` so removing a non-active profile from
       // Settings still revokes its device and clears its sync keys.
       await syncService.signOutCleanup(input.userId, { removeDevice })
@@ -387,22 +397,16 @@ export const authService = {
       }
       clearCinnaTokens(input.userId)
       userActivation.forgetUnlock(input.userId)
-
-      if (signOut) {
-        // Non-destructive: keep the profile row (re-login rebinds to it), wipe
-        // only the local profile-scoped data — synced collections re-pull.
-        userRepo.wipeProfileData(input.userId)
-        logger.info('user.signed_out', {
-          userId: input.userId,
-          username: row.username,
-          removeDevice
-        })
-      } else {
-        // Destructive: remove the profile entirely. Server-side synced data is
-        // untouched and recoverable by re-linking the Cinna account.
-        userRepo.deleteWithCascade(input.userId)
-        logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
-      }
+      // `deleteWithCascade` also clears `llmProviders`/`mcpProviders`/`chatModes`
+      // by userId — a no-op for Cinna profiles, since those are Default-scope
+      // (stored under `__default__`, never under a Cinna userId).
+      userRepo.deleteWithCascade(input.userId)
+      logger.info(signOut ? 'user.signed_out' : 'user.deleted', {
+        userId: input.userId,
+        username: row.username,
+        type: row.type,
+        removeDevice
+      })
     } else {
       // Local profiles have no server copy — always a destructive delete.
       if (wasCurrent) {
