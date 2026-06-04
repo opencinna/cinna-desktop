@@ -81,15 +81,85 @@ export function useForceRefreshAgentStatus() {
       window.api.agentStatus.get({ agentId, forceRefresh: true }),
     onSuccess: (result) => {
       if (!result.success || !result.item) return
-      const fresh = result.item
-      queryClient.setQueryData<AgentStatusSnapshot[]>(AGENT_STATUS_KEY, (prev) => {
-        if (!prev) return prev
-        const idx = prev.findIndex((s) => s.agentId === fresh.agentId)
-        if (idx === -1) return [...prev, fresh]
-        const next = prev.slice()
-        next[idx] = fresh
-        return next
-      })
+      patchAgentStatusCache(queryClient, [result.item])
     }
+  })
+}
+
+/** Outcome of a "Refresh all" fan-out, so callers can give honest feedback. */
+export interface ForceRefreshAllResult {
+  /** Agents whose snapshot was successfully re-fetched and patched in. */
+  refreshed: number
+  /** Agents whose force-refresh returned an error (excludes silent 429 no-ops). */
+  failed: number
+  /** At least one agent failed with `reauth_required` — the session expired. */
+  reauthRequired: boolean
+}
+
+/**
+ * Mass refresh used by the overlay and tray "Refresh all" buttons. The batch
+ * `list` route is cache-only, so a genuine refresh has to fan out per-agent
+ * `force_refresh=true` calls (one per currently-known agent) — this is what
+ * wakes a suspended env and re-reads STATUS.md, including for A2A agents. Each
+ * fresh snapshot is patched back into the batch cache as it lands. When nothing
+ * is cached yet there are no envs to force-refresh, so we fall back to the
+ * cache-only list refetch to populate the grid.
+ *
+ * Returns a {@link ForceRefreshAllResult} (never throws on per-agent failure, so
+ * one dead env doesn't abort the batch) — callers branch on it to flash
+ * success/error and surface an expired session.
+ */
+export function useForceRefreshAllAgentStatuses() {
+  const queryClient = useQueryClient()
+  return useMutation<ForceRefreshAllResult>({
+    mutationFn: async () => {
+      const cached = queryClient.getQueryData<AgentStatusSnapshot[]>(AGENT_STATUS_KEY) ?? []
+      const agentIds = cached.map((s) => s.agentId)
+      if (agentIds.length === 0) {
+        // No envs to force — fall back to the cache-only list. Its own error
+        // (incl. reauth) surfaces through the `useAgentStatus` query state.
+        await queryClient.refetchQueries({ queryKey: AGENT_STATUS_KEY })
+        return { refreshed: 0, failed: 0, reauthRequired: false }
+      }
+      const results = await Promise.allSettled(
+        agentIds.map((agentId) => window.api.agentStatus.get({ agentId, forceRefresh: true }))
+      )
+      const fresh: AgentStatusSnapshot[] = []
+      let failed = 0
+      let reauthRequired = false
+      for (const r of results) {
+        if (r.status === 'rejected') {
+          failed++
+          continue
+        }
+        const value = r.value
+        if (value.success) {
+          // `item: null` is a swallowed 429 (rate-limited) — a no-op, not a failure.
+          if (value.item) fresh.push(value.item)
+        } else {
+          failed++
+          if (value.code === 'reauth_required') reauthRequired = true
+        }
+      }
+      patchAgentStatusCache(queryClient, fresh)
+      return { refreshed: fresh.length, failed, reauthRequired }
+    }
+  })
+}
+
+/** Upsert fresh snapshots into the shared batch cache, keyed by `agentId`. */
+function patchAgentStatusCache(
+  queryClient: ReturnType<typeof useQueryClient>,
+  fresh: AgentStatusSnapshot[]
+): void {
+  if (fresh.length === 0) return
+  queryClient.setQueryData<AgentStatusSnapshot[]>(AGENT_STATUS_KEY, (prev) => {
+    const next = prev ? prev.slice() : []
+    for (const item of fresh) {
+      const idx = next.findIndex((s) => s.agentId === item.agentId)
+      if (idx === -1) next.push(item)
+      else next[idx] = item
+    }
+    return next
   })
 }

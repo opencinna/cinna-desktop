@@ -33,8 +33,8 @@ A macOS menu-bar (status-bar) icon with a small popover window that surfaces age
 2. The popup closes, the main window is raised, any open overlay (status or console) is closed so the chat page isn't hidden underneath, and the chat view opens with that agent preselected.
 
 ### Refresh feedback
-1. The user clicks the refresh-all button.
-2. The icon spins for at least a minimum period (so an instant cached refetch still reads as a deliberate action), then briefly flashes green on success or red on error before fading back to the default color.
+1. The user clicks the refresh-all button. It fans out a `force_refresh=true` call per known agent (via `useForceRefreshAllAgentStatuses`), waking suspended envs to re-read STATUS.md rather than just re-reading the cache-only batch route.
+2. The icon spins for at least a minimum period (so an instant refresh still reads as a deliberate action), then briefly flashes green on success or red on error before fading back to the default color.
 
 ## Business Rules
 

@@ -4,7 +4,11 @@ import { useUIStore } from '../../stores/ui.store'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
-import { useAgentStatus, useForceRefreshAgentStatus } from '../../hooks/useAgentStatus'
+import {
+  useAgentStatus,
+  useForceRefreshAgentStatus,
+  useForceRefreshAllAgentStatuses
+} from '../../hooks/useAgentStatus'
 import { StatusCard, DetailView, sortByUrgency } from './statusViews'
 
 const FADE_MS = 350
@@ -59,7 +63,15 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
   } = useUIStore()
   const { data: statuses, isLoading, error, refetch } = useAgentStatus()
   const forceRefresh = useForceRefreshAgentStatus()
+  const refreshAll = useForceRefreshAllAgentStatuses()
   const refreshingAgentId = forceRefresh.isPending ? forceRefresh.variables ?? null : null
+  // Reauth can surface from the background poll (query error) or from a bulk
+  // "Refresh all" where one agent reported the session expired.
+  const reauthNeeded = error?.code === 'reauth_required' || refreshAll.data?.reauthRequired === true
+  const handleReauthRetry = (): void => {
+    refreshAll.reset()
+    refetch()
+  }
   const now = useRelativeNow()
   // Keep the overlay mounted long enough to fade out after the store flips to
   // closed. `visible` drives the opacity; `mounted` gates the DOM.
@@ -150,23 +162,25 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
               )}
               <div className="flex-1" />
               <button
-                onClick={() => refetch()}
-                className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
-                title="Refresh all"
+                onClick={() => refreshAll.mutate()}
+                disabled={refreshAll.isPending}
+                className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                title="Force refresh all from running environments"
               >
-                <RefreshCw size={12} className={isLoading ? 'animate-spin' : ''} />
+                <RefreshCw
+                  size={12}
+                  className={isLoading || refreshAll.isPending ? 'animate-spin' : ''}
+                />
               </button>
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pb-4">
-              {error ? (
-                error.code === 'reauth_required' ? (
-                  <ReauthErrorPanel onRetry={refetch} />
-                ) : (
-                  <div className="h-full flex items-center justify-center text-xs text-[var(--color-danger)]">
-                    {error.message}
-                  </div>
-                )
+              {reauthNeeded ? (
+                <ReauthErrorPanel onRetry={handleReauthRetry} />
+              ) : error ? (
+                <div className="h-full flex items-center justify-center text-xs text-[var(--color-danger)]">
+                  {error.message}
+                </div>
               ) : isLoading && sorted.length === 0 ? (
                 <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
                   Loading…

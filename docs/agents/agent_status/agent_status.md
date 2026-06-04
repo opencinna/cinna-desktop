@@ -10,7 +10,8 @@ Surfaces the per-agent self-reported status (severity, summary, timestamps, mark
 - **Severity** — Normalized severity level for a snapshot: `ok` · `info` · `warning` · `error` · `unknown` · `null` (never published). Drives card tint, corner indicator, icon, and sort order.
 - **Worst severity** — The highest-ranked severity across all of the user's agents. Shown as a small coloured dot on the status icon in the title bar.
 - **Batch list** — The cache-only, poll-safe endpoint returning every agent the user owns. This is what the title-bar indicator and the overlay grid consume.
-- **Force refresh** — Per-agent one-shot request that asks the backend to re-read `STATUS.md` from the running environment. Rate-limited to 1 call / 30 s per env by the backend; 429 responses are swallowed client-side.
+- **Force refresh** — Per-agent one-shot request that asks the backend to re-read `STATUS.md` from the running environment (waking a suspended env if needed). User-initiated force refresh always actually fetches; the backend's 1 call / 30 s per-env rate limit applies only to event-driven refreshes (post-stream, post-CRON). 429 responses are swallowed client-side.
+- **Force refresh all** — The "Refresh all" buttons (overlay grid header and tray popup) fan out a `force_refresh=true` call per currently-known agent (the batch `list` route is cache-only and cannot force). Each fresh snapshot is patched back into the batch cache as it lands. When nothing is cached yet there are no envs to refresh, so it falls back to the cache-only list refetch to populate the grid.
 - **Sentinel snapshot** — A row with both `severity == null` *and* `raw == null` — means the agent has never published a status. Hidden from the card grid per the integration spec.
 - **Status overlay** — Full-window modal (frosted-glass panel) opened from the title-bar icon. Shows a responsive grid of agent cards; clicking a card opens a detail view with the full markdown body.
 
@@ -71,7 +72,8 @@ Surfaces the per-agent self-reported status (severity, summary, timestamps, mark
 
 - **Cinna-only feature.** The title-bar icon is only rendered for `cinna_user` accounts; the batch hook runs with `enabled: false` for local users. A user who has a Cinna account but no remote agents yet sees no icon (dot only appears when there is at least one non-null severity).
 - **Background polling** runs every **45 s** against the cache-only batch route. The query is marked stale after 15 s so mounting a new consumer (opening the overlay) reuses the cache. Focus events refetch.
-- **Force refresh** is one-shot and either user-triggered (clicking refresh on a card / detail view) or auto-triggered when the active agent chat turn ends (`done` or `error` from the agent stream). The backend enforces 1/30 s per environment; 429 responses are logged at info and treated as a no-op (the cache patch is skipped, polling catches up later).
+- **Force refresh** is one-shot and either user-triggered (clicking refresh on a card / detail view, or "Refresh all" in the overlay/tray) or auto-triggered when the active agent chat turn ends (`done` or `error` from the agent stream). Every user click that says "refresh" goes through `force_refresh=true` — the cache-only batch `list` route is only used for background polling and as the empty-cache fallback. User-initiated force refresh always fetches; the backend's 1/30 s per-env rate limit only throttles event-driven refreshes. 429 responses are logged at info and treated as a no-op (the cache patch is skipped, polling catches up later).
+- **Mass refresh fans out.** Because the batch endpoint cannot force, "Refresh all" fires one per-agent `force_refresh` call per known agent in parallel (`Promise.allSettled`); a failed agent drops out without failing the batch, and each successful snapshot is upserted into the shared cache by `agentId`. The mutation returns a `{ refreshed, failed, reauthRequired }` summary (a swallowed 429 counts as neither) so callers give honest feedback: the tray flashes green only when `failed === 0`, and the overlay shows the re-auth panel when any agent reports `reauth_required`.
 - **Sentinel snapshots** (`severity == null && raw == null`) are filtered out client-side; they represent agents that have never published.
 - **Local mapping.** The batch response returns backend agent UUIDs. Desktop maps them to local agent rows via `remoteTargetId` (added during `agent:sync-remote`). Any backend row without a local match is dropped — prevents surfacing statuses for agents the user just removed locally.
 - **Severity rank** (highest → lowest urgency): `error`, `warning`, `info`, `ok`, `unknown`. `null` is ignored when computing worst severity.
@@ -107,8 +109,9 @@ Preload
   window.api.agentStatus.get({ agentId, forceRefresh? })
 
 Renderer
-  useAgentStatus()           ── React Query, 45 s poll, cinna_user-gated
-  useForceRefreshAgentStatus ── Mutation, patches batch cache on success
+  useAgentStatus()              ── React Query, 45 s poll, cinna_user-gated
+  useForceRefreshAgentStatus    ── Mutation, single-agent force, patches batch cache
+  useForceRefreshAllAgentStatuses ── Mutation, fans out per-agent force over the cache
 
   TitleBar
       └── Activity icon + severity dot (worst severity across agents)

@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Brain,
   Plug,
   Trash2,
   MessageSquare,
@@ -10,7 +9,8 @@ import {
   Sparkles,
   Package,
   Cloud,
-  RefreshCw
+  Link,
+  SlidersHorizontal
 } from 'lucide-react'
 import { useEffect } from 'react'
 import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
@@ -26,21 +26,21 @@ import { UpdateStatusButton } from '../updater/UpdateStatusButton'
 import { InterfaceMenu } from './InterfaceMenu'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
-const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
+const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'llm', label: 'LLM Providers', icon: Brain },
+  { id: 'llm', label: 'LLM Providers', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
-  { id: 'features', label: 'Features', icon: Sparkles },
+  { id: 'features', label: 'Features', icon: SlidersHorizontal },
   { id: 'development', label: 'Development', icon: Wrench }
 ]
 
-const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Brain }[] = [
-  { id: 'profile-agents', label: 'Agents', icon: Bot },
+const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
+  { id: 'profile-agents', label: 'Remote Agents', icon: Bot },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
-  { id: 'profile-connection', label: 'Connection', icon: Cloud },
-  { id: 'profile-sync', label: 'Cloud Sync', icon: RefreshCw }
+  { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud },
+  { id: 'profile-connection', label: 'Connection', icon: Link }
 ]
 
 export function Sidebar(): React.JSX.Element {
@@ -70,7 +70,7 @@ export function Sidebar(): React.JSX.Element {
 
   const isSettings = activeView === 'settings'
 
-  const renderMenuButton = (item: { id: SettingsMenu; label: string; icon: typeof Brain }) => {
+  const renderMenuButton = (item: { id: SettingsMenu; label: string; icon: typeof Sparkles }) => {
     const Icon = item.icon
     const active = settingsTab === item.id
     return (

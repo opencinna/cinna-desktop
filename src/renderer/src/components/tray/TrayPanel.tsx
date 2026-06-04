@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
-import { useAgentStatus } from '../../hooks/useAgentStatus'
+import { useAgentStatus, useForceRefreshAllAgentStatuses } from '../../hooks/useAgentStatus'
 import { useTrayActions } from '../../hooks/useTrayActions'
 import { sortByUrgency } from '../agents/statusViews'
 import { TrayStatusCard } from './TrayStatusCard'
@@ -13,7 +13,8 @@ const MIN_SPIN_MS = 500
 const FLASH_HOLD_MS = 500
 
 export function TrayPanel(): React.JSX.Element {
-  const { data: statuses, isLoading, error, refetch } = useAgentStatus()
+  const { data: statuses, isLoading, error } = useAgentStatus()
+  const refreshAll = useForceRefreshAllAgentStatuses()
   const tray = useTrayActions()
   const now = useRelativeNow()
   const [spinning, setSpinning] = useState(false)
@@ -34,8 +35,8 @@ export function TrayPanel(): React.JSX.Element {
     setSpinning(true)
     setFlash(null)
     const started = Date.now()
-    refetch().then(
-      (ok) => finishRefresh(started, ok),
+    refreshAll.mutateAsync().then(
+      (res) => finishRefresh(started, res.failed === 0),
       () => finishRefresh(started, false)
     )
   }
@@ -97,7 +98,7 @@ export function TrayPanel(): React.JSX.Element {
                 <button
                   onClick={handleRefresh}
                   className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
-                  title="Refresh all"
+                  title="Force refresh all from running environments"
                 >
                   <RefreshCw
                     size={12}

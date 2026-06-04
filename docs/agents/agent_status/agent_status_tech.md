@@ -27,11 +27,14 @@
 | Purpose | File |
 |---------|------|
 | Data hook (batch poll + cache) | `src/renderer/src/hooks/useAgentStatus.ts` — `useAgentStatus()` |
-| Force-refresh mutation (patches batch cache on success) | `src/renderer/src/hooks/useAgentStatus.ts` — `useForceRefreshAgentStatus()` |
+| Per-agent force-refresh mutation (patches batch cache on success) | `src/renderer/src/hooks/useAgentStatus.ts` — `useForceRefreshAgentStatus()` |
+| Mass force-refresh mutation (fans out per-agent, returns outcome summary) | `src/renderer/src/hooks/useAgentStatus.ts` — `useForceRefreshAllAgentStatuses()` |
 | Typed client-side error | `src/renderer/src/hooks/useAgentStatus.ts` — `AgentStatusRequestError` |
 | Severity palette + `worstSeverity()` | `src/renderer/src/constants/agentSeverity.ts` |
 | Sidebar-footer activity icon with severity dot | `src/renderer/src/components/agents/AgentStatusButton.tsx` |
-| Modal / overlay (grid + detail view + cards) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` |
+| Modal / overlay (grid + detail view + "Refresh all") | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` |
+| Grid/detail card views (StatusCard, DetailView, sortByUrgency) | `src/renderer/src/components/agents/statusViews.tsx` |
+| Tray popup (separate-window list + "Refresh all") | `src/renderer/src/components/tray/TrayPanel.tsx` — see [Menu-Bar Tray](../../ui/tray/tray.md) |
 | Overlay mount point | `src/renderer/src/App.tsx` |
 | UI state (`agentStatusOpen`, `pendingAgentId`) | `src/renderer/src/stores/ui.store.ts` |
 | Pending-agent effect + focus-return effect | `src/renderer/src/components/layout/MainArea.tsx` |
@@ -55,7 +58,7 @@ Error `code` values: `reauth_required` · `not_found` · `forbidden` · `remote_
 | Endpoint | Used from | Notes |
 |----------|-----------|-------|
 | `GET /api/v1/agents/status` | `agentStatusService.list()` | Cache-only, safe to poll. Returns every agent the authenticated user owns. |
-| `GET /api/v1/agents/{agent_id}/status?force_refresh=<bool>` | `agentStatusService.get()` | Rate-limited to 1/30 s per env when `force_refresh=true`; 429 swallowed (returns `null`). |
+| `GET /api/v1/agents/{agent_id}/status?force_refresh=<bool>` | `agentStatusService.get()` | `force_refresh=true` wakes a suspended env and re-reads STATUS.md. User-initiated force always fetches; the backend's 1/30 s-per-env limit only throttles event-driven refreshes (post-stream/CRON). 429 is still swallowed defensively (returns `null`). |
 
 Both endpoints use the user's Cinna JWT via `Authorization: Bearer <token>` (resolved per request via `getCinnaAccessToken(userId)`).
 
@@ -74,11 +77,12 @@ Both endpoints use the user's Cinna JWT via `Authorization: Bearer <token>` (res
 | Component / hook | File | Role |
 |------------------|------|------|
 | `useAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | React Query for the batch list; `refetchInterval: 45_000`, `staleTime: 15_000`, `enabled: cinna_user`. Throws `AgentStatusRequestError` with typed `code` on failure. |
-| `useForceRefreshAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | Per-agent mutation; `onSuccess` patches the batch cache so consumers update in place. Consumed both by user-triggered refresh buttons in `AgentStatusOverlay.tsx` and by the auto-refresh in `useChatStream.startAgent` (fires on agent stream `done` / `error`, gated on `cinna_user`). |
+| `useForceRefreshAgentStatus()` | `src/renderer/src/hooks/useAgentStatus.ts` | Per-agent mutation; `onSuccess` patches the batch cache so consumers update in place. Consumed by the per-card / detail Refresh buttons in `statusViews.tsx` (via `AgentStatusOverlay.tsx`) and by the auto-refresh in `useChatStream.startAgent` (fires on agent stream `done` / `error`, gated on `cinna_user`). |
+| `useForceRefreshAllAgentStatuses()` | `src/renderer/src/hooks/useAgentStatus.ts` | Mass-refresh mutation for the "Refresh all" buttons. Reads the cached agent ids, fans out one `forceRefresh: true` `get` per agent (`Promise.allSettled`), upserts each fresh snapshot via `patchAgentStatusCache`, and returns `{ refreshed, failed, reauthRequired }` (swallowed 429 counts as neither). Falls back to a cache-only list refetch when nothing is cached. Consumed by `AgentStatusOverlay.tsx` and `TrayPanel.tsx`. |
 | `AgentStatusButton` | `src/renderer/src/components/agents/AgentStatusButton.tsx` | Renders the `Activity` icon + severity dot (via `worstSeverity()` + `SEVERITY_DOT`) in the sidebar footer; only mounted by `Sidebar.tsx` for `cinna_user`. |
-| `AgentStatusOverlay` | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Root of the modal; owns the fade state machine (`mounted` + `visible`), the single force-refresh mutation, and swaps between grid and detail views. |
-| `StatusCard` (inner) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Grid tile — bot avatar, name, severity label, summary, timestamp row, circular Refresh + Chat buttons. Takes `refreshing` + `onRefresh` from the parent — no local mutation state. |
-| `DetailView` (inner) | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Header with agent avatar + severity dot + Refresh / Start Chat buttons; body renders markdown via `react-markdown` + `remark-gfm`. Reads live snapshot from the parent (no local cache). |
+| `AgentStatusOverlay` | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | Root of the modal; owns the fade state machine (`mounted` + `visible`), the per-agent + mass force-refresh mutations, the derived `reauthNeeded` flag (query error or bulk `reauthRequired`), and swaps between grid and detail views. |
+| `StatusCard` | `src/renderer/src/components/agents/statusViews.tsx` | Grid tile — bot avatar, name, severity label, summary, timestamp row, circular Refresh + Chat buttons. Takes `refreshing` + `onRefresh` from the parent — no local mutation state. |
+| `DetailView` | `src/renderer/src/components/agents/statusViews.tsx` | Header with agent avatar + severity dot + Refresh / Start Chat buttons; body renders markdown via `react-markdown` + `remark-gfm`. Reads live snapshot from the parent (no local cache). |
 | `MainArea` | `src/renderer/src/components/layout/MainArea.tsx` | Two effects — one consumes `pendingAgentId` to preselect the agent and focus the input; another watches `agentStatusOpen` and re-focuses the input when the overlay closes on the chat view. |
 
 ## UI State
@@ -116,7 +120,7 @@ No user-facing settings. Hardcoded values worth knowing:
 | Poll interval: **45 000 ms** | `useAgentStatus.ts` — `refetchInterval` | Within the 30–60 s range recommended by the integration spec for the cache-only endpoint. |
 | Stale time: **15 000 ms** | `useAgentStatus.ts` — `staleTime` | Lets the overlay reuse the cached value when mounted close to a background poll. |
 | Fade duration: **350 ms** | `AgentStatusOverlay.tsx` — `FADE_MS` | Drives both the inline `transitionDuration` style and the post-close unmount timer. |
-| Rate-limit on force refresh: **1 / 30 s / env** | Server-enforced | Desktop treats 429 as a silent no-op. |
+| Rate-limit on force refresh: **1 / 30 s / env (event-driven only)** | Server-enforced | Applies to post-stream/CRON refreshes; user-initiated force always fetches. Desktop still treats any 429 as a silent no-op. |
 | Severity-changed "recent" window: **60 min** | `DetailView` | Threshold for showing the `Changed from <prev_severity>` line. |
 
 ## Security
