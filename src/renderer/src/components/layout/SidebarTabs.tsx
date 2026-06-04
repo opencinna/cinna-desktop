@@ -1,11 +1,11 @@
-import { MessageSquare, Cog, NotebookPen } from 'lucide-react'
+import { MessageSquare, ClipboardList, NotebookPen } from 'lucide-react'
 import { useUIStore, type SidebarTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
 
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
-  { id: 'jobs', label: 'Jobs', Icon: Cog },
+  { id: 'jobs', label: 'Jobs', Icon: ClipboardList },
   { id: 'notes', label: 'Notes', Icon: NotebookPen }
 ]
 
