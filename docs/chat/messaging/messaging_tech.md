@@ -89,6 +89,18 @@ Events sent through the MessagePort from main to renderer:
 6. `{ type: 'done' }` — Stream finished
 7. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. Renderer handles by calling `stopStreaming()` and invalidating the chat query.
 
+## Optimistic user-message lifecycle
+
+The user's bubble is shown the instant they send — before the persisted row arrives via the `['chat', chatId]` refetch — and must stay continuously visible across the optimistic→persisted handoff (no flicker, no vanishing while the assistant streams). Mirrors the `streamingBlocks` "no visual gap" pattern.
+
+- **Store field** — `src/renderer/src/stores/chat.store.ts` — `pendingUserMessage: { content, baselineUserCount } | null` (type `PendingUserMessage`). `baselineUserCount` snapshots how many persisted `role: 'user'` rows the chat already had at send time.
+- **Set on send** — `src/renderer/src/hooks/useChatStream.ts` — `startLlm` / `startAgent` call `setPendingUserMessage({ content, baselineUserCount: snapshotUserCount(chatId) })`; `snapshotUserCount` counts `user` rows in the cached `['chat', chatId]` query.
+- **Rendered** — `src/renderer/src/components/chat/MessageStream.tsx` shows the optimistic bubble while `persistedUserCount <= baselineUserCount`. **Count-keyed, not content-keyed** — repeating the previous turn's exact text still shows a bubble (content-keyed dedup hid the second of two identical consecutive messages until its own row refetched).
+- **Cleared** — *Not* on the `request-id` (`startStreaming`) or `done` (`finishStreaming`) transitions: clearing there left a window where neither the optimistic bubble nor the not-yet-refetched persisted row was visible, so the user's message vanished while the reply streamed in. Instead retired in the `done` handler's `.finally` (after the `['chat']` refetch settles — its persisted row is already in `messages`, so the clear is gap-free), alongside `clearStreamingBlocks`. Also cleared on chat switch (`setActiveChatId`), `stopStreaming` (stream error / abort / synchronous send-throw — no persisted row is coming), and `reset`.
+- **Send re-entrancy** — `src/renderer/src/components/chat/ChatInput.tsx` guards the active-chat send with an `activeSendInFlight` ref (set/reset in try/finally). `isStreaming` only flips on `request-id`, so it can't block a second Enter fired during the `attachNotesAsync` await; the ref prevents double-sending the same turn.
+
+The persisted user content equals the optimistic `content` verbatim (both `prepareLlmSend` / `prepareAgentSend` pass the payload `content` straight to `messageRepo.saveUser`), so the handoff is exact.
+
 ## Renderer Components
 
 - `src/renderer/src/components/chat/MessageStream.tsx` — Renders message list, manages auto-scroll to bottom

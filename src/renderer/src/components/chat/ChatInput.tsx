@@ -142,6 +142,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const attachButtonRef = useRef<HTMLButtonElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastEscapeAt = useRef(0)
+  // Synchronous re-entrancy guard for the active-chat send. `isStreaming` only
+  // flips true once the stream's `request-id` arrives, so it can't block a
+  // second Enter fired during the `attachNotesAsync` await — this ref does.
+  const activeSendInFlight = useRef(false)
   const { data: chatData } = useChatDetail(chatId)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   // Used only to gate the new-chat attach button: showing `[+]` for a
@@ -663,40 +667,53 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       return
     }
 
-    // Convert any pending notes into real .md attachments via the IPC
-    // ingest path so they ride the same code-path as user-attached files
-    // for the rest of the send. Scope mirrors the file pipeline: Cinna
-    // when the destination is a remote agent (or unknown), local for raw
-    // LLM chats.
-    let noteAttachments: MessageAttachment[] = []
-    if (pendingNotes.length > 0) {
-      try {
-        noteAttachments = await attachNotesAsync({
-          chatId,
-          scope: attachScope,
-          noteIds: pendingNotes.map((n) => n.id)
-        })
-      } catch (err) {
-        setAttachError(err instanceof Error ? err.message : String(err))
-        return
+    // Guard against a second Enter landing during the note-ingest await below
+    // (which would double-send the same turn) — `isStreaming` can't yet, since
+    // it only flips once the stream's `request-id` arrives.
+    if (activeSendInFlight.current) return
+    activeSendInFlight.current = true
+    try {
+      // Convert any pending notes into real .md attachments via the IPC
+      // ingest path so they ride the same code-path as user-attached files
+      // for the rest of the send. Scope mirrors the file pipeline: Cinna
+      // when the destination is a remote agent (or unknown), local for raw
+      // LLM chats.
+      let noteAttachments: MessageAttachment[] = []
+      if (pendingNotes.length > 0) {
+        try {
+          noteAttachments = await attachNotesAsync({
+            chatId,
+            scope: attachScope,
+            noteIds: pendingNotes.map((n) => n.id)
+          })
+        } catch (err) {
+          setAttachError(err instanceof Error ? err.message : String(err))
+          return
+        }
       }
-    }
 
-    // Hand off to the composer hook, which decides direct-A2A vs
-    // orchestrated/LLM dispatch from a fresh cache snapshot. The active-chat
-    // composer only ever holds already-ingested attachments — `pending` is
-    // gated to the new-chat path by `useChatAttachments` — so the type narrow
-    // below is safe.
-    const persistedAttachments = attachmentsToSend?.filter(
-      (a): a is MessageAttachment => a.source !== 'pending'
-    )
-    const mergedAttachments =
-      noteAttachments.length > 0
-        ? [...(persistedAttachments ?? []), ...noteAttachments]
-        : persistedAttachments
-    await composer.submit(trimmed, mergedAttachments)
-    clearPendingAttachments()
-    clearPendingNotes()
+      // Hand off to the composer hook, which decides direct-A2A vs
+      // orchestrated/LLM dispatch from a fresh cache snapshot. The active-chat
+      // composer only ever holds already-ingested attachments — `pending` is
+      // gated to the new-chat path by `useChatAttachments` — so the type narrow
+      // below is safe.
+      const persistedAttachments = attachmentsToSend?.filter(
+        (a): a is MessageAttachment => a.source !== 'pending'
+      )
+      const mergedAttachments =
+        noteAttachments.length > 0
+          ? [...(persistedAttachments ?? []), ...noteAttachments]
+          : persistedAttachments
+      await composer.submit(trimmed, mergedAttachments)
+      // Reset the composer after an active-chat send: text, pending attachments,
+      // and textarea height. `clearComposer` mirrors the new-chat branch above —
+      // the input clear lived in `handleSend` pre-refactor and was lost when it
+      // moved into `clearComposer`, which only the new-chat branch then called.
+      clearComposer()
+      clearPendingNotes()
+    } finally {
+      activeSendInFlight.current = false
+    }
   }, [
     input,
     isStreaming,

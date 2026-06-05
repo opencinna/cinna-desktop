@@ -424,7 +424,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             const parts = msg.parts
             const suppressStreamReanimation =
               msg.role === 'assistant' && streamedIncrementallyChatId === chatId
-            const shouldAnimate = msg.id === newMessageId && !suppressStreamReanimation
+            // The optimistic user bubble already played its expand animation;
+            // when its persisted row lands mid-handoff (same content, pending
+            // not yet retired) the swap must be silent — otherwise the bubble
+            // animates a second time. Mirrors the assistant suppression above.
+            const suppressOptimisticReanimation =
+              msg.role === 'user' && pendingUserMessage?.content === msg.content
+            const shouldAnimate =
+              msg.id === newMessageId &&
+              !suppressStreamReanimation &&
+              !suppressOptimisticReanimation
             const sourceAgentId = msg.role === 'assistant' ? msg.sourceAgentId ?? null : null
             const sourceAgentName =
               sourceAgentId && sourceAgentId !== rootAgentId
@@ -616,11 +625,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
 
           // Optimistic user bubble — shown immediately while the DB round-trip
           // is in flight so the dots always appear BELOW the user message.
-          if (pendingUserMessage && !messages.some((m) => m.role === 'user' && m.content === pendingUserMessage)) {
+          // Retired the instant a *new* user row lands: the persisted count
+          // growing past the send-time baseline means this message's own row is
+          // now in `messages`. Count- (not content-) keyed so repeating the
+          // previous turn's exact text still shows the optimistic bubble.
+          const persistedUserCount = messages.reduce((n, m) => (m.role === 'user' ? n + 1 : n), 0)
+          if (pendingUserMessage && persistedUserCount <= pendingUserMessage.baselineUserCount) {
             renderNodes.push({
               slot: 'plain',
               key: 'pending-user',
-              node: <MessageBubble role="user" content={pendingUserMessage} animate />
+              node: <MessageBubble role="user" content={pendingUserMessage.content} animate />
             })
           }
 

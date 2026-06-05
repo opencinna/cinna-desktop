@@ -1,6 +1,11 @@
 import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
+
+// Cached `['chat', chatId]` shape — used to snapshot the persisted user-message
+// count at send time so the optimistic bubble retires the instant a new user
+// row lands (see `pendingUserMessage` / `PendingUserMessage`).
+type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 import { useAuthStore } from '../stores/auth.store'
 import { useForceRefreshAgentStatus } from './useAgentStatus'
 import type { MessageAttachment } from '../../../shared/attachments'
@@ -76,12 +81,18 @@ export function useChatStream(): {
         case 'done':
           // Keep streaming blocks visible (cursor already hidden via isStreaming=false)
           // until the DB message is fetched, then remove them — no visual gap.
+          // The optimistic user bubble is retired in the same `.finally`: by the
+          // time the refetch settles its persisted row is in `messages`, so the
+          // clear is gap-free and bounds the optimistic copy to this turn.
           finishStreaming()
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
             queryClient.invalidateQueries({ queryKey: ['chats'] }),
             queryClient.invalidateQueries({ queryKey: ['jobs'] })
-          ]).finally(() => clearStreamingBlocks())
+          ]).finally(() => {
+            clearStreamingBlocks()
+            setPendingUserMessage(null)
+          })
           break
         case 'error':
           // The error has already been persisted main-side (`chatStreamingService`
@@ -95,7 +106,7 @@ export function useChatStream(): {
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, queryClient]
   )
 
   const handleAgent = useCallback(
@@ -116,12 +127,17 @@ export function useChatStream(): {
           )
           break
         case 'done':
+          // Retire the optimistic user bubble alongside the streaming blocks
+          // once the refetch lands — its persisted row is in `messages` by then.
           finishStreaming()
           Promise.all([
             queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
             queryClient.invalidateQueries({ queryKey: ['chats'] }),
             queryClient.invalidateQueries({ queryKey: ['jobs'] })
-          ]).finally(() => clearStreamingBlocks())
+          ]).finally(() => {
+            clearStreamingBlocks()
+            setPendingUserMessage(null)
+          })
           break
         case 'error':
           // Agent errors are already persisted by `agent_a2a.ipc` /
@@ -135,12 +151,23 @@ export function useChatStream(): {
           break
       }
     },
-    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, queryClient]
+    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, queryClient]
+  )
+
+  // Count the user rows already persisted for this chat, so the optimistic
+  // bubble can be retired the instant a *new* one appears (count grows past
+  // this baseline) — robust even when the new message repeats earlier text.
+  const snapshotUserCount = useCallback(
+    (chatId: string): number => {
+      const cached = queryClient.getQueryData<CachedChat>(['chat', chatId])
+      return cached?.messages?.filter((m) => m.role === 'user').length ?? 0
+    },
+    [queryClient]
   )
 
   const startLlm = useCallback(
     (chatId: string, content: string, opts?: StartLlmOptions): void => {
-      setPendingUserMessage(content)
+      setPendingUserMessage({ content, baselineUserCount: snapshotUserCount(chatId) })
       try {
         window.api.llm.sendMessage(
           chatId,
@@ -157,12 +184,12 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleLlm, queryClient, setPendingUserMessage, stopStreaming]
+    [handleLlm, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming]
   )
 
   const startAgent = useCallback(
     (agentId: string, chatId: string, content: string, opts?: StartAgentOptions): void => {
-      setPendingUserMessage(content)
+      setPendingUserMessage({ content, baselineUserCount: snapshotUserCount(chatId) })
       try {
         window.api.agents.sendMessage(
           agentId,
@@ -188,7 +215,7 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleAgent, queryClient, setPendingUserMessage, stopStreaming, isCinnaUser, forceRefreshAgentStatus]
+    [handleAgent, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus]
   )
 
   const cancel = useCallback((requestId: string): void => {

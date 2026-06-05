@@ -55,6 +55,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - The provider/model for a new chat comes from the active [chat mode](../chat_modes/chat_modes.md) (auto-applied default mode if the user hasn't picked one explicitly); the model defaults to the mode's `modelId`, falling back to the provider's `default_model_id` and finally the first available model. There is no provider-level "default" flag — if no mode or agent is chosen, sending raises an inline "can't determine destination" error
 - Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages, then persisted to DB as `role: 'error'` messages so they survive navigation
 - Tool calls are only available when MCP servers are connected and enabled for the chat
+- The user's sent message renders instantly (an optimistic bubble) and stays visible without flicker through the entire streaming turn, swapping seamlessly to its persisted row once the chat refetches; sending the same text twice in a row still shows a distinct bubble for each turn (see the optimistic user-message lifecycle in `messaging_tech.md`)
 
 ## Architecture Overview
 

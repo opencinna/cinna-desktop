@@ -88,12 +88,26 @@ interface TextBlock {
 
 export type StreamBlock = TextBlock | ToolCallBlock
 
+/**
+ * Optimistic user message — rendered the instant the user sends, before the
+ * persisted row arrives via the `['chat', chatId]` refetch. Keyed by a
+ * snapshot of how many user rows the chat already had at send time
+ * (`baselineUserCount`) rather than by content, so `MessageStream` can drop the
+ * optimistic copy the moment a *new* user row appears even when its text is
+ * identical to a previous turn (content-keyed dedup hid the second of two
+ * identical consecutive messages until its own row refetched).
+ */
+export interface PendingUserMessage {
+  content: string
+  baselineUserCount: number
+}
+
 interface ChatStore {
   activeChatId: string | null
   streamingBlocks: StreamBlock[]
   isStreaming: boolean
   activeRequestId: string | null
-  pendingUserMessage: string | null
+  pendingUserMessage: PendingUserMessage | null
   // Chat ID of the most recent stream that produced gradual deltas. Scoped
   // per-chat so MessageStream only suppresses the DB-arrival fade-in for the
   // exact chat whose stream just finished — out-of-band message arrivals on
@@ -106,7 +120,7 @@ interface ChatStore {
 
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
-  setPendingUserMessage: (content: string | null) => void
+  setPendingUserMessage: (message: PendingUserMessage | null) => void
   appendDelta: (
     text: string,
     kind?: ContentKind,
@@ -155,15 +169,22 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null
     }),
 
-  setPendingUserMessage: (content) =>
-    set({ pendingUserMessage: content }),
+  setPendingUserMessage: (message) =>
+    set({ pendingUserMessage: message }),
 
   startStreaming: (requestId) =>
+    // Deliberately does NOT clear `pendingUserMessage`. The optimistic user
+    // bubble must stay rendered until the persisted row arrives via the
+    // `['chat', chatId]` refetch — `MessageStream` suppresses it once the user
+    // row count grows past `baselineUserCount` (the same "no visual gap"
+    // handoff that keeps `streamingBlocks` until `clearStreamingBlocks`).
+    // Clearing it here left a window where neither the optimistic bubble nor
+    // the (not-yet-refetched) persisted row was visible, so the user's message
+    // vanished while the assistant reply streamed in.
     set({
       isStreaming: true,
       streamingBlocks: [],
       activeRequestId: requestId,
-      pendingUserMessage: null,
       streamedIncrementallyChatId: null,
       sendError: null
     }),
@@ -254,7 +275,13 @@ export const useChatStore = create<ChatStore>((set) => ({
     })),
 
   finishStreaming: () =>
-    set({ isStreaming: false, pendingUserMessage: null }),
+    // Keep `pendingUserMessage` set past `done`: the `done` handler keeps
+    // `streamingBlocks` visible until the refetch lands, then drops both
+    // together (see `useChatStream`'s `done` `.finally`) — the user bubble
+    // follows the same lifecycle so there's no gap when `done` beats the
+    // refetch. The post-refetch clear (not this transition) is what finally
+    // retires the optimistic copy, by which point its persisted row is in view.
+    set({ isStreaming: false }),
 
   clearStreamingBlocks: () =>
     set({ streamingBlocks: [], activeRequestId: null }),
