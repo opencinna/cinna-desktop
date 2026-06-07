@@ -1,6 +1,8 @@
 import { Wrench, X, Loader2, Plug, ChevronRight } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { ToolCallSummary } from './ToolCallSummary'
+import { ApplyPatchBlock } from './ApplyPatchBlock'
+import { parsePatch } from '../../utils/applyPatch'
 import { useUIStore } from '../../stores/ui.store'
 
 interface ToolCallBlockProps {
@@ -113,6 +115,15 @@ export function ToolCallBlock({
   status,
   provider
 }: ToolCallBlockProps): React.JSX.Element {
+  // OpenCode / Codex `apply_patch` renders as a git-diff view rather than the
+  // generic tool block — but errors keep the standard block so the failure
+  // shows. The single parse doubles as the guard (null → not a valid patch).
+  // Kept above the hooks below so it must stay hook-free.
+  const patchFiles = name === 'apply_patch' && !error && input ? parsePatch(input.patch_text) : null
+  if (patchFiles) {
+    return <ApplyPatchBlock files={patchFiles} />
+  }
+
   const verboseMode = useUIStore((s) => s.verboseMode)
   const [expanded, setExpanded] = useState(false)
 
