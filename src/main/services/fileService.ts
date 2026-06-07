@@ -5,7 +5,7 @@ import { chatFileRepo } from '../db/chatFiles'
 import { FileError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { createReadStream, createWriteStream } from 'fs'
-import { mkdtemp, rm, stat, writeFile } from 'fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'fs/promises'
 import { tmpdir } from 'os'
 import { basename, join } from 'path'
 import { pipeline } from 'stream/promises'
@@ -226,6 +226,54 @@ export const fileService = {
       return
     }
     await cinnaFileService.downloadToPath(opts.userId, opts.attachmentId, opts.destPath)
+  },
+
+  /**
+   * Read an attachment's bytes (capped at `maxBytes`) and decode as UTF-8 for
+   * in-app preview. Routes by source like {@link downloadToPath} but keeps
+   * everything in memory — the preview supports only small text formats, and
+   * the cap protects against a mistakenly-previewed large file. Decoding is
+   * lossy-tolerant: invalid byte sequences become the replacement character
+   * rather than throwing, so a previewed non-UTF-8 file still renders
+   * something instead of erroring.
+   */
+  async readTextPreview(opts: {
+    userId: string
+    attachmentId: string
+    source: FileScope
+    maxBytes: number
+  }): Promise<{ text: string; truncated: boolean }> {
+    let bytes: Buffer
+    let truncated = false
+    if (opts.source === 'local') {
+      const row = chatFileRepo.getOwned(opts.userId, opts.attachmentId)
+      if (!row) throw new FileError('not_found', 'Local attachment not found')
+      try {
+        const full = await readFile(row.storagePath)
+        truncated = full.length > opts.maxBytes
+        bytes = truncated ? full.subarray(0, opts.maxBytes) : full
+      } catch (err) {
+        throw new FileError(
+          'read_failed',
+          `Could not read local file: ${err instanceof Error ? err.message : String(err)}`
+        )
+      }
+    } else {
+      const read = await cinnaFileService.readBytes(
+        opts.userId,
+        opts.attachmentId,
+        opts.maxBytes
+      )
+      bytes = read.bytes
+      truncated = read.truncated
+    }
+    // When truncated, decode with `stream: true` and skip the final flush so a
+    // multi-byte UTF-8 sequence severed by the byte cap is dropped rather than
+    // surfacing a trailing replacement char. A complete (non-truncated) buffer
+    // decodes normally — genuinely-invalid bytes still become � (intended).
+    const decoder = new TextDecoder('utf-8')
+    const text = truncated ? decoder.decode(bytes, { stream: true }) : decoder.decode(bytes)
+    return { text, truncated }
   }
 }
 

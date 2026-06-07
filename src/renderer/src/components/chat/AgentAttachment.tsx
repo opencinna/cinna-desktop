@@ -1,6 +1,7 @@
 import { X } from 'lucide-react'
 import { AttachmentList } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
+import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
 import type { MessagePartFile } from '../../../../shared/messageParts'
 import { agentFileToAttachment } from '../../../../shared/attachments'
 
@@ -25,7 +26,8 @@ export function AgentAttachment({
   file: MessagePartFile
   align?: 'left' | 'right'
 }): React.JSX.Element {
-  const { isDownloading, download, error, errorFileId, dismissError } = useFileDownload()
+  const { isDownloading, error, errorFileId, dismissError } = useFileDownload()
+  const openAttachment = useAttachmentOpen()
   const attachment = agentFileToAttachment(file)
   const errorForThisFile = error && errorFileId === file.fileId ? error : null
 
@@ -35,7 +37,7 @@ export function AgentAttachment({
         attachments={[attachment]}
         variant="message"
         align={align}
-        onClick={(a) => void download(a)}
+        onClick={(a) => openAttachment(a)}
         isLoading={isDownloading}
       />
       {errorForThisFile && (

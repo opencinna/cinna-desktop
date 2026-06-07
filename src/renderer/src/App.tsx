@@ -9,6 +9,7 @@ import { ReauthModal } from './components/auth/ReauthModal'
 import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
+import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
@@ -135,6 +136,7 @@ function App(): React.JSX.Element {
         <AgentStatusOverlay />
         <ReauthModal />
         <SyncSetupModal />
+        <FilePreviewModal />
       </AuthGate>
     </QueryClientProvider>
   )

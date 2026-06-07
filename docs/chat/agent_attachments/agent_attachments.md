@@ -10,15 +10,17 @@ materialises the bytes into durable storage and delivers the reference to the
 desktop as a native **A2A `FilePart`** carrying `cinna.content_kind: 'file'` and
 `cinna.file_*` metadata. The desktop turns that into a `file`-kind
 `MessagePart`, persists it on the assistant message, and renders an attachment
-badge under the reply. Clicking the badge downloads the file via the user's
-OAuth bearer session — no signed URL.
+badge under the reply. Clicking the badge previews text types in place or
+downloads other types via the user's OAuth bearer session — no signed URL.
 
 The FilePart is delivered **live at finalize** (the backend yields it into the
 A2A stream after the reply text), so on desktop the badge lands at the **end**
 of the turn — not spliced at the tag's textual position the way the web renders
 it from the persisted trace.
 
-Preview is out of scope for now: every agent attachment is a download.
+Text-based attachments (`txt`/`csv`/`md`/`json`/`yaml`) now open an in-app
+read-only preview on click — see [File Preview](../file_preview/file_preview.md).
+Image / PDF / binary attachments still download on click.
 
 ## Core Concepts
 
@@ -177,8 +179,9 @@ desktop's live stream).
 
 ## Future Enhancements (Out of Scope)
 
-- **Inline preview** — image/PDF/text preview modal (web has this; desktop is
-  download-only for now).
+- **Inline preview for image/PDF** — image and PDF preview modal (text preview
+  shipped via [File Preview](../file_preview/file_preview.md); image/PDF still
+  download).
 - **`FileWithBytes` inline transport** — fully offline fetch without a backend round-trip.
 - **Non-Cinna FilePart support** — downloading via the FilePart `uri` for agents
   that don't carry a `cinna.file_id`.

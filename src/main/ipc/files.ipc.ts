@@ -7,6 +7,7 @@ import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
+import { MAX_PREVIEW_BYTES } from '../../shared/filePreview'
 import type { MessageAttachment, PendingAttachment } from '../../shared/attachments'
 
 export type FilesPickAndUploadResult =
@@ -313,6 +314,41 @@ export function registerFilesHandlers(): void {
           // File is on disk; reveal is best-effort.
         }
         return { success: true, savedPath: saveResult.filePath }
+      } catch (err) {
+        const e = ipcErrorShape(err)
+        return { success: false, error: e.message, code: e.code }
+      }
+    }
+  )
+
+  /**
+   * In-app preview. Reads a small text attachment's bytes into memory
+   * (capped at {@link MAX_PREVIEW_BYTES}) and returns the decoded UTF-8 so
+   * the renderer can show it in a modal without a save dialog. Only the
+   * preview-supported text formats reach here — the renderer gates the call
+   * on `previewKindFor`.
+   */
+  ipcHandle(
+    'files:read-preview',
+    async (
+      _event,
+      data: { fileId: string; source?: 'cinna' | 'local' }
+    ): Promise<
+      | { success: true; text: string; truncated: boolean }
+      | { success: false; error: string; code?: string }
+    > => {
+      userActivation.requireActivated()
+      const userId = getProfileScopeUserId()
+      const sourceRaw = data.source ?? 'cinna'
+      try {
+        assertFileScope(sourceRaw)
+        const { text, truncated } = await fileService.readTextPreview({
+          userId,
+          attachmentId: data.fileId,
+          source: sourceRaw,
+          maxBytes: MAX_PREVIEW_BYTES
+        })
+        return { success: true, text, truncated }
       } catch (err) {
         const e = ipcErrorShape(err)
         return { success: false, error: e.message, code: e.code }

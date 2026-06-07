@@ -36,6 +36,7 @@ const MarkdownContent = memo(function MarkdownContent({
 import { presetForAgentId } from '../../utils/agentColors'
 import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
+import { useAttachmentOpen } from '../../hooks/useAttachmentOpen'
 import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
 
 export interface MessageMeta {
@@ -85,11 +86,11 @@ export function MessageBubble({
   // label for its own attachments by matching `errorFileId`.
   const {
     isDownloading,
-    download,
     error: downloadError,
     errorFileId,
     dismissError
   } = useFileDownload()
+  const openAttachment = useAttachmentOpen()
   const downloadErrorForThisBubble =
     isUser && downloadError && attachments?.some((a) => a.id === errorFileId)
       ? downloadError
@@ -124,7 +125,7 @@ export function MessageBubble({
             attachments={attachments}
             variant="message"
             align="right"
-            onClick={(a) => void download(a)}
+            onClick={(a) => openAttachment(a)}
             isLoading={isDownloading}
           />
         )}

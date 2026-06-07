@@ -319,6 +319,65 @@ export const cinnaFileService = {
   },
 
   /**
+   * Fetch a previously-uploaded file's bytes into memory (capped at
+   * `maxBytes`) for in-app preview. Unlike {@link downloadToPath} this never
+   * touches disk — the small text formats the preview supports fit easily in
+   * memory, and the cap keeps a mistakenly-previewed large file from blowing
+   * up the main process. Access control is the same backend bearer check.
+   */
+  async readBytes(
+    userId: string,
+    fileId: string,
+    maxBytes: number
+  ): Promise<{ bytes: Buffer; truncated: boolean }> {
+    const baseUrl = resolveBaseUrl(userId)
+    const authHeader = await resolveAuthHeader(userId)
+    const url = `${baseUrl}/api/v1/files/${fileId}/download`
+    logger.debug(`read → ${url}`, { maxBytes })
+
+    const started = Date.now()
+    let response: Response
+    try {
+      response = await net.fetch(url, {
+        method: 'GET',
+        headers: { Authorization: authHeader }
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logger.error(`read network error`, {
+        url,
+        error: msg,
+        durationMs: Date.now() - started
+      })
+      throw new CinnaFileError('download_failed', msg)
+    }
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '')
+      logger.error(`read failed`, {
+        url,
+        status: response.status,
+        body: body.slice(0, 200),
+        durationMs: Date.now() - started
+      })
+      throw new CinnaFileError(
+        'download_failed',
+        `Download failed (${response.status}): ${body.slice(0, 200) || response.statusText}`
+      )
+    }
+
+    const full = Buffer.from(await response.arrayBuffer())
+    const truncated = full.length > maxBytes
+    logger.info('read', {
+      fileId,
+      bytes: Math.min(full.length, maxBytes),
+      truncated,
+      durationMs: Date.now() - started
+    })
+    return { bytes: truncated ? full.subarray(0, maxBytes) : full, truncated }
+  },
+
+  /**
    * Download a task attachment (a `TaskAttachment` — distinct from the
    * `FileUpload` entity used by `downloadToPath`). Cinna's task attachments
    * live under a task-scoped endpoint with its own access-control path:

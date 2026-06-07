@@ -722,6 +722,19 @@ const api = {
       | { success: false; canceled?: false; error: string; code?: string }
     > => ipcRenderer.invoke('files:download', data),
     /**
+     * Read a small text attachment's content for in-app preview. Returns the
+     * decoded UTF-8 (capped main-side) and a `truncated` flag the modal
+     * surfaces. Only the preview-supported text formats should call this —
+     * the renderer gates on `previewKindFor`.
+     */
+    readPreview: (data: {
+      fileId: string
+      source?: 'cinna' | 'local'
+    }): Promise<
+      | { success: true; text: string; truncated: boolean }
+      | { success: false; error: string; code?: string }
+    > => ipcRenderer.invoke('files:read-preview', data),
+    /**
      * Save-as for a TaskAttachment (cinna task-scoped). Distinct from
      * `download` above because these are not FileUpload rows — their
      * download URL is task-scoped.

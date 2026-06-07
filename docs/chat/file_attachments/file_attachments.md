@@ -177,6 +177,7 @@ Download:
 ## Integration Points
 
 - [Messaging](../messaging/messaging.md) — Attachments piggy-back on user-message persistence. `messageRoutingService.prepareAgentSend` and `prepareLlmSend` are the persistence chokepoints.
+- [File Preview](../file_preview/file_preview.md) — Clicking a sent attachment badge previews text types in place (txt/csv/md/json/yaml) instead of always downloading; reuses the same `cinna`/`local` source routing.
 - [LLM Adapters](../../llm/adapters/adapters.md) — Each adapter declares `modelCapability(modelId)` + translates `MediaPart[]` to provider-native content blocks.
 - [Provider Integration](../../llm/adapters/provider_integration.md) — Per-provider MIME and capability matrix (native PDF support, image MIMEs, size envelopes).
 - [Agents](../../agents/agents/agents.md) — A2A streaming + endpoint resolution for Cinna-scoped attachments.
