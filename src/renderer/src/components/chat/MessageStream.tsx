@@ -13,6 +13,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
+import { AgentAttachment } from './AgentAttachment'
 import { AgentToolSubThread } from './AgentToolSubThread'
 import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
@@ -418,10 +419,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
               }
               continue
             }
-            if (msg.role === 'assistant' && !msg.content) {
+            const parts = msg.parts
+            // Skip empty assistant rows — but NOT when they carry structured
+            // parts (e.g. an agent turn that only attached a file has no text
+            // content yet still renders a download badge from `parts[]`).
+            if (
+              msg.role === 'assistant' &&
+              !msg.content &&
+              !(Array.isArray(parts) && parts.length > 0)
+            ) {
               continue
             }
-            const parts = msg.parts
             const suppressStreamReanimation =
               msg.role === 'assistant' && streamedIncrementallyChatId === chatId
             // The optimistic user bubble already played its expand animation;
@@ -495,6 +503,9 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                               animateDelay={idx * 80}
                             />
                           )
+                        }
+                        if (p.kind === 'file' && p.file) {
+                          return <AgentAttachment key={k} file={p.file} align="left" />
                         }
                         return (
                           <MessageBubble
@@ -581,6 +592,15 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                           animateDelay={idx * 80}
                         />
                       )
+                    })
+                  } else if (p.kind === 'file' && p.file) {
+                    // Agent-attached file — downloadable badge inline at the
+                    // position the agent declared it. Plain slot, left-aligned
+                    // like the rest of the assistant turn.
+                    renderNodes.push({
+                      slot: 'plain',
+                      key: k,
+                      node: <AgentAttachment file={p.file} align="left" />
                     })
                   } else {
                     renderNodes.push({
@@ -763,6 +783,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                       isStreaming={live}
                     />
                   )
+                })
+                return
+              }
+              if (block.kind === 'file' && block.file) {
+                // Agent-attached file streamed in at finalize — render the
+                // download badge live; the post-`done` refetch replaces it with
+                // the persisted `file` part (same badge, no visual change).
+                renderNodes.push({
+                  slot: 'plain',
+                  key: `stream-file-${i}`,
+                  node: <AgentAttachment file={block.file} align="left" />
                 })
                 return
               }

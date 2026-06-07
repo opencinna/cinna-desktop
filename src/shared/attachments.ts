@@ -1,3 +1,5 @@
+import type { MessagePartFile } from './messageParts'
+
 /**
  * Persistent file-attachment DTO — the shape that travels over IPC and
  * lives on the `messages.attachments` JSON column. Two backing stores:
@@ -43,4 +45,20 @@ export type ComposerAttachment = MessageAttachment | PendingAttachment
 
 export function isPendingAttachment(a: ComposerAttachment): a is PendingAttachment {
   return a.source === 'pending'
+}
+
+/**
+ * Adapt an agent-attached {@link MessagePartFile} (A2A FilePart metadata) into
+ * the {@link MessageAttachment} shape the badge + download path consume. Always
+ * `cinna`-sourced — the `fileId` is a Cinna backend UUID downloaded via the
+ * OAuth bearer path.
+ */
+export function agentFileToAttachment(file: MessagePartFile): MessageAttachment {
+  return {
+    id: file.fileId,
+    filename: file.filename,
+    size: file.size,
+    mimeType: file.mimeType,
+    source: 'cinna'
+  }
 }

@@ -83,9 +83,13 @@ export function AttachmentBadge({
       ? ' cursor-pointer hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors'
       : '')
 
+  // Agent attachments may arrive without a size (`cinna.file_size` omitted) —
+  // show nothing rather than a misleading "0 B".
+  const hasSize = attachment.size > 0
+  const sizeSuffix = hasSize ? ` (${formatSize(attachment.size)})` : ''
   const titleText = isClickable
-    ? `Download ${attachment.filename} (${formatSize(attachment.size)})`
-    : `${attachment.filename} (${formatSize(attachment.size)})`
+    ? `Download ${attachment.filename}${sizeSuffix}`
+    : `${attachment.filename}${sizeSuffix}`
 
   const innerContent = (
     <>
@@ -95,7 +99,7 @@ export function AttachmentBadge({
         pickIcon(attachment.mimeType)
       )}
       <span className="truncate">{truncate(attachment.filename, isInput ? 24 : 22)}</span>
-      {!isInput && (
+      {!isInput && hasSize && (
         <span className="opacity-70 ml-0.5">{formatSize(attachment.size)}</span>
       )}
       {onRemove && (

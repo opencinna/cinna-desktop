@@ -20,6 +20,14 @@
  * to `messages.content` (for chat previews / titles / search). Rendered in
  * a terminal-style block to signal "platform output, not LLM voice".
  *
+ * The `file` kind carries an agent-authored file attachment delivered as a
+ * native A2A `FilePart` (`metadata['cinna.content_kind'] = 'file'`). The agent
+ * declares it with a `<cinna_attach>` tag; the Cinna backend materialises the
+ * bytes into durable storage and references them by `cinna.file_id`. The part's
+ * `text` is empty — the payload lives on the {@link MessagePartFile} `file`
+ * field. Rendered inline as a downloadable badge at the tag's position in the
+ * reply (mirrors how a user's own attachments render under their message).
+ *
  * Keep this file purely type-only — it is imported from both Electron
  * processes and must not pull in any runtime dependencies.
  */
@@ -31,8 +39,23 @@ export type ContentKind =
   | 'tool_result'
   | 'notice'
   | 'command_result'
+  | 'file'
 
 export type ToolStream = 'stdout' | 'stderr'
+
+/**
+ * Agent-attached file metadata carried on a `file`-kind {@link MessagePart}.
+ * Sourced from the `cinna.file_*` metadata on an A2A `FilePart`. `fileId` is
+ * the Cinna backend file UUID — the renderer builds a `cinna`-sourced
+ * `MessageAttachment` from this and downloads via the OAuth bearer path
+ * (`GET /api/v1/files/{fileId}/download`), never the signed `?token=` URI.
+ */
+export interface MessagePartFile {
+  fileId: string
+  filename: string
+  mimeType: string
+  size: number
+}
 
 export interface MessagePart {
   kind: ContentKind
@@ -58,4 +81,9 @@ export interface MessagePart {
    *     wrap a `/run:*` execution; absent for LLM-initiated tool calls.
    */
   commandInvocation?: string
+  /**
+   * Set only when `kind === 'file'` — an agent-attached file (A2A FilePart).
+   * `text` is empty for file parts; the badge renders from this metadata.
+   */
+  file?: MessagePartFile
 }

@@ -36,6 +36,7 @@ const MarkdownContent = memo(function MarkdownContent({
 import { presetForAgentId } from '../../utils/agentColors'
 import { AttachmentList, type AttachmentBadgeData } from './AttachmentBadge'
 import { useFileDownload } from '../../hooks/useFileDownload'
+import { stripCinnaAttachTags } from '../../../../shared/cinnaAttach'
 
 export interface MessageMeta {
   [key: string]: unknown
@@ -159,7 +160,13 @@ export function MessageBubble({
         className={`text-sm leading-relaxed markdown-body text-[var(--color-text)] ${animate ? 'anim-assistant-bubble' : ''}`}
         style={animate && animateDelay ? { animationDelay: `${animateDelay}ms` } : undefined}
       >
-        <MarkdownContent content={content} highlight={!isStreaming} />
+        {/* Strip any `<cinna_attach>` tag the agent streamed raw — the file is
+            rendered as a separate badge. Streaming pass also hides partial tags
+            mid-stream so no fragment flashes before the turn finalizes. */}
+        <MarkdownContent
+          content={stripCinnaAttachTags(content, { streaming: isStreaming })}
+          highlight={!isStreaming}
+        />
         {isStreaming && (
           <span className="inline-block w-1.5 h-3.5 ml-0.5 bg-[var(--color-accent)] animate-pulse rounded-sm" />
         )}

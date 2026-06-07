@@ -10,7 +10,7 @@
  * Pure type-only module: imported from both Electron processes and the
  * renderer; no runtime dependencies.
  */
-import type { ContentKind, ToolStream } from './messageParts'
+import type { ContentKind, MessagePartFile, ToolStream } from './messageParts'
 
 /** Emitted exactly once before any other event so the renderer can track the request id (used by `cancelMessage`). */
 export interface AgentRequestIdEvent {
@@ -61,6 +61,12 @@ export interface AgentDeltaEvent {
   toolId?: string
   toolStream?: ToolStream
   commandInvocation?: string
+  /**
+   * Set only when `kind === 'file'` — an agent-attached file (A2A FilePart).
+   * `text` is empty for file deltas; the renderer builds a download badge from
+   * this. Each file delta is a complete attachment (no incremental assembly).
+   */
+  file?: MessagePartFile
 }
 
 /** Stream terminated cleanly — renderer drains the cache and clears streaming blocks. */

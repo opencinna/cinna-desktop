@@ -1,5 +1,10 @@
 import { create } from 'zustand'
-import type { ContentKind, MessagePart, ToolStream } from '../../../shared/messageParts'
+import type {
+  ContentKind,
+  MessagePart,
+  MessagePartFile,
+  ToolStream
+} from '../../../shared/messageParts'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 
 export type { ContentKind, ToolStream }
@@ -40,14 +45,18 @@ function appendAgentDeltaPart(
     toolId?: string
     toolStream?: ToolStream
     commandInvocation?: string
+    file?: MessagePartFile
   }
 ): MessagePart[] {
-  const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation } = delta
+  const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation, file } = delta
   const out = parts.slice()
   const last = out[out.length - 1]
   const sameKind = last && last.kind === kind
+  // `file` parts are discrete attachments — never merge them, even with an
+  // adjacent file part (two attachments must stay two badges).
   const mergeable =
     sameKind &&
+    kind !== 'file' &&
     (kind === 'tool_result'
       ? last.toolId === toolId && last.toolStream === toolStream
       : last.toolName === toolName)
@@ -66,6 +75,7 @@ function appendAgentDeltaPart(
     if (toolId) next.toolId = toolId
     if (toolStream) next.toolStream = toolStream
     if (commandInvocation) next.commandInvocation = commandInvocation
+    if (file) next.file = file
     out.push(next)
   }
   return out
@@ -84,6 +94,8 @@ interface TextBlock {
   toolStream?: ToolStream
   /** Slash invocation from `cinna.command_invocation` — see MessagePart. */
   commandInvocation?: string
+  /** Set only when `kind === 'file'` — agent-attached file (A2A FilePart). */
+  file?: MessagePartFile
 }
 
 export type StreamBlock = TextBlock | ToolCallBlock
@@ -128,7 +140,8 @@ interface ChatStore {
     toolInput?: Record<string, unknown>,
     toolId?: string,
     toolStream?: ToolStream,
-    commandInvocation?: string
+    commandInvocation?: string,
+    file?: MessagePartFile
   ) => void
   addToolCall: (tc: {
     id: string
@@ -189,15 +202,26 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null
     }),
 
-  appendDelta: (text, kind = 'text', toolName, toolInput, toolId, toolStream, commandInvocation) =>
+  appendDelta: (
+    text,
+    kind = 'text',
+    toolName,
+    toolInput,
+    toolId,
+    toolStream,
+    commandInvocation,
+    file
+  ) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
       // Mirror main-process accumulator: tool_result blocks merge on
-      // (toolId, toolStream); all other text-kinds merge on toolName.
+      // (toolId, toolStream); all other text-kinds merge on toolName. `file`
+      // blocks are discrete attachments and never merge.
       const sameKind = last?.type === 'text' && last.kind === kind
       const isMergeable =
         sameKind &&
+        kind !== 'file' &&
         (kind === 'tool_result'
           ? last.toolId === toolId && last.toolStream === toolStream
           : last.toolName === toolName)
@@ -216,6 +240,7 @@ export const useChatStore = create<ChatStore>((set) => ({
         if (toolId) next.toolId = toolId
         if (toolStream) next.toolStream = toolStream
         if (commandInvocation) next.commandInvocation = commandInvocation
+        if (file) next.file = file
         blocks.push(next)
       }
       return {
@@ -251,7 +276,8 @@ export const useChatStore = create<ChatStore>((set) => ({
                   toolInput: event.toolInput,
                   toolId: event.toolId,
                   toolStream: event.toolStream,
-                  commandInvocation: event.commandInvocation
+                  commandInvocation: event.commandInvocation,
+                  file: event.file
                 })
               }
             : b

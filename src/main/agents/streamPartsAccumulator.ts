@@ -21,6 +21,10 @@
  *   stream did not run — the command_result IS the assistant turn — so it
  *   joins the assistant message's `parts[]` and contributes to `answerText()`
  *   so chat previews / titles / search show the command output.
+ * - A2A `FilePart`s (`kind: 'file'`) are agent-authored file attachments. They
+ *   carry no text — the file metadata lives on `cinna.file_*` — and are
+ *   appended as `file` parts (deduped by `file_id`), rendered inline as a
+ *   downloadable badge. They contribute nothing to `answerText()`.
  * - `cinna.command_invocation` (any kind): verbatim slash invocation, e.g.
  *   "/files" or "/run:rotate_status". Always set on `command_result` parts;
  *   set on `tool` / `tool_result` parts only when the pair was synthesized to
@@ -40,8 +44,14 @@
  * `answerText()` returns concat of `text` and `command_result` parts — used as
  * the message preview/fallback content (`messages.content`).
  */
-import type { ContentKind, MessagePart, ToolStream } from '../../shared/messageParts'
+import type {
+  ContentKind,
+  MessagePart,
+  MessagePartFile,
+  ToolStream
+} from '../../shared/messageParts'
 import type { AgentDeltaEvent } from '../../shared/agentStreamEvents'
+import { stripCinnaAttachTags } from '../../shared/cinnaAttach'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
@@ -49,6 +59,11 @@ export const TOOL_INPUT_METADATA_KEY = 'cinna.tool_input'
 export const TOOL_ID_METADATA_KEY = 'cinna.tool_id'
 export const TOOL_STREAM_METADATA_KEY = 'cinna.tool_stream'
 export const COMMAND_INVOCATION_METADATA_KEY = 'cinna.command_invocation'
+// Agent-attachment FilePart metadata (see backend a2a_event_mapper.py).
+export const FILE_ID_METADATA_KEY = 'cinna.file_id'
+export const FILE_NAME_METADATA_KEY = 'cinna.file_name'
+export const FILE_MIME_METADATA_KEY = 'cinna.file_mime'
+export const FILE_SIZE_METADATA_KEY = 'cinna.file_size'
 
 const VALID_KINDS: readonly ContentKind[] = [
   'text',
@@ -56,13 +71,17 @@ const VALID_KINDS: readonly ContentKind[] = [
   'tool',
   'tool_result',
   'notice',
-  'command_result'
+  'command_result',
+  'file'
 ] as const
 const VALID_STREAMS: readonly ToolStream[] = ['stdout', 'stderr'] as const
 
 export interface PartLike {
   kind: string
   text?: string
+  /** Present on A2A FileParts (`kind: 'file'`); `name`/`mimeType` fall back
+   *  when the `cinna.file_*` metadata is absent. */
+  file?: { uri?: string; name?: string; mimeType?: string } | null
   metadata?: Record<string, unknown> | null
 }
 
@@ -124,6 +143,46 @@ export function partCommandInvocationOf(part: PartLike): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined
 }
 
+/**
+ * Read the agent-attachment metadata off an A2A FilePart. Returns `undefined`
+ * (so the part is skipped) when there's no `cinna.file_id` — without it the
+ * renderer can't route to the OAuth download path, and a bare signed URI isn't
+ * something we surface. Name/mime fall back to the `file` field, then to
+ * sensible defaults; size defaults to 0 when the backend omits it.
+ */
+export function partFileOf(part: PartLike): MessagePartFile | undefined {
+  const meta = part.metadata ?? undefined
+  const rawId = meta?.[FILE_ID_METADATA_KEY]
+  if (typeof rawId !== 'string' || !rawId) return undefined
+  const nameMeta = meta?.[FILE_NAME_METADATA_KEY]
+  const mimeMeta = meta?.[FILE_MIME_METADATA_KEY]
+  const sizeMeta = meta?.[FILE_SIZE_METADATA_KEY]
+  const filename =
+    (typeof nameMeta === 'string' && nameMeta) ||
+    (typeof part.file?.name === 'string' && part.file.name) ||
+    'attachment'
+  const mimeType =
+    (typeof mimeMeta === 'string' && mimeMeta) ||
+    (typeof part.file?.mimeType === 'string' && part.file.mimeType) ||
+    'application/octet-stream'
+  const size = typeof sizeMeta === 'number' && sizeMeta >= 0 ? sizeMeta : 0
+  return { fileId: rawId, filename, mimeType, size }
+}
+
+/**
+ * Outcome of routing one A2A `FilePart`. Surfaced via
+ * {@link StreamPartsAccumulatorOptions.onFile} so the host can trace agent
+ * attachments — including the *dropped* ones, which otherwise leave no signal
+ * for "my agent attached a file but nothing showed up" debugging.
+ */
+export interface AccumulatedFileEvent {
+  status: 'attached' | 'duplicate' | 'skipped'
+  fileId?: string
+  filename?: string
+  /** Set on `'skipped'` — why the part was dropped (e.g. missing file id). */
+  reason?: string
+}
+
 export interface StreamPartsAccumulatorOptions {
   /**
    * Called once per (part, name+input) pair the first time a tool part is
@@ -131,6 +190,13 @@ export interface StreamPartsAccumulatorOptions {
    * a friendly tool-call summary alongside the raw event dump.
    */
   onToolCall?: (call: { partKey: string; name: string; input: Record<string, unknown> }) => void
+  /**
+   * Called for every A2A `FilePart` the accumulator routes — `attached` (new
+   * download badge), `duplicate` (deduped by file id; expected on replay), or
+   * `skipped` (no usable `cinna.file_id`). Lets the host log attachment
+   * outcomes since the accumulator itself stays logger-free.
+   */
+  onFile?: (event: AccumulatedFileEvent) => void
 }
 
 export interface AccumulatedNotice {
@@ -143,6 +209,13 @@ export interface AccumulatedNotice {
 export class StreamPartsAccumulator {
   private seenPartText = new Map<string, string>()
   private loggedToolCalls = new Set<string>()
+  /**
+   * File ids already appended as `file` parts. The backend may emit the same
+   * attachment more than once (the same path declared twice shares one
+   * `file_id`, and history replay re-sends every part), so we attach each
+   * `file_id` exactly once — mirrors the backend's per-message dedup rule.
+   */
+  private seenFileIds = new Set<string>()
   private parts: MessagePart[] = []
   private answer = ''
   /**
@@ -169,6 +242,13 @@ export class StreamPartsAccumulator {
   private ingest(idPrefix: string, parts: PartLike[] | undefined, port: DeltaPort): void {
     if (!Array.isArray(parts)) return
     parts.forEach((part, idx) => {
+      // A2A FileParts (agent attachments) carry no text — the payload is on
+      // `metadata['cinna.file_*']`. Route them through the file path and bail
+      // before the text-delta logic, which assumes a growing `text` string.
+      if (part.kind === 'file') {
+        this.ingestFilePart(part, port)
+        return
+      }
       if (part.kind !== 'text' || typeof part.text !== 'string' || !part.text) return
       const key = `${idPrefix}:${idx}`
       const prior = this.seenPartText.get(key) ?? ''
@@ -222,6 +302,27 @@ export class StreamPartsAccumulator {
     })
   }
 
+  /**
+   * Append an agent-attached file as a `file` part and emit a `file` delta.
+   * Deduped by `file_id` (see {@link seenFileIds}). File parts never merge —
+   * each is a discrete attachment — and contribute nothing to `answerText`.
+   */
+  private ingestFilePart(part: PartLike, port: DeltaPort): void {
+    const file = partFileOf(part)
+    if (!file) {
+      this.opts.onFile?.({ status: 'skipped', reason: 'missing cinna.file_id' })
+      return
+    }
+    if (this.seenFileIds.has(file.fileId)) {
+      this.opts.onFile?.({ status: 'duplicate', fileId: file.fileId, filename: file.filename })
+      return
+    }
+    this.seenFileIds.add(file.fileId)
+    this.parts.push({ kind: 'file', text: '', file })
+    port.postMessage({ type: 'delta', kind: 'file', text: '', file })
+    this.opts.onFile?.({ status: 'attached', fileId: file.fileId, filename: file.filename })
+  }
+
   private appendToList(
     kind: ContentKind,
     delta: string,
@@ -262,11 +363,17 @@ export class StreamPartsAccumulator {
   }
 
   snapshotParts(): MessagePart[] {
-    return this.parts.slice()
+    // Strip `<cinna_attach>` tags from text the agent streamed raw — the file
+    // itself rides a separate `file` part / FilePart, so the literal tag must
+    // not persist in the visible text. Only `text`-kind parts can carry it.
+    return this.parts.map((p) =>
+      p.kind === 'text' ? { ...p, text: stripCinnaAttachTags(p.text) } : p
+    )
   }
 
   answerText(): string {
-    return this.answer
+    // Cleaned for the `messages.content` column (chat preview / title / search).
+    return stripCinnaAttachTags(this.answer)
   }
 
   /**

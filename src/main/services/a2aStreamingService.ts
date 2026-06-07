@@ -203,6 +203,16 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
     const accumulator = new StreamPartsAccumulator({
       onToolCall: ({ name, input: toolInput }) => {
         logger.info(`tool call → ${name}`, { input: toolInput })
+      },
+      onFile: (event) => {
+        if (event.status === 'attached') {
+          logger.info(`attachment → ${event.filename}`, { fileId: event.fileId })
+        } else if (event.status === 'skipped') {
+          logger.warn('attachment skipped', { reason: event.reason })
+        } else {
+          // Duplicate file id — expected on history replay / re-declared paths.
+          logger.debug('attachment deduped', { fileId: event.fileId })
+        }
       }
     })
 

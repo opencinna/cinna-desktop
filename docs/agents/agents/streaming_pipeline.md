@@ -9,7 +9,8 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 | Term | Definition |
 |------|-----------|
 | **TextPart** | A2A protocol text fragment inside a `Message` or `Artifact`. May carry arbitrary `metadata` |
-| **Content Kind** | Value of `metadata['cinna.content_kind']` on a TextPart: `'text'`, `'thinking'`, `'tool'`, `'tool_result'`, `'notice'`, or `'command_result'`. Defaults to `'text'` when absent (and when an unknown future kind arrives, for forward compatibility) |
+| **FilePart** | A2A protocol file segment (`kind: 'file'`) inside a `Message` or `Artifact` — an agent-authored attachment. Carries a `FileWithUri` and `cinna.file_*` metadata; routed to a `file`-kind `MessagePart`. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md) |
+| **Content Kind** | Value of `metadata['cinna.content_kind']`: `'text'`, `'thinking'`, `'tool'`, `'tool_result'`, `'notice'`, `'command_result'` (on TextParts), or `'file'` (on FileParts). Defaults to `'text'` when absent (and when an unknown future kind arrives, for forward compatibility) |
 | **Notice** | A `'notice'`-kind TextPart — an agent-side system message (e.g. the startup ping "Starting up the agent environment, this may take a moment…"). Never persisted as part of the assistant message — the streaming service saves each notice as its own `role: 'agent_transition'` row so it renders as a muted system message and is excluded from LLM history rebuilds |
 | **Command Result** | A `'command_result'`-kind TextPart — the synchronous output of a platform slash-command (`/files`, `/agent-status`, `/run:<name>`, …). Source is the platform's slash-command executor, not the LLM; the agent stream did not run. Joins the assistant message's `parts[]` and contributes to `answerText()` (chat preview / title / search source) because it IS the substantive answer for that turn. Rendered in a terminal-style block to signal "platform output, not LLM voice" |
 | **Tool Name** | Value of `metadata['cinna.tool_name']` on a `tool`-kind part — names the tool the agent is narrating about |
@@ -32,6 +33,8 @@ The Cinna backend (`a2a_event_mapper.py`) tags every emitted A2A `TextPart` with
 | `cinna.tool_id` | string | On `tool` and `tool_result` parts | Pairing key: same value on a `tool` part and every `tool_result` chunk that belongs to it. Backend uses `exec_id` for CLI commands and the provider tool-call id for LLM tools |
 | `cinna.tool_stream` | `'stdout' \| 'stderr'` | Only on `tool_result` parts | Stream label for command output. Renderer styles `stderr` chunks in danger color. Unknown/absent values default to `'stdout'` (backend coerces server-side) |
 | `cinna.command_invocation` | string | Always on `command_result`; on `tool` / `tool_result` only when the pair was synthesized to wrap a `/run:*` execution | Verbatim slash invocation (`/files`, `/agent-status`, `/run:rotate_status`, …). Marks the part as originating from a cinna-core slash command (absent → LLM-initiated tool call). Renderer wraps the affected blocks in a "Command: <invocation>" frame so both flows (synchronous `command_result` and tool-pair `/run:*`) read as a single slash-command UI. See [Command Results](../../chat/command_results/command_results.md) |
+| `cinna.file_id` | string | Always on `file` parts (FileParts) | Cinna backend file UUID for an agent-attached file. The renderer builds a `cinna`-sourced `MessageAttachment` from it and downloads via the OAuth bearer path; the signed `?token=` download URI on the FilePart is ignored. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md) |
+| `cinna.file_name` / `cinna.file_mime` / `cinna.file_size` | string / string / int | On `file` parts (each optional) | Display name, MIME type, byte size for the attachment badge. Fall back to the FilePart's `file.name` / `file.mimeType`, then to `attachment` / `application/octet-stream` / `0` |
 
 When metadata is absent (non-Cinna A2A servers), parts default to `kind: 'text'` — backward-compatible plain rendering.
 
@@ -45,6 +48,12 @@ A2A SDK sendMessageStream() emits events
 For each event (status-update | artifact-update | message | task):
   - Extract message and/or artifacts
   - StreamPartsAccumulator.ingestMessage / ingestArtifact:
+      For each FilePart in parts[] (kind === 'file'):
+        file = partFileOf(part)   # reads cinna.file_id/name/mime/size
+        if no file_id -> skip
+        if file_id already seen -> skip (dedup; never merge file parts)
+        append { kind: 'file', text: '', file } to internal parts[]
+        port.postMessage({ type: 'delta', kind: 'file', text: '', file })
       For each TextPart in parts[]:
         key = `${idPrefix}:${partIndex}`              # idPrefix = msg:<id> | art:<id>
         prior = seenPartText.get(key) ?? ''
@@ -101,6 +110,7 @@ Keying the seen-text map by `(messageId, partIndex)` and computing `delta = text
 | `toolId` | string \| undefined | Pairing key from `cinna.tool_id`. Set on `tool` and `tool_result` deltas |
 | `toolStream` | `'stdout' \| 'stderr' \| undefined` | Set only when `kind === 'tool_result'`. Defaulted to `'stdout'` if metadata was absent |
 | `commandInvocation` | string \| undefined | Verbatim slash invocation from `cinna.command_invocation`. Always set for `kind: 'command_result'`; set on `kind: 'tool' \| 'tool_result'` only when the pair was synthesized to wrap a `/run:*` execution. Absent → LLM-initiated tool call |
+| `file` | `{ fileId, filename, mimeType, size }` \| undefined | Set only when `kind === 'file'`. The complete attachment descriptor (no incremental assembly — one delta per file). `text` is empty for file deltas |
 
 For `kind: 'notice'` deltas, only `text` and `kind` are populated; all `tool*` fields are `undefined`. The renderer appends them as `notice` text blocks in `chat.store.streamingBlocks`, rendered as muted system messages. After the stream completes they're persisted as `role: 'agent_transition'` rows and the streaming block is cleared.
 
@@ -113,7 +123,8 @@ Stored as JSON on the `messages` row:
   { "kind": "thinking", "text": "**Considering user request**\n\nI think..." },
   { "kind": "tool", "text": "Calling search...", "toolName": "web_search", "toolInput": { "query": "weather paris" }, "toolId": "exec_123" },
   { "kind": "tool_result", "text": "Found 3 results...", "toolId": "exec_123", "toolStream": "stdout" },
-  { "kind": "text", "text": "Here is the answer..." }
+  { "kind": "text", "text": "Here is the answer..." },
+  { "kind": "file", "text": "", "file": { "fileId": "uuid", "filename": "report.pdf", "mimeType": "application/pdf", "size": 20480 } }
 ]
 ```
 
@@ -138,6 +149,7 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 - `kind: 'tool'` → `ToolNarrationBlock` (collapsible card with wrench icon). Header is `Tool: <toolName>` in compact mode; in verbose mode and when `toolInput` is present, the header renders an inline `<ToolCallSummary>` (`name(arg: value, …)`). Expanded body always shows the structured `<ToolCallSummary>` block when `toolInput` is present. See [Verbose Mode](../../ui/verbose_mode/verbose_mode.md) for the gating rules
 - `kind: 'tool_result'` → `ToolResultBlock` (collapsible monospace card with terminal icon). Renders the raw stdout/stderr emitted by a tool execution; `stderr` chunks switch to danger-color styling. The block is shown immediately under its originating `tool` part — the in-order parts list places them adjacent naturally, no explicit lookup needed
 - `kind: 'command_result'` → `CommandResultBlock` (bordered card with terminal icon and `Command output` header, markdown-rendered body). Default-expanded inline because it IS the assistant turn (the agent stream did not run), not auxiliary narration. Visually distinct from the assistant text bubble so the user can see they're looking at platform output, not an LLM voice
+- `kind: 'file'` → `AgentAttachment` (downloadable badge via `AttachmentList`, left-aligned). The FilePart arrives at finalize, so the badge renders below the reply text (end of the turn) — the mirror of how a user's own attachments render under their message. Click downloads via the Cinna OAuth bearer path. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md)
 - `kind: 'notice'` → live during streaming via a `notice` block in `chat.store.streamingBlocks`, rendered through `NoticeBlock` with `live` (left-aligned `Info`+text row, no collapse). Persisted as a `role: 'agent_transition'` row that also renders through `NoticeBlock`, with `defaultExpanded={verboseMode}` — compact mode collapses to a small info-toned dot the user clicks to read; verbose mode keeps the row expanded inline. Notices never appear in an assistant message's `parts[]`
 
 Streaming blocks merge consecutive deltas with the same merge rule as the main-process accumulator: `text` / `thinking` / `command_result` merge by kind; `tool` adds `toolName`; `tool_result` requires both `toolId` AND `toolStream` to match.
@@ -152,7 +164,7 @@ Streaming blocks merge consecutive deltas with the same merge rule as the main-p
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
 - Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleAgent` <!-- nocheck -->
 - Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
-- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`, `src/renderer/src/components/chat/CommandResultBlock.tsx`, `src/renderer/src/components/chat/NoticeBlock.tsx`. Both live and persisted notices route through `NoticeBlock` (live: forced-expanded row; persisted: collapsed dot or expanded row per verbose mode)
+- Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`, `src/renderer/src/components/chat/CommandResultBlock.tsx`, `src/renderer/src/components/chat/AgentAttachment.tsx` (`file` kind), `src/renderer/src/components/chat/NoticeBlock.tsx`. Both live and persisted notices route through `NoticeBlock` (live: forced-expanded row; persisted: collapsed dot or expanded row per verbose mode)
 
 ## Backward Compatibility
 
@@ -164,5 +176,6 @@ Streaming blocks merge consecutive deltas with the same merge rule as the main-p
 ## Integration Points
 
 - [Agents](agents.md) — Owns the broader A2A integration; this doc is its streaming-pipeline aspect
+- [Agent Attachments](../../chat/agent_attachments/agent_attachments.md) — The `file`-kind aspect: FilePart → downloadable badge, OAuth download path
 - [Conversation UI](../../chat/conversation_ui/conversation_ui.md) — Visual treatment of `thinking` and `tool` blocks
 - [Messaging](../../chat/messaging/messaging.md) — Underlying streaming infrastructure (MessagePort, `chat.store`)

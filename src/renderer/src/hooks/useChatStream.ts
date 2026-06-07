@@ -123,7 +123,8 @@ export function useChatStream(): {
             event.toolInput,
             event.toolId,
             event.toolStream,
-            event.commandInvocation
+            event.commandInvocation,
+            event.file
           )
           break
         case 'done':

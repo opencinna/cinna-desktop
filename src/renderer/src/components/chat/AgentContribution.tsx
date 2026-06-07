@@ -6,6 +6,7 @@ import { ThinkingBlock } from './ThinkingBlock'
 import { ToolNarrationBlock } from './ToolNarrationBlock'
 import { ToolResultBlock } from './ToolResultBlock'
 import { CommandResultBlock } from './CommandResultBlock'
+import { AgentAttachment } from './AgentAttachment'
 import { type RenderNode, groupConsecutiveCollapsibles } from './CollapsibleGroup'
 
 interface AgentContributionProps {
@@ -107,6 +108,8 @@ export function AgentContribution({
           <CommandResultBlock content={p.text} commandInvocation={p.commandInvocation} isStreaming={live} />
         )
       })
+    } else if (p.kind === 'file' && p.file) {
+      renderNodes.push({ slot: 'plain', key: k, node: <AgentAttachment file={p.file} align="left" /> })
     } else {
       renderNodes.push({
         slot: 'plain',
