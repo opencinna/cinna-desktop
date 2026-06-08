@@ -108,6 +108,18 @@
     background-color: transparent;
   }
 
+  /* Light theme background image on body; #root is transparent so it shows through */
+  [data-theme="light"] body {
+    background-image: url('./light-background-gradient-mesh-1.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed;
+  }
+  [data-theme="light"] #root {
+    background-color: transparent;
+  }
+
   /* Sidebar surface: floating card slightly inset from window edges. macOS
      traffic lights overlay its top-left header (the 8 px inset is small enough
      that they still land inside the filled rounded corner). */
