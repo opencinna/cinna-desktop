@@ -15,6 +15,7 @@ import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
 import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
+import { useCatalogPicker } from '../../hooks/useCatalogPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
 import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
@@ -318,6 +319,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     onTogglePendingAgent,
     onTogglePendingMcp
   })
+
+  // Catalog section of the picker — not-yet-installed bundles the user can
+  // quick-install inline. On success the new agent is selected via the same
+  // `toggleCapability` routing (it's freshly synced and unselected, so toggle
+  // engages it: pending buffer for a new chat, on-demand attach for active).
+  const {
+    catalogItems,
+    installingBundleId,
+    install: installCatalogBundle,
+    error: catalogInstallError
+  } = useCatalogPicker(toggleCapability)
 
   /**
    * Two backing flows feed the [+] button:
@@ -1073,6 +1085,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         items={capabilityItems}
         selectedIds={selectedCapabilityIds}
         onToggle={toggleCapability}
+        catalogItems={catalogItems}
+        installingBundleId={installingBundleId}
+        onInstallCatalog={installCatalogBundle}
+        catalogError={catalogInstallError}
         onClose={() => setCapabilityPickerOpen(false)}
         searchPlaceholder="Search agents and MCP servers…"
         emptyLabel="No agents or MCP servers available"
@@ -1084,7 +1100,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             canAttachFiles={canShowAttachButton && !isStreaming}
             uploading={isUploading}
             onAttachFiles={() => void pickAttachments()}
-            hasCapabilities={hasCapabilities}
+            hasCapabilities={hasCapabilities || catalogItems.length > 0}
             onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
             modeMenu={chatModeMenu}
             activeModeColor={modeColor ? { border: modeColor.border } : null}

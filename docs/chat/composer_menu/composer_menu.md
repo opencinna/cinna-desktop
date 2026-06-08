@@ -11,6 +11,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - **Capability Picker** — The card modal opened by **Add agents / MCP** (`AgentPickerModal` in `activeFirst` multi-select mode): an autofocused search box over a grid of agent + MCP cards.
 - **Active-First Ordering** — On open, already-selected cards float to the top; they then hold position while the user toggles (a card never jumps under the cursor). The order snapshot re-sorts only on the next open or when the available capability set changes. Ported from the cinna-mobile picker.
 - **Chat-mode Sub-menu** — An in-place sub-view of the `[+]` menu (back-navigable) listing the user's chat modes, mirroring the `~` shortcut popup.
+- **Catalog Section** — A dedicated group at the bottom of the Capability Picker listing every cinna-server bundle the user hasn't installed yet. Each card carries an **Install** button (not a selection toggle); a one-click quick install runs inline, the card spins while installing, and on success the new agent is selected automatically. Cinna-only — empty for non-Cinna profiles. See [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md).
 
 ## User Stories / Flows
 
@@ -31,6 +32,11 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 2. Agents and MCP servers render as cards; currently-engaged ones appear selected and sorted to the top.
 3. Clicking a card toggles it (the modal stays open for multiple picks); typing filters by name / description / protocol / transport.
 4. Each toggle runs the same engage/detach action as an `@`-mention (see Business Rules). The footer capability chips and the new-chat comm-pattern badge update accordingly.
+
+### Install from the Catalog (Cinna users)
+1. Below the user's own agents/MCP, a **Catalog** group lists every visible cinna-server bundle the user hasn't installed.
+2. User clicks **Install** on a catalog card → the card spins while a quick install runs (server install → remote-agent sync → local agent appears). Other Install buttons disable during the in-flight install.
+3. On success the freshly-installed agent drops out of the Catalog group, appears as a normal capability card, and is auto-selected — ready to start the chat. If the install is missing credentials nothing extra happens here: the agent auto-replies "setup not complete" on the first message (handled by [Agents](../../agents/agents/agents.md)), so the in-chat flow stays one click.
 
 ## Business Rules
 

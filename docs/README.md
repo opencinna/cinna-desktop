@@ -103,7 +103,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Agents](agents/agents/agents.md) — A2A protocol agent management, card discovery, streaming chat via external agents
 - [A2A Streaming Pipeline](agents/agents/streaming_pipeline.md) — Per-part delta computation, `cinna.content_kind` / `cinna.tool_name` metadata contract (text, thinking, tool, tool_result, notice, command_result), structured `parts[]` persistence
 - [Remote Agents](agents/remote_agents/remote_agents.md) — Auto-sync agents from Cinna backend, categorized display, JWT-based A2A communication
-- [Bundles Catalog](agents/bundles_catalog/bundles_catalog.md) — Settings → Profile → Catalog: browse cinna-server agent bundles, one-click Quick Install, post-install setup modal that deep-links missing credentials to the cinna-server web pages and polls until the runtime gate clears
+- [Bundles Catalog](agents/bundles_catalog/bundles_catalog.md) — Settings → Profile → Catalog: browse cinna-server agent bundles, one-click Quick Install, post-install setup modal that deep-links missing credentials to the cinna-server web pages and polls until the runtime gate clears. Sub-doc: [Inline Catalog Install](agents/bundles_catalog/inline_install.md) — a **Catalog** section in the chat composer's add-agents picker that quick-installs a bundle and auto-selects the resulting agent in one click (no Settings detour; skips the setup gate)
 - [Agent Status](agents/agent_status/agent_status.md) — Title-bar activity indicator + frosted-glass modal surfacing per-agent self-reported status (severity, summary, markdown body) with one-click "Start chat"
 
 ### Jobs

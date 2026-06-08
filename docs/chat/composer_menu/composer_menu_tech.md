@@ -4,12 +4,13 @@
 
 ### Renderer — components
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the `[+]` button + popover. Owns `open` and `view: 'root' | 'modes'` state, outside-click / Esc close, and the chat-mode sub-view. Purely presentational — all data/handlers arrive via props.
-- `src/renderer/src/components/agents/AgentPickerModal.tsx` — shared card-grid modal (portal-rendered, autofocused search, multi-select). Extended with the `activeFirst` prop for this feature; also used by Jobs (`JobEditForm`).
+- `src/renderer/src/components/agents/AgentPickerModal.tsx` — shared card-grid modal (portal-rendered, autofocused search, multi-select). Extended with the `activeFirst` prop for this feature; also used by Jobs (`JobEditForm`). The optional `catalogItems` / `installingBundleId` / `onInstallCatalog` / `catalogError` props render the bottom **Catalog** section (Install cards with a spinner, plus an inline error row; the `CatalogPickerItem` type lives here too).
 - `src/renderer/src/components/chat/ChatInput.tsx` — composer host. Renders `ComposerPlusMenu` as the first footer-left element and the `AgentPickerModal` (gated by `capabilityPickerOpen`); wires `pickAttachments`, `chatModeMenu`, and the capability picker.
 - `src/renderer/src/components/layout/MainArea.tsx` — owns new-chat selection state and the chat-mode select handlers; passes `chatModeMenu` to both `ChatInput` instances.
 
 ### Renderer — hooks
 - `src/renderer/src/hooks/useCapabilityPicker.ts` — builds the picker's `items` / `selectedIds` / `toggle` / `hasCapabilities`. Encapsulates the `@`-mirroring routing (new-chat pending buffers vs active-chat on-demand). Owns its own on-demand read/mutation instances.
+- `src/renderer/src/hooks/useCatalogPicker.ts` — backs the **Catalog** section: filters `useCatalog()` to non-installed bundles, and `install(bundleId)` runs `catalog.quickInstall` → awaits `agents.syncRemote` → invalidates + `fetchQuery(['agents'])` → finds the new agent (`remoteTargetId === installId`) → calls `onInstalled` (wired to `toggleCapability` so the new agent is selected). Awaiting the sync is the reason it doesn't reuse the fire-and-forget `useRefreshCatalogState`; cache writes stay inside React Query's invalidate/fetch flow rather than a direct `setQueryData`. Returns `error` (surfaced inline in the modal). Skips the setup-status gate the settings catalog uses. Cinna-only via `useCatalog`'s gating.
 - `src/renderer/src/hooks/useAgents.ts` — `useAttachAgentToChat` (promote + add on-demand agent), `useChatOnDemandAgents`, `useRemoveOnDemandAgent`, `usePromoteToOrchestrated`.
 - `src/renderer/src/hooks/useMcp.ts` — `useMcpProviders`, `useAddOnDemandMcp`, `useChatOnDemandMcps`, `useRemoveOnDemandMcp`.
 - `src/renderer/src/hooks/useChatAttachments.ts` — backs the **Attach files** action (`pick`).

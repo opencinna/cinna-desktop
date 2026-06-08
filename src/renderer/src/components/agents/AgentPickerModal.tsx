@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, Check, Plug, Search, X } from 'lucide-react'
+import { AlertTriangle, Bot, Check, Download, Loader2, Plug, Search, Sparkles, X } from 'lucide-react'
 
 export interface AgentPickerItem {
   id: string
@@ -12,6 +12,22 @@ export interface AgentPickerItem {
   group?: string | null
   /** Card glyph. `'connector'` renders a Plug (MCP); default is a Bot (agent). */
   iconKind?: 'agent' | 'connector'
+}
+
+/**
+ * A not-yet-installed catalog bundle, rendered in the dedicated "Catalog"
+ * section at the bottom of the picker. Unlike {@link AgentPickerItem} these
+ * carry an Install action rather than a selection toggle — installing one
+ * makes it a normal selectable capability (see `useCatalogPicker`).
+ */
+export interface CatalogPickerItem {
+  bundleId: string
+  name: string
+  description?: string | null
+  /** Publisher attribution shown under the name. */
+  meta?: string | null
+  /** Publisher email, shown alongside the attribution. */
+  email?: string | null
 }
 
 interface AgentPickerModalProps {
@@ -45,6 +61,21 @@ interface AgentPickerModalProps {
    * Renders a single flat grid (group labels are ignored).
    */
   activeFirst?: boolean
+  // --- catalog section (optional, multi-select only) ---
+  /**
+   * Not-yet-installed catalog bundles shown in a dedicated section at the
+   * bottom of the list. Each renders with an Install button instead of a
+   * selection toggle; installing one quick-installs it and hands the new
+   * agent id back through `onInstallCatalog` so the owner can select it.
+   */
+  catalogItems?: CatalogPickerItem[]
+  /** Bundle id whose install is currently in flight (drives the spinner). */
+  installingBundleId?: string | null
+  onInstallCatalog?: (bundleId: string) => void
+  /** Section label for the catalog group. */
+  catalogLabel?: string
+  /** Last install error, shown inline above the catalog cards. */
+  catalogError?: string | null
 }
 
 interface NoneEntry {
@@ -80,7 +111,12 @@ export function AgentPickerModal({
   noneDescription,
   selectedIds,
   onToggle,
-  activeFirst = false
+  activeFirst = false,
+  catalogItems,
+  installingBundleId = null,
+  onInstallCatalog,
+  catalogLabel = 'Catalog',
+  catalogError = null
 }: AgentPickerModalProps): React.ReactPortal | null {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
@@ -135,6 +171,21 @@ export function AgentPickerModal({
     () => orderedItems.filter((i) => matches(i, query)),
     [orderedItems, query]
   )
+
+  // Catalog bundles run through the same search filter (name / description /
+  // publisher) but render in their own section, outside the keyboard-nav
+  // `entries` list — they're mouse-driven Install actions, not selectable rows.
+  const filteredCatalog = useMemo(() => {
+    const list = catalogItems ?? []
+    if (!query) return list
+    const q = query.toLowerCase()
+    return list.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        !!c.description?.toLowerCase().includes(q) ||
+        !!c.meta?.toLowerCase().includes(q)
+    )
+  }, [catalogItems, query])
 
   const entries: Entry[] = useMemo(() => {
     const list: Entry[] = []
@@ -289,7 +340,7 @@ export function AgentPickerModal({
 
         {/* Card grid */}
         <div className="px-4 pb-4 overflow-y-auto flex-1 min-h-0">
-          {entries.length === 0 ? (
+          {entries.length === 0 && filteredCatalog.length === 0 ? (
             <div className="h-full flex items-center justify-center text-xs text-[var(--color-text-muted)]">
               {emptyLabel}
             </div>
@@ -399,6 +450,87 @@ export function AgentPickerModal({
                   </div>
                 </div>
               ))}
+
+              {/* Catalog section — not-yet-installed bundles with a quick
+                  Install action. Sits at the very bottom, after the user's
+                  own agents/MCP. */}
+              {filteredCatalog.length > 0 && (
+                <div>
+                  <div className="flex items-center gap-1.5 mb-1.5 text-[10px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+                    <Sparkles size={11} />
+                    {catalogLabel}
+                  </div>
+                  {catalogError && (
+                    <div className="flex items-start gap-1.5 mb-2 px-2.5 py-1.5 rounded-md border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 text-[11px] text-[var(--color-text-secondary)]">
+                      <AlertTriangle
+                        size={12}
+                        className="mt-0.5 shrink-0 text-[var(--color-danger)]"
+                      />
+                      <span className="min-w-0">{catalogError}</span>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-2">
+                    {filteredCatalog.map((item) => {
+                      const isInstalling = installingBundleId === item.bundleId
+                      const busy = installingBundleId !== null
+                      return (
+                        <div
+                          key={item.bundleId}
+                          className="relative flex flex-col p-3 rounded-lg border bg-[var(--color-bg-secondary)] border-[var(--color-border)]"
+                        >
+                          {isInstalling && (
+                            <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-[var(--color-bg-secondary)]/70 backdrop-blur-sm">
+                              <Loader2
+                                size={20}
+                                className="animate-spin text-[var(--color-accent)]"
+                              />
+                            </div>
+                          )}
+                          <div className="flex items-center gap-2">
+                            <div className="shrink-0 w-7 h-7 rounded-md flex items-center justify-center bg-[var(--color-bg)] text-[var(--color-text-muted)]">
+                              <Bot size={14} />
+                            </div>
+                            <span className="min-w-0 flex-1 truncate text-xs font-medium text-[var(--color-text)]">
+                              {item.name}
+                            </span>
+                          </div>
+                          {item.description && (
+                            <div className="mt-1.5 text-[10px] line-clamp-2 text-[var(--color-text-muted)]">
+                              {item.description}
+                            </div>
+                          )}
+                          {(item.meta || item.email) && (
+                            <div className="mt-1.5 text-[9px] text-[var(--color-text-muted)] truncate">
+                              by {item.meta ?? item.email}
+                              {item.meta && item.email && ` <${item.email}>`}
+                            </div>
+                          )}
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onInstallCatalog?.(item.bundleId)}
+                            className="mt-2 inline-flex items-center justify-center gap-1 px-2 py-1 rounded-md text-[11px] font-medium
+                              bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
+                              disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                          >
+                            {isInstalling ? (
+                              <>
+                                <Loader2 size={11} className="animate-spin" />
+                                Installing…
+                              </>
+                            ) : (
+                              <>
+                                <Download size={11} />
+                                Install
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
