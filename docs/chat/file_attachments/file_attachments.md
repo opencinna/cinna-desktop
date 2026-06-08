@@ -14,13 +14,14 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 - **Media Part** — Resolver output for the LLM stream loop. Three variants: `image` (raster bytes), `document` (native non-image bytes like PDF), `text` (UTF-8 string from extraction). Adapters translate to provider-native blocks.
 - **Text Extractor** — Service that converts office docs (DOCX/XLSX/PPTX/ODT/…), PDFs (when the model has no native PDF support), and code/CSV/JSON files into UTF-8 text the LLM can read. Backed by `officeparser` for binary office formats.
 - **Path Guard** — Allowlist of OS paths the renderer is permitted to reference. Populated by file dialogs and the `webUtils.getPathForFile` preload wrapper. Defense-in-depth against a compromised renderer.
+- **`[+]` Composer Menu** — The single left-side composer entry point (`ComposerPlusMenu`). Opens a small menu whose **Attach files** item triggers the picker described here; the same menu also hosts **Chat mode** and **Add agents / MCP**. Attachment gating below governs whether the **Attach files** item shows. Drag-and-drop is unchanged and independent of the menu.
 - **`cinna_file_ids` Metadata** — A2A message metadata key carrying Cinna file UUIDs. Backend forwards bytes into the agent environment's `./uploads/` before the agent receives the message.
 
 ## User Stories / Flows
 
 ### Attaching a file in an active LLM chat
 1. User is in a chat bound to an LLM provider (no remote agent active).
-2. `[+]` button appears if the selected model declares any accepted MIME types.
+2. The `[+]` menu's **Attach files** item appears if the selected model declares any accepted MIME types.
 3. User picks files via the menu or drags them onto the composer.
 4. Bytes are copied into the per-user local store (`chat_files` table + `userData/files/...`). Badges appear in the composer.
 5. User sends. The stream loop reads the persisted attachments, runs each through the text extractor or passes native bytes, and hands the adapter resolved `MediaPart[]`.
@@ -28,12 +29,12 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 
 ### Attaching a file in a chat bound to a Cinna remote agent
 1. User is in a chat bound to a Cinna-source remote agent (direct A2A).
-2. `[+]` appears for Cinna users.
+2. The `[+]` menu's **Attach files** item appears for Cinna users.
 3. Picked/dropped files stream to the Cinna backend (`POST /api/v1/files/upload`).
 4. On send, the A2A request carries `metadata.cinna_file_ids` — bytes are referenced, not retransmitted.
 
 ### Attaching on the new-chat screen
-1. `[+]` appears when the user has any plausible destination — a Cinna account, or at least one enabled LLM provider with an API key.
+1. The `[+]` menu's **Attach files** item appears when the user has any plausible destination — a Cinna account, or at least one enabled LLM provider with an API key.
 2. Picked/dropped files do NOT upload yet — they're held as `pending` attachments whose `id` carries the absolute OS path.
 3. Badges render from filename + size alone, immediately.
 4. User picks an agent or chat mode and types a message.
@@ -60,10 +61,11 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 ## Business Rules
 
 ### Destination gating
-- **Active chat with remote agent active**: `[+]` available for Cinna users. Scope = `cinna`.
-- **Active LLM chat** (no agent): `[+]` available when the selected model's capability has at least one accepted MIME type. Scope = `local`.
-- **Active chat with local-A2A agent**: `[+]` hidden. No backend can receive the files.
-- **New-chat screen**: `[+]` available when the user has a Cinna account OR any enabled LLM provider with an API key. Scope decision deferred to send time.
+(Governs the **Attach files** item in the `[+]` menu — `canShowAttachButton` in `ChatInput`.)
+- **Active chat with remote agent active**: available for Cinna users. Scope = `cinna`.
+- **Active LLM chat** (no agent): available when the selected model's capability has at least one accepted MIME type. Scope = `local`.
+- **Active chat with local-A2A agent**: hidden. No backend can receive the files.
+- **New-chat screen**: available when the user has a Cinna account OR any enabled LLM provider with an API key. Scope decision deferred to send time.
 - Pending attachments auto-clear when the user pivots to a target whose scope differs from the queued scope.
 
 ### Capability-driven adapter routing

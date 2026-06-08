@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Bot, Check, Plug, Search, X } from 'lucide-react'
 
@@ -37,6 +37,14 @@ interface AgentPickerModalProps {
   // --- multi-select props ---
   selectedIds?: Set<string>
   onToggle?: (id: string) => void
+  /**
+   * Active-first ordering (multi-select only): selected items float to the top
+   * when the modal opens, then hold their position while the user toggles
+   * (so a card never jumps under the cursor). The snapshot re-sorts on the next
+   * open or when the item set itself changes. Mirrors the cinna-mobile picker.
+   * Renders a single flat grid (group labels are ignored).
+   */
+  activeFirst?: boolean
 }
 
 interface NoneEntry {
@@ -71,13 +79,23 @@ export function AgentPickerModal({
   noneLabel = 'No agent',
   noneDescription,
   selectedIds,
-  onToggle
+  onToggle,
+  activeFirst = false
 }: AgentPickerModalProps): React.ReactPortal | null {
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const cardRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const cardRefs = useRef<(HTMLButtonElement | null)[]>([])
+
+  // Active-first snapshot. Read selection through a ref so toggling doesn't
+  // re-sort the list (the snapshot only refreshes on open or when the item
+  // set's identity changes). Array.sort is stable, so within each bucket the
+  // original order is preserved.
+  const selectedIdsRef = useRef(selectedIds)
+  selectedIdsRef.current = selectedIds
+  const [order, setOrder] = useState<string[]>([])
+  const capSig = useMemo(() => items.map((i) => i.id).join('|'), [items])
 
   // Reset state each time the modal is opened.
   useEffect(() => {
@@ -88,7 +106,35 @@ export function AgentPickerModal({
     return () => window.clearTimeout(t)
   }, [open])
 
-  const filtered = useMemo(() => items.filter((i) => matches(i, query)), [items, query])
+  // (Re)compute the active-first snapshot at open time and whenever the item
+  // set changes while open. Layout effect so the reorder lands before paint —
+  // otherwise a reopen briefly shows the previous snapshot's order.
+  useLayoutEffect(() => {
+    if (!activeFirst || !open) return
+    const sel = selectedIdsRef.current
+    setOrder(
+      [...items]
+        .sort((a, b) => Number(!!sel?.has(b.id)) - Number(!!sel?.has(a.id)))
+        .map((i) => i.id)
+    )
+  }, [open, capSig, activeFirst]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Items in snapshot order (active-first mode); plain `items` otherwise. Any
+  // item missing from the snapshot (added while open) is appended.
+  const orderedItems = useMemo(() => {
+    if (!activeFirst || order.length === 0) return items
+    const byId = new Map(items.map((i) => [i.id, i]))
+    const ranked = order
+      .map((id) => byId.get(id))
+      .filter((i): i is AgentPickerItem => !!i)
+    const inSnapshot = new Set(order)
+    return [...ranked, ...items.filter((i) => !inSnapshot.has(i.id))]
+  }, [activeFirst, order, items])
+
+  const filtered = useMemo(
+    () => orderedItems.filter((i) => matches(i, query)),
+    [orderedItems, query]
+  )
 
   const entries: Entry[] = useMemo(() => {
     const list: Entry[] = []
@@ -104,7 +150,10 @@ export function AgentPickerModal({
   }, [allowNone, multiSelect, filtered, noneDescription, noneLabel, query])
 
   // Group agent entries by group label, preserving order of first appearance.
+  // Active-first mode renders a single flat grid (the snapshot order already
+  // carries the active-first ranking, so section breaks would fight it).
   const grouped = useMemo(() => {
+    if (activeFirst) return [{ label: null as string | null, entries }]
     const sections: Array<{ label: string | null; entries: Entry[] }> = []
     const indexByLabel = new Map<string | null, number>()
     for (const e of entries) {
@@ -118,7 +167,7 @@ export function AgentPickerModal({
       sections[idx].entries.push(e)
     }
     return sections
-  }, [entries])
+  }, [entries, activeFirst])
 
   // Clamp activeIndex into range whenever the filtered list changes.
   useEffect(() => {

@@ -9,7 +9,7 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 - **Chat Mode** — A saved configuration preset with a name, optional LLM provider/model, a set of MCP providers, and a color from 10 presets
 - **Default Chat Mode** — At most one mode per user can be flagged `isDefault`. The new-chat screen auto-applies it whenever the user lands there without an explicit choice — this is the only implicit fallback when routing a message; there is no longer a "default LLM provider" concept
 - **Color Preset** — One of 10 named color themes (slate, indigo, violet, rose, amber, emerald, cyan, sky, orange, fuchsia) that visually distinguish modes in the UI
-- **Mode Selection** — Choosing a mode from the `+` popup below the chat input; available on both the new-chat screen and active chats that were created with a mode
+- **Mode Selection** — Choosing a mode from the **Chat mode** sub-menu of the left-side `[+]` composer menu (`ComposerPlusMenu`), or via the `~` sole-character keyboard shortcut; available on both the new-chat screen and active chats that were created with a mode. (The standalone `ChatConfigMenu` `+` button was retired — its modes list now lives inside the unified `[+]` menu.)
 
 ## User Stories / Flows
 
@@ -27,26 +27,26 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 
 ### Starting a chat with a mode
 1. User is on the new-chat screen ("What can I help with?")
-2. User clicks the `+` button below the chat input
-3. Popup shows all defined modes as colored cards with name, model, and MCP summary
+2. User clicks the `[+]` button below the chat input and chooses **Chat mode**
+3. The sub-menu shows all defined modes as colored rows with name, model, and MCP summary
 4. Hover highlights the card with the mode's color tint and a left border accent
 5. User clicks a mode — popup closes, the input border and background tint to the mode's color
 6. User types a message and sends — chat is created with the mode's provider, model, and MCP configuration
 7. Mode resets after the chat is created
 
 ### Deselecting a mode (new-chat screen)
-1. User clicks the `+` button again and clicks the already-selected mode
+1. User reopens the `[+]` → **Chat mode** sub-menu and clicks the already-selected mode
 2. Mode deselects — input returns to default styling. Without a mode (and without a selected agent) the next send raises an inline "can't determine destination" error banner above the input; the user has to pick a mode or an agent to send
 
 ### Switching mode on an active chat
-1. User is in a chat that was created with a mode — the input border/background shows the mode's color, and the `+` button appears below the input
-2. User clicks the `+` button and selects a different mode
+1. User is in a chat that was created with a mode — the input border/background and the `[+]` button show the mode's color
+2. User opens the `[+]` → **Chat mode** sub-menu and selects a different mode
 3. The chat's provider, model, and MCP configuration update to match the new mode
 4. Input styling changes to the new mode's color
 5. Subsequent messages use the new mode's configuration
 
 ### Deselecting a mode on an active chat
-1. User clicks the `+` button and clicks the currently active mode
+1. User opens the `[+]` → **Chat mode** sub-menu and clicks the currently active mode
 2. Mode clears — `modeId` is removed from the chat, input returns to default styling
 3. The chat falls back to standard ChatControls (model picker + MCP toggles) for manual configuration
 
@@ -73,14 +73,15 @@ Settings UI (ChatModesSection / ChatModeCard / ChatModeForm)
   -> IPC chatmode:* handlers
   -> SQLite chat_modes table
 
-New Chat Screen (MainArea + ChatConfigMenu popup)
-  -> User selects mode from popup
+New Chat Screen (MainArea -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
+  -> User selects mode from the sub-menu (or via the `~` shortcut popup)
   -> Mode's provider/model/MCPs are applied to the new chat
-  -> Chat input border/bg tint to mode color
+  -> Chat input border/bg + `[+]` button tint to mode color
   -> On send: chat created with mode_id, provider, model, MCPs
 
-Active Chat (MainArea + ChatConfigMenu popup)
-  -> Chat has mode_id -> ChatConfigMenu shown instead of ChatControls
+Active Chat (MainArea -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
+  -> Chat has mode_id -> "Chat mode" sub-menu offered; ChatControls hidden
+  -> Chat without mode_id -> no "Chat mode" item; ChatControls shown (model + MCP)
   -> User switches mode -> chat's provider/model/MCPs updated
   -> Chat input border/bg tint to active mode color
   -> Deselecting mode -> modeId cleared, falls back to ChatControls

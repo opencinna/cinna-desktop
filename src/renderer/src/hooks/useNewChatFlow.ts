@@ -18,10 +18,11 @@ type ModelData = Awaited<ReturnType<typeof window.api.providers.listModels>>[num
 export interface NewChatOptions {
   message: string
   /**
-   * Full agent selection (AgentSelector primary + every `@`-mentioned agent),
-   * de-duped. Decides routing: exactly one agent with no on-demand MCPs binds
-   * that agent as the chat root (direct A2A); anything else creates an
-   * LLM-root chat and exposes each agent as an orchestrated tool.
+   * The new-chat agent pick list (`pendingAgentIds`) — populated by the `[+]`
+   * capability picker and the `@` popup. Decides routing: exactly one agent
+   * with no on-demand MCPs binds that agent as the chat root (direct A2A);
+   * anything else creates an LLM-root chat and exposes each agent as an
+   * orchestrated tool.
    */
   agentIds: string[]
   mode: ChatModeData | null

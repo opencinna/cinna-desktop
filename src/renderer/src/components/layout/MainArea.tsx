@@ -9,8 +9,6 @@ import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
 import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
 import { NoteDetail } from '../notes/NoteDetail'
-import { ChatConfigMenu } from '../chat/ChatConfigMenu'
-import { AgentSelector } from '../chat/AgentSelector'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { resolveMcpNames } from '../../utils/mcpNames'
@@ -25,8 +23,6 @@ import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
 import type { ComposerAttachment } from '../../../../shared/attachments'
-
-type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
 
 export function MainArea(): React.JSX.Element {
   const { activeView, pendingAgentId, setPendingAgentId } = useUIStore()
@@ -44,18 +40,19 @@ export function MainArea(): React.JSX.Element {
   const setChatMcp = useSetChatMcpProviders()
   const { startNewChat } = useNewChatFlow()
   const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
-  const [selectedAgent, setSelectedAgent] = useState<AgentData | null>(null)
   // On-demand MCP buffer for the new-chat screen — the chat row doesn't
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
   const [pendingMcpIds, setPendingMcpIds] = useState<string[]>([])
-  // On-demand agent buffer — symmetric to `pendingMcpIds`. The `@` popup
-  // routes every agent pick here; the AgentSelector dropdown's primary pick
-  // (`selectedAgent`) is unioned with this at send time.
+  // The new-chat agent set — a single ordered list. Both the `[+]` capability
+  // picker and the `@` popup toggle into it; the "primary" agent (first picked)
+  // is derived below for example-prompt sourcing and the comm badge.
   const [pendingAgentIds, setPendingAgentIds] = useState<string[]>([])
 
   const togglePendingMcp = useCallback((mcpId: string) => {
-    setPendingMcpIds((curr) => (curr.includes(mcpId) ? curr : [...curr, mcpId]))
+    setPendingMcpIds((curr) =>
+      curr.includes(mcpId) ? curr.filter((id) => id !== mcpId) : [...curr, mcpId]
+    )
   }, [])
 
   const removePendingMcp = useCallback((mcpId: string) => {
@@ -71,6 +68,15 @@ export function MainArea(): React.JSX.Element {
   const removePendingAgent = useCallback((agentId: string) => {
     setPendingAgentIds((curr) => curr.filter((id) => id !== agentId))
   }, [])
+  // Primary new-chat agent — the first one picked. Sources example prompts and
+  // the comm-pattern badge; replaces the old standalone AgentSelector pick.
+  const selectedAgent = useMemo(
+    () =>
+      pendingAgentIds[0]
+        ? (agentList ?? []).find((a) => a.id === pendingAgentIds[0]) ?? null
+        : null,
+    [pendingAgentIds, agentList]
+  )
   const examplePrompts = useMemo(() => extractExamplePrompts(selectedAgent), [selectedAgent])
   const chatInputRef = useRef<ChatInputHandle>(null)
   const inputWrapperRef = useRef<HTMLDivElement>(null)
@@ -108,15 +114,9 @@ export function MainArea(): React.JSX.Element {
     ? new Set(activeMode.mcpProviderIds)
     : defaultMcpIds
 
-  // The full agent set for the new chat = AgentSelector primary (if any)
-  // unioned with every `@`-mentioned agent, de-duped. Drives both the routing
-  // decision and the badge.
-  const combinedAgentIds = useMemo(() => {
-    const ids: string[] = []
-    if (selectedAgent) ids.push(selectedAgent.id)
-    for (const id of pendingAgentIds) if (!ids.includes(id)) ids.push(id)
-    return ids
-  }, [selectedAgent, pendingAgentIds])
+  // The full agent set for the new chat is just the ordered pick list. Drives
+  // both the routing decision and the badge.
+  const combinedAgentIds = pendingAgentIds
 
   const commPatternInfo = useMemo(() => {
     if (combinedAgentIds.length === 0 && pendingMcpIds.length === 0) return undefined
@@ -146,30 +146,17 @@ export function MainArea(): React.JSX.Element {
     setActiveMode((current) => (current ? current : defaultMode ?? null))
   }, [activeChatId, defaultMode?.id])
 
-  // Chat-modes popup can be opened two ways: the `+` button (rendered above
-  // the button itself by ChatConfigMenu) and the `~` sole-character shortcut
-  // (rendered above the textarea by ChatInput). Keeping the two opens as
-  // distinct states lets each component render its own popup with the right
-  // anchoring while ensuring only one is visible at a time.
-  const [buttonModePopupOpen, setButtonModePopupOpen] = useState(false)
+  // The `~` sole-character shortcut opens a chat-modes popup above the textarea
+  // (rendered by ChatInput). The `[+]` button's own chat-mode sub-menu manages
+  // its open state internally, so only the tilde popup needs coordinating here.
   const [tildeModePopupOpen, setTildeModePopupOpen] = useState(false)
 
   const handleTildeOpenRequest = useCallback(() => {
     setTildeModePopupOpen(true)
-    setButtonModePopupOpen(false)
   }, [])
 
   const handleTildeCancel = useCallback(() => {
     setTildeModePopupOpen(false)
-  }, [])
-
-  const handleButtonOpenChange = useCallback((next: boolean) => {
-    setButtonModePopupOpen(next)
-    if (next) setTildeModePopupOpen(false)
-  }, [])
-
-  const focusChatInput = useCallback(() => {
-    chatInputRef.current?.focus()
   }, [])
 
   // Pending-agent selection from AgentStatusOverlay: land on new-chat screen,
@@ -182,7 +169,7 @@ export function MainArea(): React.JSX.Element {
       return
     }
     setActiveChatId(null)
-    setSelectedAgent(agent)
+    setPendingAgentIds([agent.id])
     setPendingAgentId(null)
     // Focus after the new-chat screen mounts the input.
     requestAnimationFrame(() => chatInputRef.current?.focus())
@@ -234,7 +221,6 @@ export function MainArea(): React.JSX.Element {
         attachments,
         noteIds
       })
-      setSelectedAgent(null)
       setActiveMode(null)
       setPendingMcpIds([])
       setPendingAgentIds([])
@@ -388,7 +374,18 @@ export function MainArea(): React.JSX.Element {
           onTogglePendingAgent={togglePendingAgent}
           onRemovePendingAgent={removePendingAgent}
           commPatternInfo={commPatternInfo}
-          onDoubleEscape={() => { setSelectedAgent(null); setPendingAgentIds([]) }}
+          onDoubleEscape={() => setPendingAgentIds([])}
+          chatModeMenu={
+            availableModes.length > 0
+              ? {
+                  modes: availableModes,
+                  activeId: activeMode?.id ?? null,
+                  onSelectMode: handleSelectMode,
+                  renderIcon: renderModeIcon,
+                  composeSecondary: composeModeSecondary
+                }
+              : undefined
+          }
           tildeModePopup={
             availableModes.length > 0
               ? {
@@ -402,21 +399,6 @@ export function MainArea(): React.JSX.Element {
                   composeSecondary: composeModeSecondary
                 }
               : undefined
-          }
-          leftSlot={
-            <>
-              <ChatConfigMenu
-                activeMode={activeMode}
-                onSelectMode={handleSelectMode}
-                open={buttonModePopupOpen}
-                onOpenChange={handleButtonOpenChange}
-              />
-              <AgentSelector
-                selectedAgent={selectedAgent}
-                onSelectAgent={setSelectedAgent}
-                onCollapsed={focusChatInput}
-              />
-            </>
           }
         />
       </div>
@@ -451,6 +433,17 @@ export function MainArea(): React.JSX.Element {
             ref={chatInputRef}
             chatId={activeChatId}
             modeColor={activeChatModeColor}
+            chatModeMenu={
+              activeChatMode && availableModes.length > 0
+                ? {
+                    modes: availableModes,
+                    activeId: activeChatMode.id,
+                    onSelectMode: handleActiveChatModeChange,
+                    renderIcon: renderModeIcon,
+                    composeSecondary: composeModeSecondary
+                  }
+                : undefined
+            }
             tildeModePopup={
               activeChatMode && availableModes.length > 0
                 ? {
@@ -464,16 +457,6 @@ export function MainArea(): React.JSX.Element {
                     composeSecondary: composeModeSecondary
                   }
                 : undefined
-            }
-            leftSlot={
-              activeChatMode ? (
-                <ChatConfigMenu
-                  activeMode={activeChatMode}
-                  onSelectMode={handleActiveChatModeChange}
-                  open={buttonModePopupOpen}
-                  onOpenChange={handleButtonOpenChange}
-                />
-              ) : undefined
             }
           />
         </div>

@@ -12,6 +12,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement.
 - **MCP Chip** — A removable pill rendered with the other capability chips below the composer. One per on-demand MCP; clicking the `×` detaches that MCP from the chat.
 - **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it for the chat (an agent row instead attaches an on-demand agent).
+- **`[+]` Capability Picker** — The mouse-driven equivalent of the `@` popup: the left-side `[+]` composer menu → **Add agents / MCP** opens a searchable card modal (`AgentPickerModal` in `activeFirst` multi-select mode). Selecting/deselecting a card runs the exact same engage/detach calls (`addOnDemandMcp` / `removeOnDemandMcp`, or the pending-buffer toggle on the new-chat screen) — so the `@` popup and the `[+]` picker are interchangeable entry points. Selected cards float to the top when the modal opens and hold position while toggling. In active chats it shows on-demand engagements + the bound root agent as "selected" (the root stays non-removable, mirroring `@`).
 
 ## User Stories / Flows
 

@@ -4,6 +4,8 @@
 
 Trigger-driven floating picker family that appears above the chat input when the user types `@`, `#`, `/`, or `?` at a word boundary. All four popups share one presentational primitive so they look, feel, and behave identically — only the data source, icon, and label differ.
 
+> **Mouse-driven equivalents.** The keyboard triggers are kept as fast-path shortcuts, but the same actions are also reachable from the left-side `[+]` composer menu (`ComposerPlusMenu`): **Attach files**, **Chat mode** (mirrors `~`), and **Add agents / MCP** (mirrors `@`, via the `AgentPickerModal` capability picker). The old standalone `AgentSelector` dropdown and `ChatConfigMenu` `+` button were folded into this menu. `#` / `/` / `?` remain keyboard-only.
+
 ## Core Concepts
 
 - **Trigger character** — `@`, `#`, `/`, or `?` typed at the start of the input or after whitespace. Each maps to a distinct picker (agents, example prompts, CLI commands, notes).
@@ -59,15 +61,20 @@ The trigger fires only when input transitions from empty to exactly `~` — `~` 
 ## Architecture Overview
 
 ```
-User keystroke or click on selector trigger
+User keystroke (@ # / ?)
   -> ChatInput (trigger-token state, filtered list, keyboard handling)
-       -> AgentMentionPopup | ExamplePromptPopup | CliCommandPopup | NoteMentionPopup  (thin wrapper)
-  -> ChatConfigMenu (mouse-driven `+` button)
-       -> direct MentionPopup<ChatModeData> usage
+       -> AgentMcpMentionPopup | AgentMentionPopup | ExamplePromptPopup | CliCommandPopup | NoteMentionPopup
+       -> MentionPopup<ChatModeData>  (the `~` chat-mode shortcut)
             -> MentionPopup<T>  (shared listbox shell, item layout, theming)
+
+User mouse (left-side `[+]` button)
+  -> ChatInput -> ComposerPlusMenu
+       -> "Chat mode" sub-menu (inline list)        — mirrors `~`
+       -> "Add agents / MCP" -> AgentPickerModal     — mirrors `@`
+       -> "Attach files" -> file picker             — mirrors the old attach button
 ```
 
-The four text-trigger wrappers exist only to bind their data shape (`AgentData`, `ExamplePrompt`, `CliCommand`, `NoteData`) to the generic `MentionPopup<T>` and declare the icon, header label, width, and field accessors. `ChatConfigMenu` is the fifth consumer — mouse-driven rather than keystroke-driven, and supplies a per-mode colored dot via `renderIcon` instead of a Lucide icon.
+The text-trigger wrappers exist only to bind their data shape (`AgentData`, `ExamplePrompt`, `CliCommand`, `NoteData`) to the generic `MentionPopup<T>` and declare the icon, header label, width, and field accessors. The `~` chat-mode shortcut uses `MentionPopup<ChatModeData>` directly. The mouse-driven `ComposerPlusMenu` renders its own list/sub-menu rather than reusing `MentionPopup`, and the agent/MCP picker uses the card-grid `AgentPickerModal` instead.
 
 ## Integration Points
 

@@ -1,5 +1,5 @@
-import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef, type ReactNode } from 'react'
-import { SendHorizontal, Square, Bot, Plus, Loader2, Paperclip } from 'lucide-react'
+import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
+import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
@@ -14,6 +14,7 @@ import { useAgents, useAttachAgentToChat } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
+import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
 import { useModelCapability } from '../../hooks/useModelCapability'
 import { useNoteList, useAttachNotesAsFiles, useFetchNote } from '../../hooks/useNotes'
@@ -28,7 +29,8 @@ import { CommPatternBadge } from './CommPatternBadge'
 import type { CommPattern } from '../../../../shared/commPattern'
 import { AttachmentList } from './AttachmentBadge'
 import { NoteBadgeList } from './NoteBadge'
-import { AttachMenuPopup, type AttachMenuItem } from './AttachMenuPopup'
+import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
+import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
@@ -43,7 +45,11 @@ interface ChatInputProps {
     attachments?: ComposerAttachment[],
     noteIds?: string[]
   ) => void
-  leftSlot?: ReactNode
+  /**
+   * Chat-mode sub-menu for the `[+]` button. Omitted when mode selection
+   * doesn't apply (e.g. an active chat that wasn't created with a mode).
+   */
+  chatModeMenu?: PlusModeMenu
   modeColor?: ColorPreset | null
   /** Agent currently selected on the new-chat screen — used to source example prompts for `#`. */
   selectedAgent?: AgentData | null
@@ -122,7 +128,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   {
     chatId,
     onNewChat,
-    leftSlot,
+    chatModeMenu,
     modeColor,
     selectedAgent,
     pendingMcpIds,
@@ -138,8 +144,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   ref
 ) {
   const [input, setInput] = useState('')
-  const [attachMenuOpen, setAttachMenuOpen] = useState(false)
-  const attachButtonRef = useRef<HTMLButtonElement>(null)
+  const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastEscapeAt = useRef(0)
   // Synchronous re-entrancy guard for the active-chat send. `isStreaming` only
@@ -294,6 +299,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     () => (chatData?.agentId ? (agents ?? []).find((a) => a.id === chatData.agentId) ?? null : null),
     [chatData?.agentId, agents]
   )
+
+  // The `[+]` "Add agents / MCP" picker — cards, selection set, and toggle that
+  // mirrors the `@`-mention routing. Logic lives in the hook (testable, out of
+  // the view); see `useCapabilityPicker`.
+  const {
+    items: capabilityItems,
+    selectedIds: selectedCapabilityIds,
+    toggle: toggleCapability,
+    hasCapabilities
+  } = useCapabilityPicker({
+    chatId,
+    enabledAgents,
+    enabledMcps,
+    boundAgent,
+    pendingAgentIds,
+    pendingMcpIds,
+    onTogglePendingAgent,
+    onTogglePendingMcp
+  })
 
   /**
    * Two backing flows feed the [+] button:
@@ -589,21 +613,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       removePendingNote(id)
     },
     [pendingExpansionNoteId, removePendingNote]
-  )
-
-  // Menu actions. Today the menu has one entry ("Add files"); the array is
-  // here so future additions (clipboard import, drag-zone toggle, browse
-  // workspace, …) only need to push a new item.
-  const attachMenuItems = useMemo<AttachMenuItem[]>(
-    () => [
-      {
-        id: 'add-files',
-        label: 'Add files',
-        icon: Paperclip,
-        onSelect: () => void pickAttachments()
-      }
-    ],
-    [pickAttachments]
   )
 
   const handleSend = useCallback(async () => {
@@ -1056,9 +1065,30 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      <AgentPickerModal
+        open={capabilityPickerOpen}
+        title="Add agents & tools"
+        multiSelect
+        activeFirst
+        items={capabilityItems}
+        selectedIds={selectedCapabilityIds}
+        onToggle={toggleCapability}
+        onClose={() => setCapabilityPickerOpen(false)}
+        searchPlaceholder="Search agents and MCP servers…"
+        emptyLabel="No agents or MCP servers available"
+      />
+
       <div className="flex items-center justify-between px-1 pt-2">
         <div className="flex items-center gap-1.5 flex-wrap">
-          {leftSlot}
+          <ComposerPlusMenu
+            canAttachFiles={canShowAttachButton && !isStreaming}
+            uploading={isUploading}
+            onAttachFiles={() => void pickAttachments()}
+            hasCapabilities={hasCapabilities}
+            onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
+            modeMenu={chatModeMenu}
+            activeModeColor={modeColor ? { border: modeColor.border } : null}
+          />
           {chatId && boundAgent ? (
             <div
               className="flex items-center gap-1.5 pl-1.5 pr-2.5 py-1 rounded-lg border
@@ -1069,7 +1099,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 {boundAgent.name}
               </span>
             </div>
-          ) : chatId && !leftSlot ? (
+          ) : chatId && !chatData?.modeId ? (
+            // Mode-less active LLM chats keep their manual model + baseline-MCP
+            // controls; moded chats configure those through the chat mode.
             <ChatControls chatId={chatId} inline />
           ) : null}
           {chatId ? (
@@ -1097,37 +1129,6 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
               agentName={commPatternInfo.agentName}
               modelName={commPatternInfo.modelName}
             />
-          )}
-          {canShowAttachButton && !isStreaming && (
-            <div className="relative">
-              <button
-                ref={attachButtonRef}
-                type="button"
-                onClick={() => setAttachMenuOpen((v) => !v)}
-                disabled={isUploading}
-                title={isUploading ? 'Uploading…' : 'Attach'}
-                aria-label="Attach"
-                aria-haspopup="menu"
-                aria-expanded={attachMenuOpen}
-                className="p-1.5 rounded-lg border border-[var(--color-border)]
-                  text-[var(--color-text-secondary)] hover:text-[var(--color-text)]
-                  hover:bg-[var(--color-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed
-                  transition-colors"
-              >
-                {isUploading ? (
-                  <Loader2 size={16} className="animate-spin" />
-                ) : (
-                  <Plus size={16} />
-                )}
-              </button>
-              {attachMenuOpen && (
-                <AttachMenuPopup
-                  items={attachMenuItems}
-                  onClose={() => setAttachMenuOpen(false)}
-                  anchorRef={attachButtonRef}
-                />
-              )}
-            </div>
           )}
           {isStreaming ? (
             <button
