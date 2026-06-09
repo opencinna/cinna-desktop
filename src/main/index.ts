@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, Menu, dialog } from 'electron'
+import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
 import { join } from 'path'
 import { appendFileSync, renameSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
@@ -270,6 +270,12 @@ function startup(): void {
 
   createWindow()
   initAutoUpdater()
+
+  // Pause periodic sync around OS sleep so a token refresh can't be suspended
+  // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +
+  // catch up on resume. `powerMonitor` is only available after the app is ready.
+  powerMonitor.on('suspend', () => syncService.setSystemSuspended(true))
+  powerMonitor.on('resume', () => syncService.setSystemSuspended(false))
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

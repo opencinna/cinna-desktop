@@ -133,6 +133,6 @@ The `RegisterFormProps` interface no longer carries an `onCancel` callback — o
 - **Localhost-only redirect**: callback server binds to `127.0.0.1` on a random available port
 - **Token encryption**: access and refresh tokens encrypted via `safeStorage` (OS keychain) before SQLite storage
 - **Token rotation**: server issues new refresh token on each refresh; old token invalidated; replay detection triggers full re-auth and local token wipe
-- **Refresh mutex**: concurrent refresh attempts deduplicated via promise — prevents race conditions that could trigger false replay detection
+- **Refresh mutex**: concurrent refresh attempts deduplicated via a per-user in-flight promise — prevents race conditions that could trigger false replay detection and cross-account token bleed. Full lifecycle + suspend/resume orphan safeguards in [Token Lifecycle tech](./token_lifecycle_tech.md)
 - **No secrets on disk**: `client_id` is public (per OAuth spec for native apps); no client secret stored
 - **Cleanup on failure**: if OAuth fails mid-flow, the partially-created user row is deleted — no orphaned records

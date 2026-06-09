@@ -65,6 +65,45 @@ interface DeviceMaterial {
 
 const debounceTimers = new Map<string, NodeJS.Timeout>()
 const periodicTimers = new Map<string, NodeJS.Timeout>()
+// Which profiles *should* be polling — the source of truth, independent of
+// whether a live timer currently exists. A system suspend tears the live timers
+// down (so no authed cycle is mid-flight when the OS freezes us → no orphaned
+// token refresh on wake) but leaves this set intact so resume re-arms them.
+const periodicArmed = new Set<string>()
+// True between `powerMonitor` 'suspend' and 'resume'. While set, no periodic
+// timer is created — the desktop analog of mobile's "foreground-only polling":
+// don't start a refresh the OS is about to suspend mid-flight and orphan.
+let systemSuspended = false
+
+/** Create the live periodic timer for a profile (unless suspended / already running). */
+function startPeriodicTimer(userId: string): void {
+  if (systemSuspended) return
+  if (periodicTimers.has(userId)) return
+  const timer = setInterval(() => void runCycleNow(userId), PERIODIC_MS)
+  timer.unref?.()
+  periodicTimers.set(userId, timer)
+}
+
+/** Tear down the live periodic timer for a profile (leaves `periodicArmed` intact). */
+function stopPeriodicTimer(userId: string): void {
+  const timer = periodicTimers.get(userId)
+  if (timer) {
+    clearInterval(timer)
+    periodicTimers.delete(userId)
+  }
+}
+
+/** Register a profile for periodic sync and (if awake) start its timer. */
+function armPeriodic(userId: string): void {
+  periodicArmed.add(userId)
+  startPeriodicTimer(userId)
+}
+
+/** Unregister a profile from periodic sync and stop its timer. */
+function disarmPeriodic(userId: string): void {
+  periodicArmed.delete(userId)
+  stopPeriodicTimer(userId)
+}
 
 // ---- pairing (commit-then-reveal) runtime state ----
 
@@ -115,6 +154,11 @@ let lastStatus: SyncStatus = 'idle'
 // surfaces a prompt; the user opts in via `beginVerify`.
 const INBOX_POLL_MS = 5_000
 let inboxPollTimer: NodeJS.Timeout | null = null
+// Last window-focus state reported via `setWindowFocused`. The inbox poll is
+// focus-gated, but a system suspend also tears it down (it shares the authed
+// refresh path); the OS doesn't reliably re-emit a focus event on wake, so
+// resume re-arms it from this remembered flag rather than waiting for one.
+let windowFocused = false
 // Pairing ids already surfaced this session — so a still-pending row isn't
 // re-prompted every 5s. Cleared on profile switch.
 const announcedPairings = new Set<string>()
@@ -472,6 +516,7 @@ async function pollInboxOnce(): Promise<void> {
 }
 
 function startInboxPolling(): void {
+  if (systemSuspended) return // don't start an authed poll the OS is about to freeze
   if (inboxPollTimer) return
   void pollInboxOnce() // surface anything already pending without waiting a tick
   const timer = setInterval(() => void pollInboxOnce(), INBOX_POLL_MS)
@@ -514,11 +559,7 @@ export const syncService = {
       }
       await inFlight
     }
-    if (!periodicTimers.has(userId)) {
-      const timer = setInterval(() => void runCycleNow(userId), PERIODIC_MS)
-      timer.unref?.()
-      periodicTimers.set(userId, timer)
-    }
+    armPeriodic(userId)
   },
 
   /**
@@ -976,8 +1017,48 @@ export const syncService = {
    * pairing requests; stops it on blur.
    */
   setWindowFocused(focused: boolean): void {
+    windowFocused = focused
     if (focused) startInboxPolling()
     else stopInboxPolling()
+  },
+
+  /**
+   * `powerMonitor` suspend/resume hook (wired in `main/index.ts`). On suspend we
+   * stop every authed background timer — the periodic sync timers *and* the inbox
+   * poll (both route through `getCinnaAccessToken` and can trigger a refresh) — so
+   * no authed cycle is in flight when the OS freezes the process. A refresh
+   * suspended mid-flight is the orphaned-refresh that becomes a rotation-replay
+   * self-logout on wake. On resume we re-arm each registered profile's periodic
+   * timer + fire one immediate catch-up cycle, and restart inbox polling if the
+   * window is still focused (the OS may not re-emit a focus event on wake).
+   *
+   * Residual: a refresh already in flight at the instant 'suspend' fires can't be
+   * aborted here — this prevents *starting* new autonomous cycles, it doesn't
+   * close the window on one already past its `net.fetch`.
+   *
+   * Idempotent: duplicate suspend/resume signals (the OS can coalesce or repeat
+   * them) are no-ops past the first transition.
+   */
+  setSystemSuspended(suspended: boolean): void {
+    if (suspended === systemSuspended) return
+    systemSuspended = suspended
+    if (suspended) {
+      logger.info('system suspend — pausing periodic sync + inbox timers', {
+        armed: periodicArmed.size
+      })
+      for (const userId of periodicArmed) stopPeriodicTimer(userId)
+      stopInboxPolling()
+    } else {
+      logger.info('system resume — re-arming periodic sync + inbox timers + catch-up', {
+        armed: periodicArmed.size,
+        windowFocused
+      })
+      for (const userId of periodicArmed) {
+        startPeriodicTimer(userId)
+        void runCycleNow(userId)
+      }
+      if (windowFocused) startInboxPolling()
+    }
   },
 
   // ---- devices ----
@@ -1022,11 +1103,7 @@ export const syncService = {
       clearTimeout(debounce)
       debounceTimers.delete(userId)
     }
-    const periodic = periodicTimers.get(userId)
-    if (periodic) {
-      clearInterval(periodic)
-      periodicTimers.delete(userId)
-    }
+    disarmPeriodic(userId)
 
     // Remove THIS device from the account's authorized list. Only this device's
     // envelope/row is affected — peers are untouched. Best-effort: offline, the
@@ -1147,6 +1224,7 @@ export const syncService = {
     for (const t of periodicTimers.values()) clearInterval(t)
     debounceTimers.clear()
     periodicTimers.clear()
+    periodicArmed.clear()
     pairingEphemerals.clear()
     pendingVerifications.clear()
     cancelledVerifications.clear()

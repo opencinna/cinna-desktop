@@ -2,8 +2,11 @@ import { userRepo } from '../db/users'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { refreshCinnaTokens, CinnaReauthRequired } from './cinna-oauth'
 
-// Mutex to prevent concurrent refresh races
-let refreshInProgress: Promise<string> | null = null
+// Per-user mutex to prevent concurrent refresh races. Keyed by userId so a
+// refresh in flight for one account can never be handed back to another (a
+// global promise would let account B dedup onto account A's refresh and receive
+// A's access token).
+const refreshInProgress = new Map<string, Promise<string>>()
 
 /**
  * Store Cinna OAuth tokens (encrypted) for a user.
@@ -47,12 +50,18 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
     return decryptApiKey(state.accessTokenEnc)
   }
 
-  // Deduplicate concurrent refresh attempts
-  if (refreshInProgress) {
-    return refreshInProgress
+  // Deduplicate concurrent refresh attempts for THIS account.
+  const inFlight = refreshInProgress.get(userId)
+  if (inFlight) {
+    return inFlight
   }
 
-  refreshInProgress = (async () => {
+  // Defer the body to a microtask so the `refreshInProgress.set` below always
+  // wins the ordering. Otherwise a *synchronous* throw inside the body (e.g.
+  // `decryptApiKey` on a corrupt blob / unavailable keychain) would run the
+  // `finally` delete before the entry was ever set, then leave a permanently
+  // rejected promise in the map that poisons every later caller for this user.
+  const refresh = Promise.resolve().then(async () => {
     try {
       const currentRefreshToken = decryptApiKey(state.refreshTokenEnc!)
       const serverUrl = state.serverUrl
@@ -79,11 +88,12 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
       }
       throw e
     } finally {
-      refreshInProgress = null
+      refreshInProgress.delete(userId)
     }
-  })()
+  })
 
-  return refreshInProgress
+  refreshInProgress.set(userId, refresh)
+  return refresh
 }
 
 /**
