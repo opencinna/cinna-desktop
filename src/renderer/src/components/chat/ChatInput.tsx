@@ -222,8 +222,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setTildeIndex(idx >= 0 ? idx : 0)
   }, [tildeOpen]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Single source for "return focus to the composer". Used by the imperative
+  // handle and by every attach path (menu pick + drag-drop) so focus restoration
+  // stays consistent across call sites instead of duplicating inline closures.
+  const focusComposer = useCallback(() => textareaRef.current?.focus(), [])
+
   useImperativeHandle(ref, () => ({
-    focus: () => textareaRef.current?.focus(),
+    focus: focusComposer,
     clearInput: () => {
       setInput('')
       const el = textareaRef.current
@@ -443,9 +448,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         setAttachError('Folders and unresolved files cannot be attached')
         return
       }
-      void pickAttachmentsFromPaths(paths)
+      void pickAttachmentsFromPaths(paths).finally(focusComposer)
     },
-    [canAcceptDrop, pickAttachmentsFromPaths, setAttachError]
+    [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -1099,7 +1104,11 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           <ComposerPlusMenu
             canAttachFiles={canShowAttachButton && !isStreaming}
             uploading={isUploading}
-            onAttachFiles={() => void pickAttachments()}
+            onAttachFiles={() => {
+              // Return focus to the composer after the file dialog closes so the
+              // user can keep typing without re-clicking the input.
+              void pickAttachments().finally(focusComposer)
+            }}
             hasCapabilities={hasCapabilities || catalogItems.length > 0}
             onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
             modeMenu={chatModeMenu}

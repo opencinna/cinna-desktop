@@ -78,7 +78,7 @@ export function ComposerPlusMenu({
   if (!canAttachFiles && !hasCapabilities && !hasModes) return null
 
   const rowCls =
-    'w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-[12px] ' +
+    'w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] ' +
     'text-[var(--color-text)] hover:bg-[var(--color-accent)]/20 ' +
     'disabled:opacity-40 disabled:cursor-not-allowed transition-colors'
   const iconCls = 'shrink-0 text-[var(--color-text-secondary)]'
@@ -113,7 +113,7 @@ export function ComposerPlusMenu({
           ref={menuRef}
           role="menu"
           aria-label="Add to chat"
-          className="absolute bottom-full left-0 mb-1 min-w-[12rem]
+          className="absolute bottom-full left-0 mb-1 min-w-[13rem]
             bg-[var(--color-accent)]/10 [[data-theme=light]_&]:bg-[var(--color-accent)]/5
             backdrop-blur-xl
             border border-[var(--color-accent)]/25 [[data-theme=light]_&]:border-[var(--color-accent)]/12
@@ -132,7 +132,7 @@ export function ComposerPlusMenu({
                   }}
                   className={rowCls}
                 >
-                  <Paperclip size={14} className={iconCls} />
+                  <Paperclip size={16} className={iconCls} />
                   <span>{uploading ? 'Uploading…' : 'Attach files'}</span>
                 </button>
               )}
@@ -144,9 +144,9 @@ export function ComposerPlusMenu({
                   onClick={() => setView('modes')}
                   className={rowCls}
                 >
-                  <SlidersHorizontal size={14} className={iconCls} />
+                  <SlidersHorizontal size={16} className={iconCls} />
                   <span className="flex-1">Chat mode</span>
-                  <ChevronLeft size={13} className="rotate-180 text-[var(--color-text-muted)]" />
+                  <ChevronLeft size={14} className="rotate-180 text-[var(--color-text-muted)]" />
                 </button>
               )}
 
@@ -160,7 +160,7 @@ export function ComposerPlusMenu({
                   }}
                   className={rowCls}
                 >
-                  <Boxes size={14} className={iconCls} />
+                  <Boxes size={16} className={iconCls} />
                   <span>Add agents / MCP</span>
                 </button>
               )}
@@ -171,11 +171,11 @@ export function ComposerPlusMenu({
                 <button
                   type="button"
                   onClick={() => setView('root')}
-                  className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px]
+                  className="w-full flex items-center gap-1.5 px-3 py-2 text-left text-[12px]
                     font-semibold uppercase tracking-wider text-[var(--color-text-muted)]
                     hover:text-[var(--color-text)] transition-colors"
                 >
-                  <ChevronLeft size={13} />
+                  <ChevronLeft size={14} />
                   <span>Chat mode</span>
                 </button>
                 {modeMenu.modes.map((mode) => {
@@ -191,22 +191,22 @@ export function ComposerPlusMenu({
                         modeMenu.onSelectMode(isActive ? null : mode)
                         setOpen(false)
                       }}
-                      className="w-full flex items-start gap-2 px-2.5 py-1.5 text-left
+                      className="w-full flex items-start gap-2.5 px-3 py-2 text-left
                         hover:bg-[var(--color-accent)]/20 transition-colors"
                     >
                       <span className="mt-0.5">{modeMenu.renderIcon(mode)}</span>
                       <span className="min-w-0 flex-1">
-                        <span className="block text-[12px] text-[var(--color-text)] truncate">
+                        <span className="block text-[13px] text-[var(--color-text)] truncate">
                           {mode.name}
                         </span>
                         {secondary && (
-                          <span className="block text-[10px] text-[var(--color-text-muted)] truncate">
+                          <span className="block text-[11px] text-[var(--color-text-muted)] truncate">
                             {secondary}
                           </span>
                         )}
                       </span>
                       {isActive && (
-                        <Check size={13} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+                        <Check size={14} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
                       )}
                     </button>
                   )

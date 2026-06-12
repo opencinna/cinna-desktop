@@ -6,6 +6,7 @@ import type {
   ToolStream
 } from '../../../shared/messageParts'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { MessageAttachment } from '../../../shared/attachments'
 
 export type { ContentKind, ToolStream }
 
@@ -112,6 +113,10 @@ export type StreamBlock = TextBlock | ToolCallBlock
 export interface PendingUserMessage {
   content: string
   baselineUserCount: number
+  // Attachments already ingested at send time, so the optimistic bubble shows
+  // its file badges immediately — without this the badges only appear once the
+  // persisted row refetches, lagging the bubble itself.
+  attachments?: MessageAttachment[]
 }
 
 interface ChatStore {

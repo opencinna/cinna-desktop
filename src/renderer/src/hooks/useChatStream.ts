@@ -168,7 +168,11 @@ export function useChatStream(): {
 
   const startLlm = useCallback(
     (chatId: string, content: string, opts?: StartLlmOptions): void => {
-      setPendingUserMessage({ content, baselineUserCount: snapshotUserCount(chatId) })
+      setPendingUserMessage({
+        content,
+        baselineUserCount: snapshotUserCount(chatId),
+        attachments: opts?.attachments
+      })
       try {
         window.api.llm.sendMessage(
           chatId,
@@ -190,7 +194,11 @@ export function useChatStream(): {
 
   const startAgent = useCallback(
     (agentId: string, chatId: string, content: string, opts?: StartAgentOptions): void => {
-      setPendingUserMessage({ content, baselineUserCount: snapshotUserCount(chatId) })
+      setPendingUserMessage({
+        content,
+        baselineUserCount: snapshotUserCount(chatId),
+        attachments: opts?.attachments
+      })
       try {
         window.api.agents.sendMessage(
           agentId,

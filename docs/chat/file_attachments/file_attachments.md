@@ -47,9 +47,10 @@ Lets a user attach local files to a chat message — images, PDFs, Office docume
 3. On drop, paths are resolved via `webUtils.getPathForFile` (each path is auto-tracked into the path-guard allowlist as a side-effect).
 4. From there, the flow matches a normal pick — active chats ingest immediately, new-chat holds as pending.
 5. Directory drops are rejected with an inline error (paths come back empty from `getPathForFile`).
+6. After the pick/drop resolves, focus returns to the composer textarea (shared `focusComposer` helper in `ChatInput`, used by both the `[+]` menu's **Attach files** and drag-drop).
 
 ### Viewing & downloading sent attachments
-1. User bubbles render their `attachments[]` as right-aligned badges with file-type icon, truncated filename, and size.
+1. User bubbles render their `attachments[]` as right-aligned badges with file-type icon, truncated filename, and size. The optimistic user bubble (shown while the persisted row is still in flight) carries the turn's already-ingested attachments too, so badges appear instantly on send rather than only after the chat refetches — see the optimistic user-message lifecycle in [Messaging tech](../messaging/messaging_tech.md).
 2. Clicking a badge opens the OS save dialog (default = Downloads / original filename, with `basename(filename)` applied to strip any traversal).
 3. The file streams from the right store (Cinna backend or local disk) to the chosen path.
 4. The OS file manager reveals the saved file.

@@ -22,6 +22,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 ### Attach files
 1. User clicks **Attach files** → the OS file picker opens (same flow as the old attach button). See [File Attachments](../file_attachments/file_attachments.md).
 2. While an upload is in flight, the `[+]` button shows a small corner spinner (the row itself is disabled); the glyph stays a `+`.
+3. Once the dialog closes (whether files were picked or it was cancelled), focus returns to the composer textarea so the user can keep typing without re-clicking. Same focus-return applies to drag-drop attaches.
 
 ### Switch chat mode
 1. User clicks **Chat mode** → the menu swaps to a sub-view listing every chat mode (colored dot, name, model · MCP summary), with the active mode checkmarked.

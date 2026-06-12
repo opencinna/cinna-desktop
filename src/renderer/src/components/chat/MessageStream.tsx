@@ -654,7 +654,20 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             renderNodes.push({
               slot: 'plain',
               key: 'pending-user',
-              node: <MessageBubble role="user" content={pendingUserMessage.content} animate />
+              // Keep this prop set in lockstep with the persisted user bubble
+              // above — any new user-turn prop must be added in both places.
+              // `addressedAgent*` is intentionally null: the optimistic turn has
+              // no persisted addressed-agent yet; it fills in on refetch.
+              node: (
+                <MessageBubble
+                  role="user"
+                  content={pendingUserMessage.content}
+                  attachments={pendingUserMessage.attachments ?? null}
+                  addressedAgentName={null}
+                  addressedAgentId={null}
+                  animate
+                />
+              )
             })
           }
 
