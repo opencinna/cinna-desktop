@@ -20,7 +20,15 @@ export interface RemoteSyncCompletePayload {
   error?: RemoteSyncError
 }
 
-function notifyRenderer(payload: RemoteSyncCompletePayload = {}): void {
+/**
+ * Broadcast `agents:remote-sync-complete` to the renderer so `useAgents`
+ * invalidates `['agents']` and mirrors the sync error into the shared
+ * sync-status cache. Exported so the on-demand `agent:sync-remote` IPC handler
+ * notifies identically to this periodic runner — otherwise a renderer-triggered
+ * sync (install/uninstall/bundle-update refresh) writes the DB but never tells
+ * the renderer to refetch, leaving stale agent rows on screen.
+ */
+export function notifyRemoteSyncComplete(payload: RemoteSyncCompletePayload = {}): void {
   const win = getMainWindow()
   if (win && !win.isDestroyed()) {
     win.webContents.send('agents:remote-sync-complete', payload)
@@ -34,16 +42,16 @@ function notifyRenderer(payload: RemoteSyncCompletePayload = {}): void {
 export async function runSyncOnce(userId: string): Promise<void> {
   try {
     await agentService.syncRemoteAgents(userId)
-    notifyRenderer()
+    notifyRemoteSyncComplete()
   } catch (err) {
     if (err instanceof CinnaReauthRequired) {
       logger.error('sync stopped: Cinna re-auth required', { userId })
       stopPeriodicSync()
-      notifyRenderer({ error: 'reauth_required' })
+      notifyRemoteSyncComplete({ error: 'reauth_required' })
       return
     }
     logger.warn('remote sync failed', { error: String(err) })
-    notifyRenderer({ error: 'sync_failed' })
+    notifyRemoteSyncComplete({ error: 'sync_failed' })
   }
 }
 

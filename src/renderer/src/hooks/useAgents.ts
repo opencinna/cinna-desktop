@@ -215,6 +215,41 @@ export function useRemoveOnDemandAgent() {
   })
 }
 
+/**
+ * Apply the latest bundle revision to an installed agent — the in-app update
+ * action shared by the Catalog card and the Agents list. Hits
+ * `POST /external/agents/{installId}/apply-update` via `agents.applyBundleUpdate`
+ * (installId = the catalog entry's `userInstallId` or a synced agent's
+ * `remoteTargetId`). Rejects with a `code`-tagged Error so the caller can
+ * branch on `reauth_required`.
+ *
+ * On success: re-fetch `['catalog']` (so the install's `pendingUpdate` flips)
+ * and kick a remote sync to pull the fresh `bundle_version`. We deliberately do
+ * NOT invalidate `['agents']` here — the sync's `agents:remote-sync-complete`
+ * broadcast invalidates it once the new metadata has actually landed (see
+ * [[useAgents]] / `useRefreshCatalogState`). Invalidating it directly would
+ * refetch the local table *before* the sync writes, briefly re-showing the
+ * stale "Update available" state until the broadcast corrects it.
+ */
+export function useApplyBundleUpdate() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (installId: string) => {
+      const res = await window.api.agents.applyBundleUpdate(installId)
+      if (!res.success) {
+        const err = new Error(res.error ?? 'Update failed') as Error & { code?: string }
+        err.code = res.code
+        throw err
+      }
+      return res
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['catalog'] })
+      void window.api.agents.syncRemote()
+    }
+  })
+}
+
 export function useSyncRemoteAgents() {
   const queryClient = useQueryClient()
   return useMutation({

@@ -9,12 +9,17 @@ import {
   A2aHttpError,
   type ProtocolResolution
 } from '../agents/a2a-client'
-import { AgentError } from '../errors'
+import { AgentError, CinnaApiError } from '../errors'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
+import { cinnaFetch } from './cinna-http'
 import { createLogger } from '../logger/logger'
 import type { AgentCard } from '../agents/a2a-client'
-import type { RemoteAgentMetadata, CinnaMcpDescriptor } from '../../shared/agentMetadata'
+import type {
+  RemoteAgentMetadata,
+  CinnaMcpDescriptor,
+  BundleVersionInfo
+} from '../../shared/agentMetadata'
 import { extractCliCommands, type CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('agents')
@@ -164,6 +169,8 @@ interface ExternalTarget {
   metadata: Record<string, unknown>
   /** The agent's `cinna.mcp` descriptor (agents-as-MCP wrapper). */
   mcp?: CinnaMcpDescriptor
+  /** Installed-vs-latest bundle version state (consumer installs only). */
+  bundle_version?: BundleVersionInfo | null
 }
 
 export const agentService = {
@@ -489,7 +496,12 @@ export const agentService = {
           // Carry the agents-as-MCP descriptor when the backend supplied one.
           // Spread `t.metadata` first so an explicit top-level `mcp` wins over
           // any stray `cinna_mcp` already nested in metadata.
-          ...(t.mcp ? { cinna_mcp: t.mcp } : {})
+          ...(t.mcp ? { cinna_mcp: t.mcp } : {}),
+          // Installed-vs-latest version state — drives the in-app Update
+          // affordance on the Catalog card and Agents list. Omit the key
+          // entirely when absent so older servers don't write a null over a
+          // previously-synced value mid-rollout.
+          ...(t.bundle_version ? { bundle_version: t.bundle_version } : {})
         }
       })
     }
@@ -500,6 +512,52 @@ export const agentService = {
       logger.info(`removed ${result.removed} stale remote agents`)
     }
     return result
+  },
+
+  /**
+   * Apply the latest bundle revision to an installed agent via the native
+   * client surface — `POST /api/v1/external/agents/{installId}/apply-update`.
+   * cinna-server stops the environment, swaps in the new revision's bundle
+   * folders, restarts, and refreshes prompts; per-bundle App Data and
+   * credentials are preserved. Returns the post-update `BundleVersionInfo`
+   * snapshot so the caller can refresh its UI without a second round-trip.
+   *
+   * `installId` is the cinna-server Agent UUID — i.e. the catalog entry's
+   * `userInstallId` or a synced agent's `remoteTargetId`. Routes through the
+   * shared {@link cinnaFetch} so auth, error mapping (401/403 →
+   * `CinnaApiError('reauth_required')`, surfaced to the IPC layer as a re-auth
+   * chip), and latency logging match every other Cinna call.
+   */
+  async applyBundleUpdate(userId: string, installId: string): Promise<BundleVersionInfo> {
+    // Fail fast on a malformed id before it reaches the request URL — the
+    // server owner-gates and validates too, but this keeps the boundary tight.
+    if (!UUID_RE.test(installId)) {
+      throw new AgentError('invalid_id', `Invalid install id: ${installId}`)
+    }
+    logger.info('apply bundle update start', { installId })
+    const started = Date.now()
+    try {
+      const bundleVersion = await cinnaFetch<BundleVersionInfo>(
+        userId,
+        `/api/v1/external/agents/${encodeURIComponent(installId)}/apply-update`,
+        { method: 'POST', body: {} }
+      )
+      logger.info('apply bundle update done', {
+        installId,
+        installedRevision: bundleVersion.installed_revision_number,
+        latestRevision: bundleVersion.latest_revision_number,
+        durationMs: Date.now() - started
+      })
+      return bundleVersion
+    } catch (err) {
+      const code = err instanceof CinnaApiError ? err.code : undefined
+      logger.warn('apply bundle update failed', {
+        installId,
+        code,
+        durationMs: Date.now() - started
+      })
+      throw err
+    }
   }
 }
 

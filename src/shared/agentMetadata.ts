@@ -36,6 +36,29 @@ export interface CinnaMcpDescriptor {
   run_commands?: Array<{ name: string; description?: string; invocation?: string }>
 }
 
+/**
+ * Installed-vs-latest bundle version state for a consumer install, mirrored
+ * straight from cinna-server's `BundleVersionInfo` on each
+ * `/api/v1/external/agents` target. Present only for the caller's own
+ * consumer installs (`target_type='agent'` with a `bundle_uuid` and
+ * `is_publisher_install=false`); absent for publisher working copies, shared
+ * routes, identity contacts, and plain (never-from-a-bundle) agents.
+ *
+ * `update_available` is server-derived from the monotonic `revision_number`
+ * comparison (read-only — discovery never mutates `pending_update`). The
+ * `*_version` strings are the publisher-supplied labels and may be null on
+ * legacy revisions, in which case the UI falls back to the `*_revision_number`.
+ */
+export interface BundleVersionInfo {
+  installed_revision_number: number | null
+  installed_version: string | null
+  latest_revision_number: number | null
+  latest_version: string | null
+  update_available: boolean
+  update_mode: string | null
+  last_update_status: string | null
+}
+
 export interface RemoteAgentMetadata {
   entrypoint_prompt: string | null
   example_prompts: string[]
@@ -60,6 +83,14 @@ export interface RemoteAgentMetadata {
   bundle_id?: string | null
   bundle_uuid?: string | null
   is_publisher_install?: boolean | null
+  /**
+   * Installed-vs-latest version state for the install, surfaced on the
+   * external-agents discovery payload under `bundle_version`. Drives the
+   * "vX → vY update available" affordance + in-app Update action on both the
+   * Catalog card and the Agents list. Absent until a sync runs against a
+   * server new enough to send it.
+   */
+  bundle_version?: BundleVersionInfo | null
   /** Carries through any extra fields the backend attaches under `metadata`. */
   [key: string]: unknown
 }

@@ -9,13 +9,15 @@
  * {@link CatalogSetupModal} so the user fills the draft credentials on
  * the server; the modal polls and auto-closes when it goes ready.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { RefreshCw, AlertTriangle } from 'lucide-react'
 import {
   useCatalog,
   useQuickInstallBundle,
   useRefreshCatalogState
 } from '../../hooks/useCatalog'
+import { useAgents, useApplyBundleUpdate } from '../../hooks/useAgents'
+import type { BundleVersionInfo } from '../../../../shared/agentMetadata'
 import { useAuthStore } from '../../stores/auth.store'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useQueryClient } from '@tanstack/react-query'
@@ -33,10 +35,13 @@ export function CatalogSettingsSection(): React.JSX.Element {
   const catalog = useCatalog()
   const queryClient = useQueryClient()
   const quickInstall = useQuickInstallBundle()
+  const applyUpdate = useApplyBundleUpdate()
+  const agents = useAgents()
   const refreshCatalogState = useRefreshCatalogState()
   const cinnaReauth = useCinnaReauth()
   const [reauthError, setReauthError] = useState<string | null>(null)
   const [pendingBundleId, setPendingBundleId] = useState<string | null>(null)
+  const [updatingBundleId, setUpdatingBundleId] = useState<string | null>(null)
   const [activeSetup, setActiveSetup] = useState<ActiveSetup | null>(null)
   const [toast, setToast] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null)
 
@@ -45,6 +50,23 @@ export function CatalogSettingsSection(): React.JSX.Element {
     const t = setTimeout(() => setToast(null), 4000)
     return () => clearTimeout(t)
   }, [toast])
+
+  // Join the install's authoritative version state (installed + latest +
+  // update_available) from the synced agents, keyed by install id. The catalog
+  // list only carries the `pendingUpdate` boolean + latest version, so the card
+  // needs this to render "v1.0 → v1.2". Matches catalog `userInstallId` against
+  // a synced agent's `remoteTargetId` (both are the cinna-server Agent UUID).
+  // Declared before the early return below to keep hook order stable.
+  const bundleVersionByInstall = useMemo(() => {
+    const map = new Map<string, BundleVersionInfo>()
+    for (const a of agents.data ?? []) {
+      if (a.source === 'remote' && a.remoteTargetType === 'agent' && a.remoteTargetId) {
+        const bv = a.remoteMetadata?.bundle_version
+        if (bv) map.set(a.remoteTargetId, bv)
+      }
+    }
+    return map
+  }, [agents.data])
 
   if (!isCinnaUser) {
     return (
@@ -93,6 +115,36 @@ export function CatalogSettingsSection(): React.JSX.Element {
       }
     } finally {
       setPendingBundleId(null)
+    }
+  }
+
+  const handleUpdate = async (
+    bundleId: string,
+    installId: string | null,
+    displayName: string
+  ): Promise<void> => {
+    if (updatingBundleId || pendingBundleId) return
+    if (!installId) {
+      setToast({ kind: 'err', text: `Can't update ${displayName}: missing install id.` })
+      return
+    }
+    setUpdatingBundleId(bundleId)
+    try {
+      await applyUpdate.mutateAsync(installId)
+      setToast({ kind: 'ok', text: `${displayName} updated` })
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code
+      if (code === 'reauth_required') {
+        setToast({
+          kind: 'err',
+          text: `Cinna session expired — re-authenticate to update ${displayName}.`
+        })
+      } else {
+        const msg = err instanceof Error ? err.message : String(err)
+        setToast({ kind: 'err', text: `Update failed: ${msg.slice(0, 160)}` })
+      }
+    } finally {
+      setUpdatingBundleId(null)
     }
   }
 
@@ -181,9 +233,19 @@ export function CatalogSettingsSection(): React.JSX.Element {
           <CatalogCard
             key={entry.bundleId}
             entry={entry}
+            bundleVersion={
+              entry.userInstallId ? bundleVersionByInstall.get(entry.userInstallId) : undefined
+            }
             installing={pendingBundleId === entry.bundleId}
-            disabled={pendingBundleId !== null && pendingBundleId !== entry.bundleId}
+            updating={updatingBundleId === entry.bundleId}
+            disabled={
+              (pendingBundleId !== null && pendingBundleId !== entry.bundleId) ||
+              (updatingBundleId !== null && updatingBundleId !== entry.bundleId)
+            }
             onInstall={() => void handleInstall(entry.bundleId, entry.displayName)}
+            onUpdate={() =>
+              void handleUpdate(entry.bundleId, entry.userInstallId, entry.displayName)
+            }
           />
         ))}
       </div>

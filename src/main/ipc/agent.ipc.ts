@@ -3,6 +3,7 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId, getProfileScopeUserId } from '../auth/scope'
 import { ipcErrorShape } from '../errors'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
+import { notifyRemoteSyncComplete } from '../agents/remote-sync'
 import { registerA2AHandlers } from './agent_a2a.ipc'
 import { ipcHandle } from './_wrap'
 
@@ -80,7 +81,35 @@ export function registerAgentHandlers(): void {
     userActivation.requireActivated()
     try {
       const result = await agentService.syncRemoteAgents(getProfileScopeUserId())
+      // Broadcast like the periodic runner so `useAgents` invalidates
+      // `['agents']` after a renderer-triggered sync — without this, callers
+      // that rely on the sync to refresh agent rows (catalog refresh,
+      // bundle-update apply) write the DB but the UI keeps stale data.
+      notifyRemoteSyncComplete()
       return { success: true as const, ...result }
+    } catch (err) {
+      if (err instanceof CinnaReauthRequired) {
+        notifyRemoteSyncComplete({ error: 'reauth_required' })
+        return { success: false as const, code: 'reauth_required' as const, error: err.message }
+      }
+      const e = ipcErrorShape(err)
+      notifyRemoteSyncComplete({ error: 'sync_failed' })
+      return { success: false as const, code: e.code, error: e.message }
+    }
+  })
+
+  // Apply the latest bundle revision to an installed agent (native in-app
+  // update). Returns the post-update version snapshot so both the Catalog
+  // card and the Agents list can refresh without a second round-trip. Inline
+  // error shape mirrors agent:sync-remote so the UI can branch on reauth.
+  ipcHandle('agent:apply-bundle-update', async (_event, installId: string) => {
+    userActivation.requireActivated()
+    try {
+      const bundleVersion = await agentService.applyBundleUpdate(
+        getProfileScopeUserId(),
+        installId
+      )
+      return { success: true as const, bundleVersion }
     } catch (err) {
       if (err instanceof CinnaReauthRequired) {
         return { success: false as const, code: 'reauth_required' as const, error: err.message }

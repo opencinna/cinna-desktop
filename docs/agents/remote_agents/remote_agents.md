@@ -73,7 +73,7 @@ When remote agents are present, the agent selector dropdown groups agents into s
 - **Graceful degradation** — If the backend is unreachable during sync (network error, 4xx/5xx), the sync silently fails and existing remote agents remain unchanged
 - **Stale agent removal** — Remote agents that no longer appear in the backend response are deleted from the local DB during sync
 - **No card pre-fetch** — Remote agents are synced with `cardUrl` but without pre-fetching the agent card. The card and protocol endpoint are auto-resolved on first message send; the result is cached so subsequent messages skip the card fetch
-- **Event-driven UI refresh** — After each sync (initial or periodic), the main process broadcasts `agents:remote-sync-complete` to the renderer, which auto-invalidates the agents query cache for immediate UI updates
+- **Event-driven UI refresh** — After **every** sync — initial activation, the 5-minute periodic tick, **and** on-demand renderer-triggered syncs (`agent:sync-remote`: the Settings Refresh button, catalog install/uninstall refresh, bundle-update apply) — the main process broadcasts `agents:remote-sync-complete` to the renderer, which auto-invalidates the agents query cache for immediate UI updates. This single broadcast is the only refresh signal callers may rely on; renderer code must not invalidate `['agents']` directly before a sync (it would refetch the DB before the sync writes). Consumers that depend on freshly-synced fields (e.g. the catalog's bundle-update affordance reading `bundle_version`) only update because this fires on the on-demand path too — see [Bundle Updates](../bundles_catalog/bundle_updates_tech.md)
 - **Periodic sync** — A 5-minute interval timer runs while a Cinna user is active; it stops on deactivation
 - **Settings UI** — Remote agents show a "Remote" badge, hide the delete button, and hide the access token section (JWT is managed automatically). They live in the sidebar's "Profile {name}" group, separate from the Default group's local agents — see [Settings](../../ui/settings/settings.md)
 
@@ -91,9 +91,16 @@ Sync Flow:
       → webContents.send('agents:remote-sync-complete')
     → startPeriodicSync(userId) — repeats every 5 minutes, same event on each sync
 
+On-Demand Sync Flow (Refresh button / catalog install·uninstall·update):
+  Renderer: window.api.agents.syncRemote()
+    → IPC: agent:sync-remote handler
+      → syncRemoteAgents(userId)
+      → notifyRemoteSyncComplete()  (same broadcast as the periodic runner)
+    → returns { success, synced, removed } to the caller
+
 UI Refresh Flow:
-  Main: syncRemoteAgents() completes
-    → Main: webContents.send('agents:remote-sync-complete')
+  Main: syncRemoteAgents() completes (any trigger)
+    → Main: notifyRemoteSyncComplete() → webContents.send('agents:remote-sync-complete')
     → Preload: ipcRenderer.on('agents:remote-sync-complete')
     → Renderer: useAgents() hook listener fires
     → Renderer: queryClient.invalidateQueries(['agents'])

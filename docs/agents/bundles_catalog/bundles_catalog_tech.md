@@ -3,7 +3,8 @@
 ## File Locations
 
 ### Shared
-- `src/shared/catalog.ts` — DTOs (`CatalogEntryDto`, `CatalogCredentialSpec`, `CatalogInstallResultDto`, `InstallContextDto`, `InstallContextSpecDto`, `InstallContextPublisherSummaryDto`, `SetupStatusDto`, `SetupMissingItemDto`, `SetupCredentialSummaryDto`) consumed by the main service, preload bridge, and renderer
+- `src/shared/catalog.ts` — DTOs (`CatalogEntryDto` incl. `pendingUpdate`, `CatalogCredentialSpec`, `CatalogInstallResultDto`, `InstallContextDto`, `InstallContextSpecDto`, `InstallContextPublisherSummaryDto`, `SetupStatusDto`, `SetupMissingItemDto`, `SetupCredentialSummaryDto`) consumed by the main service, preload bridge, and renderer
+- `src/main/services/cinna-http.ts` — shared Cinna HTTP client (`cinnaFetch`, `resolveBaseUrl`); consumed by both `catalogService` and `agentService`
 
 ### Main Process
 - `src/main/services/catalogService.ts` — `catalogService` object; proxies catalog + setup endpoints, projects server snake_case → desktop camelCase, hides secrets
@@ -57,12 +58,13 @@ All channels run through `ipcHandle()` so `CinnaApiError.code` survives Electron
 | `getSetupCredentials(userId, installId)` | `GET /api/v1/agents/{id}/setup-credentials` → `SetupCredentialSummaryDto[]` (used to resolve `placeholder_empty` rows to credential UUIDs) |
 | `getServerUrl(userId)` | Resolves the active profile's `cinnaServerUrl` so the renderer can build `/credential/{id}` and `/agent/{id}#credentials` deep links |
 
-Internal helpers mirror `cinnaApiService`:
-- `resolveBaseUrl(userId)` — raises `CinnaApiError('not_cinna_user' | 'missing_server_url')`
-- `resolveAuthHeader(userId)` — wraps `getCinnaAccessToken()`; translates `CinnaReauthRequired` to `CinnaApiError('reauth_required')`
-- `cinnaFetch<T>(userId, path, opts)` — single fetch helper. Maps 401/403 to `reauth_required`, other non-2xx to `request_failed` with a human-readable detail string (parsed via `extractErrorDetail`: prefers FastAPI's `body.detail`, then `body.message`, falls back to a 200-char raw slice — so the user sees `"Cinna API 400: Cannot uninstall the publisher install…"` instead of the raw JSON envelope). Network errors map to `request_failed`, JSON parse errors to `invalid_response`
-- `projectEntry`, `projectSpec`, `projectMissing`, `projectInstallContextSpec`, `projectPublisherSummary` — pure mapping helpers; no I/O
-- `extractErrorDetail(text)` — pure helper that turns a non-2xx response body into a human-readable message. Tries `JSON.parse` when the body looks JSON-shaped, prefers `body.detail` (FastAPI convention) over `body.message`, falls back to the raw 200-char slice. Used by `cinnaFetch` so the `CinnaApiError.message` the renderer sees is "Cannot uninstall the publisher install…" instead of the literal JSON envelope
+The Cinna HTTP plumbing lives in the shared `src/main/services/cinna-http.ts` (extracted from this service so `agentService` reuses the same auth + error mapping — see [Bundle Updates tech](./bundle_updates_tech.md)):
+- `resolveBaseUrl(userId)` — raises `CinnaApiError('not_cinna_user' | 'missing_server_url')`. Re-exported through `cinnaFetch`'s module and consumed directly by `catalogService.getServerUrl`
+- `resolveAuthHeader(userId)` (module-private) — wraps `getCinnaAccessToken()`; translates `CinnaReauthRequired` to `CinnaApiError('reauth_required')`
+- `cinnaFetch<T>(userId, path, opts)` — single fetch helper. Maps 401/403 to `reauth_required`, other non-2xx to `request_failed` with a human-readable detail string (parsed via the module-private `extractErrorDetail`: prefers FastAPI's `body.detail`, then `body.message`, falls back to a 200-char raw slice — so the user sees `"Cinna API 400: Cannot uninstall the publisher install…"` instead of the raw JSON envelope). Network errors map to `request_failed`, JSON parse errors to `invalid_response`. Logs request failures + network errors with `durationMs` under the `cinna-http` scope
+
+`catalogService`'s own pure helpers (no I/O):
+- `projectEntry`, `projectSpec`, `projectMissing`, `projectInstallContextSpec`, `projectPublisherSummary` — mapping helpers. `projectEntry` also maps `user_install_pending_update` → `CatalogEntryDto.pendingUpdate` (the update-available fallback boolean; see [Bundle Updates tech](./bundle_updates_tech.md))
 - `fetchServerInstallContext(userId, bundleId)` — single private wrapper around `GET /api/v1/catalog/{bundle_id}/install-context`. Shared by `quickInstall` (which needs the raw `suggested_credential_id` UUIDs to build the install body) and `getInstallContext` (which re-projects the shape into `InstallContextDto` for the renderer)
 - `buildDefaultCredentialsPayload(context, bundleId)`, `buildDefaultAISelections(context)` — pure functions that translate the `ServerInstallContext` response into the `InstallCredentialSelection` + `AICredentialSelections` shapes accepted by `POST /catalog/{bundle_id}/install`. Kept in sync with cinna-core's `useQuickInstall.ts`. `buildDefaultCredentialsPayload` takes `bundleId` only to scope the defensive `warn` log it emits when the server's `install-context` response violates the unique-spec-name invariant
 
@@ -103,7 +105,7 @@ Thin orchestrator. Owns only the local `expanded` UI state and renders the card 
 - `<CatalogCardCredentials entry={entry} enabled={expanded && !entry.isInstalled} />` for the install-context-driven sections
 - `<CatalogCardFooter entry={entry} />` for installed-bundle actions, rendered inside the `AnimatedCollapse` after the body block
 
-The Install button is replaced with an "Installed" indicator when `entry.isInstalled`; both states gate on `installing`/`disabled` from the parent so only one quick install runs at a time across the whole catalog.
+The header action has three states: **Install** button (uninstalled), an amber **"Update to v\<latest>"** button (installed + behind latest), or an "Installed" indicator (installed + up to date). The update state is driven by the `bundleVersion` prop (joined from the synced agent) with `entry.pendingUpdate` as fallback — see [Bundle Updates tech](./bundle_updates_tech.md). All states gate on `installing` / `updating` / `disabled` from the parent so only one install or update runs at a time across the whole catalog.
 
 ### `CatalogCardCredentials`
 Owns its own `useInstallContext(entry.bundleId, enabled)` subscription so the lazy fetch only happens when the parent passes `enabled=true` (uninstalled bundle, card expanded). `ctxBySpec` is memoised on `installContext.data` so the rebuild only runs when the query result actually changes. While fetching (initial load OR background refetch) and verdict data hasn't arrived yet, a small spinner sits next to the "Required credentials" header and each row's icon is a `Loader2` placeholder. Once data arrives, `CredentialIcon` picks per spec:

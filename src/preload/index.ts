@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
-import type { RemoteAgentMetadata } from '../shared/agentMetadata'
+import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
 import { isAgentStreamEvent, type AgentStreamEvent } from '../shared/agentStreamEvents'
@@ -431,6 +431,14 @@ const api = {
       code?: string
       error?: string
     }> => ipcRenderer.invoke('agent:sync-remote'),
+    applyBundleUpdate: (
+      installId: string
+    ): Promise<{
+      success: boolean
+      bundleVersion?: BundleVersionInfo
+      code?: string
+      error?: string
+    }> => ipcRenderer.invoke('agent:apply-bundle-update', installId),
     fetchCard: (data: {
       cardUrl: string
       accessToken?: string

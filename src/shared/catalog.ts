@@ -24,6 +24,13 @@ export interface CatalogEntryDto {
   isInstalled: boolean
   /** Set when `isInstalled` — the user's local Agent UUID on the server. */
   userInstallId: string | null
+  /**
+   * True when `isInstalled` AND the user's install is behind the bundle's
+   * latest published revision — i.e. an update to `latestVersion` is
+   * available. Mirrors cinna-server's `user_install_pending_update`. Drives
+   * the catalog card's "Update to v<latestVersion>" affordance.
+   */
+  pendingUpdate: boolean
   requiredCredentialSpecs: CatalogCredentialSpec[]
 }
 

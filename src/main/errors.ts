@@ -49,6 +49,7 @@ export type AgentErrorCode =
   | 'invalid_id'
   | 'sync_reauth_required'
   | 'sync_failed'
+  | 'update_failed'
 
 export type AgentStatusErrorCode =
   | 'not_found'

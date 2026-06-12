@@ -5,12 +5,9 @@
  * project DTOs into camelCase and hide secrets, so the renderer can render
  * a "Catalog" tab that mirrors the cinna-server catalog page.
  */
-import { net } from 'electron'
-import { userRepo } from '../db/users'
-import { getCinnaAccessToken } from '../auth/cinna-tokens'
-import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { CinnaApiError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { cinnaFetch, resolveBaseUrl } from './cinna-http'
 import type {
   CatalogEntryDto,
   CatalogCredentialSpec,
@@ -24,102 +21,6 @@ import type {
 } from '../../shared/catalog'
 
 const logger = createLogger('catalog-api')
-
-interface FetchOptions {
-  method?: string
-  body?: unknown
-}
-
-function resolveBaseUrl(userId: string): string {
-  const user = userRepo.get(userId)
-  if (!user) throw new CinnaApiError('not_cinna_user', 'User not found')
-  if (user.type !== 'cinna_user') {
-    throw new CinnaApiError('not_cinna_user', 'Profile is not linked to Cinna')
-  }
-  if (!user.cinnaServerUrl) {
-    throw new CinnaApiError('missing_server_url', 'Cinna server URL is not configured')
-  }
-  return user.cinnaServerUrl.replace(/\/$/, '')
-}
-
-async function resolveAuthHeader(userId: string): Promise<string> {
-  try {
-    const token = await getCinnaAccessToken(userId)
-    return `Bearer ${token}`
-  } catch (err) {
-    if (err instanceof CinnaReauthRequired) {
-      throw new CinnaApiError('reauth_required', err.message)
-    }
-    throw err
-  }
-}
-
-/**
- * Best-effort extraction of a human-readable error message from a cinna-server
- * response body. FastAPI surfaces failures as `{ detail: "<message>" }`, our
- * own handlers sometimes use `{ message: "..." }`; everything else falls back
- * to the raw body slice so we never accidentally suppress server-supplied
- * context.
- */
-function extractErrorDetail(text: string): string {
-  const trimmed = text.trim()
-  if (!trimmed) return ''
-  if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-    try {
-      const parsed = JSON.parse(trimmed) as Record<string, unknown>
-      const detail = parsed.detail
-      if (typeof detail === 'string' && detail) return detail
-      const message = parsed.message
-      if (typeof message === 'string' && message) return message
-    } catch {
-      // JSON-shaped but not valid JSON; fall through to raw text.
-    }
-  }
-  return trimmed.slice(0, 200)
-}
-
-async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = {}): Promise<T> {
-  const baseUrl = resolveBaseUrl(userId)
-  const authHeader = await resolveAuthHeader(userId)
-  const url = `${baseUrl}${path}`
-  const method = opts.method ?? 'GET'
-
-  const headers: Record<string, string> = {
-    Authorization: authHeader,
-    Accept: 'application/json'
-  }
-  let body: BodyInit | undefined
-  if (opts.body !== undefined) {
-    headers['Content-Type'] = 'application/json'
-    body = JSON.stringify(opts.body)
-  }
-
-  const started = Date.now()
-  let response: Response
-  try {
-    response = await net.fetch(url, { method, headers, body })
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logger.error('network error', { url, method, error: msg, durationMs: Date.now() - started })
-    throw new CinnaApiError('request_failed', msg)
-  }
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    logger.warn('request failed', { url, method, status: response.status })
-    if (response.status === 401 || response.status === 403) {
-      throw new CinnaApiError('reauth_required', `Cinna ${response.status}`)
-    }
-    const detail = extractErrorDetail(text) || response.statusText
-    throw new CinnaApiError('request_failed', `Cinna API ${response.status}: ${detail}`)
-  }
-  try {
-    return (await response.json()) as T
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logger.error('invalid response', { url, method, error: msg })
-    throw new CinnaApiError('invalid_response', msg)
-  }
-}
 
 interface ServerCatalogEntry {
   bundle_id: string
@@ -136,6 +37,7 @@ interface ServerCatalogEntry {
   install_count: number
   is_installed: boolean
   user_install_id: string | null
+  user_install_pending_update?: boolean
   required_credential_specs: Array<{
     name: string
     type: string
@@ -319,6 +221,7 @@ function projectEntry(e: ServerCatalogEntry): CatalogEntryDto {
     installCount: e.install_count,
     isInstalled: e.is_installed,
     userInstallId: e.user_install_id ?? null,
+    pendingUpdate: Boolean(e.user_install_pending_update),
     requiredCredentialSpecs: (e.required_credential_specs ?? []).map(projectSpec)
   }
 }

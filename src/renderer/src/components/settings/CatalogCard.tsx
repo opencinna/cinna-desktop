@@ -9,38 +9,75 @@
  * with the subcomponent that consumes it.
  */
 import { useState } from 'react'
-import { ChevronDown, Circle, Loader2, Download, CheckCircle2 } from 'lucide-react'
+import { ChevronDown, Circle, Loader2, Download, CheckCircle2, ArrowUpCircle } from 'lucide-react'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 import type { CatalogEntryDto } from '../../../../shared/catalog'
+import type { BundleVersionInfo } from '../../../../shared/agentMetadata'
+import { deriveBundleUpdate } from '../../utils/bundleVersion'
 import { CatalogCardCredentials } from './CatalogCardCredentials'
 import { CatalogCardFooter } from './CatalogCardFooter'
 
 interface CatalogCardProps {
   entry: CatalogEntryDto
+  /**
+   * Version state for the user's install, joined in by the parent from the
+   * matching synced agent's `remoteMetadata.bundle_version` (by install id).
+   * Undefined when the agent sync hasn't surfaced the install yet — in that
+   * case the card falls back to the catalog's `pendingUpdate` boolean (and can
+   * only name the target version, not the installed one).
+   */
+  bundleVersion?: BundleVersionInfo | null
   /** True while *this* card's quick-install is in flight. */
   installing?: boolean
-  /** Disabled when another card's install is still pending. */
+  /** True while *this* card's apply-update is in flight. */
+  updating?: boolean
+  /** Disabled when another card's install/update is still pending. */
   disabled?: boolean
   onInstall: () => void
+  onUpdate: () => void
 }
 
 export function CatalogCard({
   entry,
+  bundleVersion,
   installing,
+  updating,
   disabled,
-  onInstall
+  onInstall,
+  onUpdate
 }: CatalogCardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
 
-  const versionLabel = entry.latestVersion
+  const targetVersionLabel = entry.latestVersion
     ? `v${entry.latestVersion}`
     : entry.latestRevisionNumber
       ? `rev ${entry.latestRevisionNumber}`
       : null
 
-  const statusColor = entry.isInstalled
-    ? 'text-[var(--color-success)]'
-    : 'text-[var(--color-text-muted)]'
+  // Update state: trust the synced agent's `bundle_version` when present (it
+  // carries installed AND latest), else fall back to the catalog's boolean.
+  const bundleUpdate = deriveBundleUpdate(bundleVersion)
+  const hasUpdate =
+    entry.isInstalled &&
+    (bundleVersion ? bundleUpdate.updateAvailable : entry.pendingUpdate)
+
+  const latestLabel = bundleUpdate.latestLabel ?? targetVersionLabel
+  const installedLabel = bundleUpdate.installedLabel
+  // "v1.0 → v1.2" when we know both ends; otherwise nothing (the button still
+  // names the target). Shown in place of the neutral version chip, which would
+  // misleadingly read `latestVersion` as the installed version.
+  const transitionLabel =
+    hasUpdate && installedLabel && latestLabel ? `${installedLabel} → ${latestLabel}` : null
+
+  // Neutral version chip: only for non-update states. `latestVersion` equals
+  // the installed version when up to date, so it's correct there.
+  const versionLabel = hasUpdate ? null : targetVersionLabel
+
+  const statusColor = hasUpdate
+    ? 'text-[var(--color-warning)]'
+    : entry.isInstalled
+      ? 'text-[var(--color-success)]'
+      : 'text-[var(--color-text-muted)]'
 
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
@@ -62,14 +99,14 @@ export function CatalogCard({
               Active
             </span>
           )}
+          {hasUpdate && (
+            <span className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium">
+              {transitionLabel ?? 'Update available'}
+            </span>
+          )}
         </div>
 
-        {entry.isInstalled ? (
-          <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-muted)] shrink-0 px-2">
-            <CheckCircle2 size={12} className="text-[var(--color-success)]" />
-            Installed
-          </span>
-        ) : (
+        {!entry.isInstalled ? (
           <button
             type="button"
             onClick={(e) => {
@@ -93,6 +130,35 @@ export function CatalogCard({
               </>
             )}
           </button>
+        ) : hasUpdate ? (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation()
+              onUpdate()
+            }}
+            disabled={updating || disabled}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium
+              bg-[var(--color-warning)] hover:opacity-90 text-white
+              disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shrink-0"
+          >
+            {updating ? (
+              <>
+                <Loader2 size={10} className="animate-spin" />
+                Updating…
+              </>
+            ) : (
+              <>
+                <ArrowUpCircle size={10} />
+                {latestLabel ? `Update to ${latestLabel}` : 'Update'}
+              </>
+            )}
+          </button>
+        ) : (
+          <span className="flex items-center gap-1 text-[12px] text-[var(--color-text-muted)] shrink-0 px-2">
+            <CheckCircle2 size={12} className="text-[var(--color-success)]" />
+            Installed
+          </span>
         )}
 
         <div

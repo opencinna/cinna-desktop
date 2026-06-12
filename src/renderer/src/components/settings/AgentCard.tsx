@@ -7,14 +7,17 @@ import {
   XCircle,
   Loader2,
   Eye,
-  EyeOff
+  EyeOff,
+  ArrowUpCircle
 } from 'lucide-react'
 import {
   useUpsertAgent,
   useDeleteAgent,
   useTestAgent,
-  useSetAgentEnabled
+  useSetAgentEnabled,
+  useApplyBundleUpdate
 } from '../../hooks/useAgents'
+import { deriveBundleUpdate } from '../../utils/bundleVersion'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
 type AgentData = Awaited<ReturnType<typeof window.api.agents.list>>[number]
@@ -37,6 +40,8 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
   const deleteAgent = useDeleteAgent()
   const testAgent = useTestAgent()
   const setEnabled = useSetAgentEnabled()
+  const applyUpdate = useApplyBundleUpdate()
+  const [updateError, setUpdateError] = useState<string | null>(null)
 
   const handleToggle = (): void => {
     setEnabled.mutate({ agentId: agent.id, enabled: !agent.enabled })
@@ -76,6 +81,30 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
     typeof bundleUuid === 'string' &&
     bundleUuid.length > 0 &&
     !isPublisherInstall
+
+  // In-app bundle update: only consumer installs carry `bundle_version`, and
+  // `remoteTargetId` is the cinna-server install id the apply-update route
+  // takes. "v1.0 → v1.2" when both ends are known, else just the target.
+  const bundleUpdate = deriveBundleUpdate(agent.remoteMetadata?.bundle_version)
+  const showUpdate = isBundleInstall && bundleUpdate.updateAvailable
+  const transitionLabel =
+    bundleUpdate.installedLabel && bundleUpdate.latestLabel
+      ? `${bundleUpdate.installedLabel} → ${bundleUpdate.latestLabel}`
+      : bundleUpdate.latestLabel
+
+  const handleUpdate = (): void => {
+    if (!agent.remoteTargetId) return
+    setUpdateError(null)
+    applyUpdate.mutate(agent.remoteTargetId, {
+      onError: (err: Error & { code?: string }) => {
+        setUpdateError(
+          err.code === 'reauth_required'
+            ? 'Cinna session expired — re-authenticate to update.'
+            : err.message || 'Update failed'
+        )
+      }
+    })
+  }
 
   const statusColor =
     agent.enabled
@@ -123,6 +152,14 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               Bundle
             </span>
           )}
+          {showUpdate && (
+            <span
+              className="text-[11px] ml-1.5 px-1.5 py-0.5 rounded-full bg-[var(--color-warning)]/15 text-[var(--color-warning)] font-medium"
+              title={transitionLabel ? `Update available: ${transitionLabel}` : 'Update available'}
+            >
+              Update
+            </span>
+          )}
         </div>
 
         <button
@@ -161,6 +198,46 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
 
       <AnimatedCollapse open={expanded}>
         <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
+          {/* Bundle update banner — applies the publisher's latest revision in
+              place (App Data + credentials preserved). */}
+          {showUpdate && (
+            <div
+              className="flex items-center gap-2 px-2.5 py-2 rounded-md
+                border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10"
+            >
+              <ArrowUpCircle size={14} className="shrink-0 text-[var(--color-warning)]" />
+              <div className="flex-1 min-w-0 text-[12px] text-[var(--color-text-secondary)]">
+                Bundle update available
+                {transitionLabel && (
+                  <span className="text-[var(--color-text-muted)]"> · {transitionLabel}</span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={handleUpdate}
+                disabled={applyUpdate.isPending}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[12px] font-medium
+                  bg-[var(--color-warning)] hover:opacity-90 text-white
+                  disabled:opacity-50 disabled:cursor-not-allowed transition-opacity shrink-0"
+              >
+                {applyUpdate.isPending ? (
+                  <>
+                    <Loader2 size={10} className="animate-spin" />
+                    Updating…
+                  </>
+                ) : (
+                  bundleUpdate.latestLabel ? `Update to ${bundleUpdate.latestLabel}` : 'Update'
+                )}
+              </button>
+            </div>
+          )}
+          {updateError && (
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
+              <XCircle size={10} />
+              <span>{updateError}</span>
+            </div>
+          )}
+
           {/* Agent details */}
           {agent.description && (
             <div className="text-[12px] text-[var(--color-text-muted)]">
