@@ -3,6 +3,11 @@ import { reloadUserProviders } from './reload'
 import { clearAllAdapters } from '../llm/registry'
 import { mcpManager } from '../mcp/manager'
 import { runSyncOnce, startPeriodicSync, stopPeriodicSync } from '../agents/remote-sync'
+import {
+  runAccountConfigSyncOnce,
+  startAccountConfigPeriodicSync,
+  stopAccountConfigPeriodicSync
+} from '../services/account-config-sync'
 import { syncService } from '../services/syncService'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
@@ -49,12 +54,17 @@ class UserActivation {
     this._startRemoteSync(userId)
   }
 
-  /** Trigger remote agent sync for Cinna users */
+  /** Trigger remote agent + account-config sync for Cinna users */
   private _startRemoteSync(userId: string): void {
     const user = userRepo.get(userId)
     if (user?.type === 'cinna_user' && user.cinnaServerUrl) {
       void runSyncOnce(userId)
       startPeriodicSync(userId)
+      // Materialize account-provisioned LLM providers + default chat modes
+      // ("ready on login"). Already-synced managed adapters were loaded by
+      // reloadUserProviders; this refreshes them against the server.
+      void runAccountConfigSyncOnce(userId)
+      startAccountConfigPeriodicSync(userId)
       // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
       void syncService.ensureActivated(userId)
     }
@@ -64,6 +74,7 @@ class UserActivation {
   async deactivate(): Promise<void> {
     this._activated = false
     stopPeriodicSync()
+    stopAccountConfigPeriodicSync()
     // Zero all UMKs + clear sync timers on profile switch / sign-out.
     void syncService.onProfileSwitch()
     clearAllAdapters()

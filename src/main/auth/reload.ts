@@ -4,7 +4,8 @@ import { clearAllAdapters, registerAdapter } from '../llm/registry'
 import { createAdapter } from '../llm/factory'
 import { decryptApiKey } from '../security/keystore'
 import { mcpManager } from '../mcp/manager'
-import { getSettingsScopeUserId } from './scope'
+import { getSettingsScopeUserId, getProfileScopeUserId, DEFAULT_SCOPE_USER_ID } from './scope'
+import { accountConfigService } from '../services/accountConfigService'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('Activation')
@@ -24,12 +25,23 @@ export async function reloadUserProviders(): Promise<void> {
     if (provider.enabled && provider.apiKeyEncrypted) {
       try {
         const apiKey = decryptApiKey(provider.apiKeyEncrypted)
-        const adapter = createAdapter(provider.type, apiKey, provider.id)
+        const adapter = createAdapter(provider.type, apiKey, provider.id, {
+          baseUrl: provider.baseUrl,
+          fallbackModels: provider.defaultModelId ? [provider.defaultModelId] : []
+        })
         if (adapter) registerAdapter(provider.id, adapter)
       } catch (err) {
         logger.error(`Failed to init provider ${provider.name}`, err)
       }
     }
+  }
+
+  // Account-provisioned (Cinna-managed) providers are profile-scoped. Load the
+  // active profile's already-synced managed adapters so they're usable
+  // immediately on activation (even before the network sync refreshes them).
+  const profileUserId = getProfileScopeUserId()
+  if (profileUserId !== DEFAULT_SCOPE_USER_ID) {
+    accountConfigService.loadManagedAdapters(profileUserId)
   }
 
   for (const provider of mcpProviderRepo.list(userId)) {

@@ -22,6 +22,7 @@ import {
   writeSelfHostedHistory,
   prependSelfHostedHistory
 } from '../../constants/selfHostedHistory'
+import { pickDefaultModelId } from '../../../../shared/modelDefaults'
 
 interface OnboardingScreenProps {
   onComplete: () => void
@@ -144,7 +145,10 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps): React.J
     setProviderError(null)
 
     const models = testKey.data.models ?? []
-    const modelId = selectedModelId ?? models[0]?.id ?? null
+    // No explicit pick → choose a generally-available default, skipping
+    // access-gated tiers (Fable/Mythos) that list first but the account may not
+    // be able to call (would 404 on the first chat).
+    const modelId = selectedModelId ?? pickDefaultModelId(models.map((m) => m.id))
 
     // Provider creation is the load-bearing step — without it, the user can't
     // chat at all. Block on its failure.
@@ -447,7 +451,12 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps): React.J
                 onChange={(e) => setSelectedModelId(e.target.value || null)}
                 className={`${inputClass} cursor-pointer`}
               >
-                <option value="">First available ({models[0]?.name})</option>
+                <option value="">
+                  Recommended (
+                  {models.find((m) => m.id === pickDefaultModelId(models.map((x) => x.id)))?.name ??
+                    models[0]?.name}
+                  )
+                </option>
                 {models.map((m) => (
                   <option key={m.id} value={m.id}>
                     {m.name}

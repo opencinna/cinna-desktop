@@ -37,7 +37,9 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 ]
 
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
+  { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
   { id: 'profile-agents', label: 'Remote Agents', icon: Bot },
+  { id: 'profile-llm', label: 'LLM Providers', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
   { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud },
   { id: 'profile-connection', label: 'Connection', icon: Link }

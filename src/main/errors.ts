@@ -9,6 +9,7 @@ export type ProviderErrorCode =
   | 'unsupported_type'
   | 'missing_api_key'
   | 'not_activated'
+  | 'read_only'
 
 export type McpErrorCode =
   | 'not_found'
@@ -24,7 +25,7 @@ export type ChatErrorCode =
   | 'adapter_unavailable'
   | 'not_activated'
 
-export type ChatModeErrorCode = 'not_found'
+export type ChatModeErrorCode = 'not_found' | 'read_only'
 
 export type AuthErrorCode =
   | 'not_found'

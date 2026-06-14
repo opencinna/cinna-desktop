@@ -17,6 +17,8 @@ export type SettingsMenu =
   | 'features'
   | 'development'
   | 'profile-agents'
+  | 'profile-chats'
+  | 'profile-llm'
   | 'profile-catalog'
   | 'profile-connection'
   | 'profile-sync'
@@ -29,6 +31,8 @@ export type SettingsMenu =
  */
 export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
   'profile-agents',
+  'profile-chats',
+  'profile-llm',
   'profile-catalog',
   'profile-connection',
   'profile-sync'

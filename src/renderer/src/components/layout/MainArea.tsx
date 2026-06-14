@@ -37,9 +37,22 @@ export function MainArea(): React.JSX.Element {
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
   const { data: defaultMode } = useDefaultChatMode()
+  const { data: chatModes } = useChatModes()
   const setChatMcp = useSetChatMcpProviders()
   const { startNewChat } = useNewChatFlow()
-  const [activeMode, setActiveMode] = useState<ChatModeData | null>(null)
+  // New-chat mode selection, modelled as intent rather than a snapshot:
+  //   'auto'      → follow the current default mode REACTIVELY (so changing the
+  //                 default chat mode, editing it, or flipping the account/local
+  //                 precedence in Settings updates the composer immediately),
+  //   'none'      → the user explicitly cleared the mode,
+  //   { id }      → the user picked a specific mode (re-derived from the live
+  //                 list so edits to that mode propagate too).
+  const [modeSelection, setModeSelection] = useState<'auto' | 'none' | { id: string }>('auto')
+  const activeMode = useMemo<ChatModeData | null>(() => {
+    if (modeSelection === 'none') return null
+    if (modeSelection === 'auto') return defaultMode ?? null
+    return (chatModes ?? []).find((m) => m.id === modeSelection.id) ?? null
+  }, [modeSelection, defaultMode, chatModes])
   // On-demand MCP buffer for the new-chat screen — the chat row doesn't
   // exist yet, so picks are held here until `useNewChatFlow.startNewChat`
   // flushes them onto the created chat.
@@ -133,18 +146,21 @@ export function MainArea(): React.JSX.Element {
   }, [combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
-    setActiveMode(mode)
+    setModeSelection(mode ? { id: mode.id } : 'none')
     setSendError(null)
   }, [])
 
-  // Auto-apply the default chat mode whenever the user lands on the new-chat
-  // screen with nothing chosen — the default chat mode replaces the previous
-  // "default LLM provider" concept. The user can still deselect it; the
-  // default reapplies on the next new-chat entry.
+  // Returning to the new-chat screen resets the selection to 'auto' so the
+  // current default re-applies — a settings change to the default chat mode (or
+  // the account/local precedence) then takes effect immediately when the user
+  // hasn't picked anything. (A pick/deselect on the screen sticks until they
+  // leave and come back, matching the documented chat-mode behavior.)
+  const prevChatIdRef = useRef<string | null | undefined>(undefined)
   useEffect(() => {
-    if (activeChatId) return
-    setActiveMode((current) => (current ? current : defaultMode ?? null))
-  }, [activeChatId, defaultMode?.id])
+    const prev = prevChatIdRef.current
+    prevChatIdRef.current = activeChatId
+    if (activeChatId === null && prev !== null) setModeSelection('auto')
+  }, [activeChatId])
 
   // The `~` sole-character shortcut opens a chat-modes popup above the textarea
   // (rendered by ChatInput). The `[+]` button's own chat-mode sub-menu manages
@@ -221,7 +237,7 @@ export function MainArea(): React.JSX.Element {
         attachments,
         noteIds
       })
-      setActiveMode(null)
+      setModeSelection('auto')
       setPendingMcpIds([])
       setPendingAgentIds([])
     },
@@ -239,7 +255,6 @@ export function MainArea(): React.JSX.Element {
 
   // Active chat: resolve current mode from chatData.modeId
   const { data: activeChatData } = useChatDetail(activeChatId)
-  const { data: chatModes } = useChatModes()
 
   const activeChatMode = activeChatData?.modeId
     ? (chatModes ?? []).find((m) => m.id === activeChatData.modeId) ?? null
@@ -334,7 +349,9 @@ export function MainArea(): React.JSX.Element {
     if (!model && !mcps.length) return null
     return [model, mcps.length ? mcps.join(', ') : null].filter(Boolean).join(' · ')
   }
-  const availableModes = chatModes ?? []
+  // Drop account-managed modes the user has locally disabled — they shouldn't be
+  // selectable in the composer (their provider's adapter is unregistered).
+  const availableModes = (chatModes ?? []).filter((m) => m.enabled !== false)
 
   const sendErrorBanner = sendError ? (
     <div

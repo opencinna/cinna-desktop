@@ -8,6 +8,10 @@ export function ChatModesSection(): React.JSX.Element {
   const { data: modes } = useChatModes()
   const [showAdd, setShowAdd] = useState(false)
 
+  // Account-provisioned (managed) modes live in the Profile group's "Chats"
+  // section — keep this Default-scope section to user-created ones.
+  const own = (modes ?? []).filter((m) => !m.managed)
+
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">
@@ -15,7 +19,7 @@ export function ChatModesSection(): React.JSX.Element {
         and MCP tools for each mode, then start new chats in one click.
       </p>
 
-      {(modes ?? []).map((m) => (
+      {own.map((m) => (
         <ChatModeCard key={m.id} mode={m} />
       ))}
 

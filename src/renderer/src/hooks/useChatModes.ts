@@ -1,9 +1,33 @@
+import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { resolveDefaultModeId } from '../../../shared/chatModeDefaults'
+import { useAppSettings } from './useAppSettings'
 
 export function useChatModes() {
+  const queryClient = useQueryClient()
+
+  // Account-config sync materializes/refreshes managed chat modes in the main
+  // process; refetch on its broadcast so they appear without a manual reload.
+  useEffect(() => {
+    return window.api.providers.onAccountConfigSynced(() => {
+      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
+    })
+  }, [queryClient])
+
   return useQuery({
     queryKey: ['chat-modes'],
     queryFn: () => window.api.chatModes.list()
+  })
+}
+
+export function useSetManagedChatModeEnabled() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { id: string; enabled: boolean }) =>
+      window.api.chatModes.setManagedEnabled(data.id, data.enabled),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
+    }
   })
 }
 
@@ -27,7 +51,11 @@ export function useUpsertChatMode() {
 
 export function useDefaultChatMode() {
   const query = useChatModes()
-  const mode = (query.data ?? []).find((m) => m.isDefault) ?? null
+  const { data: settings } = useAppSettings()
+  const prioritizeAccount = settings?.prioritizeAccountDefaults === true
+  const modes = query.data ?? []
+  const id = resolveDefaultModeId(modes, prioritizeAccount)
+  const mode = id ? modes.find((m) => m.id === id) ?? null : null
   return { ...query, data: mode }
 }
 

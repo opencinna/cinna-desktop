@@ -4,6 +4,8 @@ import { MCPSettingsSection } from './MCPSettingsSection'
 import { AgentsSettingsSection } from './AgentsSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
+import { ProfileChatModesSection } from './ProfileChatModesSection'
+import { ProfileLLMSection } from './ProfileLLMSection'
 import { UserAccountsSection } from './UserAccountsSection'
 import { FeaturesSettingsSection } from './FeaturesSettingsSection'
 import { DevelopmentSettingsSection } from './DevelopmentSettingsSection'
@@ -20,6 +22,8 @@ const sectionTitles = {
   features: 'Features',
   development: 'Development',
   'profile-agents': 'Profile Agents',
+  'profile-chats': 'Chat Modes',
+  'profile-llm': 'LLM Providers',
   'profile-catalog': 'Catalog',
   'profile-connection': 'Connection',
   'profile-sync': 'Cloud Sync',
@@ -39,6 +43,8 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'profile-agents' && (
           <AgentsSettingsSection key="profile-agents" scope="profile" />
         )}
+        {settingsTab === 'profile-chats' && <ProfileChatModesSection key="profile-chats" />}
+        {settingsTab === 'profile-llm' && <ProfileLLMSection key="profile-llm" />}
         {settingsTab === 'profile-catalog' && <CatalogSettingsSection key="profile-catalog" />}
         {settingsTab === 'profile-connection' && (
           <ConnectionSettingsSection key="profile-connection" />

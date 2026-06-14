@@ -8,9 +8,13 @@ export function LLMSettingsSection(): React.JSX.Element {
   const { data: providers } = useProviders()
   const [showAddLLM, setShowAddLLM] = useState(false)
 
+  // Account-provisioned (managed) providers live in the Profile group's
+  // "LLM Providers" section — keep this Default-scope section to user-created ones.
+  const own = (providers ?? []).filter((p) => !p.managed)
+
   return (
     <div className="space-y-3">
-      {(providers ?? []).map((p) => (
+      {own.map((p) => (
         <LLMProviderCard key={p.id} provider={p} />
       ))}
 

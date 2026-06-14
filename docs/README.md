@@ -8,7 +8,8 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 |------|-----------|
 | **Chat** | A conversation with an LLM, persisted in SQLite with messages and model/provider binding |
 | **Chat Mode** | A named preset bundling an LLM provider/model, MCP servers, and a color — used to quickly start configured chats |
-| **Provider** | An LLM service (Anthropic, OpenAI, Gemini) configured with an encrypted API key |
+| **Provider** | An LLM service (Anthropic, OpenAI, Gemini, OpenAI-compatible) configured with an encrypted API key |
+| **Managed Provider / Chat Mode** | An LLM provider / default chat mode auto-materialized from a Cinna admin-provisioned credential (`managed = true`). Profile-scoped, sync-owned, read-only (local enable/disable only). See [Account Provisioning](llm/account_provisioning/account_provisioning.md) |
 | **Adapter** | Implementation of the `LLMAdapter` interface that translates between our chat system and a provider's SDK |
 | **MCP Server** | A Model Context Protocol server (local stdio or remote HTTP) that exposes tools to the LLM |
 | **MCP Connection** | A live client session to an MCP server, managed by MCPManager |
@@ -121,6 +122,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Adapters](llm/adapters/adapters.md) — Custom LLM abstraction layer with Anthropic, OpenAI, Gemini adapters
 - [Provider Integration](llm/adapters/provider_integration.md) — Cross-provider translation matrix (message history, tool schema, tool-call extraction, error parsing) and known per-provider quirks
 - [AI Functions](llm/ai_functions/ai_functions.md) — Shared primitive for one-shot LLM calls (Auto Chat Titles today; chat-summary and similar utilities in the future) — adapter resolution + `runSingleShot`
+- [Account-Provisioned Providers & Chat Modes](llm/account_provisioning/account_provisioning.md) — "Ready on login": a Cinna admin provisions AI credentials centrally; the desktop auto-materializes read-only, profile-scoped **managed providers** + a default **managed chat mode** per credential from cinna-core's `GET /external/account-config` (decrypted key delivered to the trusted client, re-encrypted locally). Mirrors the Remote Agents sync pattern (deterministic ids, 5-min periodic, broadcast refresh); local vs account default-mode precedence is governed by the `prioritizeAccountDefaults` toggle (local wins by default); per-profile local enable/disable on managed chat modes via `managed_overrides`; admin-vs-own credential distinction (shield/cloud). Adds the `openai_compatible` adapter type (`base_url`)
 
 ### MCP
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR

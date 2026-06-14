@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import { getDb } from './client'
 import { chatModes, mcpProviders } from './schema'
@@ -15,6 +15,8 @@ export interface ChatModeUpsertInput {
   mcpProviderIds?: string[]
   colorPreset?: string
   isDefault?: boolean
+  managed?: boolean
+  adminManaged?: boolean
 }
 
 type DrizzleDb = BetterSQLite3Database<typeof schema>
@@ -25,6 +27,21 @@ export type DbOrTx = DrizzleDb | DrizzleTx
 export const chatModeRepo = {
   list(userId: string, db: DbOrTx = getDb()): ChatModeRow[] {
     return db.select().from(chatModes).where(eq(chatModes.userId, userId)).all()
+  },
+
+  /** List modes across a set of scopes (Default + active profile). */
+  listByUserIds(userIds: string[], db: DbOrTx = getDb()): ChatModeRow[] {
+    if (userIds.length === 0) return []
+    return db.select().from(chatModes).where(inArray(chatModes.userId, userIds)).all()
+  },
+
+  /** Managed (account-provisioned) rows for a profile — used by sync prune. */
+  listManaged(userId: string, db: DbOrTx = getDb()): ChatModeRow[] {
+    return db
+      .select()
+      .from(chatModes)
+      .where(and(eq(chatModes.userId, userId), eq(chatModes.managed, true)))
+      .all()
   },
 
   getOwned(userId: string, id: string, db: DbOrTx = getDb()): ChatModeRow | undefined {
@@ -45,7 +62,9 @@ export const chatModeRepo = {
     input: ChatModeUpsertInput,
     db: DbOrTx = getDb()
   ): { id: string; created: true } {
-    const id = nanoid()
+    // Honor a caller-provided id (account-config sync seeds deterministic
+    // `managed-mode:{credentialId}` ids); otherwise generate one.
+    const id = input.id ?? nanoid()
     db.insert(chatModes)
       .values({
         id,
@@ -56,6 +75,8 @@ export const chatModeRepo = {
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
         isDefault: input.isDefault ?? false,
+        managed: input.managed ?? false,
+        adminManaged: input.adminManaged ?? false,
         createdAt: new Date()
       })
       .run()
@@ -78,7 +99,9 @@ export const chatModeRepo = {
         modelId: input.modelId ?? null,
         mcpProviderIds: input.mcpProviderIds ?? [],
         colorPreset: input.colorPreset ?? 'slate',
-        isDefault: input.isDefault ?? existing.isDefault
+        isDefault: input.isDefault ?? existing.isDefault,
+        managed: input.managed ?? existing.managed,
+        adminManaged: input.adminManaged ?? existing.adminManaged
       })
       .where(and(eq(chatModes.id, id), eq(chatModes.userId, userId)))
       .run()

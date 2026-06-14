@@ -69,26 +69,62 @@ function humanizeOpenAIName(id: string): string {
   return parts[0] + '-' + parts[1] + ' ' + parts.slice(2).join(' ')
 }
 
+/** Construction options for OpenAI-compatible (gateway) providers. */
+export interface OpenAIAdapterOptions {
+  /** Custom API base URL — points the SDK at a self-hosted / enterprise gateway. */
+  baseURL?: string
+  /**
+   * Models to advertise when live `models.list()` is unavailable. Gateways
+   * frequently don't implement the listing endpoint, so account-config sync
+   * seeds the credential's model(s) here to keep the picker populated.
+   */
+  fallbackModels?: string[]
+}
+
 export class OpenAIAdapter implements LLMAdapter {
   readonly providerType = 'openai'
   private client: OpenAI
   private providerId: string
+  private fallbackModels: string[]
 
-  constructor(apiKey: string, providerId: string) {
-    this.client = new OpenAI({ apiKey })
+  constructor(apiKey: string, providerId: string, opts: OpenAIAdapterOptions = {}) {
+    this.client = new OpenAI({ apiKey, baseURL: opts.baseURL })
     this.providerId = providerId
+    this.fallbackModels = opts.fallbackModels ?? []
   }
 
   async listModels(): Promise<ModelInfo[]> {
     const collected: { id: string; created: number }[] = []
-    for await (const m of this.client.models.list()) {
-      if (isChatCapableId(m.id)) {
-        collected.push({ id: m.id, created: m.created ?? 0 })
+    try {
+      for await (const m of this.client.models.list()) {
+        if (isChatCapableId(m.id)) {
+          collected.push({ id: m.id, created: m.created ?? 0 })
+        }
       }
+    } catch (err) {
+      // Gateways (openai_compatible) often don't implement /models. When we have
+      // seeded fallback models, advertise those instead of failing the picker.
+      // For a first-party OpenAI provider there is no fallback → surface the
+      // error so `provider:test` shows the real cause (bad key, etc.).
+      if (this.fallbackModels.length === 0) throw err
+      return this.fallbackModels.map((id) => ({
+        id,
+        name: humanizeOpenAIName(id),
+        providerId: this.providerId,
+        providerType: this.providerType
+      }))
     }
     // Newest first so the picker surfaces current models without us
     // hardcoding a "preferred" order that goes stale.
     collected.sort((a, b) => b.created - a.created)
+    if (collected.length === 0 && this.fallbackModels.length > 0) {
+      return this.fallbackModels.map((id) => ({
+        id,
+        name: humanizeOpenAIName(id),
+        providerId: this.providerId,
+        providerType: this.providerType
+      }))
+    }
     return collected.map((m) => ({
       id: m.id,
       name: humanizeOpenAIName(m.id),

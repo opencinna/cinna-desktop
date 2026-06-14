@@ -11,6 +11,8 @@ import { useChatStream } from './useChatStream'
 import { useChatModes } from './useChatModes'
 import { useProviders } from './useProviders'
 import { useModels } from './useModels'
+import { useAppSettings } from './useAppSettings'
+import { resolveDefaultModeId } from '../../../shared/chatModeDefaults'
 import { resolveModel } from './useNewChatFlow'
 
 export function useJobList() {
@@ -217,6 +219,7 @@ export function useExecuteJob() {
   const { data: chatModes } = useChatModes()
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
+  const { data: appSettings } = useAppSettings()
 
   return useMutation({
     mutationFn: (input: ExecuteJobInput) => window.api.jobs.execute(input.jobId),
@@ -244,7 +247,13 @@ export function useExecuteJob() {
         const explicitMode = modeId
           ? (chatModes ?? []).find((m) => m.id === modeId) ?? null
           : null
-        const defaultMode = (chatModes ?? []).find((m) => m.isDefault) ?? null
+        const defaultId = resolveDefaultModeId(
+          chatModes ?? [],
+          appSettings?.prioritizeAccountDefaults === true
+        )
+        const defaultMode = defaultId
+          ? (chatModes ?? []).find((m) => m.id === defaultId) ?? null
+          : null
         const mode = explicitMode ?? defaultMode
         const providerId = mode?.providerId ?? null
         const resolvedModelId = resolveModel(mode, providerId, providers, allModels)

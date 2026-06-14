@@ -10,6 +10,7 @@ import type {
   PendingAttachment
 } from '../../../shared/attachments'
 import { deriveTitleFromMessage } from '../../../shared/chatTitle'
+import { pickDefaultModelId } from '../../../shared/modelDefaults'
 import { unwrapIpcError } from '../utils/ipcError'
 
 type ProviderData = Awaited<ReturnType<typeof window.api.providers.list>>[number]
@@ -70,7 +71,11 @@ export function resolveModel(
     providerData?.defaultModelId && providerModels.some((m) => m.id === providerData.defaultModelId)
       ? providerData.defaultModelId
       : null
-  return defaultValid ?? providerModels[0]?.id ?? null
+  // No explicit model: auto-pick a generally-available one. Skips Anthropic's
+  // access-gated tiers (Fable/Mythos) that `models.list()` returns first but the
+  // account may not be able to call — picking the raw newest would 404 at stream
+  // time. The gated models remain selectable explicitly in the picker.
+  return defaultValid ?? pickDefaultModelId(providerModels.map((m) => m.id))
 }
 
 export function useNewChatFlow(): {

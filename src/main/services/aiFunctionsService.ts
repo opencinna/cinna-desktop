@@ -1,11 +1,11 @@
 import { chatRepo } from '../db/chats'
-import { chatModeRepo } from '../db/chatModes'
-import { llmProviderRepo } from '../db/llmProviders'
+import { chatModeService } from './chatModeService'
+import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
 import { decryptApiKey } from '../security/keystore'
 import { createAdapter, isProviderType } from '../llm/factory'
 import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
-import { getSettingsScopeUserId } from '../auth/scope'
+import { getManagedResourceScopes } from '../auth/scope'
 import type { LLMAdapter, ChatMessage } from '../llm/types'
 
 const logger = createLogger('ai-functions')
@@ -46,13 +46,15 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
     logger.debug('candidate skipped: missing provider/model id', pair)
     return null
   }
-  const settingsUserId = getSettingsScopeUserId()
-  const provider = llmProviderRepo.getOwned(settingsUserId, pair.providerId)
+  // User-created providers live in Default scope; account-provisioned managed
+  // ones in the active Profile scope. Search both.
+  let provider: LlmProviderRow | undefined
+  for (const scope of getManagedResourceScopes()) {
+    provider = llmProviderRepo.getOwned(scope, pair.providerId)
+    if (provider) break
+  }
   if (!provider) {
-    logger.debug('candidate skipped: provider not found in settings scope', {
-      providerId: pair.providerId,
-      settingsUserId
-    })
+    logger.debug('candidate skipped: provider not found', { providerId: pair.providerId })
     return null
   }
   if (!provider.apiKeyEncrypted) {
@@ -61,6 +63,8 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
     })
     return null
   }
+  // Managed providers are always active (enabled stays true; usability is gated
+  // by their chat mode), so a single `enabled` check covers both kinds.
   if (!provider.enabled) {
     logger.debug('candidate skipped: provider disabled', {
       providerId: pair.providerId
@@ -77,7 +81,16 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
   const adapter = createAdapter(
     provider.type,
     decryptApiKey(provider.apiKeyEncrypted),
-    provider.id
+    provider.id,
+    {
+      baseUrl: provider.baseUrl,
+      fallbackModels:
+        provider.availableModels && provider.availableModels.length > 0
+          ? provider.availableModels
+          : provider.defaultModelId
+            ? [provider.defaultModelId]
+            : []
+    }
   )
   if (!adapter) {
     logger.debug('candidate skipped: adapter factory returned null', {
@@ -103,17 +116,18 @@ function buildChatModeCandidates(
   if (!chat) {
     throw new AiFunctionError('no_provider', 'Chat not found for AI-function adapter resolution')
   }
-  // Chat modes are scoped to the settings (shared) user, not the active profile.
-  const settingsUserId = getSettingsScopeUserId()
 
   const candidates: Array<{ source: string } & ProviderModelPair> = []
   if (chat.modeId) {
-    const mode = chatModeRepo.getOwned(settingsUserId, chat.modeId)
+    // Managed-aware lookup: the mode may be a Default-scope user mode or an
+    // account-provisioned Profile-scope managed mode.
+    const mode = chatModeService.findMerged(chat.modeId)
     if (mode) {
       candidates.push({ source: 'chat-mode', providerId: mode.providerId, modelId: mode.modelId })
     }
   }
-  const defaultMode = chatModeRepo.list(settingsUserId).find((m) => m.isDefault)
+  // Effective default honors managed precedence (account default outranks local).
+  const defaultMode = chatModeService.resolveEffectiveDefault()
   if (defaultMode) {
     candidates.push({
       source: 'default-mode',
@@ -128,7 +142,6 @@ function buildChatModeCandidates(
   logger.debug('resolve adapter candidates', {
     chatId,
     profileUserId: userId,
-    settingsUserId,
     chatModeId: chat.modeId,
     defaultModeId: defaultMode?.id ?? null,
     candidates: candidates.map((c) => ({
@@ -191,8 +204,7 @@ export const aiFunctions = {
    * from the first user message on a brand-new chat).
    */
   resolveAdapterFromDefaultMode(_userId: string): ResolvedAdapter {
-    const settingsUserId = getSettingsScopeUserId()
-    const defaultMode = chatModeRepo.list(settingsUserId).find((m) => m.isDefault)
+    const defaultMode = chatModeService.resolveEffectiveDefault()
     if (defaultMode) {
       const resolved = tryResolve({
         providerId: defaultMode.providerId,

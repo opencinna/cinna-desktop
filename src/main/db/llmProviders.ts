@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { llmProviders } from './schema'
@@ -12,6 +12,18 @@ export interface UpsertInput {
   apiKeyEncrypted?: Buffer | null
   enabled?: boolean
   defaultModelId?: string | null
+  /** Curated picker model ids (account-config `suggested_models`). Null clears it. */
+  availableModels?: string[] | null
+  baseUrl?: string | null
+  managed?: boolean
+  adminManaged?: boolean
+  /**
+   * Insert with the provided `id` when no row exists, instead of throwing
+   * "Provider not found". The user-facing path leaves this false so a stale
+   * update errors; account-config sync sets it to seed managed rows under their
+   * deterministic `managed:{credentialId}` ids.
+   */
+  createIfMissing?: boolean
 }
 
 export interface UpsertResult {
@@ -26,6 +38,25 @@ export const llmProviderRepo = {
       .select()
       .from(llmProviders)
       .where(eq(llmProviders.userId, userId))
+      .all()
+  },
+
+  /** List providers across a set of scopes (Default + active profile). */
+  listByUserIds(userIds: string[]): LlmProviderRow[] {
+    if (userIds.length === 0) return []
+    return getDb()
+      .select()
+      .from(llmProviders)
+      .where(inArray(llmProviders.userId, userIds))
+      .all()
+  },
+
+  /** Managed (account-provisioned) rows for a profile — used by sync prune. */
+  listManaged(userId: string): LlmProviderRow[] {
+    return getDb()
+      .select()
+      .from(llmProviders)
+      .where(and(eq(llmProviders.userId, userId), eq(llmProviders.managed, true)))
       .all()
   },
 
@@ -51,7 +82,7 @@ export const llmProviderRepo = {
             .get()
         : undefined
 
-      if (input.id && !existing) {
+      if (input.id && !existing && !input.createIfMissing) {
         throw new Error('Provider not found')
       }
 
@@ -70,7 +101,14 @@ export const llmProviderRepo = {
             defaultModelId:
               input.defaultModelId !== undefined
                 ? input.defaultModelId
-                : existing.defaultModelId
+                : existing.defaultModelId,
+            availableModels:
+              input.availableModels !== undefined
+                ? input.availableModels
+                : existing.availableModels,
+            baseUrl: input.baseUrl !== undefined ? input.baseUrl : existing.baseUrl,
+            managed: input.managed ?? existing.managed,
+            adminManaged: input.adminManaged ?? existing.adminManaged
           })
           .where(and(eq(llmProviders.id, id), eq(llmProviders.userId, userId)))
           .run()
@@ -84,6 +122,10 @@ export const llmProviderRepo = {
             apiKeyEncrypted,
             enabled: input.enabled ?? true,
             defaultModelId: input.defaultModelId ?? null,
+            availableModels: input.availableModels ?? null,
+            baseUrl: input.baseUrl ?? null,
+            managed: input.managed ?? false,
+            adminManaged: input.adminManaged ?? false,
             createdAt: new Date()
           })
           .run()

@@ -17,10 +17,19 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   const autoChatTitles = settings?.autoChatTitles === true
   const enableTrayIcon = settings?.enableTrayIcon === true
+  const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
 
   const toggleAutoChatTitles = (): void => {
     if (!settings || disabled) return
     setSetting.mutate({ key: 'autoChatTitles', value: !settings.autoChatTitles })
+  }
+
+  const togglePrioritizeAccountDefaults = (): void => {
+    if (!settings || disabled) return
+    setSetting.mutate({
+      key: 'prioritizeAccountDefaults',
+      value: !settings.prioritizeAccountDefaults
+    })
   }
 
   const toggleEnableTrayIcon = (): void => {
@@ -34,20 +43,37 @@ export function FeaturesSettingsSection(): React.JSX.Element {
         <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
           AI Functions
         </h2>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-          <ToggleRow
-            label="Auto-generate chat titles"
-            description="Generates a short title from your first message in a new chat. Uses your default chat mode’s LLM provider — consumes tokens."
-            checked={autoChatTitles}
-            disabled={disabled}
-            onToggle={toggleAutoChatTitles}
-            title={
-              autoChatTitles
-                ? 'New chats will get a generated title from your first message'
-                : 'Chats will keep the default "New Chat" name'
-            }
-            showError={isError}
-          />
+        <div className="space-y-3">
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
+            <ToggleRow
+              label="Auto-generate chat titles"
+              description="Generates a short title from your first message in a new chat. Uses your default chat mode’s LLM provider — consumes tokens."
+              checked={autoChatTitles}
+              disabled={disabled}
+              onToggle={toggleAutoChatTitles}
+              title={
+                autoChatTitles
+                  ? 'New chats will get a generated title from your first message'
+                  : 'Chats will keep the default "New Chat" name'
+              }
+              showError={isError}
+            />
+          </div>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
+            <ToggleRow
+              label="Prioritize ‘Account’ defaults over default profile"
+              description="When you’re signed in to a Cinna account, use the account’s default chat mode as the one that auto-applies on new chats — overriding your local default. Off by default: your local default wins, and the account default only applies when you have none."
+              checked={prioritizeAccountDefaults}
+              disabled={disabled}
+              onToggle={togglePrioritizeAccountDefaults}
+              title={
+                prioritizeAccountDefaults
+                  ? 'Account default chat mode takes precedence over your local default'
+                  : 'Your local default chat mode takes precedence'
+              }
+              showError={isError}
+            />
+          </div>
         </div>
       </section>
 

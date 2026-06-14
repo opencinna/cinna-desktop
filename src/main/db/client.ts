@@ -11,6 +11,7 @@ import { migrateChatModes } from './migrations/chat-modes'
 import { migrateAgents } from './migrations/agents'
 import { migrateA2aSessions } from './migrations/a2a-sessions'
 import { migrateAgentOverrides } from './migrations/agent-overrides'
+import { migrateAccountConfig } from './migrations/account-config'
 import { migrateUsers, migrateUserIdColumns } from './migrations/users'
 import { migrateChatFiles } from './migrations/chat-files'
 import { migrateJobs } from './migrations/jobs'
@@ -75,6 +76,9 @@ function runMigrations(): void {
   migrateChats(sqlite)
   migrateMessages(sqlite)
   migrateChatModes(sqlite)
+  // Account-provisioned (Cinna-managed) provider/mode columns + overrides table.
+  // Must come after providers + chat-modes tables exist.
+  migrateAccountConfig(sqlite)
   migrateAgents(sqlite)
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)

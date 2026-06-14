@@ -15,6 +15,13 @@ export interface AppSettingsSchema {
    * the main window. Toggling at runtime creates or destroys the tray live.
    */
   enableTrayIcon: boolean
+  /**
+   * When true, an account-provisioned (Cinna) default chat mode takes precedence
+   * over the local default-profile default. Off by default — the local default
+   * wins, and the account default only applies when no local default is set.
+   * See `shared/chatModeDefaults.ts` for the resolution.
+   */
+  prioritizeAccountDefaults: boolean
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

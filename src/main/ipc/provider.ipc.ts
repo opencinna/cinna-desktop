@@ -1,13 +1,22 @@
 import { userActivation } from '../auth/activation'
-import { getSettingsScopeUserId } from '../auth/scope'
+import { getSettingsScopeUserId, getProfileScopeUserId } from '../auth/scope'
 import { providerService } from '../services/providerService'
+import { runAccountConfigSyncOnce } from '../services/account-config-sync'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
 
 export function registerProviderHandlers(): void {
   ipcHandle('provider:list', async () => {
     userActivation.requireActivated()
-    return providerService.list(getSettingsScopeUserId())
+    // Unions Default-scope user providers + active-profile managed providers.
+    return providerService.listMerged()
+  })
+
+  // Manual "Sync now" for account-provisioned providers/modes (Settings button).
+  ipcHandle('provider:sync-account-config', async () => {
+    userActivation.requireActivated()
+    await runAccountConfigSyncOnce(getProfileScopeUserId())
+    return { success: true }
   })
 
   ipcHandle(

@@ -33,3 +33,16 @@ export function getAgentLookupScope(): string[] {
   if (profile === DEFAULT_SCOPE_USER_ID) return [DEFAULT_SCOPE_USER_ID]
   return [DEFAULT_SCOPE_USER_ID, profile]
 }
+
+/**
+ * Scope union for LLM providers and chat modes: user-created rows live in
+ * Default scope (shared), while account-provisioned (Cinna-managed) rows are
+ * profile-scoped — materialized under the active user id by account-config
+ * sync. Reads union both so managed rows surface only while their account is
+ * active; writes still target Default scope. Mirrors {@link getAgentLookupScope}.
+ */
+export function getManagedResourceScopes(): string[] {
+  const profile = getProfileScopeUserId()
+  if (profile === DEFAULT_SCOPE_USER_ID) return [DEFAULT_SCOPE_USER_ID]
+  return [DEFAULT_SCOPE_USER_ID, profile]
+}

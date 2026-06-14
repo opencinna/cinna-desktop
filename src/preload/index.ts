@@ -107,6 +107,10 @@ export interface ProviderData {
   enabled: boolean
   defaultModelId: string | null
   hasApiKey: boolean
+  /** True for account-provisioned (Cinna-managed) providers — read-only in the UI. */
+  managed: boolean
+  /** For managed rows: provisioned by an admin vs the user's own Cinna credential. */
+  adminManaged: boolean
   createdAt: Date
 }
 
@@ -125,6 +129,12 @@ export interface ChatModeData {
   mcpProviderIds: string[]
   colorPreset: string
   isDefault: boolean
+  /** True for account-provisioned (Cinna-managed) modes — read-only in the UI. */
+  managed: boolean
+  /** For managed rows: provisioned by an admin vs the user's own Cinna credential. */
+  adminManaged: boolean
+  /** Effective local enable state (managed modes can be toggled off per profile). */
+  enabled: boolean
   createdAt: Date
 }
 
@@ -382,12 +392,33 @@ const api = {
       apiKey: string
     }): Promise<{ success: boolean; models?: ModelData[]; error?: string }> =>
       ipcRenderer.invoke('provider:test-key', data),
-    listModels: (): Promise<ModelData[]> => ipcRenderer.invoke('provider:list-models')
+    listModels: (): Promise<ModelData[]> => ipcRenderer.invoke('provider:list-models'),
+    /** Manual "Sync now" for account-provisioned providers/modes. */
+    syncAccountConfig: (): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('provider:sync-account-config'),
+    /**
+     * Fires after every account-config sync (activation, 5-min tick, manual
+     * sync, managed toggle). Both `useProviders` and `useChatModes` subscribe to
+     * invalidate their caches — mirrors `agents.onRemoteSyncComplete`.
+     */
+    onAccountConfigSynced: (
+      handler: (payload: { error?: 'reauth_required' | 'sync_failed' }) => void
+    ): (() => void) => {
+      const listener = (
+        _event: IpcRendererEvent,
+        payload: { error?: 'reauth_required' | 'sync_failed' }
+      ): void => handler(payload ?? {})
+      ipcRenderer.on('providers:account-config-synced', listener)
+      return () => ipcRenderer.off('providers:account-config-synced', listener)
+    }
   },
 
   chatModes: {
     list: (): Promise<ChatModeData[]> => ipcRenderer.invoke('chatmode:list'),
     get: (id: string): Promise<ChatModeData | null> => ipcRenderer.invoke('chatmode:get', id),
+    /** Toggle an account-provisioned (managed) chat mode on/off locally. */
+    setManagedEnabled: (id: string, enabled: boolean): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chatmode:set-managed-enabled', { id, enabled }),
     upsert: (data: {
       id?: string
       name: string

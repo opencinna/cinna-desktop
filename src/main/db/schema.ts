@@ -26,11 +26,39 @@ export const users = sqliteTable('users', {
 export const llmProviders = sqliteTable('llm_providers', {
   id: text('id').primaryKey(),
   userId: text('user_id').notNull().default('__default__'),
-  type: text('type').notNull(), // 'anthropic' | 'openai' | 'gemini'
+  type: text('type').notNull(), // 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
   name: text('name').notNull(),
   apiKeyEncrypted: blob('api_key_enc', { mode: 'buffer' }),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   defaultModelId: text('default_model_id'),
+  /**
+   * Curated list of selectable model ids for a managed provider — the Cinna
+   * account-config `suggested_models` (admin-curated `available_models`, else the
+   * key's `discovered_models`). When non-empty it REPLACES the adapter's model
+   * list in the picker (`providerService.listModels`), so the user only sees the
+   * models the admin offered. Null/empty for local providers and managed
+   * providers with no curation (the adapter list applies as before).
+   */
+  availableModels: text('available_models', { mode: 'json' }).$type<string[]>(),
+  /**
+   * Custom API base URL — used by `openai_compatible` providers (self-hosted /
+   * enterprise gateways) so the OpenAI adapter targets the right endpoint.
+   * Null for the native first-party providers.
+   */
+  baseUrl: text('base_url'),
+  /**
+   * True when this provider was auto-materialized from the Cinna account-config
+   * endpoint. Sync owns the row content; the row is profile-scoped and read-only
+   * in the user's own UI. See `accountConfigService` + `docs/llm/account_provisioning`.
+   */
+  managed: integer('managed', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * For managed rows: true when the underlying Cinna credential was provisioned
+   * by an admin (`is_admin_managed`), false when it's the user's own Cinna-account
+   * credential. Drives the "Managed by your administrator" vs "From your account"
+   * UI distinction. Always false for non-managed (local) providers.
+   */
+  adminManaged: integer('admin_managed', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
@@ -150,6 +178,14 @@ export const chatModes = sqliteTable('chat_modes', {
   mcpProviderIds: text('mcp_provider_ids', { mode: 'json' }).$type<string[]>().default([]),
   colorPreset: text('color_preset').notNull().default('slate'),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * True when this mode was auto-materialized from the Cinna account-config
+   * endpoint (one default mode per provisioned credential). Profile-scoped,
+   * sync-owned, read-only in the user's own UI. Mirrors `llmProviders.managed`.
+   */
+  managed: integer('managed', { mode: 'boolean' }).notNull().default(false),
+  /** Mirrors {@link llmProviders.adminManaged} for the mode's credential. */
+  adminManaged: integer('admin_managed', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
@@ -230,6 +266,30 @@ export const agentOverrides = sqliteTable(
       .$defaultFn(() => new Date())
   },
   (table) => [primaryKey({ columns: [table.userId, table.agentId] })]
+)
+
+/**
+ * Per-profile enable/disable preference for sync-managed LLM providers and
+ * chat modes (materialized from the Cinna account-config endpoint). The synced
+ * rows in `llm_providers` / `chat_modes` are owned by account-config sync, so
+ * the user's local on/off choice is kept here — survives re-sync (and a
+ * remove/re-add round-trip) without being clobbered, exactly like
+ * {@link agentOverrides}. `kind` discriminates the two resource families so one
+ * table backs both. Manual cleanup of a deleted user's rows happens in
+ * `userRepo.deleteWithCascade`.
+ */
+export const managedOverrides = sqliteTable(
+  'managed_overrides',
+  {
+    userId: text('user_id').notNull(),
+    kind: text('kind').notNull(), // 'provider' | 'mode'
+    resourceId: text('resource_id').notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.kind, table.resourceId] })]
 )
 
 export const a2aSessions = sqliteTable('a2a_sessions', {
