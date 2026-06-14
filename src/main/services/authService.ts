@@ -61,6 +61,12 @@ export interface UpdateUserInput {
   displayName?: string
   password?: string
   removePassword?: boolean
+  /**
+   * Current local password, required to set/change/remove the password on an
+   * account that already has one (website-style password change). Ignored when
+   * the account has no password yet.
+   */
+  currentPassword?: string
 }
 
 export interface DeleteAccountInput {
@@ -334,6 +340,18 @@ export const authService = {
 
     if (input.displayName !== undefined && input.displayName.trim()) {
       userRepo.updateProfile(input.userId, { displayName: input.displayName.trim() })
+    }
+
+    // Changing or removing a password requires confirming the existing one
+    // (only when the account already has a password — first-time set is open).
+    const changingPassword = input.removePassword || !!input.password
+    if (changingPassword && row.passwordHash && row.salt) {
+      if (!input.currentPassword) {
+        throw new AuthError('password_required', 'Current password is required')
+      }
+      if (!verifyPassword(input.currentPassword, row.passwordHash, row.salt)) {
+        throw new AuthError('invalid_password', 'Current password is incorrect')
+      }
     }
 
     if (input.removePassword) {

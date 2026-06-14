@@ -255,6 +255,7 @@ const api = {
       displayName?: string
       password?: string
       removePassword?: boolean
+      currentPassword?: string
     }): Promise<{ success: boolean; user?: UserData; error?: string }> =>
       ipcRenderer.invoke('auth:update-user', data),
     deleteUser: (data: {

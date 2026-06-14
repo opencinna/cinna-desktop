@@ -20,7 +20,6 @@ export type SettingsMenu =
   | 'profile-chats'
   | 'profile-llm'
   | 'profile-catalog'
-  | 'profile-connection'
   | 'profile-sync'
   | 'trash'
 
@@ -34,7 +33,6 @@ export const PROFILE_SCOPE_TABS: readonly SettingsMenu[] = [
   'profile-chats',
   'profile-llm',
   'profile-catalog',
-  'profile-connection',
   'profile-sync'
 ]
 export type Theme = 'dark' | 'light'

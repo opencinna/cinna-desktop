@@ -116,7 +116,7 @@ Mutation side-channel: note/job service writes call `syncService.markDirty()`, w
 - **[Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)** — sync requires a linked Cinna profile; reuses the OAuth Bearer/`reauth_required` path. A 401/403 pauses sync and triggers the global re-auth modal.
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — sync activates on profile activation and tears down (UMK zeroed) on deactivation.
 - **[Notes](../../notes/notes/notes.md)** & **[Jobs](../../jobs/jobs/jobs.md)** — the synced collections; their repos own the read/write helpers the engine calls, and their service write paths emit dirty/tombstone signals.
-- **[Settings](../../ui/settings/settings.md)** — the Cloud Sync card lives under Settings → Profile, next to Connection.
+- **[Settings](../../ui/settings/settings.md)** — the Cloud Sync card lives under Settings → Profile.
 
 ## Phasing
 

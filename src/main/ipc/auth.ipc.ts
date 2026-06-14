@@ -95,6 +95,7 @@ export function registerAuthHandlers(): void {
         displayName?: string
         password?: string
         removePassword?: boolean
+        currentPassword?: string
       }
     ) => {
       try {

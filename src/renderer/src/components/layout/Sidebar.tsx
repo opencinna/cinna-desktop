@@ -9,7 +9,6 @@ import {
   Sparkles,
   Package,
   Cloud,
-  Link,
   SlidersHorizontal
 } from 'lucide-react'
 import { useEffect } from 'react'
@@ -41,8 +40,7 @@ const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
   { id: 'profile-agents', label: 'Remote Agents', icon: Bot },
   { id: 'profile-llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
-  { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud },
-  { id: 'profile-connection', label: 'Connection', icon: Link }
+  { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }
 ]
 
 export function Sidebar(): React.JSX.Element {

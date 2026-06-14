@@ -150,6 +150,7 @@ export function useUpdateUser() {
       displayName?: string
       password?: string
       removePassword?: boolean
+      currentPassword?: string
     }) => window.api.auth.updateUser(data),
     onSuccess: (result) => {
       if (result.success && result.user) {

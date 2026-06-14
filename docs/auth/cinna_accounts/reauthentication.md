@@ -14,7 +14,7 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 | **Identity match check** | Guard that compares the OAuth-returned `profile.email` to the existing row's `username`. Mismatch is rejected with `identity_mismatch` so a user cannot accidentally re-link the local profile to a different server identity |
 | **Reauth-required error code** | Typed discriminator (`cinna_reauth_required`) shipped on `AgentErrorEvent` and persisted on error message rows — drives the dedicated reauth bubble in the chat without substring-matching the user-facing copy |
 | **Reauth bubble swap** | The dedicated chat bubble owns two visual states keyed off local component state: pre-reauth (danger, `AlertTriangle`, expired copy, "Re-authenticate" button) and post-reauth (success, `CheckCircle`, "Authenticated — you can resend your message now."). Replacing the entire bubble — rather than appending a success note under the now-stale danger headline — avoids the visual contradiction of a red "expired" banner immediately after the user has fixed the session |
-| **Global reauth modal** | App-level modal (`ReauthModal`, mounted in `App.tsx`, `z-[100]` so it sits over every other overlay) raised whenever a reauth-required code surfaces, regardless of which feature triggered it. **Primary trigger:** the IPC wrapper (`ipc/_wrap.ts`) — the one path every handler shares — calls `broadcastReauthRequired` (`auth/reauth-notify.ts`) whenever a handler *throws* `reauth_required`/`cinna_reauth_required` (e.g. `catalog:list`) **or returns** an `{ success: false, code: 'reauth_required' }` shape (e.g. `agent-status:list`, which catches internally). The broadcast resolves the active profile and ships `{ account, serverUrl, source }` so the modal names which connection failed. **Secondary trigger:** the renderer QueryClient's `queryCache`/`mutationCache` `onError` → `flagReauthFromError` (no details), covering anything that bypasses an IPC reject. Visibility is held in `useReauthStore`, gated to `cinna_user`. Dismissing sets a session `dismissed` flag so the next failed poll doesn't re-pop it; a successful re-auth anywhere clears it via the shared `useCinnaReauth` `onSuccess`. The pre-existing inline surfaces (catalog banner, Connection card, agent-status panel, chat bubble) still work independently |
+| **Global reauth modal** | App-level modal (`ReauthModal`, mounted in `App.tsx`, `z-[100]` so it sits over every other overlay) raised whenever a reauth-required code surfaces, regardless of which feature triggered it. **Primary trigger:** the IPC wrapper (`ipc/_wrap.ts`) — the one path every handler shares — calls `broadcastReauthRequired` (`auth/reauth-notify.ts`) whenever a handler *throws* `reauth_required`/`cinna_reauth_required` (e.g. `catalog:list`) **or returns** an `{ success: false, code: 'reauth_required' }` shape (e.g. `agent-status:list`, which catches internally). The broadcast resolves the active profile and ships `{ account, serverUrl, source }` so the modal names which connection failed. **Secondary trigger:** the renderer QueryClient's `queryCache`/`mutationCache` `onError` → `flagReauthFromError` (no details), covering anything that bypasses an IPC reject. Visibility is held in `useReauthStore`, gated to `cinna_user`. Dismissing sets a session `dismissed` flag so the next failed poll doesn't re-pop it; a successful re-auth anywhere clears it via the shared `useCinnaReauth` `onSuccess`. The pre-existing inline surfaces (catalog banner, User Accounts card re-auth button, agent-status panel, chat bubble) still work independently |
 
 ## User Stories / Flows
 
@@ -41,10 +41,10 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 3. `ReauthModal` (app root, `z-[100]`) flips `useReauthStore` via the broadcast listener and pops a centered "Cinna session expired" prompt that **names the account + server** ("The connection to *Full Name* on *host* was lost while loading agent status …") with "Re-authenticate" and "Not now" buttons — visible on any screen
 4. "Re-authenticate" runs the same OAuth flow. On success `useCinnaReauth.onSuccess` clears the store and the modal invalidates every query so the surfaces that failed while the session was dead recover; "Not now" (or Escape / backdrop click) sets the session `dismissed` flag so the next failed poll doesn't re-open it
 
-### Trigger: discoverability via Settings → Connection
-1. Any time the current user is a Cinna account, the **Profile → Connection** settings tab renders an "Authentication" card with a "Re-authenticate" button (mirrors the Features card layout — description on the left, button vertically centered on the right)
-2. When the user has no tokens (`hasCinnaTokens === false`), the card shows the "session expired" copy and the button is rendered in the accent colour to draw attention; otherwise it's a neutral outline button
-3. Clicking it runs the same OAuth flow. On failure, an inline error is shown under the description so the user can retry
+### Trigger: discoverability via Settings → User Accounts
+1. Any Cinna account's expandable card in **Settings → User Accounts** renders a "Re-authenticate" row inside its Cinna Server Details block (description on the left, button on the right). This replaces the former standalone Profile → Connection tab, which has been removed
+2. When the user has no tokens (`hasCinnaTokens === false`), the row shows the "session expired" copy and the button is rendered in the accent colour to draw attention; otherwise it's a neutral outline button
+3. Clicking it runs the same OAuth flow (`useCinnaReauth`). On failure, an inline error is shown under the description so the user can retry
 
 ### Identity mismatch path
 1. User clicks Re-authenticate → browser opens → user accidentally signs in to the Cinna server as a different account
@@ -71,7 +71,7 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 Renderer                                Main Process                     Browser / Cinna Server
 ─────────                               ────────────                     ──────────────────────
 Trigger:
-- "Re-authenticate" in Settings → Profile → Connection
+- "Re-authenticate" on the account's card in Settings → User Accounts
 - Settings banner button
 - Agent Status panel button       ───→  auth:cinna-reauth (no args)
 - Chat error chip (cinna_reauth_required)

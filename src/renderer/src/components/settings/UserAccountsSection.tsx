@@ -1,8 +1,9 @@
 import { useState } from 'react'
-import { User, Cloud, HardDrive, Trash2, ChevronDown, ChevronUp, Lock, Unlock, AlertTriangle } from 'lucide-react'
-import { useUsers, useUpdateUser, useDeleteUser } from '../../hooks/useAuth'
+import { User, Cloud, CloudOff, HardDrive, Trash2, ChevronDown, ChevronUp, Lock, Unlock, AlertTriangle, KeyRound, RefreshCw } from 'lucide-react'
+import { useUsers, useUpdateUser, useDeleteUser, useCinnaReauth } from '../../hooks/useAuth'
 import { useAuthStore } from '../../stores/auth.store'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { PasswordModal } from './PasswordModal'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const inputClass =
@@ -27,48 +28,36 @@ interface UserCardProps {
 function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [displayName, setDisplayName] = useState(user.displayName)
-  const [newPassword, setNewPassword] = useState('')
+  const [showPasswordModal, setShowPasswordModal] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [deletePassword, setDeletePassword] = useState('')
   const [error, setError] = useState('')
+  const [reauthError, setReauthError] = useState('')
 
   const updateUser = useUpdateUser()
   const deleteUser = useDeleteUser()
+  const cinnaReauth = useCinnaReauth()
 
   const isDefault = user.id === DEFAULT_USER_ID
   const isCinna = user.type === 'cinna_user'
+  const needsReauth = isCinna && user.hasCinnaTokens === false
 
   const handleSave = async (): Promise<void> => {
     setError('')
-    const data: { userId: string; displayName?: string; password?: string } = {
-      userId: user.id
-    }
+    const trimmed = displayName.trim()
+    if (!trimmed || trimmed === user.displayName) return
 
-    if (displayName.trim() && displayName.trim() !== user.displayName) {
-      data.displayName = displayName.trim()
-    }
-    if (newPassword) {
-      data.password = newPassword
-    }
-
-    if (!data.displayName && !data.password) return
-
-    const result = await updateUser.mutateAsync(data)
-    if (result.success) {
-      setNewPassword('')
-    } else {
+    const result = await updateUser.mutateAsync({ userId: user.id, displayName: trimmed })
+    if (!result.success) {
       setError(result.error ?? 'Update failed')
     }
   }
 
-  const handleRemovePassword = async (): Promise<void> => {
-    setError('')
-    const result = await updateUser.mutateAsync({
-      userId: user.id,
-      removePassword: true
-    })
+  const handleReauth = async (): Promise<void> => {
+    setReauthError('')
+    const result = await cinnaReauth.mutateAsync()
     if (!result.success) {
-      setError(result.error ?? 'Failed to remove password')
+      setReauthError(result.error ?? 'Re-authentication failed')
     }
   }
 
@@ -117,7 +106,7 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <span className="text-[14px] font-medium text-[var(--color-text)] truncate">
-              {user.displayName}
+              {isCinna ? user.cinnaFullName ?? user.displayName : user.displayName}
             </span>
             {isDefault && (
               <span className="shrink-0 px-1.5 py-0.5 rounded text-[11px] font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-muted)]">
@@ -131,10 +120,26 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
             )}
           </div>
           <div className="flex items-center gap-2 mt-0.5">
-            <TypeIcon size={10} className="text-[var(--color-text-muted)] shrink-0" />
+            {isCinna ? (
+              user.hasCinnaTokens ? (
+                <Cloud
+                  size={10}
+                  className="text-[var(--color-accent)] shrink-0"
+                  aria-label="Connected"
+                />
+              ) : (
+                <CloudOff
+                  size={10}
+                  className="text-[var(--color-danger)] shrink-0"
+                  aria-label="Not connected"
+                />
+              )
+            ) : (
+              <TypeIcon size={10} className="text-[var(--color-text-muted)] shrink-0" />
+            )}
             <span className="text-[12px] text-[var(--color-text-muted)] truncate">
               {isCinna
-                ? `Cinna · ${user.cinnaHostingType === 'cloud' ? 'Cloud' : user.cinnaServerUrl ?? 'Self-hosted'}`
+                ? user.username
                 : isDefault
                   ? 'Built-in guest account'
                   : `Local · @${user.username}`}
@@ -163,22 +168,6 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
                 Cinna Server Details
               </h3>
               <div className="grid grid-cols-2 gap-2">
-                {user.cinnaFullName && (
-                  <div className="col-span-2">
-                    <div className="text-[12px] text-[var(--color-text-muted)]">Full Name</div>
-                    <div className="text-[14px] text-[var(--color-text)]">{user.cinnaFullName}</div>
-                  </div>
-                )}
-                <div>
-                  <div className="text-[12px] text-[var(--color-text-muted)]">Email</div>
-                  <div className="text-[14px] text-[var(--color-text)] truncate">{user.username}</div>
-                </div>
-                <div>
-                  <div className="text-[12px] text-[var(--color-text-muted)]">Connection</div>
-                  <div className="text-[14px] text-[var(--color-text)]">
-                    {user.hasCinnaTokens ? 'Connected' : 'Not connected'}
-                  </div>
-                </div>
                 <div>
                   <div className="text-[12px] text-[var(--color-text-muted)]">Host</div>
                   {user.cinnaServerUrl ? (
@@ -216,21 +205,8 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
             </div>
           )}
 
-          {/* Password section */}
-          <div>
-            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-              {user.hasPassword ? 'Change Password' : 'Set Password'}
-            </label>
-            <input
-              type="password"
-              value={newPassword}
-              onChange={(e) => setNewPassword(e.target.value)}
-              placeholder={user.hasPassword ? 'New password' : 'Set a password (optional)'}
-              className={inputClass}
-            />
-          </div>
-
           {error && <div className="text-[12px] text-red-400">{error}</div>}
+          {reauthError && <div className="text-[12px] text-[var(--color-danger)]">{reauthError}</div>}
 
           {/* Action buttons */}
           <div className="flex items-center gap-2">
@@ -244,23 +220,43 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
 
             <div className="flex-1" />
 
-            {user.hasPassword && (
+            {isCinna && (
               <button
-                onClick={handleRemovePassword}
-                disabled={updateUser.isPending}
-                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                onClick={handleReauth}
+                disabled={cinnaReauth.isPending}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[14px] font-medium transition-colors disabled:opacity-50 ${
+                  needsReauth
+                    ? 'bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white'
+                    : 'border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                }`}
+                title={
+                  needsReauth
+                    ? 'Cinna session expired — re-authenticate to restore remote agents'
+                    : 'Re-link this account with a fresh Cinna session'
+                }
               >
-                Remove Password
+                <RefreshCw size={12} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+                {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
               </button>
             )}
 
             <button
-              onClick={handleSave}
-              disabled={updateUser.isPending}
-              className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
+              onClick={() => setShowPasswordModal(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
             >
-              {updateUser.isPending ? 'Saving...' : 'Save Changes'}
+              <KeyRound size={12} />
+              {user.hasPassword ? 'Change Local Password' : 'Set Local Password'}
             </button>
+
+            {!isCinna && (
+              <button
+                onClick={handleSave}
+                disabled={updateUser.isPending}
+                className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
+              >
+                {updateUser.isPending ? 'Saving...' : 'Save Changes'}
+              </button>
+            )}
           </div>
 
           {/* Delete confirmation */}
@@ -308,6 +304,10 @@ function UserAccountCard({ user, isCurrentUser }: UserCardProps): React.JSX.Elem
           )}
         </div>
       </AnimatedCollapse>
+
+      {showPasswordModal && (
+        <PasswordModal user={user} onClose={() => setShowPasswordModal(false)} />
+      )}
     </div>
   )
 }

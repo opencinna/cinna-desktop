@@ -64,9 +64,18 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 
 ### Edit Account (Settings)
 1. User expands an account card in Settings → User Accounts
-2. **Local users**: can change display name and set/change/remove password
-3. **Cinna users**: profile fields are read-only (username/email from OAuth), but read-only details are shown — host, hosting type (Cloud/Self-Hosted), connection status. User can set a local password for session lock
-4. Click "Save Changes" to apply
+2. **Local users**: can change display name (via "Save Changes") and manage the local password (via "Set/Change Local Password")
+3. **Cinna users**: profile fields are read-only (username/email from OAuth), but read-only details are shown — host, hosting type (Cloud/Self-Hosted), connection status. The card also hosts an in-place **Re-authenticate** button (see [Cinna Re-authentication](../cinna_accounts/reauthentication.md)). User can set a local password for session lock
+4. Click "Save Changes" to apply display-name edits
+
+### Set / Change Local Password (Settings)
+1. User expands an account card and clicks **"Set Local Password"** (or **"Change Local Password"** when one already exists) in the card footer
+2. A modal opens (website-style password setup):
+   - If the account already has a password, a **Current password** field is required and verified server-side before any change is applied
+   - The new password is always entered twice (**New password** + **Confirm new password**); a mismatch is rejected inline
+   - Submitting an **empty** new password **removes** the password — the modal confirms with a "password removed" message and the account stops asking for a password
+3. The modal carries a note that the password is **local only** — it gates unlocking this account inside this app and is never sent to any server
+4. Applies to both local and Cinna accounts (a Cinna account can still carry a local session-lock password)
 
 ### Delete Account (Settings)
 1. User clicks the trash icon on an expanded account card
@@ -80,6 +89,7 @@ Local user accounts for the desktop app, similar to OS-level login. Users can cr
 - The `__default__` user always exists and cannot be deleted or edited
 - Usernames must be unique (case-sensitive)
 - Passwords are optional for all account types — used only to lock the local session
+- Changing or removing an existing password requires confirming the **current** password (verified in `authService.updateUser` via `verifyPassword`); first-time set has no current-password gate
 - Password is required to delete a password-protected account (security confirmation)
 - Cinna account profile fields (username, display name) come from OAuth and cannot be edited locally — only local password can be set/changed
 - Data is split into two scopes — see [Settings Scope](../../core/settings_scope/settings_scope.md): **Default scope** (LLM providers, MCP providers, chat modes, local agents) is shared across all profiles; **Profile scope** (chats, remote agents, agent overrides, Cinna tokens) is per-account and changes on user switch
