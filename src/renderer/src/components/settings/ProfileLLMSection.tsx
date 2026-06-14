@@ -18,7 +18,7 @@ export function ProfileLLMSection(): React.JSX.Element {
     <div className="space-y-3">
       <div className="flex items-start justify-between gap-2">
         <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">
-          These LLM providers are managed by your account administrator. They&apos;re ready to use
+          These AI credentials are managed by your account administrator. They&apos;re ready to use
           and can&apos;t be edited here — you can enable or disable each one for this profile.
         </p>
         <button
@@ -36,7 +36,7 @@ export function ProfileLLMSection(): React.JSX.Element {
       {managed.length === 0 ? (
         <div className="rounded-lg border border-dashed border-[var(--color-border)] px-4 py-6
           text-center text-[13px] text-[var(--color-text-muted)]">
-          No providers have been assigned to your account yet.
+          No AI credentials have been assigned to your account yet.
         </div>
       ) : (
         managed.map((p) => <ManagedProviderCard key={p.id} provider={p} />)

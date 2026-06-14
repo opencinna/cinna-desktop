@@ -220,7 +220,7 @@ export function MainArea(): React.JSX.Element {
         setSendError(
           combinedAgentIds.length > 0
             ? 'Orchestrated mode needs a local model — pick a chat mode or set a default in Settings.'
-            : "Can't send message — no agent, chat mode, or LLM provider is configured. Pick an agent or set a default chat mode in Settings."
+            : "Can't send message — no agent, chat mode, or AI credentials are configured. Pick an agent or set a default chat mode in Settings."
         )
         return
       }

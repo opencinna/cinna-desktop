@@ -83,7 +83,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
   return (
     <div className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)]">
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-        <span className="font-medium text-[14px]">Add LLM Provider</span>
+        <span className="font-medium text-[14px]">Add AI Credentials</span>
         <button
           type="button"
           onClick={onClose}
@@ -274,7 +274,7 @@ export function LLMProviderForm({ onClose }: LLMProviderFormProps): React.JSX.El
                     <Loader2 size={10} className="animate-spin" /> Saving...
                   </span>
                 ) : (
-                  'Save Provider'
+                  'Save Credentials'
                 )}
               </button>
             </div>

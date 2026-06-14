@@ -29,7 +29,7 @@ import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'llm', label: 'LLM Providers', icon: Sparkles },
+  { id: 'llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
   { id: 'features', label: 'Features', icon: SlidersHorizontal },
@@ -39,7 +39,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
   { id: 'profile-agents', label: 'Remote Agents', icon: Bot },
-  { id: 'profile-llm', label: 'LLM Providers', icon: Sparkles },
+  { id: 'profile-llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
   { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud },
   { id: 'profile-connection', label: 'Connection', icon: Link }

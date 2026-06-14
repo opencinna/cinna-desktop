@@ -12,6 +12,8 @@ Settings screen for managing chat modes, agents, LLM providers, MCP server conne
 - **Profile Group** — Sidebar section labeled "Profile {displayName}" containing profile-bound settings. Only rendered when the active profile has profile-scope content (currently: Cinna users only — "Agents" (remote agents), "Catalog" (bundle catalog), and "Connection" (Cinna re-authentication)).
 - **Sidebar Menu Mode** — When settings are active, the sidebar replaces the chat list with the two-group vertical settings menu plus a footer "Trash" entry.
 
+> **UI naming note:** The settings section for LLM providers (the `'llm'` / `'profile-llm'` tab) is labeled **"AI Credentials"** in the UI — in the sidebar menu item, the page title, and the "Add AI Credentials" button. "LLM Provider" is the canonical/technical name used in code (`useProviders`, `LLMProviderCard`, the `providers` store) and throughout these docs; "AI Credentials" is just the friendlier user-facing label (matching CinnaCore). They are the same thing. References to the "LLM Providers" menu item below describe this same "AI Credentials" section.
+
 ## User Stories / Flows
 
 ### Entering Settings

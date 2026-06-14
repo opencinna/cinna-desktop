@@ -8,7 +8,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 |------|-----------|
 | **Chat** | A conversation with an LLM, persisted in SQLite with messages and model/provider binding |
 | **Chat Mode** | A named preset bundling an LLM provider/model, MCP servers, and a color — used to quickly start configured chats |
-| **Provider** | An LLM service (Anthropic, OpenAI, Gemini, OpenAI-compatible) configured with an encrypted API key |
+| **Provider** (a.k.a. **LLM Provider**) | An LLM service (Anthropic, OpenAI, Gemini, OpenAI-compatible) configured with an encrypted API key. **UI naming:** surfaced to users as **"AI Credentials"** (the sidebar section, page title, "Add AI Credentials" button, and the chat-mode field). "LLM Provider" remains the canonical/technical name in code and these docs; "AI Credentials" is purely the friendlier user-facing label, matching CinnaCore. The two terms refer to the same thing |
 | **Managed Provider / Chat Mode** | An LLM provider / default chat mode auto-materialized from a Cinna admin-provisioned credential (`managed = true`). Profile-scoped, sync-owned, read-only (local enable/disable only). See [Account Provisioning](llm/account_provisioning/account_provisioning.md) |
 | **Adapter** | Implementation of the `LLMAdapter` interface that translates between our chat system and a provider's SDK |
 | **MCP Server** | A Model Context Protocol server (local stdio or remote HTTP) that exposes tools to the LLM |

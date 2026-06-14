@@ -47,7 +47,7 @@ export function FeaturesSettingsSection(): React.JSX.Element {
           <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
             <ToggleRow
               label="Auto-generate chat titles"
-              description="Generates a short title from your first message in a new chat. Uses your default chat mode’s LLM provider — consumes tokens."
+              description="Generates a short title from your first message in a new chat. Uses your default chat mode’s AI credentials — consumes tokens."
               checked={autoChatTitles}
               disabled={disabled}
               onToggle={toggleAutoChatTitles}

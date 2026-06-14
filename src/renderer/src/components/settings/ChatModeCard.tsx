@@ -127,10 +127,10 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
             </div>
           </div>
 
-          {/* LLM Provider */}
+          {/* AI Credentials (a.k.a. LLM provider) */}
           <div>
             <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-              LLM Provider
+              AI Credentials
             </label>
             <select
               value={mode.providerId ?? ''}

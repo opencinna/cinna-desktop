@@ -10,6 +10,8 @@ detour. The user logs in and can immediately chat with the LLM (and, combined
 with [Remote Agents](../../agents/remote_agents/remote_agents.md) + the
 [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md), with agents).
 
+> **UI naming note:** What this doc calls **"LLM providers"** is labeled **"AI Credentials"** in the UI (sidebar section, page title) — the canonical/technical name stays "LLM Provider", "AI Credentials" is the friendlier user-facing label that matches the cinna-core term. See the glossary in [docs/README.md](../../README.md#glossary).
+
 ## Core Concepts
 
 | Term | Definition |

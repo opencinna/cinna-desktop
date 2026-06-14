@@ -15,7 +15,7 @@ import { CloudSyncSettingsSection } from './CloudSyncSettingsSection'
 
 const sectionTitles = {
   chats: 'Chat Modes',
-  llm: 'LLM Providers',
+  llm: 'AI Credentials',
   agents: 'Agents',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
@@ -23,7 +23,7 @@ const sectionTitles = {
   development: 'Development',
   'profile-agents': 'Profile Agents',
   'profile-chats': 'Chat Modes',
-  'profile-llm': 'LLM Providers',
+  'profile-llm': 'AI Credentials',
   'profile-catalog': 'Catalog',
   'profile-connection': 'Connection',
   'profile-sync': 'Cloud Sync',

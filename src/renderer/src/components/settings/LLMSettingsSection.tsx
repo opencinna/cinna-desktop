@@ -29,7 +29,7 @@ export function LLMSettingsSection(): React.JSX.Element {
             hover:border-[var(--color-text-muted)] transition-colors"
         >
           <Plus size={14} />
-          Add LLM Provider
+          Add AI Credentials
         </button>
       )}
     </div>

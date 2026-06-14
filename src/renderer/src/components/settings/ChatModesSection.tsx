@@ -15,7 +15,7 @@ export function ChatModesSection(): React.JSX.Element {
   return (
     <div className="space-y-3">
       <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">
-        Chat modes let you define presets for different workflows — choose an LLM provider, model,
+        Chat modes let you define presets for different workflows — choose AI credentials, a model,
         and MCP tools for each mode, then start new chats in one click.
       </p>
 
