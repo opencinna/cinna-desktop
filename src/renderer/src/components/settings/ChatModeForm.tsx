@@ -22,7 +22,9 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
   const { data: mcpProviders } = useMcpProviders()
   const upsert = useUpsertChatMode()
 
-  const enabledProviders = (providers ?? []).filter((p) => p.enabled && p.hasApiKey)
+  const enabledProviders = (providers ?? []).filter(
+    (p) => p.enabled && p.hasApiKey && !p.unsupported
+  )
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === providerId)
 
   const toggleMcp = (id: string): void => {

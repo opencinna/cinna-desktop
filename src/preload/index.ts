@@ -111,6 +111,8 @@ export interface ProviderData {
   managed: boolean
   /** For managed rows: provisioned by an admin vs the user's own Cinna credential. */
   adminManaged: boolean
+  /** Managed credential that can't make API calls (e.g. anthropic oauth token). */
+  unsupported: boolean
   createdAt: Date
 }
 
@@ -394,6 +396,9 @@ const api = {
     }): Promise<{ success: boolean; models?: ModelData[]; error?: string }> =>
       ipcRenderer.invoke('provider:test-key', data),
     listModels: (): Promise<ModelData[]> => ipcRenderer.invoke('provider:list-models'),
+    /** On-demand live model fetch for one provider (scope-aware → managed too). */
+    fetchModels: (providerId: string): Promise<ModelData[]> =>
+      ipcRenderer.invoke('provider:fetch-models', providerId),
     /** Manual "Sync now" for account-provisioned providers/modes. */
     syncAccountConfig: (): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('provider:sync-account-config'),
@@ -420,6 +425,9 @@ const api = {
     /** Toggle an account-provisioned (managed) chat mode on/off locally. */
     setManagedEnabled: (id: string, enabled: boolean): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chatmode:set-managed-enabled', { id, enabled }),
+    /** Set the local model for a managed chat mode (null reverts to default). */
+    setManagedModel: (id: string, modelId: string | null): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chatmode:set-managed-model', { id, modelId }),
     upsert: (data: {
       id?: string
       name: string

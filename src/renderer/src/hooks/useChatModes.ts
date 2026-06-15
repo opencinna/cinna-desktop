@@ -31,6 +31,17 @@ export function useSetManagedChatModeEnabled() {
   })
 }
 
+export function useSetManagedChatModeModel() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: { id: string; modelId: string | null }) =>
+      window.api.chatModes.setManagedModel(data.id, data.modelId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['chat-modes'] })
+    }
+  })
+}
+
 export function useUpsertChatMode() {
   const queryClient = useQueryClient()
   return useMutation({

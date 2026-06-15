@@ -59,6 +59,14 @@ export const llmProviders = sqliteTable('llm_providers', {
    * UI distinction. Always false for non-managed (local) providers.
    */
   adminManaged: integer('admin_managed', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * For managed rows: the credential exists but cannot be used for API calls in
+   * the app (e.g. an Anthropic OAuth token `sk-ant-oat…`, valid for the Claude
+   * apps but not the Messages API). Such rows are still materialized so they show
+   * in the AI-credentials list, but get no adapter and no auto-created chat mode;
+   * the UI shows a "Not supported" badge. Always false for usable/local providers.
+   */
+  unsupported: integer('unsupported', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
@@ -285,6 +293,8 @@ export const managedOverrides = sqliteTable(
     kind: text('kind').notNull(), // 'provider' | 'mode'
     resourceId: text('resource_id').notNull(),
     enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    // Per-mode model choice overriding the synced default (null = use default).
+    modelId: text('model_id'),
     updatedAt: integer('updated_at', { mode: 'timestamp' })
       .notNull()
       .$defaultFn(() => new Date())

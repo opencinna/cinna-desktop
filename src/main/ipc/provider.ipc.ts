@@ -76,4 +76,15 @@ export function registerProviderHandlers(): void {
     userActivation.requireActivated()
     return providerService.listModels()
   })
+
+  // On-demand live model fetch for a single provider (scope-aware → works for
+  // managed providers). Unlike provider:test/test-key (which catch and return a
+  // `{ success, error }` union for inline settings rendering), this intentionally
+  // THROWS the ProviderError: the managed chat-mode card consumes it via React
+  // Query's `isError`, and `ipcHandle` preserves the DomainError `code`/`detail`
+  // across the boundary so the card shows the provider's real message + retry.
+  ipcHandle('provider:fetch-models', async (_event, providerId: string) => {
+    userActivation.requireActivated()
+    return providerService.fetchModels(providerId)
+  })
 }

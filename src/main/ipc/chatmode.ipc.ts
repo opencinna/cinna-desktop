@@ -28,6 +28,18 @@ export function registerChatModeHandlers(): void {
     }
   )
 
+  // Set the local model for an account-provisioned chat mode (per-profile
+  // override; null reverts to the synced default).
+  ipcHandle(
+    'chatmode:set-managed-model',
+    async (_event, data: { id: string; modelId: string | null }) => {
+      userActivation.requireActivated()
+      chatModeService.setManagedModel(data.id, data.modelId)
+      notifyAccountConfigSynced()
+      return { success: true }
+    }
+  )
+
   ipcHandle(
     'chatmode:upsert',
     async (

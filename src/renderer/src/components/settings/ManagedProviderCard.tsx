@@ -14,6 +14,7 @@ interface ManagedProviderCardProps {
     name: string
     defaultModelId: string | null
     adminManaged: boolean
+    unsupported: boolean
   }
 }
 
@@ -33,13 +34,27 @@ export function ManagedProviderCard({ provider }: ManagedProviderCardProps): Rea
   return (
     <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
       <div className="flex items-center gap-2 px-4 py-2.5">
-        <Circle size={6} className="fill-current text-[var(--color-success)]" />
+        <Circle
+          size={6}
+          className={`fill-current ${
+            provider.unsupported ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-success)]'
+          }`}
+        />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="font-medium text-[14px]">{provider.name}</span>
             <span className="text-[12px] text-[var(--color-text-muted)]">
               {PROVIDER_LABELS[provider.type] ?? provider.type}
             </span>
+            {provider.unsupported && (
+              <span
+                className="text-[10px] font-medium px-1.5 py-0.5 rounded
+                  bg-[var(--color-danger)]/15 text-[var(--color-danger)]"
+                title="This is an OAuth token (sk-ant-oat…) for the Claude apps — it can't be used for API calls in this app."
+              >
+                Not supported
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] mt-0.5">
             <SourceIcon size={9} />

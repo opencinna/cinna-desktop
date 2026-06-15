@@ -23,26 +23,35 @@ export const chatModeService = {
 
   /**
    * Modes visible to the active session: user-created (Default scope) plus
-   * account-provisioned managed rows (active Profile scope). Overlays the
-   * effective `enabled` from `managed_overrides` (managed rows only) WITHOUT
-   * touching `isDefault` — the local and account defaults are independent flags;
-   * precedence between them is resolved separately in
+   * account-provisioned managed rows (active Profile scope). For managed rows
+   * overlays the effective `enabled` AND the per-mode `modelId` from
+   * `managed_overrides` (the user's local model choice wins over the synced
+   * default), WITHOUT touching `isDefault` — the local and account defaults are
+   * independent flags; precedence between them is resolved separately in
    * {@link resolveEffectiveDefault}. Backs the `chatmode:list` IPC.
    */
   listMerged(): ChatModeListItem[] {
     const profileUserId = getProfileScopeUserId()
     const overrides = managedOverrideRepo.map(profileUserId)
-    return chatModeRepo.listByUserIds(getManagedResourceScopes()).map((r) => ({
-      ...r,
-      enabled: r.managed ? overrides.get(`mode:${r.id}`) ?? true : true
-    }))
+    return chatModeRepo.listByUserIds(getManagedResourceScopes()).map((r) => {
+      if (!r.managed) return { ...r, enabled: true }
+      const ov = overrides.get(`mode:${r.id}`)
+      return { ...r, enabled: ov?.enabled ?? true, modelId: ov?.modelId ?? r.modelId }
+    })
   },
 
-  /** Lookup a mode by id across Default + active Profile scope (managed-aware). */
+  /**
+   * Lookup a mode by id across Default + active Profile scope (managed-aware).
+   * Applies the local model override for managed modes so chat start
+   * (`chatmode:get`) uses the user's chosen model, not just the synced default.
+   */
   findMerged(id: string): ChatModeRow | null {
     for (const scope of getManagedResourceScopes()) {
       const row = chatModeRepo.getOwned(scope, id)
-      if (row) return row
+      if (!row) continue
+      if (!row.managed) return row
+      const modelOverride = managedOverrideRepo.getModel(getProfileScopeUserId(), 'mode', row.id)
+      return modelOverride ? { ...row, modelId: modelOverride } : row
     }
     return null
   },
@@ -73,6 +82,19 @@ export const chatModeService = {
     if (!row || !row.managed) throw new ChatModeError('not_found', 'Managed chat mode not found')
     managedOverrideRepo.set(profileUserId, 'mode', id, enabled)
     logger.info('managed chat mode toggled', { modeId: id, enabled })
+  },
+
+  /**
+   * Set the local model for a managed chat mode (per-profile override; survives
+   * re-sync). `null` clears the override and reverts to the synced default. The
+   * choice overlays the mode's `modelId` in {@link listMerged}/{@link findMerged}.
+   */
+  setManagedModel(id: string, modelId: string | null): void {
+    const profileUserId = getProfileScopeUserId()
+    const row = chatModeRepo.getOwned(profileUserId, id)
+    if (!row || !row.managed) throw new ChatModeError('not_found', 'Managed chat mode not found')
+    managedOverrideRepo.setModel(profileUserId, 'mode', id, modelId)
+    logger.info('managed chat mode model set', { modeId: id, modelId })
   },
 
   /**

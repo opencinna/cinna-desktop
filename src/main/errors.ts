@@ -10,6 +10,7 @@ export type ProviderErrorCode =
   | 'missing_api_key'
   | 'not_activated'
   | 'read_only'
+  | 'list_models_failed'
 
 export type McpErrorCode =
   | 'not_found'

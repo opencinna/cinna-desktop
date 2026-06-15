@@ -26,10 +26,33 @@ export function isDefaultEligibleModelId(id: string): boolean {
 }
 
 /**
- * Choose an auto-default model id from a candidate list (assumed newest-first):
- * the first generally-available model, falling back to the first entry only if
- * every candidate is gated. Returns null for an empty list.
+ * Non-chat model families that must never be auto-selected — and are hidden from
+ * the managed model picker. A provider's discovery cache (e.g. OpenAI's) lists
+ * embeddings/audio/image/moderation models alongside chat ones, so "pick the
+ * first model" or "newest" can silently land on `text-embedding-ada-002`.
+ * Conservative on purpose: only clearly non-conversational families. Matches a
+ * substring of the id, case-insensitive.
+ */
+const NON_CHAT_MODEL =
+  /embedding|whisper|\btts\b|-tts|dall-?e|gpt-image|imagen|stable-diffusion|moderation|davinci|babbage|curie|rerank|-audio|-realtime|-transcribe|-search-|-similarity-|veo|sora|llama-guard/i
+
+/** True when a model id looks usable for chat (not an embedding/audio/image/etc.). */
+export function isChatCapableModelId(id: string): boolean {
+  return !NON_CHAT_MODEL.test(id)
+}
+
+/**
+ * Choose an auto-default model id from a candidate list (assumed newest-first).
+ * Prefers a model that is both chat-capable and generally available, then falls
+ * back to any non-gated model, then the first entry. Returns null for an empty
+ * list. Used for the silent default only — gated/non-chat models stay otherwise
+ * selectable for accounts that want them.
  */
 export function pickDefaultModelId(ids: readonly string[]): string | null {
-  return ids.find(isDefaultEligibleModelId) ?? ids[0] ?? null
+  return (
+    ids.find((id) => isChatCapableModelId(id) && isDefaultEligibleModelId(id)) ??
+    ids.find(isDefaultEligibleModelId) ??
+    ids[0] ??
+    null
+  )
 }

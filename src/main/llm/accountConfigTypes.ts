@@ -25,9 +25,30 @@ export interface AccountConfigProvider {
   credential_id: string
   provider_type: AccountConfigProviderType
   display_name: string
+  /**
+   * The credential's own free-form name on cinna-core (e.g. "Work Claude").
+   * `display_name` is only the provider family ("Claude"/"OpenAI"/"Gemini"), so
+   * it's identical across every credential of one provider — this disambiguates
+   * them in the managed provider / chat-mode names. May be absent on older
+   * servers; callers fall back to `display_name` alone.
+   */
+  credential_name?: string
   descriptor_slug: string
   base_url: string | null
+  /**
+   * Auto-resolved suggestion from cinna-core's legacy fallback chain. Can land
+   * on a non-chat model (e.g. an embedding) for keys whose only signal is
+   * `discovered_models` — prefer {@link default_model}. Still authoritative for
+   * `openai_compatible`, where it carries the gateway's required model id.
+   */
   model: string | null
+  /**
+   * The admin-curated preferred default model on cinna-core
+   * (`credential.default_model`). Absent/null for self-created credentials with
+   * no curation. When present this is the authoritative default the desktop uses
+   * for the managed provider/mode. May be absent on older servers.
+   */
+  default_model?: string | null
   /** *** DECRYPTED *** — re-encrypted locally via safeStorage, never logged. */
   api_key: string
   is_default: boolean
@@ -84,6 +105,23 @@ export function mapToDesktopProviderType(t: AccountConfigProviderType): Provider
  * onboarding provider→color choice (Anthropic→amber, OpenAI→emerald,
  * Gemini→sky) so managed modes look consistent with hand-created ones.
  */
+/**
+ * Build the display name for a managed provider / chat mode, disambiguating
+ * multiple credentials of the same provider family by appending the credential's
+ * own name: `"Claude"` + `"Work Key"` → `"Claude (Work Key)"`.
+ *
+ * Returns the base name unchanged when there's no distinct credential name —
+ * absent/blank, or equal to the base (e.g. `openai_compatible`, whose
+ * `display_name` already *is* the credential name) — so single-key setups stay
+ * clean ("Claude", not "Claude (Claude)").
+ */
+export function managedDisplayName(baseName: string, credentialName?: string): string {
+  const base = (baseName ?? '').trim()
+  const cred = (credentialName ?? '').trim()
+  if (!cred || cred.toLowerCase() === base.toLowerCase()) return base
+  return `${base} (${cred})`
+}
+
 export function colorPresetForType(t: ProviderType): string {
   switch (t) {
     case 'anthropic':

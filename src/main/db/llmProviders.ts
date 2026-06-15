@@ -17,6 +17,8 @@ export interface UpsertInput {
   baseUrl?: string | null
   managed?: boolean
   adminManaged?: boolean
+  /** Managed credential unusable for API calls (e.g. `sk-ant-oat` token). */
+  unsupported?: boolean
   /**
    * Insert with the provided `id` when no row exists, instead of throwing
    * "Provider not found". The user-facing path leaves this false so a stale
@@ -108,7 +110,8 @@ export const llmProviderRepo = {
                 : existing.availableModels,
             baseUrl: input.baseUrl !== undefined ? input.baseUrl : existing.baseUrl,
             managed: input.managed ?? existing.managed,
-            adminManaged: input.adminManaged ?? existing.adminManaged
+            adminManaged: input.adminManaged ?? existing.adminManaged,
+            unsupported: input.unsupported ?? existing.unsupported
           })
           .where(and(eq(llmProviders.id, id), eq(llmProviders.userId, userId)))
           .run()
@@ -126,6 +129,7 @@ export const llmProviderRepo = {
             baseUrl: input.baseUrl ?? null,
             managed: input.managed ?? false,
             adminManaged: input.adminManaged ?? false,
+            unsupported: input.unsupported ?? false,
             createdAt: new Date()
           })
           .run()

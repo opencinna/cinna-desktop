@@ -23,7 +23,9 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const upsert = useUpsertChatMode()
   const deleteMutation = useDeleteChatMode()
 
-  const enabledProviders = (providers ?? []).filter((p) => p.enabled && p.hasApiKey)
+  const enabledProviders = (providers ?? []).filter(
+    (p) => p.enabled && p.hasApiKey && !p.unsupported
+  )
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === mode.providerId)
   const preset = getPreset(mode.colorPreset)
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
