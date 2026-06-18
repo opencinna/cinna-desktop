@@ -32,11 +32,23 @@ export function initDatabase(): void {
   sqlite = new Database(dbPath)
 
   sqlite.pragma('journal_mode = WAL')
-  sqlite.pragma('foreign_keys = ON')
+
+  // Foreign-key enforcement is disabled WHILE migrations run, then re-enabled.
+  // Rationale: SQLite resolves `ON DELETE CASCADE` chains at statement-prepare
+  // time, so a CREATE/DML in an early migration that touches a table whose FK
+  // points at a not-yet-created parent (e.g. `chat_on_demand_agents` →
+  // `agents`) throws `no such table` on a fresh install — even with zero rows.
+  // Turning FK off during migrations makes table-creation order irrelevant for
+  // referential integrity; the post-migration re-enable restores enforcement
+  // for the app's runtime. This is the standard SQLite schema-migration pattern.
+  sqlite.pragma('foreign_keys = OFF')
 
   db = drizzle(sqlite, { schema })
 
   runMigrations()
+
+  sqlite.pragma('foreign_keys = ON')
+
   runConsistencyChecks()
 }
 
@@ -70,16 +82,19 @@ function safeRun(name: string, fn: () => void): void {
 function runMigrations(): void {
   // Users table first (referenced by all data tables)
   migrateUsers(sqlite)
-  // Order matters: providers & mcp first (referenced by chats), then chats, messages, chat-modes
+  // Order matters: providers, mcp & agents first (all referenced by chats via
+  // FK — `chat_on_demand_agents` references `agents`), then chats, messages,
+  // chat-modes. FK enforcement is off during migrations (see initDatabase), so
+  // this ordering is belt-and-suspenders, not the sole guard.
   migrateProviders(sqlite)
   migrateMcp(sqlite)
+  migrateAgents(sqlite)
   migrateChats(sqlite)
   migrateMessages(sqlite)
   migrateChatModes(sqlite)
   // Account-provisioned (Cinna-managed) provider/mode columns + overrides table.
   // Must come after providers + chat-modes tables exist.
   migrateAccountConfig(sqlite)
-  migrateAgents(sqlite)
   migrateAgentOverrides(sqlite)
   migrateA2aSessions(sqlite)
   migrateChatFiles(sqlite)

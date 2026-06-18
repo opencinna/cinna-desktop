@@ -41,8 +41,9 @@ Make sure that any failure during app startup — or a renderer crash afterwards
 ### Fresh install (no log, no DB)
 
 1. App launches for the very first time — `userData/` is empty
-2. Migration ordering runs `users → providers → mcp → chats → ...` and finally backfills `user_id` columns on legacy tables (now guarded by `hasTable`, so it skips tables that haven't been created yet on fresh installs)
-3. Window opens normally
+2. Foreign-key enforcement is disabled for the duration of migrations (re-enabled immediately after), so table-creation order can't trip a `no such table` failure: SQLite resolves `ON DELETE CASCADE` chains at statement-prepare time, so an early migration that runs DML on a table whose FK points at a parent created by a *later* migration (e.g. `migrateChats`'s trashed-chat `DELETE` cascading through `chat_on_demand_agents → agents`) would otherwise throw even with zero rows
+3. Migration ordering runs `users → providers → mcp → agents → chats → ...` and finally backfills `user_id` columns on legacy tables (now guarded by `hasTable`, so it skips tables that haven't been created yet on fresh installs)
+4. Window opens normally
 
 ## Business Rules
 
@@ -54,6 +55,7 @@ Make sure that any failure during app startup — or a renderer crash afterwards
 - Renderer crashes are distinct from main-process exceptions and require their own `webContents` listeners
 - Renderer dev-mode failures don't auto-exit (preserves DevTools session)
 - Migration ordering rule: any `ALTER TABLE` against a table not owned by the current migration must be guarded with `hasTable()` and must run **after** all table-creation migrations
+- FK-safety rule: foreign-key enforcement is turned **off** for the whole migration pass and re-enabled afterward, so neither a forward FK reference in a `CREATE TABLE` nor a DML statement that triggers a cascade can fail when the referenced table is created by a later migration. Table-creation order (parents before children, e.g. `agents` before `chats`) is still maintained as defense-in-depth, not as the sole guard
 
 ## Architecture Overview
 

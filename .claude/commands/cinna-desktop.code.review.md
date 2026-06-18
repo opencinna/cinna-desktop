@@ -184,6 +184,32 @@ All calls to external systems (LLM APIs, MCP servers, A2A agents, OAuth endpoint
 - Errors logged with full context: `logger.error('LLM failed', { provider, model, chatId, error })`
 - Logger UI (Cmd+`) shows chronological trace of all external calls with timing
 
+### 10. Database Migrations & Fresh-Install Safety
+
+Migrations are inline functions invoked from `runMigrations()` in `src/main/db/client.ts`, run on **every** boot against the user's existing DB. A fresh install is the worst case: the DB is empty, every migration runs top-to-bottom for the first time, in order, with no rows. A migration that only works because an earlier launch already created a table will pass in dev (where the DB is warm) and crash only for brand-new users — the hardest failure to notice. Every migration change must be reviewed as "does this still work starting from zero?"
+
+**Flag these patterns:**
+- **Out-of-order FK references with side effects** — a `CREATE TABLE` whose FK targets a table created by a *later* migration is tolerated at create time, but any DML on the parent/child (e.g. a cleanup `DELETE`, a backfill `INSERT…SELECT`) fails at **statement-prepare time** with `no such table: …` because SQLite compiles the `ON DELETE CASCADE` chain eagerly — even against an empty table. (Root cause of the `no such table: main.agents` fresh-install crash: `migrateChats`'s trashed-chat `DELETE` cascaded through `chat_on_demand_agents → agents` before `migrateAgents` ran.)
+- **Unguarded cross-table `ALTER`/DML** — an `ALTER TABLE x …` or `INSERT INTO x` where `x` is not the table this migration creates, without a `hasTable(sqlite, 'x')` guard. On a fresh install `x` may not exist yet. Backfills that touch legacy tables must run **after** all table-creation migrations *and* be `hasTable`-guarded (see `migrateUserIdColumns`).
+- **Non-idempotent statements** — `CREATE TABLE`/`CREATE INDEX` without `IF NOT EXISTS`, `ADD COLUMN` without a `hasColumn` guard, `DROP COLUMN`/`DROP TABLE` without `IF EXISTS` (or a `hasColumn`/`hasTable` guard). Migrations re-run every boot; any statement that throws on the second run is a bug.
+- **Reintroducing `foreign_keys = ON` mid-migration** — FK enforcement is intentionally **off** for the whole migration pass and re-enabled in `initDatabase` only after `runMigrations()` returns. A migration that flips it back on (or a new pre-migration query that depends on FK enforcement) re-opens the ordering trap.
+- **Assuming column/table existence from prior migrations** — reading a column another migration adds without confirming ordering; relying on seed rows that a guarded `INSERT` may have skipped.
+- **`Date.now()`-scaled comparisons against differently-scaled columns** — e.g. comparing a millisecond `Date.now()` against a seconds-stored timestamp column, which silently wipes rows (see the seconds conversion in `migrateChats`).
+
+**What a fresh-install-safe migration looks like:**
+- Self-contained: creates its own tables with `IF NOT EXISTS`, adds columns behind `hasColumn`, and never touches another migration's table without a `hasTable` guard.
+- Order-aware: parent tables before child tables in `runMigrations()`; pure table-creation before any backfill/DML; legacy-table backfills last.
+- Idempotent: running it twice in a row is a no-op the second time.
+
+**Validation approach (perform this for any change under `src/main/db/`):**
+1. **Trace the call order** — read `runMigrations()` and confirm the changed migration sits after everything it depends on (referenced tables, columns) and before anything that depends on it. New FK-referenced tables (parents) must precede their referencing tables.
+2. **Simulate from zero** — mentally (or with the `sqlite3` CLI) replay the migrations in `runMigrations()` order against an empty DB. Watch specifically for FK-cascade DML hitting a not-yet-created table. A fast harness: copy the `CREATE`/`DELETE`/`INSERT` statements into a script and run them in order through `sqlite3 /tmp/fresh.db`, then run `PRAGMA foreign_key_check;` — it must exit 0. (The native `better-sqlite3` binding is built for Electron and won't load under plain `node`; use the `sqlite3` CLI to model engine behavior.)
+3. **Prove idempotency** — run the migration block a second time against the now-populated DB; it must not throw (this catches missing `IF NOT EXISTS` / `hasColumn` guards).
+4. **Build-validate** — `npx electron-vite build` (full main+preload+renderer) must pass; type-check renderer with `npx tsc --noEmit --project tsconfig.web.json`. Never use bare `npx tsc --noEmit` (hangs).
+5. **Smoke-test a real fresh install** — delete (or point `userData` elsewhere) so `cinna.db` is absent, launch the app, and confirm the window opens with no fatal dialog and no `no such table` / `no such column` in `cinna-errors.log`. This is the definitive check; the boot-resilience fatal dialog surfaces any migration throw.
+
+**Reference:** `docs/core/boot_resilience/boot_resilience.md` — the "Fresh install" flow and the migration-ordering + FK-safety business rules.
+
 ## Output Format
 
 Generate a review report with:
@@ -197,7 +223,7 @@ For each issue:
 ```
 **Issue:** [Brief description]
 **Location:** [file:line_number]
-**Category:** [Service Layer | Repository | Auth | Error Handling | Logger | Separation | IPC Types | Security | Observability]
+**Category:** [Service Layer | Repository | Auth | Error Handling | Logger | Separation | IPC Types | Security | Observability | Migrations]
 **Pattern:** [What's wrong — the anti-pattern detected]
 **Impact:** [Why this matters — security risk, maintainability, testability, reliability]
 **Fix:** [Specific recommendation with target file/class name]
@@ -269,6 +295,7 @@ Short paragraph — why this refactor, what triggered it, current pain points.
 | IPC Type Safety | 1-5 | End-to-end typed channels? |
 | Security | 1-5 | Electron security hardened? |
 | Observability | 1-5 | External calls debuggable? |
+| Migrations | 1-5 | Fresh-install-safe, ordered, idempotent? |
 
 ## Reference Implementations
 
@@ -283,11 +310,12 @@ Short paragraph — why this refactor, what triggered it, current pain points.
 2. **Read IPC Handlers** - Check for business logic, direct DB access, missing auth
 3. **Read DB Layer** - Check for repository abstractions, scattered queries
 4. **Read Services** - Check if they exist, what they encapsulate
-5. **Read Renderer** - Check hook/store/component layering
-6. **Check Logger Usage** - Verify external calls are logged with context
-7. **Check Security Config** - Verify Electron security flags and credential handling
-8. **Score Each Category** - Rate 1-5 based on findings
-9. **Generate Report** - List issues, warnings, good patterns, and refactoring plan
-10. **Write Plan File (if scope is large)** - If the refactor spans more than ~3 independent work units or multiple domains, write `plans/<topic>-refactor.md` split into session-sized priorities, and reference it from the review
+5. **Check Migrations (if `src/main/db/` changed)** - Trace `runMigrations()` order, simulate from an empty DB, watch for out-of-order FK-cascade DML and unguarded cross-table ALTER/DML, verify idempotency and fresh-install boot (section 10)
+6. **Read Renderer** - Check hook/store/component layering
+7. **Check Logger Usage** - Verify external calls are logged with context
+8. **Check Security Config** - Verify Electron security flags and credential handling
+9. **Score Each Category** - Rate 1-5 based on findings
+10. **Generate Report** - List issues, warnings, good patterns, and refactoring plan
+11. **Write Plan File (if scope is large)** - If the refactor spans more than ~3 independent work units or multiple domains, write `plans/<topic>-refactor.md` split into session-sized priorities, and reference it from the review
 
 Do NOT make code changes automatically. Writing the plan file in `plans/` is allowed and expected for large refactors. Present the review report and wait for user approval before implementing any code changes.
