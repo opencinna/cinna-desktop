@@ -17,6 +17,8 @@ import { AgentAttachment } from './AgentAttachment'
 import { AgentToolSubThread } from './AgentToolSubThread'
 import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
+import { AskUserQuestionBlock } from './AskUserQuestionBlock'
+import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQuestion'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import {
   type RenderNode,
@@ -288,6 +290,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   const messages = chatData?.messages ?? []
   const hasStreamingContent = streamingBlocks.length > 0
 
+  // The agent's `AskUserQuestion` tool is answerable only while the chat is
+  // waiting on it: it's the final turn (no user reply after it) and nothing is
+  // streaming. Once the user answers, a new user row lands after it (or a
+  // stream starts), so the prompt reverts to a muted, read-only record.
+  const lastMsg = messages[messages.length - 1]
+  const activeQuestionMsgId =
+    !isStreaming &&
+    !pendingUserMessage &&
+    lastMsg &&
+    lastMsg.role === 'assistant' &&
+    Array.isArray(lastMsg.parts) &&
+    lastMsg.parts.some((p) => p.kind === 'tool' && isAskUserQuestionTool(p.toolName))
+      ? lastMsg.id
+      : null
+
   // Animate only when exactly one message was appended since the previous render
   // for the same chat — this matches the "user sent a message" pattern and skips
   // initial loads and bulk re-fetches.
@@ -483,6 +500,16 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         if (p.kind === 'thinking') {
                           return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                         }
+                        if (p.kind === 'tool' && isAskUserQuestionTool(p.toolName)) {
+                          return (
+                            <AskUserQuestionBlock
+                              key={k}
+                              questions={parseAskQuestions(p.toolInput)}
+                              interactive={msg.id === activeQuestionMsgId}
+                              chatId={chatId}
+                            />
+                          )
+                        }
                         if (p.kind === 'tool') {
                           return (
                             <ToolNarrationBlock key={k} content={p.text} toolName={p.toolName} toolInput={p.toolInput} animate={shouldAnimate} animateDelay={idx * 80} />
@@ -556,6 +583,20 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         status: 'done',
                         node: <ThinkingBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
+                    })
+                  } else if (p.kind === 'tool' && isAskUserQuestionTool(p.toolName)) {
+                    // Interactive question prompt — never collapse it into a
+                    // dots group; the user must be able to act on it directly.
+                    renderNodes.push({
+                      slot: 'plain',
+                      key: k,
+                      node: (
+                        <AskUserQuestionBlock
+                          questions={parseAskQuestions(p.toolInput)}
+                          interactive={msg.id === activeQuestionMsgId}
+                          chatId={chatId}
+                        />
+                      )
                     })
                   } else if (p.kind === 'tool') {
                     renderNodes.push({
@@ -747,6 +788,23 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                     item: { key: `stream-think-${i}`, kind: 'thinking', status: 'done', isLive: live, node }
                   })
                 }
+                return
+              }
+              if (block.kind === 'tool' && isAskUserQuestionTool(block.toolName)) {
+                // Question just arrived mid-stream — show it passively; it
+                // becomes answerable once the turn finishes and persists (the
+                // refetched part renders interactive via `activeQuestionMsgId`).
+                renderNodes.push({
+                  slot: 'plain',
+                  key: `stream-askq-${i}`,
+                  node: (
+                    <AskUserQuestionBlock
+                      questions={parseAskQuestions(block.toolInput)}
+                      interactive={false}
+                      chatId={chatId}
+                    />
+                  )
+                })
                 return
               }
               if (block.kind === 'tool') {
