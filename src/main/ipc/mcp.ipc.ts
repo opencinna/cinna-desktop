@@ -24,6 +24,8 @@ export function registerMcpHandlers(): void {
         url?: string
         env?: Record<string, string>
         enabled?: boolean
+        authType?: 'oauth' | 'bearer'
+        bearerToken?: string
       }
     ) => {
       userActivation.requireActivated()

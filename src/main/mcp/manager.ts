@@ -83,7 +83,17 @@ class MCPManager {
         })
       } else if (config.transportType === 'sse') {
         if (!config.url) throw new Error('URL is required for SSE transport')
-        transport = new SSEClientTransport(new URL(config.url))
+        transport =
+          config.authType === 'bearer'
+            ? new SSEClientTransport(new URL(config.url), {
+                requestInit: { headers: this.bearerAuthHeaders(config) }
+              })
+            : new SSEClientTransport(new URL(config.url))
+      } else if (config.transportType === 'streamable-http' && config.authType === 'bearer') {
+        if (!config.url) throw new Error('URL is required for streamable-http transport')
+        transport = new StreamableHTTPClientTransport(new URL(config.url), {
+          requestInit: { headers: this.bearerAuthHeaders(config) }
+        })
       } else if (config.transportType === 'streamable-http') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
 
@@ -169,6 +179,15 @@ class MCPManager {
       logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
     }
+  }
+
+  /** Static bearer-token auth: no DCR, no browser round-trip — just a header. */
+  private bearerAuthHeaders(config: McpProviderConfig): Record<string, string> {
+    if (!config.bearerTokenEncrypted) {
+      throw new Error('Bearer token is required for bearer auth')
+    }
+    const token = decryptApiKey(config.bearerTokenEncrypted)
+    return { Authorization: `Bearer ${token}` }
   }
 
   private async handleOAuthCallback(providerId: string): Promise<void> {

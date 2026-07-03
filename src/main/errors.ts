@@ -16,6 +16,7 @@ export type McpErrorCode =
   | 'not_found'
   | 'not_activated'
   | 'invalid_transport'
+  | 'invalid_auth_type'
   | 'connect_failed'
   | 'registry_unknown'
   | 'registry_unreachable'

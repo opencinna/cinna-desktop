@@ -85,6 +85,15 @@ export const mcpProviders = sqliteTable('mcp_providers', {
   authTokensEncrypted: blob('auth_tokens_enc', { mode: 'buffer' }),
   clientInfo: text('client_info', { mode: 'json' }).$type<Record<string, unknown>>(),
   /**
+   * How a remote (sse / streamable-http) server authenticates: `'oauth'` (DCR,
+   * the historic default — also covers servers needing no auth at all, since
+   * the OAuth-capable transport just never hits a 401) or `'bearer'` (a static
+   * token the user pastes in, sent as `Authorization: Bearer <token>`).
+   * Unused for `stdio` transport.
+   */
+  authType: text('auth_type').notNull().default('oauth'), // 'oauth' | 'bearer'
+  bearerTokenEncrypted: blob('bearer_token_enc', { mode: 'buffer' }),
+  /**
    * True when this provider was auto-created from a synced job dependency
    * descriptor (disabled "finish setup" shell). Lets the UI mark it amber and
    * cleanup tools distinguish it from user-created providers. Never

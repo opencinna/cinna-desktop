@@ -20,4 +20,9 @@ export function migrateMcp(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE mcp_providers ADD COLUMN auth_tokens_enc BLOB`)
     sqlite.exec(`ALTER TABLE mcp_providers ADD COLUMN client_info TEXT`)
   }
+
+  if (!hasColumn(sqlite, 'mcp_providers', 'auth_type')) {
+    sqlite.exec(`ALTER TABLE mcp_providers ADD COLUMN auth_type TEXT NOT NULL DEFAULT 'oauth'`)
+    sqlite.exec(`ALTER TABLE mcp_providers ADD COLUMN bearer_token_enc BLOB`)
+  }
 }

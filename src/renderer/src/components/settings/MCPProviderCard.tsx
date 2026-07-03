@@ -15,6 +15,7 @@ interface MCPProviderCardProps {
     env?: Record<string, string>
     enabled: boolean
     hasAuth: boolean
+    authType: string
     status: string
     tools: Array<{ name: string; description: string }>
     error?: string
@@ -29,6 +30,9 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
   const [args, setArgs] = useState((provider.args ?? []).join(' '))
   const [url, setUrl] = useState(provider.url ?? '')
   const [envStr, setEnvStr] = useState(formatEnvVars(provider.env))
+  const [authType, setAuthType] = useState(provider.authType === 'bearer' ? 'bearer' : 'oauth')
+  // Never prefilled with the stored token — write-only, left blank to keep it.
+  const [bearerToken, setBearerToken] = useState('')
 
   const upsert = useUpsertMcpProvider()
   const deleteMcp = useDeleteMcpProvider()
@@ -60,22 +64,29 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
     command !== (provider.command ?? '') ||
     args !== (provider.args ?? []).join(' ') ||
     url !== (provider.url ?? '') ||
-    envStr !== formatEnvVars(provider.env)
+    envStr !== formatEnvVars(provider.env) ||
+    authType !== (provider.authType === 'bearer' ? 'bearer' : 'oauth') ||
+    bearerToken.trim() !== ''
 
   const handleSave = (): void => {
     const envObj = parseEnvVars(envStr)
 
-    upsert.mutate({
-      id: provider.id,
-      name,
-      transportType,
-      command: transportType === 'stdio' ? command : undefined,
-      args: transportType === 'stdio' ? args.split(/\s+/).filter(Boolean) : undefined,
-      url: transportType !== 'stdio' ? url : undefined,
-      env:
-        transportType === 'stdio' && Object.keys(envObj).length > 0 ? envObj : undefined,
-      enabled: provider.enabled
-    })
+    upsert.mutate(
+      {
+        id: provider.id,
+        name,
+        transportType,
+        command: transportType === 'stdio' ? command : undefined,
+        args: transportType === 'stdio' ? args.split(/\s+/).filter(Boolean) : undefined,
+        url: transportType !== 'stdio' ? url : undefined,
+        env:
+          transportType === 'stdio' && Object.keys(envObj).length > 0 ? envObj : undefined,
+        enabled: provider.enabled,
+        authType: transportType !== 'stdio' ? (authType as 'oauth' | 'bearer') : undefined,
+        bearerToken: bearerToken.trim() || undefined
+      },
+      { onSuccess: () => setBearerToken('') }
+    )
   }
 
   const handleToggle = (): void => {
@@ -112,7 +123,13 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
         <span className="flex-1 font-medium text-[14px]">{provider.name}</span>
 
         {provider.hasAuth && (
-          <Shield size={12} className="text-[var(--color-accent)]" aria-label="OAuth authenticated" />
+          <Shield
+            size={12}
+            className="text-[var(--color-accent)]"
+            aria-label={
+              provider.authType === 'bearer' ? 'Bearer token configured' : 'OAuth authenticated'
+            }
+          />
         )}
 
         <button
@@ -182,10 +199,50 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
               </div>
             </>
           ) : (
-            <div>
-              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
-              <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
-            </div>
+            <>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">URL</label>
+                <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://mcp.example.com" className={inputClass} />
+              </div>
+              <div>
+                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+                  Authentication
+                </label>
+                <div className="flex gap-1 rounded-md border border-[var(--color-border)] p-0.5">
+                  {(['oauth', 'bearer'] as const).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => setAuthType(t)}
+                      className={`flex-1 px-2 py-1 rounded text-[13px] font-medium transition-colors ${
+                        authType === t
+                          ? 'bg-[var(--color-accent)] text-white'
+                          : 'text-[var(--color-text-muted)] hover:text-[var(--color-text)]'
+                      }`}
+                    >
+                      {t === 'oauth' ? 'OAuth' : 'Bearer Token'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {authType === 'bearer' && (
+                <div>
+                  <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+                    Bearer Token
+                  </label>
+                  <input
+                    type="password"
+                    value={bearerToken}
+                    onChange={(e) => setBearerToken(e.target.value)}
+                    placeholder={
+                      provider.hasAuth
+                        ? 'Leave blank to keep the current token'
+                        : "Paste the server's access token"
+                    }
+                    className={inputClass}
+                  />
+                </div>
+              )}
+            </>
           )}
 
           <div className="flex justify-end gap-2">

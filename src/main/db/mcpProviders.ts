@@ -16,6 +16,13 @@ export interface UpsertInput {
   enabled?: boolean
   /** Set on insert only — marks a provider auto-created from a synced job dep. */
   createdBySync?: boolean
+  authType?: 'oauth' | 'bearer'
+  /**
+   * Encrypted bearer token. `undefined` preserves whatever is already stored
+   * (the caller didn't touch it — mirrors how OAuth tokens are never passed
+   * through the normal upsert path either); `null` clears it explicitly.
+   */
+  bearerTokenEncrypted?: Buffer | null
 }
 
 export interface UpsertResult {
@@ -67,7 +74,12 @@ export const mcpProviderRepo = {
             args: input.args ?? null,
             url: input.url ?? null,
             env: input.env ?? null,
-            enabled: input.enabled ?? existing.enabled
+            enabled: input.enabled ?? existing.enabled,
+            authType: input.authType ?? existing.authType,
+            bearerTokenEncrypted:
+              input.bearerTokenEncrypted !== undefined
+                ? input.bearerTokenEncrypted
+                : existing.bearerTokenEncrypted
           })
           .where(and(eq(mcpProviders.id, id), eq(mcpProviders.userId, userId)))
           .run()
@@ -84,6 +96,8 @@ export const mcpProviderRepo = {
             env: input.env ?? null,
             enabled: input.enabled ?? true,
             createdBySync: input.createdBySync ?? false,
+            authType: input.authType ?? 'oauth',
+            bearerTokenEncrypted: input.bearerTokenEncrypted ?? null,
             createdAt: new Date()
           })
           .run()

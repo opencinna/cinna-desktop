@@ -214,6 +214,7 @@ export interface McpProviderData {
   env?: Record<string, string>
   enabled: boolean
   hasAuth: boolean
+  authType: string
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
@@ -575,6 +576,8 @@ const api = {
       url?: string
       env?: Record<string, string>
       enabled?: boolean
+      authType?: 'oauth' | 'bearer'
+      bearerToken?: string
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('mcp:upsert', data),
     delete: (providerId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('mcp:delete', providerId),

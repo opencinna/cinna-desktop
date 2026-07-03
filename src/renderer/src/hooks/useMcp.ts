@@ -46,6 +46,8 @@ export function useUpsertMcpProvider() {
       url?: string
       env?: Record<string, string>
       enabled?: boolean
+      authType?: 'oauth' | 'bearer'
+      bearerToken?: string
     }) => window.api.mcp.upsert(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['mcp-providers'] })

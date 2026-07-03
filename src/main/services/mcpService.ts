@@ -3,11 +3,13 @@ import { chatModeRepo } from '../db/chatModes'
 import { mcpManager } from '../mcp/manager'
 import { McpError } from '../errors'
 import { McpProviderConfig } from '../mcp/types'
+import { encryptApiKey } from '../security/keystore'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('MCP')
 
 const VALID_TRANSPORTS = new Set(['stdio', 'sse', 'streamable-http'])
+const VALID_AUTH_TYPES = new Set(['oauth', 'bearer'])
 
 export interface McpProviderDto {
   id: string
@@ -21,6 +23,7 @@ export interface McpProviderDto {
   enabled: boolean
   createdAt: Date
   hasAuth: boolean
+  authType: string
   status: string
   tools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }>
   error?: string
@@ -35,11 +38,20 @@ export interface UpsertMcpInput {
   url?: string
   env?: Record<string, string>
   enabled?: boolean
+  authType?: 'oauth' | 'bearer'
+  /** Plaintext — encrypted here before it ever reaches the repo/DB. Omit to keep the existing token. */
+  bearerToken?: string
 }
 
 function assertTransport(t: string): asserts t is 'stdio' | 'sse' | 'streamable-http' {
   if (!VALID_TRANSPORTS.has(t)) {
     throw new McpError('invalid_transport', `Unknown transport type: ${t}`)
+  }
+}
+
+function assertAuthType(t: string): asserts t is 'oauth' | 'bearer' {
+  if (!VALID_AUTH_TYPES.has(t)) {
+    throw new McpError('invalid_auth_type', `Unknown auth type: ${t}`)
   }
 }
 
@@ -53,8 +65,10 @@ function toConfig(row: McpProviderRow): McpProviderConfig {
     url: row.url ?? undefined,
     env: (row.env as Record<string, string> | null) ?? undefined,
     enabled: row.enabled,
+    authType: (row.authType as 'oauth' | 'bearer') ?? 'oauth',
     authTokensEncrypted: row.authTokensEncrypted ?? undefined,
-    clientInfo: (row.clientInfo as Record<string, unknown> | null) ?? undefined
+    clientInfo: (row.clientInfo as Record<string, unknown> | null) ?? undefined,
+    bearerTokenEncrypted: row.bearerTokenEncrypted ?? undefined
   }
 }
 
@@ -71,7 +85,8 @@ function toDto(row: McpProviderRow): McpProviderDto {
     env: (row.env as Record<string, string> | null) ?? undefined,
     enabled: row.enabled,
     createdAt: row.createdAt,
-    hasAuth: !!(row.authTokensEncrypted || row.clientInfo),
+    hasAuth: !!(row.authTokensEncrypted || row.clientInfo || row.bearerTokenEncrypted),
+    authType: row.authType ?? 'oauth',
     status: conn?.status ?? 'disconnected',
     tools: conn?.tools ?? [],
     error: conn?.error
@@ -88,6 +103,7 @@ export const mcpService = {
     input: UpsertMcpInput
   ): Promise<{ id: string; row: McpProviderDto }> {
     assertTransport(input.transportType)
+    if (input.authType !== undefined) assertAuthType(input.authType)
 
     const { id, created, row } = mcpProviderRepo.upsert(userId, {
       id: input.id,
@@ -97,12 +113,15 @@ export const mcpService = {
       args: input.args ?? null,
       url: input.url ?? null,
       env: input.env ?? null,
-      enabled: input.enabled
+      enabled: input.enabled,
+      authType: input.authType,
+      bearerTokenEncrypted: input.bearerToken ? encryptApiKey(input.bearerToken) : undefined
     })
 
     logger.info(created ? 'mcp created' : 'mcp updated', {
       providerId: id,
       transport: row.transportType,
+      authType: row.authType,
       enabled: row.enabled
     })
 
