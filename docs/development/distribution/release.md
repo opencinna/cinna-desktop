@@ -211,17 +211,17 @@ Once you have signed+notarized DMGs in `dist/`:
 
 ## Releasing & auto-update
 
-Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`) and `electron-builder`'s GitHub publish provider. Each release goes through the same 7-step runbook below.
+Auto-update is wired up via `electron-updater` (in `src/main/updater/updater.ts`) and `electron-builder`'s GitHub publish provider. Each release goes through the same 8-step runbook below.
 
 At a glance:
 1. **Pre-flight** — clean tree on `main`, typecheck/build/dev sanity-checks pass.
 2. **Bump version** — `npm version patch|minor|major` commits + tags.
 3. **Build, sign, notarize, upload** — `npm run release:mac` produces a GitHub **draft** release with both DMGs + manifest.
-4. **Verify the draft** — `gh release view`, optional download-and-launch smoke test.
-5. **(Optional) Test auto-update** before users see it.
-6. **Write notes & publish** — `gh release edit ... --draft=false`.
-7. **Push** the version-bump commit. Pushing the tag also triggers...
-8. **Linux build (automated)** — GitHub Actions runs on `ubuntu-latest`, appends `.AppImage` + `.deb` to the same release.
+4. **Push** the version-bump commit **and the tag** — `git push --follow-tags`. This is what triggers...
+5. **Linux build (automated)** — GitHub Actions runs on `ubuntu-latest`, appends `.AppImage` + `.deb` to the same release.
+6. **Verify the draft** — `gh release view`, optional download-and-launch smoke test.
+7. **(Optional) Test auto-update** before users see it.
+8. **Write notes & publish** — `gh release edit ... --draft=false`.
 
 ### One-time setup: GitHub token
 
@@ -260,6 +260,8 @@ npm run dev              # Ctrl+C once the window opens cleanly
 
 If anything fails, fix it on `main` before continuing — every release tag is a permanent reference point.
 
+> **The `npm run dev` check is normally already done.** In practice the maintainer has been running the app in dev while finishing the work that's being released, so by the time a release is requested this step is redundant and gets skipped. It needs an interactive window + Ctrl+C, so it's also the one step an agent driving this runbook can't meaningfully perform — skipping it is fine as long as `typecheck` and `electron-vite build` pass. Run it explicitly only when the release contains changes you haven't exercised in a live app.
+
 #### 2. Pick the version bump
 
 ```bash
@@ -291,13 +293,26 @@ This single command:
 - Builds DMGs containing the stapled `.app`s.
 - Generates blockmaps (for differential auto-update).
 - Generates `latest-mac.yml` (the auto-update manifest).
-- Uploads everything to a **draft GitHub Release** at `v${version}` (created automatically; the tag is pushed by electron-builder at this point).
+- Uploads everything to a **draft GitHub Release** at `v${version}` (created automatically).
 
 Watch the log for `notarization successful` (twice — once per arch) and final `uploading ... provider=github` lines for each artifact.
 
-**As soon as the tag lands on GitHub (during step 3), `.github/workflows/release-linux.yml` triggers and starts building Linux artifacts on `ubuntu-latest` in parallel.** Check it at https://github.com/opencinna/cinna-desktop/actions. Wait for it to finish (5–8 min) before publishing the draft in step 6, so the released version includes Linux too. See step 8 for details.
+> ⚠️ **electron-builder does NOT push the git tag.** A *draft* release only reserves the tag name on GitHub — no git ref is created until the release is published. So nothing is watching for `v*` yet, and the Linux workflow stays idle until you push the tag yourself in step 4. (Verify with `git ls-remote --tags origin v${version}` — empty at this point is expected.)
 
-#### 4. Verify the draft on GitHub
+#### 4. Push the version commit and tag
+
+`npm version` (step 2) committed and tagged locally. Push both now — **this is what triggers the Linux build**, and Linux needs to finish before you publish the draft in step 8:
+
+```bash
+git push origin main --follow-tags
+git ls-remote --tags origin "v$(node -p "require('./package.json').version")"   # confirm the tag landed
+```
+
+#### 5. Linux artifacts (automated via GitHub Actions)
+
+The moment the `v*` tag lands, `.github/workflows/release-linux.yml` triggers on `ubuntu-latest` and builds Linux artifacts in parallel. Check it at https://github.com/opencinna/cinna-desktop/actions and wait for it to finish (5–8 min) before publishing the draft, so the released version includes Linux too. Full details — what the workflow runs, manual dispatch, auto-update caveats — are in "Linux build details" below.
+
+#### 6. Verify the draft on GitHub
 
 ```bash
 VERSION="v$(node -p "require('./package.json').version")"
@@ -337,7 +352,7 @@ open cinna-desktop-*-arm64.dmg
 cd -
 ```
 
-#### 5. Test auto-update BEFORE publishing the draft (recommended)
+#### 7. Test auto-update BEFORE publishing the draft (recommended)
 
 The draft is invisible to `electron-updater`, so existing installs won't try to pull it until you publish. To preview the upgrade path safely:
 
@@ -351,7 +366,9 @@ If something's wrong, immediately flip back to draft (`--draft=true`) — instal
 
 For a typical patch release where you're confident, you can skip this step.
 
-#### 6. Write release notes and publish
+#### 8. Write release notes and publish
+
+Do this only once the Linux assets have landed on the draft (step 5).
 
 ```bash
 # Pull commits since the previous tag, format them, and use gh to set the body:
@@ -363,21 +380,15 @@ gh release edit "$VERSION" --repo opencinna/cinna-desktop \
   --draft=false
 ```
 
+`$NOTES` includes the `npm version` bump commit (a bare `X.Y.Z` line) — drop it before publishing.
+
 Or edit notes in the GitHub web UI: https://github.com/opencinna/cinna-desktop/releases → click the draft → write notes → Publish release.
-
-#### 7. Push the version commit
-
-The tag was pushed by electron-builder in step 3, but the version-bump commit on `main` is still local:
-
-```bash
-git push
-```
 
 Done. Installed clients on a previous version will pick up the new release on next launch or within 6 hours of running.
 
-#### 8. Linux artifacts (automated via GitHub Actions)
+#### Linux build details
 
-When you push the `v*` tag in step 3, the workflow `.github/workflows/release-linux.yml` triggers automatically on `ubuntu-latest` and:
+When you push the `v*` tag in step 4, the workflow `.github/workflows/release-linux.yml` triggers automatically on `ubuntu-latest` and:
 
 - Runs `npm ci` (which installs `linux-x64` native binaries for `better-sqlite3` and friends).
 - Runs `npm run release:linux` — builds `.AppImage` and `.deb`, plus `latest-linux.yml` for auto-update.
@@ -395,7 +406,7 @@ gh workflow run release-linux.yml --repo opencinna/cinna-desktop
 gh workflow run release-linux.yml --repo opencinna/cinna-desktop -f ref=v0.1.3
 ```
 
-After Linux finishes uploading, the draft will contain both macOS and Linux assets — that's the right moment to write release notes and publish (step 6).
+After Linux finishes uploading, the draft will contain both macOS and Linux assets — that's the right moment to write release notes and publish (step 8).
 
 > **Linux auto-update caveats**
 > - **AppImage**: `electron-updater` works fully. The downloaded AppImage replaces the running one in-place via the `APPIMAGE` env var. Users must run from the AppImage (not extract it).
