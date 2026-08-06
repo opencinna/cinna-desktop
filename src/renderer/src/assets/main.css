@@ -315,6 +315,15 @@
   }
 
   /* Markdown inside message bubbles */
+  /* Long unbreakable tokens (URLs, hashes, base64, paths) have no break
+     opportunity, so with the default `overflow-wrap: normal` they render as a
+     single inline box wider than the bubble's max-width and paint outside it.
+     `overflow-wrap` is inherited, so this covers p / li / code / table cells;
+     fenced code is unaffected (`pre code` is `white-space: pre` and its `pre`
+     scrolls horizontally). */
+  .markdown-body {
+    overflow-wrap: break-word;
+  }
   .markdown-body p {
     margin: 0.4em 0;
   }
