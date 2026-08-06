@@ -9,6 +9,7 @@
 - `src/main/llm/anthropic.ts` — `AnthropicAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/openai.ts` — `OpenAIAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/gemini.ts` — `GeminiAdapter` (single-turn streamer, returns `StreamResult`)
+- `src/main/llm/geminiSchema.ts` — MCP JSON Schema → Gemini's v1beta `Schema` subset. `toGeminiParameters(schema, report)` is the call-site entry point (returns `undefined` for a no-argument tool); `sanitizeForGemini()` does the walk; `createReport()` collects `{ translated, dropped }` for the debug log. Pure/Electron-free, unit-tested in `src/main/llm/geminiSchema.test.ts` — see [Tool Schema Translation](./tool_schema_translation.md)
 - `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`. Providers no longer carry a `is_default` flag; the "default" concept moved to chat modes (see [Chat Modes](../../chat/chat_modes/chat_modes.md)).
 - `src/main/services/providerService.ts` — `providerService` — DTO mapping (`hasApiKey: boolean`), encryption via `encryptApiKey()`, registry sync on upsert/delete, `test()` and `testKey()` helpers, `listModels()` aggregator
 - `src/main/services/chatStreamingService.ts` — Drives the centralized tool-call loop via `getAdapter()` from the registry

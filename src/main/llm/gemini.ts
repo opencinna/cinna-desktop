@@ -11,6 +11,7 @@ import type {
   FunctionDeclarationSchema
 } from '@google/generative-ai'
 import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
+import { createReport, toGeminiParameters } from './geminiSchema'
 import { createLogger } from '../logger/logger'
 
 // Gemini accepts images and PDFs natively via `inlineData`. Office formats
@@ -341,55 +342,22 @@ export class GeminiAdapter implements LLMAdapter {
 
   private convertTools(tools: ToolDefinition[]): FunctionDeclaration[] {
     return tools.map((t) => {
-      const dropped: string[] = []
-      const parameters = sanitizeForGemini(t.inputSchema, dropped)
-      if (dropped.length > 0) {
-        logger.debug('schema sanitized', { tool: t.name, dropped })
+      const report = createReport()
+      // `undefined` for a no-argument tool — Gemini rejects an object schema
+      // with an empty `properties` map, so the field must be absent entirely.
+      const parameters = toGeminiParameters(t.inputSchema, report)
+      if (report.translated.length > 0 || report.dropped.length > 0) {
+        logger.debug('schema sanitized', {
+          tool: t.name,
+          translated: report.translated,
+          dropped: report.dropped
+        })
       }
       return {
         name: t.name,
         description: t.description,
-        parameters: parameters as unknown as FunctionDeclarationSchema
+        ...(parameters ? { parameters: parameters as unknown as FunctionDeclarationSchema } : {})
       }
     })
   }
-}
-
-// Gemini's `function_declarations.parameters` accepts only a narrow OpenAPI-3
-// subset and rejects standard JSON-Schema keywords that MCP servers commonly
-// emit. Anthropic and OpenAI tolerate them; Gemini hard-fails the whole
-// request ("Unknown name … Cannot find field"). Walk the schema and drop
-// the unsupported keys.
-//
-// `exclusiveMinimum` / `exclusiveMaximum` deserve special note: in JSON
-// Schema 2020-12 they're numeric (`exclusiveMinimum: 0`), but Gemini's
-// schema follows OpenAPI 3.0 where they're booleans alongside
-// `minimum`/`maximum`. Different shapes => safest fix is to drop them.
-const GEMINI_DROP_KEYS = new Set([
-  '$schema',
-  '$id',
-  '$ref',
-  '$defs',
-  'definitions',
-  'additionalProperties',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'multipleOf',
-  'patternProperties',
-  'examples',
-  '$comment'
-])
-
-function sanitizeForGemini(schema: unknown, dropped: string[] = []): unknown {
-  if (Array.isArray(schema)) return schema.map((s) => sanitizeForGemini(s, dropped))
-  if (!schema || typeof schema !== 'object') return schema
-  const out: Record<string, unknown> = {}
-  for (const [k, v] of Object.entries(schema as Record<string, unknown>)) {
-    if (GEMINI_DROP_KEYS.has(k)) {
-      if (!dropped.includes(k)) dropped.push(k)
-      continue
-    }
-    out[k] = sanitizeForGemini(v, dropped)
-  }
-  return out
 }

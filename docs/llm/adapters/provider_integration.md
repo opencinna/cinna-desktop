@@ -36,7 +36,7 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 |------|-----------|--------|--------|
 | **SDK call** | `client.messages.stream()` | `client.chat.completions.create({ stream: true })` | `chat.sendMessageStream()` (built from `getGenerativeModel().startChat({ history })`) |
 | **System prompt** | Top-level `system` field | First message with `role: 'system'` | `systemInstruction` on `getGenerativeModel()` |
-| **Tool definition** | `input_schema` accepts JSON Schema verbatim | `parameters` accepts JSON Schema verbatim | `parameters` requires OpenAPI-3 subset — JSON Schema must be sanitized (see Quirks) |
+| **Tool definition** | `input_schema` accepts JSON Schema verbatim | `parameters` accepts JSON Schema verbatim | `parameters` is a proto `Schema` (OpenAPI-3 subset) — JSON Schema must be translated, see [Tool Schema Translation](./tool_schema_translation.md) |
 | **Tool-call extraction** | `contentBlock` event of type `tool_use` | Accumulate streamed `delta.tool_calls[i].function.arguments` JSON across chunks | `chunk.candidates[0].content.parts` of type `functionCall` |
 | **Tool-call ID** | Provider-supplied `block.id` | Provider-supplied `tool_call.id` | Provider does **not** emit IDs — adapter generates `gemini-<nanoid>` |
 | **Tool result back to model** | `role: 'user'` with `tool_result` content block referencing `tool_use_id` | `role: 'tool'` with `tool_call_id` | `role: 'function'` Content with `functionResponse` part (SDK validates role; `'user'` is rejected) |
@@ -47,16 +47,16 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 
 ### Gemini: schema sanitization
 
-Gemini's `function_declarations.parameters` accepts only a narrow OpenAPI-3 subset and hard-fails the entire request when it encounters standard JSON-Schema metadata that MCP servers commonly emit. `gemini.ts:sanitizeForGemini()` recursively strips:
+`function_declarations[].parameters` is **not** JSON Schema — it's the `Schema` message of the v1beta API (a narrow OpenAPI-3.0 subset). Its proto JSON parser rejects the *whole request* on the first field it doesn't recognize, so one stray keyword from one MCP server kills every tool call in the chat:
 
-- `$schema`
-- `$id`
-- `$ref`
-- `$defs`
-- `definitions`
-- `additionalProperties`
+```
+[400 Bad Request] Invalid JSON payload received. Unknown name "const" at
+'tools[0].function_declarations[1].parameters.properties[1].value': Cannot find field.
+```
 
-Anthropic and OpenAI tolerate all of the above and pass `inputSchema` through verbatim. When the sanitizer drops anything it emits `logger.debug('schema sanitized', { tool, dropped })` so unexpected loss is traceable in the `⌘\`` log.
+`geminiSchema.ts` therefore allowlists the 22 fields Gemini documents, translates the keywords that have an equivalent (`const` → single-value `enum`, `$ref` → inlined `$defs`, `oneOf` → `anyOf`, `allOf` → merge, tuple `items` → first position), and degrades what it can't express rather than throwing. Anthropic and OpenAI tolerate all of the above and pass `inputSchema` through verbatim.
+
+Full rules, the translation table, known limitations, and how to re-derive the field list: [Tool Schema Translation](./tool_schema_translation.md).
 
 ### Gemini: `function` role for tool responses
 
@@ -115,5 +115,6 @@ An adapter must not call MCP, must not loop, must not persist. It receives histo
 
 - [Adapters](./adapters.md) — High-level abstraction, configuration UX, registry lifecycle
 - [Adapters Tech](./adapters_tech.md) — File paths, IPC channels, DB schema
+- [Tool Schema Translation](./tool_schema_translation.md) — MCP JSON Schema → each provider's tool-definition shape, and what Gemini's subset costs
 - [Chat Messaging](../../chat/messaging/messaging.md) — The tool-call loop in `chatStreamingService` that drives every adapter
 - [MCP Connections](../../mcp/connections/connections.md) — Source of `ToolDefinition[]` with raw MCP `inputSchema`
