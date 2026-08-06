@@ -32,7 +32,7 @@
 ### Renderer
 - `src/shared/commPattern.ts` — `derivePattern(agentIds, mcpIds): 'A2A' | 'AI'` (single source of truth, shared by renderer + main; moved here from the renderer util so the job runner can import it too)
 - `src/renderer/src/components/chat/CommPatternBadge.tsx` — badge + hover tooltip, left of the Cog
-- `src/renderer/src/components/chat/OnDemandAgentChips.tsx` — removable agent chips, two modes: DB-backed (`chatId` prop, active chat) and buffer-backed (`pendingIds` + `onRemovePending`, new chat) — mirrors `OnDemandMcpChips`
+- `src/renderer/src/components/chat/OnDemandAgentChips.tsx` — removable agent chips, two modes: DB-backed (`chatId` prop, active chat) and buffer-backed (`pendingIds` + `onRemovePending`, new chat) — mirrors `ActiveMcpChips`
 - `src/renderer/src/hooks/useAgents.ts` — `useChatOnDemandAgents`, `useAddOnDemandAgent`, `useRemoveOnDemandAgent` (React Query hooks, cache key `['chat-on-demand-agent', chatId]`, scoped `on-demand-agent` logger on error)
 - `src/renderer/src/components/chat/AgentContribution.tsx` — reusable parts renderer (name label + hash color + thinking/tool/tool_result/text/command_result blocks). Builds a `RenderNode[]` and runs it through the shared `groupConsecutiveCollapsibles` (from `CollapsibleGroup.tsx`) so consecutive auxiliary steps fold into dots in compact mode; renders every part inline in verbose. Takes a `verbose` prop threaded from `AgentToolSubThread`.
 - `src/renderer/src/components/chat/CollapsibleGroup.tsx` — dots-group component + shared `RenderNode` type and `groupConsecutiveCollapsibles` helper, used by both this sub-thread and the main transcript (`MessageStream`)

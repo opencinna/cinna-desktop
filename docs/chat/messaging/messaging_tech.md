@@ -33,7 +33,7 @@
 - `src/renderer/src/components/layout/MainArea.tsx` — Composes `useNewChatFlow` (new-chat send), `useChatDetail` + `useChatModes` (active chat mode resolution), and renders the new-chat / active-chat layouts. No longer owns streaming event handling — that lives in `useChatStream`.
 - `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row; auto-focuses the textarea on mount and whenever `chatId` changes, so navigating to a chat (including after the first-message send from the default screen) lands the caret in the input
 - `src/renderer/src/components/chat/ChatControls.tsx` — Model dropdown + MCP toggle pills; active MCP IDs re-fetched when provider list changes (prevents stale FK references after provider deletion)
-- `src/renderer/src/components/chat/ChatConfigMenu.tsx` — [+] button with LLM/MCP provider submenus
+- `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — `[+]` button consolidating attach-files, chat-mode, and add-agents/MCP (replaced the retired `ChatConfigMenu`)
 - `src/renderer/src/components/chat/MessageStream.tsx` — Scrollable message list with auto-scroll
 - `src/renderer/src/components/chat/MessageBubble.tsx` — User/assistant message with markdown, avatar, metadata popup
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible tool call display: provider-first badge layout, shimmer progress bar during pending, CSS grid expand/collapse animation, structured JSON input/result rendering with MCP content block unwrapping

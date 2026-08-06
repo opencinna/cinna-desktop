@@ -18,11 +18,11 @@
 
 ### Renderer
 - `src/renderer/src/hooks/useMcp.ts` — `useChatOnDemandMcps`, `useAddOnDemandMcp`, `useRemoveOnDemandMcp` (React Query hooks with scoped `on-demand-mcp` logger on error)
-- `src/renderer/src/hooks/useNewChatFlow.ts` — `startNewChat` flushes the new-chat MCP buffer onto the freshly-created chat (via `window.api.chat.addOnDemandMcp`) before the first send dispatches
+- `src/renderer/src/hooks/useNewChatFlow.ts` — `startNewChat` flushes the new-chat MCP buffer onto the freshly-created chat (via the `useAddOnDemandMcp` mutation, so the chips' query key is invalidated and failures are logged) before the first send dispatches
 - `src/renderer/src/components/layout/MainArea.tsx` — owns the `pendingMcpIds` state for the new-chat screen and the toggle/remove callbacks passed into ChatInput
 - `src/renderer/src/components/chat/ChatInput.tsx` — owns trigger detection, filtered agent + MCP lists, combined keyboard nav; routes MCP selections to either the DB mutation (active chat) or the parent's pending buffer (new chat)
 - `src/renderer/src/components/chat/AgentMcpMentionPopup.tsx` — listbox with `role="group"` sections per "Agents" and "MCP"
-- `src/renderer/src/components/chat/OnDemandMcpChips.tsx` — removable strip rendered alongside `OnDemandAgentChips` below the composer; two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`
+- `src/renderer/src/components/chat/ActiveMcpChips.tsx` — the strip rendered alongside `OnDemandAgentChips` below the composer. Draws the chat's **whole** active MCP set: mode-owned `baselineIds` first (locked, no `×`), then the on-demand engagements (removable), de-duplicated by id with the baseline winning. The on-demand half has two modes — DB-backed (`chatId` prop) and buffer-backed (`pendingIds` + `onRemovePending` props). Fixed accent color + connector (`Plug`) icon; connection health is shown only on problems via a red `McpStatusDot` (hover-card detail) after the name when `status !== 'connected'`
 
 ## Database Schema
 
@@ -58,7 +58,8 @@ All three require `userActivation.requireActivated()` and use `getProfileScopeUs
 
 - `ChatInput` — when `chatId` is set, switches the `@` popup from `AgentMentionPopup` to `AgentMcpMentionPopup`. Owns the flat `triggerIndex` that spans agents-then-MCPs and routes Enter/Tab to either `selectAgent` or `selectMcp`.
 - `AgentMcpMentionPopup` — `role="listbox"` containing one `role="group"` per non-empty section. Single `selectedIndex` highlights one row across the flattened list; option ids are `${listboxId}-opt-${flatIndex}` matching the index ChatInput maintains.
-- `OnDemandMcpChips` — reads `useChatOnDemandMcps` + `useMcpProviders` directly (no props beyond `chatId`) so the strip stays in sync with whichever path mutated the table.
+- `ActiveMcpChips` — reads `useChatOnDemandMcps` + `useMcpProviders` directly so the strip stays in sync with whichever path mutated the table; the baseline half arrives as the `baselineIds` prop, resolved once in `ChatInput` (`useChatMcpProviders` for an active chat, the `baselineMcpIds` prop from `MainArea` on the new-chat screen) and shared with `useCapabilityPicker` so chips and picker can't disagree.
+- `ChatInput.showsChatControls` (`!boundAgent && !chatData?.modeId`) is the single gate: when `ChatControls` is on screen it owns the baseline (toggle pills), so `baselineIds` resolves to `[]` and the chips/picker stay on-demand-only. When it's hidden — a moded chat or an agent-rooted one — the baseline is mode-owned and shows up locked in both surfaces.
 
 ## Configuration
 

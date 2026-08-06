@@ -10,7 +10,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - **On-Demand MCP** — An MCP server the user `@-mentions` inside the chat composer. Attached to the chat in a separate table (`chat_on_demand_mcps`) so the user's per-chat engagements don't tangle with the chat mode's baseline.
 - **Engagement** — Picking an MCP from the `@` popup. Persists for the rest of the chat session until the user removes it via the chip.
 - **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement.
-- **MCP Chip** — A removable pill rendered with the other capability chips below the composer. One per on-demand MCP; clicking the `×` detaches that MCP from the chat.
+- **MCP Chip** — A pill rendered with the other capability chips below the composer, one per MCP active in the chat. On-demand engagements are removable (`×` detaches them); mode-owned baseline servers are shown **locked** (no `×`) so the strip reflects everything the LLM actually gets, not just the user's own picks. Baseline chips are omitted when `ChatControls` is visible, since its toggle pills already list them.
 - **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it for the chat (an agent row instead attaches an on-demand agent).
 - **`[+]` Capability Picker** — The mouse-driven equivalent of the `@` popup: the left-side `[+]` composer menu → **Add agents / MCP** opens a searchable card modal (`AgentPickerModal` in `activeFirst` multi-select mode). Selecting/deselecting a card runs the exact same engage/detach calls (`addOnDemandMcp` / `removeOnDemandMcp`, or the pending-buffer toggle on the new-chat screen) — so the `@` popup and the `[+]` picker are interchangeable entry points. Selected cards float to the top when the modal opens and hold position while toggling. In active chats it shows on-demand engagements + the bound root agent as "selected" (the root stays non-removable, mirroring `@`).
 
@@ -47,8 +47,8 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 
 ### Engaging an MCP that's also in the chat mode baseline
 
-1. The current chat mode already includes the GitHub MCP. The user `@-mentions` GitHub anyway.
-2. The on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) but the LLM still receives the silent announcement that the user just emphasised this server. The chip appears in the capability-chip strip alongside the baseline.
+1. The current chat mode already includes the GitHub MCP, so it's already on screen as a locked chip and shows as selected (locked) in the `[+]` picker — the user can see there's nothing to add.
+2. If they `@-mention` it anyway, the on-demand row is inserted with `pendingAnnounce = true`. The next send doesn't gain extra tools (GitHub was already attached via the baseline) but the LLM still receives the silent announcement that the user just emphasised this server. The chip is drawn once, and stays locked — detaching the on-demand row wouldn't remove GitHub from the chat, so no `×` is offered.
 
 ### Engaging an MCP that's disconnected
 
@@ -66,6 +66,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - Only MCPs with `enabled = true` in settings appear in the popup. Disabled MCPs can't connect and would just engage a dead chip.
 - The chip color is **fixed** (accent, matching the in-transcript MCP tool badge) — it no longer encodes connection status. Connection health is surfaced separately and only when there's a problem: a red status dot (with hover detail) after the name for any non-`connected` status.
 - The stream loop unions the baseline set with the on-demand set and de-duplicates by provider id, so a chat mode that already includes the MCP doesn't double-list tools.
+- The chip strip and the `[+]` picker render that same union, so what the user sees below the composer is what the LLM gets. Mode-owned entries are locked in both (no `×`, toggling is a no-op) — the chat mode owns them, and letting the picker "deselect" one would file an on-demand duplicate rather than detach anything. Same rule the bound root agent already follows.
 - The `@` popup keyboard nav indexes the flattened agent-then-MCP list: ArrowUp/Down moves across both sections; Enter / Tab selects the highlighted row regardless of section.
 
 ## Architecture Overview
@@ -79,10 +80,16 @@ User types '@' in any chat context
          -> useAddOnDemandMcp -> chat:on-demand-mcp-add
               -> chatService.addOnDemandMcp
                    -> chatOnDemandMcpRepo.add (pendingAnnounce=true)
-         -> OnDemandMcpChips reads DB via React Query, renders the chip
+         -> ActiveMcpChips reads DB via React Query, renders the chip
        New chat (no chatId yet):
          -> onTogglePendingMcp pushes id into MainArea's buffer
-         -> OnDemandMcpChips (pending mode) reads the buffer, renders the chip
+         -> ActiveMcpChips (pending mode) reads the buffer, renders the chip
+
+ChatInput resolves the mode-owned baseline once:
+  Active chat: useChatMcpProviders(chatId), unless ChatControls is showing
+  New chat:    MainArea's `baselineMcpIds` (the selected mode's list)
+  -> passed to BOTH ActiveMcpChips (locked chips) and useCapabilityPicker
+     (locked selections), so the two surfaces can't disagree
 
 User presses Enter
   Active chat:

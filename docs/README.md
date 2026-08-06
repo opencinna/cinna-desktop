@@ -14,6 +14,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **MCP Server** | A Model Context Protocol server (local stdio or remote HTTP) that exposes tools to the LLM |
 | **MCP Connection** | A live client session to an MCP server, managed by MCPManager |
 | **On-Demand MCP** | An MCP server the user `@-mentions` into a chat so its tools are available only for that chat — tracked separately from the chat mode's baseline MCP set |
+| **Baseline MCP** | The chat-mode-owned MCP set of a chat (`chat_mcp_providers`). Exactly the mode's list — empty means none. Unioned with the on-demand set at stream time; rendered as locked chips (no `×`) in the composer, since it's managed on the mode |
 | **Tool Call** | LLM requests a tool -> main process calls MCP server -> result fed back to LLM |
 | **MessagePort** | Electron's streaming channel used to send LLM response chunks from main to renderer |
 | **safeStorage** | Electron's OS-keychain encryption used for API keys and OAuth tokens at rest |
@@ -86,7 +87,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 ### Chat
 - [Messaging](chat/messaging/messaging.md) — Chat CRUD, MessagePort streaming, multi-provider tool-call loop
 - [Conversation UI](chat/conversation_ui/conversation_ui.md) — Message rendering: user bubbles, assistant plain text, tool blocks, system errors
-- [Chat Modes](chat/chat_modes/chat_modes.md) — Named presets bundling LLM provider/model, MCP servers, and color scheme for one-click chat setup
+- [Chat Modes](chat/chat_modes/chat_modes.md) — Named presets bundling LLM provider/model, MCP servers, and color scheme for one-click chat setup. The mode's MCP list is the chat's complete baseline: an empty list attaches **nothing** (no "all enabled providers" fallback), and switching mode on an active chat replaces the baseline verbatim
 - [Example Prompts](chat/example_prompts/example_prompts.md) — Remote-agent starter prompts shown as an animated tag cloud and surfaced via `#` in the chat input
 - [CLI Commands](chat/cli_commands/cli_commands.md) — `/` picker surfacing an agent's `cinna.run.*` shell commands; selecting one inserts the `/run:<slug>` invocation string
 - [Mention Popups](chat/mention_popups/mention_popups.md) — Shared trigger-driven listbox primitive (`@`, `#`, `/`) backing the agent, example-prompt, and CLI-command pickers
@@ -128,7 +129,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 
 ### MCP
 - [Connections](mcp/connections/connections.md) — MCP server lifecycle, stdio/SSE/streamable-http transports, OAuth DCR or static Bearer Token auth for remote servers
-- [On-Demand MCP](mcp/on_demand/on_demand.md) — `@-mention` MCP servers into a chat lazily so default chats don't pay token cost for tools they don't need; sticky chips + one-shot silent announce to the LLM
+- [On-Demand MCP](mcp/on_demand/on_demand.md) — `@-mention` MCP servers into a chat lazily so default chats don't pay token cost for tools they don't need; sticky chips + one-shot silent announce to the LLM. The chip strip and the `[+]` picker render the full active set (mode-owned baseline shown locked, on-demand removable) — the same union the stream sends to the LLM
 - [Registries](mcp/registries/registries.md) — Browse public MCP catalogs from Settings, one-click Connect into the standard MCP flow; built-in adapters for `registry.modelcontextprotocol.io` and the Cinna-curated catalog
 - [Cinna Official Registry](mcp/registries/cinna_official.md) — Curated catalog of recommended remote MCP servers, served as a static JSON from `opencinna.io`; add/remove servers without a desktop release
 

@@ -53,7 +53,9 @@ Let users define named presets that bundle an LLM provider + model, a set of MCP
 ## Business Rules
 
 - A chat mode's provider and model are optional — if neither the mode nor the user explicitly selects a provider on the new-chat screen, sending fails with a "can't determine destination" error (no implicit provider fallback exists)
-- A chat mode's MCP list can be empty — if so, the app falls back to all enabled MCP providers
+- A chat mode's MCP list is the chat's **complete** baseline MCP set. An empty list means the chat starts with **no** MCP servers — there is no "fall back to every enabled provider" rule (it used to exist and silently attached every connector the user owned, tool schemas included, to chats whose mode selected none). Extra servers are added per chat via [On-Demand MCP](../../mcp/on_demand/on_demand.md) (`@`-mention or the `[+]` picker), and a mode-less chat configures its own set through `ChatControls`
+- Switching modes on an active chat replaces the baseline with the new mode's list verbatim — switching to a mode with no MCPs clears it. On-demand engagements live in their own table and survive the switch
+- A moded chat hides `ChatControls`, so the mode's MCP servers are surfaced as **locked chips** below the composer (and as locked selections in the `[+]` picker) — visible, but managed on the mode itself. See [On-Demand MCP](../../mcp/on_demand/on_demand.md)
 - At most one mode per user is `isDefault`. Marking a mode as default in Settings clears the flag on any previously default mode (single-default invariant, enforced in the same transaction)
 - The default chat mode auto-applies whenever the user lands on the new-chat screen with nothing chosen. Deselecting it via the popup keeps it cleared for the rest of that new-chat session; it reapplies the next time the user returns to the new-chat screen
 - Mode selection is available on the new-chat screen and on active chats that were created with a mode

@@ -3,6 +3,8 @@ import { useCreateChat, useUpdateChat } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { useChatStream } from './useChatStream'
 import { useAttachNotesAsFiles } from './useNotes'
+import { useAddOnDemandMcp, useSetChatMcpProviders } from './useMcp'
+import { useAddOnDemandAgent } from './useAgents'
 import type { ChatModeData } from '../constants/chatModeColors'
 import type {
   ComposerAttachment,
@@ -86,6 +88,12 @@ export function useNewChatFlow(): {
   const { startLlm, startAgent } = useChatStream()
   const setSendError = useChatStore((s) => s.setSendError)
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
+  // Go through the mutations rather than `window.api.chat.*` directly: they
+  // own the cache invalidation for the chips' query keys and the failure
+  // logging, so the composer strip can't render a stale set.
+  const { mutateAsync: setChatMcpAsync } = useSetChatMcpProviders()
+  const { mutateAsync: addOnDemandMcpAsync } = useAddOnDemandMcp()
+  const { mutateAsync: addOnDemandAgentAsync } = useAddOnDemandAgent()
 
   /**
    * Ingest every `pending` attachment now that the chat row exists and
@@ -187,7 +195,7 @@ export function useNewChatFlow(): {
           // kept for symmetry): the user may later switch to the LLM root via
           // multi-agent routing, where these MCPs become relevant.
           for (const mcpId of onDemandMcpSnapshot) {
-            await window.api.chat.addOnDemandMcp(chat.id, mcpId)
+            await addOnDemandMcpAsync({ chatId: chat.id, mcpProviderId: mcpId })
           }
           await updateChat.mutateAsync({
             chatId: chat.id,
@@ -209,10 +217,10 @@ export function useNewChatFlow(): {
         // on-demand agents before the first send so the stream loop reads
         // both at setup time (and emits the one-shot announce prefix).
         for (const mcpId of onDemandMcpSnapshot) {
-          await window.api.chat.addOnDemandMcp(chat.id, mcpId)
+          await addOnDemandMcpAsync({ chatId: chat.id, mcpProviderId: mcpId })
         }
         for (const agentId of agentSnapshot) {
-          await window.api.chat.addOnDemandAgent(chat.id, agentId)
+          await addOnDemandAgentAsync({ chatId: chat.id, agentId })
         }
 
         const resolvedModelId = resolveModel(mode, providerId, providers, allModels)
@@ -235,9 +243,12 @@ export function useNewChatFlow(): {
 
         await updateChat.mutateAsync({ chatId: chat.id, updates })
 
+        // Baseline MCPs = the chat mode's list, verbatim. Empty means the
+        // chat starts with no baseline servers (the row has none yet, so
+        // there's nothing to clear) — on-demand picks above are separate.
         const mcpSnapshot = Array.from(mcpIds)
         if (mcpSnapshot.length > 0) {
-          await window.api.chat.setMcpProviders(chat.id, mcpSnapshot)
+          await setChatMcpAsync({ chatId: chat.id, mcpProviderIds: mcpSnapshot })
         }
 
         // LLM destination: ingest pending into the local store under the
@@ -271,7 +282,10 @@ export function useNewChatFlow(): {
       startLlm,
       resolvePendingAttachments,
       ingestPendingNotes,
-      setSendError
+      setSendError,
+      setChatMcpAsync,
+      addOnDemandMcpAsync,
+      addOnDemandAgentAsync
     ]
   )
 

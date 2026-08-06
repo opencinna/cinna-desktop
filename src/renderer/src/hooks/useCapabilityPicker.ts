@@ -22,6 +22,15 @@ interface UseCapabilityPickerArgs {
   enabledMcps: McpData[]
   /** The chat's bound root agent (active chat only); shown selected + locked. */
   boundAgent: AgentData | null
+  /**
+   * Mode-owned baseline MCPs, resolved by the composer (`chat_mcp_providers`
+   * for an active chat, the selected mode's list on the new-chat screen).
+   * Shown selected + locked, mirroring `boundAgent`: the chat mode owns them,
+   * so toggling here must not silently file an on-demand duplicate. Empty when
+   * `ChatControls` is on screen — the baseline is the user's own there, and its
+   * toggle pills already manage it.
+   */
+  baselineMcpIds?: string[]
   /** New-chat pending buffers (owned by MainArea). Ignored when `chatId` is set. */
   pendingAgentIds?: string[]
   pendingMcpIds?: string[]
@@ -59,6 +68,7 @@ export function useCapabilityPicker({
   enabledAgents,
   enabledMcps,
   boundAgent,
+  baselineMcpIds,
   pendingAgentIds,
   pendingMcpIds,
   onTogglePendingAgent,
@@ -102,17 +112,35 @@ export function useCapabilityPicker({
     [onDemandMcps.data]
   )
 
+  const lockedMcpIds = useMemo(() => new Set(baselineMcpIds ?? []), [baselineMcpIds])
+
   const selectedIds = useMemo(() => {
+    const ids = [...lockedMcpIds]
     if (chatId) {
-      const ids = [...onDemandAgentIds, ...onDemandMcpIds]
+      ids.push(...onDemandAgentIds, ...onDemandMcpIds)
       if (boundAgent) ids.push(boundAgent.id)
       return new Set(ids)
     }
-    return new Set([...(pendingAgentIds ?? []), ...(pendingMcpIds ?? [])])
-  }, [chatId, onDemandAgentIds, onDemandMcpIds, boundAgent, pendingAgentIds, pendingMcpIds])
+    ids.push(...(pendingAgentIds ?? []), ...(pendingMcpIds ?? []))
+    return new Set(ids)
+  }, [
+    chatId,
+    lockedMcpIds,
+    onDemandAgentIds,
+    onDemandMcpIds,
+    boundAgent,
+    pendingAgentIds,
+    pendingMcpIds
+  ])
 
   const toggle = useCallback(
     (id: string): void => {
+      // Mode-owned MCPs stay selected and non-removable — same rule as the
+      // bound root agent below. Detaching one has to happen on the chat mode.
+      // Checked before the kind lookup so a baseline id that isn't in
+      // `enabledMcps` (a since-disabled server) can't fall through to the
+      // agent branch.
+      if (lockedMcpIds.has(id)) return
       const isMcp = mcpIdSet.has(id)
       if (chatId) {
         if (isMcp) {
@@ -138,6 +166,7 @@ export function useCapabilityPicker({
     [
       chatId,
       mcpIdSet,
+      lockedMcpIds,
       onDemandMcpIds,
       onDemandAgentIds,
       boundAgent,

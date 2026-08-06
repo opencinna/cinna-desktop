@@ -11,7 +11,7 @@ type OnDemandAgentChipsProps =
  * Renders the on-demand agent set as a strip of removable chips next to the
  * on-demand-MCP chips below the composer. Each chip is an agent the local
  * model calls as an emulated MCP tool in orchestrated mode. Two modes,
- * mirroring [[OnDemandMcpChips]]:
+ * mirroring [[ActiveMcpChips]]:
  *
  *  - **Active chat** (`chatId` set): reads `chat_on_demand_agents` via React
  *    Query; removal hits the DB through `chat:on-demand-agent-remove`.

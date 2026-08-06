@@ -12,12 +12,13 @@ import { NoteDetail } from '../notes/NoteDetail'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { resolveMcpNames } from '../../utils/mcpNames'
-import { useUpdateChat, useChatDetail } from '../../hooks/useChat'
+import { useChatDetail } from '../../hooks/useChat'
 import { useChatModes, useDefaultChatMode } from '../../hooks/useChatModes'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
-import { useMcpProviders, useSetChatMcpProviders } from '../../hooks/useMcp'
+import { useMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
+import { useApplyChatMode } from '../../hooks/useApplyChatMode'
 import { derivePattern } from '../../../../shared/commPattern'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
@@ -32,14 +33,13 @@ export function MainArea(): React.JSX.Element {
   const sendError = useChatStore((s) => s.sendError)
   const setSendError = useChatStore((s) => s.setSendError)
   const { data: agentList } = useAgents()
-  const updateChat = useUpdateChat()
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
   const { data: defaultMode } = useDefaultChatMode()
   const { data: chatModes } = useChatModes()
-  const setChatMcp = useSetChatMcpProviders()
   const { startNewChat } = useNewChatFlow()
+  const applyChatMode = useApplyChatMode()
   // New-chat mode selection, modelled as intent rather than a snapshot:
   //   'auto'      → follow the current default mode REACTIVELY (so changing the
   //                 default chat mode, editing it, or flipping the account/local
@@ -104,28 +104,18 @@ export function MainArea(): React.JSX.Element {
     ro.observe(el)
     return () => ro.disconnect()
   }, [activeChatId, activeView])
-  const mcpDefaultsApplied = useRef(false)
-  const [defaultMcpIds, setDefaultMcpIds] = useState<Set<string>>(new Set())
-
-  // Initialize default MCP ids with enabled MCP providers on first load
-  useEffect(() => {
-    if (mcpDefaultsApplied.current || !mcpProviders) return
-    const enabledIds = mcpProviders.filter((p) => p.enabled).map((p) => p.id)
-    if (enabledIds.length > 0) {
-      setDefaultMcpIds(new Set(enabledIds))
-      mcpDefaultsApplied.current = true
-    }
-  }, [mcpProviders])
-
   // Resolve effective provider exclusively from the active chat mode — the
   // app no longer keeps a "default LLM provider" concept, so the mode is the
   // single source of truth for both new chats and active chats that switch
   // modes mid-conversation.
   const effectiveProviderId = activeMode?.providerId ?? null
-  // Resolve effective MCPs: mode > defaults
-  const effectiveMcpIds = activeMode?.mcpProviderIds?.length
-    ? new Set(activeMode.mcpProviderIds)
-    : defaultMcpIds
+  // The new chat's baseline MCP set is exactly the active mode's list —
+  // nothing selected means nothing attached. There is deliberately no
+  // "fall back to every enabled MCP" rule: it silently handed each chat every
+  // connector the user owned (and their tool schemas) without any selection
+  // gesture. Extra servers come in per-chat via the on-demand picks below.
+  const activeModeMcpIds = useMemo(() => activeMode?.mcpProviderIds ?? [], [activeMode])
+  const effectiveMcpIds = useMemo(() => new Set(activeModeMcpIds), [activeModeMcpIds])
 
   // The full agent set for the new chat is just the ordered pick list. Drives
   // both the routing decision and the badge.
@@ -267,28 +257,9 @@ export function MainArea(): React.JSX.Element {
   const handleActiveChatModeChange = useCallback(
     async (mode: ChatModeData | null) => {
       if (!activeChatId) return
-
-      if (!mode) {
-        await updateChat.mutateAsync({ chatId: activeChatId, updates: { modeId: null } })
-        return
-      }
-
-      const resolvedProviderId = mode.providerId ?? null
-      const resolvedModelId = resolveModel(mode, resolvedProviderId, providers, allModels)
-
-      const updates: { modeId: string; providerId?: string; modelId?: string } = { modeId: mode.id }
-      if (resolvedProviderId && resolvedModelId) {
-        updates.providerId = resolvedProviderId
-        updates.modelId = resolvedModelId
-      }
-      await updateChat.mutateAsync({ chatId: activeChatId, updates })
-
-      const mcpIds = mode.mcpProviderIds?.length
-        ? mode.mcpProviderIds
-        : Array.from(defaultMcpIds)
-      setChatMcp.mutate({ chatId: activeChatId, mcpProviderIds: mcpIds })
+      await applyChatMode(activeChatId, mode)
     },
-    [activeChatId, updateChat, providers, allModels, defaultMcpIds, setChatMcp]
+    [activeChatId, applyChatMode]
   )
 
   // Tilde-driven select: apply the mode, wipe the `~` from the textarea, and
@@ -387,6 +358,7 @@ export function MainArea(): React.JSX.Element {
           pendingMcpIds={pendingMcpIds}
           onTogglePendingMcp={togglePendingMcp}
           onRemovePendingMcp={removePendingMcp}
+          baselineMcpIds={activeModeMcpIds}
           pendingAgentIds={pendingAgentIds}
           onTogglePendingAgent={togglePendingAgent}
           onRemovePendingAgent={removePendingAgent}

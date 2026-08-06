@@ -13,7 +13,7 @@ import { NoteMentionPopup } from './NoteMentionPopup'
 import { useAgents, useAttachAgentToChat } from '../../hooks/useAgents'
 import { useProviders } from '../../hooks/useProviders'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
-import { useMcpProviders, useAddOnDemandMcp } from '../../hooks/useMcp'
+import { useMcpProviders, useAddOnDemandMcp, useChatMcpProviders } from '../../hooks/useMcp'
 import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
 import { useCatalogPicker } from '../../hooks/useCatalogPicker'
 import { useChatAttachments } from '../../hooks/useChatAttachments'
@@ -24,7 +24,7 @@ import { extractExamplePrompts, type ExamplePrompt } from '../../utils/examplePr
 import type { ColorPreset, ChatModeData } from '../../constants/chatModeColors'
 import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
-import { OnDemandMcpChips } from './OnDemandMcpChips'
+import { ActiveMcpChips } from './ActiveMcpChips'
 import { OnDemandAgentChips } from './OnDemandAgentChips'
 import { CommPatternBadge } from './CommPatternBadge'
 import type { CommPattern } from '../../../../shared/commPattern'
@@ -63,6 +63,13 @@ interface ChatInputProps {
   pendingMcpIds?: string[]
   onTogglePendingMcp?: (mcpProviderId: string) => void
   onRemovePendingMcp?: (mcpProviderId: string) => void
+  /**
+   * New-chat screen only: the selected chat mode's MCP list. These become the
+   * chat's baseline on send, so they're surfaced now — locked — alongside the
+   * user's own picks, and count as selected in the `[+]` picker. Active chats
+   * read the equivalent set from `chat_mcp_providers` instead.
+   */
+  baselineMcpIds?: string[]
   /**
    * New-chat agent engagement buffer — symmetric to `pendingMcpIds`. The `@`
    * popup routes *every* agent pick here (orchestrated-mode tool set). The
@@ -135,6 +142,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     pendingMcpIds,
     onTogglePendingMcp,
     onRemovePendingMcp,
+    baselineMcpIds,
     pendingAgentIds,
     onTogglePendingAgent,
     onRemovePendingAgent,
@@ -306,6 +314,22 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [chatData?.agentId, agents]
   )
 
+  // `ChatControls` (model picker + baseline MCP toggle pills) is offered only
+  // on a mode-less LLM chat — that's the chat whose baseline the user manages
+  // by hand. Everywhere else the baseline is mode-owned, and this strip is the
+  // only place it can be seen.
+  const showsChatControls = !boundAgent && !chatData?.modeId
+  const { data: chatBaselineLinks } = useChatMcpProviders(chatId)
+  const baselineIds = useMemo(() => {
+    if (chatId) {
+      // Skip when ChatControls is on screen: its pills already list the
+      // baseline, and chips would double it up.
+      if (showsChatControls) return []
+      return (chatBaselineLinks ?? []).map((l) => l.mcpProviderId)
+    }
+    return baselineMcpIds ?? []
+  }, [chatId, showsChatControls, chatBaselineLinks, baselineMcpIds])
+
   // The `[+]` "Add agents / MCP" picker — cards, selection set, and toggle that
   // mirrors the `@`-mention routing. Logic lives in the hook (testable, out of
   // the view); see `useCapabilityPicker`.
@@ -319,6 +343,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     enabledAgents,
     enabledMcps,
     boundAgent,
+    baselineMcpIds: baselineIds,
     pendingAgentIds,
     pendingMcpIds,
     onTogglePendingAgent,
@@ -1124,7 +1149,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
                 {boundAgent.name}
               </span>
             </div>
-          ) : chatId && !chatData?.modeId ? (
+          ) : chatId && showsChatControls ? (
             // Mode-less active LLM chats keep their manual model + baseline-MCP
             // controls; moded chats configure those through the chat mode.
             <ChatControls chatId={chatId} inline />
@@ -1138,11 +1163,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             />
           ) : null}
           {chatId ? (
-            <OnDemandMcpChips chatId={chatId} />
+            <ActiveMcpChips chatId={chatId} baselineIds={baselineIds} />
           ) : pendingMcpIds && onRemovePendingMcp ? (
-            <OnDemandMcpChips
+            <ActiveMcpChips
               pendingIds={pendingMcpIds}
               onRemovePending={onRemovePendingMcp}
+              baselineIds={baselineIds}
             />
           ) : null}
         </div>

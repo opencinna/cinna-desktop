@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createLogger } from '../stores/logger.store'
 
 const onDemandLog = createLogger('on-demand-mcp')
+const baselineLog = createLogger('chat-mcp')
 
 export function useMcpProviders() {
   const queryClient = useQueryClient()
@@ -122,6 +123,17 @@ export function useSetChatMcpProviders() {
     }) => window.api.chat.setMcpProviders(chatId, mcpProviderIds),
     onSuccess: (_data, { chatId }) => {
       queryClient.invalidateQueries({ queryKey: ['chat-mcp', chatId] })
+    },
+    // This write is the *only* thing that sets a chat's baseline: a mode
+    // switch replaces it wholesale (an empty mode list clears it). A silent
+    // failure therefore leaves the chat out of sync with its mode with no
+    // other surface to notice it — log so ⌘` shows why.
+    onError: (error, { chatId, mcpProviderIds }) => {
+      baselineLog.error('set baseline failed', {
+        chatId,
+        mcpProviderIds,
+        error: error instanceof Error ? error.message : String(error)
+      })
     }
   })
 }

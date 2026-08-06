@@ -50,8 +50,9 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 ### Capability selection & routing (mirrors `@`)
 - **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `MainArea`; flushed onto the chat row at creation. Routing (direct A2A vs orchestrated) is derived at send time — exactly one agent with no MCPs → A2A, anything else → orchestrated.
 - **Active chat**: toggles hit the on-demand DB tables. Engaging an agent attaches it as an orchestrated tool, promoting a direct-A2A or plain LLM chat on the first pick; engaging an MCP adds it to the on-demand set. Detaching removes the on-demand row.
-- **Bound root agent**: in an active chat, the chat's root agent shows as selected and is non-removable from the picker — same constraint as the `@` popup. Chat-mode baseline MCPs are likewise not surfaced for detach here; they are managed through the chat mode.
-- Selected state in the picker = on-demand agents + on-demand MCPs + bound root agent (active chat), or the pending buffers (new chat).
+- **Bound root agent**: in an active chat, the chat's root agent shows as selected and is non-removable from the picker — same constraint as the `@` popup.
+- **Chat-mode baseline MCPs**: shown selected and locked too (toggling is a no-op), so the picker states what the chat actually has rather than only what the user added on top. They're detached by editing the chat mode, not here. Only surfaced when `ChatControls` is hidden — a mode-less chat manages its own baseline through the model/MCP pills instead.
+- Selected state in the picker = mode-owned baseline MCPs (locked) + on-demand agents + on-demand MCPs + bound root agent (active chat), or the selected mode's MCPs (locked) + the pending buffers (new chat).
 
 ### Keyboard equivalents
 - The `@` (agents + MCP), `~` (chat mode), and `#` / `/` / `?` triggers are retained as fast-path shortcuts. The `[+]` menu does not replace them — both entry points drive the same logic. See [Mention Popups](../mention_popups/mention_popups.md).
