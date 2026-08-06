@@ -34,7 +34,7 @@ Every data table in the app has a `userId` column, but it is filtered along one 
 ### Startup Lifecycle
 
 1. App launches — database initialized, IPC handlers registered, **no services started**
-2. Renderer loads `AuthGate` component, calls `auth:get-startup`
+2. Renderer loads `AuthGate` component, which calls `auth:get-startup` once per session (a failed call shows a retry surface rather than a blank window)
 3. Main process checks the last active user from `session.json`:
    - **Passwordless / default user** — activated immediately (providers load, gate opens)
    - **Password-protected user** — stays deactivated; renderer shows login screen
@@ -96,6 +96,14 @@ Deactivation (used when deleting the current user) is different from logout:
 - The `__default__` guest user is always considered authenticated (no password)
 - Activation is the **only** path to loading providers — there is no eager init at startup
 - On app quit, `mcpManager.disconnectAll()` runs as a safety net regardless of activation state
+
+### Activation is destructive — request it once
+
+Activation is not a cheap read: it clears every LLM adapter and disconnects every MCP server before reloading them. Requesting it twice therefore has real, user-visible cost (servers drop and reconnect; an OAuth-requiring server could open a second browser window). Two rules keep that from happening:
+
+- **The renderer asks for startup exactly once per session.** The startup request is made once and its result reused, so a component remount (including React StrictMode's dev-only double mount) cannot re-trigger activation. It is also deliberately excluded from cache-invalidation and refetch machinery — a login or user deletion resets query caches, and re-issuing the startup request from there would re-activate the session mid-flow
+- **Concurrent activation requests for the same user collapse onto one run.** Overlapping callers share a single activation rather than each performing a teardown-and-reload. Sequential activations still each run in full — that is what a user switch or a re-login needs
+- A consequence worth knowing when debugging: MCP connects are started but not awaited by activation, so activation completes while connections are still being established. The connection layer serializes per provider so a later activation cannot corrupt an in-flight connect — see [Connections](../../mcp/connections/connections.md)
 
 ## Integration Points
 

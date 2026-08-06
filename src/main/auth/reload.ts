@@ -4,6 +4,7 @@ import { clearAllAdapters, registerAdapter } from '../llm/registry'
 import { createAdapter } from '../llm/factory'
 import { decryptApiKey } from '../security/keystore'
 import { mcpManager } from '../mcp/manager'
+import { mcpRowToConfig } from '../mcp/config'
 import { getSettingsScopeUserId, getProfileScopeUserId, DEFAULT_SCOPE_USER_ID } from './scope'
 import { accountConfigService } from '../services/accountConfigService'
 import { createLogger } from '../logger/logger'
@@ -47,18 +48,7 @@ export async function reloadUserProviders(): Promise<void> {
   for (const provider of mcpProviderRepo.list(userId)) {
     if (!provider.enabled) continue
     mcpManager
-      .connect({
-        id: provider.id,
-        name: provider.name,
-        transportType: provider.transportType as 'stdio' | 'sse' | 'streamable-http',
-        command: provider.command ?? undefined,
-        args: (provider.args as string[] | null) ?? undefined,
-        url: provider.url ?? undefined,
-        env: (provider.env as Record<string, string> | null) ?? undefined,
-        enabled: true,
-        authTokensEncrypted: provider.authTokensEncrypted ?? undefined,
-        clientInfo: (provider.clientInfo as Record<string, unknown> | null) ?? undefined
-      })
+      .connect(mcpRowToConfig(provider))
       .catch((err) => logger.error(`Failed to init MCP ${provider.name}`, err))
   }
 }

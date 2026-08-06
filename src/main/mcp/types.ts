@@ -7,8 +7,12 @@ export interface McpProviderConfig {
   url?: string
   env?: Record<string, string>
   enabled: boolean
-  /** How a remote server authenticates. Unused for `stdio`. Defaults to `'oauth'`. */
-  authType?: 'oauth' | 'bearer'
+  /**
+   * How a remote server authenticates. Unused for `stdio`. Required — an
+   * omitted value used to fall through to the OAuth/DCR branch in `manager.ts`.
+   * Build configs with `mcpRowToConfig` rather than by hand.
+   */
+  authType: 'oauth' | 'bearer'
   /** Encrypted OAuth tokens (from DB) */
   authTokensEncrypted?: Buffer
   /** DCR client registration info (from DB) */

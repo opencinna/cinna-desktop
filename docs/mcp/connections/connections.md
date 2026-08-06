@@ -45,7 +45,8 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 ## Business Rules
 
 - Connection statuses: `connected`, `disconnected`, `error`, `awaiting-auth`
-- On app start, all enabled MCP providers are auto-connected (including restoring persisted OAuth tokens or the bearer token)
+- All enabled MCP providers are auto-connected when a user session activates — not eagerly at process launch (see [Resource Activation](../../core/resource_activation/resource_activation.md)). Persisted OAuth tokens or the bearer token are restored as part of that connect
+- The active auth mode is resolved from the provider's persisted config on **every** connect, including the automatic one at activation. A bearer-token server therefore never opens a browser at any point in its lifecycle — if one appears, the auth mode was lost on the way to the connection layer
 - On app quit, all connections are cleanly disconnected
 - OAuth tokens are encrypted via `safeStorage` and persisted; if still valid on next launch, no browser auth needed
 - DCR client info (client_id, client_secret) is persisted separately so re-registration isn't needed
@@ -56,14 +57,25 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 - A bearer-token connection never enters `awaiting-auth`: the token is static and known up front, so `client.connect()` either succeeds or fails straight to `error` (e.g. wrong/expired token → 401 surfaces as a connect error, not a re-auth prompt)
 - Switching a provider's `authType` doesn't clear the other auth mode's stored credentials (OAuth tokens/client info survive a switch to Bearer and vice versa) — harmless since the manager only reads the credential matching the active `authType`
 
+### Connection Lifecycle & Concurrency
+
+- **One live connection per provider.** Connect and disconnect requests for the same provider are serialized, so they never overlap — a double-clicked Reconnect, or a re-activation landing mid-handshake, cannot leave two live sessions behind. Different providers connect concurrently
+- **A superseded attempt is discarded silently.** When a newer connect or a disconnect replaces an attempt that is still waiting on the network, the abandoned attempt closes its own session and reports nothing: it does not set `error`, and it does not overwrite the surviving attempt's status. Only the surviving attempt reports. Users should never see a transient failure caused purely by an internal reconnect
+- **Genuine failures still surface.** Config errors that fail before a connection is established (missing URL, missing bearer token) and real network/auth failures always report `error` with the underlying message
+- **A pending OAuth authorization never blocks teardown.** Because the browser round-trip is user-paced, Disconnect, sign-out, and profile switch take effect immediately rather than queueing behind an unfinished auth flow. If the flow later completes for a connection that is no longer live, its result is thrown away
+- **The status a user sees is always the live connection's status** — a late-completing attempt can never resurrect a provider the user just disconnected
+
 ## Architecture Overview
 
 ```
 Settings UI -> IPC -> MCPManager.connect(config)
+  -> Serialize per provider (close any existing connection first)
   -> Create transport (Stdio / SSE / StreamableHTTP)
-  -> For streamable-http: attach ElectronOAuthProvider if auth needed
+  -> For remote transports, branch on authType:
+       'bearer' -> static Authorization header
+       'oauth'  -> attach ElectronOAuthProvider (DCR, browser round-trip)
   -> MCP Client.connect() + listTools()
-  -> Cache tools in memory
+  -> Cache tools in memory (unless superseded meanwhile — then discard)
 
 Chat flow:
   LLM Adapter -> tool_use -> MCPManager.callTool(providerId, toolName, input)
@@ -82,6 +94,8 @@ Chat flow:
 8. Fresh Client reconnects through authenticated transport
 9. Tokens encrypted and persisted to `mcp_providers.auth_tokens_enc`
 10. DCR client info persisted to `mcp_providers.client_info`
+
+The flow is abandoned — with the connection left untouched — if the user disconnects the provider, signs out, or switches profile while the browser step is pending, or if the callback doesn't arrive within 2 minutes.
 
 ## Bearer Token Flow (Remote Servers)
 

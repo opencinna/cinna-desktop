@@ -32,16 +32,15 @@
 | Layer | File | Purpose |
 |-------|------|---------|
 | Store | `src/renderer/src/stores/auth.store.ts` | Zustand: currentUser, needsPassword, unlockedUserIds, markUnlocked/markLocked |
-| Hook | `src/renderer/src/hooks/useAuth.ts` | React Query mutations/queries: useUsers, useCurrentUser, useLogin, useRegister, useLogout, useUpdateUser, useDeleteUser, useCinnaOAuthAbort |
+| Hook | `src/renderer/src/hooks/useAuth.ts` | React Query mutations/queries: useUsers, useCurrentUser, useLogin, useRegister, useLogout, useUpdateUser, useDeleteUser, useCinnaOAuthAbort. Plus `useStartup` — deliberately *not* React Query (one-shot module-scoped promise, since the channel activates the session; see [Resource Activation](../../core/resource_activation/resource_activation.md)) |
 | AuthGate | `src/renderer/src/App.tsx` | Startup auth check, wraps app with login gate |
 | UserMenu | `src/renderer/src/components/auth/UserMenu.tsx` | Title bar dropdown — "Guest" badge on default user |
 | LoginScreen | `src/renderer/src/components/auth/LoginScreen.tsx` | Full-screen password prompt on restart — wraps `PasswordUnlockForm` |
 | LoginPrompt | `src/renderer/src/components/auth/LoginPrompt.tsx` | Full-screen login overlay for user switching — wraps `PasswordUnlockForm` |
 | PasswordUnlockForm | `src/renderer/src/components/auth/PasswordUnlockForm.tsx` | Shared OS-style centered avatar + password form (used by both LoginScreen and LoginPrompt) |
 | RegisterForm | `src/renderer/src/components/auth/RegisterForm.tsx` | Multi-step account creation modal with horizontal type-selection cards (local + Cinna) — see [Cinna Accounts Tech](../cinna_accounts/cinna_accounts_tech.md) |
-| TitleBar | `src/renderer/src/components/layout/TitleBar.tsx` | Hosts UserMenu in top-right slot |
 | Settings | `src/renderer/src/components/settings/UserAccountsSection.tsx` | User Accounts settings page — list, edit, delete accounts |
-| Sidebar | `src/renderer/src/components/layout/Sidebar.tsx` | Settings sidebar includes "User Accounts" menu item |
+| Sidebar | `src/renderer/src/components/layout/Sidebar.tsx` | Hosts `UserMenu compact` in the sidebar footer (previously a top-bar slot); settings sidebar includes the "User Accounts" menu item |
 | Settings Page | `src/renderer/src/components/settings/SettingsPage.tsx` | Routes `accounts` tab to `UserAccountsSection` |
 | UI Store | `src/renderer/src/stores/ui.store.ts` | `SettingsMenu` type includes `'accounts'` |
 

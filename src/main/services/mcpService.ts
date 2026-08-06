@@ -2,7 +2,7 @@ import { mcpProviderRepo, McpProviderRow } from '../db/mcpProviders'
 import { chatModeRepo } from '../db/chatModes'
 import { mcpManager } from '../mcp/manager'
 import { McpError } from '../errors'
-import { McpProviderConfig } from '../mcp/types'
+import { mcpRowToConfig } from '../mcp/config'
 import { encryptApiKey } from '../security/keystore'
 import { createLogger } from '../logger/logger'
 
@@ -52,23 +52,6 @@ function assertTransport(t: string): asserts t is 'stdio' | 'sse' | 'streamable-
 function assertAuthType(t: string): asserts t is 'oauth' | 'bearer' {
   if (!VALID_AUTH_TYPES.has(t)) {
     throw new McpError('invalid_auth_type', `Unknown auth type: ${t}`)
-  }
-}
-
-function toConfig(row: McpProviderRow): McpProviderConfig {
-  return {
-    id: row.id,
-    name: row.name,
-    transportType: row.transportType as 'stdio' | 'sse' | 'streamable-http',
-    command: row.command ?? undefined,
-    args: (row.args as string[] | null) ?? undefined,
-    url: row.url ?? undefined,
-    env: (row.env as Record<string, string> | null) ?? undefined,
-    enabled: row.enabled,
-    authType: (row.authType as 'oauth' | 'bearer') ?? 'oauth',
-    authTokensEncrypted: row.authTokensEncrypted ?? undefined,
-    clientInfo: (row.clientInfo as Record<string, unknown> | null) ?? undefined,
-    bearerTokenEncrypted: row.bearerTokenEncrypted ?? undefined
   }
 }
 
@@ -126,7 +109,7 @@ export const mcpService = {
     })
 
     if (row.enabled) {
-      await mcpManager.connect(toConfig(row))
+      await mcpManager.connect(mcpRowToConfig(row))
     } else {
       await mcpManager.disconnect(row.id)
     }
@@ -154,7 +137,7 @@ export const mcpService = {
     const row = mcpProviderRepo.getOwned(userId, id)
     if (!row) throw new McpError('not_found', 'MCP provider not found')
 
-    const conn = await mcpManager.connect(toConfig(row))
+    const conn = await mcpManager.connect(mcpRowToConfig(row))
     return { tools: conn.tools, status: conn.status }
   },
 

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useAuthStore } from '../stores/auth.store'
 import { useReauthStore } from '../stores/reauth.store'
@@ -38,6 +39,82 @@ export function useCurrentUser() {
       return user
     }
   })
+}
+
+type StartupResult = Awaited<ReturnType<typeof window.api.auth.getStartup>>
+
+export type StartupState =
+  | { status: 'pending' }
+  | { status: 'ready' }
+  | { status: 'error'; message: string }
+
+/**
+ * In-flight/settled startup call, memoised at module scope so it survives the
+ * unmount/remount that StrictMode performs on mount effects. Reset on failure
+ * so `retry()` can re-issue it.
+ */
+let startupPromise: Promise<StartupResult> | undefined
+
+/**
+ * Startup auth state.
+ *
+ * Deliberately NOT a `useQuery`: `auth:get-startup` is not a read, it activates
+ * the session in the main process (reloading every LLM adapter and reconnecting
+ * every MCP server). Query-cache semantics would re-issue it — the auth
+ * mutations below call `queryClient.resetQueries()`, which refetches every
+ * active query, so a login would re-activate the session and could bounce the
+ * user back to the login screen. A module-scoped promise gives the exactly-once
+ * guarantee this call needs while keeping the IPC out of the component layer.
+ *
+ * Store writes land before `status: 'ready'`, so a consumer branching on the
+ * auth store can't flash the wrong screen for a frame.
+ */
+export function useStartup(): { state: StartupState; retry: () => void } {
+  const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
+  const setNeedsPassword = useAuthStore((s) => s.setNeedsPassword)
+  const setPendingUserId = useAuthStore((s) => s.setPendingUserId)
+  const [state, setState] = useState<StartupState>({ status: 'pending' })
+  const [attempt, setAttempt] = useState(0)
+
+  useEffect(() => {
+    let cancelled = false
+    startupPromise ??= window.api.auth.getStartup()
+
+    startupPromise
+      .then((startup) => {
+        if (cancelled) return
+        if (startup.needsLogin && startup.pendingUser) {
+          // Last user has a password — the login screen takes over.
+          setPendingUserId(startup.pendingUser.id)
+          setNeedsPassword(true)
+        } else if (startup.user) {
+          // Default or passwordless user — already activated in main.
+          setCurrentUser(toAuthUser(startup.user))
+        }
+        setState({ status: 'ready' })
+      })
+      .catch((err: unknown) => {
+        // Let a retry re-issue the call rather than replaying the failure.
+        startupPromise = undefined
+        if (cancelled) return
+        setState({
+          status: 'error',
+          message: err instanceof Error ? err.message : String(err)
+        })
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [attempt, setCurrentUser, setNeedsPassword, setPendingUserId])
+
+  return {
+    state,
+    retry: () => {
+      setState({ status: 'pending' })
+      setAttempt((n) => n + 1)
+    }
+  }
 }
 
 export function useLogin() {

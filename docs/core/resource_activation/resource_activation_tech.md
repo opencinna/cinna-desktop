@@ -38,7 +38,8 @@ Every user-scoped handler calls `userActivation.requireActivated()` as its first
 
 ### `src/main/auth/activation.ts`
 
-- `userActivation.activate(userId)` — calls `setCurrentUser()` + `reloadUserProviders()` + sets `_activated = true`
+- `userActivation.activate(userId)` — dedupes concurrent activations of the same user onto one in-flight `_pendingActivation` promise, then delegates to `_activate()`: `setCurrentUser()` + `reloadUserProviders()` + `_activated = true`. Activation is expensive and destructive (it disconnects and reconnects every MCP server), so overlapping calls must not both run
+- **Renderer side:** `useStartup()` (`src/renderer/src/hooks/useAuth.ts`) memoises the `auth:get-startup` call in a module-scoped promise so it runs exactly once per renderer session. Deliberately not a `useQuery` — the auth mutations call `queryClient.resetQueries()`, which refetches active queries, and re-issuing this channel would re-activate the session
 - `userActivation.deactivate()` — sets `_activated = false` + `clearAllAdapters()` + `mcpManager.disconnectAll()` + `setCurrentUser('__default__')`
 - `userActivation.isActivated()` — returns current gate state (used by MessagePort handlers that can't throw)
 - `userActivation.requireActivated()` — throws `'Session not activated'` if gate is closed (used by `ipcMain.handle` handlers)

@@ -3,7 +3,7 @@
 ## File Locations
 
 ### Main Process
-- `src/main/mcp/types.ts` — `McpProviderConfig`, `McpTool`, `McpConnection` types. `McpProviderConfig.authType` (`'oauth' | 'bearer'`) selects the auth branch; `bearerTokenEncrypted` carries the encrypted static token alongside the existing `authTokensEncrypted`/`clientInfo` OAuth fields
+- `src/main/mcp/types.ts` — `McpProviderConfig`, `McpTool`, `McpConnection` types. `McpProviderConfig.authType` (`'oauth' | 'bearer'`, required) selects the auth branch; `bearerTokenEncrypted` carries the encrypted static token alongside the existing `authTokensEncrypted`/`clientInfo` OAuth fields
 - `src/main/mcp/manager.ts` — `MCPManager` singleton: connect, disconnect, callTool, getTools, OAuth flow, bearer-token headers. Persists OAuth tokens via `mcpProviderRepo.setAuthTokens()` / `setClientInfo()`; bearer tokens are persisted through the normal `mcpService.upsert()` path instead (no callback to persist after-the-fact)
 - `src/main/mcp/oauth-provider.ts` — `ElectronOAuthProvider` class (DCR metadata, token/client-info storage, PKCE, browser redirect). Only used on the `authType: 'oauth'` branch
 - `src/main/mcp/oauth-callback.ts` — `waitForOAuthCallback()` (temp HTTP server) + `findAvailablePort()`
@@ -13,7 +13,8 @@
 - `src/main/errors.ts` — `McpError` + `McpErrorCode` (`not_found`, `not_activated`, `invalid_transport`, `invalid_auth_type`, `connect_failed`)
 - `src/main/db/schema.ts` — `mcpProviders`, `chatMcpProviders` table definitions
 - `src/main/db/migrations/mcp.ts` — `migrateMcp()`: creates `mcp_providers`/adds `auth_tokens_enc`/`client_info`/`auth_type`/`bearer_token_enc` columns, all guarded by `hasColumn()`
-- `src/main/index.ts` — `initMcpProviders()`: connects all enabled MCP providers on startup (called by activation, not eagerly)
+- `src/main/mcp/config.ts` — `mcpRowToConfig(row)`: the single row→`McpProviderConfig` mapper. Every `mcpManager.connect()` caller must use it — a hand-built literal that omits `authType`/`bearerTokenEncrypted` silently downgrades a bearer provider onto the OAuth/DCR branch
+- `src/main/auth/reload.ts` — `reloadUserProviders()`: connects all enabled MCP providers on activation/startup (via `mcpRowToConfig`), not eagerly at app launch
 - `src/main/security/keystore.ts` — Encrypt/decrypt for OAuth tokens and bearer tokens (`encryptApiKey`/`decryptApiKey`)
 
 ### Preload
@@ -51,10 +52,14 @@
 - `src/main/services/mcpService.ts` — `connect()`, `disconnect()`, `listTools()` — look up the owned row, then forward to the manager.
 - `src/main/db/mcpProviders.ts:setAuthTokens(id, encrypted)` / `setClientInfo(id, info)` — Called from the manager during OAuth callback, intentionally without an ownership check (the manager already holds the provider handle).
 - `src/main/mcp/manager.ts:connect(config)` — Creates transport, creates MCP Client, calls `client.connect()` + `client.listTools()`, caches tools. Branches on `config.authType`: `'bearer'` builds the transport with a static `Authorization` header via `bearerAuthHeaders()`; anything else attaches `ElectronOAuthProvider` (the historic default, also covers no-auth servers)
+- `src/main/mcp/manager.ts:enqueue(id, task)` — per-provider task queue. `connect()`/`disconnect()` are thin wrappers that enqueue `_connect()`/`_disconnect()`, so lifecycle work for one provider never overlaps — two concurrent connects would otherwise each build a client while the map holds only one, leaking the loser's HTTP/SSE session (or stdio child process). Different providers still run concurrently. **`_connect`/`_disconnect` must never enqueue** — they run inside the queue already, so re-entering deadlocks. `handleOAuthCallback` is intentionally outside the queue (it waits on the user's browser; holding the queue would make Disconnect hang behind an abandoned auth flow)
+- `src/main/mcp/manager.ts:discardSuperseded(connection, reason, id)` — closes a superseded attempt's client and cleans up its OAuth state, so no orphaned session survives the race
+- `src/main/mcp/manager.ts:isSuperseded(id, connection)` — Identity check against the live map entry. A `connect()` whose entry was replaced/removed mid-flight (concurrent `disconnect()`/`disconnectAll()`, or a second `connect()` for the same provider) returns quietly at `debug` instead of logging `Connect failed` and broadcasting an `error` status — the superseding call already closed the client, which is what surfaces as `McpError -32000: Connection closed`. Guarded by a local `registered` flag so pre-registration failures (bad URL, missing bearer token) still surface as real errors
 - `src/main/mcp/manager.ts:bearerAuthHeaders(config)` — Decrypts `config.bearerTokenEncrypted` via `decryptApiKey`, returns `{ Authorization: 'Bearer <token>' }`; throws if the config is `authType: 'bearer'` with no stored token
-- `src/main/mcp/manager.ts:disconnect(id)` — Calls `client.close()`, cleans up OAuth state, removes from map
+- `src/main/mcp/manager.ts:disconnect(id)` — Removes from the map **first**, then cleans up OAuth state and calls `client.close()`. The ordering matters: `close()` rejects the client's pending requests synchronously, so an in-flight `connect()` resumes as a microtask during the `await` — with the entry still present it would fail `isSuperseded()` and log a bogus failure
 - `src/main/mcp/manager.ts:callTool(providerId, toolName, input)` — Calls `client.callTool()` on the connected client
 - `src/main/mcp/manager.ts:getToolsForProviders(ids)` — Returns aggregated tool list for given provider IDs
+- `src/main/mcp/manager.ts:handleOAuthCallback(id)` — finishes the browser flow and reconnects. Re-checks `isSuperseded()` after every await (auth-code wait, token exchange, reconnect) because it runs outside the per-provider queue; on supersession it discards via `discardSuperseded()` instead of calling `setStatus()`, which would otherwise re-insert a torn-down connection into the map as `connected`
 - `src/main/mcp/oauth-provider.ts` — `ElectronOAuthProvider`: implements SDK's `OAuthClientProvider` interface (DCR metadata, token storage callbacks, PKCE code verifier, `shell.openExternal()` for browser redirect). `prepareForAuth()` attaches a no-op `.catch()` to prevent unhandled rejections when `cleanup()` aborts a never-awaited auth code promise (happens on successful connection with valid tokens). Not instantiated on the `authType: 'bearer'` branch
 - `src/main/mcp/oauth-callback.ts:waitForOAuthCallback()` — Starts temp HTTP server, waits for redirect, returns auth code. `abort()` rejects the promise and closes the server
 - `src/main/mcp/oauth-callback.ts:findAvailablePort()` — Finds random available port for callback server

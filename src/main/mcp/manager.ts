@@ -38,6 +38,39 @@ function broadcastStatusChange(providerId: string, status: string): void {
 
 class MCPManager {
   private connections = new Map<string, InternalConnection>()
+  /** Tail of each provider's task queue — see `enqueue()`. */
+  private queues = new Map<string, Promise<unknown>>()
+
+  /**
+   * Serialize lifecycle work per provider. The map holds one entry per id, so
+   * two overlapping `connect()` calls would each build a client and only the
+   * last-registered one would be reachable — the other's HTTP/SSE session (or
+   * stdio child process) would leak with nothing left holding a handle to close
+   * it. Queueing makes "close the old one, then open the new one" atomic per
+   * provider; different providers still run concurrently.
+   *
+   * The internal `_connect`/`_disconnect` must never enqueue — they already run
+   * inside the queue, so re-entering it would deadlock.
+   */
+  private enqueue<T>(providerId: string, task: () => Promise<T>): Promise<T> {
+    const prev = this.queues.get(providerId) ?? Promise.resolve()
+    // Run `task` whether the previous entry resolved or rejected — one failed
+    // connect must not wedge the provider's queue forever.
+    const result = prev.then(task, task)
+    const tail = result.then(
+      () => {},
+      () => {}
+    )
+    this.queues.set(providerId, tail)
+    void tail.then(() => {
+      // Only the current tail may clean up, or we'd drop a queue that a later
+      // call has already chained onto.
+      if (this.queues.get(providerId) === tail) {
+        this.queues.delete(providerId)
+      }
+    })
+    return result
+  }
 
   /**
    * Persist the status on the connection and notify the renderer. Centralised
@@ -61,15 +94,56 @@ class MCPManager {
     broadcastStatusChange(providerId, status)
   }
 
+  /**
+   * True when `connection` is no longer the live entry for the provider — a
+   * later `connect()` or a `disconnect()`/`disconnectAll()` replaced or removed
+   * it while this attempt was awaiting the network. The superseding call closed
+   * our client (which is what surfaces as `McpError -32000: Connection closed`)
+   * and owns the status broadcast, so a superseded attempt must not log an
+   * error, must not overwrite the status, and must not re-insert itself into
+   * the map.
+   */
+  private isSuperseded(providerId: string, connection: InternalConnection): boolean {
+    return this.connections.get(providerId) !== connection
+  }
+
+  /**
+   * Give up on a connection attempt whose entry is no longer live. Closes our
+   * client so the superseded session doesn't linger — the superseding call only
+   * closed whatever *it* found in the map, which may not be us (the OAuth
+   * callback runs outside the per-provider queue by design, see
+   * `handleOAuthCallback`).
+   */
+  private async discardSuperseded(
+    connection: InternalConnection,
+    reason: string,
+    providerId: string
+  ): Promise<void> {
+    connection.oauthProvider?.cleanup()
+    try {
+      await connection.client?.close()
+    } catch {
+      // Already closing/closed — nothing to salvage.
+    }
+    logger.debug(reason, { providerId, providerName: connection.config.name })
+  }
+
   async connect(config: McpProviderConfig): Promise<McpConnection> {
-    // Disconnect existing if any
-    await this.disconnect(config.id)
+    return this.enqueue(config.id, () => this._connect(config))
+  }
+
+  private async _connect(config: McpProviderConfig): Promise<McpConnection> {
+    // Disconnect existing if any. Calls the unqueued form — we hold the queue.
+    await this._disconnect(config.id)
 
     const connection: InternalConnection = {
       config,
       tools: [],
       status: 'disconnected'
     }
+
+    /** Set once `connection` is in the map, i.e. once supersession is meaningful. */
+    let registered = false
 
     try {
       let transport: AnyTransport
@@ -140,10 +214,19 @@ class MCPManager {
       connection.client = client
       connection.transport = transport
       this.connections.set(config.id, connection)
+      registered = true
 
       try {
         await client.connect(transport)
       } catch (err) {
+        if (this.isSuperseded(config.id, connection)) {
+          await this.discardSuperseded(
+            connection,
+            'connect superseded, ignoring failure',
+            config.id
+          )
+          return this.toPublic(connection)
+        }
         if (err instanceof UnauthorizedError && connection.oauthProvider) {
           // OAuth flow initiated — browser was opened for user to authorize
           this.setStatus(config.id, connection, 'awaiting-auth')
@@ -151,6 +234,13 @@ class MCPManager {
 
           // Wait for the callback in the background
           this.handleOAuthCallback(config.id).catch((authErr) => {
+            if (this.isSuperseded(config.id, connection)) {
+              logger.debug('oauth flow superseded, ignoring failure', {
+                providerId: config.id,
+                providerName: config.name
+              })
+              return
+            }
             logger.error(`OAuth failed for ${config.name}`, authErr)
             this.setStatus(config.id, connection, 'error', `OAuth failed: ${String(authErr)}`)
           })
@@ -168,12 +258,35 @@ class MCPManager {
         connection.oauthProvider.cleanup()
       }
 
+      // A disconnect that landed between `listTools()` resolving and here
+      // already closed this client — don't resurrect it in the map.
+      if (this.isSuperseded(config.id, connection)) {
+        await this.discardSuperseded(
+          connection,
+          'connect superseded, discarding result',
+          config.id
+        )
+        return this.toPublic(connection)
+      }
+
       this.setStatus(config.id, connection, 'connected')
       logger.info(`Connected: ${config.name} (${tools.length} tools)`)
       return this.toPublic(connection)
     } catch (err) {
       if (connection.oauthProvider) {
         connection.oauthProvider.cleanup()
+      }
+      // Same supersession check as above — covers `listTools()` failing because
+      // a concurrent disconnect closed the client under us. `registered` keeps
+      // pre-registration failures (bad URL, missing bearer token — the map has
+      // no entry for us yet) out of this branch so they still surface.
+      if (registered && this.isSuperseded(config.id, connection)) {
+        await this.discardSuperseded(
+          connection,
+          'connect superseded, ignoring failure',
+          config.id
+        )
+        return this.toPublic(connection)
       }
       this.setStatus(config.id, connection, 'error', String(err))
       logger.error(`Connect failed for ${config.name}`, err)
@@ -190,15 +303,30 @@ class MCPManager {
     return { Authorization: `Bearer ${token}` }
   }
 
+  /**
+   * Finish a browser-based OAuth flow and reconnect. Deliberately runs *outside*
+   * the per-provider queue: `waitForAuthCode()` blocks for as long as the user
+   * takes in the browser, and holding the queue that long would make an
+   * explicit Disconnect (or a profile switch) hang behind an abandoned auth
+   * flow. The cost of staying outside the queue is that a concurrent
+   * connect/disconnect can supersede us at any await, so every step re-checks
+   * before touching shared state.
+   */
   private async handleOAuthCallback(providerId: string): Promise<void> {
     const conn = this.connections.get(providerId)
     if (!conn?.oauthProvider || !conn.transport) return
 
     const httpTransport = conn.transport as StreamableHTTPClientTransport
     const code = await conn.oauthProvider.waitForAuthCode()
+    if (this.isSuperseded(providerId, conn)) {
+      return this.discardSuperseded(conn, 'oauth callback superseded before token exchange', providerId)
+    }
 
     // Exchange the auth code for tokens
     await httpTransport.finishAuth(code)
+    if (this.isSuperseded(providerId, conn)) {
+      return this.discardSuperseded(conn, 'oauth callback superseded after token exchange', providerId)
+    }
 
     // Create a fresh transport — the old one is already started and can't be reused
     const freshTransport = new StreamableHTTPClientTransport(
@@ -220,6 +348,13 @@ class MCPManager {
     conn.tools = tools
 
     conn.oauthProvider.cleanup()
+
+    // Last check before `setStatus` — it re-inserts into the map, which would
+    // resurrect a connection a concurrent disconnect had already removed.
+    if (this.isSuperseded(providerId, conn)) {
+      return this.discardSuperseded(conn, 'oauth callback superseded after reconnect', providerId)
+    }
+
     this.setStatus(providerId, conn, 'connected')
     logger.info(`Connected after OAuth: ${conn.config.name} (${tools.length} tools)`)
   }
@@ -268,8 +403,20 @@ class MCPManager {
   }
 
   async disconnect(providerId: string): Promise<void> {
+    return this.enqueue(providerId, () => this._disconnect(providerId))
+  }
+
+  private async _disconnect(providerId: string): Promise<void> {
     const conn = this.connections.get(providerId)
     if (conn) {
+      // Drop the map entry BEFORE closing the client. `client.close()` rejects
+      // the client's pending requests synchronously, so an in-flight
+      // `connect()` awaiting `initialize`/`listTools` resumes as a microtask
+      // during the `await` below — i.e. before this method could continue.
+      // Deleting afterwards meant that attempt still saw itself as the live
+      // entry, failed `isSuperseded()`, and logged a bogus
+      // `Connect failed … Connection closed` while overwriting the status.
+      this.connections.delete(providerId)
       try {
         if (conn.oauthProvider) {
           conn.oauthProvider.cleanup()
@@ -280,7 +427,6 @@ class MCPManager {
       } catch (err) {
         logger.error(`Error disconnecting MCP ${providerId}`, err)
       }
-      this.connections.delete(providerId)
       // Notify the renderer so any UI that had been showing this provider as
       // `connected` flips back to `disconnected` immediately.
       broadcastStatusChange(providerId, 'disconnected')
@@ -288,7 +434,11 @@ class MCPManager {
   }
 
   async disconnectAll(): Promise<void> {
-    const ids = Array.from(this.connections.keys())
+    // Union with `queues`: a provider whose `connect()` is still in flight has
+    // no map entry yet, so keys alone would skip it and leave a live client
+    // behind after a teardown (quit, sign-out, profile switch). Its queued
+    // disconnect runs once that connect registers.
+    const ids = new Set([...this.connections.keys(), ...this.queues.keys()])
     for (const id of ids) {
       await this.disconnect(id)
     }

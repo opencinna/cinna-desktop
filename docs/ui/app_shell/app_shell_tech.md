@@ -5,6 +5,7 @@
 ### Renderer — Composition Root
 
 - `src/renderer/src/App.tsx` — `App` (QueryClientProvider + AuthGate), `Shell` (relative container with `p-2` window padding; sidebar/main flex row + absolutely positioned TopBar overlaying the top so MainArea can claim full window height)
+- `src/renderer/src/App.tsx` — `AuthGate` branches on `useStartup()`: blank backdrop while pending, `StartupError` (message + Retry) if the startup call failed, `LoginScreen` when a password is required, otherwise the app. `StartupError` is the only guard against a silent blank window on a failed boot — see [Resource Activation](../../core/resource_activation/resource_activation.md)
 
 ### Renderer — Layout
 

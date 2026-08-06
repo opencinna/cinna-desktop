@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/layout/Sidebar'
 import { TopBar } from './components/layout/TopBar'
@@ -13,6 +13,7 @@ import { FilePreviewModal } from './components/chat/FilePreviewModal'
 import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
+import { useStartup } from './hooks/useAuth'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useSyncEvents, useSyncOnTabOpen } from './hooks/useSync'
 import {
@@ -41,40 +42,44 @@ const queryClient = new QueryClient({
 
 function AuthGate({ children }: { children: React.ReactNode }): React.JSX.Element {
   const needsPassword = useAuthStore((s) => s.needsPassword)
-  const setCurrentUser = useAuthStore((s) => s.setCurrentUser)
-  const setNeedsPassword = useAuthStore((s) => s.setNeedsPassword)
-  const setPendingUserId = useAuthStore((s) => s.setPendingUserId)
-  const [ready, setReady] = useState(false)
-
-  // On mount, ask main process for startup auth state
-  useEffect(() => {
-    window.api.auth.getStartup().then((startup) => {
-      if (startup.needsLogin && startup.pendingUser) {
-        // Last user has a password — show login screen
-        setPendingUserId(startup.pendingUser.id)
-        setNeedsPassword(true)
-      } else if (startup.user) {
-        // Default or passwordless user — activate immediately
-        setCurrentUser({
-          id: startup.user.id,
-          type: startup.user.type,
-          username: startup.user.username,
-          displayName: startup.user.displayName,
-          hasPassword: startup.user.hasPassword
-        })
-      }
-      setReady(true)
-    })
-  }, [setCurrentUser, setNeedsPassword, setPendingUserId])
+  // `useStartup` owns the IPC call and syncs the auth store before reporting
+  // `ready`, so no intermediate render can see a half-applied session.
+  const { state, retry } = useStartup()
 
   // Don't render anything until startup state is resolved
-  if (!ready) return <div className="h-full bg-[var(--color-bg)]" />
+  if (state.status === 'pending') return <div className="h-full bg-[var(--color-bg)]" />
+
+  // Startup failed — without this the app would sit on a blank window forever.
+  if (state.status === 'error') {
+    return <StartupError message={state.message} onRetry={retry} />
+  }
 
   if (needsPassword) {
     return <LoginScreen />
   }
 
   return <>{children}</>
+}
+
+function StartupError({
+  message,
+  onRetry
+}: {
+  message: string
+  onRetry: () => void
+}): React.JSX.Element {
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-4 bg-[var(--color-bg)] p-8">
+      <div className="text-base font-medium text-[var(--color-text)]">Startup failed</div>
+      <div className="max-w-md text-center text-sm text-[var(--color-text-muted)]">{message}</div>
+      <button
+        onClick={onRetry}
+        className="rounded-md bg-[var(--color-accent)] px-4 py-2 text-sm text-[var(--color-on-accent)] hover:bg-[var(--color-accent-hover)]"
+      >
+        Retry
+      </button>
+    </div>
+  )
 }
 
 function Shell(): React.JSX.Element {
