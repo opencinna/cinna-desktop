@@ -1,4 +1,5 @@
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
+import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
 
 /**
  * Features tab — opt-in toggles grouped by domain:
@@ -17,7 +18,14 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   const autoChatTitles = settings?.autoChatTitles === true
   const enableTrayIcon = settings?.enableTrayIcon === true
+  const showHints = settings?.showHints === true
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
+
+  // Hint retirement counters live in localStorage (renderer-local UI state),
+  // not in `app_settings` — so resetting them is a store call, not a mutation.
+  const hintProgress = useHintsStore((s) => s.progress)
+  const resetHints = useHintsStore((s) => s.reset)
+  const canResetHints = hasHintProgress(hintProgress)
 
   const toggleAutoChatTitles = (): void => {
     if (!settings || disabled) return
@@ -35,6 +43,11 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const toggleEnableTrayIcon = (): void => {
     if (!settings || disabled) return
     setSetting.mutate({ key: 'enableTrayIcon', value: !settings.enableTrayIcon })
+  }
+
+  const toggleShowHints = (): void => {
+    if (!settings || disabled) return
+    setSetting.mutate({ key: 'showHints', value: !settings.showHints })
   }
 
   return (
@@ -81,16 +94,52 @@ export function FeaturesSettingsSection(): React.JSX.Element {
         <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
           Interface
         </h2>
-        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-          <ToggleRow
-            label="Enable Tray Icon"
-            description="Show the menu-bar icon for agent status at a glance. Turn off to hide it without quitting the app."
-            checked={enableTrayIcon}
-            disabled={disabled}
-            onToggle={toggleEnableTrayIcon}
-            title={enableTrayIcon ? 'Menu-bar tray icon is visible' : 'Menu-bar tray icon is hidden'}
-            showError={isError}
-          />
+        <div className="space-y-3">
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
+            <ToggleRow
+              label="Enable Tray Icon"
+              description="Show the menu-bar icon for agent status at a glance. Turn off to hide it without quitting the app."
+              checked={enableTrayIcon}
+              disabled={disabled}
+              onToggle={toggleEnableTrayIcon}
+              title={
+                enableTrayIcon ? 'Menu-bar tray icon is visible' : 'Menu-bar tray icon is hidden'
+              }
+              showError={isError}
+            />
+          </div>
+          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
+            <ToggleRow
+              label="Show hints"
+              description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
+              checked={showHints}
+              disabled={disabled}
+              onToggle={toggleShowHints}
+              title={showHints ? 'Hints are shown on the new-chat screen' : 'Hints are hidden'}
+              showError={isError}
+            />
+            {showHints && (
+              <div className="mt-3 pt-3 border-t border-[var(--color-border)] flex items-center justify-between gap-3">
+                <div className="text-[13px] text-[var(--color-text-muted)]">
+                  {canResetHints
+                    ? 'Some hints have stopped appearing because you’ve used what they teach.'
+                    : 'No hints have been retired yet.'}
+                </div>
+                <button
+                  type="button"
+                  onClick={resetHints}
+                  disabled={!canResetHints}
+                  className={`shrink-0 text-[13px] px-2.5 py-1 rounded-md border transition-colors ${
+                    canResetHints
+                      ? 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] cursor-pointer'
+                      : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
+                  }`}
+                >
+                  Reset hints
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </section>
     </div>

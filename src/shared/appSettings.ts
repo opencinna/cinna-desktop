@@ -16,6 +16,12 @@ export interface AppSettingsSchema {
    */
   enableTrayIcon: boolean
   /**
+   * When true, the new-chat screen shows a rotating one-line hint bar teaching
+   * composer shortcuts. Purely a renderer feature — no main-side reaction.
+   * Per-hint retirement counters live in localStorage, not here.
+   */
+  showHints: boolean
+  /**
    * When true, an account-provisioned (Cinna) default chat mode takes precedence
    * over the local default-profile default. Off by default — the local default
    * wins, and the account default only applies when no local default is set.

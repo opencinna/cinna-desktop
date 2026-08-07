@@ -81,6 +81,7 @@ MainArea
 - [App Shell](../app_shell/app_shell.md) — Hosts the profile dropdown (settings entry) and the sidebar's settings-menu mode
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Chat modes section manages named presets
 - [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — The Features tab hosts the "AI Functions" subsection where this opt-in toggle lives
+- [Hints](../hints/hints.md) — The Features tab's "Interface" group hosts the `showHints` toggle and the "Reset hints" button that clears the localStorage retirement counters
 - [Agents](../../agents/agents/agents.md) — Agents section (Default group) manages local A2A agent registrations
 - [Remote Agents](../../agents/remote_agents/remote_agents.md) — Agents section (Profile group) lists Cinna-synced remote agents with per-profile enable/disable overrides
 - [Adapters](../../llm/adapters/adapters.md) — LLM settings section manages provider configuration consumed by the adapter layer

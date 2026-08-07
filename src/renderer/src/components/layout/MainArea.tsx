@@ -10,6 +10,8 @@ import { JobEditPage } from '../jobs/JobEditPage'
 import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
 import { NoteDetail } from '../notes/NoteDetail'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
+import { HintBar } from '../ui/HintBar'
+import { useHintsEnabled } from '../../hooks/useHintsEnabled'
 import { extractExamplePrompts } from '../../utils/examplePrompts'
 import { resolveMcpNames } from '../../utils/mcpNames'
 import { useChatDetail } from '../../hooks/useChat'
@@ -38,6 +40,7 @@ export function MainArea(): React.JSX.Element {
   const { data: mcpProviders } = useMcpProviders()
   const { data: defaultMode } = useDefaultChatMode()
   const { data: chatModes } = useChatModes()
+  const hintsEnabled = useHintsEnabled()
   const { startNewChat } = useNewChatFlow()
   const applyChatMode = useApplyChatMode()
   // New-chat mode selection, modelled as intent rather than a snapshot:
@@ -338,7 +341,13 @@ export function MainArea(): React.JSX.Element {
   // Default / New Chat screen
   if (!activeChatId) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center px-4 pt-[var(--topbar-h)]">
+      <div
+        className={`relative flex-1 flex flex-col items-center justify-center px-4 pt-[var(--topbar-h)] ${
+          // Reserve the strip the absolutely-positioned HintBar overlays, so a
+          // tall composer on a short window can't grow underneath it.
+          hintsEnabled ? 'pb-8' : ''
+        }`}
+      >
         <div className="mb-8 text-center">
           <Sparkles size={32} className="mx-auto mb-3 text-[var(--color-accent)] opacity-60" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
@@ -390,6 +399,9 @@ export function MainArea(): React.JSX.Element {
               : undefined
           }
         />
+        {/* Sits outside the centered stack (absolute, bottom-anchored) so a
+            hint appearing or changing never shifts the composition above it. */}
+        <HintBar selectedAgent={selectedAgent} pendingAgentCount={pendingAgentIds.length} />
       </div>
     )
   }

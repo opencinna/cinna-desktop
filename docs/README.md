@@ -52,6 +52,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 | **Task Activity** | UI grouping for system-generated comment types (`status_change`, `assignment`, `system`) — shown as a compact collapsible log separate from authored comments |
 | **Note** | A profile-scoped markdown document (title + body) the user inline-edits in the Notes tab. Autosaves on debounce; rendered with the same `react-markdown` stack used for chat bubbles |
 | **Note Folder** | User-defined sidebar grouping for notes (profile-scoped, name + collapsed-state + sort position). Mirrors Job Folder semantics — a thin collapsible separator that owns ordering, not content |
+| **Hint** | One line of shortcut-teaching copy shown in the new-chat screen's bottom bar. Either **ambient** (enters a shuffled rotation) or **contextual** (preempts the rotation when a matching user action fires). Gated on being actionable, and retired once the user has used what it teaches. See [Hints](ui/hints/hints.md) |
 | **Tray Popup** | Menu-bar (status-bar) popover window listing agent statuses; opens from the macOS menu-bar tray icon, shows a worst-severity dot, and redirects the main window on click |
 
 ## Domain Map
@@ -138,6 +139,7 @@ Desktop client for remote agents (MCP, A2A, OpenCinna).
 - [Settings](ui/settings/settings.md) — Settings screen with sidebar navigation, LLM provider and MCP server configuration
 - [Verbose Mode](ui/verbose_mode/verbose_mode.md) — Compact/verbose display toggle: message timestamps, meta popup, streaming block auto-expand, and structured tool-call headers in tool narration
 - [Keyboard Shortcuts](ui/keyboard_shortcuts/keyboard_shortcuts.md) — Registry of every shortcut: global menu accelerators (⌘`), context-scoped ESC, chord patterns (double-ESC) and input-popup navigation
+- [Hints](ui/hints/hints.md) — Rotating one-line tip bar stuck to the bottom of the new-chat screen, teaching composer shortcuts in place. Two lanes: an ambient rotation (session-stable shuffled order, ~7 s dwell scaled to line length, paused on hover / open picker / background window) and contextual hints that preempt it the moment the user does something adjacent to an undiscovered gesture (attach a note → learn the double-Enter inline expansion). Every hint is gated on being actionable right now and retires once the user has used what it teaches; contextual hints are additionally capped per session and per install. Renderer-only apart from one `app_settings` boolean — Settings → Features → Interface toggle (`showHints`) + Reset hints. Sub-doc: [Technical Details](ui/hints/hints_tech.md) — catalog schema, scheduler constants, storage split
 - [Menu-Bar Tray](ui/tray/tray.md) — macOS menu-bar (status-bar) icon with a severity dot + frosted popover listing agent statuses; renderer-pushed icon, separate popup window, redirects the main window on click. Lifecycle gated by the `enableTrayIcon` setting (Settings → Features → Interface), togglable live
 
 ### Development

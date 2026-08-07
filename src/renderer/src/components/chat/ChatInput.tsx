@@ -4,6 +4,7 @@ import { useChatDetail } from '../../hooks/useChat'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { useAuthStore } from '../../stores/auth.store'
+import { useHintsStore } from '../../stores/hints.store'
 import { ChatControls } from './ChatControls'
 import { AgentMentionPopup } from './AgentMentionPopup'
 import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
@@ -11,7 +12,7 @@ import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { NoteMentionPopup } from './NoteMentionPopup'
 import { useAgents, useAttachAgentToChat } from '../../hooks/useAgents'
-import { useProviders } from '../../hooks/useProviders'
+import { useHasAttachDestination } from '../../hooks/useAttachDestination'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp, useChatMcpProviders } from '../../hooks/useMcp'
 import { useCapabilityPicker } from '../../hooks/useCapabilityPicker'
@@ -162,12 +163,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const activeSendInFlight = useRef(false)
   const { data: chatData } = useChatDetail(chatId)
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
+  // Hint bar telemetry. Every call is "the user just did X" — the store decides
+  // whether that retires a hint, fires a contextual one, or neither. Emitting
+  // from active chats too is intentional: the gestures are the same, so using
+  // one in a live chat still retires the tip shown on the dashboard.
+  const observeHint = useHintsStore((s) => s.observe)
+  const setHintsBusy = useHintsStore((s) => s.setBusy)
   // Used only to gate the new-chat attach button: showing `[+]` for a
   // user with no Cinna account *and* no configured LLM provider would
-  // lead them to attach files they have nowhere to send.
-  const { data: providers } = useProviders()
-  const hasAnyDestination =
-    isCinnaUser || (providers ?? []).some((p) => p.enabled && p.hasApiKey)
+  // lead them to attach files they have nowhere to send. Shared with the
+  // hint bar so it can't advertise drag-drop while this button is hidden.
+  const hasAnyDestination = useHasAttachDestination()
   const listboxId = useId()
 
   // Model capability drives both gating (show/hide the [+]) and scope
@@ -288,6 +294,16 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     setPreviewNoteId(null)
     setPendingExpansionNoteId(null)
   }, [chatId])
+
+  // Hold the hint rotation while the composer has something open — changing the
+  // tip under a user who's mid-selection competes for the attention they're
+  // already spending. Cleared on unmount so a stale flag can't freeze the bar.
+  const composerBusy =
+    triggerChar !== null || tildeActive || capabilityPickerOpen || previewNoteId !== null
+  useEffect(() => {
+    setHintsBusy(composerBusy)
+  }, [composerBusy, setHintsBusy])
+  useEffect(() => () => setHintsBusy(false), [setHintsBusy])
 
   const { data: agents } = useAgents()
   const enabledAgents = useMemo(
@@ -473,9 +489,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         setAttachError('Folders and unresolved files cannot be attached')
         return
       }
+      observeHint('files-dropped')
       void pickAttachmentsFromPaths(paths).finally(focusComposer)
     },
-    [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer]
+    [canAcceptDrop, pickAttachmentsFromPaths, setAttachError, focusComposer, observeHint]
   )
 
   /** Agent whose example_prompts `#` should surface. Bound agent wins in an active chat, else the selected agent on the new-chat screen. */
@@ -579,6 +596,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const selectAgent = useCallback(
     (agent: AgentData) => {
       replaceTriggerToken('')
+      observeHint('mention-used')
       if (chatId) {
         // Active chat: attach as an orchestrated tool (promoting + guarding the
         // sole-bound-agent no-op + error handling are owned by the hook).
@@ -590,7 +608,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       // send time from the combined selection.
       onTogglePendingAgent?.(agent.id)
     },
-    [replaceTriggerToken, onTogglePendingAgent, chatId, attachAgent]
+    [replaceTriggerToken, onTogglePendingAgent, chatId, attachAgent, observeHint]
   )
 
   /**
@@ -605,13 +623,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const selectMcp = useCallback(
     (mcp: { id: string }) => {
       replaceTriggerToken('')
+      observeHint('mention-used')
       if (chatId) {
         void addOnDemandMcp.mutateAsync({ chatId, mcpProviderId: mcp.id })
         return
       }
       onTogglePendingMcp?.(mcp.id)
     },
-    [replaceTriggerToken, addOnDemandMcp, chatId, onTogglePendingMcp]
+    [replaceTriggerToken, addOnDemandMcp, chatId, onTogglePendingMcp, observeHint]
   )
 
   const selectAgentOrMcp = useCallback(
@@ -625,15 +644,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const selectPrompt = useCallback(
     (prompt: ExamplePrompt) => {
       replaceTriggerToken(prompt.full)
+      observeHint('prompt-picked')
     },
-    [replaceTriggerToken]
+    [replaceTriggerToken, observeHint]
   )
 
   const selectCommand = useCallback(
     (command: CliCommand) => {
       replaceTriggerToken(command.command)
+      observeHint('command-picked')
     },
-    [replaceTriggerToken]
+    [replaceTriggerToken, observeHint]
   )
 
   const selectNote = useCallback(
@@ -645,8 +666,19 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       // swaps this note's badge for its body inline. Any typing clears it
       // (see `handleInput`).
       setPendingExpansionNoteId(note.id)
+      // The one beat where the double-Enter tip is actionable — the hint bar
+      // surfaces it now or never.
+      observeHint('note-attached')
     },
-    [replaceTriggerToken, addPendingNote]
+    [replaceTriggerToken, addPendingNote, observeHint]
+  )
+
+  const handlePreviewNote = useCallback(
+    (id: string) => {
+      setPreviewNoteId(id)
+      observeHint('note-previewed')
+    },
+    [observeHint]
   )
 
   const handleRemovePendingNote = useCallback(
@@ -655,6 +687,38 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       removePendingNote(id)
     },
     [pendingExpansionNoteId, removePendingNote]
+  )
+
+  /**
+   * `[+]`-menu equivalents of the keyboard triggers. Each mouse-driven pick is
+   * a teachable moment for the shortcut that does the same thing, so the menu
+   * callbacks are wrapped rather than passed through.
+   */
+  const handleToggleCapability = useCallback(
+    (id: string) => {
+      observeHint('capability-picked-via-menu')
+      toggleCapability(id)
+    },
+    [toggleCapability, observeHint]
+  )
+
+  const hintedModeMenu = useMemo<PlusModeMenu | undefined>(() => {
+    if (!chatModeMenu) return undefined
+    return {
+      ...chatModeMenu,
+      onSelectMode: (mode) => {
+        if (mode) observeHint('mode-picked-via-menu')
+        chatModeMenu.onSelectMode(mode)
+      }
+    }
+  }, [chatModeMenu, observeHint])
+
+  const handleTildeSelect = useCallback(
+    (mode: ChatModeData) => {
+      observeHint('mode-picked-via-tilde')
+      tildeModePopup?.onSelect(mode)
+    },
+    [tildeModePopup, observeHint]
   )
 
   const handleSend = useCallback(async () => {
@@ -676,6 +740,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       removePendingNote(expandId)
       try {
         const note = await fetchNote(expandId)
+        observeHint('note-expanded-inline')
         setInput(note.body)
         requestAnimationFrame(() => {
           const el = textareaRef.current
@@ -782,7 +847,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     clearPendingNotes,
     pendingExpansionNoteId,
     removePendingNote,
-    fetchNote
+    fetchNote,
+    observeHint
   ])
 
   const handleCancel = useCallback(() => {
@@ -825,7 +891,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
         const mode = tildeModePopup.modes[tildeIndex]
-        if (mode) tildeModePopup.onSelect(mode)
+        if (mode) handleTildeSelect(mode)
         return
       }
       if (e.key === 'Escape') {
@@ -880,9 +946,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       const now = Date.now()
       if (now - lastEscapeAt.current <= DOUBLE_ESC_WINDOW_MS) {
         lastEscapeAt.current = 0
+        observeHint('double-escape')
         onDoubleEscape()
       } else {
         lastEscapeAt.current = now
+        // A lone ESC is the half-gesture — the hint that completes it is only
+        // useful in the 400 ms before the chord window lapses.
+        observeHint('escape-pressed-once')
       }
       return
     }
@@ -938,6 +1008,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       if (triggerChar) closeTrigger()
       return
     }
+
+    // Opening (not merely filtering) the note picker — fire once on the
+    // transition, not on every keystroke that narrows the list.
+    if (token.char === '?' && triggerChar !== '?') observeHint('note-picker-opened')
 
     setTriggerChar(token.char)
     setTriggerFilter(token.filter)
@@ -1006,7 +1080,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         <MentionPopup<ChatModeData>
           items={tildeModePopup.modes}
           selectedIndex={tildeIndex}
-          onSelect={tildeModePopup.onSelect}
+          onSelect={handleTildeSelect}
           onClose={tildeModePopup.onCancel}
           listboxId={`${listboxId}-tilde-modes`}
           anchorRef={textareaRef}
@@ -1075,7 +1149,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <NoteBadgeList
               notes={pendingNotes}
               onRemove={handleRemovePendingNote}
-              onPreview={setPreviewNoteId}
+              onPreview={handlePreviewNote}
               align="right"
             />
           </div>
@@ -1114,7 +1188,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         activeFirst
         items={capabilityItems}
         selectedIds={selectedCapabilityIds}
-        onToggle={toggleCapability}
+        onToggle={handleToggleCapability}
         catalogItems={catalogItems}
         installingBundleId={installingBundleId}
         onInstallCatalog={installCatalogBundle}
@@ -1130,13 +1204,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             canAttachFiles={canShowAttachButton && !isStreaming}
             uploading={isUploading}
             onAttachFiles={() => {
+              observeHint('files-picked-via-menu')
               // Return focus to the composer after the file dialog closes so the
               // user can keep typing without re-clicking the input.
               void pickAttachments().finally(focusComposer)
             }}
             hasCapabilities={hasCapabilities || catalogItems.length > 0}
             onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
-            modeMenu={chatModeMenu}
+            modeMenu={hintedModeMenu}
             activeModeColor={modeColor ? { border: modeColor.border } : null}
           />
           {chatId && boundAgent ? (

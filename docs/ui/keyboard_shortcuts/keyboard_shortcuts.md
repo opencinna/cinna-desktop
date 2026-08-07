@@ -76,6 +76,7 @@ Typing `~` into an empty input opens the chat-modes picker above the textarea (s
 - **Double-press windows use a ref, not state.** Chord timestamps (`lastEscapeAt`) are tracked in a `useRef` so consecutive presses don't trigger re-renders. The window length is 400 ms — short enough to avoid accidental triggers, long enough to survive a casual double-tap.
 - **Popup keys take priority.** When a chat-input popup is open, `Esc` closes the popup and resets the double-ESC timer to 0. This prevents the sequence "popup Esc → typing delay → stray Esc" from accidentally firing a reset.
 - **Shortcuts are not user-configurable.** There is no remapping UI; any change requires editing the relevant handler. Document new shortcuts in this file when adding them.
+- **Shortcuts are surfaced in-product by [Hints](../hints/hints.md).** The hint catalog (`src/renderer/src/constants/hints.ts`) is documentation shipped inside the UI. Changing a binding below means checking whether a hint teaches it — a stale hint is worse than no hint. Hints exist today for `?`, the `?`-then-Enter note expansion, `#`, `/`, `@`, `~`, the picker navigation keys, `Shift`+`Enter`, double-ESC, and `⌘`/`⌃` + `` ` ``.
 - **Modifier disambiguation.** Use `CommandOrControl` in Electron menu accelerators so bindings work on both macOS (`⌘`) and Linux/Windows (`⌃`). Context shortcuts that rely on raw DOM events should generally avoid modifier keys to keep behaviour predictable on every platform.
 
 ## Architecture Overview
@@ -107,4 +108,5 @@ Chord shortcut
 - [Messaging](../../chat/messaging/messaging.md) — `Enter` / `Shift+Enter` send/newline behaviour is part of the chat input.
 - [Example Prompts](../../chat/example_prompts/example_prompts.md) — `#` trigger + popup navigation keys.
 - [CLI Commands](../../chat/cli_commands/cli_commands.md) — `/` trigger that opens the per-agent command picker.
+- [Hints](../hints/hints.md) — Surfaces the shortcuts in this registry as rotating tips on the new-chat screen; its catalog must stay in sync with this file.
 - [Settings](../settings/settings.md) — Houses the `ChatModeCard` `Enter`-to-commit behaviour and the logger enable toggle that gates `⌘` `.
