@@ -176,6 +176,13 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
    */
   const [refreshingIds, setRefreshingIds] = useState<ReadonlySet<string>>(new Set())
   const refreshAgent = (agentId: string): void => {
+    // Deliberately untested, and shielded: `disabled={refreshing}` on both
+    // cards' buttons already swallows a second click, so deleting this line
+    // fails nothing — a mutation confirmed it. It stays because the shield is
+    // the *caller's* choice: any future call site that renders its own control
+    // and forgets `refreshing` would otherwise start a concurrent run whose
+    // turn-lock refusal comes back as `{success: true}`. Cheap belt to a brace
+    // that lives somewhere else.
     if (refreshingIds.has(agentId)) return
     setRefreshingIds((prev) => new Set(prev).add(agentId))
     // `mutateAsync`, not `mutate` with a per-call `onSettled`. A `useMutation`

@@ -265,20 +265,27 @@ describe('AgentStatusOverlay — the per-card Refresh', () => {
     await waitFor(() => expect((buttons[0] as HTMLButtonElement).disabled).toBe(false))
   })
 
-  it('ignores a second click on an agent that is already refreshing', async () => {
+  it('will not start a second run on an agent that is already refreshing', async () => {
+    // Named for what it actually proves. An earlier version of this test clicked
+    // twice and asserted one call — and the `if (refreshingIds.has(agentId))
+    // return` guard **survived being deleted**, because `disabled={refreshing}`
+    // already swallows the second click, so the test could not distinguish the
+    // guard from its absence. What is observable, and what actually stops the
+    // second run, is the button going disabled; the guard is a second mechanism
+    // behind it (see the note in `AgentStatusOverlay.tsx`).
     setApi({ success: true, items: [folderRow], remoteError: null })
     get.mockImplementation(() => new Promise(() => {}))
 
     render(createElement(AgentStatusOverlay), { wrapper })
     expect(await screen.findByText('Alpha')).toBeTruthy()
 
-    const button = screen.getAllByTitle(/status refresh command/i)[0]
-    fireEvent.click(button)
-    await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+    const button = screen.getAllByTitle(/status refresh command/i)[0] as HTMLButtonElement
     fireEvent.click(button)
     // A second run would be refused by the agent's turn lock, swallowed as
     // `busy`, and returned as `{success: true}` — a click that looks like it
-    // worked and did nothing.
+    // worked and did nothing. The button is what prevents it.
+    await waitFor(() => expect(button.disabled).toBe(true))
+    fireEvent.click(button)
     expect(get).toHaveBeenCalledTimes(1)
   })
 
