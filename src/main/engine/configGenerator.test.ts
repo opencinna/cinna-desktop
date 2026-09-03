@@ -80,12 +80,20 @@ function input(overrides: Partial<EngineConfigInput> = {}): EngineConfigInput {
 }
 
 describe('buildEngineConfig', () => {
-  it('puts an {env:…} reference in the config and the key only in the environment', () => {
+  it('names the key’s environment variable in the config and puts the key only in the environment', () => {
     const built = buildEngineConfig(input())
     const serialised = JSON.stringify(built.config)
 
     expect(serialised).not.toContain(ANTHROPIC_KEY)
-    expect(serialised).toContain(`{env:${credentialEnvName('prov-anthropic')}}`)
+    // **`env: [NAME]`, not `options.apiKey: "{env:NAME}"`.** The engine's v2
+    // config reader substitutes nothing, so the placeholder form is sent to the
+    // provider as the key itself and every request 401s; the `env` form makes
+    // the variable an integration connection the session runner resolves.
+    // Mutation: put the key back behind `options.apiKey` → this fails.
+    expect(
+      (built.config.provider as Record<string, Record<string, unknown>>).anthropic.env
+    ).toEqual([credentialEnvName('prov-anthropic')])
+    expect(serialised).not.toContain('{env:')
     expect(built.env[credentialEnvName('prov-anthropic')]).toBe(ANTHROPIC_KEY)
   })
 
@@ -154,16 +162,21 @@ describe('buildEngineConfig', () => {
     const key = built.providerKeys.get('gw') as string
     const entry = (built.config.provider as Record<string, Record<string, unknown>>)[key]
     expect((entry.options as Record<string, unknown>).baseURL).toBe('https://gw.example.com/v1')
-    expect((entry.options as Record<string, unknown>).apiKey).toBe(`{env:${credentialEnvName('gw')}}`)
+    expect(entry.env).toEqual([credentialEnvName('gw')])
+    expect(Object.hasOwn(entry.options as object, 'apiKey')).toBe(false)
     expect(entry.npm).toBe('@ai-sdk/openai-compatible')
     expect(entry.models).toEqual({ 'gpt-4o': { name: 'GPT-4o' } })
     expect(JSON.stringify(built.config)).not.toContain('gw-secret-value')
   })
 
-  it('does not put a baseURL on a canonical provider that has none', () => {
+  it('does not put an options block on a canonical provider that has no baseURL', () => {
+    // `options` exists only to carry a gateway's `baseURL`. An empty one is not
+    // merely untidy: the engine's v1→v2 config migration only builds a
+    // `request` block for an entry that *has* options, so an empty object is a
+    // shape the engine reads differently from no object at all.
     const built = buildEngineConfig(input({ agents: [] }))
     const entry = (built.config.provider as Record<string, Record<string, unknown>>).anthropic
-    expect(Object.hasOwn(entry.options as object, 'baseURL')).toBe(false)
+    expect(Object.hasOwn(entry, 'options')).toBe(false)
   })
 
   it('maps gemini onto OpenCode’s `google` provider key', () => {
@@ -225,7 +238,13 @@ describe('buildEngineConfig', () => {
     expect(key).toBe(engineAgentKey(agentId, 'invoices'))
     const entry = (built.config.agent as Record<string, Record<string, unknown>>)[key]
     expect(entry.model).toBe('anthropic/claude-sonnet-4-5')
-    expect(entry.prompt).toBe(`{file:./prompts/${key}.md}`)
+    // **The prompt text, not a `{file:…}` reference to it.** The engine's v2
+    // config reader resolves no file references: watched at a probe server the
+    // engine was pointed at, the literal `{file:./prompts/<key>.md}` arrived as
+    // the system prompt while the file's own text never did. Mutation: emit
+    // `{file:./prompts/<key>.md}` → fails.
+    expect(entry.prompt).toContain('You are the invoice agent.')
+    expect(entry.prompt).not.toContain('{file:')
     expect(built.prompts.get(key)).toContain('You are the invoice agent.')
 
     // **The same pair again, split.** The config file spells a model

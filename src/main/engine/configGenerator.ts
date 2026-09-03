@@ -7,21 +7,43 @@
  * home belongs to the user: an assistant may have it open, it is very often a
  * git repository, and Invariant 2 says exactly one file inside an agent folder
  * is the desktop's (`app-data/desktop.json`). The engine is pointed at our copy
- * with `OPENCODE_CONFIG`, and the generated per-agent prompt files sit beside
- * it, referenced as `{file:./prompts/<key>.md}` — a path OpenCode resolves
- * relative to the config file, so the whole generated set moves together.
+ * with `OPENCODE_CONFIG_DIR` — see {@link engineManager} for why that variable
+ * and not `OPENCODE_CONFIG` — and the generated per-agent prompt files sit
+ * beside it.
  *
- * **A key is never written into the config.** Every provider's key is emitted as
- * an `{env:CINNA_ENGINE_KEY_…}` reference and the value is handed to the engine
- * process as an environment variable (Invariant 4). This is not cosmetic: the
- * config file sits in the app data directory at rest, gets read by anything
- * that can read the user's home, and would otherwise be a plaintext copy of
- * every credential in the app — the thing `safeStorage` exists to prevent.
+ * **A key is never written into the config.** Every provider entry names the
+ * *environment variable* its key travels in (`env: ["CINNA_ENGINE_KEY_…"]`) and
+ * the value is handed to the engine process as an environment variable
+ * (Invariant 4). This is not cosmetic: the config file sits in the app data
+ * directory at rest, gets read by anything that can read the user's home, and
+ * would otherwise be a plaintext copy of every credential in the app — the
+ * thing `safeStorage` exists to prevent.
  *
- * A consequence worth knowing before Phase 6 goes near it: OpenCode's `/config`
- * endpoint returns the **resolved** configuration, with `{env:…}` already
- * substituted. That response therefore contains live API keys. It must never be
- * logged, echoed into a stream part, or forwarded to the renderer.
+ * ## Two shapes that look like style and are not
+ *
+ * The engine has **two config readers**, and only the newer one decides what a
+ * session can run on. The v1 reader resolves `{env:…}` and `{file:…}`
+ * placeholders; the v2 reader — the one behind `model.available()`, `GET
+ * /api/model` and `GET /api/agent` — parses the JSON and substitutes **nothing**
+ * (verified against 1.18.27 on 3 Sep 2026, `opencode_contract.md` §9.5). So:
+ *
+ * - `options: {apiKey: "{env:NAME}"}` reaches the v2 catalog as the literal
+ *   nine-character string `{env:NAME}` and is sent to the provider as the key.
+ *   `env: ["NAME"]` instead registers an *integration connection* the runner
+ *   resolves from the process environment — watched end to end, as
+ *   `Authorization: Bearer <the value>` arriving at a probe server.
+ * - `prompt: "{file:./prompts/<key>.md}"` arrives at the model **as those 34
+ *   characters**, in place of the system prompt — watched at a probe server the
+ *   engine was pointed at. The agent then has no instructions and one line of
+ *   noise where they should be. The text is therefore inlined into the entry.
+ *   The prompt file is still written beside the config — it is what the user's
+ *   own assistant reads when it opens the folder — but the engine no longer
+ *   reads it.
+ *
+ * A consequence worth knowing: OpenCode's v1 `/config` endpoint returns the
+ * **resolved** configuration. Nothing we emit carries a key any more, but that
+ * response can still carry one substituted from the user's own config, so it
+ * must never be logged, echoed into a stream part, or forwarded to the renderer.
  */
 
 import { createHash } from 'node:crypto'
@@ -248,11 +270,6 @@ export function engineAgentKey(agentId: string, slug: string): string {
   return `${readable}-${shortHash(agentId)}`
 }
 
-/** The prompt file an agent entry points at, relative to the config file. */
-export function promptFileRef(agentKey: string): string {
-  return `{file:./prompts/${agentKey}.md}`
-}
-
 /**
  * Build the config, the credential environment and the key maps.
  *
@@ -305,10 +322,15 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     const envName = credentialEnvName(provider.id)
     env[envName] = provider.apiKey
 
-    const options: Record<string, unknown> = { apiKey: `{env:${envName}}` }
-    if (provider.baseUrl) options.baseURL = provider.baseUrl
-
-    const entry: Record<string, unknown> = { options }
+    // **`env`, not `options.apiKey`.** The engine's v2 config reader performs no
+    // `{env:…}` substitution, so an `options.apiKey` of `"{env:NAME}"` is sent
+    // to the provider verbatim and every request 401s. Naming the variable here
+    // instead registers an integration whose connection the session runner
+    // resolves out of the process environment — for a canonical key and for a
+    // custom entry alike, which is what the desktop needs since it has to carry
+    // a second credential of the same type.
+    const entry: Record<string, unknown> = { env: [envName] }
+    if (provider.baseUrl) entry.options = { baseURL: provider.baseUrl }
     if (!useCanonical) {
       // A custom key gets no models.dev catalog, so it has to declare both the
       // package that implements it and every model it can address.
@@ -351,7 +373,10 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       description: agent.description || `The ${agent.slug} agent.`,
       mode: 'primary',
       model: `${providerKey}/${agent.modelId}`,
-      prompt: promptFileRef(key),
+      // Inline, not `{file:./prompts/<key>.md}`: the v2 reader resolves no file
+      // reference, and the placeholder itself is what the model receives as its
+      // system prompt. See the header.
+      prompt: agent.prompt,
       permission: mergePermissions(agent.permissions)
     }
   }

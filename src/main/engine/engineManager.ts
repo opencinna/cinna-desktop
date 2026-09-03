@@ -101,6 +101,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { dirname } from 'node:path'
 import { app } from 'electron'
 import { createLogger } from '../logger/logger'
 import { getShellEnv, shellEnvForChild } from '../shell/env'
@@ -303,6 +304,20 @@ async function engineEnv(
     ...base,
     // Our generated config, in the app data dir — never the agents home.
     OPENCODE_CONFIG: configPath,
+    // **And the same directory again, under the variable the engine's *other*
+    // config reader honours.** `OPENCODE_CONFIG` is read only by the v1 loader.
+    // The v2 loader — the one behind `model.available()`, and therefore behind
+    // every session's model resolution — builds its document set from the
+    // global config *directory* plus a walk up from the session's own
+    // `location.directory`, and consults `OPENCODE_CONFIG` nowhere. A folder
+    // agent's session is located in the user's folder, which our config is
+    // deliberately nowhere near (Invariant 2), so without this variable the
+    // engine loaded our providers for its v1 surface and resolved every turn
+    // against a catalog that had never heard of them: `ModelUnavailableError`,
+    // reported on no event at all, so the turn hangs to its ceiling. Verified
+    // as the single sufficient variable on 3 Sep 2026 — see
+    // `opencode_contract.md` §9.5.
+    OPENCODE_CONFIG_DIR: dirname(configPath),
     // Without a password the server is unsecured, and it is a loopback server
     // that can run bash: any process on this machine could drive it. Fresh per
     // start, never written to disk, never logged, never sent to the renderer.

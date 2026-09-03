@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EngineConfigInput } from './configGenerator'
+import { credentialEnvName, type EngineConfigInput } from './configGenerator'
 
 /**
  * Turning this desktop's state into the engine's config input.
@@ -455,8 +455,9 @@ describe('a decrypted key, from the keystore to disk', () => {
     const written = writeEngineConfig(dir, built)
 
     // In the environment handed to spawn, by name — this is the whole point of
-    // the `{env:…}` indirection, and a generator that inlined the key instead
-    // would still satisfy "the engine can authenticate".
+    // naming the variable rather than carrying a value, and a generator that
+    // inlined the key instead would still satisfy "the engine can
+    // authenticate".
     expect(Object.values(built.env)).toContain(SECRET)
     expect(Object.values(built.env)).toContain(GATEWAY_SECRET)
     // The custom entry really is in this config, or the sweep below proves
@@ -478,7 +479,14 @@ describe('a decrypted key, from the keystore to disk', () => {
       expect(text, name).not.toContain(SECRET)
       expect(text, name).not.toContain(GATEWAY_SECRET)
     }
-    expect(readFileSync(written.configPath, 'utf8')).toContain('{env:')
+    // The indirection is still *there* — a generator that simply dropped the
+    // credential would also pass the sweep above. It is now the variable's
+    // name in an `env` array rather than an `{env:…}` placeholder, because the
+    // engine's v2 config reader substitutes nothing and would have sent the
+    // placeholder itself as the key.
+    const onDisk = readFileSync(written.configPath, 'utf8')
+    expect(onDisk).toContain(`"${credentialEnvName('p1')}"`)
+    expect(onDisk).not.toContain('{env:')
   })
 
   it('leaves no temp file behind, so the config directory is only ever complete files', () => {

@@ -479,6 +479,7 @@ describe('engineManager', () => {
       new Set([
         ...passedThrough,
         'OPENCODE_CONFIG',
+        'OPENCODE_CONFIG_DIR',
         'OPENCODE_SERVER_PASSWORD',
         'OPENCODE_SERVER_USERNAME',
         'OPENCODE_DISABLE_AUTOUPDATE',
@@ -492,7 +493,16 @@ describe('engineManager', () => {
     await engineManager.ensureRunning('user-1')
     const [env] = envDumps()
     expect(env.OPENCODE_CONFIG).toBe(join(userData, 'engine', 'opencode.json'))
-    // And the key is not in it — the config carries an `{env:…}` reference.
+    // **And the directory, which is the variable that actually decides what a
+    // session can run on.** `OPENCODE_CONFIG` is read by the engine's v1
+    // loader only; the v2 loader — the one behind model resolution — takes the
+    // global config *directory* and a walk up from the session's own location,
+    // and a folder agent's session is located in the user's folder, nowhere
+    // near ours. Mutation: drop `OPENCODE_CONFIG_DIR` from `engineEnv` → this
+    // fails, and in production every turn resolves `ModelUnavailableError` and
+    // hangs, because that error is reported on no event at all.
+    expect(env.OPENCODE_CONFIG_DIR).toBe(join(userData, 'engine'))
+    // And the key is not in it — the config names the variable, not the value.
     expect(readFileSync(env.OPENCODE_CONFIG, 'utf8')).not.toContain('sk-ant-THE-SECRET')
   })
 
