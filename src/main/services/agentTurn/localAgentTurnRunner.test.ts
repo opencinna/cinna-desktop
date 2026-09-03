@@ -828,6 +828,42 @@ describe('LocalAgentTurnRunner', () => {
     expect(result.error).toBeUndefined()
   })
 
+  it('gives up the readiness wait the moment the user stops the turn', async () => {
+    // **The wait happens inside the per-agent lock**, and `turnLock.anyHeld()`
+    // blocks every engine reconcile while any lock is held — so a stop pressed
+    // during a cold start used to hold the whole app's engine still for the
+    // rest of `ENGINE_READY_MS` with nothing to show for it. `realLock` so the
+    // release is the real one and not the pass-through.
+    //
+    // The bound is **below one poll interval**, deliberately. At anything above
+    // `ENGINE_READY_POLL_MS` the assertion passes against a plain `setTimeout`
+    // too — the loop's own top-of-iteration abort check catches it one tick
+    // later — and the test would read as if it pinned the early wake while
+    // pinning nothing. Measured at ~1 s with a plain sleep; a few ms without.
+    const engine = fakeEngine({
+      'GET /api/model': () => new Response(JSON.stringify({ data: [] }), { status: 200 })
+    })
+    const controller = new AbortController()
+    const h = harness({ engine, realLock: true, engineReadyMs: 30_000 })
+    const started = Date.now()
+    const run = h.runner.runTurn(h.input({ signal: controller.signal }))
+    await settle()
+    controller.abort()
+    const result = await run
+
+    expect(Date.now() - started).toBeLessThan(500)
+    // A stop is not an error. The mid-turn abort path returns parts with no
+    // `error` field, and this one has no parts to return; reporting "the engine
+    // has no such model" for something the user did on purpose would be worse
+    // than saying nothing.
+    expect(result.error).toBeUndefined()
+    expect(result.parts).toEqual([])
+    // And the lock is genuinely back, so the next turn — and every engine
+    // reconcile — can proceed.
+    expect(turnLock.isLocked('folder:abc')).toBe(false)
+    expect(paths(h)).not.toContain('POST /api/session')
+  })
+
   it('refuses when the running engine has no key for this agent', async () => {
     const h = harness({ agentKey: null })
     const result = await h.runner.runTurn(h.input())
@@ -1190,6 +1226,7 @@ describe('LocalAgentTurnRunner', () => {
  * | delete the `awaitEngineReady` call in `stream()` | fails the turn when the engine never gets the model… (hangs to the ceiling) |
  * | check only the model and not the agent in `awaitEngineReady` | fails the turn when the engine never loads the agent… |
  * | treat an unreadable readiness probe as "not ready" | runs the turn anyway when the readiness probe itself cannot be read |
+ * | drop the `signal` from `awaitEngineReady` / plain `setTimeout` | gives up the readiness wait the moment the user stops the turn |
  * | delete the returned-session-id validation in `openSession` | refuses when the engine answers a session create with no usable id |
  * | delete `unsubscribe()` from `stream()`'s `finally` | releases its bus subscription when the turn ends |
  * | `after === null ? '' : …` → `?after=${after}` in `replayDurable` | replays the whole durable stream when the socket dies before any cursor exists |

@@ -141,6 +141,26 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
   return { text: '', parts: [], notices: [], error: { message, raw: raw ?? message } }
 }
 
+/**
+ * Sleep, or wake early when the turn is aborted.
+ *
+ * The listener is removed on both exits. A poll loop that added one per
+ * iteration and never removed it would leak a listener per second onto a signal
+ * that outlives the loop, and `AbortSignal` warns about exactly that at ten.
+ */
+function sleepUnlessAborted(ms: number, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.resolve()
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer)
+      signal.removeEventListener('abort', done)
+      resolve()
+    }
+    const timer = setTimeout(done, ms)
+    signal.addEventListener('abort', done, { once: true })
+  })
+}
+
 export class LocalAgentTurnRunner implements AgentTurnRunner {
   constructor(private readonly deps: LocalTurnDeps) {}
 
@@ -219,7 +239,16 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
   }): Promise<RunAgentTurnResult> {
     const { agent, agentKey, model, signal, wireContent, chatId, agentId } = ctx
 
-    const notReady = await this.awaitEngineReady(agent.name, agent.path, agentKey, model)
+    const notReady = await this.awaitEngineReady(agent.name, agent.path, agentKey, model, signal)
+    // **Abort is checked first, and that order is the point.** A stop that
+    // lands on the last poll would otherwise be reported to the user as "the
+    // engine has no such model" — an error message for something they did on
+    // purpose. An aborted turn is not an error anywhere else in this file
+    // either: the mid-turn path returns parts with no `error` field.
+    if (signal.aborted) {
+      logger.info('the turn was stopped while the engine was still coming up', { agentId })
+      return { text: '', parts: [], notices: [] }
+    }
     if (notReady) {
       logger.warn('the engine never became ready for this turn', { agentId, agentKey, model })
       return fail(notReady)
@@ -538,17 +567,26 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
    * fresh folder still went out **with no system prompt**; with the probe
    * scoped, the same first turn carried it. The probe is therefore also what
    * warms the location.
+   *
+   * **It gives up the moment the turn is aborted.** The wait happens inside the
+   * per-agent lock, and `turnLock.anyHeld()` blocks every engine reconcile, so
+   * a user who presses stop during a cold start would otherwise hold the whole
+   * app's engine still for the rest of the window with nothing to show for it.
+   * The caller distinguishes the two exits by reading the signal itself, so
+   * this returns null on an abort — "nothing to report" rather than a reason.
    */
   private async awaitEngineReady(
     agentName: string,
     directory: string,
     agentKey: string,
-    model: EngineModelRef | null
+    model: EngineModelRef | null,
+    signal: AbortSignal
   ): Promise<string | null> {
     const at = `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
     const deadline = Date.now() + (this.deps.engineReadyMs ?? ENGINE_READY_MS)
     let missing: string | null = null
     for (;;) {
+      if (signal.aborted) return null
       const agents = await this.readList(`/api/agent${at}`)
       if (agents === null) return null
       if (agents.some((entry) => entry.id === agentKey)) {
@@ -561,7 +599,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         missing = `“${agentName}” is not loaded in the local engine yet. Try again in a moment.`
       }
       if (Date.now() + ENGINE_READY_POLL_MS >= deadline) return missing
-      await new Promise((resolve) => setTimeout(resolve, ENGINE_READY_POLL_MS))
+      await sleepUnlessAborted(ENGINE_READY_POLL_MS, signal)
     }
   }
 
