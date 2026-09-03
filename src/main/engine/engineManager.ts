@@ -1,0 +1,663 @@
+/**
+ * The one desktop-managed `opencode serve` process.
+ *
+ * Owns the whole lifecycle: resolve a binary, generate the config, pick a
+ * loopback port, spawn, health-check, restart when the config changes, stop on
+ * quit — and expose a state the readiness strip can render. Every transition is
+ * logged through the scoped logger, because the failures here are all
+ * *invisible* ones: a port that got taken, a process that died between two
+ * turns, a start that was still running when the app quit.
+ *
+ * ## Four situations this is written around
+ *
+ * **The port dying under us.** OpenCode's `--port 0` does *not* mean "any free
+ * port" — verified against v1.18.27, it falls back to the default 4096, which
+ * collides with any `opencode serve` the user is already running. Re-checked
+ * against the real binary on 3 Sep 2026: the second instance does **not** fail
+ * on the collision. It comes up on an unpredictable OS-assigned port instead —
+ * so a collision is silent rather than loud, and an engine we did not intend to
+ * talk to is reachable at an address we would never guess. (An earlier note
+ * here said the second instance dies on a SQLite `CREATE TABLE`; that did not
+ * reproduce, though the check shared one config and data directory and did not
+ * capture the engine's own logs, so a logged error may still exist.)
+ *
+ * So the port is chosen here: bind a throwaway server to `127.0.0.1:0`, read
+ * the port the OS gave it, close, and pass that. There is an unavoidable race
+ * between closing and spawning, so a start that fails its health check is
+ * retried on a fresh port.
+ *
+ * **The process exiting unexpectedly.** A crash, an OOM kill, a user killing it
+ * from Activity Monitor. The `exit` handler moves the state to `failed` with
+ * the exit code, so the next caller starts a new one rather than talking to a
+ * closed socket — the state is not repaired by polling, because nothing polls.
+ *
+ * **`start` called twice concurrently.** Two chats opening at once, or a start
+ * racing a config change. One in-flight promise serves every caller; the second
+ * caller never spawns a second engine.
+ *
+ * **The app quitting mid-start.** `stop()` sets a flag that the start path
+ * checks at each step and honours by killing whatever it just created. A
+ * download in flight is not interrupted — it is up to 50 MB and interrupting it
+ * saves nothing — but the process it would have spawned is never spawned.
+ *
+ * ## The engine's environment, and why it is narrow
+ *
+ * The engine gets **the same narrowed environment a third-party stdio MCP
+ * server gets** — `shellEnvForChild` over the login-shell environment — plus an
+ * explicit, enumerated set of variables we add ourselves.
+ *
+ * The instinct is that this should be looser: the engine is our own binary, not
+ * a third party, and `envMerge`'s reasoning is about not widening the blast
+ * radius of the user's shell secrets to code we did not write. But the thing
+ * that *runs inside* the engine is a language model with a bash tool, driven by
+ * whatever text arrives in a conversation, and its output goes on screen and
+ * into the database. A shell environment handed to it is one prompt injection
+ * away from being read aloud. `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `AWS_*`
+ * live in exactly the `.zshrc` this app is deliberately sourcing, so the
+ * narrowing applies with *more* force here than it does for an MCP server,
+ * whose tools at least have fixed schemas.
+ *
+ * It also costs nothing. Every credential the engine legitimately needs is
+ * injected here by name, decrypted from our own keystore; the agent's own
+ * secrets stay in `credentials/.env` where its scripts read them. The login
+ * shell is being consulted for `PATH` — so `uv`, `make` and `python` resolve —
+ * and for nothing else.
+ */
+
+import { spawn, type ChildProcess } from 'node:child_process'
+import { randomBytes } from 'node:crypto'
+import { mkdirSync } from 'node:fs'
+import { createServer } from 'node:net'
+import { app } from 'electron'
+import { createLogger } from '../logger/logger'
+import { getShellEnv, shellEnvForChild } from '../shell/env'
+import { turnLock } from '../services/localAgents/turnLock'
+import { appSettingsRepo } from '../db/appSettings'
+import {
+  engineRootDir,
+  realBinaryResolverDeps,
+  resolveEngineBinaryWith,
+  type ResolvedEngineBinary
+} from './binaryResolver'
+import { buildEngineConfig, writeEngineConfig, type WrittenEngineConfig } from './configGenerator'
+import { collectEngineConfigInput } from './engineConfigSource'
+import type { EngineSkips, EngineState } from '../../shared/engine'
+
+const logger = createLogger('engine')
+
+/**
+ * The clock this module runs on.
+ *
+ * A mutable object rather than four `const`s so a test can shorten the health
+ * window: the "server answers but is never healthy" path costs
+ * `attempts × healthMs` by definition, and at the shipping value that is a
+ * ninety-second test — long enough that it would be deleted, which is how a
+ * failure path ends up with no coverage at all. Production never writes to it.
+ */
+export const ENGINE_TIMEOUTS = {
+  /** How long a spawned engine has to answer its health check. */
+  healthMs: 45_000,
+  /** Gap between health probes while waiting for a fresh process to come up. */
+  pollMs: 250,
+  /** Ceiling on one health request, so a wedged socket cannot stall the poll. */
+  requestMs: 3_000,
+  /** How long a stopping process gets before SIGKILL. */
+  stopGraceMs: 3_000
+}
+
+/** Starts to attempt before giving up. A second try covers a lost port race. */
+const START_ATTEMPTS = 2
+
+/** Stderr kept for the failure message. Enough to be useful, small enough to log. */
+const STDERR_KEEP = 4_000
+
+/**
+ * The Basic-auth username OpenCode expects. Its own default, hard-coded rather
+ * than left unset so the credential pair is visible in one place.
+ */
+const ENGINE_USERNAME = 'opencode'
+
+interface RunningEngine {
+  child: ChildProcess
+  baseUrl: string
+  authHeader: string
+  port: number
+}
+
+let state: EngineState = {
+  status: 'stopped',
+  version: null,
+  binarySource: null,
+  binaryPath: null,
+  pid: null,
+  error: null,
+  changedAt: Date.now()
+}
+
+let running: RunningEngine | null = null
+let startInFlight: Promise<EngineState> | null = null
+let stopRequested = false
+let lastConfig: WrittenEngineConfig | null = null
+/** Cached across starts: resolving the binary can mean a 50 MB download. */
+let binary: ResolvedEngineBinary | null = null
+/**
+ * The Settings value {@link binary} was resolved against.
+ *
+ * Without this the cache is wrong the moment the user edits the engine path:
+ * they would keep running the old binary until the app restarted, and the
+ * Settings field would silently describe something that is not what is running.
+ */
+let binaryResolvedFor: string | null = null
+/**
+ * A config change that has been written but not yet loaded, because applying it
+ * would have restarted the engine underneath a streaming turn.
+ *
+ * See {@link engineManager.applyConfigChange} for why deferring is the only
+ * correct answer, and {@link engineManager.ensureRunning} for where the debt is
+ * paid off.
+ */
+let configRestartDeferred = false
+/**
+ * The reconcile {@link engineManager.ensureRunning} runs when the engine is
+ * already up, shared between concurrent callers.
+ *
+ * Two chats opening at once would otherwise each regenerate, and the second
+ * would compare against bytes the first had already written — reporting no
+ * change while the first was still stopping, and handing back a state that
+ * says stopped for an engine that is coming back up.
+ */
+let reconcileInFlight: Promise<EngineState> | null = null
+
+const listeners = new Set<(next: EngineState) => void>()
+
+function setState(patch: Partial<EngineState>): void {
+  const next = { ...state, ...patch, changedAt: Date.now() }
+  const changed = (Object.keys(patch) as (keyof EngineState)[]).some(
+    (key) => state[key] !== next[key]
+  )
+  state = next
+  if (!changed) return
+  logger.info('engine state', {
+    status: next.status,
+    source: next.binarySource,
+    version: next.version,
+    pid: next.pid,
+    error: next.error
+  })
+  for (const listener of listeners) {
+    try {
+      listener(next)
+    } catch (err) {
+      logger.warn('an engine state listener threw', { error: String(err) })
+    }
+  }
+}
+
+/**
+ * A free loopback port, from the OS.
+ *
+ * Closing the probe server before spawning leaves a window in which something
+ * else can take the port. That is unavoidable without handing the child a
+ * listening socket, which `opencode serve` has no way to accept — so the window
+ * is made harmless instead: a start that loses the race fails its health check
+ * and {@link ensureRunning} retries on a fresh port.
+ */
+function pickLoopbackPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const probe = createServer()
+    probe.once('error', reject)
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      probe.close(() => (port > 0 ? resolve(port) : reject(new Error('no port available'))))
+    })
+  })
+}
+
+/** The engine path in Settings, or null for "resolve one for me". */
+function configuredBinaryPath(): string | null {
+  const value = appSettingsRepo.get('localAgentsEnginePath')
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+/**
+ * The child's environment: the narrowed shell environment, plus exactly what
+ * the engine needs and nothing else. See the module comment for why it is
+ * narrow rather than inherited.
+ */
+async function engineEnv(
+  configPath: string,
+  password: string,
+  credentials: Record<string, string>
+): Promise<Record<string, string>> {
+  const base = shellEnvForChild(await getShellEnv())
+  return {
+    ...base,
+    // Our generated config, in the app data dir — never the agents home.
+    OPENCODE_CONFIG: configPath,
+    // Without a password the server is unsecured, and it is a loopback server
+    // that can run bash: any process on this machine could drive it. Fresh per
+    // start, never written to disk, never logged, never sent to the renderer.
+    OPENCODE_SERVER_PASSWORD: password,
+    OPENCODE_SERVER_USERNAME: ENGINE_USERNAME,
+    // We pin and verify the binary; an engine that replaces itself underneath
+    // that pin is exactly what the checksum exists to prevent.
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+    ...credentials
+  }
+}
+
+async function healthy(engine: RunningEngine): Promise<boolean> {
+  try {
+    const response = await fetch(`${engine.baseUrl}/api/health`, {
+      headers: { Authorization: engine.authHeader },
+      signal: AbortSignal.timeout(ENGINE_TIMEOUTS.requestMs)
+    })
+    if (!response.ok) return false
+    const body = (await response.json()) as { healthy?: unknown }
+    return body?.healthy === true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Wait for the engine to answer, or for its process to die.
+ *
+ * The dead-process check is the point. Without it a crashed engine is
+ * indistinguishable from a slow one and the caller waits the full timeout for a
+ * process that exited in the first 200 ms — which is exactly what a bad config
+ * or a taken port looks like.
+ */
+async function waitForHealth(engine: RunningEngine): Promise<boolean> {
+  const deadline = Date.now() + ENGINE_TIMEOUTS.healthMs
+  while (Date.now() < deadline) {
+    if (engine.child.exitCode !== null || engine.child.signalCode !== null) return false
+    if (stopRequested) return false
+    if (await healthy(engine)) return true
+    await new Promise((resolve) => setTimeout(resolve, ENGINE_TIMEOUTS.pollMs))
+  }
+  return false
+}
+
+function killEngine(engine: RunningEngine): void {
+  try {
+    engine.child.kill('SIGTERM')
+  } catch {
+    /* already gone */
+  }
+  const child = engine.child
+  setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill('SIGKILL')
+      } catch {
+        /* already gone */
+      }
+    }
+  }, ENGINE_TIMEOUTS.stopGraceMs).unref?.()
+}
+
+/** One spawn attempt. Resolves to a healthy engine, or null. */
+async function spawnAttempt(
+  binaryPath: string,
+  configPath: string,
+  credentials: Record<string, string>
+): Promise<RunningEngine | null> {
+  const port = await pickLoopbackPort()
+  const password = randomBytes(32).toString('hex')
+  const env = await engineEnv(configPath, password, credentials)
+  const root = engineRootDir()
+  mkdirSync(root, { recursive: true })
+
+  // Logged **before** the spawn, not after a successful one. The transition
+  // this module most needs a record of is an engine starting when nothing
+  // should have started one — during a quit, or behind a stop — and a line
+  // written only on success is exactly the line that would be missing then.
+  logger.info('spawning the engine', { port })
+
+  let child: ChildProcess
+  try {
+    child = spawn(binaryPath, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {
+      cwd: root,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+  } catch (err) {
+    logger.error('could not spawn the engine', { error: String(err) })
+    return null
+  }
+
+  const engine: RunningEngine = {
+    child,
+    port,
+    baseUrl: `http://127.0.0.1:${port}`,
+    authHeader: `Basic ${Buffer.from(`${ENGINE_USERNAME}:${password}`).toString('base64')}`
+  }
+
+  let stderr = ''
+  child.stderr?.setEncoding('utf8')
+  child.stderr?.on('data', (chunk: string) => {
+    stderr = `${stderr}${chunk}`.slice(-STDERR_KEEP)
+  })
+  child.stdout?.setEncoding('utf8')
+  child.stdout?.on('data', (chunk: string) => {
+    logger.debug('engine stdout', { line: chunk.trim().slice(0, 500) })
+  })
+  child.on('error', (err) => logger.error('engine process error', { error: err.message }))
+  child.on('exit', (code, signal) => {
+    if (running?.child !== child) return
+    running = null
+    // An engine that dies while we thought it was up is the case the readiness
+    // strip exists for: nothing else will notice, because nothing polls.
+    setState({
+      status: 'failed',
+      pid: null,
+      error: `The local engine stopped unexpectedly (${signal ?? `exit ${code}`}).`
+    })
+    logger.error('engine exited unexpectedly', {
+      code,
+      signal,
+      stderr: stderr.trim().slice(-1000)
+    })
+  })
+
+  if (await waitForHealth(engine)) return engine
+
+  logger.warn('engine did not become healthy', {
+    port,
+    exitCode: child.exitCode,
+    stderr: stderr.trim().slice(-1000)
+  })
+  killEngine(engine)
+  return null
+}
+
+async function startEngine(userId: string): Promise<EngineState> {
+  const configured = configuredBinaryPath()
+  if (!binary || binaryResolvedFor !== configured) {
+    setState({ status: 'installing', error: null })
+    try {
+      binary = await resolveEngineBinaryWith(realBinaryResolverDeps(() => configured))
+      binaryResolvedFor = configured
+    } catch (err) {
+      binary = null
+      binaryResolvedFor = null
+      const message = err instanceof Error ? err.message : String(err)
+      setState({ status: 'failed', error: message, binarySource: null, binaryPath: null })
+      return state
+    }
+  }
+  setState({
+    binarySource: binary.source,
+    binaryPath: binary.path,
+    version: binary.version
+  })
+  if (stopRequested) {
+    setState({ status: 'stopped', pid: null, error: null })
+    return state
+  }
+
+  setState({ status: 'starting', error: null })
+  const built = await regenerateConfig(userId, true)
+
+  for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
+    if (stopRequested) break
+    const engine = await spawnAttempt(binary.path, built.configPath, built.env)
+    if (engine) {
+      if (stopRequested) {
+        killEngine(engine)
+        break
+      }
+      running = engine
+      setState({ status: 'running', pid: engine.child.pid ?? null, error: null })
+      return state
+    }
+  }
+
+  if (stopRequested) {
+    setState({ status: 'stopped', pid: null, error: null })
+    return state
+  }
+  setState({
+    status: 'failed',
+    pid: null,
+    error: 'The local engine did not start. See the log for details.'
+  })
+  return state
+}
+
+/**
+ * Rebuild and write the config. Returns what was written, changed or not.
+ *
+ * `refreshModels` is false on the reconcile path — see
+ * `collectEngineConfigInput` for why a per-turn model refresh would put a
+ * provider API call in front of every message.
+ */
+async function regenerateConfig(
+  userId: string,
+  refreshModels: boolean
+): Promise<WrittenEngineConfig> {
+  const root = engineRootDir()
+  mkdirSync(root, { recursive: true })
+  const built = buildEngineConfig(await collectEngineConfigInput(userId, { refreshModels }))
+  const written = writeEngineConfig(root, built)
+  lastConfig = written
+  return written
+}
+
+export const engineManager = {
+  /** The current state, for the readiness strip and Settings. */
+  getState(): EngineState {
+    return state
+  },
+
+  /** Subscribe to state transitions. Returns an unsubscribe function. */
+  onStateChange(listener: (next: EngineState) => void): () => void {
+    listeners.add(listener)
+    return () => listeners.delete(listener)
+  },
+
+  /**
+   * Start the engine if it is not running, and hand back the resulting state.
+   *
+   * Never throws: a failed start is a *state*, not an exception, because every
+   * caller — the readiness strip, a turn about to run — has to render it either
+   * way, and `ipcMain.handle` would drop the code off a thrown error anyway.
+   */
+  async ensureRunning(userId: string): Promise<EngineState> {
+    if (running && state.status === 'running') {
+      // A config change deferred earlier is applied **here**, at the moment of
+      // use, rather than by whoever changed the credential. That is what keeps
+      // this correct without enumerating call sites: there are at least five
+      // ways to invalidate a generated config — a credential added or deleted,
+      // an account-config sync that materialises managed providers with no IPC
+      // call at all, a managed chat mode's model, the default chat mode the
+      // Default runtime falls back to, and a per-agent runtime write — and a
+      // sixth added later would silently defeat a list of hooks.
+      if (configRestartDeferred && !turnLock.anyHeld()) {
+        configRestartDeferred = false
+        logger.info('applying a config change that was deferred past a streaming turn')
+        // Restart **directly**, not by way of `applyConfigChange`. The deferred
+        // change already wrote its bytes to disk, so a second regeneration
+        // finds them identical and reports `changed: false` — routing through
+        // it here would clear the debt without ever loading the new config,
+        // and the engine would keep serving the old one until something else
+        // happened to change it again.
+        await this.stop()
+        return this.ensureRunning(userId)
+      }
+      // **Reconcile, rather than return early.** This is the choke point: at
+      // least five things invalidate a generated config — a credential added
+      // or deleted, an account-config sync materialising managed providers on
+      // a background timer with no IPC call to hook, a managed chat mode's
+      // model, the default chat mode the Default runtime falls back to, and a
+      // per-agent runtime write — and hooking each is a list that a sixth
+      // input silently defeats. Deriving from current state at the moment the
+      // engine is about to be used is correct for inputs nobody has thought of
+      // yet, including the ones with nowhere to put a hook.
+      if (reconcileInFlight) return reconcileInFlight
+      const reconcile = this.applyConfigChange(userId).finally(() => {
+        if (reconcileInFlight === reconcile) reconcileInFlight = null
+      })
+      reconcileInFlight = reconcile
+      return reconcile
+    }
+    if (startInFlight) return startInFlight
+
+    // Cleared **here**, synchronously, not inside `startEngine`. `startEngine`
+    // runs a microtask later, so clearing it there would let a `stop()` issued
+    // in between be erased by the start it was meant to cancel — the app
+    // quitting mid-start, which is precisely the case the flag exists for.
+    stopRequested = false
+    // Deferred through a resolved promise for the reason `getShellEnv` does it:
+    // a synchronous throw in the body would run `finally` before `startInFlight`
+    // was ever assigned, leaving a stale in-flight promise behind.
+    const run = Promise.resolve()
+      .then(() => startEngine(userId))
+      .catch((err) => {
+        logger.error('engine start failed', { error: String(err) })
+        setState({
+          status: 'failed',
+          pid: null,
+          error: err instanceof Error ? err.message : String(err)
+        })
+        return state
+      })
+      .finally(() => {
+        if (startInFlight === run) startInFlight = null
+      })
+
+    startInFlight = run
+    return run
+  },
+
+  /**
+   * Regenerate the config and restart the engine **only if it changed**.
+   *
+   * Called whenever something the config is derived from moves: a credential
+   * added or removed, a runtime chosen, a folder rescanned. The no-change case
+   * has to be cheap, because a rescan fires on every file the user's assistant
+   * saves — restarting the engine on each one would kill a live conversation to
+   * apply a config identical to the one already loaded.
+   *
+   * **A changed config does not restart a busy engine.** One `opencode serve`
+   * serves every folder agent, so a restart ends every conversation in flight,
+   * not only the one whose folder changed — Invariant 3, at the coarsest
+   * granularity it has. When any turn holds a lock the new config is written to
+   * disk and the restart is deferred; {@link ensureRunning} applies it at the
+   * next turn boundary, when ending the previous turn costs nothing because it
+   * has already ended.
+   *
+   * This is also why there is no enumerated list of "things that call me". The
+   * account-config sync can materialise a managed provider on a timer with no
+   * IPC call to hook at all, so a list would be incomplete by construction. The
+   * two honest choke points are a start (which always generates fresh) and a
+   * turn (which is `ensureRunning`).
+   */
+  async applyConfigChange(userId: string): Promise<EngineState> {
+    if (state.status === 'stopped' && !running) {
+      // Nothing is loaded, so there is nothing to reconcile; the next start
+      // will generate a fresh config anyway.
+      return state
+    }
+    let written: WrittenEngineConfig
+    try {
+      written = await regenerateConfig(userId, false)
+    } catch (err) {
+      logger.error('could not regenerate the engine config', { error: String(err) })
+      return state
+    }
+    if (!written.changed) return state
+    if (turnLock.anyHeld()) {
+      // Written to disk, not loaded. The next turn picks it up; ending someone
+      // else's streaming reply to load it now would be the worse trade.
+      configRestartDeferred = true
+      logger.info('engine config changed while a turn is streaming; deferring the restart')
+      return state
+    }
+    configRestartDeferred = false
+    logger.info('engine config changed, restarting')
+    await this.stop()
+    return this.ensureRunning(userId)
+  },
+
+  /** Stop the engine. Safe to call when it is not running, or mid-start. */
+  async stop(): Promise<void> {
+    stopRequested = true
+    const pending = startInFlight
+    if (pending) {
+      // A start in flight will see `stopRequested` and clean up after itself,
+      // but only once it reaches its next checkpoint — so wait for it rather
+      // than returning while a process is still being spawned behind us.
+      await pending.catch(() => undefined)
+    }
+    const engine = running
+    running = null
+    if (engine) {
+      logger.info('stopping the engine', { pid: engine.child.pid })
+      killEngine(engine)
+    }
+    setState({ status: 'stopped', pid: null, error: null })
+  },
+
+  /**
+   * Which OpenCode agent key a folder agent became in the current config.
+   *
+   * Phase 6 needs this to open a session against the right agent entry; it is
+   * null when the agent was skipped, which is the same thing as "this agent
+   * cannot run right now".
+   */
+  agentKey(agentId: string): string | null {
+    return lastConfig?.agentKeys.get(agentId) ?? null
+  },
+
+  /** What the last generation refused to include, for the Runtime card's reason line. */
+  lastSkips(): EngineSkips {
+    return { agents: lastConfig?.skippedAgents ?? [] }
+  },
+
+  /**
+   * An authenticated request to the running engine.
+   *
+   * The base URL and the Basic-auth header never leave this module, which is
+   * what keeps "everything talks to the engine through the runner" true by
+   * construction rather than by convention.
+   */
+  async request(path: string, init?: RequestInit): Promise<Response> {
+    const engine = running
+    if (!engine || state.status !== 'running') {
+      throw new Error('The local engine is not running.')
+    }
+    const headers = new Headers(init?.headers)
+    headers.set('Authorization', engine.authHeader)
+    return fetch(`${engine.baseUrl}${path}`, { ...init, headers })
+  }
+}
+
+/**
+ * Kill the engine synchronously.
+ *
+ * `will-quit` handlers are not awaited — Electron tears the process down around
+ * an async one — and a spawned child is not reaped just because its parent
+ * exits, so a quit that only scheduled an async stop would leave an
+ * `opencode serve` running on the user's machine with no window to stop it
+ * from. Signalling inside the handler body is what actually gets it killed.
+ */
+function stopEngineNow(): void {
+  stopRequested = true
+  const engine = running
+  running = null
+  if (!engine) return
+  logger.info('killing the engine on quit', { pid: engine.child.pid })
+  try {
+    engine.child.kill('SIGTERM')
+  } catch {
+    /* already gone */
+  }
+}
+
+/** Stop the engine when the app quits. Registered from the IPC composition root. */
+export function registerEngineShutdown(): void {
+  app.on('will-quit', stopEngineNow)
+}

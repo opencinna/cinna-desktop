@@ -17,7 +17,12 @@ export const DEFAULTS: AppSettingsSchema = {
   autoChatTitles: false,
   enableTrayIcon: true,
   showHints: true,
-  prioritizeAccountDefaults: false
+  prioritizeAccountDefaults: false,
+  // Empty = the built-in default (`~/Documents/CinnaAgents`). Kept as a string
+  // rather than `string | null` so `appSettingsService`'s typeof check works.
+  localAgentsHome: '',
+  // Empty = resolve one (PATH first, then the pinned managed download).
+  localAgentsEnginePath: ''
 }
 
 export const appSettingsRepo = {
@@ -57,9 +62,19 @@ export const appSettingsRepo = {
       .all()
     const out: AppSettingsSchema = { ...DEFAULTS }
     for (const r of rows) {
-      if (!(r.key in DEFAULTS)) continue
+      if (!Object.hasOwn(DEFAULTS, r.key)) continue
+      const key = r.key as AppSettingKey
       try {
-        out[r.key as AppSettingKey] = JSON.parse(r.value)
+        const parsed: unknown = JSON.parse(r.value)
+        // The store is untyped at rest and the schema now mixes types, so a row
+        // whose value drifted from its key's type is dropped rather than handed
+        // to a caller that trusts the declared type. Same rule
+        // `appSettingsService` applies on the way in.
+        if (typeof parsed !== typeof DEFAULTS[key]) continue
+        // The write is type-erased on purpose: `out[key]` narrows to `never`
+        // across a heterogeneous schema, and the typeof check above is what
+        // actually makes it sound.
+        ;(out as Record<AppSettingKey, unknown>)[key] = parsed
       } catch {
         /* keep default */
       }

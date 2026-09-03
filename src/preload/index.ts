@@ -1,5 +1,23 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
+import type { DetectedTool, OpenInRequest } from '../shared/localTools'
+import type {
+  AgentRootDto,
+  CreateLocalAgentInput,
+  DraftLocalAgentResult,
+  LocalAgentChangedPayload,
+  LocalAgentDocDto,
+  LocalAgentDto,
+  LocalAgentOutcome,
+  LocalAgentValidation,
+  OpenLocalAgentPathInput,
+  ReadLocalAgentDocInput,
+  RescanResult,
+  UpdateLocalAgentFieldInput
+} from '../shared/localAgents'
+import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
+import type { EngineSkips, EngineState } from '../shared/engine'
+import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
@@ -966,6 +984,125 @@ const api = {
       key: K,
       value: AppSettingsSchema[K]
     ): Promise<{ success: true }> => ipcRenderer.invoke('settings:set', key, value)
+  },
+
+  /**
+   * Developer tools installed on this machine, and the "Open in…" launchers
+   * for a local agent folder. The folder path is validated against the
+   * registered agents roots in the main process — the renderer cannot open an
+   * arbitrary directory.
+   */
+  localTools: {
+    list: (): Promise<DetectedTool[]> => ipcRenderer.invoke('local-tools:list'),
+    /** Drop the cached PATH lookups and detect again (Settings → Refresh). */
+    refresh: (): Promise<DetectedTool[]> => ipcRenderer.invoke('local-tools:refresh'),
+    openIn: (request: OpenInRequest): Promise<{ success: true }> =>
+      ipcRenderer.invoke('local-tools:open-in', request)
+  },
+
+  /**
+   * Folder agents — agents that are a folder on disk. Everything here reads or
+   * writes files through the main process; the renderer never touches a path
+   * itself, and the only path it may send is agent-relative (`openPath`), which
+   * main re-resolves inside the agent folder before using it.
+   */
+  localAgents: {
+    /** Every registered root and every agent scanned from them. */
+    list: (): Promise<{ roots: AgentRootDto[]; agents: LocalAgentDto[] }> =>
+      ipcRenderer.invoke('local-agent:list'),
+    /** One agent, re-read from its folder. */
+    /**
+     * One agent, re-read from its folder — as an outcome, not a rejection.
+     *
+     * A failure **code** cannot reach the renderer on an error object. Two
+     * boundaries drop non-standard properties: `ipcMain.handle` serialises a
+     * rejection as `{message, stack}`, and `contextBridge` then clones it into
+     * the main world as a fresh `Error`. Rebuilding the error here would put it
+     * on the wrong side of the second one — the renderer still receives a plain
+     * `Error` with no `code`. So the failure travels as **data** the whole way
+     * and `useLocalAgents` unwraps it, where the error it throws stays put.
+     */
+    get: (agentId: string): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:get', agentId),
+    /** Scaffold a new agent folder from the bundled kit contract. */
+    create: (input: CreateLocalAgentInput): Promise<LocalAgentDto> =>
+      ipcRenderer.invoke('local-agent:create', input),
+    /**
+     * Draft the workflow prompt, example prompts and router trigger with one
+     * AI call. Resolves `skipped` — not a rejection — when no AI credential is
+     * configured, so the create flow never depends on one.
+     */
+    draft: (agentId: string): Promise<DraftLocalAgentResult> =>
+      ipcRenderer.invoke('local-agent:draft', agentId),
+    /**
+     * Save one field back to the folder. `expectedStamp` is the stamp the
+     * editor read (from `LocalAgentDto.stamps`); a save over a file that
+     * changed underneath is refused so an assistant's edit is never clobbered.
+     */
+    /** Save one field. An outcome, so `manifest_modified` / `file_modified` /
+     *  `turn_in_progress` survive the crossing — see `get` above. */
+    updateField: (
+      input: UpdateLocalAgentFieldInput
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:update-field', input),
+    /** Re-read one root, or every root. */
+    rescan: (rootId?: string): Promise<RescanResult[]> =>
+      ipcRenderer.invoke('local-agent:rescan', rootId),
+    /**
+     * One prompt document. The stamp comes back from the same read as the
+     * text, which is what the editor hands to `updateField`.
+     */
+    readDoc: (input: ReadLocalAgentDocInput): Promise<LocalAgentDocDto> =>
+      ipcRenderer.invoke('local-agent:read-doc', input),
+    /** Run the kit validator over one folder on demand. */
+    validate: (agentId: string): Promise<LocalAgentValidation> =>
+      ipcRenderer.invoke('local-agent:validate', agentId),
+    /** Reveal a file inside the agent folder in Finder / Explorer. */
+    openPath: (input: OpenLocalAgentPathInput): Promise<{ success: true }> =>
+      ipcRenderer.invoke('local-agent:open-path', input),
+    rootsList: (): Promise<AgentRootDto[]> => ipcRenderer.invoke('local-agent:roots-list'),
+    /** Opens the OS directory picker; the renderer never supplies the path. */
+    rootAdd: (): Promise<{ cancelled: true } | { cancelled: false; root: AgentRootDto }> =>
+      ipcRenderer.invoke('local-agent:root-add'),
+    /** Forget a root. The folder on disk is left untouched. */
+    rootRemove: (rootId: string): Promise<{ pruned: number }> =>
+      ipcRenderer.invoke('local-agent:root-remove', rootId),
+    /** Fires when a watched folder changed on disk. Returns an unsubscribe. */
+    onChanged: (handler: (payload: LocalAgentChangedPayload) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: LocalAgentChangedPayload): void =>
+        handler(payload)
+      ipcRenderer.on(LOCAL_AGENT_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(LOCAL_AGENT_CHANGED_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * The local engine — the desktop-managed `opencode serve` process folder
+   * agents run on.
+   *
+   * There is no `baseUrl` here and there never will be: the engine's address
+   * and its per-start auth password stay in the main process, so a component
+   * cannot be written that talks to it directly instead of through the turn
+   * runner. What crosses is the state a readiness strip renders.
+   */
+  engine: {
+    status: (): Promise<EngineState> => ipcRenderer.invoke('engine:status'),
+    /**
+     * Start it, installing the binary first if this machine has none. Resolves
+     * with the resulting state — including a failed one — rather than
+     * rejecting, because a failure here is something the UI renders, and a
+     * rejection would lose its code crossing the bridge.
+     */
+    start: (): Promise<EngineState> => ipcRenderer.invoke('engine:start'),
+    stop: (): Promise<EngineState> => ipcRenderer.invoke('engine:stop'),
+    /** Folder agents the running config left out, and why. */
+    skips: (): Promise<EngineSkips> => ipcRenderer.invoke('engine:skips'),
+    /** Fires on every engine state transition. Returns an unsubscribe. */
+    onState: (handler: (state: EngineState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: EngineState): void => handler(state)
+      ipcRenderer.on(ENGINE_STATE_CHANNEL, listener)
+      return () => ipcRenderer.off(ENGINE_STATE_CHANNEL, listener)
+    }
   },
 
   tray: {

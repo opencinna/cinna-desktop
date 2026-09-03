@@ -28,6 +28,28 @@ export interface AppSettingsSchema {
    * See `shared/chatModeDefaults.ts` for the resolution.
    */
   prioritizeAccountDefaults: boolean
+  /**
+   * Absolute path of the agents home — the workshop folder local agents are
+   * scaffolded into. Empty means "the built-in default", `~/Documents/CinnaAgents`,
+   * which is what a fresh install uses; `agentsHomeService` resolves and
+   * validates the value on every read, so a path that is not a plausible agents
+   * home falls back to the default rather than being written to.
+   */
+  localAgentsHome: string
+  /**
+   * Absolute path of an `opencode` binary to run folder agents with. Empty
+   * means "resolve one" — a user-installed `opencode` on the login-shell PATH
+   * first, else the pinned version this app downloads and verifies. An explicit
+   * path always wins, and is never version-checked: the point of setting it is
+   * to run the one you named.
+   *
+   * Unlike `localAgentsHome` this is a *file*, not a directory the app writes
+   * into, so `appSettingsService` only checks that it is absolute — whether it
+   * is a runnable engine is answered by `binaryResolver`, which has to ask the
+   * file itself and reports the answer as engine state rather than as a
+   * rejected setting.
+   */
+  localAgentsEnginePath: string
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

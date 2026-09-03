@@ -1,0 +1,460 @@
+/**
+ * The OpenCode configuration the desktop generates for its engine.
+ *
+ * Two rules decide everything in this file.
+ *
+ * **The config goes in the app data directory, never in the agents home.** The
+ * home belongs to the user: an assistant may have it open, it is very often a
+ * git repository, and Invariant 2 says exactly one file inside an agent folder
+ * is the desktop's (`app-data/desktop.json`). The engine is pointed at our copy
+ * with `OPENCODE_CONFIG`, and the generated per-agent prompt files sit beside
+ * it, referenced as `{file:./prompts/<key>.md}` — a path OpenCode resolves
+ * relative to the config file, so the whole generated set moves together.
+ *
+ * **A key is never written into the config.** Every provider's key is emitted as
+ * an `{env:CINNA_ENGINE_KEY_…}` reference and the value is handed to the engine
+ * process as an environment variable (Invariant 4). This is not cosmetic: the
+ * config file sits in the app data directory at rest, gets read by anything
+ * that can read the user's home, and would otherwise be a plaintext copy of
+ * every credential in the app — the thing `safeStorage` exists to prevent.
+ *
+ * A consequence worth knowing before Phase 6 goes near it: OpenCode's `/config`
+ * endpoint returns the **resolved** configuration, with `{env:…}` already
+ * substituted. That response therefore contains live API keys. It must never be
+ * logged, echoed into a stream part, or forwarded to the renderer.
+ */
+
+import { createHash } from 'node:crypto'
+import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { createLogger } from '../logger/logger'
+
+const logger = createLogger('engine-config')
+
+/**
+ * OpenCode's provider key for each of our provider types.
+ *
+ * The key matters: OpenCode looks a canonical key up in the models.dev catalog
+ * and gets the full model list for free. `gemini` is ours, `google` is theirs.
+ * `openai_compatible` has no canonical key by definition — a gateway is
+ * whatever the user pointed it at — so it always gets a custom entry.
+ */
+const CANONICAL_PROVIDER_KEY: Record<string, string> = {
+  anthropic: 'anthropic',
+  openai: 'openai',
+  gemini: 'google'
+}
+
+/**
+ * The AI SDK package a **custom** provider entry loads.
+ *
+ * Needed only for the entries that cannot use a canonical key: a second
+ * credential of a type whose canonical key is already taken, and every
+ * OpenAI-compatible gateway. A custom entry gets no models.dev catalog either,
+ * which is why {@link EngineProviderInput.models} has to be supplied for them.
+ */
+const PROVIDER_NPM: Record<string, string> = {
+  anthropic: '@ai-sdk/anthropic',
+  openai: '@ai-sdk/openai',
+  gemini: '@ai-sdk/google',
+  openai_compatible: '@ai-sdk/openai-compatible'
+}
+
+/**
+ * The conversation permission profile.
+ *
+ * The shape is OpenCode's: a permission name maps to an action, or to a
+ * pattern→action map where the most specific matching pattern wins (their own
+ * built-in `build` agent is written the same way — `read: *` allow, then
+ * `read: *.env` ask).
+ *
+ * What it encodes, from the design: reads are free, writes and edits are free
+ * **only under `app-data/`**, and bash is free only for the three command
+ * shapes the kit teaches. Everything else asks. Two entries are not about
+ * convenience at all:
+ *
+ * - `credentials/.env` is `deny`, not `ask`. The desktop never reads credential
+ *   values and neither should the agent it runs: the kit's own rule is that a
+ *   value is read from inside a script through `cinna_credentials.py` and never
+ *   printed. An `ask` here would put a one-click path to pasting the user's
+ *   secrets into a transcript behind a dialog nobody reads carefully.
+ * - `external_directory` is `ask`, so a session bound to one agent folder
+ *   cannot quietly wander into another agent's folder — or into the rest of the
+ *   user's disk — without the user seeing it.
+ *
+ * Phase 6 owns answering these prompts and persisting "always" grants; this
+ * phase only has to put the right profile in the config.
+ */
+export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
+  /**
+   * The catch-all, and it has to be here explicitly.
+   *
+   * OpenCode's own base rule is `{permission: '*', pattern: '*', action:
+   * 'allow'}` — verified by reading `GET /agent` back off a running engine —
+   * so a profile that only enumerates `read`/`edit`/`write`/`bash` leaves
+   * *every other tool* on allow, which is the opposite of the design's
+   * "everything else asks". Later entries override earlier ones, so this line
+   * lands after their base rule and before ours.
+   */
+  '*': 'ask',
+  read: {
+    '*': 'allow',
+    'credentials/.env': 'deny',
+    '**/.env': 'deny',
+    '**/*.pem': 'deny',
+    '**/*.key': 'deny'
+  },
+  edit: {
+    '*': 'ask',
+    'app-data/**': 'allow'
+  },
+  write: {
+    '*': 'ask',
+    'app-data/**': 'allow'
+  },
+  bash: {
+    '*': 'ask',
+    'uv run *': 'allow',
+    'make *': 'allow',
+    'python scripts/*': 'allow'
+  },
+  webfetch: 'ask',
+  external_directory: 'ask'
+}
+
+/** One AI credential, ready to become a provider entry. */
+export interface EngineProviderInput {
+  /** Our `llm_providers` row id. Only ever used to derive stable names. */
+  id: string
+  /** `anthropic` | `openai` | `gemini` | `openai_compatible`. */
+  type: string
+  name: string
+  /** The decrypted key. Goes to the env map, never into the config. */
+  apiKey: string
+  /** Required for `openai_compatible`; ignored otherwise. */
+  baseUrl: string | null
+  /** Needed for custom entries, which get no models.dev catalog. */
+  models: { id: string; name: string }[]
+}
+
+/** One folder agent, ready to become an OpenCode agent entry. */
+export interface EngineAgentInput {
+  /** `folder:<manifest id>` — the `agents` row id. */
+  agentId: string
+  slug: string
+  description: string
+  /** The assembled system prompt. Written to its own file beside the config. */
+  prompt: string
+  /** Which {@link EngineProviderInput.id} this agent runs on. */
+  providerId: string
+  modelId: string
+  /** Manifest `runtime.permissions`, merged over the conversation profile. */
+  permissions?: Record<string, unknown> | null
+}
+
+export interface EngineConfigInput {
+  providers: EngineProviderInput[]
+  agents: EngineAgentInput[]
+}
+
+/** A credential that could not become a provider entry, and why. */
+export interface SkippedProvider {
+  providerId: string
+  reason: string
+}
+
+/** An agent that could not become an agent entry, and why. */
+export interface SkippedAgent {
+  agentId: string
+  reason: string
+}
+
+export interface BuiltEngineConfig {
+  /** The config object, ready to be serialised. Contains no key. */
+  config: Record<string, unknown>
+  /** Credential environment for the engine process. **Never logged.** */
+  env: Record<string, string>
+  /** Our provider id → the OpenCode provider key it became. */
+  providerKeys: Map<string, string>
+  /** Our agent id → the OpenCode agent key it became. */
+  agentKeys: Map<string, string>
+  /** Agent key → the prompt text that must be written beside the config. */
+  prompts: Map<string, string>
+  skippedProviders: SkippedProvider[]
+  skippedAgents: SkippedAgent[]
+}
+
+/** Uppercase, `_`-separated, safe as an environment variable name fragment. */
+function sanitizeForEnv(value: string): string {
+  return value.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase()
+}
+
+/** Lowercase, `-`-separated, safe as a JSON config key. */
+function sanitizeForKey(value: string): string {
+  return value.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
+}
+
+function shortHash(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 8)
+}
+
+/**
+ * The environment variable name a credential's key travels in.
+ *
+ * Derived from the provider id so it is stable across regenerations, and
+ * suffixed with a hash so two ids that sanitise to the same string (`a-b` and
+ * `a_b`) cannot collide and silently hand one provider the other's key.
+ */
+export function credentialEnvName(providerId: string): string {
+  const readable = sanitizeForEnv(providerId).slice(0, 40)
+  return `CINNA_ENGINE_KEY_${readable}_${shortHash(providerId).toUpperCase()}`
+}
+
+/**
+ * The OpenCode agent key for a folder agent.
+ *
+ * **Always suffixed with a hash of the agent id, even when the slug is unique.**
+ * The tempting alternative — bare slug when unique, suffixed on collision —
+ * makes an existing agent's key depend on which *other* agents exist, so
+ * creating a second `assistant` in another root would rename the first one's
+ * entry. Phase 6 binds engine sessions to this key, so a key that moves is a
+ * conversation that loses its agent. The user never types it.
+ */
+export function engineAgentKey(agentId: string, slug: string): string {
+  const readable = sanitizeForKey(slug).slice(0, 40) || 'agent'
+  return `${readable}-${shortHash(agentId)}`
+}
+
+/** The prompt file an agent entry points at, relative to the config file. */
+export function promptFileRef(agentKey: string): string {
+  return `{file:./prompts/${agentKey}.md}`
+}
+
+/**
+ * Build the config, the credential environment and the key maps.
+ *
+ * Pure: no filesystem, no clock, no `app`. Everything that decides what the
+ * engine will do is visible in the return value, which is what makes "does a
+ * key ever reach the config" a question a test can answer directly rather than
+ * by reading.
+ */
+export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
+  const providers: Record<string, unknown> = {}
+  const env: Record<string, string> = {}
+  const providerKeys = new Map<string, string>()
+  const skippedProviders: SkippedProvider[] = []
+  /** Canonical keys already claimed, so the second `anthropic` gets its own. */
+  const claimed = new Set<string>()
+
+  // Deterministic order: the same set of credentials must always produce the
+  // same config bytes, or "did the config change" — which decides whether the
+  // engine restarts — would be answered by map iteration order.
+  const sortedProviders = [...input.providers].sort((a, b) => a.id.localeCompare(b.id))
+
+  for (const provider of sortedProviders) {
+    if (provider.apiKey === '') {
+      skippedProviders.push({ providerId: provider.id, reason: 'no API key is stored for it' })
+      continue
+    }
+    const npm = PROVIDER_NPM[provider.type]
+    if (!npm) {
+      skippedProviders.push({
+        providerId: provider.id,
+        reason: `the local engine does not support provider type "${provider.type}"`
+      })
+      continue
+    }
+    if (provider.type === 'openai_compatible' && !provider.baseUrl) {
+      skippedProviders.push({
+        providerId: provider.id,
+        reason: 'an OpenAI-compatible credential needs a base URL'
+      })
+      continue
+    }
+
+    const canonical = CANONICAL_PROVIDER_KEY[provider.type]
+    const useCanonical = canonical !== undefined && !claimed.has(canonical)
+    const key = useCanonical
+      ? canonical
+      : `${sanitizeForKey(canonical ?? provider.type)}-${shortHash(provider.id)}`
+    if (useCanonical) claimed.add(canonical)
+
+    const envName = credentialEnvName(provider.id)
+    env[envName] = provider.apiKey
+
+    const options: Record<string, unknown> = { apiKey: `{env:${envName}}` }
+    if (provider.baseUrl) options.baseURL = provider.baseUrl
+
+    const entry: Record<string, unknown> = { options }
+    if (!useCanonical) {
+      // A custom key gets no models.dev catalog, so it has to declare both the
+      // package that implements it and every model it can address.
+      entry.npm = npm
+      entry.name = provider.name
+      entry.models = Object.fromEntries(
+        [...provider.models]
+          .sort((a, b) => a.id.localeCompare(b.id))
+          .map((model) => [model.id, { name: model.name }])
+      )
+    }
+    providers[key] = entry
+    providerKeys.set(provider.id, key)
+  }
+
+  const agents: Record<string, unknown> = {}
+  const agentKeys = new Map<string, string>()
+  const prompts = new Map<string, string>()
+  const skippedAgents: SkippedAgent[] = []
+
+  for (const agent of [...input.agents].sort((a, b) => a.agentId.localeCompare(b.agentId))) {
+    const providerKey = providerKeys.get(agent.providerId)
+    if (!providerKey) {
+      skippedAgents.push({
+        agentId: agent.agentId,
+        reason: 'its runtime credential is not available to the local engine'
+      })
+      continue
+    }
+    if (!agent.modelId) {
+      skippedAgents.push({ agentId: agent.agentId, reason: 'its runtime names no model' })
+      continue
+    }
+    const key = engineAgentKey(agent.agentId, agent.slug)
+    agentKeys.set(agent.agentId, key)
+    prompts.set(key, agent.prompt)
+    agents[key] = {
+      description: agent.description || `The ${agent.slug} agent.`,
+      mode: 'primary',
+      model: `${providerKey}/${agent.modelId}`,
+      prompt: promptFileRef(key),
+      permission: mergePermissions(agent.permissions)
+    }
+  }
+
+  return {
+    config: {
+      $schema: 'https://opencode.ai/config.json',
+      provider: providers,
+      agent: agents
+    },
+    env,
+    providerKeys,
+    agentKeys,
+    prompts,
+    skippedProviders,
+    skippedAgents
+  }
+}
+
+/**
+ * The conversation profile with a manifest's `runtime.permissions` merged over
+ * it, one permission name at a time.
+ *
+ * A shallow merge on purpose. Deep-merging the pattern maps would let a
+ * manifest add `"*": "allow"` *underneath* our `bash` rules and quietly widen
+ * them; replacing the whole `bash` entry makes the override visible as an
+ * override. The folder is the user's own, so this is not a trust boundary —
+ * it is a legibility one.
+ */
+function mergePermissions(overrides?: Record<string, unknown> | null): Record<string, unknown> {
+  if (!overrides || typeof overrides !== 'object') return { ...CONVERSATION_PERMISSIONS }
+  return { ...CONVERSATION_PERMISSIONS, ...overrides }
+}
+
+export interface WrittenEngineConfig extends BuiltEngineConfig {
+  configPath: string
+  /** False when the bytes on disk already matched — nothing needs restarting. */
+  changed: boolean
+}
+
+/**
+ * Write the config and its prompt files into `dir`, atomically, and report
+ * whether anything actually changed.
+ *
+ * `changed` is what makes "restart the engine when the config changes" cheap
+ * enough to call on every rescan: a regeneration that produces identical bytes
+ * leaves a running engine alone. The comparison covers the prompt files too,
+ * because a reworded `WORKFLOW_PROMPT.md` changes what the agent *is* while
+ * leaving the config identical.
+ */
+export function writeEngineConfig(dir: string, built: BuiltEngineConfig): WrittenEngineConfig {
+  const configPath = join(dir, 'opencode.json')
+  const promptDir = join(dir, 'prompts')
+  mkdirSync(promptDir, { recursive: true })
+
+  const serialised = `${JSON.stringify(built.config, null, 2)}\n`
+  let changed = writeIfDifferent(configPath, serialised)
+  for (const [key, text] of [...built.prompts].sort(([a], [b]) => a.localeCompare(b))) {
+    if (writeIfDifferent(join(promptDir, `${key}.md`), text)) changed = true
+  }
+  if (pruneStalePrompts(promptDir, built.prompts)) changed = true
+
+  if (changed) {
+    // Names and counts only. The config object holds `{env:…}` references
+    // rather than keys, but logging it wholesale would still be one refactor
+    // away from logging a key, and the counts are the whole diagnostic value.
+    logger.info('engine config regenerated', {
+      providers: built.providerKeys.size,
+      agents: built.agentKeys.size,
+      skippedProviders: built.skippedProviders.length,
+      skippedAgents: built.skippedAgents.length
+    })
+  }
+  return { ...built, configPath, changed }
+}
+
+/**
+ * Delete generated prompt files for agents that are no longer in the set.
+ *
+ * A prompt file is this app's own derived copy of the *user's* folder — their
+ * `WORKFLOW_PROMPT.md`, their `scripts/README.md`, the topics they wrote — and
+ * deleting an agent is the user saying they are done with it. "Nothing reads
+ * the leftover" is not a good enough answer to that: the file keeps their
+ * material on disk after they asked for it to go, and the directory grows one
+ * file per agent ever created.
+ *
+ * Scoped hard, because this is the only place in the engine that deletes
+ * anything. It only ever touches `<userData>/engine/prompts/`, only `.md` files
+ * directly inside it, and never a directory — no agent folder is reachable from
+ * here even if a key were somehow malformed. A file it cannot delete is
+ * skipped, not thrown: a stale prompt is untidy, and failing the config write
+ * over one would take the engine down for it.
+ */
+function pruneStalePrompts(promptDir: string, prompts: Map<string, string>): boolean {
+  let removed = false
+  let entries: string[]
+  try {
+    entries = readdirSync(promptDir)
+  } catch {
+    return false
+  }
+  for (const name of entries) {
+    if (!name.endsWith('.md')) continue
+    if (prompts.has(name.slice(0, -'.md'.length))) continue
+    try {
+      rmSync(join(promptDir, name), { force: true })
+      removed = true
+    } catch (err) {
+      logger.warn('could not remove a stale engine prompt', { file: name, error: String(err) })
+    }
+  }
+  return removed
+}
+
+/** True when the file was written; false when it already held these bytes. */
+function writeIfDifferent(path: string, contents: string): boolean {
+  try {
+    if (readFileSync(path, 'utf8') === contents) return false
+  } catch {
+    /* missing or unreadable — write it */
+  }
+  const temp = `${path}.${process.pid}.${Date.now()}.tmp`
+  try {
+    writeFileSync(temp, contents, { mode: 0o600 })
+    renameSync(temp, path)
+  } catch (err) {
+    rmSync(temp, { force: true })
+    throw err
+  }
+  return true
+}

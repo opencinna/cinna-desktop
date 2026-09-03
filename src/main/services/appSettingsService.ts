@@ -1,3 +1,4 @@
+import { isAbsolute } from 'node:path'
 import { appSettingsRepo, DEFAULTS } from '../db/appSettings'
 import type {
   AppSettingKey,
@@ -5,6 +6,7 @@ import type {
 } from '../../shared/appSettings'
 import { AppSettingsError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { assertUsableRoot } from './localAgents/pathRules'
 
 const logger = createLogger('app-settings')
 
@@ -23,6 +25,10 @@ const logger = createLogger('app-settings')
  * Add a new setting by adding a key to `AppSettingsSchema` in `shared/` and
  * a default in `appSettingsRepo`'s `DEFAULTS` — validation picks it up
  * automatically.
+ *
+ * A key whose *type* does not make it safe adds an entry to {@link VALUE_CHECKS}
+ * as well. Every setting was a boolean until `localAgentsHome`, and a boolean is
+ * fully described by its type; a filesystem path is not.
  */
 
 function assertKnownKey(key: string): asserts key is AppSettingKey {
@@ -47,6 +53,62 @@ function assertValueShape<K extends AppSettingKey>(
   }
 }
 
+/**
+ * Extra per-key checks, for settings a `typeof` cannot make safe.
+ *
+ * `localAgentsHome` names a directory this app creates files in and hands to
+ * the "open in…" guard as an allowed root, so an arbitrary string is not an
+ * acceptable value even though it is the right type. The path rules are shared
+ * with the rest of that feature, so a folder rejected here is exactly the set
+ * rejected everywhere else.
+ *
+ * The read side stays defensive regardless — `agentsHomeService` re-validates
+ * and falls back to the default — but rejecting at the boundary means the user
+ * is told, instead of saving a value that is silently ignored forever.
+ */
+const VALUE_CHECKS: {
+  [K in AppSettingKey]?: (value: AppSettingsSchema[K]) => void
+} = {
+  localAgentsHome: (value) => {
+    // Empty means "use the built-in default", which is always valid.
+    if (value.trim() === '') return
+    try {
+      assertUsableRoot(value)
+    } catch {
+      throw new AppSettingsError(
+        'invalid_value',
+        'Choose a folder inside your home directory or on a mounted volume.'
+      )
+    }
+  },
+  /**
+   * A path to an executable, not a folder this app writes into, so
+   * `assertUsableRoot`'s rules do not apply — but an accepted relative path
+   * would be resolved against `process.cwd()`, which for a packaged app is
+   * wherever the OS happened to launch it from. Absolute or empty.
+   *
+   * Whether the file exists and runs is deliberately *not* checked here:
+   * `binaryResolver` has to spawn it to find out, and a user pasting a path
+   * before installing the binary should be able to save it and be told about
+   * the problem by the engine's own status line rather than by a rejected save.
+   */
+  localAgentsEnginePath: (value) => {
+    const trimmed = value.trim()
+    if (trimmed === '') return
+    if (!isAbsolute(trimmed)) {
+      throw new AppSettingsError(
+        'invalid_value',
+        'The engine path must be an absolute path to the opencode executable.'
+      )
+    }
+  }
+}
+
+function runValueCheck<K extends AppSettingKey>(key: K, value: AppSettingsSchema[K]): void {
+  const check = VALUE_CHECKS[key] as ((v: AppSettingsSchema[K]) => void) | undefined
+  check?.(value)
+}
+
 export const appSettingsService = {
   getAll(): AppSettingsSchema {
     return appSettingsRepo.getAll()
@@ -55,6 +117,7 @@ export const appSettingsService = {
   set(key: string, value: unknown): void {
     assertKnownKey(key)
     assertValueShape(key, value)
+    runValueCheck(key, value)
     appSettingsRepo.set(key, value)
     logger.info('app setting updated', { key, valueType: typeof value })
   }

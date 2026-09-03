@@ -1,0 +1,130 @@
+/**
+ * The wire contract for the **local engine** — the desktop-managed
+ * `opencode serve` process that runs folder agents.
+ *
+ * Shared between main and renderer, so everything here is type-only or a plain
+ * constant. The rule that shapes it is Invariant 4: **nothing key-shaped may be
+ * in any of these types.** The engine is handed its credentials as environment
+ * variables in the main process; what crosses to the renderer is which
+ * credential a runtime *refers to* and whether the engine is up.
+ *
+ * The engine's own base URL and the per-run Basic-auth password stay in main
+ * too. They are not secrets in the same sense — the port is loopback and the
+ * password is regenerated on every start — but the renderer has no use for
+ * either, and a base URL on the wire is an invitation for a component to fetch
+ * the engine directly and route around the runner.
+ */
+
+/**
+ * Where the running `opencode` binary came from.
+ *
+ * - `configured` — an explicit path in Settings. Whatever the user points at is
+ *   what runs; no version pin applies.
+ * - `path` — a user-installed `opencode` found on the login-shell PATH. The
+ *   preferred source: a developer who already has one keeps their own install,
+ *   their own auth and their own updates.
+ * - `managed` — the pinned version this app downloaded into its data directory,
+ *   verified against a recorded SHA-256.
+ */
+export type EngineBinarySource = 'configured' | 'path' | 'managed'
+
+/** What the engine is doing right now. */
+export type EngineStatus =
+  /** Never started, or stopped cleanly. */
+  | 'stopped'
+  /** Resolving or downloading the binary. Can take a minute on first use. */
+  | 'installing'
+  /** Process spawned, health check not yet green. */
+  | 'starting'
+  /** Health check green. Turns can run. */
+  | 'running'
+  /** The last start failed, or the process died. {@link EngineState.error} says how. */
+  | 'failed'
+
+/**
+ * The engine as the readiness strip and the Runtime card see it.
+ *
+ * No `baseUrl`, no password, no `pid`-adjacent handle a renderer could act on
+ * — deliberately. `pid` itself is here because "the engine is running as
+ * process 4711" is a diagnosis a user can act on and a number that grants
+ * nothing.
+ */
+export interface EngineState {
+  status: EngineStatus
+  /** `opencode --version`, once a binary has been resolved. */
+  version: string | null
+  binarySource: EngineBinarySource | null
+  /** Absolute path of the resolved binary — shown in Settings, never fetched. */
+  binaryPath: string | null
+  pid: number | null
+  /** One sentence explaining a `failed` status. Never carries a secret. */
+  error: string | null
+  /** When the state last changed (epoch ms). */
+  changedAt: number
+}
+
+/**
+ * What the last config generation refused to include, and why.
+ *
+ * A folder agent can be perfectly valid on disk and still be absent from the
+ * engine — its credential is one the engine cannot use, or its runtime names no
+ * model. Without this the only symptom is an agent that does nothing when
+ * chatted with, which is indistinguishable from a bug in this app.
+ *
+ * Empty until a config has been generated, which is to say until the engine has
+ * been started at least once. `reason` is a phrase, not a sentence: the card
+ * puts it after "Cinna's engine skipped this agent because…".
+ */
+export interface EngineSkips {
+  agents: { agentId: string; reason: string }[]
+}
+
+/** Main → renderer push whenever {@link EngineState} changes. */
+export const ENGINE_STATE_CHANNEL = 'engine:state'
+
+/** The pinned engine version this build downloads when it must manage one. */
+export const PINNED_ENGINE_VERSION = '1.18.27'
+
+/** Which of the two resolution steps produced a runtime. */
+export type RuntimeSource =
+  /** The manifest's own `runtime` block. */
+  | 'manifest'
+  /** The Default runtime, derived from the user's default chat mode. */
+  | 'default'
+  /** Neither — there is nothing to run on. {@link ResolvedRuntime.reason} says so. */
+  | 'none'
+
+/**
+ * A resolved runtime: which credential, which model.
+ *
+ * The engine is always OpenCode, so a runtime reduces to these two. The
+ * manifest stores a credential **reference** (`credentialRef`) and a model id;
+ * `credentialId` is that reference resolved against the credentials this
+ * machine actually has, and is null when it resolves to nothing.
+ */
+export interface ResolvedRuntime {
+  source: RuntimeSource
+  /** Verbatim from the manifest, when it declares one. Never a key. */
+  credentialRef: string | null
+  /** The provider row the reference resolved to. */
+  credentialId: string | null
+  credentialName: string | null
+  credentialType: string | null
+  modelId: string | null
+  /** One sentence when this runtime cannot run. Null when it can. */
+  reason: string | null
+}
+
+/**
+ * What the user picked in the Runtime card, on its way to the manifest.
+ *
+ * Both nullable: clearing them removes the `runtime` block and the agent falls
+ * back to the Default runtime. Neither may ever hold a key — `runtimeService`
+ * rejects a value that looks like one rather than trusting the caller, because
+ * this is a renderer-supplied string that lands in a file the user may commit.
+ */
+export interface LocalAgentRuntimeInput {
+  /** A credential **name** — what the manifest carries, so it travels. */
+  credential: string | null
+  modelId: string | null
+}

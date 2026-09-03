@@ -17,6 +17,9 @@ import { registerCatalogHandlers } from './catalog.ipc'
 import { registerSettingsHandlers } from './settings.ipc'
 import { registerTrayHandlers } from './tray.ipc'
 import { registerSyncHandlers } from './sync.ipc'
+import { registerLocalToolsHandlers } from './local_tools.ipc'
+import { registerLocalAgentHandlers } from './local_agent.ipc'
+import { registerEngineHandlers } from './engine.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -38,4 +41,7 @@ export function registerAllIpcHandlers(): void {
   registerSettingsHandlers()
   registerTrayHandlers()
   registerSyncHandlers()
+  registerLocalToolsHandlers()
+  registerLocalAgentHandlers()
+  registerEngineHandlers()
 }
