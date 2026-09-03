@@ -9,8 +9,11 @@ export function registerAgentStatusHandlers(): void {
   ipcHandle('agent-status:list', async () => {
     userActivation.requireActivated()
     try {
-      const items = await agentStatusService.list(getProfileScopeUserId())
-      return { success: true as const, items }
+      const { items, remoteError } = await agentStatusService.list(getProfileScopeUserId())
+      // A *partial* success: the Cinna leg failed but folder agents answered
+      // from disk. `success: true` because there are rows to show; `remoteError`
+      // because the rows that are missing must not go missing silently.
+      return { success: true as const, items, remoteError }
     } catch (err) {
       if (err instanceof CinnaReauthRequired) {
         return { success: false as const, code: 'reauth_required' as const, error: err.message }
