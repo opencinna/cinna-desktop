@@ -14,6 +14,8 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 - **OAuth DCR** — Dynamic Client Registration (RFC 7591) used for authenticating with remote MCP servers when `authType: 'oauth'`
 - **Bearer Token** — A static, user-supplied access token sent as `Authorization: Bearer <token>` on every request, for servers that don't support DCR. No browser round-trip, no `awaiting-auth` state — set once and it's used immediately, encrypted at rest like other credentials
 - **Registry** — A public catalog of MCP servers the user can browse to discover and one-click install — see [Registries](../registries/registries.md)
+- **Inherited Environment** (`stdio`) — The fixed, narrow set of variables a spawned server process receives from the app, valued from the user's **login shell** rather than the app's own environment. See [Stdio Environment](#stdio-environment)
+- **Server `env` map** — The per-server environment variables the user types into the provider card. Merged on top of the inherited set and always wins; it is the escape hatch for anything the inherited set does not carry
 
 ## User Stories / Flows
 
@@ -21,6 +23,7 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 1. User goes to Settings > MCP Providers, clicks "Add Local MCP"
 2. Enters name, command (e.g., `npx`), args (e.g., `["-y", "@modelcontextprotocol/server-filesystem"]`), optional env vars
 3. Saves; system auto-connects and lists available tools
+4. The command is resolved against the user's **login-shell `PATH`**, so `npx` / `uvx` / a Homebrew or mise-installed binary works whether the app was started from the Dock or from a terminal. What the server process can read is otherwise deliberately narrow — see [Stdio Environment](#stdio-environment)
 
 ### Adding a remote MCP server (streamable-http)
 1. User clicks "Add Custom MCP", enters name and URL, and picks an authentication mode: **OAuth** (default) or **Bearer Token**
@@ -57,6 +60,30 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 - A bearer-token connection never enters `awaiting-auth`: the token is static and known up front, so `client.connect()` either succeeds or fails straight to `error` (e.g. wrong/expired token → 401 surfaces as a connect error, not a re-auth prompt)
 - Switching a provider's `authType` doesn't clear the other auth mode's stored credentials (OAuth tokens/client info survive a switch to Bearer and vice versa) — harmless since the manager only reads the credential matching the active `authType`
 
+### Stdio Environment
+
+What a local (`stdio`) MCP server process inherits from Cinna. This behaviour **changed**: it previously received either the MCP SDK's minimal default environment (when the server had no `env` map) or the app's whole `process.env` (when it did). It now receives one rule on both branches.
+
+**The rule: the MCP SDK's inherit-allowlist, valued from the user's login-shell environment, plus three named additions, with the server's own `env` map merged on top. `config.env` always wins.**
+
+- **Why the login shell.** A Dock-launched app on macOS inherits `launchd`'s environment — a bare `PATH`, and none of the user's profile. That is why a server command resolved when the app was started from a terminal but not otherwise, and why passing `process.env` never fixed it. Cinna now asks the user's login shell for its environment once and takes `PATH` (and the rest of the inherited set) from there. See [Shell Environment Resolution](../../development/shell_environment/shell_environment.md)
+- **Why not the whole shell environment.** Sourcing `.zshrc` / `.bashrc` is exactly how `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `AWS_SECRET_ACCESS_KEY` reach a shell. Handing that wholesale to a third-party binary would widen every one of those secrets' blast radius. The inherited set is therefore an allowlist imported from the SDK — on POSIX exactly `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, `USER`
+
+The three additions each have a **different** justification:
+
+1. **`PATHEXT` (Windows only)** — a deliberate addition, *not* SDK parity. Without it a server cannot resolve the `.cmd` shims `npm` and `uv` install on Windows
+2. **Session variables** — `SSH_AUTH_SOCK`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, `TMPDIR`. These are already in a GUI-launched app's environment, so a server with an `env` map receives them **today**; omitting them would be a regression, not a hypothetical. `SSH_AUTH_SOCK` is the sharp case — a git-over-SSH server would silently lose agent auth on private repos
+3. **Proxy / CA variables** — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY` (and lowercase) plus `NODE_EXTRA_CA_CERTS`, taken from **`process.env` only, never from the shell dump**. On Windows (full user environment from Explorer, where IT and MDM push these) and Linux (display manager sourcing `/etc/environment`) a server has them today, so dropping them would regress. On macOS they arrive only as a shell export, so sourcing them from the shell would be *new capability* rather than regression protection — and reading them from `process.env` means a `.zshrc` export cannot introduce or overwrite them. Where both sources have a variable, `process.env` wins. The motivation for the split: a proxy URL routinely embeds credentials, and `NODE_EXTRA_CA_CERTS` changes TLS trust for a third-party child
+
+Deliberately **not** inherited: `NODE_PATH` and `npm_config_*` — shell exports on every platform, so omitting them regresses nothing, and they redirect where a child resolves its code.
+
+Also:
+
+- **Values starting with `()` are dropped**, whatever their name. That is bash's encoding of an exported shell function (the Shellshock surface), which a login-shell dump can contain and the app's own environment effectively cannot
+- **The user-visible consequence, stated plainly: this narrows what a stdio MCP server can read.** A server that silently relied on an inherited variable outside this set will need that variable added to its own `env` map
+- **The `env` map is the answer to "my server needs variable X".** It is a per-variable, per-server, explicit opt-in — deliberately not a global toggle
+- **The diagnostic**: on every stdio connect a debug log line names the variables the old behaviour would have passed and this rule drops. **Names only, never values.** When a server stops working for a reason that looks unrelated, that line is the one-minute diagnosis — see [Logger](../../development/logger/logger.md), scope `MCP`
+
 ### Connection Lifecycle & Concurrency
 
 - **One live connection per provider.** Connect and disconnect requests for the same provider are serialized, so they never overlap — a double-clicked Reconnect, or a re-activation landing mid-handshake, cannot leave two live sessions behind. Different providers connect concurrently
@@ -71,6 +98,10 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 Settings UI -> IPC -> MCPManager.connect(config)
   -> Serialize per provider (close any existing connection first)
   -> Create transport (Stdio / SSE / StreamableHTTP)
+       Stdio: env = SDK allowlist + session vars (+ PATHEXT on win32)
+                    valued from the login shell,
+                    + proxy/CA vars from process.env,
+                    then config.env merged on top (config.env wins)
   -> For remote transports, branch on authType:
        'bearer' -> static Authorization header
        'oauth'  -> attach ElectronOAuthProvider (DCR, browser round-trip)
@@ -110,4 +141,5 @@ The flow is abandoned — with the connection left untouched — if the user dis
 - [MCP Registries](../registries/registries.md) — Discovery layer; the picker creates providers through `mcp:upsert` and reuses the connection flow above
 - [Chat Messaging](../../chat/messaging/messaging.md) — Tool calls during streaming are routed through MCPManager
 - [LLM Adapters](../../llm/adapters/adapters.md) — MCP tools are converted to each provider's tool schema format
+- [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell resolver the stdio spawn draws `PATH` and the inherited set from; the narrowing rule lives there in full
 - Database — MCP configs, OAuth tokens, and chat-MCP junction stored in SQLite

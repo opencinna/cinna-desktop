@@ -9,6 +9,7 @@ import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
 import { getMainWindow } from '../index'
+import { droppedChildEnvNames, getShellEnv, mergeEnv, shellEnvForChild } from '../shell/env'
 
 /**
  * Channel the main process uses to tell the renderer that one or more MCP
@@ -150,10 +151,36 @@ class MCPManager {
 
       if (config.transportType === 'stdio') {
         if (!config.command) throw new Error('Command is required for stdio transport')
+        // What changed: `PATH` (and the rest of the inherited set) now comes
+        // from the user's *login shell* rather than from the app's own
+        // environment. A Dock-launched app inherits launchd's bare env, which
+        // is why `uvx`/`npx`-style commands resolved when the app was started
+        // from a terminal but not otherwise — and why passing `process.env`
+        // here never fixed it.
+        //
+        // What deliberately did NOT change: a server does not become able to
+        // read the user's secrets. `shellEnvForChild` narrows to the SDK's own
+        // inherit-allowlist plus the session variables a GUI-launched process
+        // already carried (`SSH_AUTH_SOCK` and friends — dropping those would
+        // regress a git-over-SSH server), so the API keys that live in
+        // `.zshrc`/`.bashrc` — which is exactly what `getShellEnv()` goes and
+        // reads — stay out of a third-party binary's environment.
+        // `config.env` is still merged on top and still wins.
+        const shellEnv = await getShellEnv()
+        // Narrowing means some server, somewhere, loses a variable it silently
+        // relied on, and the failure will not look like it came from here. Name
+        // what was dropped once per connect so that report is a one-minute
+        // diagnosis. NAMES ONLY — the dropped set is the secret-bearing half of
+        // the environment, so a value here would leak into the log buffer
+        // exactly what this rule keeps out of the child process.
+        logger.debug('stdio env narrowed to the inherit allowlist', {
+          providerId: config.id,
+          dropped: droppedChildEnvNames(shellEnv, config.env)
+        })
         transport = new StdioClientTransport({
           command: config.command,
           args: config.args ?? [],
-          env: config.env ? { ...process.env, ...config.env } as Record<string, string> : undefined
+          env: mergeEnv(shellEnvForChild(shellEnv), config.env)
         })
       } else if (config.transportType === 'sse') {
         if (!config.url) throw new Error('URL is required for SSE transport')
