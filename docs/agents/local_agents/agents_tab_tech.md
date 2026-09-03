@@ -45,7 +45,8 @@ Implementation reference for [Agents Tab & Agent Page](agents_tab.md). Path conv
 - `src/renderer/src/components/agents/local/OpenInRow.tsx` — the detected assistants/editors, Terminal, Reveal
 - `src/renderer/src/components/agents/local/ManifestCards.tsx` — `DescriptionCard`, `ExamplePromptsCard` (which owns two editors: prompts and router trigger) and the shared `useManifestSnapshot`
 - `src/renderer/src/components/agents/local/PromptDocCard.tsx` — one of the three prompt documents, read through its own query
-- `src/renderer/src/components/agents/local/ReadOnlyCards.tsx` — `RuntimeCard`, `CredentialsCard`, `CommandsCard`, `StatusCard`, `PublishedCard`, `RunsCard`
+- `src/renderer/src/components/agents/local/ReadOnlyCards.tsx` — `CredentialsCard`, `CommandsCard`, `StatusCard`, `PublishedCard`, `RunsCard`
+- `src/renderer/src/components/agents/local/RuntimeCard.tsx` — its own file since Phase 5 made it interactive; see [The Local Engine — Technical Details](engine_tech.md)
 - `src/renderer/src/components/agents/local/InlineFileEditor.tsx` — the Notes inline-editor pattern plus the conflict banner, the blocked note and the error line
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the one-sentence create form
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — roots, add/forget/reveal, the readiness list, detected tools, contract version
@@ -135,7 +136,7 @@ The six FK-less columns are the ones a cascade would have missed entirely — th
 | `DescriptionCard`, `ExamplePromptsCard` | Manifest-backed editors. `ExamplePromptsCard` owns two — prompts (validated per line) and router trigger |
 | `PromptDocCard` | One prompt document via `useLocalAgentDoc`; plain-text editing, not markdown |
 | `InlineFileEditor` | Click-to-type, autosave on pause and blur; conflict banner with disk preview + Reload; the muted blocked note; the error line; the "file is not in the folder" read-only state |
-| `RuntimeCard` | Manifest `runtime` block, falling back to the default chat mode's model, with the engine line disabled |
+| `RuntimeCard` | Manifest `runtime` block, falling back to the default chat mode's credential and model. Interactive since Phase 5, which added the engine status line and the skip line |
 | `CredentialsCard` | Slot names and which declared variable names `credentials/.env` defines. **Names only** |
 | `CommandsCard` | `Local/<slug>/docs/CLI_COMMANDS.yaml` entries with their localised command; Run disabled |
 | `StatusCard` | `app-data/storage/STATUS.md` — state, updated-at, summary, markdown body |

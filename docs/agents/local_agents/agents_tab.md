@@ -189,7 +189,9 @@ Typing in the folder field holds the raw text rather than normalising per keystr
 
 ### Chat controls render disabled
 
-The runner is Phase 6. **Start chat** on the page header, **Run** on each command row, and the Runtime card's pickers are present, disabled and titled with why. Hiding them would make the finished page's shape invisible; enabling them would produce an error where the user expected a reply.
+The runner is Phase 6. **Start chat** on the page header and **Run** on each command row are present, disabled and titled with why. Hiding them would make the finished page's shape invisible; enabling them would produce an error where the user expected a reply.
+
+(The Runtime card's pickers were disabled in Phase 3 for the same reason and became interactive in Phase 5, which also gave the card an engine status line and a skip line — see [The Local Engine](engine.md).)
 
 The same restriction elsewhere is `canBeCounterparty(agent)` — a **temporary** exclusion of folder agents from the composer `@`-mention list and the Job agent picker. It is deliberately *not* expressed by clearing `enabled`: `enabled` means only the user's own choice and survives every rescan, so borrowing it here would make "the user turned this off" and "no runner exists yet" indistinguishable exactly when the runner arrives. The predicate and its two call sites are deleted, not migrated, in Phase 6.
 
