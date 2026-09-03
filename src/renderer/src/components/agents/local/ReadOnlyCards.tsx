@@ -1,8 +1,11 @@
+import { useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Check, Circle, Minus } from 'lucide-react'
 import { markdownComponents } from '../../../utils/markdownComponents'
 import { useOpenAgentPath } from '../../../hooks/useLocalAgents'
+import { useNewChatFlow } from '../../../hooks/useNewChatFlow'
+import { useUIStore } from '../../../stores/ui.store'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { AgentCard } from './AgentCard'
@@ -81,9 +84,45 @@ export function CredentialsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
   )
 }
 
-/** `docs/CLI_COMMANDS.yaml`. Running one arrives with the engine. */
+/**
+ * `docs/CLI_COMMANDS.yaml`. Run opens (or reuses the pattern the sidebar's
+ * "Start chat" affordance already uses for a remote agent) a new chat bound
+ * directly to this agent and sends `/run:<name>` — the same message the
+ * composer's `/` popup would insert, so the two entry points converge on one
+ * execution path (`agent_a2a.ipc.ts`'s `/run:` interception) rather than
+ * this card doing its own thing.
+ */
 export function CommandsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const openPath = useOpenAgentPath()
+  const setActiveView = useUIStore((s) => s.setActiveView)
+  const { startNewChat } = useNewChatFlow()
+  const [runningName, setRunningName] = useState<string | null>(null)
+
+  const run = async (name: string): Promise<void> => {
+    if (runningName) return
+    setRunningName(name)
+    try {
+      // Switch to the chat view first — `startNewChat` sets `activeChatId`
+      // but does not itself decide which screen is on top, and the whole
+      // point of "Run" is to watch the command stream in.
+      setActiveView('chat')
+      await startNewChat({
+        message: `/run:${name}`,
+        agentIds: [agent.id],
+        mode: null,
+        providerId: null,
+        // Never read on this path: exactly one agent id and no on-demand
+        // MCPs always takes `useNewChatFlow`'s direct-A2A branch, which binds
+        // the chat to the agent and sends — it never reaches `resolveModel`.
+        providers: undefined,
+        allModels: undefined,
+        mcpIds: []
+      })
+    } finally {
+      setRunningName(null)
+    }
+  }
+
   return (
     <AgentCard
       title="Commands"
@@ -111,12 +150,15 @@ export function CommandsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               </div>
               <button
                 type="button"
-                disabled
-                title="Running a command arrives with the local engine"
+                onClick={() => run(command.name)}
+                disabled={runningName !== null}
+                title={`Run in a new chat with ${agent.name}`}
                 className="shrink-0 rounded-md px-2 py-1 text-[10px] font-medium
-                  text-[var(--color-text-muted)] disabled:cursor-not-allowed disabled:opacity-40"
+                  text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
+                  hover:text-[var(--color-text)] transition-colors
+                  disabled:cursor-not-allowed disabled:opacity-40"
               >
-                Run
+                {runningName === command.name ? 'Starting…' : 'Run'}
               </button>
             </li>
           ))}
