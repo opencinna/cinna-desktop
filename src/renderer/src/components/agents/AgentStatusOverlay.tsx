@@ -105,6 +105,48 @@ function FailureStrip({ message }: { message: string }): React.JSX.Element {
   )
 }
 
+/**
+ * Every failure this overlay can be showing, in one component, rendered
+ * **identically by both render paths** — the grid and `DetailView`.
+ *
+ * It is a component rather than a line duplicated into each branch because the
+ * defect it repairs was shaped exactly that way: the per-agent refresh error was
+ * added to the grid branch and not to the detail branch, so the one refresh
+ * button the tray links straight to (`useTrayActions.openStatusDetail` opens the
+ * overlay *into* DetailView) was the one that could not report a failure. That
+ * is a shape that repeats every time someone adds a fourth strip, and only a
+ * shared component makes it impossible — a prop threaded into `DetailView`
+ * would push overlay-level failure state into a presenter in `statusViews.tsx`
+ * and would still leave two places to remember.
+ *
+ * The batch failure is shown on the detail view too, deliberately **not**
+ * narrowed to remote agents even though a folder agent's snapshot is unaffected
+ * by the Cinna leg. Erring toward saying too much is the right direction here:
+ * the tray is the surface people check instead of opening the app, and a detail
+ * card reached from it with no failure surface at all is the same defect class
+ * as the one this fixes.
+ */
+function FailureStrips({
+  reauthNeeded,
+  error,
+  perAgentError,
+  onReauthRetry
+}: {
+  reauthNeeded: boolean
+  error: { message: string } | null
+  perAgentError: string | null
+  onReauthRetry: () => void
+}): React.JSX.Element | null {
+  if (!reauthNeeded && !error && !perAgentError) return null
+  return (
+    <>
+      {reauthNeeded && <ReauthErrorStrip onRetry={onReauthRetry} />}
+      {error && !reauthNeeded && <FailureStrip message={error.message} />}
+      {perAgentError && <FailureStrip message={perAgentError} />}
+    </>
+  )
+}
+
 export function AgentStatusOverlay(): React.JSX.Element | null {
   const {
     agentStatusOpen,
@@ -222,14 +264,24 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
           <X size={14} />
         </button>
         {detail ? (
-          <DetailView
-            snapshot={detail}
-            now={now}
-            refreshing={refreshingAgentId === detail.agentId}
-            onRefresh={() => forceRefresh.mutate(detail.agentId)}
-            onBack={() => setDetailAgentId(null)}
-            onStartChat={() => handleStartChat(detail.agentId)}
-          />
+          <div className="flex-1 flex flex-col overflow-hidden">
+            <div className="px-4 pt-3 empty:hidden">
+              <FailureStrips
+                reauthNeeded={reauthNeeded}
+                error={error}
+                perAgentError={perAgentError}
+                onReauthRetry={handleReauthRetry}
+              />
+            </div>
+            <DetailView
+              snapshot={detail}
+              now={now}
+              refreshing={refreshingAgentId === detail.agentId}
+              onRefresh={() => forceRefresh.mutate(detail.agentId)}
+              onBack={() => setDetailAgentId(null)}
+              onStartChat={() => handleStartChat(detail.agentId)}
+            />
+          </div>
         ) : (
           <>
             <div className="flex items-center gap-2 px-4 pt-3 pb-2 pr-12">
@@ -270,9 +322,12 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
                 </div>
               ) : (
                 <>
-                  {reauthNeeded && <ReauthErrorStrip onRetry={handleReauthRetry} />}
-                  {error && !reauthNeeded && <FailureStrip message={error.message} />}
-                  {perAgentError && <FailureStrip message={perAgentError} />}
+                  <FailureStrips
+                    reauthNeeded={reauthNeeded}
+                    error={error}
+                    perAgentError={perAgentError}
+                    onReauthRetry={handleReauthRetry}
+                  />
                 <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">
                   {sorted.map((s) => (
                     <StatusCard

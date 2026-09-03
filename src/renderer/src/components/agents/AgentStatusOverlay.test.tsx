@@ -194,6 +194,43 @@ describe('AgentStatusOverlay — the per-card Refresh', () => {
     expect(screen.getByText('Alpha')).toBeTruthy()
   })
 
+  /**
+   * The differential pair. This test and the grid one above it differ in
+   * **exactly one line** — `agentStatusDetailId` — and that is the point: the
+   * per-agent error was rendered inside the grid branch of
+   * `{detail ? <DetailView/> : <>…</>}`, so the grid test passed while the
+   * detail view, wired to the same mutation, said nothing at all.
+   *
+   * Detail is not the obscure half of that pair. `useTrayActions.openStatusDetail`
+   * sets `agentStatusDetailId` and opens the overlay *straight into* it, so the
+   * tray — the surface people check instead of opening the app — is the shortest
+   * path to the button that could not report a failure. Keep these two together:
+   * either one alone stops being evidence of anything.
+   */
+  it('says so on the detail view too, which the tray opens straight into', async () => {
+    setApi({ success: true, items: [folderRow], remoteError: null }, {
+      success: false,
+      code: 'unknown',
+      error: '"uv run scripts/update_status.py" exited with code 3.'
+    })
+    useUIStore.setState({ agentStatusOpen: true, agentStatusDetailId: 'folder:alpha' } as never)
+
+    render(createElement(AgentStatusOverlay), { wrapper })
+    // Back to grid — DetailView's own control, so we know we are on it.
+    expect(await screen.findByTitle('Back to grid')).toBeTruthy()
+
+    fireEvent.click(screen.getAllByTitle(/status refresh command/i)[0])
+
+    // Mechanism first here, unusually: without it a missing error message is
+    // ambiguous between "not rendered" and "the refresh never ran".
+    await waitFor(() =>
+      expect(get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: true })
+    )
+    expect(
+      await screen.findByText('"uv run scripts/update_status.py" exited with code 3.')
+    ).toBeTruthy()
+  })
+
   it('says nothing when a refresh succeeds', async () => {
     setApi({ success: true, items: [folderRow], remoteError: null }, {
       success: true,
