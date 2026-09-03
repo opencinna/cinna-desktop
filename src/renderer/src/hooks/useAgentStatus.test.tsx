@@ -131,6 +131,51 @@ describe('useAgentStatus — the account gate', () => {
   })
 })
 
+describe('a rejection is never rendered as health', () => {
+  it('surfaces an invoke that rejects with a plain Error', async () => {
+    // `userActivation.requireActivated()` throws a plain `Error`, `ipcHandle`
+    // re-throws, and the code is discarded at two IPC boundaries — so the
+    // renderer sees an `Error` that is neither an `AgentStatusRequestError` nor
+    // a partial failure. That combination used to produce `error: null` with
+    // `data: []`, which the overlay and the tray both print as "No agents have
+    // reported status yet." An inactive session shown as a clean panel.
+    signInAs('local_user')
+    stubApi({
+      list: vi.fn().mockRejectedValue(
+        new Error(
+          "Error invoking remote method 'agent-status:list': Error: Session not activated"
+        )
+      )
+    })
+
+    const { result } = renderHook(() => useAgentStatus(), { wrapper })
+
+    // The consequence: something is reported at all.
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+    expect(result.current.error?.message).toContain('Session not activated')
+    expect(result.current.data).toEqual([])
+  })
+
+  it('surfaces a rejection that is not an Error at all', async () => {
+    signInAs('local_user')
+    stubApi({ list: vi.fn().mockRejectedValue('something threw a string') })
+    const { result } = renderHook(() => useAgentStatus(), { wrapper })
+    await waitFor(() => expect(result.current.error).not.toBeNull())
+    expect(result.current.error?.message).toContain('something threw a string')
+  })
+
+  it('still reports nothing when nothing went wrong', async () => {
+    // The other half: the catch-all must not manufacture an error from a clean
+    // empty result, or every account with no agents sees a failure.
+    signInAs('local_user')
+    stubApi()
+    const { result } = renderHook(() => useAgentStatus(), { wrapper })
+    await waitFor(() => expect(result.current.isLoading).toBe(false))
+    expect(result.current.error).toBeNull()
+    expect(result.current.data).toEqual([])
+  })
+})
+
 describe('a partial failure is raised, not swallowed', () => {
   const folderRow = {
     agentId: 'folder:alpha',

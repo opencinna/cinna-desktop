@@ -52,6 +52,43 @@ export class AgentStatusRequestError extends Error {
  * of being wrong the cheap way is one IPC round trip returning `[]`, with no
  * network call behind it for a local-only account.
  */
+/**
+ * Whatever went wrong, as the typed error every consumer branches on — with a
+ * **catch-all for a rejection that is not one of ours**.
+ *
+ * The last branch is the load-bearing one. It used to be `null`, so an
+ * `ipcRenderer.invoke` that *rejected* — a plain `Error`, because IPC discards
+ * a thrown code at two boundaries — matched neither check and left the hook
+ * reporting `error: null` with `data: []` and `isLoading: false`. The overlay
+ * and the tray both read that as "nothing to report" and printed "No agents
+ * have reported status yet.", so a failure the user needed to act on arrived as
+ * a clean panel. That is the worst shape a status surface has.
+ *
+ * The main-process handler now returns its code as data instead of throwing, so
+ * this branch should be unreachable for the case that produced it. It stays
+ * anyway, and belt-and-braces is the point: **this is the half that holds when
+ * a future handler forgets the rule.** One of them is a fix; the pair is a
+ * guarantee that an unexpected rejection can never again render as health.
+ *
+ * The message is passed through raw, IPC plumbing prefix and all. It is ugly and
+ * it is supposed to be: an unexpected rejection reaching a user is a bug, and a
+ * tidied message is a bug that looks handled.
+ */
+function toRequestError(
+  queryError: unknown,
+  partial: { code: string; message: string } | null
+): AgentStatusRequestError | null {
+  if (queryError instanceof AgentStatusRequestError) return queryError
+  if (queryError) {
+    return new AgentStatusRequestError(
+      'unknown',
+      queryError instanceof Error ? queryError.message : String(queryError)
+    )
+  }
+  if (partial) return new AgentStatusRequestError(partial.code, partial.message)
+  return null
+}
+
 export function useAgentStatus(): {
   data: AgentStatusSnapshot[]
   isLoading: boolean
@@ -85,12 +122,7 @@ export function useAgentStatus(): {
   return {
     data: query.data?.items ?? [],
     isLoading: query.isLoading,
-    error:
-      query.error instanceof AgentStatusRequestError
-        ? query.error
-        : partial
-          ? new AgentStatusRequestError(partial.code, partial.message)
-          : null,
+    error: toRequestError(query.error, partial),
     refetch: async () => {
       try {
         const r = await query.refetch()
