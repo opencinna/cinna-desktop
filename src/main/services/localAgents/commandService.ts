@@ -26,13 +26,20 @@
  * without it, an editor save or a concurrent model turn could land mid-script
  * and the folder would show a half-written file to whichever side lost the
  * race. Taking the lock also gets two more invariants for free, both already
- * proven by the runner: a second `/run:` for the same agent (or a model turn)
- * refuses immediately with the existing "busy" message instead of racing, and
- * the folder watcher defers its rescan until the command's writes have
- * settled rather than reading a half-written tree. See `commandService.test.ts`
- * for the mutation-checked proof (concurrent run refused; editor-write-alike
- * probe blocked while a command holds the lock; lock released after both a
- * clean exit and a spawn failure).
+ * proven generically for other owner pairs (`turnLock.test.ts`,
+ * `localAgentService.test.ts:285-293`) and now proven for this exact pair
+ * too: a second `/run:` for the same agent refuses immediately with the
+ * existing "busy" message instead of racing (`commandService.test.ts`'s
+ * "the turn lock" suite), an **editor write** is refused the same way while a
+ * command is running (`turnLock.acquire(agentId, 'editor')` throws — same
+ * suite, "blocks an editor write"; mutation-checked: removing the
+ * `turnLock.withLock` wrapper fails that test), and the folder watcher defers
+ * its rescan until the command's writes have settled (this is
+ * `watcherService`'s own `turnLock.isLocked`/`whenFree` consumption,
+ * unmodified by this file and covered by `watcherService.test.ts` — not
+ * re-proven here for the 'command' owner specifically). Lock release is
+ * proven after a clean exit, a spawn failure, an abort and a timeout, all in
+ * the same suite.
  *
  * `turnLock.anyHeld()` — the engine-wide predicate — is deliberately NOT used
  * here: a command never touches the shared `opencode serve` process, so there
@@ -56,7 +63,13 @@ import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 
 const logger = createLogger('local-agent-command')
 
-/** Combined stdout+stderr cap. A runaway script must not grow the DB row without bound. */
+/**
+ * Combined stdout+stderr cap. A runaway script must not grow the DB row — or
+ * this process's heap — without bound: `execute()` stops *accumulating* the
+ * moment the cap is crossed (while still draining the pipes so the child
+ * never blocks on a full buffer), rather than buffering everything and
+ * trimming at the end.
+ */
 export const MAX_OUTPUT_BYTES = 200_000
 
 /**
@@ -73,10 +86,7 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
   return { text: '', parts: [], notices: [], error: { message, raw: raw ?? message } }
 }
 
-function truncate(output: string): string {
-  if (output.length <= MAX_OUTPUT_BYTES) return output
-  return output.slice(0, MAX_OUTPUT_BYTES) + '\n…output truncated…'
-}
+const TRUNCATION_MARKER = '\n…output truncated…'
 
 interface SpawnOutcome {
   output: string
@@ -84,6 +94,8 @@ interface SpawnOutcome {
   spawnError?: string
   exitCode: number | null
   timedOut: boolean
+  /** The caller's `AbortSignal` fired — a cancel, not a failure of the command itself. */
+  aborted: boolean
 }
 
 /**
@@ -149,7 +161,7 @@ function execute(
     // completion unkilled. Checking here closes that gap without spawning
     // anything at all.
     if (signal?.aborted) {
-      resolve({ output: '', exitCode: null, timedOut: false })
+      resolve({ output: '', exitCode: null, timedOut: false, aborted: true })
       return
     }
     let child: ReturnType<typeof spawn>
@@ -170,12 +182,14 @@ function execute(
         output: '',
         spawnError: err instanceof Error ? err.message : String(err),
         exitCode: null,
-        timedOut: false
+        timedOut: false,
+        aborted: false
       })
       return
     }
 
     let output = ''
+    let overflowed = false
     let settled = false
     let timedOut = false
 
@@ -189,17 +203,30 @@ function execute(
     ceiling.unref?.()
 
     const append = (chunk: Buffer): void => {
+      // Past the cap, keep consuming (an unread pipe would stall the child
+      // once its buffer fills) but hold on to nothing more — the bound is on
+      // what this process keeps, not on what the script may print.
+      if (overflowed) return
       output += chunk.toString('utf8')
+      if (output.length > MAX_OUTPUT_BYTES) {
+        output = output.slice(0, MAX_OUTPUT_BYTES)
+        overflowed = true
+      }
     }
     child.stdout?.on('data', append)
     child.stderr?.on('data', append)
 
-    const finish = (outcome: Omit<SpawnOutcome, 'output' | 'timedOut'>): void => {
+    const finish = (outcome: Omit<SpawnOutcome, 'output' | 'timedOut' | 'aborted'>): void => {
       if (settled) return
       settled = true
       clearTimeout(ceiling)
       signal?.removeEventListener('abort', onAbort)
-      resolve({ output: truncate(output), timedOut, ...outcome })
+      resolve({
+        output: overflowed ? output + TRUNCATION_MARKER : output,
+        timedOut,
+        aborted: signal?.aborted === true,
+        ...outcome
+      })
     }
 
     child.once('error', (err) => finish({ spawnError: err.message, exitCode: null }))
@@ -215,6 +242,13 @@ export interface CommandRunOutcome {
   localCommand: string
   output: string
   exitCode: number | null
+  /**
+   * The caller cancelled it (`signal` fired). Always `ok: false`, but a
+   * cancel is not a failure of the command — a caller that consumes {@link run}
+   * directly (rather than through `streamToAgent`, which already suppresses
+   * the error surface on abort) must not log or display it as one.
+   */
+  aborted: boolean
   /** Set when `ok` is false: a short, user-facing reason. */
   error?: string
 }
@@ -237,9 +271,10 @@ export const commandService = {
   /**
    * Run catalog command `name` for `agentId`, cwd'd to its folder, under the
    * turn lock. Never throws — every failure path (not in the catalog, the
-   * agent folder gone, the localized binary not on PATH, a non-zero exit, a
-   * spawn that throws) comes back as `ok: false` with a user-facing `error`
-   * and whatever output the process did produce before failing.
+   * agent folder gone, the kit contract unreadable, the localized binary not
+   * on PATH, a non-zero exit, a spawn that throws, a cancel, the ceiling)
+   * comes back as `ok: false` with a user-facing `error` and whatever output
+   * the process did produce before failing.
    */
   async run(
     userId: string,
@@ -255,27 +290,47 @@ export const commandService = {
       const message =
         err instanceof LocalAgentError ? err.message : 'That agent is no longer in your agents folder.'
       logger.warn('command run: agent could not be located', { agentId, error: String(err) })
-      return { ok: false, name, localCommand: '', output: '', exitCode: null, error: message }
+      return { ok: false, name, localCommand: '', output: '', exitCode: null, aborted: false, error: message }
     }
     const { root, agentDir } = located
 
-    const layout = getLayoutView(root.path)
-    const catalogPath = layout.layout.agent.command_catalog
-    const catalog = readCommandCatalog(agentDir, catalogPath)
-    const entry = catalog.commands.find((c) => c.name === name)
-    if (!entry) {
+    // `readCommandCatalog` never throws, but `getLayoutView` does when the
+    // kit contract itself cannot be loaded (`KitError`), and this function's
+    // contract is that it never does — so the whole lookup is guarded, not
+    // just the one call known to throw today.
+    let localCommand: string
+    let catalogPath: string
+    try {
+      const layout = getLayoutView(root.path)
+      catalogPath = layout.layout.agent.command_catalog
+      const catalog = readCommandCatalog(agentDir, catalogPath)
+      const entry = catalog.commands.find((c) => c.name === name)
+      if (!entry) {
+        return {
+          ok: false,
+          name,
+          localCommand: '',
+          output: '',
+          exitCode: null,
+          aborted: false,
+          error: `No command named "${name}" in ${catalogPath}.`
+        }
+      }
+      const context = { hasPyproject: existsSync(join(agentDir, 'pyproject.toml')) }
+      localCommand = layout.localizeCommand(entry.command, context)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      logger.warn('command run: catalog could not be resolved', { agentId, name, error: message })
       return {
         ok: false,
         name,
         localCommand: '',
         output: '',
         exitCode: null,
-        error: `No command named "${name}" in ${catalogPath}.`
+        aborted: false,
+        error: `The command catalog could not be read: ${message}`
       }
     }
-
-    const context = { hasPyproject: existsSync(join(agentDir, 'pyproject.toml')) }
-    const localCommand = layout.localizeCommand(entry.command, context)
 
     try {
       return await turnLock.withLock(agentId, 'command', async () => {
@@ -289,9 +344,14 @@ export const commandService = {
             localCommand,
             output: outcome.output,
             exitCode: null,
+            aborted: false,
             error: `"${localCommand}" could not run: ${outcome.spawnError}`
           }
         }
+        // Timeout before abort: the ceiling kills through the same path a
+        // cancel does, but the caller's signal never fires for it, so the two
+        // are distinguishable — and a run that hit the ceiling *and* was then
+        // cancelled is still a timeout, which is the fact worth reporting.
         if (outcome.timedOut) {
           return {
             ok: false,
@@ -299,7 +359,19 @@ export const commandService = {
             localCommand,
             output: outcome.output,
             exitCode: outcome.exitCode,
-            error: `"${localCommand}" did not finish within ${Math.round(COMMAND_TIMEOUT_MS / 1000)}s and was stopped.`
+            aborted: false,
+            error: `"${localCommand}" did not finish within ${Math.ceil(timeoutMs / 1000)}s and was stopped.`
+          }
+        }
+        if (outcome.aborted) {
+          return {
+            ok: false,
+            name,
+            localCommand,
+            output: outcome.output,
+            exitCode: outcome.exitCode,
+            aborted: true,
+            error: `"${localCommand}" was cancelled.`
           }
         }
         if (outcome.exitCode !== 0) {
@@ -309,10 +381,11 @@ export const commandService = {
             localCommand,
             output: outcome.output,
             exitCode: outcome.exitCode,
+            aborted: false,
             error: `"${localCommand}" exited with code ${outcome.exitCode}.`
           }
         }
-        return { ok: true, name, localCommand, output: outcome.output, exitCode: 0 }
+        return { ok: true, name, localCommand, output: outcome.output, exitCode: 0, aborted: false }
       })
     } catch (err) {
       // `turnLock.acquire` throws `LocalAgentError('turn_in_progress', …)` and
@@ -321,7 +394,7 @@ export const commandService = {
       // here rather than left for the IPC handler to rediscover.
       const message = err instanceof Error ? err.message : String(err)
       logger.warn('command could not start', { agentId, name, error: message })
-      return { ok: false, name, localCommand, output: '', exitCode: null, error: message }
+      return { ok: false, name, localCommand, output: '', exitCode: null, aborted: false, error: message }
     }
   },
 

@@ -62,6 +62,20 @@ vi.mock('node:child_process', async (importOriginal) => {
   }
 })
 
+// Same shape as `spawnShouldThrow`: the real contract store, except when a
+// test needs `getLayoutView` to fail the way a broken install would.
+const layoutShouldThrow = vi.hoisted(() => ({ current: false }))
+vi.mock('../../kit/contractStore', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../kit/contractStore')>()
+  return {
+    ...actual,
+    getLayoutView: (...args: Parameters<typeof actual.getLayoutView>) => {
+      if (layoutShouldThrow.current) throw new Error('synthetic contract failure')
+      return actual.getLayoutView(...args)
+    }
+  }
+})
+
 const { commandService, resolveCommandRunner, MAX_OUTPUT_BYTES } = await import('./commandService')
 const { turnLock } = await import('./turnLock')
 const { LocalAgentError } = await import('../../errors')
@@ -88,6 +102,7 @@ beforeEach(() => {
     return { root: { path: workshop }, agentDir }
   }
   spawnShouldThrow.current = false
+  layoutShouldThrow.current = false
   turnLock.releaseAll()
 })
 
@@ -158,6 +173,16 @@ describe('error paths', () => {
     expect(result.error).toBe('That agent is no longer in your agents folder.')
   })
 
+  it('the kit contract cannot be loaded: reported, not thrown, and no lock is taken', async () => {
+    writeCatalog('commands:\n  - name: check\n    description: x\n    command: true\n')
+    layoutShouldThrow.current = true
+    const result = await commandService.run(USER, AGENT_ID, 'check')
+    expect(result.ok).toBe(false)
+    expect(result.aborted).toBe(false)
+    expect(result.error).toMatch(/catalog could not be read: synthetic contract failure/)
+    expect(turnLock.isLocked(AGENT_ID)).toBe(false)
+  })
+
   it('the localized binary is not on PATH: a real shell 127, captured as output', async () => {
     writeCatalog(
       'commands:\n  - name: ghost\n    description: x\n    command: cinna-test-definitely-not-a-real-binary-xyz\n'
@@ -191,7 +216,10 @@ describe('error paths', () => {
     writeCatalog('commands:\n  - name: slow\n    description: x\n    command: sleep 5\n')
     const result = await commandService.run(USER, AGENT_ID, 'slow', undefined, 80)
     expect(result.ok).toBe(false)
-    expect(result.error).toMatch(/did not finish within/)
+    // The ceiling actually applied (80ms → "1s"), not the 5-minute default.
+    expect(result.error).toMatch(/did not finish within 1s/)
+    // A timeout is not a cancel: nothing on the caller's side fired.
+    expect(result.aborted).toBe(false)
     expect(turnLock.isLocked(AGENT_ID)).toBe(false)
   }, 10_000)
 
@@ -218,6 +246,11 @@ describe('error paths', () => {
     const result = await pending
     expect(Date.now() - abortedAt).toBeLessThan(1500)
     expect(result.ok).toBe(false)
+    // A cancel is reported as one — `streamToAgent` suppresses the error
+    // surface on abort, but a direct caller of `run()` needs the flag to tell
+    // a cancel from a failure of the command itself.
+    expect(result.aborted).toBe(true)
+    expect(result.error).toMatch(/was cancelled/)
     expect(turnLock.isLocked(AGENT_ID)).toBe(false)
     const { existsSync } = await import('node:fs')
     expect(existsSync(marker)).toBe(false)
@@ -233,6 +266,7 @@ describe('error paths', () => {
     controller.abort()
     const result = await pending
     expect(result.ok).toBe(false)
+    expect(result.aborted).toBe(true)
     expect(turnLock.isLocked(AGENT_ID)).toBe(false)
   })
 })
@@ -268,9 +302,14 @@ describe('success', () => {
     )
     const result = await commandService.run(USER, AGENT_ID, 'noisy')
     expect(result.ok).toBe(true)
-    expect(result.output.length).toBeLessThan(over)
     expect(result.output.endsWith('…output truncated…')).toBe(true)
     expect(result.output.startsWith('a'.repeat(100))).toBe(true)
+    // Exactly the cap plus the marker — what is kept is bounded, whatever
+    // the script printed. (That the bound is enforced as chunks arrive
+    // rather than once at the end — the heap, not just the row — is a
+    // property of `execute()`'s `append` a black-box run cannot distinguish;
+    // it is stated in `MAX_OUTPUT_BYTES`'s docstring and checked by reading.)
+    expect(result.output.length).toBe(MAX_OUTPUT_BYTES + '\n…output truncated…'.length)
   }, 10_000)
 })
 
@@ -293,6 +332,23 @@ describe('the turn lock', () => {
     expect(secondResult.ok).toBe(false)
     expect(secondResult.error).toMatch(/busy/i)
     expect(firstResult.ok).toBe(true)
+  })
+
+  it('blocks an editor write while a command is running, not just another command', async () => {
+    // The module header claims this specifically — that a command and the
+    // page editors share the same lock, `owner` string aside — and until now
+    // nothing had actually run the 'command'-vs-'editor' pair: every other
+    // test here only pits a command against another command.
+    // `localAgentService.ts`'s save path takes the lock the same way,
+    // `turnLock.acquire(agentId, 'editor')`; this drives that call directly
+    // rather than standing up the editor's own save machinery.
+    writeCatalog('commands:\n  - name: slow\n    description: x\n    command: sleep 0.2\n')
+    const pending = commandService.run(USER, AGENT_ID, 'slow')
+    expect(() => turnLock.acquire(AGENT_ID, 'editor')).toThrow(/busy/i)
+    await pending
+    // And released afterwards — an editor write is not permanently locked out.
+    const handle = turnLock.acquire(AGENT_ID, 'editor')
+    handle.release()
   })
 })
 
