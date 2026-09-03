@@ -408,20 +408,39 @@ export function useAgentFileEditor(input: {
 
   const persist = useCallback(() => {
     // Whatever brought us here — the timer firing or a blur — the armed timer
-    // is now spent. Clearing it is what stops `flushNow` and the debounce from
-    // both firing: `flushNow` at t=200 used to leave the t=700 timer armed, and
-    // that second save went out with the *same* stamp while the first was still
-    // in flight. The first landed, the second was refused as `manifest_modified`
-    // and the user was told their file had changed on disk — for a save that had
-    // just succeeded, with Reload (which discards their text) the only way out.
+    // is now spent, so drop it.
+    //
+    // Narrower than it looks, and the narrowness is the point: this block is
+    // **not** what stops the duplicate save. Delete it and both halves of the
+    // in-flight race still hold, because every path that sends puts a fresh
+    // object into `state`, which re-runs the debounce effect and lets its
+    // cleanup tear the old timer down. That race is the `inFlightRef` guard's,
+    // below — see the two "autosave race" tests in
+    // `useLocalAgents.autosave.test.tsx`, which pass with this block removed.
+    //
+    // What it does hold is the one path that returns having sent *nothing* and
+    // changed *nothing*: a flush the `validate` call below rejects. `state` is
+    // untouched there, so the effect never re-runs and nothing else would clear
+    // the superseded timer — it would fire and re-validate on its own. Clearing
+    // it here is what keeps a rejected edit sitting still until the user types
+    // again. Pinned by "leaves no timer armed behind it" in that same file.
     if (timerRef.current !== null) {
       clearTimeout(timerRef.current)
       timerRef.current = null
     }
-    // One save at a time, for the same reason: a second request built from the
-    // pre-save stamp is guaranteed to be refused. Work typed while this one is
-    // in flight is not lost — the settle handler changes `state`, which re-runs
-    // the effect below and arms a fresh timer for it.
+    // One save at a time. This is the guard that closes the W1 race, and it is
+    // the only one that does: a second request built from the pre-save stamp is
+    // guaranteed to be refused, because main re-reads the file at write time
+    // and the first save has already spent that stamp. `flushNow` at t=200 used
+    // to leave the t=700 timer armed, and that second save went out with the
+    // *same* stamp while the first was still in flight. The first landed, the
+    // second was refused as `manifest_modified`, and the user was told their
+    // file had changed on disk — for a save that had just succeeded, with
+    // Reload (which discards their text) the only way out.
+    //
+    // Work typed while this one is in flight is not lost — the settle handler
+    // changes `state`, which re-runs the effect below and arms a fresh timer
+    // for it, built from the stamp the save returned.
     if (inFlightRef.current) return
     const current = stateRef.current
     const request = saveRequest(current)
