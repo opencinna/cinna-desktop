@@ -231,6 +231,57 @@ describe('AgentStatusOverlay — the per-card Refresh', () => {
     ).toBeTruthy()
   })
 
+  it('keeps one card’s spinner on while another card is refreshed', async () => {
+    // The shared-mutation bug: `forceRefresh.variables` names only the most
+    // recent call, so starting B stopped A's spinner and re-enabled A's button
+    // mid-flight — which invites a second click that the turn lock refuses,
+    // swallows as `busy`, and reports as success.
+    const rows = [folderRow, { ...folderRow, agentId: 'folder:beta', name: 'Beta' }]
+    setApi({ success: true, items: rows, remoteError: null })
+    let settleA: (v: unknown) => void = () => {}
+    get.mockImplementation((args: { agentId: string }) =>
+      args.agentId === 'folder:alpha'
+        ? new Promise((resolve) => {
+            settleA = resolve
+          })
+        : Promise.resolve({ success: true, item: rows[1] })
+    )
+
+    render(createElement(AgentStatusOverlay), { wrapper })
+    expect(await screen.findByText('Alpha')).toBeTruthy()
+
+    const buttons = screen.getAllByTitle(/status refresh command/i)
+    fireEvent.click(buttons[0])
+    await waitFor(() => expect((buttons[0] as HTMLButtonElement).disabled).toBe(true))
+
+    // Refresh the *other* card while the first is still in flight.
+    fireEvent.click(buttons[1])
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(2))
+
+    // The consequence: A is still shown as refreshing, because it still is.
+    expect((buttons[0] as HTMLButtonElement).disabled).toBe(true)
+
+    settleA({ success: true, item: rows[0] })
+    await waitFor(() => expect((buttons[0] as HTMLButtonElement).disabled).toBe(false))
+  })
+
+  it('ignores a second click on an agent that is already refreshing', async () => {
+    setApi({ success: true, items: [folderRow], remoteError: null })
+    get.mockImplementation(() => new Promise(() => {}))
+
+    render(createElement(AgentStatusOverlay), { wrapper })
+    expect(await screen.findByText('Alpha')).toBeTruthy()
+
+    const button = screen.getAllByTitle(/status refresh command/i)[0]
+    fireEvent.click(button)
+    await waitFor(() => expect(get).toHaveBeenCalledTimes(1))
+    fireEvent.click(button)
+    // A second run would be refused by the agent's turn lock, swallowed as
+    // `busy`, and returned as `{success: true}` — a click that looks like it
+    // worked and did nothing.
+    expect(get).toHaveBeenCalledTimes(1)
+  })
+
   it('says nothing when a refresh succeeds', async () => {
     setApi({ success: true, items: [folderRow], remoteError: null }, {
       success: true,

@@ -159,7 +159,44 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
   const { data: statuses, isLoading, error, refetch } = useAgentStatus()
   const forceRefresh = useForceRefreshAgentStatus()
   const refreshAll = useForceRefreshAllAgentStatuses()
-  const refreshingAgentId = forceRefresh.isPending ? forceRefresh.variables ?? null : null
+  /**
+   * Which agents are refreshing, tracked **per agent** rather than read off the
+   * one shared mutation.
+   *
+   * `forceRefresh.isPending && forceRefresh.variables` names only the *most
+   * recent* call, so clicking card B while A was still running stopped A's
+   * spinner and re-enabled A's button mid-flight — which then invites a second
+   * click on A, and for a folder agent that second run is refused by the turn
+   * lock, swallowed as `busy`, and comes back `{success: true}` with the
+   * on-disk snapshot. It looks like it worked and it did nothing, which is this
+   * phase's own theme wearing a different hat.
+   *
+   * A set keyed by agent id makes each button tell the truth about its own
+   * agent and makes a second click on an already-running one a no-op.
+   */
+  const [refreshingIds, setRefreshingIds] = useState<ReadonlySet<string>>(new Set())
+  const refreshAgent = (agentId: string): void => {
+    if (refreshingIds.has(agentId)) return
+    setRefreshingIds((prev) => new Set(prev).add(agentId))
+    // `mutateAsync`, not `mutate` with a per-call `onSettled`. A `useMutation`
+    // observer keeps only the *latest* call's callbacks, so with two refreshes
+    // in flight the first one's `onSettled` never fires and its card stays
+    // spinning for the life of the overlay — the same concurrency assumption
+    // that produced the bug this is fixing, one layer down. The returned
+    // promise is per call and settles for the call that made it. Rejections are
+    // swallowed here because the failure is already rendered from the
+    // mutation's own state; this handler exists only to clear the spinner.
+    void forceRefresh
+      .mutateAsync(agentId)
+      .catch(() => undefined)
+      .finally(() =>
+        setRefreshingIds((prev) => {
+          const next = new Set(prev)
+          next.delete(agentId)
+          return next
+        })
+      )
+  }
   // Reauth can surface from the background poll (query error) or from a bulk
   // "Refresh all" where one agent reported the session expired.
   const reauthNeeded = error?.code === 'reauth_required' || refreshAll.data?.reauthRequired === true
@@ -213,6 +250,11 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
   // nothing. That is the surface a folder agent's broken `status_refresh_command`
   // lands on, so it had to stop being silent for this phase to mean anything;
   // it repairs the remote path on the way past.
+  // Still one shared strip, and deliberately un-attributed: with two refreshes
+  // in flight `forceRefresh.variables` names the latest *call* while `.data`
+  // holds the latest *settled result*, and the two can disagree — so naming an
+  // agent here would sometimes name the wrong one, which is worse than naming
+  // none. See the doc's limitations list.
   const refreshResult = forceRefresh.data
   const perAgentError = forceRefresh.isPending
     ? null
@@ -276,8 +318,8 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
             <DetailView
               snapshot={detail}
               now={now}
-              refreshing={refreshingAgentId === detail.agentId}
-              onRefresh={() => forceRefresh.mutate(detail.agentId)}
+              refreshing={refreshingIds.has(detail.agentId)}
+              onRefresh={() => refreshAgent(detail.agentId)}
               onBack={() => setDetailAgentId(null)}
               onStartChat={() => handleStartChat(detail.agentId)}
             />
@@ -334,8 +376,8 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
                       key={s.agentId}
                       snapshot={s}
                       now={now}
-                      refreshing={refreshingAgentId === s.agentId}
-                      onRefresh={() => forceRefresh.mutate(s.agentId)}
+                      refreshing={refreshingIds.has(s.agentId)}
+                      onRefresh={() => refreshAgent(s.agentId)}
                       onViewDetails={() => setDetailAgentId(s.agentId)}
                       onStartChat={() => handleStartChat(s.agentId)}
                     />
