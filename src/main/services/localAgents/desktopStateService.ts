@@ -32,7 +32,41 @@ export interface DesktopSessionState {
   updatedAt: number
 }
 
-/** A permission the user granted this agent, keyed by permission id. */
+/**
+ * A permission the user granted this agent, keyed by permission id.
+ *
+ * **Still not written by the runner — but the reason recorded here before was
+ * wrong, and the correction matters because it changes what is possible.**
+ *
+ * The original note said OpenCode is authoritative because "replying `always`
+ * writes into OpenCode's own store and the desktop cannot opt out of that", so
+ * a copy here could only be a mirror that drifts. The premise is false. The
+ * desktop *can* opt out, completely: **`once` persists nothing.** That was
+ * verified against the real binary — `GET /api/permission/saved` stayed empty
+ * through repeated `once` replies and gained a row only at the moment `always`
+ * was sent. Nothing reaches OpenCode's store unless the desktop puts it there.
+ *
+ * Which is fortunate, because OpenCode's store turned out to be unusable for
+ * this feature's purpose. An `always` grant writes
+ * `{projectID: "global", action, resource: "*"}` — no directory, no session, no
+ * agent — into `~/.local/share/opencode/opencode.db`, a **user-global** file
+ * shared with the user's own OpenCode installation. One grant made in one agent
+ * folder was observed silently authorising a *different* folder agent, and it
+ * outlives engine restarts. The canonical record of that observation is
+ * `docs/agents/local_agents/opencode_contract.md`, which supersedes this
+ * comment if the two ever disagree; `ALWAYS_GRANTS_ENABLED` in
+ * `src/shared/localAgentRequests.ts` carries the short version.
+ *
+ * So the eventual design is the opposite of what this comment used to say:
+ * **the desktop should be authoritative**, remembering grants per agent folder
+ * in this file and auto-answering `once` from them, so nothing is ever written
+ * to the shared store. That is a Phase 7+ decision and is deliberately not
+ * built yet — which is why this field is still unwritten today, and why it is
+ * kept rather than removed.
+ *
+ * If you are looking for where "always" is remembered: nowhere. The Always
+ * answer is not offered at all.
+ */
 export interface DesktopPermissionGrant {
   granted: boolean
   /** `'once'` grants are not persisted; only `'always'` reaches this file. */

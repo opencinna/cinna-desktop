@@ -26,6 +26,7 @@ import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
 import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
 import type { MessagePart } from '../../shared/messageParts'
+import type { AgentTurnRunner } from './agentTurn/runner'
 
 const logger = createLogger('A2A')
 
@@ -49,11 +50,23 @@ interface ActiveRequest {
 const activeRequests = new Map<string, ActiveRequest>()
 
 export interface StreamToAgentInput {
+  /**
+   * Which runner drives this turn — chosen by `resolveTurnRunner(agent)` in the
+   * IPC handler, not decided here.
+   *
+   * `streamToAgent` is the *direct-chat wrapper*: register for cancellation,
+   * run one turn, persist the assistant row and its notices, pump the port. All
+   * of that is identical for an A2A agent and a folder agent, so the only thing
+   * that varies is the turn itself. Passing the runner in rather than branching
+   * on `source` here keeps this function ignorant of what kinds of agent exist,
+   * which is what makes it a lift rather than a rewrite.
+   */
+  runner: AgentTurnRunner
   chatId: string
   agentId: string
   agentName: string
-  endpointUrl: string
-  cardUrl: string
+  endpointUrl?: string | null
+  cardUrl?: string | null
   accessToken?: string
   wireContent: string
   /**
@@ -86,8 +99,19 @@ export interface RunAgentTurnInput {
   chatId: string
   agentId: string
   agentName: string
-  endpointUrl: string
-  cardUrl: string
+  /**
+   * Where the agent answers, for an agent that answers over HTTP.
+   *
+   * **Optional since the runner seam landed (Phase 6).** A folder agent has no
+   * endpoint and no card — it is run by the local engine, not reached over
+   * A2A — and this type is the shared input to `AgentTurnRunner`, so both
+   * shapes have to fit through it. `runAgentTurn` below still requires both
+   * (see {@link A2ARunAgentTurnInput}); `A2ATurnRunner` is the single place
+   * that narrows, so the compiler continues to refuse an A2A turn with no card
+   * rather than discovering it at the SDK call.
+   */
+  endpointUrl?: string | null
+  cardUrl?: string | null
   accessToken?: string
   wireContent: string
   fileIds?: string[]
@@ -139,14 +163,31 @@ function isAuthRejection(err: unknown): err is A2aHttpError {
 }
 
 /**
+ * {@link RunAgentTurnInput} with the two fields an A2A turn cannot do without.
+ *
+ * The shared input widened them to optional so a folder agent — which has
+ * neither — fits through `AgentTurnRunner`. This re-narrows for the A2A pump,
+ * so the compiler still refuses a turn with no card at the call site rather
+ * than letting it surface as an SDK failure mid-stream. `A2ATurnRunner` in
+ * `agentTurn/index.ts` is the single place that does the narrowing.
+ */
+export type A2ARunAgentTurnInput = RunAgentTurnInput & {
+  endpointUrl: string
+  cardUrl: string
+}
+
+/**
  * Port-free core of a single A2A turn: create the client, run the streaming
  * (or non-streaming) RPC, accumulate parts via {@link StreamPartsAccumulator},
  * upsert the session for continuity, and return the dual output. Persistence
  * of assistant/notice rows and port wiring are the caller's responsibility —
  * see {@link a2aStreamingService.streamToAgent} (direct mode) and
  * `A2AAsMcpProvider` (orchestrated mode).
+ *
+ * **Unchanged by the Phase 6 runner seam.** Its body is exactly what it was;
+ * only its input type re-narrows the widened shared one.
  */
-export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult> {
+export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgentTurnResult> {
   const {
     chatId,
     agentId,
@@ -373,6 +414,7 @@ export async function runAgentTurn(input: RunAgentTurnInput): Promise<RunAgentTu
 export const a2aStreamingService = {
   async streamToAgent(input: StreamToAgentInput): Promise<void> {
     const {
+      runner,
       chatId,
       agentId,
       agentName,
@@ -392,7 +434,7 @@ export const a2aStreamingService = {
     port.postMessage({ type: 'request-id', requestId })
 
     try {
-      const result = await runAgentTurn({
+      const result = await runner.runTurn({
         chatId,
         agentId,
         agentName,
@@ -455,6 +497,30 @@ export const a2aStreamingService = {
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done' })
       jobService.reportRunCompletion(chatId, 'succeeded')
+    } catch (err) {
+      // **A runner is not trusted to keep its own contract here.**
+      // `AgentTurnRunner.runTurn` documents that it never throws, and the A2A
+      // one does not — but this `try` had only a `finally`, so the day a runner
+      // broke that promise the port closed having posted neither `done` nor
+      // `error` and the renderer sat in the streaming state forever. That is
+      // exactly what `turnLock.acquire`'s `LocalAgentError` did: it is thrown,
+      // not returned, and it reaches here from `LocalAgentTurnRunner`.
+      //
+      // Fixed at both ends — the local runner catches it too — because this is
+      // the wrapper every future runner will pass through, and a hung chat is
+      // unrecoverable without a restart while a visible error is not.
+      const message = err instanceof Error ? err.message : String(err)
+      logger.error('a turn threw out of its runner', {
+        agentId,
+        chatId,
+        error: message,
+        stack: err instanceof Error ? err.stack : undefined
+      })
+      if (!abortController.signal.aborted) {
+        port.postMessage({ type: 'error', error: message })
+        messageRepo.saveError({ chatId, short: message, detail: String(err) })
+        jobService.reportRunCompletion(chatId, 'failed', message)
+      }
     } finally {
       port.close()
       activeRequests.delete(requestId)

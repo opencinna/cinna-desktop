@@ -543,6 +543,29 @@ const api = {
     },
     cancelMessage: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agent:cancel-message', requestId),
+    /**
+     * Answer a permission or question a **local** agent is parked on mid-turn.
+     *
+     * Deliberately not on the turn's MessagePort: the port exists only for a
+     * direct chat, and the same request can be raised by a folder agent running
+     * as an orchestrated tool, where there is none. The engine's own request id
+     * (`per_*` / `que_*`) is the address, and it reaches the renderer as the
+     * tool part's `toolId`.
+     *
+     * Returns an outcome **as data**. A thrown rejection loses its code across
+     * `ipcMain.handle` and again across `contextBridge`, so a renderer branch on
+     * `err.code` would silently never fire.
+     */
+    answerRequest: (data: {
+      requestId: string
+      reply?: 'once' | 'always' | 'reject'
+      answers?: string[][]
+    }): Promise<{ ok: boolean; reason?: string }> =>
+      ipcRenderer.invoke('agent:answer-request', data),
+    pendingRequests: (
+      chatId: string
+    ): Promise<{ requestId: string; kind: 'permission' | 'question' }[]> =>
+      ipcRenderer.invoke('agent:pending-requests', chatId),
     getSession: (
       chatId: string
     ): Promise<{

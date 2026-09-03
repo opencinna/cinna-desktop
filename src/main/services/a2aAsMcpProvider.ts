@@ -16,7 +16,8 @@ import type { ToolProvider, ToolCallOptions, ToolExecutionResult } from '../llm/
 import type { AgentRow } from '../db/agents'
 import type { A2AClient } from '@a2a-js/sdk/client'
 import { agentService } from './agentService'
-import { runAgentTurn } from './a2aStreamingService'
+import { resolveTurnRunner } from './agentTurn'
+import { isFolderAgent } from './agentTurn/runner'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { createLogger } from '../logger/logger'
 
@@ -126,30 +127,28 @@ export class A2AAsMcpProvider implements ToolProvider {
 
     const signal = opts?.signal ?? new AbortController().signal
 
-    let endpointUrl: string | null
+    // A folder agent has no endpoint and no token — it is run by the local
+    // engine — so the pre-flight is skipped for it rather than asked a question
+    // it can only answer with null. Dispatch is on `source`, the same
+    // discriminator the direct-chat handler uses.
+    const runner = resolveTurnRunner(this.agent)
+    const isFolder = isFolderAgent(this.agent)
+
+    let endpointUrl: string | null = null
     let accessToken: string | undefined
-    try {
-      endpointUrl = await agentService.resolveEndpointIfNeeded(this.ownerId, this.agent)
-      accessToken = await agentService.resolveAccessToken(this.ownerId, this.agent)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      logger.error('agent tool pre-flight failed', { agentId: this.agent.id, error: message })
-      return { content: `Agent unavailable: ${message}`, parts: [], isError: true }
-    }
-
-    // Null means "this agent has no A2A endpoint" — a folder agent, which the
-    // local runner serves. Orchestrating one is Phase 6's job; this provider
-    // only speaks A2A, so it declines rather than building a request to `null`.
-    if (endpointUrl === null) {
-      return {
-        content: 'This agent runs locally and cannot be called as a tool yet.',
-        parts: [],
-        isError: true
+    if (!isFolder) {
+      try {
+        endpointUrl = await agentService.resolveEndpointIfNeeded(this.ownerId, this.agent)
+        accessToken = await agentService.resolveAccessToken(this.ownerId, this.agent)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        logger.error('agent tool pre-flight failed', { agentId: this.agent.id, error: message })
+        return { content: `Agent unavailable: ${message}`, parts: [], isError: true }
       }
-    }
 
-    if (!this.agent.cardUrl) {
-      return { content: 'Agent has no card URL configured', parts: [], isError: true }
+      if (endpointUrl === null || !this.agent.cardUrl) {
+        return { content: 'Agent has no endpoint configured', parts: [], isError: true }
+      }
     }
 
     // When the orchestrator aborts, also tell the remote agent to cancel its
@@ -169,7 +168,7 @@ export class A2AAsMcpProvider implements ToolProvider {
     signal.addEventListener('abort', onAbort, { once: true })
 
     try {
-      const result = await runAgentTurn({
+      const result = await runner.runTurn({
         chatId: this.chatId,
         agentId: this.agent.id,
         agentName: this.agent.name,
@@ -218,7 +217,11 @@ export function buildAgentToolProviders(
 
   for (const agentId of agentIds) {
     const located = agentService.findAgent(defaultUserId, profileUserId, agentId)
-    if (!located || !located.row.cardUrl) {
+    // A folder agent legitimately has no card URL (`cardUrl: null` at insert),
+    // so the card check has to come *after* the source check or every folder
+    // agent is skipped here exactly as it was skipped in the direct-chat
+    // handler. Same defect, same shape, second site.
+    if (!located || (!isFolderAgent(located.row) && !located.row.cardUrl)) {
       logger.warn('on-demand agent skipped (unresolved or no card URL)', { agentId })
       continue
     }

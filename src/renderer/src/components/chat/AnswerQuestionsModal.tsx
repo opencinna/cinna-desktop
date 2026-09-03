@@ -5,6 +5,7 @@ import {
   CUSTOM_ANSWER_VALUE,
   formatAnswersForSubmission,
   isQuestionAnswered,
+  toStructuredAnswers,
   isRecommended,
   type AskQuestion,
   type CollectedAnswer
@@ -12,7 +13,15 @@ import {
 
 interface AnswerQuestionsModalProps {
   questions: AskQuestion[]
-  onSubmit: (text: string) => void
+  /**
+   * Both serialisations of the same answers.
+   *
+   * `text` is the prose turn a **cloud** agent resumes on; `structured` is the
+   * `string[][]` a **local** agent's parked question endpoint takes. The modal
+   * does not know which kind of agent asked, so it hands over both and lets the
+   * block that owns the request decide.
+   */
+  onSubmit: (text: string, structured: string[][]) => void
   onClose: () => void
 }
 
@@ -87,7 +96,7 @@ export function AnswerQuestionsModal({
     if (!allAnswered) return
     const text = formatAnswersForSubmission(questions, answers)
     if (!text.trim()) return
-    onSubmit(text)
+    onSubmit(text, toStructuredAnswers(questions, answers))
   }
 
   return createPortal(

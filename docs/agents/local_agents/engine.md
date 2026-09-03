@@ -1,5 +1,8 @@
 # The Local Engine, Runtimes & Prompt Assembly
 
+> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. Three things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why *Always* is gated off.
+
+
 ## Purpose
 
 What actually runs a folder agent: one desktop-managed `opencode serve` process bound to loopback, a generated OpenCode configuration derived from this machine's AI credentials and folder agents, the **runtime** (credential + model) each agent resolves to, and the per-agent system prompt assembled out of the agent's own files.

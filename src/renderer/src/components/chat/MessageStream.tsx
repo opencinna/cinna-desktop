@@ -19,6 +19,13 @@ import { CommandToolFrame } from './CommandToolFrame'
 import { NoticeBlock } from './NoticeBlock'
 import { AskUserQuestionBlock } from './AskUserQuestionBlock'
 import { isAskUserQuestionTool, parseAskQuestions } from '../../utils/askUserQuestion'
+import {
+  isEngineRequestId,
+  isPermissionRequestTool,
+  parsePermissionRequest
+} from '../../../../shared/localAgentRequests'
+import { PermissionRequestBlock } from './PermissionRequestBlock'
+import { useAgentRequests } from '../../hooks/useAgentRequests'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import {
   type RenderNode,
@@ -38,7 +45,12 @@ function pairCommandTools<
   const pairResultIdx = new Map<number, number>()
   const consumed = new Set<number>()
   items.forEach((item, idx) => {
-    if (item.kind !== 'tool' || !item.commandInvocation || !item.toolId) return
+    // Two kinds of tool part own their result rather than letting it render as
+    // a standalone block: a synthesized `/run:*` pair, and a local agent's
+    // permission or question ask, whose result is the decision record folded
+    // into the request block.
+    if (item.kind !== 'tool' || !item.toolId) return
+    if (!item.commandInvocation && !isEngineRequestId(item.toolId)) return
     const ri = items.findIndex(
       (q, j) => j > idx && q.kind === 'tool_result' && q.toolId === item.toolId
     )
@@ -294,6 +306,69 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   // waiting on it: it's the final turn (no user reply after it) and nothing is
   // streaming. Once the user answers, a new user row lands after it (or a
   // stream starts), so the prompt reverts to a muted, read-only record.
+  // What a **local** agent is parked on right now. A local request is
+  // answerable while the turn is still streaming, which is precisely the state
+  // `activeQuestionMsgId` below excludes — the two live side by side rather
+  // than one replacing the other.
+  const { isPending, answerPermission, answerQuestion } = useAgentRequests(chatId, isStreaming)
+
+
+  /**
+   * One interactive block for a `tool` part that is a permission ask or a
+   * question.
+   *
+   * Shared by all four render sites — persisted single-agent, persisted
+   * grouped, and the two live-stream paths — because the decision "is this
+   * request still open" has exactly one right answer and four copies of it
+   * would drift.
+   */
+  const renderRequestBlock = (
+    key: string,
+    part: { toolName?: string; toolId?: string; toolInput?: Record<string, unknown> },
+    questionInteractive: boolean,
+    decision?: string
+  ): React.JSX.Element | null => {
+    // `toolId` carries the engine's own request id (`per_*` / `que_*`), which
+    // is also the address an answer is posted to.
+    const live = part.toolId && isPending(part.toolId) ? part.toolId : undefined
+    // **A block replayed from history must never be live.** These parts are
+    // persisted and re-rendered when the chat is reopened, and by then the
+    // `per_*` behind them is long dead — the registry that owns it is
+    // in-memory and died with the turn. `activeQuestionMsgId` cannot be
+    // trusted here: it was written for a *cloud* question, which stays
+    // answerable after its turn because the answer is simply the next user
+    // turn. A local request has a live address instead, so the registry is the
+    // only authority on whether it is still open.
+    const questionLive = isEngineRequestId(part.toolId) ? !!live : questionInteractive
+    if (isPermissionRequestTool(part.toolName)) {
+      const request = parsePermissionRequest(part.toolInput)
+      if (!request) return null
+      return (
+        <PermissionRequestBlock
+          key={key}
+          request={request}
+          requestId={live}
+          interactive={!!live}
+          decision={decision}
+          onAnswer={answerPermission}
+        />
+      )
+    }
+    if (isAskUserQuestionTool(part.toolName)) {
+      return (
+        <AskUserQuestionBlock
+          key={key}
+          questions={parseAskQuestions(part.toolInput)}
+          interactive={questionLive}
+          chatId={chatId}
+          liveRequestId={live}
+          onAnswerLocal={answerQuestion}
+        />
+      )
+    }
+    return null
+  }
+
   const lastMsg = messages[messages.length - 1]
   const activeQuestionMsgId =
     !isStreaming &&
@@ -500,15 +575,18 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         if (p.kind === 'thinking') {
                           return <ThinkingBlock key={k} content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                         }
-                        if (p.kind === 'tool' && isAskUserQuestionTool(p.toolName)) {
-                          return (
-                            <AskUserQuestionBlock
-                              key={k}
-                              questions={parseAskQuestions(p.toolInput)}
-                              interactive={msg.id === activeQuestionMsgId}
-                              chatId={chatId}
-                            />
+                        if (
+                          p.kind === 'tool' &&
+                          (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
+                        ) {
+                          const dri = pairResultIdx.get(idx)
+                          const block = renderRequestBlock(
+                            k,
+                            p,
+                            msg.id === activeQuestionMsgId,
+                            dri !== undefined ? parts[dri].text : undefined
                           )
+                          if (block) return block
                         }
                         if (p.kind === 'tool') {
                           return (
@@ -584,18 +662,22 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                         node: <ThinkingBlock content={p.text} animate={shouldAnimate} animateDelay={idx * 80} />
                       }
                     })
-                  } else if (p.kind === 'tool' && isAskUserQuestionTool(p.toolName)) {
-                    // Interactive question prompt — never collapse it into a
-                    // dots group; the user must be able to act on it directly.
+                  } else if (
+                    p.kind === 'tool' &&
+                    (isAskUserQuestionTool(p.toolName) || isPermissionRequestTool(p.toolName))
+                  ) {
+                    // Interactive prompt — never collapse it into a dots group;
+                    // the user must be able to act on it directly.
                     renderNodes.push({
                       slot: 'plain',
                       key: k,
-                      node: (
-                        <AskUserQuestionBlock
-                          questions={parseAskQuestions(p.toolInput)}
-                          interactive={msg.id === activeQuestionMsgId}
-                          chatId={chatId}
-                        />
+                      node: renderRequestBlock(
+                        k,
+                        p,
+                        msg.id === activeQuestionMsgId,
+                        pairResultIdx.get(idx) !== undefined
+                          ? parts[pairResultIdx.get(idx) as number].text
+                          : undefined
                       )
                     })
                   } else if (p.kind === 'tool') {
@@ -790,20 +872,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 }
                 return
               }
-              if (block.kind === 'tool' && isAskUserQuestionTool(block.toolName)) {
-                // Question just arrived mid-stream — show it passively; it
-                // becomes answerable once the turn finishes and persists (the
-                // refetched part renders interactive via `activeQuestionMsgId`).
+              if (
+                block.kind === 'tool' &&
+                (isAskUserQuestionTool(block.toolName) || isPermissionRequestTool(block.toolName))
+              ) {
+                // A **cloud** agent's question arriving mid-stream is passive:
+                // it becomes answerable only once the turn finishes and
+                // persists, because the answer is the next user turn. A
+                // **local** agent's is the opposite — the agent loop is parked
+                // right now and the answer has to arrive while the turn is
+                // still open — and `renderRequestBlock` tells them apart by
+                // whether the engine still lists the request as pending.
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-askq-${i}`,
-                  node: (
-                    <AskUserQuestionBlock
-                      questions={parseAskQuestions(block.toolInput)}
-                      interactive={false}
-                      chatId={chatId}
-                    />
-                  )
+                  node: renderRequestBlock(`stream-askq-${i}`, block, false)
                 })
                 return
               }

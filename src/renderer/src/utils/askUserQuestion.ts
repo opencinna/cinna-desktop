@@ -76,6 +76,33 @@ export function parseAskQuestions(toolInput?: Record<string, unknown>): AskQuest
   return out
 }
 
+/**
+ * The same collected answers in OpenCode's `QuestionV2Reply` shape: one array
+ * of selected labels **per question**, in question order.
+ *
+ * The prose form above resumes a *cloud* agent, which takes the answer as an
+ * ordinary user turn. A local agent is parked mid-turn on
+ * `POST /api/session/{id}/question/{requestID}/reply` and takes `string[][]`,
+ * so the same modal state has to serialise two ways. A question the user left
+ * unanswered contributes an empty array rather than being dropped, because the
+ * engine matches answers to questions **by position** — dropping one would
+ * silently shift every later answer onto the wrong question.
+ */
+export function toStructuredAnswers(
+  questions: AskQuestion[],
+  answers: Record<number, CollectedAnswer>
+): string[][] {
+  return questions.map((_q, i) => {
+    const a = answers[i]
+    if (!a) return []
+    const labels = a.selected.filter((s) => s !== CUSTOM_ANSWER_VALUE)
+    if (a.selected.includes(CUSTOM_ANSWER_VALUE) && a.custom.trim() !== '') {
+      labels.push(a.custom.trim())
+    }
+    return labels
+  })
+}
+
 /** True when an option label marks itself as the recommended choice. */
 export function isRecommended(label: string): boolean {
   return /\(recommended\)/i.test(label)

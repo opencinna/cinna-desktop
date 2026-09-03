@@ -13,6 +13,21 @@ interface AskUserQuestionBlockProps {
    */
   interactive: boolean
   chatId: string
+  /**
+   * The engine request id (`que_*`) when a **local** agent is parked on this
+   * question right now.
+   *
+   * Its presence is what picks the delivery path, and the two are genuinely
+   * different rather than two spellings of one thing. A cloud agent's question
+   * *ended its turn*, so the answer is the next user message and goes through
+   * the composer. A local agent's question ended nothing: the agent loop is
+   * still running, parked on
+   * `POST /api/session/{id}/question/{requestID}/reply`, and there is no user
+   * turn to send. Answering that through the composer would prompt the agent a
+   * second time while the first turn was still waiting.
+   */
+  liveRequestId?: string
+  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<void>
 }
 
 /**
@@ -25,30 +40,36 @@ interface AskUserQuestionBlockProps {
 export function AskUserQuestionBlock({
   questions,
   interactive,
-  chatId
+  chatId,
+  liveRequestId,
+  onAnswerLocal
 }: AskUserQuestionBlockProps): React.JSX.Element | null {
   if (questions.length === 0) return null
 
   const label = questions.length > 1 ? `${questions.length} questions` : 'A question'
+  // A local agent's question is answerable **while the turn streams**, so
+  // `interactive` — which requires the stream to have finished — is not the
+  // only way in.
+  const live = interactive || !!liveRequestId
 
   return (
     <div
       className={
         'rounded-lg border px-3.5 py-3 ' +
-        (interactive
+        (live
           ? 'border-[var(--color-accent)]/40 bg-[var(--color-accent)]/8'
           : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] opacity-90')
       }
     >
       <div className="flex items-start gap-2.5">
-        {interactive ? (
+        {live ? (
           <HelpCircle size={16} className="shrink-0 mt-0.5 text-[var(--color-accent)]" />
         ) : (
           <CheckCircle2 size={16} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
         )}
         <div className="min-w-0 flex-1">
           <div className="text-[13px] font-medium text-[var(--color-text)]">
-            {interactive ? `The agent is asking ${label.toLowerCase()}` : `${label} asked`}
+            {live ? `The agent is asking ${label.toLowerCase()}` : `${label} asked`}
           </div>
           <ul className="mt-1 space-y-0.5">
             {questions.map((q, i) => (
@@ -61,7 +82,14 @@ export function AskUserQuestionBlock({
           {/* The send hook (and its chat-store subscription) lives in the inner
               component so it mounts only for the active prompt — historical,
               read-only records stay subscription-free. */}
-          {interactive && <AnswerAffordance questions={questions} chatId={chatId} />}
+          {(interactive || liveRequestId) && (
+            <AnswerAffordance
+              questions={questions}
+              chatId={chatId}
+              liveRequestId={liveRequestId}
+              onAnswerLocal={onAnswerLocal}
+            />
+          )}
         </div>
       </div>
     </div>
@@ -74,18 +102,31 @@ export function AskUserQuestionBlock({
  */
 function AnswerAffordance({
   questions,
-  chatId
+  chatId,
+  liveRequestId,
+  onAnswerLocal
 }: {
   questions: AskQuestion[]
   chatId: string
+  liveRequestId?: string
+  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<void>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
-  // Route the answer through the canonical composer — same A2A-vs-LLM decision
-  // (and orchestrated-chat handling) as every other turn; the answer auto-
-  // threads onto the chat's existing context so the agent resumes.
+  const [error, setError] = useState<string | null>(null)
+  // Route a cloud agent's answer through the canonical composer — same
+  // A2A-vs-LLM decision (and orchestrated-chat handling) as every other turn;
+  // the answer auto-threads onto the chat's existing context so the agent
+  // resumes.
   const { submit } = useChatComposer(chatId)
 
-  const handleSubmit = (text: string): void => {
+  const handleSubmit = (text: string, structured: string[][]): void => {
+    if (liveRequestId && onAnswerLocal) {
+      void onAnswerLocal(liveRequestId, structured).catch((err) =>
+        setError(err instanceof Error ? err.message : String(err))
+      )
+      setOpen(false)
+      return
+    }
     void submit(text)
     setOpen(false)
   }
@@ -102,6 +143,7 @@ function AnswerAffordance({
         <HelpCircle size={13} />
         {questions.length > 1 ? 'Answer questions' : 'Answer'}
       </button>
+      {error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
       {open && (
         <AnswerQuestionsModal
           questions={questions}
