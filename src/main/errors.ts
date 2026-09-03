@@ -49,6 +49,10 @@ export type AgentErrorCode =
   | 'no_card_url'
   | 'no_endpoint'
   | 'remote_immutable'
+  /** A folder agent: the folder on disk is the agent, so the row is not the
+   *  thing to delete. Distinct from `remote_immutable`, which the renderer
+   *  explains as "managed by Cinna sync" — the wrong story entirely. */
+  | 'folder_immutable'
   | 'invalid_id'
   | 'sync_reauth_required'
   | 'sync_failed'
@@ -107,6 +111,73 @@ export type SyncErrorCode =
   | 'sas_mismatch'
   | 'bad_request'
 
+export type KitErrorCode =
+  | 'contract_missing'
+  | 'contract_unreadable'
+  | 'invalid_path'
+  | 'manifest_not_found'
+  | 'manifest_unreadable'
+  | 'manifest_invalid_json'
+  | 'manifest_not_object'
+  | 'manifest_modified'
+  | 'write_failed'
+  | 'export_failed'
+
+/**
+ * The agents-home domain: roots, the scanner, the scaffolder and the in-place
+ * page editors. Kit-level failures (a bad manifest, a missing contract) keep
+ * using {@link KitErrorCode} — this covers what happens *around* a folder.
+ */
+export type LocalAgentErrorCode =
+  /** No agent row / folder for that id. */
+  | 'not_found'
+  /** No root row for that id, or the root is gone from disk. */
+  | 'root_not_found'
+  /** The last remaining root, or the default home, cannot be removed. */
+  | 'root_immutable'
+  /** A path the renderer supplied is not a plausible, permitted agents path. */
+  | 'invalid_path'
+  /** The target folder already exists — the scaffolder never writes into one. */
+  | 'already_exists'
+  /** The proposed name/slug/field value is not usable. */
+  | 'invalid_input'
+  /**
+   * The file changed on disk since the editor read it, so the write was
+   * refused. The renderer turns this into a reload prompt and must never
+   * retry — a retry with a fresh stamp is exactly the clobber the guard
+   * exists to prevent. The manifest's equivalent is
+   * `KitError('manifest_modified')`; see `STALE_WRITE_ERROR_CODES`.
+   */
+  | 'file_modified'
+  /** A turn holds the per-agent lock; the desktop never writes mid-stream. */
+  | 'turn_in_progress'
+  /** Creating the home, copying a template, or writing a file failed. */
+  | 'write_failed'
+
+/**
+ * The local developer tooling around an agent folder: detecting installed
+ * assistants and editors, and the "Open in…" launchers. Distinct from
+ * {@link LocalAgentErrorCode}, which covers the folder itself — these are
+ * failures of the machine's tools and of the launch, not of the agent.
+ */
+export type LocalToolsErrorCode =
+  /** The folder is missing, is not a directory, or is not an absolute path. */
+  | 'invalid_folder'
+  /** The folder is not inside any registered agents root. */
+  | 'forbidden_path'
+  /** No agents root is registered yet, so nothing can be opened. */
+  | 'no_roots'
+  /** The requested tool id is unknown, or not installed on this machine. */
+  | 'tool_unavailable'
+  /** The tool exists but cannot serve the requested action (e.g. an editor asked to run a turn). */
+  | 'unsupported_action'
+  /** No terminal emulator / launcher could be found on this platform. */
+  | 'no_terminal'
+  /** macOS refused the Apple Event that drives Terminal/iTerm (TCC, error -1743). */
+  | 'automation_denied'
+  /** The launcher process itself failed to start. */
+  | 'launch_failed'
+
 export class DomainError<TCode extends string = string> extends Error {
   readonly code: TCode
   readonly detail?: string
@@ -119,6 +190,9 @@ export class DomainError<TCode extends string = string> extends Error {
   }
 }
 
+export class KitError extends DomainError<KitErrorCode> {}
+export class LocalAgentError extends DomainError<LocalAgentErrorCode> {}
+export class LocalToolsError extends DomainError<LocalToolsErrorCode> {}
 export class ProviderError extends DomainError<ProviderErrorCode> {}
 export class McpError extends DomainError<McpErrorCode> {}
 export class ChatError extends DomainError<ChatErrorCode> {}

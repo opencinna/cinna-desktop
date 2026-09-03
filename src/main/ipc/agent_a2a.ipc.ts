@@ -166,7 +166,7 @@ export function registerA2AHandlers(): void {
       }
       const agentOwnerId = located.userId
 
-      let endpointUrl: string
+      let endpointUrl: string | null
       try {
         endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
       } catch (err) {
@@ -180,6 +180,17 @@ export function registerA2AHandlers(): void {
         logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
         postAgentError(port, errMsg, code)
         messageRepo.saveError({ chatId, short: errMsg, code })
+        port.close()
+        return
+      }
+      if (endpointUrl === null) {
+        // A folder agent: it is run by the local engine, not reached over A2A.
+        // Until the local runner lands (the dispatch seam is this handler), a
+        // direct chat with one cannot stream — say so rather than fail obscurely.
+        const errMsg = 'This agent runs locally and cannot be reached over A2A yet.'
+        logger.error(errMsg, { agentId, source: agent.source })
+        postAgentError(port, errMsg)
+        messageRepo.saveError({ chatId, short: errMsg })
         port.close()
         return
       }

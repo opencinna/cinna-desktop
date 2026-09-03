@@ -33,10 +33,33 @@ type IpcHandler<T> = (event: IpcMainInvokeEvent, ...args: any[]) => T | Promise<
  * Register a typed IPC handler with uniform error logging.
  *
  * On throw: logs the error with the channel name and re-throws so the
- * renderer's `ipcRenderer.invoke` promise rejects. DomainError's `code` and
- * `detail` are re-attached as enumerable own properties on the thrown Error
- * so they survive Electron's structured-clone serialization across the IPC
- * boundary.
+ * renderer's `ipcRenderer.invoke` promise rejects. A `DomainError`'s `code` and
+ * `detail` are re-attached as own properties on the thrown Error — but **they
+ * do not reach the renderer.** Two boundaries discard them:
+ *
+ * 1. `ipcMain.handle` serialises a rejection to `message` + `stack` only, and
+ *    rewrites the message as `Error invoking remote method '<channel>': …`.
+ * 2. `contextBridge` then clones whatever preload throws into the renderer's
+ *    world as a fresh `Error`, so re-attaching the code in preload does not
+ *    help either — it lands on the wrong side of this one.
+ *
+ * What the renderer receives is a plain `Error` whose only own properties are
+ * `stack` and `message`. The re-attached `code` is still worth setting: it is
+ * read by callers *inside* the main process and it makes the logged error
+ * self-describing. It is not a wire contract.
+ *
+ * **So a handler whose failure code must drive renderer behaviour has to
+ * return the code as data rather than throw it.** Most of this app already
+ * does, via the `{success: false, code}` result convention (see
+ * `useAgents.ts`, which builds the Error and sets `.code` renderer-side).
+ * `LocalAgentOutcome` in `src/shared/localAgents.ts` is the worked example for
+ * a channel that otherwise wants to throw: main returns
+ * `{ok: false, code, name, message}`, and the renderer — not preload — turns it
+ * back into a throw, where the error stays put.
+ *
+ * This comment previously claimed the properties survived serialisation. They
+ * never have; `isStaleWriteError` was written trusting it and silently answered
+ * `false` for every refused write until it was probed in a running app.
  *
  * Either way — thrown or returned — a reauth-required code broadcasts the
  * global "session expired" event so the modal pops app-wide, not just on the

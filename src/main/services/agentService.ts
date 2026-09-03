@@ -21,6 +21,7 @@ import type {
   BundleVersionInfo
 } from '../../shared/agentMetadata'
 import { extractCliCommands, type CliCommand } from '../../shared/cliCommands'
+import { FOLDER_AGENT_ID_PREFIX } from '../../shared/localAgents'
 
 const logger = createLogger('agents')
 
@@ -28,6 +29,15 @@ const logger = createLogger('agents')
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 const REMOTE_ID_PREFIX = 'remote:'
+
+/**
+ * Folder agents. Machine-local like a hand-added A2A agent, so they live in the
+ * **default / settings scope** and follow every profile — the prefix exists to
+ * say "sync does not own this, and neither does a card URL", not to pick a
+ * different scope. There is no `scope` column; scope is derived from
+ * `userId` + `source`.
+ */
+const FOLDER_ID_PREFIX = FOLDER_AGENT_ID_PREFIX
 
 export interface AgentDto {
   id: string
@@ -46,6 +56,15 @@ export interface AgentDto {
   remoteTargetType: string | null
   remoteTargetId: string | null
   remoteMetadata: RemoteAgentMetadata | null
+  /**
+   * Folder agents only: the absolute path of the agent folder on this machine.
+   * Not a secret — the user chose the folder and the agent page shows it — but
+   * it is the only filesystem path in this DTO, so nothing else may be added
+   * here without the same reasoning.
+   */
+  localPath: string | null
+  /** Folder agents only: the `agent_roots` row the folder was scanned from. */
+  localRootId: string | null
   createdAt: Date
 }
 
@@ -92,6 +111,8 @@ function toDto(row: AgentRow): AgentDto {
     remoteTargetType: row.remoteTargetType,
     remoteTargetId: row.remoteTargetId,
     remoteMetadata: row.remoteMetadata,
+    localPath: row.localPath,
+    localRootId: row.localRootId,
     createdAt: row.createdAt
   }
 }
@@ -175,13 +196,19 @@ interface ExternalTarget {
 
 export const agentService = {
   /**
-   * Local agents (shared, default scope) + the active profile's remote agents.
-   * When the active profile is the default user, the merge collapses to a
-   * single `list(defaultUserId)` call. Remote agents have their `enabled` flag
-   * overlaid from {@link agentOverrideRepo} so the user's manual toggle wins.
+   * Local agents — hand-added A2A (`source: 'local'`) and folder agents
+   * (`source: 'folder'`), both in the shared default scope — plus the active
+   * profile's remote agents. When the active profile is the default user, the
+   * merge collapses to a single `list(defaultUserId)` call. Remote agents have
+   * their `enabled` flag overlaid from {@link agentOverrideRepo} so the user's
+   * manual toggle wins.
    */
   listMerged(defaultUserId: string, profileUserId: string): AgentDto[] {
-    const local = agentRepo.list(defaultUserId).filter((a) => a.source === 'local')
+    // Folder agents share the default scope with hand-added A2A agents; both
+    // are properties of this machine, not of the signed-in account.
+    const local = agentRepo
+      .list(defaultUserId)
+      .filter((a) => a.source === 'local' || a.source === 'folder')
     const remoteRows =
       profileUserId === defaultUserId
         ? agentRepo.list(defaultUserId).filter((a) => a.source === 'remote')
@@ -200,27 +227,33 @@ export const agentService = {
 
   /**
    * Resolve an agent across the dual scopes used by the new chat surface:
-   * remote agents live in the active profile, everything else in the default
-   * (shared) scope. Returns the row plus the userId that owns it so callers
-   * can pass it into the user-scoped service methods.
+   * remote agents live in the active profile, everything else — hand-added A2A
+   * agents and folder agents alike — in the default (shared) scope. Returns the
+   * row plus the userId that owns it so callers can pass it into the
+   * user-scoped service methods.
    */
   findAgent(
     defaultUserId: string,
     profileUserId: string,
     agentId: string
   ): { row: AgentRow; userId: string } | null {
-    if (agentId.startsWith(REMOTE_ID_PREFIX)) {
-      const row = agentRepo.getOwned(profileUserId, agentId)
-      return row ? { row, userId: profileUserId } : null
-    }
-    const row = agentRepo.getOwned(defaultUserId, agentId)
-    return row ? { row, userId: defaultUserId } : null
+    // Three id shapes, two scopes. `remote:` is sync-owned and profile-bound;
+    // `folder:` (a folder agent) and a bare nanoid (a hand-added A2A agent) are
+    // both properties of this machine and resolve in the default scope.
+    const userId = agentId.startsWith(REMOTE_ID_PREFIX) ? profileUserId : defaultUserId
+    const row = agentRepo.getOwned(userId, agentId)
+    return row ? { row, userId } : null
   },
 
   /**
-   * Toggle the enabled flag for an agent. Local (default-scope) agents update
-   * the row directly; remote (sync-managed) agents write to the per-profile
-   * {@link agentOverrideRepo} so the manual choice survives subsequent syncs.
+   * Toggle the enabled flag for an agent. Default-scope agents — hand-added A2A
+   * and folder agents — update the row directly; remote (sync-managed) agents
+   * write to the per-profile {@link agentOverrideRepo} so the manual choice
+   * survives subsequent syncs.
+   *
+   * A folder agent's row is otherwise a derived index that a rescan rebuilds,
+   * so this flag is the one column the scanner must never overwrite — see
+   * `agentRepo.replaceFolderIndex`.
    */
   setEnabled(
     defaultUserId: string,
@@ -238,17 +271,30 @@ export const agentService = {
     const existing = agentRepo.getOwned(defaultUserId, agentId)
     if (!existing) throw new AgentError('not_found', 'Agent not found')
     agentRepo.update(defaultUserId, agentId, { enabled })
-    logger.info('agent enabled flag set', { agentId, enabled, scope: 'local' })
+    logger.info('agent enabled flag set', {
+      agentId,
+      enabled,
+      scope: existing.source === 'folder' ? 'folder' : 'local'
+    })
   },
 
   /**
-   * Create or update an agent. Renderer-supplied ids starting with `remote:`
-   * are rejected — sync owns those. A provided id that doesn't match a row for
-   * this user returns `not_found` without leaking whether it exists elsewhere.
+   * Create or update an agent. Renderer-supplied ids starting with `remote:` or
+   * `folder:` are rejected — sync owns the first, and the folder on disk owns
+   * the second (a folder agent is edited through `local-agent:update-field`,
+   * which writes the files the row is derived from). A provided id that doesn't
+   * match a row for this user returns `not_found` without leaking whether it
+   * exists elsewhere.
    */
   upsert(userId: string, input: UpsertAgentInput): { id: string; dto: AgentDto } {
     if (input.id?.startsWith(REMOTE_ID_PREFIX)) {
       throw new AgentError('invalid_id', 'Remote agents cannot be modified manually')
+    }
+    if (input.id?.startsWith(FOLDER_ID_PREFIX)) {
+      throw new AgentError(
+        'invalid_id',
+        'Local agents are edited through their folder, not this form'
+      )
     }
 
     if (input.id) {
@@ -305,6 +351,14 @@ export const agentService = {
         'Remote agents cannot be deleted — they are managed by Cinna sync'
       )
     }
+    if (existing.source === 'folder') {
+      // Deleting the row would only make the next scan re-create it: the folder
+      // is the agent. Removing one means removing (or unregistering) the folder.
+      throw new AgentError(
+        'folder_immutable',
+        'Local agents are their folder on disk — delete the folder, or remove its agents folder'
+      )
+    }
     agentRepo.delete(userId, agentId)
     logger.info('agent deleted', { agentId })
   },
@@ -359,8 +413,16 @@ export const agentService = {
    * by fetching the card. Local agents must be tested first — their card URL
    * may require a user-supplied access token we haven't been given yet.
    * Caches the resolution so subsequent messages skip this step.
+   *
+   * Returns **null** for a folder agent, which has no endpoint at all: it is
+   * run by the local engine, not reached over HTTP. Null rather than a throw
+   * because "there is no endpoint" is this agent's normal state, not a
+   * misconfiguration — and null rather than `''` so the compiler makes every
+   * caller decide what to do about it.
    */
-  async resolveEndpointIfNeeded(userId: string, agent: AgentRow): Promise<string> {
+  async resolveEndpointIfNeeded(userId: string, agent: AgentRow): Promise<string | null> {
+    if (agent.source === 'folder') return null
+
     const existing = agent.protocolInterfaceUrl ?? agent.endpointUrl
     if (existing) return existing
 
@@ -394,10 +456,16 @@ export const agentService = {
    * Resolve the access token for an agent.
    * Remote agents use the user's Cinna JWT; local agents use the decrypted stored token.
    *
+   * A folder agent has neither: nothing authenticates to it over the network,
+   * and the token it *does* have (for its own callbacks) lives in the folder's
+   * `app-data/desktop.json` and is the local runner's business, not this
+   * method's. Short-circuit before touching the keystore.
+   *
    * Lets `CinnaReauthRequired` bubble so callers can render an actionable
    * "Re-authenticate" affordance instead of a generic error string.
    */
   async resolveAccessToken(userId: string, agent: AgentRow): Promise<string | undefined> {
+    if (agent.source === 'folder') return undefined
     if (agent.source === 'remote') {
       return getCinnaAccessToken(userId)
     }

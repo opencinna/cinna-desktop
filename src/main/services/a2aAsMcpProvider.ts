@@ -126,7 +126,7 @@ export class A2AAsMcpProvider implements ToolProvider {
 
     const signal = opts?.signal ?? new AbortController().signal
 
-    let endpointUrl: string
+    let endpointUrl: string | null
     let accessToken: string | undefined
     try {
       endpointUrl = await agentService.resolveEndpointIfNeeded(this.ownerId, this.agent)
@@ -135,6 +135,17 @@ export class A2AAsMcpProvider implements ToolProvider {
       const message = err instanceof Error ? err.message : String(err)
       logger.error('agent tool pre-flight failed', { agentId: this.agent.id, error: message })
       return { content: `Agent unavailable: ${message}`, parts: [], isError: true }
+    }
+
+    // Null means "this agent has no A2A endpoint" — a folder agent, which the
+    // local runner serves. Orchestrating one is Phase 6's job; this provider
+    // only speaks A2A, so it declines rather than building a request to `null`.
+    if (endpointUrl === null) {
+      return {
+        content: 'This agent runs locally and cannot be called as a tool yet.',
+        parts: [],
+        isError: true
+      }
     }
 
     if (!this.agent.cardUrl) {
