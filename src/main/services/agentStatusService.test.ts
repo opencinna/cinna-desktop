@@ -454,13 +454,56 @@ describe('get — the folder branch is above both gates', () => {
     expect(runStatusRefreshMock).toHaveBeenCalledWith(DEFAULT_USER, 'folder:alpha', null)
   })
 
-  it('returns null for a folder agent whose folder has gone', async () => {
+  /**
+   * `null` carries two meanings on this path and only one of them is a
+   * non-event. The renderer treats `item: null` as the swallowed 429 and says
+   * nothing — correct for a rate limit, and correct for an agent that has never
+   * written a STATUS.md. Not correct for a folder that has been moved or
+   * deleted, which is a failure the user pressed a button to find out about.
+   * These two tests exist as a pair; either alone permits collapsing them.
+   */
+  it('reports a folder agent whose folder has gone, rather than saying nothing', async () => {
     asLocalUser()
     withFolderAgent()
     locateMock.mockImplementation(() => {
-      throw new Error('folder moved')
+      throw new Error('That agent is no longer in your agents folder.')
     })
+    await expect(agentStatusService.get(SCOPE, 'folder:alpha', false)).rejects.toThrow(
+      'no longer in your agents folder'
+    )
+  })
+
+  it('still says nothing for an agent that simply has no STATUS.md yet', async () => {
+    // The legitimate nothing — the same case `list` omits rather than showing a
+    // blank card. Collapsing this into an error would make every
+    // never-yet-reported agent look broken.
+    asLocalUser()
+    withFolderAgent()
+    readSnapshotMock.mockReturnValue(null)
     expect(await agentStatusService.get(SCOPE, 'folder:alpha', false)).toBeNull()
+  })
+
+  it('guards get’s response.json the way list’s is guarded', async () => {
+    // A 200 whose body is not JSON reaches past the `!response.ok` check. This
+    // is milder today only because the renderer now renders an unrecognised
+    // rejection — a distant repair this call site should not depend on.
+    asCinnaUser()
+    putOwned(PROFILE, 'remote:agent:r1', {
+      id: 'remote:agent:r1',
+      name: 'Remote',
+      source: 'remote',
+      remoteTargetId: 'r1'
+    })
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => {
+        throw new SyntaxError('Unexpected token < in JSON')
+      }
+    })
+    await expect(
+      agentStatusService.get(SCOPE, 'remote:agent:r1', false)
+    ).rejects.toBeInstanceOf(AgentStatusError)
   })
 
   /**

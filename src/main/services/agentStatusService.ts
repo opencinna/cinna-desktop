@@ -114,7 +114,11 @@ function errorFromStatus(status: number, statusText: string, url: string): Agent
  *
  * Never throws, and one bad folder never costs another its row: an agent whose
  * row has gone stale, whose folder has moved, or whose kit contract will not
- * load is skipped, not propagated.
+ * load is skipped, not propagated. **That is deliberately the opposite of
+ * {@link folderStatus}**, which throws for a folder it cannot locate: nobody
+ * asked about that agent here, and taking the whole panel down over one moved
+ * directory would be a worse answer than a shorter list — whereas `get` is
+ * reached by a user pressing Refresh *on that agent*, and owes them a reason.
  */
 function listFolderSnapshots(defaultUserId: string): AgentStatusSnapshot[] {
   let rows: ReturnType<typeof agentRepo.listFolder>
@@ -171,8 +175,22 @@ async function folderStatus(
   try {
     located = localAgentService.locate(defaultUserId, agentId)
   } catch (err) {
+    // **`null` means two different things here and only one of them is a
+    // non-event.** The renderer treats `item: null` as the swallowed 429
+    // (`useAgentStatus.ts`: `if (!result.success || !result.item) return`),
+    // which is right for a rate limit and right for "this agent has never
+    // written a STATUS.md" — the same nothing `list` deliberately omits rather
+    // than showing a blank card. It is wrong for *the folder is gone*: the user
+    // pressed Refresh on an agent whose directory has been moved or deleted,
+    // and got a spinner that stopped and a stale card that sits there until the
+    // next poll drops it. That failure is thrown so it reaches the surface;
+    // everything else keeps the quiet semantics it should have.
     logger.warn('folder agent status: agent could not be located', { agentId, error: String(err) })
-    return null
+    throw new AgentStatusError(
+      'not_found',
+      err instanceof Error ? err.message : 'That agent is no longer in your agents folder.',
+      agentId
+    )
   }
 
   if (forceRefresh) {
@@ -434,7 +452,23 @@ export const agentStatusService = {
       throw errorFromStatus(response.status, response.statusText, url)
     }
 
-    const item = (await response.json()) as AgentStatusPublicRaw
+    let item: AgentStatusPublicRaw
+    try {
+      item = (await response.json()) as AgentStatusPublicRaw
+    } catch (err) {
+      // The same unguarded `response.json()` `list` carried: a 200 whose body is
+      // not JSON — a captive portal or a proxy login page — reaches here past
+      // the `!response.ok` check and rejects with a raw `SyntaxError`. It is
+      // milder today only because the *renderer* now renders an unrecognised
+      // rejection instead of swallowing it, and a distant repair is not a thing
+      // this call site should depend on.
+      logger.warn('agent status get unreadable response', { url, agentId, error: String(err) })
+      throw new AgentStatusError(
+        'remote_unreachable',
+        'Cinna backend returned an unreadable response',
+        String(err)
+      )
+    }
     logger.info('agent status get response', {
       url,
       agentId,
