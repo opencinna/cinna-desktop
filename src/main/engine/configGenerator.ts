@@ -55,6 +55,7 @@ import {
   isEngineProviderType,
   type EngineProviderType
 } from './modelLimits'
+import { GEMINI_OPENAI_BASE_URL } from './modelTransports'
 
 const logger = createLogger('engine-config')
 
@@ -62,29 +63,54 @@ const logger = createLogger('engine-config')
  * OpenCode's provider key for each of our provider types.
  *
  * The key matters: OpenCode looks a canonical key up in the models.dev catalog
- * and gets the full model list for free. `gemini` is ours, `google` is theirs.
+ * and gets the full model list, with real context and output windows, for free.
  * `openai_compatible` has no canonical key by definition — a gateway is
  * whatever the user pointed it at — so it always gets a custom entry.
+ *
+ * **`gemini` is not here, and its absence is the fix for a hang.** It used to
+ * map to OpenCode's canonical `google` key, which catalogues the Gemini models
+ * under `@ai-sdk/google` — a package `SessionRunnerModel` has no branch for.
+ * The models were listed, they were *available*, the readiness check passed,
+ * and the turn then died with `UnsupportedApiError`, which reaches no event at
+ * all: a twenty-minute hang with nothing on screen. There is no point emitting
+ * an entry the engine can catalogue and cannot run, so a `gemini` credential
+ * takes the custom path instead, pointed at Google's own OpenAI-compatible
+ * endpoint — see {@link PROVIDER_BASE_URL}.
  */
 const CANONICAL_PROVIDER_KEY: Partial<Record<EngineProviderType, string>> = {
   anthropic: 'anthropic',
-  openai: 'openai',
-  gemini: 'google'
+  openai: 'openai'
 }
 
 /**
  * The AI SDK package a **custom** provider entry loads.
  *
  * Needed only for the entries that cannot use a canonical key: a second
- * credential of a type whose canonical key is already taken, and every
- * OpenAI-compatible gateway. A custom entry gets no models.dev catalog either,
- * which is why {@link EngineProviderInput.models} has to be supplied for them.
+ * credential of a type whose canonical key is already taken, every
+ * OpenAI-compatible gateway, and every `gemini` credential. A custom entry gets
+ * no models.dev catalog either, which is why
+ * {@link EngineProviderInput.models} has to be supplied for them.
+ *
+ * **`gemini` loads `@ai-sdk/openai-compatible`, not `@ai-sdk/google`.** The
+ * engine can build a model from only three packages and Google's is not one of
+ * them ({@link SUPPORTED_MODEL_PACKAGES}), so the Google SDK is not an option
+ * here whatever the credential is.
  */
 const PROVIDER_NPM: Readonly<Record<EngineProviderType, string>> = {
   anthropic: '@ai-sdk/anthropic',
   openai: '@ai-sdk/openai',
-  gemini: '@ai-sdk/google',
+  gemini: '@ai-sdk/openai-compatible',
   openai_compatible: '@ai-sdk/openai-compatible'
+}
+
+/**
+ * Where a provider type's requests go when the credential does not say.
+ *
+ * Only Gemini has one. An `openai_compatible` credential *is* a base URL the
+ * user typed, and the canonical types get their endpoint from models.dev.
+ */
+const PROVIDER_BASE_URL: Partial<Record<EngineProviderType, string>> = {
+  gemini: GEMINI_OPENAI_BASE_URL
 }
 
 /**
@@ -314,7 +340,10 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       continue
     }
     const npm = PROVIDER_NPM[type]
-    if (type === 'openai_compatible' && !provider.baseUrl) {
+    // The credential's own URL wins; a type with a fixed endpoint we know
+    // (Gemini's OpenAI-compatible one) falls back to that.
+    const baseUrl = provider.baseUrl || PROVIDER_BASE_URL[type] || null
+    if (type === 'openai_compatible' && !baseUrl) {
       skippedProviders.push({
         providerId: provider.id,
         reason: 'an OpenAI-compatible credential needs a base URL'
@@ -340,7 +369,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     // custom entry alike, which is what the desktop needs since it has to carry
     // a second credential of the same type.
     const entry: Record<string, unknown> = { env: [envName] }
-    if (provider.baseUrl) entry.options = { baseURL: provider.baseUrl }
+    if (baseUrl) entry.options = { baseURL: baseUrl }
     if (!useCanonical) {
       // A custom key gets no models.dev catalog, so it has to declare both the
       // package that implements it and every model it can address.

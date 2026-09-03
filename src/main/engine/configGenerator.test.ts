@@ -196,17 +196,48 @@ describe('buildEngineConfig', () => {
     expect(Object.hasOwn(entry, 'options')).toBe(false)
   })
 
-  it('maps gemini onto OpenCode’s `google` provider key', () => {
+  it('routes gemini through Google’s OpenAI-compatible endpoint, not the `google` key', () => {
+    // **This is a fix for a hang, not a preference.** OpenCode's canonical
+    // `google` key catalogues the Gemini models under `@ai-sdk/google`, and
+    // `SessionRunnerModel` can build a model from only three packages — none of
+    // them that one. The models were listed, they were *available*, and the
+    // turn then died with `UnsupportedApiError`, which reaches no event at all:
+    // twenty minutes of nothing on screen.
+    //
+    // Mutation: put `gemini: 'google'` back in `CANONICAL_PROVIDER_KEY` → this
+    // fails, and the live symptom returns.
     const built = buildEngineConfig(
       input({
         providers: [
-          { id: 'g', type: 'gemini', name: 'Gemini', apiKey: 'k', baseUrl: null, models: [] }
+          {
+            id: 'g',
+            type: 'gemini',
+            name: 'Gemini',
+            apiKey: 'k',
+            baseUrl: null,
+            models: [{ id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash' }]
+          }
         ],
         agents: []
       })
     )
-    expect(built.providerKeys.get('g')).toBe('google')
-    expect(Object.keys(built.config.provider as object)).toEqual(['google'])
+    const key = built.providerKeys.get('g') as string
+    expect(key).not.toBe('google')
+    expect(Object.keys(built.config.provider as object)).toEqual([key])
+
+    const entry = (built.config.provider as Record<string, Record<string, unknown>>)[key]
+    expect(entry.npm).toBe('@ai-sdk/openai-compatible')
+    expect((entry.options as Record<string, unknown>).baseURL).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/openai'
+    )
+    // Bare model ids, the way Google's compatible endpoint names them — the
+    // adapter already strips the `models/` prefix its REST API returns.
+    expect(entry.models).toEqual({
+      'gemini-2.5-flash': {
+        name: 'Gemini 2.5 Flash',
+        limit: { context: 1_048_576, output: 65_536 }
+      }
+    })
   })
 
   it('gives a second credential of the same type its own key, with npm and models', () => {

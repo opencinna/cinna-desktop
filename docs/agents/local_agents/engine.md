@@ -149,6 +149,16 @@ Each piece fed into the digest is prefixed with its length. This is not ceremony
 
 The prompt bodies are the one input that is arbitrary user-controlled text — the user's own `WORKFLOW_PROMPT.md` — which makes the collision reachable rather than theoretical. Same shape as the two `isIgnoredPath` defects in `src/main/kit/validator.ts`: both false negatives in a secret check, both survivors of a green suite. Do not simplify it back to a join.
 
+### A Gemini credential does not become OpenCode's `google` provider
+
+Every other credential type maps onto the engine's own name for that provider, or onto a custom entry when the canonical name is taken. Gemini is the exception, and the reason is a hard limit rather than a preference: **the engine can build a working model out of three SDK packages, and Google's is not one of them.**
+
+Emitted under the canonical `google` key, a Gemini credential looks entirely healthy right up to the moment it is used. The models appear in the engine's catalogue, they count as available, the Runtime card offers them, a session opens against one — and then the turn fails inside the engine with `UnsupportedApiError` and **no event at all**, so the desktop sits in its streaming state until its own twenty-minute ceiling. Nothing on the way in warns anybody, which is what makes it worth a rule rather than a comment.
+
+So a `gemini` credential is emitted as an **OpenAI-compatible entry pointed at Google's own OpenAI-shaped endpoint** for the Gemini models. Same key, same models, a transport the engine can actually drive. The canonical `google` entry is not emitted at all — there is no value in offering the user a provider whose every turn would hang, and leaving it in place would also let the Runtime card present two ways to reach the same credential, one of which never works.
+
+Two consequences worth knowing. Gemini's models arrive with no models.dev catalogue behind them, so they are declared with the same per-type ceilings every custom entry uses (below). And the compatible transport sends no `max_tokens` at all, so on this route that ceiling shapes nothing in the request — Google applies its own.
+
 ### A second credential's models have to be told how big they are
 
 A provider entry comes in two shapes, and only one of them gets anything for free. A **canonical** entry — the first Anthropic credential, the first OpenAI one — uses OpenCode's own key for that provider, so the engine already knows every model it has and how large its context and reply windows are. A **custom** entry does not exist in any catalog: it is a key the desktop invented for the *second* credential of a type, or for an OpenAI-compatible gateway, and the engine knows only what the generated config tells it.
