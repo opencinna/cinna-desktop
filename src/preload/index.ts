@@ -594,6 +594,13 @@ const api = {
       items?: AgentStatusSnapshot[]
       code?: string
       error?: string
+      /**
+       * A *partial* success: `items` carries the folder agents, which are read
+       * from local disk, while the Cinna leg failed. The renderer re-raises it
+       * as the same typed error a total failure produces — see
+       * `useAgentStatus` — so a degraded panel is never a quiet one.
+       */
+      remoteError?: { code: string; message: string } | null
     }> => ipcRenderer.invoke('agent-status:list'),
     get: (data: {
       agentId: string

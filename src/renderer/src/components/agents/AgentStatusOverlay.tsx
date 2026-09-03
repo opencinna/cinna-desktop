@@ -52,6 +52,59 @@ function ReauthErrorPanel({ onRetry }: { onRetry: () => void }): React.JSX.Eleme
   )
 }
 
+/**
+ * The same reauth affordance as {@link ReauthErrorPanel}, laid out as a strip so
+ * it can sit *above* a populated grid instead of replacing it. Which one renders
+ * is decided by whether there is anything to show — see the note on
+ * `degradedBanner` below.
+ */
+function ReauthErrorStrip({ onRetry }: { onRetry: () => void }): React.JSX.Element {
+  const currentUser = useAuthStore((s) => s.currentUser)
+  const cinnaReauth = useCinnaReauth()
+  const [localError, setLocalError] = useState<string | null>(null)
+
+  const handleReauth = async (): Promise<void> => {
+    if (!currentUser) return
+    setLocalError(null)
+    const result = await cinnaReauth.mutateAsync()
+    if (result.success) onRetry()
+    else setLocalError(result.error ?? 'Re-authentication failed')
+  }
+
+  return (
+    <div className="mb-3 flex items-center gap-2 rounded-md border border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2">
+      <AlertTriangle size={14} className="shrink-0 text-[var(--color-danger)]" />
+      <div className="min-w-0 flex-1 text-xs text-[var(--color-text-secondary)]">
+        Cinna session expired — the agents below are the ones on this machine.
+        Your Cinna agents are not being updated.
+        {localError && (
+          <span className="block text-[10px] text-[var(--color-danger)]">{localError}</span>
+        )}
+      </div>
+      <button
+        onClick={handleReauth}
+        disabled={cinnaReauth.isPending}
+        className="shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium
+          bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+          disabled:opacity-50"
+      >
+        <RefreshCw size={11} className={cinnaReauth.isPending ? 'animate-spin' : ''} />
+        {cinnaReauth.isPending ? 'Re-authenticating…' : 'Re-authenticate'}
+      </button>
+    </div>
+  )
+}
+
+/** A failure that must stay visible while rows below it are still worth seeing. */
+function FailureStrip({ message }: { message: string }): React.JSX.Element {
+  return (
+    <div className="mb-3 flex items-start gap-2 rounded-md border border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-3 py-2">
+      <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
+      <div className="min-w-0 text-xs text-[var(--color-danger)] break-words">{message}</div>
+    </div>
+  )
+}
+
 export function AgentStatusOverlay(): React.JSX.Element | null {
   const {
     agentStatusOpen,
@@ -111,6 +164,32 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
 
   const detail = detailAgentId ? sorted.find((s) => s.agentId === detailAgentId) : null
 
+  // A per-agent Refresh that failed. `useForceRefreshAgentStatus` resolves to
+  // `{success:false}` rather than rejecting (IPC error codes do not survive a
+  // thrown invoke), and until now the only consumer was an `onSuccess` that
+  // early-returned on it — so a card's Refresh button spun, stopped, and said
+  // nothing. That is the surface a folder agent's broken `status_refresh_command`
+  // lands on, so it had to stop being silent for this phase to mean anything;
+  // it repairs the remote path on the way past.
+  const refreshResult = forceRefresh.data
+  const perAgentError = forceRefresh.isPending
+    ? null
+    : forceRefresh.isError
+      ? 'Could not refresh that agent.'
+      : refreshResult && !refreshResult.success
+        ? refreshResult.error ?? 'Could not refresh that agent.'
+        : null
+
+  // Which shape the failure takes is decided by whether there is anything left
+  // to look at, and *only* by that. With rows on screen a full-panel error would
+  // hide good data — a folder agent's status is read from local disk and is
+  // unaffected by anything the Cinna leg does, and even for a remote-only user a
+  // single transient poll failure used to blank a panel full of valid cached
+  // snapshots. With nothing on screen the error is the whole answer and stays
+  // full-panel, exactly as before. Nothing is softened either way: the same
+  // message, the same colour, the same reauth button.
+  const degraded = sorted.length > 0
+
   // Status list is derived server-side from agents the user owns (and
   // client-side filtered through `agentRepo.listRemote`), so any agentId we
   // receive is already in the local DB — no existence check needed.
@@ -165,7 +244,7 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
                 onClick={() => refreshAll.mutate()}
                 disabled={refreshAll.isPending}
                 className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-                title="Force refresh all from running environments"
+                title="Refresh all — wakes Cinna environments; re-reads local agents' STATUS.md"
               >
                 <RefreshCw
                   size={12}
@@ -175,9 +254,9 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
             </div>
 
             <div className="flex-1 overflow-y-auto px-4 pb-4">
-              {reauthNeeded ? (
+              {reauthNeeded && !degraded ? (
                 <ReauthErrorPanel onRetry={handleReauthRetry} />
-              ) : error ? (
+              ) : error && !degraded ? (
                 <div className="h-full flex items-center justify-center text-xs text-[var(--color-danger)]">
                   {error.message}
                 </div>
@@ -190,6 +269,10 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
                   No agents have reported status yet.
                 </div>
               ) : (
+                <>
+                  {reauthNeeded && <ReauthErrorStrip onRetry={handleReauthRetry} />}
+                  {error && !reauthNeeded && <FailureStrip message={error.message} />}
+                  {perAgentError && <FailureStrip message={perAgentError} />}
                 <div className="grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">
                   {sorted.map((s) => (
                     <StatusCard
@@ -203,6 +286,7 @@ export function AgentStatusOverlay(): React.JSX.Element | null {
                     />
                   ))}
                 </div>
+                </>
               )}
             </div>
           </>

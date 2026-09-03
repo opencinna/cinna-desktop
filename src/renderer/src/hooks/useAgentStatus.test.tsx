@@ -5,6 +5,7 @@ import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import {
   useAgentStatus,
   useForceRefreshAgentStatus,
+  useForceRefreshAllAgentStatuses,
   useRereadAgentStatus
 } from './useAgentStatus'
 import { useAuthStore } from '../stores/auth.store'
@@ -127,6 +128,78 @@ describe('useAgentStatus — the account gate', () => {
     // The overlay and the tray both branch on this code to show the
     // re-authenticate panel instead of a generic error string.
     await waitFor(() => expect(result.current.error?.code).toBe('reauth_required'))
+  })
+})
+
+describe('a partial failure is raised, not swallowed', () => {
+  const folderRow = {
+    agentId: 'folder:alpha',
+    remoteAgentId: 'folder:alpha',
+    name: 'Alpha',
+    environmentId: 'local',
+    severity: 'ok',
+    summary: 'fine',
+    reportedAt: null,
+    reportedAtSource: null,
+    fetchedAt: null,
+    raw: null,
+    body: '',
+    hasStructuredMetadata: true,
+    prevSeverity: null,
+    severityChangedAt: null
+  }
+
+  it('hands back the folder rows AND the remote failure at the same time', async () => {
+    stubApi({
+      list: vi.fn().mockResolvedValue({
+        success: true,
+        items: [folderRow],
+        remoteError: { code: 'remote_unreachable', message: 'Failed to reach Cinna backend' }
+      })
+    })
+    const { result } = renderHook(() => useAgentStatus(), { wrapper })
+
+    // Both at once is the whole point: rows to show, and a failure to report.
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+    expect(result.current.error?.message).toBe('Failed to reach Cinna backend')
+    // The code has to survive, or the re-authenticate panel never fires.
+    expect(result.current.error?.code).toBe('remote_unreachable')
+  })
+
+  it('reports no error when the remote leg was fine', async () => {
+    stubApi({
+      list: vi
+        .fn()
+        .mockResolvedValue({ success: true, items: [folderRow], remoteError: null })
+    })
+    const { result } = renderHook(() => useAgentStatus(), { wrapper })
+    await waitFor(() => expect(result.current.data).toHaveLength(1))
+    expect(result.current.error).toBeNull()
+  })
+})
+
+describe('Refresh all asks the two agent kinds different questions', () => {
+  it('force-refreshes a remote agent and only re-reads a folder agent', async () => {
+    const api = stubApi()
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(['agent-status'], {
+      items: [{ agentId: 'folder:alpha' }, { agentId: 'a-remote' }],
+      remoteError: null
+    })
+    const seeded = ({ children }: { children: ReactNode }): React.JSX.Element =>
+      createElement(QueryClientProvider, { client }, children)
+
+    const { result } = renderHook(() => useForceRefreshAllAgentStatuses(), { wrapper: seeded })
+    await act(async () => {
+      await result.current.mutateAsync()
+    })
+
+    // A menu-bar click must not start every folder agent's status script at
+    // once: for a folder agent `forceRefresh` spawns a subprocess under that
+    // agent's turn lock, which then refuses its chat and its editor saves.
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+    // For a remote agent it is the only way past the server-side cache.
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'a-remote', forceRefresh: true })
   })
 })
 

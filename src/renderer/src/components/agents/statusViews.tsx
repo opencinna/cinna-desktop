@@ -13,6 +13,7 @@ import {
   Bot
 } from 'lucide-react'
 import type { AgentStatusSnapshot } from '../../hooks/useAgentStatus'
+import { isFolderAgentId } from '../../../../shared/localAgents'
 import {
   SEVERITY_RANK,
   SEVERITY_LABEL,
@@ -20,6 +21,20 @@ import {
   SEVERITY_CARD_BORDER,
   type Severity
 } from '../../constants/agentSeverity'
+
+/**
+ * What a per-card Refresh actually does, which is not the same thing for the
+ * two agent kinds and used to claim it was. For a remote agent it wakes the
+ * running environment and is rate-limited server-side; for a folder agent there
+ * is no environment and no rate limit — it runs that agent's own
+ * `status_refresh_command` as a subprocess on this machine, which is the one
+ * surface in the app that does so.
+ */
+function refreshTitle(agentId: string): string {
+  return isFolderAgentId(agentId)
+    ? 'Run this agent’s status refresh command and re-read STATUS.md'
+    : 'Force refresh from running environment (rate-limited to 1/30s)'
+}
 
 export function SeverityIcon({ severity }: { severity: Severity }): React.JSX.Element {
   const cls = SEVERITY_TEXT[severity]
@@ -139,7 +154,7 @@ export function StatusCard({
             }}
             disabled={refreshing}
             className="w-7 h-7 rounded-md flex items-center justify-center border border-transparent text-[var(--color-text-muted)] hover:bg-[var(--color-bg-tertiary)] hover:border-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] transition-colors disabled:opacity-50"
-            title="Force refresh from running environment (rate-limited to 1/30s)"
+            title={refreshTitle(snapshot.agentId)}
           >
             <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
           </button>
@@ -207,7 +222,7 @@ export function DetailView({
           onClick={onRefresh}
           disabled={refreshing}
           className="flex items-center gap-1.5 px-2 py-1 rounded-md text-[11px] text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
-          title="Force refresh from running environment (rate-limited to 1/30s)"
+          title={refreshTitle(snapshot.agentId)}
         >
           <RefreshCw size={12} className={refreshing ? 'animate-spin' : ''} />
           Refresh

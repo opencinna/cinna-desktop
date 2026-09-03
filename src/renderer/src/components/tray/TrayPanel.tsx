@@ -61,10 +61,19 @@ export function TrayPanel(): React.JSX.Element {
 
   const sorted = useMemo(() => [...statuses].sort(sortByUrgency), [statuses])
 
+  // With rows to show, a failure becomes a strip above them rather than a panel
+  // instead of them. A folder agent's status comes off local disk and is
+  // unaffected by whatever the Cinna leg did, so blanking the popup would hide
+  // good data to report a fault about something else — and even before folder
+  // agents existed, one transient poll failure blanked a popup full of valid
+  // cached snapshots. The wording and the colour are unchanged; only the layout
+  // is, and only when there is something to lay out beside it.
+  const degraded = sorted.length > 0
+
   return (
     <div className="h-screen w-screen flex flex-col rounded-xl overflow-hidden border border-[var(--color-border)] bg-[var(--color-overlay-panel)] text-[var(--color-text)]">
       <div className="flex-1 overflow-y-auto p-2">
-          {error ? (
+          {error && !degraded ? (
             error.code === 'reauth_required' ? (
               <div className="h-full flex flex-col items-center justify-center gap-2 text-center px-4">
                 <AlertTriangle size={18} className="text-[var(--color-danger)]" />
@@ -98,7 +107,7 @@ export function TrayPanel(): React.JSX.Element {
                 <button
                   onClick={handleRefresh}
                   className="p-1 rounded text-[var(--color-text-muted)] hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors"
-                  title="Force refresh all from running environments"
+                  title="Refresh all — wakes Cinna environments; re-reads local agents' STATUS.md"
                 >
                   <RefreshCw
                     size={12}
@@ -106,6 +115,16 @@ export function TrayPanel(): React.JSX.Element {
                   />
                 </button>
               </div>
+              {error && (
+                <div className="mb-1.5 flex items-start gap-1.5 rounded-md border border-[color-mix(in_srgb,var(--color-danger)_45%,transparent)] bg-[color-mix(in_srgb,var(--color-danger)_10%,transparent)] px-2 py-1.5">
+                  <AlertTriangle size={12} className="mt-0.5 shrink-0 text-[var(--color-danger)]" />
+                  <div className="min-w-0 text-[10px] text-[var(--color-danger)] break-words">
+                    {error.code === 'reauth_required'
+                      ? 'Cinna session expired — open the app to re-authenticate. The agents below are the ones on this machine.'
+                      : error.message}
+                  </div>
+                </div>
+              )}
               <div className="flex flex-col gap-1.5">
                 {sorted.map((s) => (
                   <TrayStatusCard

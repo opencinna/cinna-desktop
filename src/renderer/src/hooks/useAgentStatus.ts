@@ -1,9 +1,21 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { isFolderAgentId } from '../../../shared/localAgents'
 
 type ListResult = Awaited<ReturnType<typeof window.api.agentStatus.list>>
 export type AgentStatusSnapshot = NonNullable<ListResult['items']>[number]
 
 const AGENT_STATUS_KEY = ['agent-status'] as const
+
+/**
+ * What the batch query actually caches. `items` is what every consumer reads;
+ * `remoteError` is a **partial** failure — the Cinna leg failed and folder
+ * agents answered from local disk anyway — which the hook re-raises through the
+ * same `error` it returns for a total failure, so nothing about it is silent.
+ */
+interface AgentStatusCache {
+  items: AgentStatusSnapshot[]
+  remoteError: { code: string; message: string } | null
+}
 
 /**
  * Error thrown from the queryFn/mutationFn when the IPC handler returns
@@ -49,7 +61,7 @@ export function useAgentStatus(): {
 } {
   const query = useQuery({
     queryKey: AGENT_STATUS_KEY,
-    queryFn: async () => {
+    queryFn: async (): Promise<AgentStatusCache> => {
       const result = await window.api.agentStatus.list()
       if (!result.success) {
         throw new AgentStatusRequestError(
@@ -57,17 +69,28 @@ export function useAgentStatus(): {
           result.error ?? 'Failed to fetch agent statuses'
         )
       }
-      return result.items ?? []
+      return { items: result.items ?? [], remoteError: result.remoteError ?? null }
     },
     refetchInterval: 45_000,
     refetchOnWindowFocus: true,
     staleTime: 15_000
   })
 
+  // A partial failure is re-raised as the same typed error a total failure
+  // produces, so `error.code` keeps meaning what every consumer already thinks
+  // it means — `reauth_required` still reaches the re-authenticate panel. What
+  // changes is that `data` can be non-empty *at the same time*, which is why
+  // the consumers render the error above the rows rather than instead of them.
+  const partial = query.data?.remoteError ?? null
   return {
-    data: query.data ?? [],
+    data: query.data?.items ?? [],
     isLoading: query.isLoading,
-    error: query.error instanceof AgentStatusRequestError ? query.error : null,
+    error:
+      query.error instanceof AgentStatusRequestError
+        ? query.error
+        : partial
+          ? new AgentStatusRequestError(partial.code, partial.message)
+          : null,
     refetch: async () => {
       try {
         const r = await query.refetch()
@@ -134,11 +157,32 @@ export interface ForceRefreshAllResult {
 /**
  * Mass refresh used by the overlay and tray "Refresh all" buttons. The batch
  * `list` route is cache-only, so a genuine refresh has to fan out per-agent
- * `force_refresh=true` calls (one per currently-known agent) — this is what
- * wakes a suspended env and re-reads STATUS.md, including for A2A agents. Each
- * fresh snapshot is patched back into the batch cache as it lands. When nothing
- * is cached yet there are no envs to force-refresh, so we fall back to the
- * cache-only list refetch to populate the grid.
+ * calls (one per currently-known agent). Each fresh snapshot is patched back
+ * into the batch cache as it lands. When nothing is cached yet there is nothing
+ * to fan out to, so we fall back to the cache-only list refetch to populate the
+ * grid.
+ *
+ * **A folder agent is deliberately re-read here, not force-refreshed** — the
+ * one place the two agent kinds are asked different questions, because
+ * `forceRefresh: true` does not mean the same thing for both. For a remote
+ * agent it means *fetch what exists now*: it wakes a suspended env so the
+ * platform re-reads its STATUS.md, and it is the only way past a server-side
+ * cache. For a folder agent it means *make the agent recompute its status*,
+ * running `status_refresh_command` as a subprocess under that agent's turn
+ * lock — the scaffolded script's `collect()` is where an author's real health
+ * check goes. "Refresh all" is a glance-level gesture asking for the panel to
+ * be current, and for a folder agent the file on disk already is the truth, so
+ * a re-read answers it completely and instantly.
+ *
+ * Two consequences settle it. This is `Promise.allSettled` over *every* cached
+ * agent, so one click would start every folder agent's script at once — the
+ * per-agent locks make that safe, not cheap — and each running script refuses
+ * that agent's chat and page-editor saves for as long as it takes. And the
+ * tray's spinner holds until the whole batch settles, so a single 30-second
+ * status script makes a menu-bar button spin for 30 seconds. Running the
+ * command stays on the overlay's **per-card** Refresh: singular, targeted,
+ * explicitly aimed at one agent — and the one surface that reports when it
+ * fails.
  *
  * Returns a {@link ForceRefreshAllResult} (never throws on per-agent failure, so
  * one dead env doesn't abort the batch) — callers branch on it to flash
@@ -148,7 +192,7 @@ export function useForceRefreshAllAgentStatuses() {
   const queryClient = useQueryClient()
   return useMutation<ForceRefreshAllResult>({
     mutationFn: async () => {
-      const cached = queryClient.getQueryData<AgentStatusSnapshot[]>(AGENT_STATUS_KEY) ?? []
+      const cached = queryClient.getQueryData<AgentStatusCache>(AGENT_STATUS_KEY)?.items ?? []
       const agentIds = cached.map((s) => s.agentId)
       if (agentIds.length === 0) {
         // No envs to force — fall back to the cache-only list. Its own error
@@ -157,7 +201,9 @@ export function useForceRefreshAllAgentStatuses() {
         return { refreshed: 0, failed: 0, reauthRequired: false }
       }
       const results = await Promise.allSettled(
-        agentIds.map((agentId) => window.api.agentStatus.get({ agentId, forceRefresh: true }))
+        agentIds.map((agentId) =>
+          window.api.agentStatus.get({ agentId, forceRefresh: !isFolderAgentId(agentId) })
+        )
       )
       const fresh: AgentStatusSnapshot[] = []
       let failed = 0
@@ -188,13 +234,15 @@ function patchAgentStatusCache(
   fresh: AgentStatusSnapshot[]
 ): void {
   if (fresh.length === 0) return
-  queryClient.setQueryData<AgentStatusSnapshot[]>(AGENT_STATUS_KEY, (prev) => {
-    const next = prev ? prev.slice() : []
+  queryClient.setQueryData<AgentStatusCache>(AGENT_STATUS_KEY, (prev) => {
+    const next = prev ? prev.items.slice() : []
     for (const item of fresh) {
       const idx = next.findIndex((s) => s.agentId === item.agentId)
       if (idx === -1) next.push(item)
       else next[idx] = item
     }
-    return next
+    // A fresh per-agent snapshot says nothing about the batch route's health,
+    // so a standing partial-failure marker survives the patch.
+    return { items: next, remoteError: prev?.remoteError ?? null }
   })
 }

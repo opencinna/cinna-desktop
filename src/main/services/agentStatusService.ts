@@ -225,7 +225,17 @@ export const agentStatusService = {
    */
   async list(userId: string): Promise<AgentStatusListResult> {
     const folderItems = listFolderSnapshots(userId)
-    /** Keep the folder rows; hand the caller the remote failure to surface. */
+    /**
+     * Keep the folder rows; hand the caller the remote failure to surface.
+     *
+     * **With no folder rows this still throws, and that is not an
+     * inconsistency.** Nothing to show plus something failed means the error is
+     * the whole answer: degrading to an empty list there would report "no
+     * agents have reported status yet" for what is actually a network fault or
+     * an expired session, which is the silent-staleness failure this function
+     * exists to avoid. The asymmetry is the point — degrade only when there is
+     * something the failure does not invalidate.
+     */
     const degraded = (err: unknown): AgentStatusListResult => {
       if (folderItems.length === 0) throw err
       const shape =
