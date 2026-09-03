@@ -1,0 +1,15 @@
+# Commands this agent exposes. A host reads this file and offers each one as
+# /run:<name>; the Makefile is its local mirror.
+#
+# Cloud-first: write the command as the platform runs it — `python scripts/x.py`,
+# paths relative to the agent root. A local host applies the contract's
+# local_command_runner rule (`python ` -> `uv run ` when pyproject.toml exists),
+# so never write `uv run` here.
+#
+# Shape: one list entry per command, with name, description and command.
+# `name` must match a Makefile target.
+
+commands:
+  - name: status
+    description: Refresh app-data/storage/STATUS.md and print the current status line.
+    command: python scripts/update_status.py

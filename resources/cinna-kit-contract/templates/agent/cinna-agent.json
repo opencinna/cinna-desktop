@@ -1,0 +1,26 @@
+{
+  "contract_version": "{{CONTRACT_VERSION}}",
+  "id": "{{ID}}",
+  "kit_version": "{{KIT_VERSION}}",
+  "created_at": "{{CREATED_AT}}",
+  "name": "{{NAME}}",
+  "slug": "{{SLUG}}",
+  "description": "{{DESCRIPTION}}",
+  "example_prompts": [],
+  "router_trigger_prompt": null,
+  "prompts": {
+    "workflow": "docs/WORKFLOW_PROMPT.md",
+    "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
+    "refiner": "docs/REFINER_PROMPT.md"
+  },
+  "runtime": null,
+  "status_refresh_command": null,
+  "credentials": [],
+  "schedules": [],
+  "handovers": [],
+  "features": {
+    "webapp": false,
+    "agent_api": false
+  },
+  "publications": []
+}

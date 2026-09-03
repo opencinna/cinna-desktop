@@ -1,0 +1,17 @@
+# Makes `uv run scripts/<x>.py` deterministic: uv provisions the interpreter
+# named here rather than falling back to whatever `python` happens to be — on
+# macOS that is either absent or 3.9.
+#
+# It is also the condition the contract's local_command_runner rule tests: with
+# this file present, a cloud-first `python scripts/x.py` from
+# docs/CLI_COMMANDS.yaml runs locally as `uv run scripts/x.py`, which is exactly
+# what the Makefile does.
+#
+# Add third-party dependencies here as the agent grows; `uv run` installs them.
+
+[project]
+name = "{{SLUG}}"
+version = "0.1.0"
+description = "{{DESCRIPTION}}"
+requires-python = ">=3.10"
+dependencies = []

@@ -1,0 +1,19 @@
+{
+  "name": "cinna-agent-contract",
+  "title": "Cinna agent folder contract",
+  "description": "The machine-readable half of the cinna-core start-kit: the manifest schema, the folder model and the agent/root templates. Everything a tool needs to create, read, validate and export an agent folder without reading a guide.",
+  "contract_version": "1.0.0",
+  "schema": "schema/cinna-agent.schema.json",
+  "layout": "layout.json",
+  "templates": {
+    "root": "templates/root",
+    "agent": "templates/agent"
+  },
+  "refresh": {
+    "base_url": "https://cinna.dev/api/agent-start",
+    "version_path": "/contract/version",
+    "tarball_path": "/contract.tar.gz",
+    "install_dir": ".cinna-kit",
+    "notes": "base_url is the default; a linked Cinna instance serves the same two paths under its own origin. The desktop and kit.py refresh swap the install_dir atomically and never edit it by hand."
+  }
+}

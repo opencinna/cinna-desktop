@@ -1,0 +1,31 @@
+# Secrets. Never commit a value.
+credentials.json
+.env
+*.env
+!*.env.example
+credentials/.env
+*.pem
+*.key
+*.p12
+
+# Runtime data written by agents.
+Local/*/app-data/
+
+# Half-written files from an interrupted atomic write.
+*.tmp
+
+# Cinna CLI account state.
+Cloud/*/.cinna/
+
+# Kit bookkeeping.
+.cinna-kit/.last_refresh_check
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

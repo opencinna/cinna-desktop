@@ -1,0 +1,447 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cinna.dev/schema/cinna-agent.schema.json",
+  "title": "cinna-agent.json",
+  "description": "Definitional metadata for a locally built agent. Lives at the agent folder root and travels unchanged into a cloud agent workspace and into bundle revisions. Unknown keys are preserved for forward compatibility.",
+  "type": "object",
+  "required": [
+    "name",
+    "slug",
+    "description"
+  ],
+  "allOf": [
+    {
+      "$comment": "Identity is required of every folder scaffolded at contract 1.0.0 or later, and tolerated as absent in exactly one case: a legacy folder, which carries the integer schema_version and neither contract_version nor id. Such a folder must still parse - it is read, reported, and re-stamped - which is why contract_version and id are not in the top-level `required`. Any other manifest needs both. This encodes the same rule as the desktop's checkIdentity() and the CHANGELOG's Compatibility table; if you change one, change all three.",
+      "if": {
+        "allOf": [
+          {
+            "required": [
+              "schema_version"
+            ]
+          },
+          {
+            "not": {
+              "required": [
+                "contract_version"
+              ]
+            }
+          },
+          {
+            "not": {
+              "required": [
+                "id"
+              ]
+            }
+          }
+        ]
+      },
+      "then": {
+        "$comment": "Legacy folder: read it, warn, ask for a re-stamp."
+      },
+      "else": {
+        "required": [
+          "contract_version",
+          "id"
+        ]
+      }
+    }
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "contract_version": {
+      "description": "Version of the folder contract this agent was scaffolded against, and the compatibility gate: a tool whose contract major is older than this must refuse to operate the folder. Required of every folder except a legacy one (see the top-level allOf).",
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z-.]+)?$"
+    },
+    "id": {
+      "description": "Stable identity of this agent, written once at scaffold and never rewritten. Survives folder moves and slug renames; preserved through cloud import as the agent's local origin. Required of every folder except a legacy one (see the top-level allOf).",
+      "type": "string",
+      "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+    },
+    "schema_version": {
+      "description": "Legacy manifest version. A manifest that carries it, and neither contract_version nor id, is a pre-1.0.0 folder: it still parses, and a tool should re-stamp it rather than reject it. It is no longer the compatibility gate and nothing should branch on its value.",
+      "type": "integer",
+      "deprecated": true
+    },
+    "kit_version": {
+      "description": "Version of the kit that scaffolded this agent. Informational only - never a gate.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "created_at": {
+      "description": "ISO 8601 timestamp written by the scaffolder. Informational.",
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "name": {
+      "description": "Display name shown to humans.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "slug": {
+      "description": "Folder name and cloud reference. Must equal the agent folder's name.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+    },
+    "description": {
+      "description": "One sentence describing what the agent does. Feeds agent cards, the A2A card and router-trigger generation.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000
+    },
+    "example_prompts": {
+      "description": "Ready-to-send task suggestions AND a first-class routing input. At least one is required for a cloud-ready agent.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500
+      },
+      "maxItems": 20
+    },
+    "router_trigger_prompt": {
+      "description": "One capability-verb sentence used only by the routing classifier. Describes when to route here, never how to behave.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2000
+    },
+    "prompts": {
+      "description": "Paths, relative to the agent root, of the three document-backed prompts.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow": {
+          "type": "string"
+        },
+        "entrypoint": {
+          "type": "string"
+        },
+        "refiner": {
+          "type": "string"
+        }
+      }
+    },
+    "runtime": {
+      "description": "How this agent should be run by a host that offers a choice. Absent means the host's default runtime. Never contains a secret: credential is a reference, not a key.",
+      "type": [
+        "object",
+        "null"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "model": {
+          "description": "Model identifier as the host names it. Seeds the cloud's per-mode model override at import.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "credential": {
+          "description": "Reference to the AI credential to run on: a credential type, or the name of a credential configured in the host. NEVER a key, token or secret value.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "permissions": {
+          "description": "Host-specific permission profile for the agent's own tools. Interpreted by the host that wrote it; unknown keys are preserved.",
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "status_refresh_command": {
+      "description": "Shell command, or a /run:<name> reference into docs/CLI_COMMANDS.yaml, executed before the platform reads STATUS.md.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1024
+    },
+    "credentials": {
+      "description": "Credential slots the agent needs. Never contains secret values.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "type"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "type": {
+            "description": "A platform CredentialType value.",
+            "type": "string",
+            "enum": [
+              "email_imap",
+              "email_smtp",
+              "odoo",
+              "gmail_oauth",
+              "gmail_oauth_readonly",
+              "gdrive_oauth",
+              "gdrive_oauth_readonly",
+              "gcalendar_oauth",
+              "gcalendar_oauth_readonly",
+              "google_service_account",
+              "api_token",
+              "ssh_key"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "env_prefix": {
+            "description": "Prefix of the local .env variable names for this slot. Variable name is <env_prefix><FIELD in upper case>.",
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*_$"
+          },
+          "fields": {
+            "description": "Field names of the credential payload, as the platform names them.",
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "optional": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "schedules": {
+      "description": "Unattended runs. Declared locally, created on the platform at import time.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "cron_string",
+          "schedule_type"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "cron_string": {
+            "description": "Standard five-field cron expression.",
+            "type": "string",
+            "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$"
+          },
+          "timezone": {
+            "description": "IANA timezone name. Local-only metadata used to render the cron description at import.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schedule_type": {
+            "type": "string",
+            "enum": [
+              "static_prompt",
+              "script_trigger"
+            ]
+          },
+          "prompt": {
+            "description": "Required for static_prompt: the message sent to start the run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "command": {
+            "description": "Required for script_trigger: the shell command whose non-OK output starts a session.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "schedule_type": {
+                  "const": "script_trigger"
+                }
+              },
+              "required": [
+                "schedule_type"
+              ]
+            },
+            "then": {
+              "required": [
+                "command"
+              ],
+              "properties": {
+                "command": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "schedule_type": {
+                  "const": "static_prompt"
+                }
+              },
+              "required": [
+                "schedule_type"
+              ]
+            },
+            "then": {
+              "required": [
+                "prompt"
+              ],
+              "properties": {
+                "prompt": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "handovers": {
+      "description": "Other agents this one may delegate to. Targets are slugs of sibling agents.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "target_slug"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "target_slug": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          }
+        }
+      }
+    },
+    "features": {
+      "description": "Cloud-only capabilities the agent expects once imported. Ignored locally.",
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "webapp": {
+          "type": "boolean"
+        },
+        "agent_api": {
+          "type": "boolean"
+        }
+      }
+    },
+    "publications": {
+      "description": "One entry per Cinna instance this agent was published to. Written only by a publish/import step. An update resolves the entry whose platform_url matches the instance it runs against.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "platform_url",
+          "agent_id"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "platform_url": {
+            "description": "Origin of the instance, e.g. https://acme.opencinna.io.",
+            "type": "string",
+            "minLength": 1
+          },
+          "agent_id": {
+            "description": "Id of the agent created on that instance.",
+            "type": "string",
+            "minLength": 1
+          },
+          "workspace": {
+            "description": "Account workspace the CLI pushed from, relative to the workshop root, e.g. Cloud/acme.opencinna.io. Absent when the desktop published directly through the account API.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "imported_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "contract_version": {
+            "description": "Contract version the folder was pushed with.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "content_hash": {
+            "description": "Hash of the exported tree at the last push (cloud_import_excludes applied). A mismatch against the current export means the instance is behind.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "cloud": {
+      "description": "DEPRECATED, replaced by publications[]. Still accepted so a folder written before contract 1.0.0 parses; migrate it into publications[] on the next write.",
+      "type": "object",
+      "deprecated": true,
+      "additionalProperties": true,
+      "properties": {
+        "platform_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "agent_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "imported_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    }
+  }
+}

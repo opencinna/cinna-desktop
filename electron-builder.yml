@@ -9,8 +9,23 @@ files:
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
   - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
   - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  # The kit contract ships via extraResources below, not inside the asar.
+  # Without this it would be packed twice: once here (and unpacked again by
+  # asarUnpack) and once as an extra resource.
+  - '!resources/cinna-kit-contract/**'
 asarUnpack:
+  # For the icon PNGs, which are imported with electron-vite's `?asset`.
+  # The kit contract is excluded from `files` above, so this never matches it.
   - resources/**
+extraResources:
+  # The kit contract is read as a *tree* at runtime — the manifest schema,
+  # layout.json, and the templates the scaffolder copies file by file — so it
+  # ships as a real directory at Resources/cinna-kit-contract, with no asar shim
+  # in the read path. In development the same tree is read straight from the
+  # repo. Both paths live in src/main/kit/contractStore.ts; read the packaging
+  # note there before changing any of this.
+  - from: resources/cinna-kit-contract
+    to: cinna-kit-contract
 win:
   executableName: cinna-desktop
 nsis:
@@ -30,6 +45,7 @@ mac:
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
     - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
     - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    - NSAppleEventsUsageDescription: Cinna needs to control Terminal or iTerm to open a terminal in your agent folder.
   notarize: true
   target:
     - target: dmg

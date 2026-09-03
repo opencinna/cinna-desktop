@@ -1,0 +1,27 @@
+# Secrets. Never commit a value.
+# credentials.json is what the platform injects at the agent root in the cloud;
+# it holds live credential values and must never come back into a repository.
+credentials.json
+.env
+*.env
+!.env.example
+!*.env.example
+*.pem
+*.key
+*.p12
+
+# Runtime data. Written by the agent, never part of its definition, never published.
+app-data/
+
+# Half-written files from an interrupted atomic write.
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# OS
+.DS_Store
+Thumbs.db

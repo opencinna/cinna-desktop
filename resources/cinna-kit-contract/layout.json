@@ -1,0 +1,274 @@
+{
+  "contract_version": "1.0.0",
+  "description": "The folder model as data. Every host that creates, refreshes, exports or validates an agent folder reads its rules from here instead of hard-coding them.",
+  "workshop": {
+    "kit_dir": ".cinna-kit",
+    "agents_dir": "Local",
+    "cloud_dir": "Cloud",
+    "root_files": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "README.md",
+      ".gitignore"
+    ],
+    "roles": [
+      {
+        "path": ".cinna-kit",
+        "kind": "directory",
+        "role": "kit",
+        "description": "The contract and, when installed by the kit installer, the guides and tools. Replaced wholesale by a refresh; never edited by hand.",
+        "survives_update": false
+      },
+      {
+        "path": "Local",
+        "kind": "directory",
+        "role": "agents",
+        "description": "One folder per agent. The agents the user builds.",
+        "survives_update": true
+      },
+      {
+        "path": "Cloud",
+        "kind": "directory",
+        "role": "cloud_workspaces",
+        "description": "One cinna-cli account workspace per instance, named by host. Empty until the user publishes.",
+        "survives_update": true
+      },
+      {
+        "path": "AGENTS.md",
+        "kind": "file",
+        "role": "orchestrator_instructions",
+        "description": "Workshop-level instructions for an assistant. Installed once; a changelog entry says when to update it by hand.",
+        "survives_update": true
+      },
+      {
+        "path": "CLAUDE.md",
+        "kind": "file",
+        "role": "assistant_pointer",
+        "description": "Points at AGENTS.md.",
+        "survives_update": true
+      },
+      {
+        "path": "README.md",
+        "kind": "file",
+        "role": "human_readme",
+        "description": "What this folder is, for the human who opens it.",
+        "survives_update": true
+      },
+      {
+        "path": ".gitignore",
+        "kind": "file",
+        "role": "ignore_rules",
+        "description": "Installed from templates/root/gitignore with the dot restored.",
+        "survives_update": true
+      }
+    ]
+  },
+  "agent": {
+    "manifest": "cinna-agent.json",
+    "prompt_files": {
+      "workflow": "docs/WORKFLOW_PROMPT.md",
+      "entrypoint": "docs/ENTRYPOINT_PROMPT.md",
+      "refiner": "docs/REFINER_PROMPT.md"
+    },
+    "command_catalog": "docs/CLI_COMMANDS.yaml",
+    "status_file": "app-data/storage/STATUS.md",
+    "roles": [
+      {
+        "path": "cinna-agent.json",
+        "kind": "file",
+        "role": "manifest",
+        "description": "Identity and definitional metadata. The one file every tool agrees on. Unknown keys are preserved.",
+        "survives_update": true
+      },
+      {
+        "path": "docs",
+        "kind": "directory",
+        "role": "prompts_and_commands",
+        "description": "The three document-backed prompts, the command catalog, and one doc per local skill.",
+        "survives_update": true
+      },
+      {
+        "path": "scripts",
+        "kind": "directory",
+        "role": "scripts",
+        "description": "Everything the agent can execute, plus README.md cataloguing all of it. Run from the agent root, so top-level helpers stay importable.",
+        "survives_update": true
+      },
+      {
+        "path": "knowledge",
+        "kind": "directory",
+        "role": "knowledge",
+        "description": "Reference material the agent reads to be correct: business rules, external-system behaviour, terminology. Read-only at runtime. Never a secret.",
+        "survives_update": true
+      },
+      {
+        "path": "files",
+        "kind": "directory",
+        "role": "input_files",
+        "description": "Static inputs that ship with the agent: fixtures, sample documents, templates it fills in.",
+        "survives_update": true
+      },
+      {
+        "path": "config",
+        "kind": "directory",
+        "role": "config",
+        "description": "Non-secret configuration the agent's scripts read: endpoints, mappings, thresholds.",
+        "survives_update": true
+      },
+      {
+        "path": "credentials",
+        "kind": "directory",
+        "role": "credentials",
+        "description": "Credential documentation and the local .env. Values are read only from inside a script, never printed, never committed, never sent to a host's UI.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data",
+        "kind": "directory",
+        "role": "runtime_data",
+        "description": "Everything written at runtime. Git-ignored and excluded from cloud import; the only place an agent may write.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/storage",
+        "kind": "directory",
+        "role": "runtime_storage",
+        "description": "Durable results the agent produces, including STATUS.md.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/cache",
+        "kind": "directory",
+        "role": "runtime_cache",
+        "description": "Disposable. Safe to delete at any time.",
+        "survives_update": true
+      },
+      {
+        "path": "app-data/uploads",
+        "kind": "directory",
+        "role": "runtime_uploads",
+        "description": "Files handed to the agent in a conversation.",
+        "survives_update": true
+      },
+      {
+        "path": "AGENTS.md",
+        "kind": "file",
+        "role": "assistant_wrapper",
+        "description": "Instructions for an assistant developing this agent. Points at docs/WORKFLOW_PROMPT.md and never duplicates it. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "CLAUDE.md",
+        "kind": "file",
+        "role": "assistant_pointer",
+        "description": "Points at AGENTS.md. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "README.md",
+        "kind": "file",
+        "role": "human_readme",
+        "description": "What this agent is, for the human who opens the folder. Excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": "Makefile",
+        "kind": "file",
+        "role": "local_command_mirror",
+        "description": "One target per docs/CLI_COMMANDS.yaml command, localized by the local_command_runner rules. Local convenience only; excluded from cloud import.",
+        "survives_update": true
+      },
+      {
+        "path": ".gitignore",
+        "kind": "file",
+        "role": "ignore_rules",
+        "description": "Installed from templates/agent/gitignore with the dot restored.",
+        "survives_update": true
+      }
+    ]
+  },
+  "scaffold_ignore_files": {
+    "agent": [
+      [
+        "gitignore",
+        ".gitignore"
+      ],
+      [
+        "app-data/cache/gitignore",
+        "app-data/cache/.gitignore"
+      ]
+    ],
+    "root": [
+      [
+        "gitignore",
+        ".gitignore"
+      ]
+    ]
+  },
+  "scaffold_ignore_files_notes": "Ignore rules ship dotless in templates/ and the dot is restored at scaffold time: shipping them dotted would make them live ignore rules wherever the contract is stored, hiding scaffold files from that repository. Each pair is [path in the template tree, path in the created folder], relative to that tree's root. A scaffolder must read this list rather than hard-code the pairs - templates/agent/credentials/.gitignore is deliberately NOT in it, because it keeps its dot on purpose: it names files no repository should track, and that has to be true of this one too.",
+  "desktop_owned": [
+    "app-data/desktop.json"
+  ],
+  "cloud_import_excludes": [
+    ".git/",
+    "**/.git/",
+    ".gitignore",
+    "**/.gitignore",
+    ".gitattributes",
+    ".gitkeep",
+    "**/.gitkeep",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "Makefile",
+    ".claude/",
+    ".cursor/",
+    ".vscode/",
+    ".idea/",
+    "app-data/",
+    "credentials.json",
+    "**/credentials.json",
+    "credentials/.env",
+    "**/.env",
+    "**/.env.local",
+    "**/*.pem",
+    "**/*.key",
+    "**/*.p12",
+    "**/*.tmp",
+    "**/*.pyc",
+    "**/__pycache__/",
+    ".venv/",
+    "venv/",
+    "node_modules/",
+    "**/.DS_Store",
+    "**/Thumbs.db"
+  ],
+  "cloud_import_excludes_notes": "Patterns are matched against the agent-root-relative POSIX path. A pattern with a trailing '/' excludes that directory and everything under it. '*' matches within one segment, '**' matches across segments; a pattern without '**' or a leading segment wildcard is anchored at the agent root, so 'README.md' excludes only the agent's own README and never docs/README.md or scripts/README.md. Everything that can hold a credential VALUE is excluded wherever it sits: credentials.json (what the platform injects at the agent root and what cinna_credentials.py reads in the cloud), any .env, and private key material. credentials/README.md and credentials/.env.example travel on purpose: they document the slots without carrying a value. The assistant wrapper (AGENTS.md, CLAUDE.md, README.md, Makefile) does not travel - the platform provides its own.",
+  "local_command_runner": {
+    "description": "docs/CLI_COMMANDS.yaml is cloud-first: commands are written as the platform runs them. These rules turn such a command into the one a local host should run. Apply the first rule whose match succeeds and whose condition holds; if none does, run the command unchanged.",
+    "rules": [
+      {
+        "id": "python-to-uv-run",
+        "match": {
+          "type": "prefix",
+          "value": "python "
+        },
+        "replace_with": "uv run ",
+        "when": {
+          "file_exists": "pyproject.toml"
+        }
+      },
+      {
+        "id": "python3-to-uv-run",
+        "match": {
+          "type": "prefix",
+          "value": "python3 "
+        },
+        "replace_with": "uv run ",
+        "when": {
+          "file_exists": "pyproject.toml"
+        }
+      }
+    ]
+  }
+}
