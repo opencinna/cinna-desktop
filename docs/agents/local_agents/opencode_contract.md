@@ -364,9 +364,13 @@ Not weaker evidence — **no evidence**. Each is a place to look first when some
 2. **Whether `?after=` is exclusive or inclusive.** The code is inclusive-tolerant by construction
    (the `length >=` guards in `setText`/`toolResult`/`settleRequest` absorb a re-delivered event), so
    this is robustness rather than a live risk — but it is an assumption.
-3. **Whether `text.ended` ever omits `assistantMessageID`.** If it does, the part is filed under a
-   different identity from its deltas and the whole block is duplicated into the transcript. The heal
-   path replays `text.ended` from the durable stream, whose field set nobody has watched.
+3. **Whether `text.ended`, `tool.called`, `tool.success` or `tool.failed` ever omits
+   `assistantMessageID`.** If any of them does, the part is filed under a different identity from the
+   events that built it and the whole block is duplicated into the transcript. All four are durable
+   variants that the heal path replays, and the durable stream's own field set on them has never been
+   watched. `TurnStream` now defends all four with first-owner-wins (`streamOwner`, keyed by
+   `textID` / `reasoningID` / `callID`), so being wrong here is absorbed rather than visible — which
+   is precisely why only a probe, and not a test, can settle it.
 4. **Whether OpenCode recycles `per_*` / `que_*` ids across restarts.** The pending-request registry
    keys on request id alone, with no session scoping.
 5. **Where a permission or question falls relative to the text stream** — whether one can arrive
