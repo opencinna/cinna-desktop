@@ -1,5 +1,4 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useAuthStore } from '../stores/auth.store'
 
 type ListResult = Awaited<ReturnType<typeof window.api.agentStatus.list>>
 export type AgentStatusSnapshot = NonNullable<ListResult['items']>[number]
@@ -23,8 +22,23 @@ export class AgentStatusRequestError extends Error {
 
 /**
  * Polls the batch agent-status endpoint at a cadence safe for the cache-only
- * backend route (spec recommends 30–60 s). Only runs for cinna_user accounts —
- * local users have no remote agents to report status.
+ * route (spec recommends 30–60 s).
+ *
+ * **Runs for every account.** It was gated on `currentUser?.type ===
+ * 'cinna_user'`, with `refetchInterval` off entirely when disabled, because a
+ * local user had no agents that could report a status. A folder agent has one,
+ * and a purely local user — no Cinna account at all — is the case Local Agents
+ * exists for. With that gate in place no amount of correctness in the main
+ * process could reach the screen: the IPC call was never issued, so the overlay,
+ * the sidebar-footer dot and the menu-bar tray (which reads this same hook
+ * through `useTrayIcon` and `TrayPanel`) all stayed empty.
+ *
+ * The account-type condition is dropped rather than widened to "cinna user OR
+ * has a folder agent". The answer to "does this user have anything to report"
+ * lives in the main process, which now checks both; asking the renderer to
+ * predict it means a second, independently-wrong copy of the rule, and the cost
+ * of being wrong the cheap way is one IPC round trip returning `[]`, with no
+ * network call behind it for a local-only account.
  */
 export function useAgentStatus(): {
   data: AgentStatusSnapshot[]
@@ -33,9 +47,6 @@ export function useAgentStatus(): {
   /** Resolves `true` when the refetch succeeded, `false` on any error. */
   refetch: () => Promise<boolean>
 } {
-  const currentUser = useAuthStore((s) => s.currentUser)
-  const enabled = currentUser?.type === 'cinna_user'
-
   const query = useQuery({
     queryKey: AGENT_STATUS_KEY,
     queryFn: async () => {
@@ -48,8 +59,7 @@ export function useAgentStatus(): {
       }
       return result.items ?? []
     },
-    enabled,
-    refetchInterval: enabled ? 45_000 : false,
+    refetchInterval: 45_000,
     refetchOnWindowFocus: true,
     staleTime: 15_000
   })
@@ -69,21 +79,46 @@ export function useAgentStatus(): {
   }
 }
 
-/**
- * One-shot per-agent refresh. `force_refresh=true` is rate-limited server-side
- * to 1/30s per env; 429s are swallowed upstream and return `item: null`.
- * On success, patches the batch cache so list consumers update in place.
- */
-export function useForceRefreshAgentStatus() {
+function useAgentStatusFetch(forceRefresh: boolean) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (agentId: string) =>
-      window.api.agentStatus.get({ agentId, forceRefresh: true }),
+    mutationFn: (agentId: string) => window.api.agentStatus.get({ agentId, forceRefresh }),
     onSuccess: (result) => {
       if (!result.success || !result.item) return
       patchAgentStatusCache(queryClient, [result.item])
     }
   })
+}
+
+/**
+ * One-shot per-agent refresh. For a remote agent `force_refresh=true` asks the
+ * platform to re-read STATUS.md from the running env, rate-limited server-side
+ * to 1/30s; 429s are swallowed upstream and return `item: null`. For a folder
+ * agent it runs the manifest's `status_refresh_command`. **A user has to have
+ * asked for this** — see {@link useRereadAgentStatus} for the cheap variant.
+ * On success, patches the batch cache so list consumers update in place.
+ */
+export function useForceRefreshAgentStatus() {
+  return useAgentStatusFetch(true)
+}
+
+/**
+ * One agent's status *without* forcing a refresh — for a folder agent that is a
+ * read of `app-data/storage/STATUS.md` off local disk and nothing else.
+ *
+ * This exists because "the turn ended, re-read the status" and "the user pressed
+ * Refresh" are different requests, and for a folder agent the difference is a
+ * subprocess. `status_refresh_command` runs under the agent's turn lock, so
+ * firing it after every chat turn would (a) run the agent's own health check —
+ * the template's `collect()`, which is where real work goes — on every message
+ * nobody asked for it on, and (b) hold the lock the user's *next* message needs,
+ * so a background refresh could refuse a message the user just sent. It is also
+ * redundant in the common case: an agent that updates its own STATUS.md does so
+ * during the turn, which is the whole design. A disk re-read gets that to the
+ * tray immediately, takes no lock, and spawns nothing.
+ */
+export function useRereadAgentStatus() {
+  return useAgentStatusFetch(false)
 }
 
 /** Outcome of a "Refresh all" fan-out, so callers can give honest feedback. */

@@ -7,7 +7,8 @@ import { useChatStore } from '../stores/chat.store'
 // row lands (see `pendingUserMessage` / `PendingUserMessage`).
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
 import { useAuthStore } from '../stores/auth.store'
-import { useForceRefreshAgentStatus } from './useAgentStatus'
+import { useForceRefreshAgentStatus, useRereadAgentStatus } from './useAgentStatus'
+import { isFolderAgentId } from '../../../shared/localAgents'
 import type { MessageAttachment } from '../../../shared/attachments'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 import type { LlmStreamEvent } from '../../../shared/llmStreamEvents'
@@ -44,6 +45,7 @@ export function useChatStream(): {
     useChatStore()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const forceRefreshAgentStatus = useForceRefreshAgentStatus()
+  const rereadAgentStatus = useRereadAgentStatus()
 
   const handleLlm = useCallback(
     (chatId: string, event: LlmEvent): void => {
@@ -208,10 +210,23 @@ export function useChatStream(): {
             handleAgent(chatId, event)
             // When the agent finishes (or errors out), it may have updated its
             // STATUS.md during the turn — pull a fresh snapshot so tiles in the
-            // status overlay / title-bar dot stay in sync. Backend rate-limits
-            // 1/30s per env; 429 is swallowed upstream. Cinna-only feature.
-            if (isCinnaUser && (event.type === 'done' || event.type === 'error')) {
-              forceRefreshAgentStatus.mutate(agentId)
+            // status overlay / title-bar dot stay in sync.
+            //
+            // A folder agent takes the *cheap* path deliberately. A force
+            // refresh runs its `status_refresh_command` under the agent's turn
+            // lock, so doing it after every message would run the agent's own
+            // health check nobody asked for and hold the lock the user's next
+            // message needs — a background refresh refusing a message the user
+            // just sent. An agent that updates its own STATUS.md does so
+            // *during* the turn, so what is needed here is a re-read of the
+            // file, which takes no lock and spawns nothing. Running the command
+            // stays where a user asked for it: the overlay's Refresh buttons.
+            //
+            // Remote is unchanged: `force_refresh=true`, backend rate-limited
+            // 1/30s per env, 429 swallowed upstream, cinna accounts only.
+            if (event.type === 'done' || event.type === 'error') {
+              if (isFolderAgentId(agentId)) rereadAgentStatus.mutate(agentId)
+              else if (isCinnaUser) forceRefreshAgentStatus.mutate(agentId)
             }
           },
           opts
@@ -224,7 +239,7 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleAgent, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus]
+    [handleAgent, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus, rereadAgentStatus]
   )
 
   const cancel = useCallback((requestId: string): void => {

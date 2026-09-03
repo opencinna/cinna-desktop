@@ -5,7 +5,9 @@ import { SEVERITY_DOT, worstSeverity } from '../../constants/agentSeverity'
 
 /**
  * Sidebar footer button that opens the agent-status overlay and shows a
- * severity dot for the worst current status. Only shown for cinna users.
+ * severity dot for the worst current status. Shown for every account: a folder
+ * agent reports a status without a Cinna account, and with nothing to report the
+ * button is a plain glyph with no dot.
  */
 export function AgentStatusButton(): React.JSX.Element {
   const agentStatusOpen = useUIStore((s) => s.agentStatusOpen)

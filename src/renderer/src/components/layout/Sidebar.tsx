@@ -166,7 +166,13 @@ export function Sidebar(): React.JSX.Element {
         <div className="px-2 py-2 flex items-center gap-1">
           <UserMenu compact />
           <div className="flex-1" />
-          {isCinnaUser && <AgentStatusButton />}
+          {/* Not account-gated: a folder agent reports a status with no Cinna
+              account at all, and this button is the only way into the status
+              overlay — and so into "Refresh all". Gating it on live data
+              instead would make the footer's controls move as statuses arrive
+              and go. With nothing to report it renders a plain glyph with no
+              severity dot. */}
+          <AgentStatusButton />
           <UpdateStatusButton />
           <InterfaceMenu />
         </div>
