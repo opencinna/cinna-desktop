@@ -5,7 +5,9 @@ Project-specific conventions for the SQLite (better-sqlite3 + Drizzle) schema-mi
 ## Model
 
 - Migrations are plain functions `migrateX(sqlite)` taking the raw `better-sqlite3` handle, each in `src/main/db/migrations/<topic>.ts`. <!-- nocheck -->
-- All are invoked sequentially from `runMigrations()` in `src/main/db/client.ts`, called by `initDatabase()` on **every** boot against the user's existing `cinna.db` (`userData/cinna.db`).
+- All are invoked sequentially from `runAllMigrations(sqlite)` in `src/main/db/migrations/index.ts`, which `runMigrations()` in `src/main/db/client.ts` delegates to; `initDatabase()` calls it on **every** boot against the user's existing `cinna.db` (`userData/cinna.db`).
+- **The chain lives in its own module on purpose.** `client.ts` imports `better-sqlite3`, whose native binding is built for Electron's ABI and will not load under plain Node, so a chain defined there could never be replayed by the test suite. Every module the chain imports takes the handle as a *type* only, so it can be driven by any handle with the same surface — see `src/main/db/testSupport/nodeSqlite.ts` (a `node:sqlite` adapter, test-only) and `src/main/db/migrations/migrations.test.ts`.
+- `client.ts` still owns everything else: the connection, the pragmas, the FK-off/on lifecycle, `runConsistencyChecks()` and the fatal-startup path. Boot behaviour is unchanged.
 - There is no version table and no "already applied" tracking. Every migration runs every launch and **must be idempotent** — running it twice is a no-op the second time.
 - A fresh install runs the whole chain top-to-bottom against an empty DB. This is the failure case to design for: a migration that only works because an earlier launch warmed the DB will pass in dev and crash only brand-new users.
 
@@ -17,7 +19,7 @@ Project-specific conventions for the SQLite (better-sqlite3 + Drizzle) schema-mi
 - After migrations, `runConsistencyChecks()` runs idempotent data-healing inside `safeRun` (e.g. `chatModeRepo.pruneDanglingMcpProviderIds()`); each check is try/caught so it can never block startup.
 - Any throw from `runMigrations()` is fatal startup → boot-resilience native dialog + `app.exit(1)`. See [Boot Resilience](../../core/boot_resilience/boot_resilience.md).
 
-## Current run order (`runMigrations`)
+## Current run order (`runAllMigrations`)
 
 Parents before children; pure table-creation before backfills; legacy-table backfills last.
 
@@ -25,19 +27,20 @@ Parents before children; pure table-creation before backfills; legacy-table back
 2. `migrateProviders` — `llm_providers`
 3. `migrateMcp` — `mcp_providers`
 4. `migrateAgents` — `agents` (must precede `chats`: `chat_on_demand_agents` FK-references it)
-5. `migrateChats` — `chats` + `chat_mcp_providers` + `chat_on_demand_mcps` + `chat_on_demand_agents`
-6. `migrateMessages` — `messages`
-7. `migrateChatModes` — `chat_modes`
-8. `migrateAccountConfig` — managed-provider/mode columns + `managed_overrides` (after providers + chat-modes)
-9. `migrateAgentOverrides` — `agent_overrides` (no FK, survives resync)
-10. `migrateA2aSessions` — `a2a_sessions` (FK → agents)
-11. `migrateChatFiles` — chat file tables
-12. `migrateJobs` — `jobs`, `job_mcp_providers`, `job_runs`, `job_folders`, `job_agents` (FK → jobs/chats/mcp_providers/agents)
-13. `migrateNotes` — notes tables
-14. `migrateAppSettings` — app settings
-15. `runSyncMigrations` — `sync_state` / `sync_device_key` / `sync_tombstone` (after notes/jobs)
-16. `runSyncDepsMigrations` — `jobs.sync_deps`, `mcp_providers.created_by_sync`, `agents.created_by_sync`
-17. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
+5. `migrateAgentRoots` — `agent_roots` (the workshop folders local agents are scanned from). Placed beside the table it extends; it creates only its own table + indexes and touches nothing else. **Deliberately no FK** from `agents.local_root_id` — a folder row is a derived index pruned explicitly, and a second FK edge on `agents` is what caused the `no such table: main.agents` crash
+6. `migrateChats` — `chats` + `chat_mcp_providers` + `chat_on_demand_mcps` + `chat_on_demand_agents`
+7. `migrateMessages` — `messages`
+8. `migrateChatModes` — `chat_modes`
+9. `migrateAccountConfig` — managed-provider/mode columns + `managed_overrides` (after providers + chat-modes)
+10. `migrateAgentOverrides` — `agent_overrides` (no FK, survives resync)
+11. `migrateA2aSessions` — `a2a_sessions` (FK → agents)
+12. `migrateChatFiles` — chat file tables
+13. `migrateJobs` — `jobs`, `job_mcp_providers`, `job_runs`, `job_folders`, `job_agents` (FK → jobs/chats/mcp_providers/agents)
+14. `migrateNotes` — notes tables
+15. `migrateAppSettings` — app settings
+16. `runSyncMigrations` — `sync_state` / `sync_device_key` / `sync_tombstone` (after notes/jobs)
+17. `runSyncDepsMigrations` — `jobs.sync_deps`, `mcp_providers.created_by_sync`, `agents.created_by_sync`
+18. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
 
 ## Helpers (`migrations/helpers.ts`)
 
@@ -54,14 +57,14 @@ Parents before children; pure table-creation before backfills; legacy-table back
 
 ## Ordering rules (enforced by review)
 
-- A table that is FK-referenced by another (parent) must be created by an **earlier** migration than the referencing table (child). E.g. `agents` (4) before `chats` (5).
+- A table that is FK-referenced by another (parent) must be created by an **earlier** migration than the referencing table (child). E.g. `agents` (4) before `chats` (6).
 - Pure `CREATE TABLE` migrations before any backfill/DML that touches the created tables.
 - Any `ALTER TABLE x …` / `INSERT INTO x` where `x` is **not** this migration's own table → must run after all table-creation migrations **and** be `hasTable`-guarded. The canonical example is `migrateUserIdColumns` (runs last, loops `hasTable` then `hasColumn`).
 - Timestamp comparisons must match the column's scale. `chats.deleted_at` is stored as **Unix seconds** (Drizzle `mode: 'timestamp'`); compare against `Math.floor(Date.now()/1000)`, never raw ms `Date.now()` (which would wipe every trashed row). `created_at` columns here are stored as **ms** — check the column.
 
 ## Adding a migration
 
-1. Create `migrations/<topic>.ts` exporting `migrate<Topic>(sqlite)`; import + call it from `runMigrations()` at the correct ordered position (parent tables earlier than referencing tables; backfills touching other tables last).
+1. Create `migrations/<topic>.ts` exporting `migrate<Topic>(sqlite)`; import + call it from `runAllMigrations()` in `src/main/db/migrations/index.ts` at the correct ordered position (parent tables earlier than referencing tables; backfills touching other tables last).
 2. `CREATE TABLE IF NOT EXISTS`; gate every `ADD COLUMN` with `hasColumn`; gate cross-table touches with `hasTable`.
 3. Mirror the table in the Drizzle schema under `src/main/db/<entity>.ts` (e.g. `chatOnDemandAgent.ts`) and register in `src/main/db/schema.ts`. <!-- nocheck -->
 4. Validate fresh-install safety — see below.
@@ -69,7 +72,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 ## Validation (run for any `src/main/db/` change)
 
 - **Build:** `npx electron-vite build` (full main+preload+renderer). Type-check renderer: `npx tsc --noEmit --project tsconfig.web.json`. Never bare `npx tsc --noEmit` (hangs).
-- **Fresh-DB simulation:** replay the `runMigrations()` statements in order against an empty DB via the `sqlite3` CLI (the `better-sqlite3` native binding is built for Electron and won't load under plain `node`). Watch for FK-cascade DML hitting a not-yet-created table; finish with `PRAGMA foreign_key_check;` (must be clean) — model the FK-off-then-on lifecycle if testing cascade behavior.
+- **Fresh-DB simulation:** extend `src/main/db/migrations/migrations.test.ts`, which drives the real `runAllMigrations()` against an empty `node:sqlite` database (the `better-sqlite3` binding is Electron-ABI-bound and won't load under plain `node`). It already asserts: replay from empty without throwing, a clean `PRAGMA foreign_key_check`, second and third runs as no-ops, and a re-run over a populated DB. Watch for FK-cascade DML hitting a not-yet-created table; model the FK-off-then-on lifecycle if testing cascade behavior.
 - **Idempotency:** run the migration block a second time against the populated DB; it must not throw.
 - **Real fresh install (definitive):** remove/relocate `userData/cinna.db`, launch, confirm the window opens with no fatal dialog and no `no such table` / `no such column` in `cinna-errors.log`.
 

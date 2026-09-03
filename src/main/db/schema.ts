@@ -222,7 +222,7 @@ export const agents = sqliteTable('agents', {
   cardData: text('card_data', { mode: 'json' }).$type<Record<string, unknown>>(), // cached agent card JSON
   skills: text('skills', { mode: 'json' }).$type<Array<{ id: string; name: string; description?: string }>>(),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
-  source: text('source').notNull().default('local'), // 'local' | 'remote'
+  source: text('source').notNull().default('local'), // 'local' | 'remote' | 'folder'
   remoteTargetType: text('remote_target_type'), // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: text('remote_target_id'), // UUID from Cinna backend
   remoteMetadata: text('remote_metadata', { mode: 'json' }).$type<RemoteAgentMetadata>(), // entrypoint_prompt, example_prompts, etc.
@@ -232,6 +232,37 @@ export const agents = sqliteTable('agents', {
    * + configures it to finish setup; card fetch/token happen then.
    */
   createdBySync: integer('created_by_sync', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * Folder agents only (`source = 'folder'`): the absolute path of the agent
+   * folder on this machine. Null for A2A and Cinna-synced agents. Machine-local
+   * and never synced — {@link agentRowToDescriptor} skips non-`'local'` rows.
+   */
+  localPath: text('local_path'),
+  /** Folder agents only: the {@link agentRoots} row this folder was scanned
+   *  from. No SQL FK on purpose — see `migrations/agent-roots.ts`. */
+  localRootId: text('local_root_id'),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date())
+})
+
+/**
+ * Registered agents roots — the workshop folders the scanner walks. Exactly one
+ * row per user carries `isDefault`: the agents home (`~/Documents/CinnaAgents`
+ * unless the `localAgentsHome` app setting overrides it). Extra rows are folders
+ * the user adopted, e.g. an existing kit workshop.
+ *
+ * Everything about a folder agent lives in the folder (Invariant 1); this table
+ * only remembers *where to look*.
+ */
+export const agentRoots = sqliteTable('agent_roots', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  /** Absolute path of the workshop root (the folder containing `Local/`). */
+  path: text('path').notNull(),
+  /** Display name for the sidebar group. */
+  label: text('label').notNull(),
+  isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

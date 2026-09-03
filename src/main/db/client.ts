@@ -3,22 +3,7 @@ import { join } from 'path'
 import Database from 'better-sqlite3'
 import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema'
-import { migrateProviders } from './migrations/providers'
-import { migrateMcp } from './migrations/mcp'
-import { migrateChats } from './migrations/chats'
-import { migrateMessages } from './migrations/messages'
-import { migrateChatModes } from './migrations/chat-modes'
-import { migrateAgents } from './migrations/agents'
-import { migrateA2aSessions } from './migrations/a2a-sessions'
-import { migrateAgentOverrides } from './migrations/agent-overrides'
-import { migrateAccountConfig } from './migrations/account-config'
-import { migrateUsers, migrateUserIdColumns } from './migrations/users'
-import { migrateChatFiles } from './migrations/chat-files'
-import { migrateJobs } from './migrations/jobs'
-import { migrateNotes } from './migrations/notes'
-import { migrateAppSettings } from './migrations/app-settings'
-import { runSyncMigrations } from './migrations/sync'
-import { runSyncDepsMigrations } from './migrations/sync-deps'
+import { runAllMigrations } from './migrations'
 import { chatModeRepo } from './chatModes'
 import { createLogger } from '../logger/logger'
 
@@ -79,36 +64,14 @@ function safeRun(name: string, fn: () => void): void {
   }
 }
 
+/**
+ * Run the migration chain against this connection. The chain itself lives in
+ * `migrations/index.ts` so it can be replayed against an empty database by the
+ * test suite — `better-sqlite3`'s binding is built for Electron and will not
+ * load under plain Node.
+ */
 function runMigrations(): void {
-  // Users table first (referenced by all data tables)
-  migrateUsers(sqlite)
-  // Order matters: providers, mcp & agents first (all referenced by chats via
-  // FK — `chat_on_demand_agents` references `agents`), then chats, messages,
-  // chat-modes. FK enforcement is off during migrations (see initDatabase), so
-  // this ordering is belt-and-suspenders, not the sole guard.
-  migrateProviders(sqlite)
-  migrateMcp(sqlite)
-  migrateAgents(sqlite)
-  migrateChats(sqlite)
-  migrateMessages(sqlite)
-  migrateChatModes(sqlite)
-  // Account-provisioned (Cinna-managed) provider/mode columns + overrides table.
-  // Must come after providers + chat-modes tables exist.
-  migrateAccountConfig(sqlite)
-  migrateAgentOverrides(sqlite)
-  migrateA2aSessions(sqlite)
-  migrateChatFiles(sqlite)
-  // Jobs depend on chats + mcp_providers being present (FK references).
-  migrateJobs(sqlite)
-  migrateNotes(sqlite)
-  migrateAppSettings(sqlite)
-  // Sync bookkeeping tables (must come after notes/jobs exist).
-  runSyncMigrations(sqlite)
-  // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).
-  runSyncDepsMigrations(sqlite)
-  // Backfill `user_id` on legacy tables — must run AFTER table creation so
-  // fresh installs don't ALTER tables that don't exist yet.
-  migrateUserIdColumns(sqlite)
+  runAllMigrations(sqlite)
 }
 
 export function getDb(): BetterSQLite3Database<typeof schema> {

@@ -32,6 +32,8 @@ export function migrateAgents(sqlite: Database.Database): void {
     sqlite.exec('ALTER TABLE agents ADD COLUMN protocol_interface_version TEXT')
   }
   if (!colNames.has('source')) {
+    // 'local' = a hand-added A2A URL, 'remote' = Cinna-synced,
+    // 'folder' = a local folder agent indexed from an `agent_roots` root.
     sqlite.exec("ALTER TABLE agents ADD COLUMN source TEXT NOT NULL DEFAULT 'local'")
   }
   if (!colNames.has('remote_target_type')) {
@@ -42,5 +44,16 @@ export function migrateAgents(sqlite: Database.Database): void {
   }
   if (!colNames.has('remote_metadata')) {
     sqlite.exec('ALTER TABLE agents ADD COLUMN remote_metadata TEXT')
+  }
+  // Folder agents (`source = 'folder'`): the agent is a folder on disk and this
+  // row is a derived index over it. `local_path` is the absolute agent folder,
+  // `local_root_id` the `agent_roots` row it was scanned from — deliberately no
+  // SQL foreign key, see `migrations/agent-roots.ts`. Both stay NULL for the
+  // other two sources.
+  if (!colNames.has('local_path')) {
+    sqlite.exec('ALTER TABLE agents ADD COLUMN local_path TEXT')
+  }
+  if (!colNames.has('local_root_id')) {
+    sqlite.exec('ALTER TABLE agents ADD COLUMN local_root_id TEXT')
   }
 }
