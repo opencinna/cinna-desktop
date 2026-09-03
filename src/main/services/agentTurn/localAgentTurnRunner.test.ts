@@ -43,7 +43,7 @@ vi.mock('../../logger/logger', () => ({
   })
 }))
 
-import { EngineEventBus } from './engineEventBus'
+import { EngineEventBus, type SessionEventListener } from './engineEventBus'
 import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner'
 import { pendingRequests } from './pendingRequests'
 import { turnLock } from '../localAgents/turnLock'
@@ -253,6 +253,55 @@ describe('LocalAgentTurnRunner', () => {
     expect(result.error?.message).toContain('switched off')
     expect(h.engine.calls).toEqual([])
     expect(h.order).toEqual([])
+  })
+
+  it('refuses a turn against an agent whose folder is not in a runnable state', async () => {
+    // The `enabled` gate above has a test; **this sibling gate had none**, and
+    // the mutation `if (agent.readiness === 'invalid' || agent.readiness ===
+    // 'contract_too_new')` → `if (false)` passed the whole suite. The two gates
+    // stand or fall together: both are the runner deciding what a turn may
+    // reach, because `collectEngineAgents` writes a config entry either way.
+    const invalid = harness({
+      agent: { readiness: 'invalid', readinessReason: 'agent.toml is malformed.' }
+    })
+    const result = await invalid.runner.runTurn(invalid.input())
+    // The reason is surfaced, not swallowed — it is the only line that can say
+    // what to fix.
+    expect(result.error?.message).toBe('agent.toml is malformed.')
+    expect(invalid.engine.calls).toEqual([])
+    expect(invalid.order).toEqual([])
+
+    const tooNew = harness({
+      agent: { readiness: 'contract_too_new', readinessReason: null }
+    })
+    const second = await tooNew.runner.runTurn(tooNew.input())
+    // And with no reason recorded it still refuses rather than falling through.
+    expect(second.error?.message).toBe(
+      'This agent’s folder is not in a state it can be run from.'
+    )
+    expect(tooNew.engine.calls).toEqual([])
+  })
+
+  it('surfaces a failed engine POST instead of waiting out the turn ceiling', async () => {
+    // **`post()`'s `if (!res.ok) throw` had nothing pinning it**: the mutation
+    // `if (false)` passed 758/758. Every call to the engine goes through this
+    // one door — the session create, the prompt, both reply endpoints and
+    // `/interrupt` — so without the throw a rejected prompt is swallowed whole
+    // and the turn hangs to the 20-minute ceiling with nothing said. Reachable
+    // on an expired session, a 500, or an agent key the engine does not know.
+    const engine = fakeEngine({
+      'POST /api/session/ses_new/prompt': () => new Response('nope', { status: 500 })
+    })
+    // A short ceiling so the mutation's symptom is a *different error message*
+    // rather than a five-second timeout — the two outcomes stay legible apart.
+    const h = harness({ engine, turnCeilingMs: 50 })
+    const result = await h.runner.runTurn(h.input())
+
+    // Mutation: `if (!res.ok) { throw }` → `if (false)` on `post()`'s call site
+    // fails this with 'The agent stopped responding…' — the ceiling firing,
+    // twenty minutes later in production, on a turn that was refused instantly.
+    expect(result.error?.message).toBe('The local agent could not complete this turn.')
+    expect(result.error?.raw).toContain('500')
   })
 
   it('reconciles the engine before taking the turn lock, never after', async () => {
@@ -496,8 +545,121 @@ describe('LocalAgentTurnRunner', () => {
     expect(paths(h)).not.toContain('POST /api/session')
     expect(paths(h)).toContain('POST /api/session/ses_old/prompt')
 
+    // **The re-point, which nothing asserted before.** `openSession`'s contract
+    // is that a resumed session whose agent key has moved — the config changed
+    // and the engine restarted — is *switched* rather than abandoned, so the
+    // conversation survives. Mutation: delete the `POST .../agent` call from
+    // `openSession` → this fails. Without it a resumed chat keeps answering as
+    // whatever agent the session was originally opened against, which is
+    // invisible until the agent's prompt has changed underneath the user.
+    const repoint = h.engine.calls.find((c) => c.path === '/api/session/ses_old/agent')
+    expect(repoint?.method).toBe('POST')
+    expect(repoint?.body).toEqual({ agent: 'assistant_ab12' })
+
     h.engine.push(endTurn('stop', 'ses_old'))
     await run
+  })
+
+  it('refuses when the engine answers a session create with no usable id', async () => {
+    // `POST /api/session` is expected to return `{data:{id:'ses_*'}}`. An error
+    // envelope, a `{data:{}}`, or an id in some other namespace must not be
+    // carried forward as a session id — every later call would be built on it
+    // and 404, and the user would see an unexplained failure per turn.
+    //
+    // Mutation: `if (typeof id !== 'string' || !id.startsWith('ses'))` →
+    // `if (false)` fails this — the turn proceeds against `undefined` as its
+    // session id.
+    const engine = fakeEngine({
+      'POST /api/session': () =>
+        new Response(JSON.stringify({ data: { notAnId: true } }), { status: 200 })
+    })
+    const h = harness({ engine, turnCeilingMs: 50 })
+    const result = await h.runner.runTurn(h.input())
+
+    expect(result.error?.message).toBe('Could not start a session with the local engine.')
+    expect(paths(h)).not.toContain('POST /api/session/undefined/prompt')
+  })
+
+  it('releases its bus subscription when the turn ends', async () => {
+    // The bus connects on the first subscriber and disconnects on the last, so
+    // a turn that never unsubscribes holds the engine socket open for the life
+    // of the app and leaves a dead `ses_…` listener taking delivery of every
+    // later event on that id.
+    //
+    // Mutation: delete `unsubscribe()` from `stream()`'s `finally` fails this —
+    // the bus stays connected after the turn is over.
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    expect(h.engineBus.isConnected()).toBe(true)
+
+    h.engine.push(endTurn())
+    await run
+    await settle()
+
+    expect(h.engineBus.isConnected()).toBe(false)
+  })
+
+  it('replays the whole durable stream when the socket dies before any cursor exists', async () => {
+    // **The branch the heal test above cannot reach.** That test hands its
+    // `text.delta` a fabricated `durable` block — but the contract, verified
+    // against the binary and restated in this file's own header, says
+    // `session.next.text.delta` carries **no** `durable` block at all. So the
+    // real shape of "the socket died early" is `turn.lastSeq() === null`, and
+    // the `after === null ? '' : …` branch is what runs.
+    //
+    // Reachable whenever the engine drops between `bus.ready()` and the first
+    // durable event — a restart landing in that window, which is exactly when a
+    // reconnect happens.
+    //
+    // Mutation: `const query = after === null ? '' : \`?after=\${after}\`` →
+    // `const query = \`?after=\${after}\`` on `replayDurable`'s call site fails
+    // this. The request becomes `?after=null`, which is not the same resource;
+    // the replay returns nothing usable and the turn hangs to the ceiling with
+    // its answer lost.
+    const engine = fakeEngine({
+      'GET /api/session/ses_new/event': () =>
+        sseBody([
+          `data: ${JSON.stringify({
+            id: 'evt',
+            type: 'session.next.text.ended',
+            durable: { aggregateID: 'ses_new', seq: 2, version: 1 },
+            data: {
+              sessionID: 'ses_new',
+              assistantMessageID: 'msg_1',
+              textID: 't1',
+              text: 'recovered'
+            }
+          })}\n\n`,
+          `data: ${JSON.stringify({
+            id: 'evt',
+            type: 'session.next.step.ended',
+            durable: { aggregateID: 'ses_new', seq: 3, version: 1 },
+            data: {
+              sessionID: 'ses_new',
+              assistantMessageID: 'msg_1',
+              finish: 'stop',
+              cost: 0,
+              tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }
+            }
+          })}\n\n`
+        ])
+    })
+    const h = harness({ engine, turnCeilingMs: 50 })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+
+    // Nothing durable has been seen — the socket dies with no cursor to resume
+    // from.
+    h.engine.closeStream()
+    await settle()
+
+    const result = await run
+
+    expect(result.error).toBeUndefined()
+    expect(result.parts).toEqual([{ kind: 'text', text: 'recovered' }])
+    expect(paths(h)).toContain('GET /api/session/ses_new/event')
+    expect(paths(h).some((p) => p.includes('after='))).toBe(false)
   })
 
   it('opens a fresh session when the remembered one is gone from the engine', async () => {
@@ -606,13 +768,34 @@ describe('LocalAgentTurnRunner', () => {
     const run = h.runner.runTurn(h.input())
     await settle()
 
-    // One delta lands, then the socket dies mid-answer and the rest of the
-    // turn — including its end — happens inside the hole.
+    // **The cursor comes from `text.started`, not from the delta, and that is
+    // fidelity rather than fussiness.** This fixture used to hang a `durable`
+    // block off the `session.next.text.delta` — which the binary never does:
+    // "`session.next.text.delta` carries no `durable` block at all" is a
+    // verified line in `opencode_contract.md` §2 *and* in this file's own
+    // header, and the whole point of §5 is that a fake faithful to something
+    // other than the binary passes every test and fails in the app. A fixture
+    // that contradicts the contract is a defect whatever it proves today.
+    //
+    // The real trace is `…admitted(1) → prompted(2) → step.started(3) →
+    // text.started(4) → delta, delta, delta (no durable) → text.ended(5) →
+    // step.ended(6)`. So the last cursor a turn holds when deltas are flowing
+    // is the one off `text.started`, and that is what `?after=` must carry.
+    h.engine.push(
+      `data: ${JSON.stringify({
+        id: 'evt',
+        type: 'session.next.text.started',
+        durable: { aggregateID: 'ses_new', seq: 7, version: 1 },
+        data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', textID: 't1' }
+      })}\n\n`
+    )
+    // One delta lands — carrying **no** `durable` block, as the binary emits it
+    // — then the socket dies mid-answer and the rest of the turn, including its
+    // end, happens inside the hole.
     h.engine.push(
       `data: ${JSON.stringify({
         id: 'evt',
         type: 'session.next.text.delta',
-        durable: { aggregateID: 'ses_new', seq: 7, version: 1 },
         data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', textID: 't1', delta: 'Hel' }
       })}\n\n`
     )
@@ -638,6 +821,107 @@ describe('LocalAgentTurnRunner', () => {
     // useless now, it is a 503 and a delay on every recovery.
     expect(paths(h).some((p) => p.includes('/wait'))).toBe(false)
     expect(h.engine.globalStreamsOpened()).toBeGreaterThan(1)
+  })
+
+  it('does not gap-fill on a reconnect that followed no disconnect', async () => {
+    // **Driven through the `listener` seam directly, not through the bus.**
+    //
+    // The runner's contract is with the `SessionEventListener` interface, not
+    // with `EngineEventBus` specifically. The invariant that makes this guard
+    // look redundant — `hadDisconnect` in `pump()` — lives on the *other* side
+    // of that seam, in code the runner does not own and cannot see. So the
+    // guard is insurance against the other side changing, and the only way to
+    // reach it is to hand the runner a bus that does the thing the real one
+    // currently promises not to do. Through the real bus the mutation deleting
+    // this line survives the whole suite; through the seam it does not.
+    //
+    // The observable effect of deleting `if (!disconnected) return` is not
+    // "a function was not called" — it is **a durable replay the turn never
+    // needed**, and everything that replay delivers gets folded into the turn.
+    // Here the engine's durable stream already holds the turn's end, so the
+    // spurious replay ends the turn early, on an answer that is still being
+    // written. (How bad it gets depends on what the durable stream holds at
+    // that instant; that it should not be asked at all does not.)
+    const engine = fakeEngine({
+      'GET /api/session/ses_new/event?after=4': () =>
+        sseBody([
+          `data: ${JSON.stringify({
+            id: 'evt',
+            type: 'session.next.step.ended',
+            durable: { aggregateID: 'ses_new', seq: 5, version: 1 },
+            data: {
+              sessionID: 'ses_new',
+              assistantMessageID: 'msg_1',
+              finish: 'stop',
+              cost: 0,
+              tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }
+            }
+          })}\n\n`
+        ])
+    })
+    const h = harness({ engine, turnCeilingMs: 5_000 })
+
+    // A bus that hands the test the listener the runner registered.
+    let listener!: SessionEventListener
+    const capturingBus = {
+      subscribe: (_sessionId: string, l: SessionEventListener) => {
+        listener = l
+        return () => {}
+      },
+      ready: async () => {}
+    } as unknown as EngineEventBus
+    const runner = new LocalAgentTurnRunner({
+      ...(h.runner as unknown as { deps: LocalTurnDeps }).deps,
+      bus: capturingBus
+    })
+
+    let settled = false
+    const run = runner.runTurn(h.input()).then((r) => {
+      settled = true
+      return r
+    })
+    await settle()
+
+    // A cursor exists and one delta has streamed — the turn is mid-answer.
+    listener.onEvent({
+      type: 'session.next.text.started',
+      durable: { aggregateID: 'ses_new', seq: 4, version: 1 },
+      data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', textID: 't1' }
+    })
+    listener.onEvent({
+      type: 'session.next.text.delta',
+      data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', textID: 't1', delta: 'Hel' }
+    })
+    await settle()
+
+    // A reconnect notice with **no disconnect before it**. There is no hole, so
+    // there is nothing to fill.
+    listener.onReconnect()
+    await settle()
+
+    // Mutation: delete `if (!disconnected) return` from `listener.onReconnect`
+    // fails both of these, and the **first** is the one that says why it
+    // matters: the turn settles on a `step.ended` that the spurious replay
+    // handed it, ending the answer at 'Hel' while the agent was still writing.
+    // The user sees a truncated reply and nothing reports it. The second
+    // assertion names the mechanism — a durable replay of a stream that never
+    // dropped — and is deliberately the weaker of the two, so it is checked
+    // second and the failure message leads with the consequence.
+    expect(settled).toBe(false)
+    expect(paths(h)).not.toContain('GET /api/session/ses_new/event?after=4')
+
+    // The turn ends the ordinary way, and the answer is whole.
+    listener.onEvent({
+      type: 'session.next.text.delta',
+      data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', textID: 't1', delta: 'lo' }
+    })
+    listener.onEvent({
+      type: 'session.next.step.ended',
+      durable: { aggregateID: 'ses_new', seq: 5, version: 1 },
+      data: { sessionID: 'ses_new', assistantMessageID: 'msg_1', finish: 'stop' }
+    })
+    const result = await run
+    expect(result.parts).toEqual([{ kind: 'text', text: 'Hello' }])
   })
 
   it('reports a busy agent as a turn error instead of hanging the chat', async () => {
@@ -750,4 +1034,58 @@ describe('LocalAgentTurnRunner', () => {
  * | delete the `onReconnect` → `heal()` call | heals a mid-turn stream drop from the durable stream alone |
  * | `?after=${after}` → no query string | heals a mid-turn stream drop from the durable stream alone |
  * | re-introduce the `POST /wait` call | heals a mid-turn stream drop from the durable stream alone |
+ * | delete the readiness `invalid`/`contract_too_new` gate in `runTurn` | refuses a turn against an agent whose folder is not in a runnable state |
+ * | `post()`'s `if (!res.ok) { throw }` → `if (false)` | surfaces a failed engine POST instead of waiting out the turn ceiling |
+ * | delete the `POST .../agent` re-point in `openSession` | resumes a remembered session when the engine still has it |
+ * | delete the returned-session-id validation in `openSession` | refuses when the engine answers a session create with no usable id |
+ * | delete `unsubscribe()` from `stream()`'s `finally` | releases its bus subscription when the turn ends |
+ * | `after === null ? '' : …` → `?after=${after}` in `replayDurable` | replays the whole durable stream when the socket dies before any cursor exists |
+ * | delete `if (!disconnected) return` in `listener.onReconnect` | does not gap-fill on a reconnect that followed no disconnect |
+ *
+ * ### `if (!disconnected) return` — was listed as untestable, and is not
+ *
+ * This guard sat in the "survives, no test added" list below on the grounds
+ * that `hadDisconnect` in `pump()` already prevents a spurious `onReconnect`.
+ * **That was wrong, and the row has been moved out of that list**, because a
+ * stale entry saying a line is untestable licenses deleting it.
+ *
+ * Two things changed the verdict. First, the invariant that makes the guard
+ * look redundant lives on the **other side of a seam** — in `EngineEventBus`,
+ * which the runner does not own; the runner's contract is with the
+ * `SessionEventListener` interface, so the test drives that interface directly
+ * with a capturing bus and reaches the branch easily.
+ *
+ * Second, and the part worth remembering: the effect of deleting it is **not**
+ * the spurious HTTP request it first appears to be. The replay is folded into
+ * the live turn, so if the durable stream already holds `step.ended` the turn
+ * **settles on it while the agent is still writing** — a truncated answer,
+ * delivered silently. The assertions are ordered `settled` first and the
+ * request-path check second for that reason: with the path check first the
+ * failure short-circuited there and read as a spurious fetch, understating a
+ * silent truncation. Assertion order decides what a future reader believes the
+ * test is for; keep it this way round.
+ *
+ * ### What the Phase 6 independent audit changed here
+ *
+ * Six of the rows above are new, and every one of them was a **survivor**: the
+ * mutation passed all 758 tests before the adversarial input was added. The
+ * sharpest was `post()`'s `if (!res.ok) { throw }` — with it gone, a 500 on
+ * `POST /prompt` was swallowed whole and the turn hung to the twenty-minute
+ * ceiling with nothing said to the user. `post()` is the single door to the
+ * engine for the session create, the prompt, both reply endpoints and
+ * `/interrupt`, so that one line carries all five.
+ *
+ * The `?after=` pair is worth reading together. `heals a mid-turn stream drop…`
+ * gives its `text.delta` a `durable` block, and the verified contract says a
+ * real `text.delta` carries **none** — so that test exercises the
+ * `after !== null` branch only, and the null branch (the socket dying before
+ * any durable event, which is the ordinary early-drop case) had no coverage at
+ * all. Both branches are pinned now; keep both if this file is reorganised.
+ *
+ * ### Mutations that SURVIVE, and why no test was added for them
+ *
+ * | Mutation | Why nothing can fail |
+ * |---|---|
+ * | delete `parked.delete(update.settled)` in `ingest` | `pendingRequests.drop()` on the next line removes the entry, and `settle` no-ops when the entry is gone — so the later `cancel()` sweep does nothing either way |
+ * | drop the `!res.ok` half of `replayDurable`'s guard | a non-OK replay body parses to nothing an `EngineEvent` can be made of, so it is dropped one layer further down |
  */

@@ -20,6 +20,7 @@ import {
   engineErrorMessage,
   isTurnOver,
   mapQuestions,
+  permissionDecisionText,
   renderToolOutput,
   TurnStream
 } from './turnStream'
@@ -155,6 +156,91 @@ describe('TurnStream → StreamPartsAccumulator', () => {
       })
     ])
     expect(parts).toEqual([{ kind: 'text', text: 'Hello world' }])
+  })
+
+  it('files a replayed tool event in the block its call was announced in', () => {
+    // **Hardening against a named unknown — not a fix for an observed defect.**
+    // No duplicated tool block has ever been seen. What is known is that
+    // `opencode_contract.md` §7.3 records that nobody has watched the durable
+    // stream's field set, that `tool.called` / `tool.success` / `tool.failed`
+    // **are** among the 28 durable variants and so really are replayed by the
+    // heal path, and that the text path was hardened against that unknown while
+    // the tool path was not. This removes the asymmetry, which is worse than
+    // defending neither: a reader seeing first-owner-wins on text would
+    // conclude the file had the question handled everywhere.
+    //
+    // If the replayed copy omits `assistantMessageID`, the old fallback
+    // (`str(data.assistantMessageID) ?? 'anon:tool'`) files it under a second
+    // key, the accumulator sees a fresh part with no prior, and the whole tool
+    // block is emitted a second time.
+    //
+    // Mutation: drop the `streamOwner` lookup in `toolCalled` and `toolResult`
+    // (back to `str(data.assistantMessageID) ?? 'anon:tool'`) fails this — the
+    // call and its result each render twice.
+    const called = (withId: boolean): EngineEvent =>
+      ev('session.next.tool.called', {
+        sessionID: 'ses_a',
+        ...(withId ? { assistantMessageID: 'msg_1' } : {}),
+        callID: 'c1',
+        tool: 'bash',
+        input: { command: 'ls' }
+      })
+    const success = (withId: boolean): EngineEvent =>
+      ev('session.next.tool.success', {
+        sessionID: 'ses_a',
+        ...(withId ? { assistantMessageID: 'msg_1' } : {}),
+        callID: 'c1',
+        content: [{ type: 'text', text: 'done' }]
+      })
+
+    // Live, then the heal path replays both with the message id missing.
+    const { parts, deltas } = run([called(true), success(true), called(false), success(false)])
+
+    expect(parts).toEqual([
+      {
+        kind: 'tool',
+        text: 'bash: ls',
+        toolName: 'bash',
+        toolInput: { command: 'ls' },
+        toolId: 'c1'
+      },
+      { kind: 'tool_result', text: 'done', toolId: 'c1', toolStream: 'stdout' }
+    ])
+    // And nothing was re-emitted to the renderer either.
+    expect(deltas.map((d) => d.text)).toEqual(['bash: ls', 'done'])
+  })
+
+  it('keeps a replayed tool event with a changed message id in its original block', () => {
+    // The other half, and the same shape as `keeps a stream id with a changed
+    // message id in its original block` does for text: not absent but
+    // *different*. A `callID` names one invocation; one invocation does not
+    // migrate to another assistant message.
+    const { parts } = run([
+      ev('session.next.tool.called', {
+        sessionID: 'ses_a',
+        assistantMessageID: 'msg_1',
+        callID: 'c1',
+        tool: 'bash',
+        input: { command: 'ls' }
+      }),
+      ev('session.next.tool.called', {
+        sessionID: 'ses_a',
+        assistantMessageID: 'msg_DIFFERENT',
+        callID: 'c1',
+        tool: 'bash',
+        input: { command: 'ls' }
+      })
+    ])
+
+    expect(parts).toEqual([
+      {
+        kind: 'tool',
+        text: 'bash: ls',
+        toolName: 'bash',
+        toolInput: { command: 'ls' },
+        toolId: 'c1'
+      }
+    ])
   })
 
   it('keeps thinking and text in separate parts', () => {
@@ -386,6 +472,31 @@ describe('TurnStream → StreamPartsAccumulator', () => {
     expect(input.questions[0].multiSelect).toBe(true)
   })
 
+  it('does not park a question that has no answerable content', () => {
+    // A `question.v2.asked` whose entries are all malformed maps to zero
+    // questions. Without the guard the runner is still handed an `asked`, so it
+    // registers a pending request and parks — and the block the renderer draws
+    // has no question text and no options, so the user *cannot* answer it. The
+    // agent loop then stays parked until the registry's timeout rejects it for
+    // them. Dropping it instead lets the turn carry on.
+    //
+    // Mutation: delete `if (questions.length === 0) return {}` from
+    // `questionAsked` fails this — `asked` comes back and a part is created.
+    const stream = new TurnStream()
+    const update = stream.apply(
+      ev('question.v2.asked', {
+        id: 'que_4',
+        sessionID: 'ses_a',
+        // Shapes `mapQuestions` rejects: not an object, and no `question` text.
+        questions: [null, { header: 'no question text here' }],
+        tool: { messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+
+    expect(update.asked).toBeUndefined()
+    expect(update.message).toBeUndefined()
+  })
+
   it('closes a permission ask with a paired decision record', () => {
     const stream = new TurnStream()
     const accumulator = new StreamPartsAccumulator()
@@ -608,6 +719,39 @@ describe('renderToolOutput', () => {
       '[file] x.png'
     )
   })
+
+  it('renders a tool that produced nothing as nothing, not as an empty object', () => {
+    // A tool that succeeds with no output at all. `toolResult` drops a result
+    // whose text is `''`, so this is what keeps a silent tool from adding a
+    // block to the transcript. Mutation: drop the `Object.keys(structured).length
+    // > 0` check in `renderToolOutput` fails this with '{}' — every quiet tool
+    // call would leave a stray `{}` block under it.
+    expect(renderToolOutput({ content: [], structured: {} })).toBe('')
+    expect(renderToolOutput({})).toBe('')
+  })
+})
+
+describe('permissionDecisionText', () => {
+  it('never claims a grant was remembered for this agent', () => {
+    // §4 of `opencode_contract.md`, proven end to end: an `always` grant is
+    // written to a **user-global** store as `{projectID:'global', resource:'*'}`,
+    // after which a *different* folder agent wrote a file with no prompt at all.
+    // So "remembered" is the strongest true statement available; "for this
+    // agent" would be false in the one place a permission decision has to be
+    // trustworthy.
+    //
+    // Unreachable through the UI today (`ALWAYS_GRANTS_ENABLED` is false) but
+    // reachable from the engine, which reports an `always` replied by another
+    // client on the same `opencode serve`. Mutation: change this string — to
+    // 'Allowed once.', or to anything naming the agent — fails this.
+    expect(permissionDecisionText('always')).toBe('Allowed, and remembered.')
+    expect(permissionDecisionText('once')).toBe('Allowed once.')
+    expect(permissionDecisionText('reject')).toBe('Denied.')
+    // A fourth reply must still leave a legible record rather than an empty
+    // block the renderer then drops.
+    expect(permissionDecisionText('escalate')).toBe('Answered: escalate.')
+    expect(permissionDecisionText(undefined)).toBe('Answered: unknown.')
+  })
 })
 
 describe('mapQuestions', () => {
@@ -647,6 +791,55 @@ describe('mapQuestions', () => {
  * | delete the `streamOwner` lookup | files a text.ended under the message its deltas built; keeps a stream id with a changed message id |
  * | `isTurnOver` → settle on any `step.ended` | ends the turn on the last step, not the first |
  * | `isTurnOver` → `finish === 'stop'` only | treats an unrecognised finish reason as the end of the turn |
+ * | delete `if (questions.length === 0) return {}` in `questionAsked` | does not park a question that has no answerable content |
+ * | drop `Object.keys(structured).length > 0` in `renderToolOutput` | renders a tool that produced nothing as nothing… |
+ * | `permissionDecisionText`'s `'always'` string | never claims a grant was remembered for this agent |
+ * | drop the `streamOwner` lookup in `toolCalled` / `toolResult` | files a replayed tool event in the block its call was announced in; keeps a replayed tool event with a changed message id… |
+ *
+ * ### The `streamOwner` extension to tools — what it is and is not
+ *
+ * Read the two rows above as **hardening against a named unknown, not as a
+ * fixed observed bug.** No duplicated tool block has ever been seen. The facts
+ * are: `opencode_contract.md` §7.3 records that the durable stream's field set
+ * has never been watched; `tool.called` / `tool.success` / `tool.failed` **are**
+ * among the 28 durable variants, so the heal path really does replay them; and
+ * the text path was hardened against that unknown while the tool path was not.
+ * The asymmetry was the problem — a reader seeing first-owner-wins on text
+ * would conclude the file had the question handled everywhere.
+ *
+ * The change is a **no-op on the verified path**, which was proven rather than
+ * asserted: applied with **zero test edits**, the full suite stayed green at the
+ * same count. First call misses the map and falls through to
+ * `assistantMessageID`; a replay carrying the same id returns that id.
+ *
+ * The key cannot degrade to a constant and merge two distinct calls: all four
+ * handlers (`toolCalled`, `toolResult`, `permissionAsked`, `questionAsked`)
+ * return `{}` before the key is built if `callID` / `id` is absent, so a
+ * missing identifier drops the event rather than colliding it. Requests reuse
+ * the existing `requestMessage` map rather than adding a second mechanism —
+ * and note that `permission.v2.*` / `question.v2.*` are **not** durable
+ * variants, so those two cannot be replayed at all; they are done for
+ * consistency within the file, not against a known exposure.
+ *
+ * ### Mutations that SURVIVE, and why no test was added for them
+ *
+ * Run by the Phase 6 independent audit and deliberately left uncovered. Each is
+ * shielded by a second mechanism downstream, so no input separates the code
+ * from its absence. Written down rather than papered over with an assertion
+ * that would pass either way.
+ *
+ * | Mutation | Why nothing can fail |
+ * |---|---|
+ * | delete the narration length guard in `toolCalled` | the accumulator's `if (!delta) return` drops an identical re-delivery already, and no realistic replay delivers a *shorter* narration for the same `callID` |
+ * | delete the length guard in `toolResult` | same shield; `stdout` and `stderr` occupy different slots, so the two never overwrite each other |
+ * | delete the length guard in `settleRequest` | same shield — and `permission.v2.replied` is not one of the 28 durable variants, so a replay cannot re-deliver it at all |
+ * | drop the `delta === ''` guard in `appendText` | an empty delta leaves the part text unchanged, and the accumulator drops a part whose text is empty |
+ * | drop `startsWith('ses')` in `eventSessionId` | an id in another namespace finds no listener set in `dispatch` and is dropped there instead |
+ *
+ * **These guards are load-bearing anyway**, and `opencode_contract.md` §7.2
+ * names them as the reason the code is inclusive-tolerant if `?after=` turns
+ * out to be inclusive. They are untestable *here*, not unnecessary — do not
+ * take these rows as licence to delete them.
  *
  * ### The survivor that mattered most
  *

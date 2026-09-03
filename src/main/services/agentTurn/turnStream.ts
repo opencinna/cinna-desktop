@@ -158,7 +158,21 @@ export class TurnStream {
    */
   private readonly requestMessage = new Map<string, string>()
   /**
-   * Which message each text / reasoning stream id first appeared under.
+   * Which message each text / reasoning / tool stream id first appeared under.
+   *
+   * **The tool keys are hardening against a named unknown, not a fix for an
+   * observed defect.** Nothing has been seen duplicating a tool block. What is
+   * known is that the durable stream's field set on these events has never been
+   * watched (`opencode_contract.md` §7.3 names exactly that gap), that
+   * `tool.called` / `tool.success` / `tool.failed` **are** among the 28 durable
+   * variants and so are genuinely replayed by the heal path, and that the text
+   * path was hardened against that unknown while the tool path was not. That
+   * asymmetry is the thing being removed: a reader who saw first-owner-wins on
+   * text would reasonably conclude this file had the whole question handled.
+   *
+   * It is also the semantically right key regardless of the replay question: a
+   * `callID` names one tool invocation, and one invocation does not migrate to
+   * a different assistant message.
    *
    * `assistantMessageID` is required on these events by the schema, but the
    * fallback below is `anon:${kind}` — and if a `session.next.text.ended` ever
@@ -324,13 +338,16 @@ export class TurnStream {
     const callId = str(data.callID)
     const tool = str(data.tool)
     if (!callId || !tool) return {}
-    const messageId = str(data.assistantMessageID) ?? 'anon:tool'
+    // First owner wins, exactly as it does for text. See `streamOwner`.
+    const key = `tool:${callId}`
+    const messageId = this.streamOwner.get(key) ?? str(data.assistantMessageID) ?? 'anon:tool'
+    this.streamOwner.set(key, messageId)
     const state = this.messageState(messageId)
     const input =
       data.input && typeof data.input === 'object' && !Array.isArray(data.input)
         ? (data.input as Record<string, unknown>)
         : undefined
-    const idx = this.slot(state, `tool:${callId}`, () => ({
+    const idx = this.slot(state, key, () => ({
       kind: 'text',
       // The accumulator drops a part with empty text, so a tool call needs a
       // narration line to exist at all — the structured call rides on the
@@ -356,9 +373,12 @@ export class TurnStream {
   ): TurnStreamUpdate {
     const callId = str(data.callID)
     if (!callId || text === '') return {}
-    const messageId = str(data.assistantMessageID) ?? 'anon:tool'
+    // First owner wins, exactly as it does for text. See `streamOwner`.
+    const key = `result:${callId}:${stream}`
+    const messageId = this.streamOwner.get(key) ?? str(data.assistantMessageID) ?? 'anon:tool'
+    this.streamOwner.set(key, messageId)
     const state = this.messageState(messageId)
-    const idx = this.slot(state, `result:${callId}:${stream}`, () => ({
+    const idx = this.slot(state, key, () => ({
       kind: 'text',
       text: '',
       metadata: {
@@ -413,7 +433,10 @@ export class TurnStream {
     const action = str(data.action)
     if (!requestId || !action) return {}
     const source = data.source as Record<string, unknown> | undefined
-    const messageId = str(source?.messageID) ?? 'anon:requests'
+    // First owner wins. `requestMessage` is already the first-owner map for
+    // requests (it is what lets `settleRequest` file a decision beside its
+    // ask), so it is reused here rather than adding a second one.
+    const messageId = this.requestMessage.get(requestId) ?? str(source?.messageID) ?? 'anon:requests'
     const state = this.messageState(messageId)
     const request: LocalPermissionRequest = {
       action,
@@ -455,7 +478,8 @@ export class TurnStream {
     const questions = mapQuestions(data.questions)
     if (questions.length === 0) return {}
     const tool = data.tool as Record<string, unknown> | undefined
-    const messageId = str(tool?.messageID) ?? 'anon:requests'
+    // First owner wins, via the same `requestMessage` map — see `permissionAsked`.
+    const messageId = this.requestMessage.get(requestId) ?? str(tool?.messageID) ?? 'anon:requests'
     const state = this.messageState(messageId)
     const idx = this.slot(state, `question:${requestId}`, () => ({
       kind: 'text',

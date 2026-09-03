@@ -37,6 +37,8 @@ vi.mock('../../logger/logger', () => ({
 function controllableStream(): {
   stream: ReadableStream<Uint8Array>
   push: (text: string) => void
+  /** Raw bytes, so a chunk boundary can be put *inside* a character. */
+  pushBytes: (bytes: Uint8Array) => void
   close: () => void
   fail: (err: Error) => void
 } {
@@ -50,6 +52,7 @@ function controllableStream(): {
   return {
     stream,
     push: (text) => ctrl.enqueue(enc.encode(text)),
+    pushBytes: (bytes) => ctrl.enqueue(bytes),
     close: () => ctrl.close(),
     fail: (err) => ctrl.error(err)
   }
@@ -217,16 +220,24 @@ describe('EngineEventBus', () => {
   })
 
   it('retries with backoff when the transport throws, and resets the delay after a success', async () => {
+    // **This test used to stop at the success and pin only half its own name.**
+    // It threw three times, asserted [250, 500, 1000], connected, and ended —
+    // so `attempt = 0` never ran, and the mutation deleting it passed the whole
+    // suite (758/758). The reset is only observable on the *second* drop, so
+    // the stream now dies after the successful connection and the delay that
+    // follows is the assertion that separates the two.
     const delays: number[] = []
     const sleep = async (ms: number): Promise<void> => {
       delays.push(ms)
     }
     const good = controllableStream()
+    const after = controllableStream()
     let call = 0
     const bus = new EngineEventBus(async () => {
       call += 1
       if (call <= 3) throw new Error('ECONNREFUSED')
-      return good.stream
+      if (call === 4) return good.stream
+      return after.stream
     }, sleep)
     bus.subscribe('ses_a', recorder())
     await settle()
@@ -235,6 +246,18 @@ describe('EngineEventBus', () => {
     // this; `attempt += 1` deleted fails it too (all 250s).
     expect(delays).toEqual([250, 500, 1_000])
     expect(bus.isConnected()).toBe(true)
+
+    // The socket that survived three failures now drops. A stream that has been
+    // up must not inherit the backoff of a failure long past — it retries
+    // promptly.
+    good.close()
+    await settle()
+
+    // Mutation: delete `attempt = 0` from `pump()`'s `if (body)` branch fails
+    // this with [250, 500, 1000, **2000**] — the reconnect after a healthy
+    // connection would wait two seconds because three unrelated failures
+    // happened before it.
+    expect(delays).toEqual([250, 500, 1_000, 250])
     bus.shutdown()
   })
 
@@ -474,6 +497,65 @@ describe('EngineEventBus', () => {
     bus.shutdown()
   })
 
+  it('holds a multi-byte character that a chunk boundary splits in half', async () => {
+    // The agent's own prose streams through this decoder, so a chunk boundary
+    // landing inside a UTF-8 sequence is an ordinary event, not an exotic one —
+    // an emoji, a curly quote, an em dash, any accented letter. The socket
+    // decides where chunks end, and it does not know or care about character
+    // boundaries.
+    //
+    // `reassembles an event split across two chunks` above splits between
+    // *characters*, which every decoder survives. This one splits **inside**
+    // one, which is the only input that can tell the two decoder modes apart.
+    const s = controllableStream()
+    const bus = new EngineEventBus(async () => s.stream, noSleep)
+    const a = recorder()
+    bus.subscribe('ses_a', a)
+    await bus.ready()
+
+    const bytes = new TextEncoder().encode(
+      evt('session.next.text.delta', 'ses_a', { delta: 'a🌍b' })
+    )
+    // Split two bytes into the four-byte emoji, so neither half is valid UTF-8.
+    const lead = bytes.indexOf(0xf0)
+    expect(lead).toBeGreaterThan(0)
+    s.pushBytes(bytes.slice(0, lead + 2))
+    await settle()
+    s.pushBytes(bytes.slice(lead + 2))
+    await settle()
+
+    // Mutation: `decoder.decode(value, { stream: true })` → `decoder.decode(value)`
+    // on `read()`'s call site fails this. Without the streaming flag each half
+    // is decoded independently, the incomplete sequence becomes U+FFFD
+    // replacement characters at both ends of the split, and the delta arrives
+    // as 'a���b' — a corrupted answer with nothing reporting it.
+    expect(a.events).toHaveLength(1)
+    expect(a.events[0]?.data?.delta).toBe('a🌍b')
+    bus.shutdown()
+  })
+
+  it('a second shutdown does not tell a listener the world ended twice', async () => {
+    // `engineManager.onStateChange` fires `shutdown()` for **every** non-running
+    // state — `stopped`, then `starting`, then `failed` — so back-to-back
+    // shutdowns are the normal case rather than a defensive one
+    // (`agentTurn/index.ts`: `if (next.status !== 'running') engineEventBus.shutdown()`).
+    const s = controllableStream()
+    const bus = new EngineEventBus(async () => s.stream, noSleep)
+    const a = recorder()
+    bus.subscribe('ses_a', a)
+    await bus.ready()
+
+    bus.shutdown()
+    bus.shutdown()
+    await settle()
+
+    // Mutation: delete `this.listeners.clear()` from `shutdown()` fails this
+    // with ['closed', 'closed']. A turn told twice that the engine stopped is
+    // harmless only because `settle` happens to be idempotent — the bus should
+    // not be relying on its listeners for that.
+    expect(a.notices).toEqual(['closed'])
+  })
+
   it('does not glue a half-line from a dead socket onto the next one', async () => {
     const first = controllableStream()
     const second = controllableStream()
@@ -523,8 +605,27 @@ describe('EngineEventBus', () => {
  * | `shutdown()` calls `onDisconnect` instead of `onClosed` | shutdown reports a close, not a disconnect; **and** the runner's "ends the turn when the engine stops" |
  * | a fresh `SseParser` per chunk | reassembles an event split across two chunks |
  * | delete `parser.reset()` on reconnect | does not glue a half-line from a dead socket… |
+ * | delete `attempt = 0` in `pump()`'s `if (body)` branch | retries with backoff… (**added by the Phase 6 independent audit** — see below) |
+ * | `read()`'s `decoder.decode(value, {stream:true})` → default | holds a multi-byte character that a chunk boundary splits in half |
+ * | delete `this.listeners.clear()` in `shutdown()` | a second shutdown does not tell a listener the world ended twice |
  *
- * ### The two survivors, and what changed because of them
+ * ### Mutations that SURVIVE, and why no test was added for them
+ *
+ * Run by the independent audit and left uncovered **on purpose**. Each is
+ * shielded by a second mechanism, so no input separates the code from its
+ * absence; a test here would pass against either and be decoration. Recorded so
+ * the next reader does not mistake the gap for an oversight — and so that if
+ * any shield is ever removed, the debt these carry becomes visible.
+ *
+ * | Mutation | Why nothing can fail |
+ * |---|---|
+ * | `isDead()`: drop `\|\| this.stopped` | `stop()` sets `stopped` and aborts the controller together, so `signal.aborted` covers it on every path that sets either |
+ * | `isDead()`: drop `\|\| signal.aborted` | the mirror of the row above, for the same reason |
+ * | `start()`'s `finally`: generation guard → unconditional `this.pumping = null` | needs an old pump to settle *after* a new one started; the transports here settle in a microtask, so the window cannot be opened from a test |
+ * | `read()`: drop the mid-read `if (this.stopped \|\| signal.aborted) return` | the abort tears the body down, so the loop exits on the next `read()` anyway |
+ * | `notifyAll()`: drop both `[...]` snapshots | a `Map`/`Set` iterator tolerates deleting an entry it has already visited — the same finding as the `dispatch` snapshot below, which was deleted from the source rather than tested |
+ *
+ * ### The two survivors from the original round, and what changed because of them
  *
  * 1. **`for (const listener of [...set])` → `of set` survived.** The snapshot
  *    was written to stop a mid-dispatch unsubscribe skipping the next
@@ -535,6 +636,16 @@ describe('EngineEventBus', () => {
  *    assertion.** With the branch gone, `listeners.get(null)` returns
  *    undefined and the event is dropped anyway. The branch's only unique
  *    observable is its log line, so the test now asserts on that.
+ *
+ * ### The survivor the independent audit found
+ *
+ * **`attempt = 0` in `pump()`'s `if (body)` branch survived the whole suite.**
+ * The test is named `…and resets the delay after a success`, and it never
+ * executed the reset: it threw three times, asserted `[250, 500, 1000]`,
+ * connected, and stopped. `attempt = 0` only becomes observable on the *next*
+ * drop, which the test never caused. This is the `saveBlocked` shape exactly —
+ * a test named for a contract whose branch it does not reach — and it is the
+ * reason the test now drops the socket a second time.
  *
  * One near-miss worth recording, because it is the trap the handover names:
  * the broadcast mutation was first applied with a regex that matched
