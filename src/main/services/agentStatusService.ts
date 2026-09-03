@@ -7,6 +7,7 @@ import { AgentStatusError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { FOLDER_AGENT_SOURCE } from '../../shared/localAgents'
 import { manifestPath, readManifest } from '../kit/manifestIo'
+import { agentService } from './agentService'
 import { localAgentService } from './localAgents/localAgentService'
 import { readFolderAgentSnapshot, runStatusRefresh } from './localAgents/statusRefresh'
 
@@ -115,10 +116,10 @@ function errorFromStatus(status: number, statusText: string, url: string): Agent
  * row has gone stale, whose folder has moved, or whose kit contract will not
  * load is skipped, not propagated.
  */
-function listFolderSnapshots(userId: string): AgentStatusSnapshot[] {
+function listFolderSnapshots(defaultUserId: string): AgentStatusSnapshot[] {
   let rows: ReturnType<typeof agentRepo.listFolder>
   try {
-    rows = agentRepo.listFolder(userId)
+    rows = agentRepo.listFolder(defaultUserId)
   } catch (err) {
     logger.error('folder agent status: index unreadable', { error: String(err) })
     return []
@@ -129,7 +130,7 @@ function listFolderSnapshots(userId: string): AgentStatusSnapshot[] {
   const snapshots: AgentStatusSnapshot[] = []
   for (const row of rows) {
     try {
-      const { root, agentDir } = localAgentService.locate(userId, row.id)
+      const { root, agentDir } = localAgentService.locate(defaultUserId, row.id)
       const snapshot = readFolderAgentSnapshot(row.id, row.name, root.path, agentDir, fetchedAt)
       // No STATUS.md is not a status. Omitting the agent is what the remote
       // route already does with a sentinel snapshot (`:153`): a surface listing
@@ -160,14 +161,15 @@ function listFolderSnapshots(userId: string): AgentStatusSnapshot[] {
  * screen behind the error.
  */
 async function folderStatus(
-  userId: string,
+  /** Always the default scope — see {@link AgentStatusScope}. */
+  defaultUserId: string,
   agentId: string,
   name: string,
   forceRefresh: boolean
 ): Promise<AgentStatusSnapshot | null> {
   let located: ReturnType<typeof localAgentService.locate>
   try {
-    located = localAgentService.locate(userId, agentId)
+    located = localAgentService.locate(defaultUserId, agentId)
   } catch (err) {
     logger.warn('folder agent status: agent could not be located', { agentId, error: String(err) })
     return null
@@ -182,7 +184,7 @@ async function folderStatus(
       // reason to withhold a STATUS.md that is sitting right there.
       logger.warn('folder agent status: manifest unreadable', { agentId, error: String(err) })
     }
-    const outcome = await runStatusRefresh(userId, agentId, refreshCommand)
+    const outcome = await runStatusRefresh(defaultUserId, agentId, refreshCommand)
     if (outcome.error) throw new AgentStatusError('unknown', outcome.error, agentId)
   }
 
@@ -206,6 +208,32 @@ export interface AgentStatusListResult {
   remoteError: RemoteStatusFailure | null
 }
 
+/**
+ * The two user ids this service needs, together, because it serves **two
+ * differently-scoped kinds of agent** and a single id can only ever be right
+ * for one of them.
+ *
+ * Folder agents are shared machine resources: every write goes through
+ * `local_agent.ipc.ts`, which passes `getSettingsScopeUserId()` — unconditionally
+ * `DEFAULT_SCOPE_USER_ID` — so their rows are *always* default-scoped
+ * (`scope.ts:5-8`: "available regardless of which profile is currently active").
+ * Remote agents are the opposite: sync-owned and bound to the active profile.
+ *
+ * They arrive as one object rather than two strings because two same-typed
+ * positional parameters can be transposed silently, and the failure that
+ * produces is invisible — `listFolder(<profile id>)` is a valid call that
+ * returns `[]`, which reads as "this user has no folder agents" rather than as
+ * a bug. That is exactly the defect this type exists to make unrepresentable:
+ * the folder leg was handed the profile scope and went quietly dead for every
+ * user except the Default profile.
+ */
+export interface AgentStatusScope {
+  /** Where folder agents live. Always `DEFAULT_SCOPE_USER_ID`. */
+  defaultUserId: string
+  /** Where remote agents, the Cinna account and its tokens live. */
+  profileUserId: string
+}
+
 export const agentStatusService = {
   /**
    * Batch list — cache-only, safe to poll. Two legs.
@@ -223,8 +251,11 @@ export const agentStatusService = {
    * knows about (by `remoteTargetId`), sentinel snapshots (severity == null &&
    * raw == null) hidden per the integration spec.
    */
-  async list(userId: string): Promise<AgentStatusListResult> {
-    const folderItems = listFolderSnapshots(userId)
+  async list(scope: AgentStatusScope): Promise<AgentStatusListResult> {
+    // Default scope, unconditionally — not a union with the profile. A union
+    // would say folder rows *might* be profile-scoped, which is false, and
+    // would leave the next reader believing there is a case to handle.
+    const folderItems = listFolderSnapshots(scope.defaultUserId)
     /**
      * Keep the folder rows; hand the caller the remote failure to surface.
      *
@@ -251,7 +282,7 @@ export const agentStatusService = {
 
     let ctx: Awaited<ReturnType<typeof getCinnaContext>>
     try {
-      ctx = await getCinnaContext(userId)
+      ctx = await getCinnaContext(scope.profileUserId)
     } catch (err) {
       // `getCinnaAccessToken` throws `CinnaReauthRequired` — a failure that
       // happens before the fetch and would otherwise take the folder rows with
@@ -306,7 +337,7 @@ export const agentStatusService = {
       )
     }
 
-    const localAgents = agentRepo.listRemote(userId)
+    const localAgents = agentRepo.listRemote(scope.profileUserId)
     const byRemoteId = new Map(localAgents.map((a) => [a.remoteTargetId!, a]))
 
     const snapshots: AgentStatusSnapshot[] = [...folderItems]
@@ -334,19 +365,27 @@ export const agentStatusService = {
    * to whatever the cache already surfaced.
    */
   async get(
-    userId: string,
+    scope: AgentStatusScope,
     agentId: string,
     forceRefresh: boolean
   ): Promise<AgentStatusSnapshot | null> {
-    const agent = agentRepo.getOwned(userId, agentId)
-    if (!agent) return null
+    // `get` is the ambiguous one: the incoming id may name either kind, so the
+    // scope cannot be chosen before the row is found. `agentService.findAgent`
+    // is the established resolver for exactly that (`agent_a2a.ipc.ts:175`) —
+    // it picks the scope from the id's shape and hands back the row *with the
+    // scope it was found in*, which is what every downstream call needs:
+    // `localAgentService.locate` and `commandService.run` do their own strict
+    // `getOwned`, so passing the wrong id there fails the same silent way.
+    const found = agentService.findAgent(scope.defaultUserId, scope.profileUserId, agentId)
+    if (!found) return null
+    const agent = found.row
     // Before *both* remote gates — the `getCinnaContext` guard below and the
     // `remoteTargetId` one after it — for the same reason as in `list`.
     if (agent.source === FOLDER_AGENT_SOURCE) {
-      return folderStatus(userId, agentId, agent.name, forceRefresh)
+      return folderStatus(found.userId, agentId, agent.name, forceRefresh)
     }
 
-    const ctx = await getCinnaContext(userId)
+    const ctx = await getCinnaContext(scope.profileUserId)
     if (!ctx) return null
 
     if (!agent.remoteTargetId) return null

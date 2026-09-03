@@ -36,17 +36,27 @@ vi.mock('electron', () => ({
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
+/** A **named profile**, not `__default__` — see the scope note below. */
+const PROFILE = 'u-named-profile'
+const DEFAULT_USER = '__default__'
+
 // A local-only account: `getCinnaContext` answers null, so the remote leg is
 // never entered and the folder leg is the whole answer.
 vi.mock('../db/users', () => ({
-  userRepo: { get: () => ({ id: 'u1', type: 'local_user', cinnaServerUrl: null }) }
+  userRepo: { get: () => ({ id: PROFILE, type: 'local_user', cinnaServerUrl: null }) }
 }))
 
+/**
+ * `listFolder` honours `userId`, because the real repository does: a strict
+ * `and(eq(agents.userId, userId), eq(agents.source, 'folder'))`
+ * (`db/agents.ts:335`). A double that ignores it is more permissive than the
+ * thing it stands for, and cannot fail a test about the argument it discards.
+ */
 const rows = vi.hoisted(() => ({ current: [] as Array<{ id: string; name: string }> }))
 vi.mock('../db/agents', () => ({
   agentRepo: {
-    listFolder: () => rows.current,
-    getOwned: () => null,
+    listFolder: (userId: string) => (userId === DEFAULT_USER ? rows.current : []),
+    getOwned: () => undefined,
     listRemote: () => []
   }
 }))
@@ -54,7 +64,10 @@ vi.mock('../db/agents', () => ({
 const dirs = vi.hoisted(() => ({ root: '', agent: '' }))
 vi.mock('./localAgents/localAgentService', () => ({
   localAgentService: {
-    locate: () => ({ root: { path: dirs.root }, agentDir: dirs.agent })
+    locate: (userId: string) => {
+      if (userId !== DEFAULT_USER) throw new Error('not found')
+      return { root: { path: dirs.root }, agentDir: dirs.agent }
+    }
   }
 }))
 
@@ -91,7 +104,13 @@ describe('a real STATUS.md all the way to a list() result', () => {
       ].join('\n')
     )
 
-    const result = await agentStatusService.list('u1')
+    // Under a **named profile**, so the two scopes are different strings. With
+    // the active user equal to `__default__` they collapse and this test could
+    // not fail on a scope mistake — which is how the live one survived.
+    const result = await agentStatusService.list({
+      defaultUserId: DEFAULT_USER,
+      profileUserId: PROFILE
+    })
 
     expect(result.items).toHaveLength(1)
     const [snapshot] = result.items
