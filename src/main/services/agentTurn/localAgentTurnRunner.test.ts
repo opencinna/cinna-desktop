@@ -101,8 +101,18 @@ function fakeEngine(overrides: Record<string, () => Response> = {}): {
       return new Response(JSON.stringify({ data: [{ id: 'assistant_ab12' }] }), { status: 200 })
     }
     if (route === '/api/model') {
+      // The `api` block is not decoration: the runner reads it to decide
+      // whether the engine can build a transport for the model at all.
       return new Response(
-        JSON.stringify({ data: [{ providerID: 'anthropic', id: 'claude-sonnet-4-6' }] }),
+        JSON.stringify({
+          data: [
+            {
+              providerID: 'anthropic',
+              id: 'claude-sonnet-4-6',
+              api: { type: 'aisdk', package: '@ai-sdk/anthropic' }
+            }
+          ]
+        }),
         { status: 200 }
       )
     }
@@ -864,6 +874,76 @@ describe('LocalAgentTurnRunner', () => {
     expect(paths(h)).not.toContain('POST /api/session')
   })
 
+  it('fails at once when the engine has the model but cannot drive its transport', async () => {
+    // **The hang this replaces was live.** A `gemini` credential emitted under
+    // OpenCode's canonical `google` key catalogues fine and is *available*, so
+    // the readiness check passes — and then `SessionRunnerModel` has no branch
+    // for `@ai-sdk/google` and fails with `UnsupportedApiError`, which reaches
+    // no event at all. The turn sat until the twenty-minute ceiling.
+    //
+    // Waiting cannot help — a package name does not change — so this must be
+    // immediate, and the elapsed-time bound is what pins that rather than the
+    // message. Mutation: treat an unsupported package as "not ready" and let it
+    // poll → this fails on the clock, having waited the full window.
+    const engine = fakeEngine({
+      'GET /api/model': () =>
+        new Response(
+          JSON.stringify({
+            data: [
+              {
+                providerID: 'anthropic',
+                id: 'claude-sonnet-4-6',
+                api: { type: 'aisdk', package: '@ai-sdk/google' }
+              }
+            ]
+          }),
+          { status: 200 }
+        )
+    })
+    const h = harness({ engine, engineReadyMs: 30_000, turnCeilingMs: 5_000 })
+    const started = Date.now()
+    const result = await h.runner.runTurn(h.input())
+
+    expect(Date.now() - started).toBeLessThan(500)
+    expect(result.error?.message).toContain('cannot run')
+    // The engine's own wording for the same condition, so a message the user
+    // reports matches its log line without a translation step.
+    expect(result.error?.message).toContain('aisdk:@ai-sdk/google')
+    expect(paths(h)).not.toContain('POST /api/session')
+  })
+
+  it('runs a model whose transport the engine does support', async () => {
+    // The other side of the same branch — without it, "fails on an unsupported
+    // package" is satisfied by refusing everything. The default fake serves
+    // `@ai-sdk/anthropic`.
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    expect(paths(h)).toContain('POST /api/session')
+    h.engine.push(endTurn())
+    expect((await run).error).toBeUndefined()
+  })
+
+  it('runs the turn when the engine reports no api block for the model', async () => {
+    // A field a separately-versioned binary might not send must not become a
+    // refusal: allowing a turn the engine cannot run costs the ceiling, which
+    // still fires, while refusing one it *can* run is a permanently broken
+    // agent. Mutation: treat a missing `api` as unsupported → this fails.
+    const engine = fakeEngine({
+      'GET /api/model': () =>
+        new Response(
+          JSON.stringify({ data: [{ providerID: 'anthropic', id: 'claude-sonnet-4-6' }] }),
+          { status: 200 }
+        )
+    })
+    const h = harness({ engine })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    expect(paths(h)).toContain('POST /api/session')
+    h.engine.push(endTurn())
+    await run
+  })
+
   it('refuses when the running engine has no key for this agent', async () => {
     const h = harness({ agentKey: null })
     const result = await h.runner.runTurn(h.input())
@@ -1227,6 +1307,9 @@ describe('LocalAgentTurnRunner', () => {
  * | check only the model and not the agent in `awaitEngineReady` | fails the turn when the engine never loads the agent… |
  * | treat an unreadable readiness probe as "not ready" | runs the turn anyway when the readiness probe itself cannot be read |
  * | drop the `signal` from `awaitEngineReady` / plain `setTimeout` | gives up the readiness wait the moment the user stops the turn |
+ * | poll on an unsupported `api.package` instead of returning | fails at once when the engine has the model but cannot drive its transport |
+ * | treat every `api.package` as unsupported | runs a model whose transport the engine does support |
+ * | treat a missing `api` block as unsupported | runs the turn when the engine reports no api block for the model |
  * | delete the returned-session-id validation in `openSession` | refuses when the engine answers a session create with no usable id |
  * | delete `unsubscribe()` from `stream()`'s `finally` | releases its bus subscription when the turn ends |
  * | `after === null ? '' : …` → `?after=${after}` in `replayDurable` | replays the whole durable stream when the socket dies before any cursor exists |

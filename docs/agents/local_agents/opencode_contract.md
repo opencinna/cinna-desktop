@@ -804,3 +804,68 @@ Four things worth keeping:
   `model.small()` filters on.
 - **`cost: []` had no effect on the request.** It would affect the engine's own `model.small()`
   choice for title generation; the desktop does not use that path.
+
+### 9.5.10 Three transports, and the fourth that catalogues but cannot run
+
+`SessionRunnerModel` builds an SDK model from a resolved catalog entry, and it has exactly three
+branches:
+
+```
+if api.type == "aisdk" && api.package == "@ai-sdk/openai"                        → OpenAI
+if api.type == "aisdk" && api.package == "@ai-sdk/anthropic"                     → Anthropic
+if api.type == "aisdk" && api.package == "@ai-sdk/openai-compatible" && api.url  → compatible
+else fail UnsupportedApiError(providerID, modelID,
+                              api.type == "aisdk" ? `${type}:${package}` : type)
+```
+
+Note the third needs a **url** as well as a package name; the other two do not.
+
+**`@ai-sdk/google` is not among them**, and that is a live user-facing hang rather than a curiosity.
+A `gemini` credential emitted under OpenCode's canonical `google` key catalogues perfectly: the
+models appear in `GET /api/model`, `provider.available()` includes them, a session opens against
+one. Then the turn dies with
+
+```
+SessionRunnerModel.UnsupportedApiError: Unsupported API for google/gemini-2.5-flash: aisdk:@ai-sdk/google
+```
+
+— and **like `ModelUnavailableError` (§9.5.5) it is reported on no event at all.** The two failures
+are therefore indistinguishable from the desktop's side and share one consequence: the turn sits
+until the client's own ceiling. They need distinguishing at different moments, though, and that is
+why the desktop treats them differently: "not in the catalog yet" can be fixed by waiting, and
+"catalogued but undrivable" never can, so the readiness probe polls on the first and returns
+immediately on the second.
+
+### 9.5.11 Gemini over Google's OpenAI-compatible endpoint
+
+The way out of §9.5.10 for Gemini is not a different SDK — it is a different endpoint. Google
+publishes an OpenAI-shaped API for the Gemini models, so the credential is emitted as an
+OpenAI-compatible custom entry rather than as the canonical `google` key. Watched at a probe server
+standing in for that endpoint, with the desktop's **real generated config** and a dummy key:
+
+```
+POST /v1beta/openai/chat/completions
+Authorization: Bearer sk-gem-dummy-777
+{ "model": "gemini-2.5-flash", "stream": true, "tools": [ …12… ],
+  "messages": [ {"role":"system", …the agent's prompt…}, {"role":"user", …} ] }
+```
+
+Five things that answers:
+
+- **The path composes correctly from a base URL with no trailing slash.** The compatible provider
+  appends `/chat/completions`; `…/v1beta/openai/` would have produced a double slash.
+- **The credential travels as `Authorization: Bearer <key>`**, out of the `env` name in the config
+  — the same mechanism as every other custom entry (§9.5.4).
+- **The model id goes out bare** — `gemini-2.5-flash`, not `models/gemini-2.5-flash`. This matches
+  what `src/main/llm/gemini.ts` already stores: its `listModels()` strips the `models/` prefix
+  Google's REST API returns.
+- **Tool calling survives the route** — 12 tools, the same as any other transport.
+- **`max_tokens` is not sent at all**, because the compatible transport never sends it (§9.5.9). So
+  the `limit` on a Gemini entry does not shape the request; it feeds the engine's own context
+  accounting, and Google applies its own default reply ceiling.
+
+**What this does not establish**, and it is the whole of the remaining risk: no request has ever
+reached Google. That the endpoint accepts this body, this model id and this key format is inference
+from Google's published compatibility layer, not observation. A live turn on a real Gemini key
+settles it, and the failure would be loud — a 4xx from Google, surfaced as
+`session.next.step.failed` (§9.5.5) — rather than another hang.

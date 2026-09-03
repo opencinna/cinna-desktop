@@ -57,6 +57,7 @@ import { SseParser } from './sseParser'
 import { TurnStream, type PendingRequest } from './turnStream'
 import { pendingRequests, type RequestResolution } from './pendingRequests'
 import type { EngineModelRef } from '../../engine/configGenerator'
+import { unsupportedModelApi, type EngineModelApi } from '../../engine/modelTransports'
 
 const logger = createLogger('local-agent-turn')
 
@@ -603,7 +604,20 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         if (!model) return null
         const models = await this.readList(`/api/model${at}`)
         if (models === null) return null
-        if (models.some((m) => m.providerID === model.providerID && m.id === model.id)) return null
+        const found = models.find(
+          (m) => m.providerID === model.providerID && m.id === model.id
+        )
+        if (found) {
+          // **Present, and still unrunnable.** The engine catalogues models it
+          // cannot build a transport for — `@ai-sdk/google` is the one that bit
+          // a user — and `UnsupportedApiError` is reported on no event, so the
+          // turn would hang to the ceiling exactly as an unresolvable model
+          // did. Unlike "not there yet" this cannot change by waiting, so it
+          // returns instead of polling.
+          const unsupported = unsupportedModelApi(found.api as EngineModelApi | undefined)
+          if (unsupported === null) return null
+          return `“${agentName}” is set to run on ${model.providerID}/${model.id}, which this version of the local engine cannot run (${unsupported}). Choose another model or credential in the agent’s Runtime.`
+        }
         missing = `“${agentName}” is set to run on ${model.providerID}/${model.id}, and the local engine has no such model. Check the agent’s Runtime, then restart the engine from Settings.`
       } else {
         missing = `“${agentName}” is not loaded in the local engine yet. Try again in a moment.`
@@ -614,13 +628,13 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
   }
 
   /** `GET path` as a `{data:[…]}` list of records, or null if it cannot be read. */
-  private async readList(path: string): Promise<Record<string, string>[] | null> {
+  private async readList(path: string): Promise<Record<string, unknown>[] | null> {
     try {
       const res = await this.deps.request(path)
       if (!res.ok) return null
       const body = (await res.json()) as { data?: unknown }
       const list = Array.isArray(body) ? body : body?.data
-      return Array.isArray(list) ? (list as Record<string, string>[]) : null
+      return Array.isArray(list) ? (list as Record<string, unknown>[]) : null
     } catch {
       return null
     }
