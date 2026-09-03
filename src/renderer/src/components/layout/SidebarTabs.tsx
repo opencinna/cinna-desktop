@@ -1,4 +1,4 @@
-import { MessageSquare, ClipboardList, NotebookPen } from 'lucide-react'
+import { MessageSquare, ClipboardList, NotebookPen, Bot } from 'lucide-react'
 import { useUIStore, type SidebarTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
@@ -6,7 +6,8 @@ import { useChatList } from '../../hooks/useChat'
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
   { id: 'jobs', label: 'Jobs', Icon: ClipboardList },
-  { id: 'notes', label: 'Notes', Icon: NotebookPen }
+  { id: 'notes', label: 'Notes', Icon: NotebookPen },
+  { id: 'agents', label: 'Agents', Icon: Bot }
 ]
 
 /**
@@ -22,6 +23,7 @@ export function SidebarTabs(): React.JSX.Element {
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
+  const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
   const { data: chats } = useChatList()
@@ -44,9 +46,15 @@ export function SidebarTabs(): React.JSX.Element {
     } else if (target === 'jobs') {
       setActiveJobId(null)
       setActiveView('job-detail')
-    } else {
+    } else if (target === 'notes') {
       setActiveNoteId(null)
       setActiveView('note-detail')
+    } else {
+      // Agents: like Jobs, land on the empty page rather than auto-selecting.
+      // The first agent is ambiguous when the list is grouped by root, and
+      // opening one would start reading its folder without being asked to.
+      setActiveLocalAgentId(null)
+      setActiveView('local-agent')
     }
   }
 

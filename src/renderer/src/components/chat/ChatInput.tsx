@@ -29,6 +29,7 @@ import { ActiveMcpChips } from './ActiveMcpChips'
 import { OnDemandAgentChips } from './OnDemandAgentChips'
 import { CommPatternBadge } from './CommPatternBadge'
 import type { CommPattern } from '../../../../shared/commPattern'
+import { canBeCounterparty } from '../../../../shared/localAgents'
 import { AttachmentList } from './AttachmentBadge'
 import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
@@ -307,7 +308,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   const { data: agents } = useAgents()
   const enabledAgents = useMemo(
-    () => (agents ?? []).filter((a) => a.enabled),
+    // `canBeCounterparty` is a temporary exclusion of folder agents, which have
+    // no runner yet — see its docstring for the removal condition.
+    () => (agents ?? []).filter((a) => a.enabled && canBeCounterparty(a)),
     [agents]
   )
 

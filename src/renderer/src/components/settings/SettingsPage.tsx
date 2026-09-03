@@ -2,6 +2,7 @@ import { useUIStore } from '../../stores/ui.store'
 import { LLMSettingsSection } from './LLMSettingsSection'
 import { MCPSettingsSection } from './MCPSettingsSection'
 import { AgentsSettingsSection } from './AgentsSettingsSection'
+import { LocalAgentsSettingsSection } from './LocalAgentsSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
 import { ProfileChatModesSection } from './ProfileChatModesSection'
@@ -16,6 +17,7 @@ const sectionTitles = {
   chats: 'Chat Modes',
   llm: 'AI Credentials',
   agents: 'Agents',
+  'local-agents': 'Local Agents',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
   features: 'Features',
@@ -38,6 +40,7 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'chats' && <ChatModesSection key="chats" />}
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
         {settingsTab === 'agents' && <AgentsSettingsSection key="agents" scope="default" />}
+        {settingsTab === 'local-agents' && <LocalAgentsSettingsSection key="local-agents" />}
         {settingsTab === 'profile-agents' && (
           <AgentsSettingsSection key="profile-agents" scope="profile" />
         )}

@@ -7,12 +7,14 @@ export type ActiveView =
   | 'job-edit'
   | 'cinna-task-run'
   | 'note-detail'
-export type SidebarTab = 'chats' | 'jobs' | 'notes'
+  | 'local-agent'
+export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
 export type SettingsMenu =
   | 'chats'
   | 'llm'
   | 'mcp'
   | 'agents'
+  | 'local-agents'
   | 'accounts'
   | 'features'
   | 'development'
@@ -47,6 +49,15 @@ interface UIStore {
   /** Cinna task run currently being viewed (when activeView === 'cinna-task-run'). */
   activeCinnaRunId: string | null
   activeNoteId: string | null
+  /** Folder agent whose page is open (when activeView === 'local-agent'). */
+  activeLocalAgentId: string | null
+  /**
+   * A folder agent that was just scaffolded and still wants its one-shot AI
+   * draft. One-shot intent, handed from the new-agent form to the agent page
+   * — the same shape as `pendingAgentId` — so the page owns the request and
+   * can show its progress, rather than a modal firing it as it unmounts.
+   */
+  pendingDraftAgentId: string | null
   sidebarOpen: boolean
   theme: Theme
   logsOpen: boolean
@@ -61,6 +72,8 @@ interface UIStore {
   setActiveJobId: (id: string | null) => void
   setActiveCinnaRunId: (id: string | null) => void
   setActiveNoteId: (id: string | null) => void
+  setActiveLocalAgentId: (id: string | null) => void
+  setPendingDraftAgentId: (id: string | null) => void
   toggleSidebar: () => void
   toggleTheme: () => void
   setLogsOpen: (open: boolean) => void
@@ -77,6 +90,8 @@ export const useUIStore = create<UIStore>((set) => ({
   activeJobId: null,
   activeCinnaRunId: null,
   activeNoteId: null,
+  activeLocalAgentId: null,
+  pendingDraftAgentId: null,
   sidebarOpen: true,
   theme: (localStorage.getItem('cinna-theme') as Theme) || 'dark',
   logsOpen: false,
@@ -90,6 +105,8 @@ export const useUIStore = create<UIStore>((set) => ({
   setActiveJobId: (id) => set({ activeJobId: id }),
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
+  setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id }),
+  setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   toggleTheme: () =>
     set((state) => {

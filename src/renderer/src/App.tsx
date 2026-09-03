@@ -15,6 +15,8 @@ import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import { useStartup } from './hooks/useAuth'
 import { useTrayIcon } from './hooks/useTrayIcon'
+import { useLocalAgentWatch } from './hooks/useLocalAgents'
+import { useEngineWatch } from './hooks/useEngine'
 import { useSyncEvents, useSyncOnTabOpen } from './hooks/useSync'
 import {
   consumeForceOnboarding,
@@ -91,6 +93,14 @@ function Shell(): React.JSX.Element {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   useSyncEvents(isCinnaUser)
   useSyncOnTabOpen(isCinnaUser)
+  // Folder agents are files on disk that other tools edit. Subscribing here,
+  // once, means an assistant's change to a folder refreshes the Agents tab and
+  // the open agent page wherever the user happens to be.
+  useLocalAgentWatch()
+  // The engine's slow transitions — a first-use download, a crash between two
+  // turns — happen while nobody is watching a particular screen, so the
+  // subscription is here rather than in the card that renders the state.
+  useEngineWatch()
   // TopBar overlays the content (absolute, inset by `pt-2`/`px-2`) so the chat
   // area can claim full window height instead of losing the bar's height. The
   // sidebar card offsets its top via CSS so it still sits below the buttons.

@@ -9,6 +9,7 @@ import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
 import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
 import { NoteDetail } from '../notes/NoteDetail'
+import { LocalAgentPage } from '../agents/local/LocalAgentPage'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { HintBar } from '../ui/HintBar'
 import { useHintsEnabled } from '../../hooks/useHintsEnabled'
@@ -304,6 +305,10 @@ export function MainArea(): React.JSX.Element {
 
   if (activeView === 'note-detail') {
     return <NoteDetail />
+  }
+
+  if (activeView === 'local-agent') {
+    return <LocalAgentPage />
   }
 
   const modeColorPreset = activeMode ? getPreset(activeMode.colorPreset) : null

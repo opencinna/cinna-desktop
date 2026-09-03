@@ -9,6 +9,7 @@ import {
   Sparkles,
   Package,
   Cloud,
+  FolderCog,
   SlidersHorizontal
 } from 'lucide-react'
 import { useEffect } from 'react'
@@ -18,6 +19,7 @@ import { useAuthStore } from '../../stores/auth.store'
 import { ChatList } from '../chat/ChatList'
 import { JobsList } from '../jobs/JobsList'
 import { NotesList } from '../notes/NotesList'
+import { LocalAgentsList } from '../agents/local/LocalAgentsList'
 import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
@@ -28,6 +30,7 @@ import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'agents', label: 'Agents', icon: Bot },
+  { id: 'local-agents', label: 'Local Agents', icon: FolderCog },
   { id: 'llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
@@ -151,8 +154,10 @@ export function Sidebar(): React.JSX.Element {
               <ChatList />
             ) : sidebarTab === 'jobs' ? (
               <JobsList />
-            ) : (
+            ) : sidebarTab === 'notes' ? (
               <NotesList />
+            ) : (
+              <LocalAgentsList />
             )}
           </div>
         )}
