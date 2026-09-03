@@ -68,6 +68,32 @@ const logger = createLogger('local-agent-turn')
  */
 export const TURN_CEILING_MS = 20 * 60 * 1000
 
+/**
+ * How long a turn waits for the engine to know about its agent and its model.
+ *
+ * **A cold `opencode serve` answers `GET /api/health` long before it can run
+ * anything.** Watched against 1.18.27 on 3 Sep 2026: `{"healthy":true}` comes
+ * back in about a second, and it is then **thirty to sixty seconds** before
+ * `GET /api/model` returns anything at all and before a config-defined agent is
+ * addressable. Both failures in that window are silent:
+ *
+ * - the model does not resolve, and the engine reports
+ *   `SessionRunnerModel.ModelUnavailableError` **on no event whatsoever** — the
+ *   only trace is a `Failed to drain Session` line in its own log, so the turn
+ *   sits until {@link TURN_CEILING_MS}, twenty minutes later;
+ * - the agent is not loaded, and the turn runs with **no system prompt** — the
+ *   folder agent answers as a generic assistant, which reads as the agent being
+ *   badly written rather than as a race.
+ *
+ * So the readiness of a turn is asked of the engine rather than assumed from
+ * its health check. Long enough to cover the observed cold start, and short
+ * enough that a genuinely unusable model is a prompt error rather than a hang.
+ */
+export const ENGINE_READY_MS = 60 * 1000
+
+/** Gap between readiness probes. */
+const ENGINE_READY_POLL_MS = 1_000
+
 /** The bits of the world this runner touches, injected so it can be driven in a test. */
 export interface LocalTurnDeps {
   /** `engineManager.ensureRunning` — the config choke point. */
@@ -101,6 +127,8 @@ export interface LocalTurnDeps {
   userId(): string
   /** Override the turn ceiling. Tests only; production takes {@link TURN_CEILING_MS}. */
   turnCeilingMs?: number
+  /** Override the readiness window. Tests only; production takes {@link ENGINE_READY_MS}. */
+  engineReadyMs?: number
 }
 
 interface Outcome {
@@ -190,6 +218,12 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     agentId: string
   }): Promise<RunAgentTurnResult> {
     const { agent, agentKey, model, signal, wireContent, chatId, agentId } = ctx
+
+    const notReady = await this.awaitEngineReady(agent.name, agentKey, model)
+    if (notReady) {
+      logger.warn('the engine never became ready for this turn', { agentId, agentKey, model })
+      return fail(notReady)
+    }
 
     let sessionId: string
     try {
@@ -478,6 +512,56 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       }
     } finally {
       reader.releaseLock()
+    }
+  }
+
+  /**
+   * Wait until the engine can actually run this turn, or say why it cannot.
+   *
+   * Returns null when it is ready, and a user-facing sentence when the window
+   * closed first. **It never fails a turn on its own trouble**: a readiness
+   * probe that errors, 404s or answers something unparseable returns null and
+   * lets the turn proceed, because the old behaviour — try it and see — is
+   * strictly better than refusing over a diagnostic we added ourselves.
+   *
+   * The two questions are asked in that order and the cheap one first: an
+   * unloaded config fails both, and `GET /api/agent` is a handful of entries
+   * where `GET /api/model` is every model of every available provider.
+   */
+  private async awaitEngineReady(
+    agentName: string,
+    agentKey: string,
+    model: EngineModelRef | null
+  ): Promise<string | null> {
+    const deadline = Date.now() + (this.deps.engineReadyMs ?? ENGINE_READY_MS)
+    let missing: string | null = null
+    for (;;) {
+      const agents = await this.readList('/api/agent')
+      if (agents === null) return null
+      if (agents.some((entry) => entry.id === agentKey)) {
+        if (!model) return null
+        const models = await this.readList('/api/model')
+        if (models === null) return null
+        if (models.some((m) => m.providerID === model.providerID && m.id === model.id)) return null
+        missing = `“${agentName}” is set to run on ${model.providerID}/${model.id}, and the local engine has no such model. Check the agent’s Runtime, then restart the engine from Settings.`
+      } else {
+        missing = `“${agentName}” is not loaded in the local engine yet. Try again in a moment.`
+      }
+      if (Date.now() + ENGINE_READY_POLL_MS >= deadline) return missing
+      await new Promise((resolve) => setTimeout(resolve, ENGINE_READY_POLL_MS))
+    }
+  }
+
+  /** `GET path` as a `{data:[…]}` list of records, or null if it cannot be read. */
+  private async readList(path: string): Promise<Record<string, string>[] | null> {
+    try {
+      const res = await this.deps.request(path)
+      if (!res.ok) return null
+      const body = (await res.json()) as { data?: unknown }
+      const list = Array.isArray(body) ? body : body?.data
+      return Array.isArray(list) ? (list as Record<string, string>[]) : null
+    } catch {
+      return null
     }
   }
 

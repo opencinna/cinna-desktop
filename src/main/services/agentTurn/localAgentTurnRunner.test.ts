@@ -86,6 +86,19 @@ function fakeEngine(overrides: Record<string, () => Response> = {}): {
     }
     const override = overrides[`${method} ${path}`] ?? overrides[path]
     if (override) return override()
+    // The readiness probes a turn makes before it opens a session. A cold
+    // engine answers its health check ~30–60s before either of these is
+    // populated, so the fake answers them the way a *warm* one does and the
+    // tests that care about the cold window override them.
+    if (path === '/api/agent') {
+      return new Response(JSON.stringify({ data: [{ id: 'assistant_ab12' }] }), { status: 200 })
+    }
+    if (path === '/api/model') {
+      return new Response(
+        JSON.stringify({ data: [{ providerID: 'anthropic', id: 'claude-sonnet-4-6' }] }),
+        { status: 200 }
+      )
+    }
     if (path === '/api/session' && method === 'POST') {
       return new Response(JSON.stringify({ data: { id: 'ses_new' } }), { status: 200 })
     }
@@ -167,6 +180,7 @@ function harness(opts: {
   /** Use the real `turnLock` instead of the pass-through, so refusal is real. */
   realLock?: boolean
   turnCeilingMs?: number
+  engineReadyMs?: number
 } = {}): Harness {
   const engine = opts.engine ?? fakeEngine()
   const order: string[] = []
@@ -209,7 +223,8 @@ function harness(opts: {
           }
         },
     userId: () => 'settings-user',
-    turnCeilingMs: opts.turnCeilingMs
+    turnCeilingMs: opts.turnCeilingMs,
+    engineReadyMs: opts.engineReadyMs
   }
 
   return {
@@ -233,7 +248,7 @@ function harness(opts: {
 
 /** Let queued microtasks drain. */
 const settle = async (): Promise<void> => {
-  for (let i = 0; i < 30; i++) await Promise.resolve()
+  for (let i = 0; i < 80; i++) await Promise.resolve()
 }
 
 const paths = (h: Harness): string[] => h.engine.calls.map((c) => `${c.method} ${c.path}`)
@@ -338,6 +353,8 @@ describe('LocalAgentTurnRunner', () => {
     // this fake resolves too quickly to distinguish. The next test is the one
     // that pins it.
     expect(paths(h)).toEqual([
+      'GET /api/agent',
+      'GET /api/model',
       'POST /api/session',
       'GET /api/event',
       'POST /api/session/ses_new/prompt'
@@ -735,6 +752,69 @@ describe('LocalAgentTurnRunner', () => {
     await run
   })
 
+  it('fails the turn when the engine never gets the model, instead of hanging on it', async () => {
+    // **The failure this replaces is invisible.** A model the engine cannot
+    // resolve produces `SessionRunnerModel.ModelUnavailableError` in its own
+    // log and **no event at all** on `/api/event` — verified against 1.18.27 on
+    // 3 Sep 2026 — so the turn used to sit in the streaming state until the
+    // twenty-minute ceiling, holding its lock and, through `turnLock.anyHeld()`,
+    // blocking every engine reconcile with it.
+    //
+    // Mutation: delete the `awaitEngineReady` call in `stream()` → this fails
+    // by hanging until the ceiling instead of returning a message.
+    const engine = fakeEngine({
+      'GET /api/model': () =>
+        new Response(JSON.stringify({ data: [{ providerID: 'openai', id: 'gpt-4o' }] }), {
+          status: 200
+        })
+    })
+    const h = harness({ engine, engineReadyMs: 30, turnCeilingMs: 5_000 })
+    const result = await h.runner.runTurn(h.input())
+
+    expect(result.error?.message).toContain('anthropic/claude-sonnet-4-6')
+    expect(result.error?.message).toContain('no such model')
+    // And no session was opened against it: an engine that cannot run the turn
+    // should not be left holding a session for one.
+    expect(paths(h)).not.toContain('POST /api/session')
+  })
+
+  it('fails the turn when the engine never loads the agent, instead of running it promptless', async () => {
+    // The other half of the same cold window, and the quieter one: an engine
+    // that does not yet know the agent runs the turn with **no system prompt**
+    // — watched at a probe server — so the folder agent answers as a generic
+    // assistant and nothing anywhere says why.
+    //
+    // Mutation: check only the model and not the agent → this fails.
+    const engine = fakeEngine({
+      'GET /api/agent': () => new Response(JSON.stringify({ data: [{ id: 'someone-else' }] }), { status: 200 })
+    })
+    const h = harness({ engine, engineReadyMs: 30, turnCeilingMs: 5_000 })
+    const result = await h.runner.runTurn(h.input())
+
+    expect(result.error?.message).toContain('not loaded in the local engine yet')
+    expect(paths(h)).not.toContain('POST /api/session')
+  })
+
+  it('runs the turn anyway when the readiness probe itself cannot be read', async () => {
+    // **A diagnostic must not be able to refuse a turn on its own trouble.**
+    // The probe is an addition; "try it and see" is what the runner did before
+    // it, and is strictly better than blocking on an endpoint that 500s, moves
+    // in a later OpenCode, or answers a shape we did not expect.
+    //
+    // Mutation: treat a non-OK probe as "not ready" → this fails.
+    const engine = fakeEngine({
+      'GET /api/agent': () => new Response('nope', { status: 500 })
+    })
+    const h = harness({ engine, engineReadyMs: 30 })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+
+    expect(paths(h)).toContain('POST /api/session')
+    h.engine.push(endTurn())
+    const result = await run
+    expect(result.error).toBeUndefined()
+  })
+
   it('refuses when the running engine has no key for this agent', async () => {
     const h = harness({ agentKey: null })
     const result = await h.runner.runTurn(h.input())
@@ -1091,6 +1171,12 @@ describe('LocalAgentTurnRunner', () => {
  * | delete the readiness `invalid`/`contract_too_new` gate in `runTurn` | refuses a turn against an agent whose folder is not in a runnable state |
  * | `post()`'s `if (!res.ok) { throw }` → `if (false)` | surfaces a failed engine POST instead of waiting out the turn ceiling |
  * | delete the `POST .../agent` re-point in `openSession` | resumes a remembered session when the engine still has it |
+ * | delete the `POST .../model` re-point in `openSession` | resumes a remembered session when the engine still has it |
+ * | drop `model` from the `POST /api/session` body | opens a session on the model the running engine loaded for the agent |
+ * | send `model` unconditionally rather than when non-null | opens a session without a model when the loaded config named none |
+ * | delete the `awaitEngineReady` call in `stream()` | fails the turn when the engine never gets the model… (hangs to the ceiling) |
+ * | check only the model and not the agent in `awaitEngineReady` | fails the turn when the engine never loads the agent… |
+ * | treat an unreadable readiness probe as "not ready" | runs the turn anyway when the readiness probe itself cannot be read |
  * | delete the returned-session-id validation in `openSession` | refuses when the engine answers a session create with no usable id |
  * | delete `unsubscribe()` from `stream()`'s `finally` | releases its bus subscription when the turn ends |
  * | `after === null ? '' : …` → `?after=${after}` in `replayDurable` | replays the whole durable stream when the socket dies before any cursor exists |
