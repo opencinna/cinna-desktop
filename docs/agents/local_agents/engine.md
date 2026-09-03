@@ -216,7 +216,9 @@ Three different outcomes, and only the middle one is visible as a "skip":
 
 A credential is offered to the generator when it is enabled, has a stored key, and is not flagged `unsupported` (an Anthropic OAuth token is not an API key). Own **and** server-managed credentials both count — excluding managed ones would make an account-provisioned machine unable to run a local agent at all. A key the keystore refuses to decrypt is skipped with a warning rather than failing the whole start; the other credentials still work.
 
-**`enabled` is not consulted.** A folder agent the user has toggled off still gets a config entry. That is consistent with what the config is — a catalogue of what *can* be addressed, not a decision about what runs — and with `enabled` meaning only the user's own choice (see [Agents Home, Scanner & Folder Index](folder_index.md)). Phase 6 decides what a turn is allowed to reach.
+**`enabled` is not consulted, and this is an obligation on Phase 6.** A folder agent the user has toggled off still gets a config entry, an agent key and a written prompt file. That is consistent with what the config is — a catalogue of what *can* be addressed, not a decision about what runs — and with `enabled` meaning only the user's own choice, which survives every rescan (see [Agents Home, Scanner & Folder Index](folder_index.md)).
+
+But the design only holds if the other half is built. **The gate does not exist yet.** The config does not enforce `enabled`, nothing else in this slice does either, and `agentKey()` will happily return a key for a disabled agent. If the Phase 6 runner routes a turn without checking `enabled` itself, an agent the user switched off is chattable — and the generated config will *look* as though it had been excluded, because a disabled agent is invisible in every list the user reads. **The runner must gate on `enabled`; the config does not.**
 
 ### Runtime resolution: manifest, then the Default runtime
 
