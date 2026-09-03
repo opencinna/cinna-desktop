@@ -50,6 +50,11 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLogger } from '../logger/logger'
+import {
+  CUSTOM_MODEL_LIMITS,
+  isEngineProviderType,
+  type EngineProviderType
+} from './modelLimits'
 
 const logger = createLogger('engine-config')
 
@@ -61,7 +66,7 @@ const logger = createLogger('engine-config')
  * `openai_compatible` has no canonical key by definition — a gateway is
  * whatever the user pointed it at — so it always gets a custom entry.
  */
-const CANONICAL_PROVIDER_KEY: Record<string, string> = {
+const CANONICAL_PROVIDER_KEY: Partial<Record<EngineProviderType, string>> = {
   anthropic: 'anthropic',
   openai: 'openai',
   gemini: 'google'
@@ -75,62 +80,12 @@ const CANONICAL_PROVIDER_KEY: Record<string, string> = {
  * OpenAI-compatible gateway. A custom entry gets no models.dev catalog either,
  * which is why {@link EngineProviderInput.models} has to be supplied for them.
  */
-const PROVIDER_NPM: Record<string, string> = {
+const PROVIDER_NPM: Readonly<Record<EngineProviderType, string>> = {
   anthropic: '@ai-sdk/anthropic',
   openai: '@ai-sdk/openai',
   gemini: '@ai-sdk/google',
   openai_compatible: '@ai-sdk/openai-compatible'
 }
-
-/**
- * Context and output ceilings for the models of a **custom** provider entry.
- *
- * **A custom entry gets no models.dev catalog, and the engine defaults a
- * model's `limit` to `{context: 0, output: 0}` when the config does not give
- * one.** For an Anthropic-shaped request that zero is sent as `max_tokens`, and
- * the provider answers `400 "stream cannot be true when max_tokens is 0"` — so
- * every folder agent on a second Anthropic credential failed on its first real
- * turn. Watched at a probe server the engine was pointed at: without `limit`
- * the body carried `"max_tokens": 0`; with it, the value below.
- *
- * The OpenAI-compatible transport happens to omit `max_tokens` entirely, so the
- * same defect is invisible on a gateway — which is exactly why this is a table
- * covering every type rather than a fix aimed at Anthropic.
- *
- * **These are floors chosen to be valid for every current model of the type,
- * not the truth about any particular model.** The desktop has no per-model
- * metadata to be truthful with: `EngineProviderInput.models` carries `id` and
- * `name` and nothing else, and the adapters do not expose limits either —
- * `src/main/llm/anthropic.ts` uses one flat `max_tokens` of 8192 for every
- * Anthropic model. Real values would come from extending the adapters'
- * `listModels()` to return the context and output windows the providers already
- * publish, and threading them through the runtime DTOs to here; until then, a
- * value too low truncates a long answer and a value too high is rejected by the
- * provider, so each entry is the largest figure valid across that type's
- * current line-up. **Revisit when a model ships with a smaller output window
- * than the number below.**
- *
- * There is no per-provider default to set instead: the config's provider schema
- * (`api`, `name`, `env`, `id`, `npm`, `whitelist`, `blacklist`, `options`) has
- * no `limit`, so per-model is the only lever.
- */
-const CUSTOM_MODEL_LIMITS: Record<string, { context: number; output: number }> = {
-  anthropic: { context: 200_000, output: 32_000 },
-  openai: { context: 128_000, output: 16_384 },
-  gemini: { context: 1_048_576, output: 65_536 },
-  openai_compatible: { context: 128_000, output: 8_192 }
-}
-
-/**
- * The limit for a provider type not in the table above.
- *
- * Unreachable today — a custom entry exists only for a type in
- * {@link PROVIDER_NPM}, and all four are covered. It is here because the
- * failure mode of forgetting a row is a **zero** limit and a 400 on the first
- * turn, which is exactly the bug this table was added for; a conservative wrong
- * answer is better than that.
- */
-const FALLBACK_MODEL_LIMIT = { context: 128_000, output: 8_192 }
 
 /**
  * The conversation permission profile.
@@ -346,15 +301,20 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       skippedProviders.push({ providerId: provider.id, reason: 'no API key is stored for it' })
       continue
     }
-    const npm = PROVIDER_NPM[provider.type]
-    if (!npm) {
+    // Narrowed once, here, and every table below is keyed by the narrowed
+    // type — so a credential type the engine has no entry shape for is a skip
+    // with a reason, and a type added to `EngineProviderType` without a row in
+    // one of those tables is a compile error rather than a silent default.
+    const type = provider.type
+    if (!isEngineProviderType(type)) {
       skippedProviders.push({
         providerId: provider.id,
         reason: `the local engine does not support provider type "${provider.type}"`
       })
       continue
     }
-    if (provider.type === 'openai_compatible' && !provider.baseUrl) {
+    const npm = PROVIDER_NPM[type]
+    if (type === 'openai_compatible' && !provider.baseUrl) {
       skippedProviders.push({
         providerId: provider.id,
         reason: 'an OpenAI-compatible credential needs a base URL'
@@ -362,11 +322,11 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       continue
     }
 
-    const canonical = CANONICAL_PROVIDER_KEY[provider.type]
+    const canonical = CANONICAL_PROVIDER_KEY[type]
     const useCanonical = canonical !== undefined && !claimed.has(canonical)
     const key = useCanonical
       ? canonical
-      : `${sanitizeForKey(canonical ?? provider.type)}-${shortHash(provider.id)}`
+      : `${sanitizeForKey(canonical ?? type)}-${shortHash(provider.id)}`
     if (useCanonical) claimed.add(canonical)
 
     const envName = credentialEnvName(provider.id)
@@ -386,9 +346,11 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       // package that implements it and every model it can address.
       entry.npm = npm
       entry.name = provider.name
-      // `limit` on every model, for the reason on CUSTOM_MODEL_LIMITS: the
-      // engine defaults it to zero and sends that as `max_tokens`.
-      const limit = CUSTOM_MODEL_LIMITS[provider.type] ?? FALLBACK_MODEL_LIMIT
+      // `limit` on every model, for the reason documented on
+      // {@link CUSTOM_MODEL_LIMITS}: a custom entry gets no models.dev catalog,
+      // the engine defaults the model to `{context: 0, output: 0}`, and the
+      // Anthropic transport sends that zero as `max_tokens`.
+      const limit = CUSTOM_MODEL_LIMITS[type]
       entry.models = Object.fromEntries(
         [...provider.models]
           .sort((a, b) => a.id.localeCompare(b.id))

@@ -20,6 +20,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 
 ### Main process — `src/main/engine/`
 - `binaryResolver.ts` — the three sources, `ENGINE_ASSETS` (six pinned `{file, sha256}` entries), `assetUrl()`, `resolveEngineBinaryWith(deps)`, `installPinned()`, `findBinary()`, `sha256File()`, `probeEngineVersion()`, `downloadToFile()`, `extractArchive()`, `engineRootDir()`, `realBinaryResolverDeps()`, `EngineBinaryError`, `BinaryResolverDeps`
+- `modelLimits.ts` — `CUSTOM_MODEL_LIMITS`, `EngineProviderType`, `EngineModelLimit`, `isEngineProviderType()`. The context/output ceilings a **custom** provider entry's models are declared with, and the union every provider-keyed table in `configGenerator` is exhaustive over
 - `engineManager.ts` — the process. `engineManager.{getState, onStateChange, ensureRunning, applyConfigChange, stop, agentKey, lastSkips, request}`, plus module-private `startEngine`, `spawnAttempt`, `halt`, `whatMoved`, `pickLoopbackPort`, `engineEnv`, `healthy`, `waitForHealth`, `killEngine`; exported `ENGINE_TIMEOUTS`, `registerEngineShutdown()`, `resetEngineStateForTests()`
 - `configGenerator.ts` — `buildEngineConfig()` (pure), `digestEngineConfig()`, `writeEngineConfig()`, `CONVERSATION_PERMISSIONS`, `credentialEnvName()`, `engineAgentKey()`, `promptFileRef()`, and module-private `framed`, `mergePermissions`, `pruneStalePrompts`, `writeIfDifferent`
 - `engineConfigSource.ts` — `collectEngineProviders()`, `collectEngineAgents(userId)`, `collectEngineConfigInput(userId, {refreshModels})`, `refreshModelCache()`. **The one place a decrypted API key is read**
@@ -278,6 +279,10 @@ Against real `opencode` **1.18.27**:
 | `--port` / `--hostname` spellings; `serve` subcommand | Run |
 | `GET /api/health` → exactly `{"healthy":true}` | Requested |
 | Basic auth via `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` | Requested with and without |
+| `CUSTOM_MODEL_LIMITS.anthropic` | `modelLimits.ts` | `{context: 200000, output: 32000}` | A custom entry has no models.dev catalog, so the engine defaults its models to `{0, 0}` and the Anthropic transport sends `output` as `max_tokens` — zero is a provider-side 400. A floor valid across the type's current line-up, **not** per-model truth; a value too high is rejected on the first turn, one too low silently truncates a long answer ([contract](opencode_contract.md) §9.5.9) |
+| `CUSTOM_MODEL_LIMITS.openai` | `modelLimits.ts` | `{context: 128000, output: 16384}` | as above |
+| `CUSTOM_MODEL_LIMITS.gemini` | `modelLimits.ts` | `{context: 1048576, output: 65536}` | as above |
+| `CUSTOM_MODEL_LIMITS.openai_compatible` | `modelLimits.ts` | `{context: 128000, output: 8192}` | as above; a gateway is whatever the user pointed it at, so the cautious pair |
 | `OPENCODE_CONFIG` points the v1 config reader at our generated file | Run |
 | `OPENCODE_CONFIG_DIR` points the **v2** reader at it, for every session location | Contract §9.5.3 |
 | Loopback binding | `lsof` |
