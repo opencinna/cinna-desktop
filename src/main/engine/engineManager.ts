@@ -118,6 +118,7 @@ import {
   writeEngineConfig,
   type BuiltEngineConfig,
   type EngineConfigDigest,
+  type EngineModelRef,
   type SkippedAgent
 } from './configGenerator'
 import { collectEngineConfigInput } from './engineConfigSource'
@@ -168,6 +169,8 @@ interface LoadedConfig {
   digest: EngineConfigDigest
   /** Our agent id → the OpenCode agent key **this process** knows. */
   agentKeys: Map<string, string>
+  /** Our agent id → the model **this process's** config gave that agent. */
+  agentModels: Map<string, EngineModelRef>
   /** What **this process's** config left out, and why. */
   skippedAgents: SkippedAgent[]
 }
@@ -409,6 +412,7 @@ async function spawnAttempt(
     loaded: {
       digest: digestEngineConfig(built),
       agentKeys: built.agentKeys,
+      agentModels: built.agentModels,
       skippedAgents: built.skippedAgents
     }
   }
@@ -724,6 +728,25 @@ export const engineManager = {
    */
   agentKey(agentId: string): string | null {
     return running?.loaded.agentKeys.get(agentId) ?? null
+  },
+
+  /**
+   * Which model a folder agent's entry names, **in the config the running
+   * engine loaded**, as `POST /api/session` spells it.
+   *
+   * Answered from the loaded record for exactly the reason {@link agentKey} is:
+   * the last config we *generated* may be one the engine never read, and a
+   * model the running process has never heard of resolves to
+   * `SessionRunnerModel.ModelUnavailableError` — which the engine reports on no
+   * event at all, so the turn hangs rather than fails.
+   *
+   * It has to be sent per session because the engine's v2 runner resolves a
+   * model from `session.model` alone; `agent.<key>.model` in the config is not
+   * read on that path. A session opened without one runs on whatever the engine
+   * picks — verified 3 Sep 2026 to be a free `opencode/muse-spark-*` gateway.
+   */
+  agentModel(agentId: string): EngineModelRef | null {
+    return running?.loaded.agentModels.get(agentId) ?? null
   },
 
   /**

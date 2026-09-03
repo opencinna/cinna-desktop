@@ -56,6 +56,7 @@ import { parseEngineEvent, type EngineEvent } from './engineEvents'
 import { SseParser } from './sseParser'
 import { TurnStream, type PendingRequest } from './turnStream'
 import { pendingRequests, type RequestResolution } from './pendingRequests'
+import type { EngineModelRef } from '../../engine/configGenerator'
 
 const logger = createLogger('local-agent-turn')
 
@@ -73,6 +74,8 @@ export interface LocalTurnDeps {
   ensureEngineRunning(userId: string): Promise<{ status: string; error: string | null }>
   /** `engineManager.agentKey` — the key **the running process loaded**, or null. */
   agentKey(agentId: string): string | null
+  /** `engineManager.agentModel` — the model **the running process loaded**, or null. */
+  agentModel(agentId: string): EngineModelRef | null
   /** Why the running config left this agent out, for the error line. */
   skipReason(agentId: string): string | null
   /** `engineManager.request` — the only door to the engine. */
@@ -148,9 +151,17 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       )
     }
 
+    // Null is tolerated rather than fatal: an agent entry always names a model
+    // (`buildEngineConfig` skips one that does not), so this is only null for
+    // an engine that has no entry at all — which `agentKey` above has already
+    // turned into an error — and for a config generated before this field
+    // existed. Sending no `model` is what the runner did until now, so the
+    // fallback is the old behaviour rather than a new failure.
+    const model = this.deps.agentModel(agentId)
+
     try {
       return await this.deps.withLock(agentId, 'turn', () =>
-        this.stream({ input, agent, agentKey, userId, signal, wireContent, chatId, agentId })
+        this.stream({ input, agent, agentKey, model, userId, signal, wireContent, chatId, agentId })
       )
     } catch (err) {
       // **`turnLock.acquire` throws and never queues.** Opening the same folder
@@ -171,17 +182,18 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     input: RunAgentTurnInput
     agent: { name: string; path: string }
     agentKey: string
+    model: EngineModelRef | null
     userId: string
     signal: AbortSignal
     wireContent: string
     chatId: string
     agentId: string
   }): Promise<RunAgentTurnResult> {
-    const { agent, agentKey, signal, wireContent, chatId, agentId } = ctx
+    const { agent, agentKey, model, signal, wireContent, chatId, agentId } = ctx
 
     let sessionId: string
     try {
-      sessionId = await this.openSession(chatId, agentId, agent.path, agentKey)
+      sessionId = await this.openSession(chatId, agentId, agent.path, agentKey, model)
     } catch (err) {
       logger.error('could not open an engine session', { agentId, error: String(err) })
       return fail('Could not start a session with the local engine.', String(err))
@@ -479,12 +491,24 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
    * folder *and* the agent in one call; a resumed session whose key has moved
    * — the config changed and the engine restarted — is switched with
    * `POST .../agent` rather than abandoned, so the conversation survives.
+   *
+   * **The model is sent with it, and that is not decoration.** OpenCode
+   * 1.18.27's v2 session runner resolves a model from the *session's* own
+   * `model` and never from `agent.<key>.model`, so a session opened with an
+   * agent and no model runs on whatever the engine picks for itself — verified
+   * 3 Sep 2026 to be a free `opencode/muse-spark-*` gateway on which every tool
+   * call fails, and once a provider with no key at all. The model therefore
+   * travels the same two routes the agent key does: in the create call, and as
+   * a `POST .../model` re-point on a remembered session whose config has moved
+   * underneath it. The ref is `{providerID, id}`; `{providerID, modelID}` is
+   * rejected at creation and does not even answer JSON.
    */
   private async openSession(
     chatId: string,
     agentId: string,
     directory: string,
-    agentKey: string
+    agentKey: string,
+    model: EngineModelRef | null
   ): Promise<string> {
     const remembered = this.deps.readSession(chatId, agentId)
     if (remembered) {
@@ -496,6 +520,14 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
             error: String(err)
           })
         )
+        if (model) {
+          await this.post(`/api/session/${remembered}/model`, { model }).catch((err) =>
+            logger.warn('could not re-point the session at its model', {
+              sessionId: remembered,
+              error: String(err)
+            })
+          )
+        }
         return remembered
       }
       logger.info('the remembered engine session is gone; opening a new one', {
@@ -505,6 +537,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     }
     const created = await this.post('/api/session', {
       agent: agentKey,
+      ...(model ? { model } : {}),
       location: { directory }
     })
     const id = (created as { data?: { id?: string } })?.data?.id

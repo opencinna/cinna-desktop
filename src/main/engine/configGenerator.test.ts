@@ -227,6 +227,18 @@ describe('buildEngineConfig', () => {
     expect(entry.model).toBe('anthropic/claude-sonnet-4-5')
     expect(entry.prompt).toBe(`{file:./prompts/${key}.md}`)
     expect(built.prompts.get(key)).toContain('You are the invoice agent.')
+
+    // **The same pair again, split.** The config file spells a model
+    // `"<provider>/<id>"`, but the session API takes `{providerID, id}` and the
+    // engine's v2 runner reads the model from the *session* only — never from
+    // the agent entry — so the runner needs the split form of exactly the model
+    // this entry names. Deriving it by splitting the string at the runner would
+    // be wrong for a model id containing a slash, which `openrouter`-style ids
+    // routinely do.
+    expect(built.agentModels.get(agentId)).toEqual({
+      providerID: 'anthropic',
+      id: 'claude-sonnet-4-5'
+    })
   })
 
   it('carries the conversation permission profile, catch-all included', () => {

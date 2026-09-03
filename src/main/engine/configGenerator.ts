@@ -169,6 +169,19 @@ export interface SkippedAgent {
   reason: string
 }
 
+/**
+ * How a model is named to the engine, everywhere outside the config file.
+ *
+ * `{providerID, id}` and not `{providerID, modelID}`: the latter is rejected by
+ * `POST /api/session` (verified against 1.18.27 — the response is not even
+ * JSON). The config file itself still spells the pair as `"<providerID>/<id>"`,
+ * which is why this exists as a second representation rather than a rename.
+ */
+export interface EngineModelRef {
+  providerID: string
+  id: string
+}
+
 export interface BuiltEngineConfig {
   /** The config object, ready to be serialised. Contains no key. */
   config: Record<string, unknown>
@@ -178,6 +191,16 @@ export interface BuiltEngineConfig {
   providerKeys: Map<string, string>
   /** Our agent id → the OpenCode agent key it became. */
   agentKeys: Map<string, string>
+  /**
+   * Our agent id → the model its entry names, as the session API spells it.
+   *
+   * The engine's v2 session runner resolves a model from the **session's** own
+   * `model` and never from `agent.<key>.model`, so this pair has to travel to
+   * `POST /api/session` as well as into the config file. Carried beside
+   * {@link agentKeys} so the runner can answer both questions from the config
+   * the running process actually loaded.
+   */
+  agentModels: Map<string, EngineModelRef>
   /** Agent key → the prompt text that must be written beside the config. */
   prompts: Map<string, string>
   skippedProviders: SkippedProvider[]
@@ -303,6 +326,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
 
   const agents: Record<string, unknown> = {}
   const agentKeys = new Map<string, string>()
+  const agentModels = new Map<string, EngineModelRef>()
   const prompts = new Map<string, string>()
   const skippedAgents: SkippedAgent[] = []
 
@@ -321,6 +345,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     }
     const key = engineAgentKey(agent.agentId, agent.slug)
     agentKeys.set(agent.agentId, key)
+    agentModels.set(agent.agentId, { providerID: providerKey, id: agent.modelId })
     prompts.set(key, agent.prompt)
     agents[key] = {
       description: agent.description || `The ${agent.slug} agent.`,
@@ -340,6 +365,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     env,
     providerKeys,
     agentKeys,
+    agentModels,
     prompts,
     skippedProviders,
     skippedAgents

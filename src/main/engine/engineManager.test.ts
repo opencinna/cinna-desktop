@@ -839,6 +839,37 @@ describe('engineManager', () => {
     expect(engineManager.agentKey('folder:bbb')).toBe(engineAgentKey('folder:bbb', 'bbb'))
   })
 
+  it('reports the model of the config the engine actually loaded', async () => {
+    // Same rule as `agentKey`, and it matters for the same reason: the engine's
+    // v2 runner resolves a model from the session's own `model` only, so the
+    // runner has to send one — and a model out of a generation the engine never
+    // loaded resolves to `ModelUnavailableError`, which arrives on no event at
+    // all and hangs the turn until its ceiling.
+    configInput.current = { providers: [provider()], agents: [agent('folder:aaa', 'a')] }
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.agentModel('folder:aaa')).toEqual({
+      providerID: 'anthropic',
+      id: 'claude-sonnet-4-5'
+    })
+    expect(engineManager.agentModel('folder:bbb')).toBeNull()
+
+    // The model changes while somebody is streaming, so the restart is deferred
+    // and the running engine is still serving the old one. Answering from the
+    // last *generated* config here would hand the runner a model the running
+    // process cannot resolve.
+    const streaming = turnLock.acquire('folder:aaa', 'turn')
+    configInput.current = {
+      providers: [provider()],
+      agents: [{ ...agent('folder:aaa', 'a'), modelId: 'claude-opus-4-5' }]
+    }
+    await engineManager.applyConfigChange('user-1')
+    expect(engineManager.agentModel('folder:aaa')?.id).toBe('claude-sonnet-4-5')
+
+    streaming.release()
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.agentModel('folder:aaa')?.id).toBe('claude-opus-4-5')
+  })
+
   it('reports the skips of the config the engine actually loaded', async () => {
     configInput.current = { providers: [provider()], agents: [agent('folder:aaa', 'a')] }
     await engineManager.ensureRunning('user-1')

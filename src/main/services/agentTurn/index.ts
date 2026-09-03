@@ -83,6 +83,7 @@ const localDeps: LocalTurnDeps = {
     return { status: state.status, error: state.error }
   },
   agentKey: (agentId) => engineManager.agentKey(agentId),
+  agentModel: (agentId) => engineManager.agentModel(agentId),
   skipReason: (agentId) =>
     engineManager.lastSkips().agents.find((a) => a.agentId === agentId)?.reason ?? null,
   request: (path, init) => engineManager.request(path, init),

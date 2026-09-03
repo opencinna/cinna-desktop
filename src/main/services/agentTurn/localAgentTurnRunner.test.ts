@@ -160,6 +160,7 @@ function harness(opts: {
     readinessReason: string | null
   }> | null
   agentKey?: string | null
+  agentModel?: { providerID: string; id: string } | null
   engineStatus?: string
   remembered?: string | null
   engine?: ReturnType<typeof fakeEngine>
@@ -179,6 +180,8 @@ function harness(opts: {
       return { status: opts.engineStatus ?? 'running', error: null }
     },
     agentKey: () => (opts.agentKey === undefined ? 'assistant_ab12' : opts.agentKey),
+    agentModel: () =>
+      opts.agentModel === undefined ? { providerID: 'anthropic', id: 'claude-sonnet-4-6' } : opts.agentModel,
     skipReason: () => null,
     request: engine.request,
     bus,
@@ -556,7 +559,58 @@ describe('LocalAgentTurnRunner', () => {
     expect(repoint?.method).toBe('POST')
     expect(repoint?.body).toEqual({ agent: 'assistant_ab12' })
 
+    // **And the model, for the same reason.** A remembered session carries the
+    // model it was opened with; a runtime changed in the Runtime card since
+    // then only reaches the engine if the session is re-pointed at it too.
+    // Mutation: delete the `POST .../model` call → this fails, and the chat
+    // silently keeps answering on the previous model.
+    const remodel = h.engine.calls.find((c) => c.path === '/api/session/ses_old/model')
+    expect(remodel?.method).toBe('POST')
+    expect(remodel?.body).toEqual({ model: { providerID: 'anthropic', id: 'claude-sonnet-4-6' } })
+
     h.engine.push(endTurn('stop', 'ses_old'))
+    await run
+  })
+
+  it('opens a session on the model the running engine loaded for the agent', async () => {
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+
+    // **The whole point of Phase 6's model fix.** OpenCode 1.18.27's v2 runner
+    // resolves a model from the *session's* `model` and never from
+    // `agent.<key>.model`, so a create call without one runs the turn on the
+    // engine's own default — observed on 3 Sep 2026 to be a free
+    // `opencode/muse-spark-*` gateway where every tool call fails in ~3 ms.
+    // Mutation: drop `model` from the `POST /api/session` body → this fails.
+    const created = h.engine.calls.find((c) => c.path === '/api/session')
+    expect(created?.body).toEqual({
+      agent: 'assistant_ab12',
+      model: { providerID: 'anthropic', id: 'claude-sonnet-4-6' },
+      location: { directory: '/agents/helper' }
+    })
+
+    h.engine.push(endTurn())
+    await run
+  })
+
+  it('opens a session without a model when the loaded config named none', async () => {
+    // Null is the old behaviour, not a new failure: a config generated before
+    // the model was recorded has no answer to give, and refusing the turn over
+    // it would be worse than the engine picking a default. Mutation: send
+    // `model: null` unconditionally → the engine rejects the body and this
+    // fails on the missing key.
+    const h = harness({ agentModel: null })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+
+    const created = h.engine.calls.find((c) => c.path === '/api/session')
+    expect(created?.body).toEqual({
+      agent: 'assistant_ab12',
+      location: { directory: '/agents/helper' }
+    })
+
+    h.engine.push(endTurn())
     await run
   })
 
