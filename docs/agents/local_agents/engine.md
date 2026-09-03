@@ -1,6 +1,6 @@
 # The Local Engine, Runtimes & Prompt Assembly
 
-> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. Three things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why *Always* is gated off.
+> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. **Read §9.5 before changing anything about the generated config:** the engine has two config readers, `OPENCODE_CONFIG` reaches only the older one, and the newer one — which decides what a session can run on and what system prompt it gets — substitutes neither `{env:…}` nor `{file:…}`. Three further things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why *Always* is gated off.
 
 
 ## Purpose
@@ -35,7 +35,7 @@ Both halves are load-bearing, and both were bugs before they were properties.
 
 - **Engine** — the one desktop-managed `opencode serve` process. Loopback-only, on a port the desktop picks, behind a per-start Basic-auth password. Shared by every folder agent
 - **Engine config** — the OpenCode configuration this app generates into `<userData>/engine/opencode.json`: one provider entry per usable AI credential, one agent entry per runnable folder agent, and a permission profile
-- **Generated prompt** — the per-agent system prompt assembled from the agent's own files, written to `<userData>/engine/prompts/<agentKey>.md` and referenced from the config as `{file:./prompts/<agentKey>.md}`
+- **Generated prompt** — the per-agent system prompt assembled from the agent's own files. It is **inlined into the agent's config entry**, because the engine's v2 config reader resolves no `{file:…}` reference and would hand the model the placeholder in place of the prompt. A copy is still written to `<userData>/engine/prompts/<agentKey>.md` as the readable artefact the user's own assistant opens; the engine does not read it
 - **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Stable for the life of the agent, and what Phase 6 binds engine sessions to
 - **Loaded config** — the record carried on the running process: a digest of its config-and-prompt bytes, a digest of its credential environment, and the agent keys and skips **that process actually loaded**. Dies with the process
 - **Reconcile** — what `ensureRunning` does when the engine is already up: re-derive the config from current state and restart only if the running process no longer matches
@@ -64,7 +64,7 @@ Both halves are load-bearing, and both were bugs before they were properties.
 
 ### Rotating a key
 1. The user replaces the API key on an existing credential
-2. The config file is **byte for byte identical** — the key was never in it, only an `{env:…}` reference was
+2. The config file is **byte for byte identical** — the key was never in it, only the *name* of the environment variable it travels in
 3. The credential digest moved, so the reconcile restarts anyway. Without that second digest, every turn would 401 while the UI showed a valid credential and a healthy engine, until the app was quit
 
 ### Choosing a runtime
@@ -114,7 +114,7 @@ Only two of those have a natural place to put a hook. A sixth input — and this
 
 There is no debt to record because the next `ensureRunning` asks the same question of the same running process and gets the same answer for as long as it stays true — and stops getting it the moment a restart makes it false, whoever caused that restart. A stored `configRestartDeferred` flag existed and was deleted: it survived a restart that had already loaded the change, buying one spurious restart at a turn boundary and ending every other agent's engine session.
 
-**Writing nothing is what closes the finer hazard.** Because change detection is an in-memory digest comparison rather than a compare-against-disk, a change that is going to be deferred is discovered *before* anything is written. That matters because `writeEngineConfig` also deletes the generated prompt file of an agent that is no longer in the set. If OpenCode resolves `{file:./prompts/<key>.md}` per request rather than at config load, a deferred change could swap a streaming agent's system prompt mid-turn, or delete the prompt file of an agent mid-reply. Not writing makes the question moot — and it never had to be answered against the real binary. The restart regenerates everything from scratch, which it already did.
+**Writing nothing is what closes the finer hazard.** Because change detection is an in-memory digest comparison rather than a compare-against-disk, a change that is going to be deferred is discovered *before* anything is written. That matters because `writeEngineConfig` also deletes the generated prompt file of an agent that is no longer in the set, and rewrites the config a running engine may re-read. Not writing makes the question moot — and it never had to be answered against the real binary. (The prompt-file half of it has since gone away for a different reason: the prompt is inlined in the config, so no file reference is resolved at any time.) The restart regenerates everything from scratch, which it already did.
 
 ### Facts about the process, not beliefs about it
 
@@ -150,11 +150,11 @@ The prompt bodies are the one input that is arbitrary user-controlled text — t
 
 ### A key is never written into the config
 
-Every provider's key is emitted as an `{env:CINNA_ENGINE_KEY_…}` reference and the value reaches the engine only as process environment (Invariant 4). The config file sits at rest in the app data directory and is readable by anything that can read the user's home; writing keys there would make it a plaintext copy of every credential in the app — the thing `safeStorage` exists to prevent.
+Every provider entry names the environment variable its key travels in (`env: ["CINNA_ENGINE_KEY_…"]`) and the value reaches the engine only as process environment (Invariant 4). **Naming the variable, rather than writing an `{env:…}` placeholder into `options.apiKey`, is load-bearing rather than stylistic:** the engine's v2 config reader performs no substitution, so the placeholder itself would be sent to the provider as the key and every turn would 401. The `env` form instead registers an integration whose connection the session runner resolves out of the process environment — for a canonical provider key and for a custom one alike. The config file sits at rest in the app data directory and is readable by anything that can read the user's home; writing keys there would make it a plaintext copy of every credential in the app — the thing `safeStorage` exists to prevent.
 
 The environment variable name is derived from the provider id so it is stable across regenerations, and hash-suffixed so two ids that sanitise to the same string cannot silently hand one provider the other's key.
 
-**A consequence Phase 6 must respect: OpenCode's `/config` endpoint returns the *resolved* configuration, with `{env:…}` already substituted — so its response contains live API keys.** It must never be logged, echoed into a stream part, or forwarded to the renderer.
+**A consequence Phase 6 must respect: OpenCode's v1 `/config` endpoint returns the *resolved* configuration, with `{env:…}` already substituted.** Nothing we generate carries a placeholder any more, but that response can still resolve one out of the user's own config, so it must never be logged, echoed into a stream part, or forwarded to the renderer.
 
 ### The engine is on loopback, behind a password, on a port we picked
 
@@ -166,7 +166,7 @@ The environment variable name is derived from the provider id so it is stable ac
 
 ### The engine's environment is narrowed, not inherited
 
-The engine gets **the same narrowed environment a third-party stdio MCP server gets** — `shellEnvForChild` over the resolved login-shell environment — plus an enumerated set of variables added explicitly (`OPENCODE_CONFIG`, the server username and password, `OPENCODE_DISABLE_AUTOUPDATE=1`, and the credential map).
+The engine gets **the same narrowed environment a third-party stdio MCP server gets** — `shellEnvForChild` over the resolved login-shell environment — plus an enumerated set of variables added explicitly (`OPENCODE_CONFIG` **and `OPENCODE_CONFIG_DIR`** — the engine has two config readers and they honour different variables, see [the contract](opencode_contract.md) §9.5.3 — the server username and password, `OPENCODE_DISABLE_AUTOUPDATE=1`, and the credential map).
 
 The instinct is that this should be looser, since the engine is our own binary rather than a third party's. It is the opposite: the thing that *runs inside* the engine is a language model with a bash tool, driven by whatever text arrives in a conversation, and its output goes on screen and into the database. A shell environment handed to it is one prompt injection away from being read aloud, and `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `AWS_*` live in exactly the `.zshrc` this app is deliberately sourcing. The narrowing applies with *more* force here than for an MCP server, whose tools at least have fixed schemas.
 
@@ -342,7 +342,7 @@ engine:status | :start | :stop | :skips          local-agent:update-field
    └──────────────────────────┬───────────────────────────┘
                               ▼
    binaryResolver          engineConfigSource ──► configGenerator
-   configured │ PATH │      providerService          providers  (keys → {env:…})
+   configured │ PATH │      providerService          providers  (keys → env: [NAME])
    pinned download          runtimeService           agent entries + permissions
    (SHA-256 verified)       promptAssembly           prompts, digest, key maps
                               │
@@ -352,12 +352,13 @@ engine:status | :start | :stop | :skips          local-agent:update-field
                               │
                               ▼
         spawn: opencode serve --port <picked> --hostname 127.0.0.1
-        env  = narrowed login shell + OPENCODE_CONFIG + Basic-auth password
+        env  = narrowed login shell + OPENCODE_CONFIG + OPENCODE_CONFIG_DIR
+               + Basic-auth password
                + OPENCODE_DISABLE_AUTOUPDATE + CINNA_ENGINE_KEY_* (the keys)
                               │
                               ▼
         RunningEngine { child, baseUrl, authHeader, port,
-                        loaded: { digest, agentKeys, skippedAgents } }
+                        loaded: { digest, agentKeys, agentModels, skippedAgents } }
                         ▲ never leaves engineManager (no baseUrl on any IPC channel)
 ```
 

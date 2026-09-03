@@ -54,8 +54,8 @@ keeping beside any future probe; it is the only machine-readable description of 
 | Loopback only | `lsof` shows `127.0.0.1:PORT` only; the LAN address refuses |
 | `GET /api/health` | returns exactly `{"healthy":true}` |
 | Basic auth enforced | **401** with no header and with a wrong password, on `/api/health`, `GET /api/event` **and** `POST /api/session` |
-| `OPENCODE_CONFIG` honoured | `GET /config` returns the file's contents — with `{env:…}` **already substituted**, so that response contains **live API keys**. Never log it, never forward it to the renderer |
-| Config-defined agents addressable | an `agent` entry in the config is accepted by `POST /api/session {"agent": …}` and its `prompt` and `permission` take effect |
+| `OPENCODE_CONFIG` honoured **by the v1 reader only** | `GET /config` returns the file's contents — with `{env:…}` **already substituted**, so that response contains **live API keys**. Never log it, never forward it to the renderer. The v2 reader, which is the one that decides what a session can run on, never consults this variable — §9.5.3 |
+| Config-defined agents addressable | an `agent` entry in the config is accepted by `POST /api/session {"agent": …}` and its `prompt` and `permission` take effect — **provided the v2 reader has the file and the entry inlines its prompt**; §9.5.3–4. An agent name it does not know is not rejected, it simply runs with no system prompt |
 | `--mdns` | defaults the hostname to `0.0.0.0`. **Never pass it.** This is why the `--hostname` assertion in the engine tests is load-bearing rather than decorative |
 
 ### Sessions and prompting
@@ -348,6 +348,8 @@ these were reported to the team before being caught.
 | "'Always' grants persist in `desktop.json`" (original plan) | They persist in OpenCode's user-global SQLite store |
 | "OpenCode is authoritative for saved grants; the desktop cannot opt out" | The desktop **can** opt out, by never sending `always` — see §4 |
 | "`--port 0` gives an OS-assigned port" | `--help` says default `0`, but `--port 0` really binds **4096**; a second `serve` against a taken 4096 comes up *silently* on an unpredictable port |
+| "The config's providers are not available to the v2 runner; cause unknown" (§9, 3 Sep) | The cause was not the providers. `OPENCODE_CONFIG` reaches only the v1 config reader, so the v2 catalog the runner consults had no config at all for a session located in an agent folder — §9.5.3 |
+| "An unavailable model fails 50–120 s after the prompt" (§9) | **0.4 s**, in the engine's log, and **never on the wire**. The 50–120 s was time-to-notice — §9.5.5 |
 | "Neither stream alone survives a drop — the resumable one cannot see completion" (an earlier draft of **this file**) | True of `session.idle`, **false** of the event that actually ends a turn. `step.ended` is one of the 28 durable variants, so one `?after=` replay carries both the missed content and the turn's end. Caught by the dev agent reading the variant list rather than trusting this document |
 
 ---
@@ -382,6 +384,14 @@ Not weaker evidence — **no evidence**. Each is a place to look first when some
    executed. One `npm run build:mac:unsigned` settles it.
 8. **Every platform except `darwin-arm64`.** The other five assets' digests are recorded and
    unverified.
+9. ~~**Which config-file provider entries the v2 runner treats as *available*, and what makes one
+   so.**~~ **Settled 3 Sep 2026 — §9.5.** The entries were never the variable: `OPENCODE_CONFIG` is
+   read by the v1 config loader only, and the v2 loader the runner consults never saw our file at
+   all. `OPENCODE_CONFIG_DIR` is the lever.
+10. ~~**What the desktop's event subscription receives when the engine fails to resolve a
+    model.**~~ **Settled 3 Sep 2026 — §9.5.4. Nothing.** `prompt.admitted` and `prompted` arrive and
+    then the stream is silent; the desktop waits on its own ceiling. A *provider* failure is the
+    opposite — `session.next.step.failed` carries it — which is why the two must not be conflated.
 
 ---
 
@@ -427,3 +437,281 @@ curl -s -u c:p -X POST "http://127.0.0.1:47315/api/session/$SES/prompt" \
   `DELETE /api/permission/saved/{id}` (204). Sessions left behind are harmless; grants are not.
 - **Never commit or echo the credential**, and prefer a short-lived key: `GET /config` returns the
   resolved configuration **with the key substituted in**.
+
+## 9. Model resolution in the v2 session runner — observed 3 Sep 2026, in the desktop's own engine
+
+Found by debugging a live run, not by a probe: every folder-agent turn the desktop had made that day
+ran on a model nobody configured. Verified against the engine the app itself spawned (1.18.27,
+`OPENCODE_CONFIG` = the generated `opencode.json`, four provider entries with keys), by reading
+`~/.local/share/opencode/opencode.db`, `GET /api/session/{id}/message`, the engine log, and the
+binary's own resolve function. Nothing in this section is inferred from the OpenAPI document.
+
+### 9.1 What the engine actually did
+
+| Session | `model` sent at `POST /api/session` | Model the turn ran on | Outcome |
+|---|---|---|---|
+| Four desktop-opened sessions (`agent` + `location` only, no `model`) | none | `opencode/muse-spark-1.3-contributor-free` (three), `nano-gpt/google/gemini-3.8-flash` (one) | free model: answered, **every tool call failed in ~3 ms**; nano-gpt: `HTTP 401 … missing_api_key` |
+| Probe, `{providerID:"anthropic", id:"claude-sonnet-4-6"}` — the **canonical** config entry, key present | explicit | none | `SessionRunnerModel.ModelUnavailableError: Model unavailable: anthropic/claude-sonnet-4-6`, logged as `Failed to drain Session` **~50–120 s after the prompt** |
+| Probe, `{providerID:"anthropic-29e5d862", id:"claude-sonnet-4-6"}` — the custom second-key entry | explicit | none | same error; adding `options.baseURL` to the custom entry (a separate `serve` on another port) changed nothing |
+| Probe, `{providerID:"opencode", id:"muse-spark-1.3-contributor-free"}` | explicit | that model | answered; `read cinna-agent.json` → `Unable to read cinna-agent.json`, both from `~/Documents/…` and from a copy under `/private/tmp` |
+
+The agent's configured `model` (`agent.<key>.model = "anthropic-29e5d862/claude-sonnet-4-6"`, and
+`GET /agent` confirms the engine parsed it) **was never used**. `GET /provider` (v1) lists all four
+config entries under `connected`; that is not the list the runner consults.
+
+### 9.2 The resolve rule, read from the binary
+
+`SessionRunnerModel.resolve` (chunk containing `"SessionRunnerModel.ModelUnavailableError"`),
+de-minified:
+
+```
+resolve(session):
+  if session.model:
+      X = model.available().find(providerID == session.model.providerID && id == session.model.id)
+      if !X: fail ModelUnavailableError(providerID, modelID)
+  else:
+      Z = model.default()
+      X = supported(Z) ? Z : model.available().find(supported)
+      if !X: fail ModelNotSelectedError(sessionID)
+  provider = provider.get(X.providerID)
+  connection = connection.active(provider.integrationID ?? X.providerID)
+  build the SDK model from X, with auth from the connection (or request.body.apiKey / api.settings.apiKey)
+
+supported(m) = m.api.type == "aisdk" && m.api.package in
+               { "@ai-sdk/openai", "@ai-sdk/anthropic", "@ai-sdk/openai-compatible" (url required) }
+```
+
+Consequences that matter to the desktop:
+
+1. **The session's own `model` is the only per-session input.** The agent's `model` in the config
+   is not read on this path. Opening a session with `agent` but no `model` (what
+   `localAgentTurnRunner.openSession` does today) means "engine's default, or the first supported
+   model in `available()`" — which is how a free OpenCode model, and once a provider with no key,
+   got chosen silently.
+2. **`available()` is not the config's provider list.** `google/gemini-3.8-flash` from the config
+   *was* in `GET /api/model` (`api.type:"aisdk"`, `api.package:"@ai-sdk/google"`,
+   `request.body.apiKey` set), so config providers can reach it — yet `anthropic/claude-sonnet-4-6`
+   from the same config resolved as unavailable. **Settled in §9.5: it is not the entries that
+   differ, it is which config the engine read for that session.** Note `@ai-sdk/google` is not in
+   `supported()` at all: a Gemini credential can never be a default here, even when it is
+   available.
+3. **An unavailable model produces no event.** *(Corrected in §9.5.)* The engine logs
+   `Failed to drain Session` about **0.4 s** after `prompt` — not the 50–120 s recorded here, which
+   was wall-clock time to notice rather than the engine's own — and emits **nothing** on
+   `/api/event` after `session.next.prompted`. The desktop is in its streaming state with nothing
+   to show and nothing coming, so what ends it is its own 20-minute ceiling and not the engine.
+4. **Model refs use `{providerID, id}`.** `{providerID, modelID}` is rejected at `POST /api/session`
+   (the response is not JSON). `POST /api/session/{id}/model {model: ModelRef}` exists to re-point
+   a remembered session, alongside the `/agent` re-point the runner already does.
+
+### 9.3 The tool failures on the free model
+
+`read`, `bash` and `glob` all failed within ~3 ms of `tool.called`, with `provider.executed:false`
+and error type `unknown`. Not a permission decision (`read` is `allow` in the agent's effective
+rules, `GET /agent`, and no `permission.v2.asked` was emitted), not `~/Documents` protection (same
+failure from `/private/tmp`). The `read` tool's error mapping in the binary is
+``mapError(e => isBinary|Limit|Decode|Size ? e.message : `Unable to read ${path}`)`` — every other
+cause collapses to that one string, so the message is not evidence of anything. Whether this is the
+same "broken config" failure §6 recorded, a property of the free `opencode` gateway, or something
+else, is **not determined**; it was only ever observed on `opencode/muse-spark-*`, which is the
+only model that resolved in this engine.
+
+### 9.4 What the desktop should do about it (not yet done)
+
+- **Send `model: {providerID, id}` on `POST /api/session`, from the config the running engine
+  loaded** (`engineManager` already records `agentKeys` per process; it needs the agent's
+  `provider/model` split the same way), and `POST /api/session/{id}/model` on a remembered session
+  next to the existing `/agent` re-point. A wrong model then fails loudly as
+  `ModelUnavailableError` instead of running on whatever the engine picked.
+- **Surface `Failed to drain Session` / `ModelUnavailableError` as a turn error the moment it
+  arrives**, and check what the desktop's `/api/event` subscription actually receives for it — the
+  probe sessions show only the user message afterwards, so it may not be a `session.next.*` event.
+- **Establish how a config-file key becomes an *available* connection in 1.18.27** before Phase 7b
+  builds anything else on the engine. Candidates, all untested: the v2 credential surface
+  (`POST /api/integration/{id}/connect/key`, `POST/DELETE /api/credential/{id}`, the empty
+  `credential(integration_id, method_id, value, …)` table in `opencode.db`); the canonical env
+  names each integration advertises (`GET /api/integration` → `methods:[{type:"env",names:[…]}]`,
+  e.g. `ANTHROPIC_API_KEY`) — the one attempt at this ran with an empty variable by mistake and
+  proves nothing. §8's own recipe passed the key as `{env:OPENAI_API_KEY}` **and** had
+  `OPENAI_API_KEY` in the process environment, which may be why that probe resolved at all.
+
+---
+
+## 9.5 Why the config's providers were not "available" — settled 3 Sep 2026
+
+§9 left one question open and everything else in this feature waiting on it: what makes a
+config-file provider entry *available* to the v2 session runner. **The entries were never the
+variable. The engine has two config readers, our file reached only one of them, and it is the other
+one that decides what a session can run on.**
+
+### 9.5.1 Conditions — these differ from §1 and the difference matters
+
+| | |
+|---|---|
+| Binary | the desktop's own managed copy, `<userData>/engine/opencode-1.18.27/opencode`, `--version` → `1.18.27` |
+| Credentials | **none**. Every key below is a dummy (`sk-ant-dummy…`). "Available" and "authenticated" are separable, and every result here was reached without one |
+| Isolation | `XDG_DATA_HOME` and `XDG_CONFIG_HOME` pointed at a scratch directory, so nothing touched `~/.local/share/opencode/opencode.db` or the user's own `~/.config/opencode`. `.db` and `.db-wal` mtimes were unchanged afterwards |
+| Launch | `serve --port <N> --hostname 127.0.0.1 --print-logs --log-level DEBUG`, cwd = the directory holding the generated config |
+| Sessions | `location.directory` deliberately pointed at a directory **outside** the config's own tree, which is what a folder agent's session does |
+| Also used | a local HTTP server impersonating an OpenAI-compatible gateway, so the exact request the engine builds — headers and system prompt — could be read off the wire |
+
+### 9.5.2 `GET /api/model` *is* `model.available()`
+
+Read out of the binary: the `server.model` route group handles `model.list` as
+`yield* t(i.model.available())`, and `server.provider` handles `provider.list` as
+`provider.available()`. So the question "is this model available to the runner" is answerable with
+one authenticated GET, with no session, no prompt and no spend. Every result below rests on that.
+
+The filter itself, de-minified from the `CatalogV2` service:
+
+```
+providerAvailable(p, integration):
+  if p.disabled:                              false
+  if typeof p.request.body.apiKey == "string": true
+  if integration?.connections.length:          true
+  else:  p.integrationID === undefined && !integration
+
+model.available() = model.all().filter(m => providerAvailable(m.providerID) && m.enabled)
+```
+
+### 9.5.3 `OPENCODE_CONFIG` is a v1-only variable
+
+The v2 `Config` service (`@opencode/v2/Config`) builds its document set from exactly two places:
+
+```
+ct = <the global config directory>                       // Global.config = OPENCODE_CONFIG_DIR ?? ~/.config/opencode
+be = up({targets: [".opencode", "opencode.jsonc", "opencode.json"],
+         start: <the location's directory>, stop: <the project directory>})
+```
+
+**`process.env.OPENCODE_CONFIG` appears nowhere in it.** That variable is read by the *v1* config
+service, which is why `GET /config`, `GET /agent` and `GET /provider` all showed our providers and
+our agent while the runner could not resolve any of them — §9.1's "`GET /provider` (v1) lists all
+four under `connected`; that is not the list the runner consults" was the visible edge of this.
+
+A v1-shaped file is migrated on the way in (`isV1` triggers on any of `provider`, `agent`,
+`permission`, `mode`, …), so the shape of our config was never the problem either.
+
+The consequence for the desktop is exact: the engine's cwd is `<userData>/engine`, but a session's
+`location.directory` is the **agent's folder**, and the walk goes up from there. Nothing in
+`~/Documents/…/invoice-reader`'s ancestry is `<userData>/engine`, so the v2 loader saw an empty
+config for every folder-agent session.
+
+**One variable, four runs, one difference:**
+
+| Run | `OPENCODE_CONFIG` | `OPENCODE_CONFIG_DIR` | `opencode.json` in cwd | Session located | Result |
+|---|---|---|---|---|---|
+| A | yes | — | no | cwd | `/api/model`: only `opencode`'s own 31 models |
+| B | yes | — | yes | a **sub**directory of cwd | resolves; real request to Anthropic → **HTTP 401 invalid key** |
+| B′ | yes | — | yes | an unrelated tree | `SessionRunnerModel.ModelUnavailableError` |
+| D | yes | **yes** | yes | an unrelated tree | resolves; real request to Anthropic → **HTTP 401** |
+| F | yes | — | yes | an unrelated tree | `ModelUnavailableError` (D with the one variable removed) |
+
+D versus F is the whole finding: same file, same environment, same cwd, same session — only
+`OPENCODE_CONFIG_DIR` differs.
+
+### 9.5.4 The v2 reader substitutes nothing
+
+The v1 loader resolves `{env:VAR}` and `{file:path}` (`ConfigVariable.substitute`). The v2 loader
+reads the file, parses JSONC and decodes it. **There is no substitution step**, and both of the
+desktop's placeholders were silently wrong because of it:
+
+- `provider.<key>.options.apiKey = "{env:NAME}"` reaches the catalog as those characters. Confirmed
+  in `GET /api/model`: `request.body.apiKey` was literally `"{env:PROBE_KEY_ANTHROPIC}"`. It makes
+  the provider *available* — it is a string — and then sends the placeholder to the provider as the
+  key.
+- `agent.<key>.prompt = "{file:./prompts/<key>.md}"` reaches the model **as those characters, in
+  place of the system prompt.** Read off the gateway: `messages[0].role == "system"`, content
+  containing `{file:` and not one word of the file. `GET /api/agent` reports the same literal in
+  `system`, while the v1 `GET /agent` reports the file's resolved text — the two readers disagreeing
+  in the open.
+
+**What does work, both watched end to end:**
+
+- `provider.<key>.env = ["NAME"]`. The v1→v2 migration carries it, and the `config-provider` plugin
+  turns it into an integration with an `{type:"env", names:["NAME"]}` method.
+  `GET /api/integration` then shows `connections: [{"type":"env","name":"NAME"}]` for that provider
+  — for a **canonical** id (`anthropic`) and for a **custom** one (`anthropic-29e5d862`,
+  `openai-compatible-<hash>`) alike, which is what the desktop needs since it must carry a second
+  credential of the same type. The gateway received `Authorization: Bearer sk-echo-dummy-777`, the
+  exact value of the named variable, with no `apiKey` anywhere in the config file.
+- `agent.<key>.prompt = "<the text>"`. The gateway received it as the system prompt, ahead of the
+  engine's own `<env>` block and its skills block.
+
+Note the migration puts a canonical entry's `apiKey` in `request.body` and a custom entry's in
+`request.headers["x-api-key"]` — an asymmetry that matters only if you go back to `options.apiKey`.
+
+### 9.5.5 What `ModelUnavailableError` looks like on the wire — nothing
+
+Subscribed to `GET /api/event` before prompting, session located outside the config's tree:
+
+```
+session.next.prompt.admitted
+session.next.prompted
+<silence>
+```
+
+The engine logs `ERROR message="Failed to drain Session" cause="SessionRunnerModel.ModelUnavailableError: …"`
+**0.4 s** after the prompt — §9's "50–120 s" was time-to-notice, not the engine's. No
+`step.started`, no `step.failed`, no `session.error`, nothing on the durable stream either. So there
+is nothing for `turnStream.ts` to map; the desktop has to ask before it prompts, which is what
+`awaitEngineReady` in `localAgentTurnRunner.ts` now does.
+
+**A provider failure is the exact opposite and must not be conflated with it.** With the model
+resolved and a bad key, the same subscription carries:
+
+```json
+{"type":"session.next.step.started","data":{"agent":"probe-agent",
+  "model":{"id":"claude-sonnet-4-6","providerID":"anthropic-29e5d862","variant":"default"}}}
+{"type":"session.next.step.failed","data":{"error":{"type":"unknown",
+  "message":"Provider request failed with HTTP 401: {…\"message\":\"invalid x-api-key\"…}"}}}
+```
+
+`step.started` carrying the **resolved** model is the cheapest diagnostic in the whole system: it is
+the engine saying out loud what it decided to run on.
+
+### 9.5.6 A healthy engine is not a usable engine for 30–60 seconds
+
+Not looked for; found by a test that failed and then passed unchanged. `GET /api/health` returns
+`{"healthy":true}` about a second after spawn. After that, on this machine with a warm
+`~/.cache/opencode/models.json`, it took **30 to 60 seconds** before either
+
+- `GET /api/model` returned anything at all — a turn in that window gets `ModelUnavailableError`,
+  which is to say silence; or
+- a config-defined agent was addressable — a turn in that window runs **with no system prompt**, and
+  the model receives only the engine's own `<env>` block. The folder agent then answers as a generic
+  assistant, and nothing anywhere says why.
+
+The second one cost an hour of this probe: a config difference was "reproduced" three times before
+the variable turned out to be *first turn after start* rather than anything in the file. Any future
+probe should run one throwaway turn before measuring, and any future reading of "the agent ignored
+its prompt" should check the clock first.
+
+### 9.5.7 Reproducing this
+
+```bash
+SP=/tmp/probe; mkdir -p $SP/enginehome $SP/elsewhere
+cat > $SP/enginehome/opencode.json <<'JSON'
+{ "$schema": "https://opencode.ai/config.json",
+  "provider": { "anthropic": { "env": ["MY_KEY"] } },
+  "agent": { "a1": { "mode": "primary", "description": "d",
+                     "model": "anthropic/claude-sonnet-4-6",
+                     "prompt": "SENTINEL. You are a probe." } } }
+JSON
+XDG_DATA_HOME=$SP/data XDG_CONFIG_HOME=$SP/cfg \
+OPENCODE_CONFIG_DIR=$SP/enginehome OPENCODE_CONFIG=$SP/enginehome/opencode.json \
+MY_KEY=sk-ant-dummy OPENCODE_SERVER_USERNAME=c OPENCODE_SERVER_PASSWORD=p \
+  ./opencode serve --port 47401 --hostname 127.0.0.1 --print-logs --log-level DEBUG &
+
+# wait for the catalog — this is §9.5.6, and it is not optional
+until [ "$(curl -s -u c:p localhost:47401/api/model | jq '.data|length')" != "0" ]; do sleep 5; done
+
+SES=$(curl -s -u c:p -X POST localhost:47401/api/session -H 'content-type: application/json' \
+  -d '{"agent":"a1","model":{"providerID":"anthropic","id":"claude-sonnet-4-6"},
+       "location":{"directory":"'$SP'/elsewhere"}}' | jq -r .data.id)
+curl -s -u c:p -X POST localhost:47401/api/session/$SES/prompt \
+  -H 'content-type: application/json' -d '{"prompt":{"text":"hi"}}'
+```
+
+A `401` from the provider in the log is the pass. `ModelUnavailableError` is the failure this
+section is about. Drop `OPENCODE_CONFIG_DIR` to see it come back.

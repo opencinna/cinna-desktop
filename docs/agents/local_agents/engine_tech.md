@@ -79,7 +79,7 @@ Module state: `state: EngineState`, `running: RunningEngine | null`, `startInFli
 
 ```
 interface RunningEngine { child, baseUrl, authHeader, port, loaded }
-interface LoadedConfig  { digest: EngineConfigDigest, agentKeys: Map, skippedAgents: SkippedAgent[] }
+interface LoadedConfig  { digest: EngineConfigDigest, agentKeys: Map, agentModels: Map, skippedAgents: SkippedAgent[] }
 ```
 
 `loaded` is carried **on the process object** rather than in a module variable so it cannot outlive the thing it describes: when the process dies the record goes with it, and there is no window in which a stale record claims to describe a running engine.
@@ -91,6 +91,7 @@ interface LoadedConfig  { digest: EngineConfigDigest, agentKeys: Map, skippedAge
 | `stop()` | `stopEpoch += 1`, then `halt()` |
 | `halt()` (private) | `stop()` minus the epoch bump. Awaits `startInFlight`, kills, sets `stopped`. An internal restart uses this so it cannot cancel itself, nor hide a user's Stop |
 | `agentKey(agentId)` | `running?.loaded.agentKeys.get(agentId) ?? null` |
+| `agentModel(agentId)` | `running?.loaded.agentModels.get(agentId) ?? null` — `{providerID, id}`, the split form `POST /api/session` takes |
 | `lastSkips()` | `{agents: running?.loaded.skippedAgents ?? []}` |
 | `request(path, init)` | Adds the Basic-auth header and fetches `${baseUrl}${path}`. Throws when not running. The Phase 6 seam |
 | `getState()` / `onStateChange(fn)` | State + a listener set; a throwing listener is caught and warned, never allowed to break a transition |
@@ -110,14 +111,16 @@ interface LoadedConfig  { digest: EngineConfigDigest, agentKeys: Map, skippedAge
 
 `stopEngineNow()` (on `will-quit`) is **synchronous**: bump the epoch, null `running`, `SIGTERM` inside the handler body. `will-quit` handlers are not awaited and a child is not reaped when its parent exits, so an async stop would leave an `opencode serve` running with no window to stop it from.
 
-`engineEnv(configPath, password, credentials)` = `shellEnvForChild(await getShellEnv())` + `OPENCODE_CONFIG`, `OPENCODE_SERVER_PASSWORD`, `OPENCODE_SERVER_USERNAME`, `OPENCODE_DISABLE_AUTOUPDATE='1'`, then the `CINNA_ENGINE_KEY_*` map. See [Shell Environment Resolution](../../development/shell_environment/shell_environment.md).
+`engineEnv(configPath, password, credentials)` = `shellEnvForChild(await getShellEnv())` + `OPENCODE_CONFIG`, **`OPENCODE_CONFIG_DIR` (`dirname(configPath)`)**, `OPENCODE_SERVER_PASSWORD`, `OPENCODE_SERVER_USERNAME`, `OPENCODE_DISABLE_AUTOUPDATE='1'`, then the `CINNA_ENGINE_KEY_*` map.
+
+**Both config variables, and the second is the one that matters.** `OPENCODE_CONFIG` is read by OpenCode's v1 config service. The v2 service — the one behind `model.available()`, and therefore behind every session's model resolution and every agent's system prompt — never reads it: it takes the *global config directory* (`OPENCODE_CONFIG_DIR ?? ~/.config/opencode`) plus a walk up from the **session's own `location.directory`**. A folder agent's session is located in the user's folder, nowhere near `<userData>/engine`, so without `OPENCODE_CONFIG_DIR` the engine resolved every turn against a catalog that had never heard of our providers — `ModelUnavailableError`, reported on no event at all. Verified as the single sufficient variable: [the contract](opencode_contract.md) §9.5.3. See [Shell Environment Resolution](../../development/shell_environment/shell_environment.md).
 
 ### `src/main/engine/configGenerator.ts`
 
 `buildEngineConfig(input) → BuiltEngineConfig` is **pure** — no filesystem, no clock, no `app`. That is what makes "does a key ever reach the config" a question a test answers directly rather than by reading.
 
 ```
-BuiltEngineConfig { config, env, providerKeys, agentKeys, prompts,
+BuiltEngineConfig { config, env, providerKeys, agentKeys, agentModels, prompts,
                     skippedProviders, skippedAgents }
 ```
 
@@ -126,7 +129,9 @@ BuiltEngineConfig { config, env, providerKeys, agentKeys, prompts,
 - Skips: no stored key; a type with no `npm` entry; an `openai_compatible` credential with no base URL
 - `credentialEnvName(providerId)` = `CINNA_ENGINE_KEY_<sanitised, ≤40>_<SHA-256[0:8] upper>`. The hash suffix stops two ids that sanitise alike (`a-b`, `a_b`) from silently swapping keys
 - `engineAgentKey(agentId, slug)` = `<sanitised slug, ≤40 or 'agent'>-<SHA-256[0:8]>` — **always suffixed**, so a key never depends on which other agents exist
-- Agent entry: `{description, mode: 'primary', model: '<providerKey>/<modelId>', prompt: promptFileRef(key), permission: mergePermissions(agent.permissions)}`. `promptFileRef(key)` = `{file:./prompts/<key>.md}`, resolved by OpenCode **relative to the config file**, which is why the whole generated set moves together
+- Provider credential: the entry carries **`env: ['CINNA_ENGINE_KEY_…']`** — the *name* of the variable, never the value and never an `{env:…}` placeholder. The v2 config reader performs no substitution, so a placeholder would be sent to the provider as the key itself; naming the variable instead registers an integration whose connection the session runner resolves out of the process environment, for canonical and custom entries alike. `options` exists only to carry an `openai_compatible` gateway's `baseURL`, and is omitted entirely when there is none
+- Agent entry: `{description, mode: 'primary', model: '<providerKey>/<modelId>', prompt: <the assembled text, inline>, permission: mergePermissions(agent.permissions)}`. **Inline, not `{file:./prompts/<key>.md}`** — the v2 reader resolves no file reference and hands the literal placeholder to the model in place of the system prompt ([contract](opencode_contract.md) §9.5.4). `<providerKey>/<modelId>` in the entry is not what a turn runs on either; the session's own `model` is (§9.2), which is what `agentModels` carries
+- `agentModels`: agent id → `{providerID, id}`, the same pair the entry's `model` string names, split the way `POST /api/session` takes it. Split here rather than at the runner because a model id may itself contain a slash
 - Agent skips: the runtime's credential is not among the emitted providers; or the runtime names no model
 
 `digestEngineConfig(built) → {config, env}`, two SHA-256 hex digests:
@@ -135,7 +140,7 @@ BuiltEngineConfig { config, env, providerKeys, agentKeys, prompts,
 - Every piece goes through `framed(v)` = `` `${v.length}:${v}` ``. See item 3 of [Read this first](#read-this-first-if-you-are-working-next-to-the-engine)
 - Entries are sorted here rather than trusting `buildEngineConfig`'s sort to stay put — this is the input to a restart decision and should not be one refactor away from restarting on map order
 
-`writeEngineConfig(dir, built) → WrittenEngineConfig` — `opencode.json` plus `prompts/<key>.md` for each agent, each through `writeIfDifferent` (read-compare, then `writeFileSync(temp, {mode: 0o600})` + `renameSync`, temp removed on failure), then `pruneStalePrompts`. Logs **counts only**, never the config object. Its `changed` flag is **vestigial**: it *was* the restart decision, before that moved in-memory to the digest comparison in `engineManager`, which now happens before this is ever called. `startEngine` ignores the return value. It is a leftover, not a hook to build on — the question it answers ("do the bytes on disk differ?") is the one that cannot see a rotated key.
+`writeEngineConfig(dir, built) → WrittenEngineConfig` — `opencode.json` plus `prompts/<key>.md` for each agent (**the engine no longer reads those files** — the prompt is inlined in the config; they remain as the readable copy the user's own assistant opens), each through `writeIfDifferent` (read-compare, then `writeFileSync(temp, {mode: 0o600})` + `renameSync`, temp removed on failure), then `pruneStalePrompts`. Logs **counts only**, never the config object. Its `changed` flag is **vestigial**: it *was* the restart decision, before that moved in-memory to the digest comparison in `engineManager`, which now happens before this is ever called. `startEngine` ignores the return value. It is a leftover, not a hook to build on — the question it answers ("do the bytes on disk differ?") is the one that cannot see a rotated key.
 
 `pruneStalePrompts(promptDir, prompts)` — only `<userData>/engine/prompts/`, only `.md` files directly inside it, never a directory; a file it cannot delete is warned about and skipped rather than thrown, because failing the config write over a stale prompt would take the engine down for it.
 
@@ -273,7 +278,8 @@ Against real `opencode` **1.18.27**:
 | `--port` / `--hostname` spellings; `serve` subcommand | Run |
 | `GET /api/health` → exactly `{"healthy":true}` | Requested |
 | Basic auth via `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` | Requested with and without |
-| `OPENCODE_CONFIG` points the engine at our generated file | Run |
+| `OPENCODE_CONFIG` points the v1 config reader at our generated file | Run |
+| `OPENCODE_CONFIG_DIR` points the **v2** reader at it, for every session location | Contract §9.5.3 |
 | Loopback binding | `lsof` |
 | OpenCode's base permission rule is allow-everything | `GET /agent` read back off a running engine |
 | **`--port 0` binds 4096**, not an OS-assigned port | Run |
@@ -289,6 +295,7 @@ What Phase 6 attaches to, and the two rules that come with it:
 
 - `engineManager.ensureRunning(userId)` — **call it before the turn, outside the turn lock.** Calling it after the runner has taken the lock is not unsafe, merely useless: the change is written and then deferred past the very turn that asked for it, landing one turn later
 - `engineManager.agentKey(agentId)` — the OpenCode agent entry to open a session against. Null means "not addressable right now"; do not synthesise one
+- `engineManager.agentModel(agentId)` — the `{providerID, id}` to open it *with*. The engine reads a session's model from the session alone; an agent entry's `model` is not consulted on that path
 - `engineManager.request(path, init)` — the only way to reach the engine. Keeping the base URL and password inside the module is what makes "everything goes through the runner" structural
 - `engineManager.lastSkips()` — why an agent is not addressable
 - **Gate on `enabled` in the runner.** The generated config ignores it, so a disabled folder agent has a config entry and a live `agentKey`. Nothing below the runner will refuse the turn

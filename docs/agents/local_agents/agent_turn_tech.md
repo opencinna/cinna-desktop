@@ -38,7 +38,7 @@ Emission side: `turnStream.ts:437` writes `PERMISSION_TOOL_NAME` into `cinna.too
 ### Main process — `src/main/services/agentTurn/`
 - `runner.ts` — the seam. `AgentTurnRunner` (`:33`), `isFolderAgent()` (`:45`). No IO, no imports beyond two types
 - `index.ts` — production wiring and the one resolver. `engineEventBus` (`:35`), the engine-stopped hook (`:52`), `a2aTurnRunner` (`:63`), `localDeps` (`:80`), `localAgentTurnRunner` (`:146`), `resolveTurnRunner()` (`:156`). **The only place `engineManager`, `localAgentService`, `desktopStateService`, `turnLock` and `a2aSessionRepo` are named together**, which is what keeps the test files free of them
-- `localAgentTurnRunner.ts` — the turn lifecycle. `TURN_CEILING_MS` (`:68`, 20 min), `LocalTurnDeps` (`:71`), `LocalAgentTurnRunner` (`:113`)
+- `localAgentTurnRunner.ts` — the turn lifecycle. `TURN_CEILING_MS` (20 min), `ENGINE_READY_MS` (60 s), `LocalTurnDeps`, `LocalAgentTurnRunner`
 - `engineEventBus.ts` — the one global SSE subscription. `RECONNECT_DELAYS_MS` (`:53`), `EngineStreamTransport` (`:62`), `SessionEventListener` (`:66`), `EngineEventBus` (`:99`)
 - `engineEvents.ts` — the event vocabulary. `EngineEventDurable` (`:59`), `EngineEvent` (`:73`, open `type: string`), `ENGINE_EVENT` (`:82`), `eventSessionId()` (`:108`), `parseEngineEvent()` (`:114`)
 - `turnStream.ts` — per-turn demultiplexing and the A2A-shaped fold. `PendingRequest` (`:56`), `TurnStreamUpdate` (`:63`), `engineErrorMessage()` (`:90`), `isTurnOver()` (`:138`), `TurnStream` (`:149`), `mapQuestions()` (`:497`), `permissionDecisionText()` (`:541`), `questionDecisionText()` (`:563`), `renderToolOutput()` (`:586`), `PART_METADATA_KEYS` (`:614`)
@@ -50,7 +50,7 @@ Emission side: `turnStream.ts:437` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `src/main/ipc/agent_a2a.ipc.ts:304` — `agent:answer-request`; `:350` — `agent:pending-requests`
 - `src/main/services/a2aStreamingService.ts` — **body unchanged.** `StreamToAgentInput.runner` (`:64`), `RunAgentTurnInput` (`:98`, with `endpointUrl`/`cardUrl` widened to optional at `:113-114`), `RunAgentTurnResult` (`:142`), `A2ARunAgentTurnInput` (`:174`, the re-narrowing), `runAgentTurn()` (`:190`), `streamToAgent()` (`:415`) calling `runner.runTurn` at `:437`, and the `catch` at `:500` that no longer trusts a runner to keep its own contract
 - `src/main/services/a2aAsMcpProvider.ts:134` — the second call site of `resolveTurnRunner`; `:171` — `runner.runTurn`. A folder agent works as an orchestrated tool with no change of its own
-- `src/main/engine/engineManager.ts` — `ensureRunning`, `agentKey`, `lastSkips`, `request`, `onStateChange`. See [engine_tech.md](engine_tech.md)
+- `src/main/engine/engineManager.ts` — `ensureRunning`, `agentKey`, `agentModel`, `lastSkips`, `request`, `onStateChange`. See [engine_tech.md](engine_tech.md)
 - `src/main/engine/engineConfigSource.ts:130` — `collectEngineAgents`, which does **not** filter on `enabled`
 - `src/main/services/localAgents/turnLock.ts:98` — `withLock()`; `:117` — `anyHeld()`, the engine-level predicate; `:58` — `isLocked()`, which is **not** the one that gates a restart
 - `src/main/services/localAgents/desktopStateService.ts` — the durable per-folder session copy
@@ -112,7 +112,7 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 | `engineEventBus` (`:35`) | The one bus, constructed over `engineManager.request('/api/event', {Accept: 'text/event-stream'})`. Costs nothing at module load — it connects on the first subscriber |
 | `engineManager.onStateChange` (`:52`) | Any non-`running` status calls `engineEventBus.shutdown()`. This is what turns "the engine stopped" into turn errors instead of hangs |
 | `a2aTurnRunner` (`:63`) | `runAgentTurn` behind the shared shape. **The single place that narrows** `endpointUrl`/`cardUrl` back to required; a missing one is returned as a turn error, not thrown |
-| `localDeps` (`:80`) | Every injection point: `ensureEngineRunning`, `agentKey`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:100-108`), `readSession`, `saveSession` (both stores, `:112-141`), `withLock`, `userId` |
+| `localDeps` (`:80`) | Every injection point: `ensureEngineRunning`, `agentKey`, `agentModel`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:100-108`), `readSession`, `saveSession` (both stores, `:112-141`), `withLock`, `userId` |
 | `resolveTurnRunner(agent)` (`:156`) | The one dispatch point, used by the IPC handler and `A2AAsMcpProvider` |
 
 ### `src/main/services/agentTurn/localAgentTurnRunner.ts`
@@ -124,13 +124,15 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 3. `readiness === 'invalid' | 'contract_too_new'` (`:128`)
 4. `ensureEngineRunning` (`:136`) — **before the lock**, because a reconcile that restarts here ends no turn
 5. `agentKey` (`:141`) — null covers all three ways an agent is unaddressable; `skipReason` is the only one of them that can say what to fix
+5b. `agentModel` — the `{providerID, id}` the session is opened with. Null is tolerated and means "as before": the engine picks its own default
 6. `withLock(agentId, 'turn', …)` (`:152`), wrapped in a `catch` (`:155-167`) because `turnLock.acquire` **throws and never queues**
 
 `stream` (`:170`) — the lifecycle:
 
 | Step | Line | Notes |
 |---|---|---|
-| `openSession` | `:184`, impl `:483` | Verify a remembered id with `GET /api/session/{id}`; on hit, re-point it with `POST …/agent` (best-effort) so a conversation survives an agent-key move; on miss, `POST /api/session {agent, location:{directory}}` and require a `ses`-prefixed id |
+| `awaitEngineReady` | impl below `heal` | `GET /api/agent` must list the agent key and `GET /api/model` must list the model, polled at 1 s up to `ENGINE_READY_MS`. A probe that cannot be read (non-OK, unparseable, thrown) returns "ready" and the turn proceeds — a diagnostic must not refuse a turn on its own trouble |
+| `openSession` | impl after `readList` | Verify a remembered id with `GET /api/session/{id}`; on hit, re-point it with `POST …/agent` **and `POST …/model`** (both best-effort) so a conversation survives an agent-key or runtime move; on miss, `POST /api/session {agent, model?, location:{directory}}` and require a `ses`-prefixed id |
 | Build `TurnStream` + `StreamPartsAccumulator` | `:190-199` | `deltaPort.postMessage` forwards to `input.onEvent?.()` — direct chat sends it to the MessagePort, orchestrated mode wraps it, a buffered turn passes no sink |
 | `settle` / `finished` | `:201-209` | Idempotent: first outcome wins |
 | Turn ceiling | `:225-236` | `TURN_CEILING_MS`, `unref`'d. The backstop for doors not yet found |
@@ -248,11 +250,16 @@ runTurn(input)
  ├ getAgent → enabled → readiness            [no engine contact yet]
  ├ ensureEngineRunning(userId)               [BEFORE the lock]
  ├ agentKey(agentId) ?? skipReason
+ ├ agentModel(agentId)
  └ withLock(agentId, 'turn')
     └ stream()
+       ├ awaitEngineReady → GET /api/agent   (does it know the agent?)
+       │                  → GET /api/model   (does it know the model?)
+       │                    neither is true for ~30-60s after a healthy start
        ├ openSession → GET /api/session/{remembered}       (verify)
        │              → POST /api/session/{id}/agent       (re-point)
-       │              → POST /api/session {agent, location} (or create)
+       │              → POST /api/session/{id}/model       (re-point)
+       │              → POST /api/session {agent, model, location} (or create)
        ├ bus.subscribe(sessionId, listener)
        ├ bus.ready()                                    ← rejects if unopenable
        ├ POST /api/session/{id}/prompt {prompt:{text}}  → admission ack
@@ -275,6 +282,7 @@ runTurn(input)
 | Constant | Where | Value | Why |
 |---|---|---|---|
 | `TURN_CEILING_MS` | `localAgentTurnRunner.ts:68` | 20 min | Not a model timeout — a ceiling on *never settling*. Generous because a ceiling that fires on a working turn is worse than none. Overridable via `LocalTurnDeps.turnCeilingMs` **in tests only** |
+| `ENGINE_READY_MS` | `localAgentTurnRunner.ts` | 60 s | A cold `opencode serve` answers `GET /api/health` **30–60 s** before `GET /api/model` returns anything or a config-defined agent is addressable ([contract](opencode_contract.md) §9.5.6). Both failures in that window are silent: an unresolvable model raises `ModelUnavailableError` **on no event at all**, so the turn ran to `TURN_CEILING_MS`; an unloaded agent runs the turn **with no system prompt**. Overridable via `LocalTurnDeps.engineReadyMs` **in tests only** |
 | `REQUEST_PARK_TIMEOUT_MS` | `src/shared/localAgentRequests.ts:84` | 10 min | Bounds an abandoned dialog. The turn holds its lock while parked and a config change defers while *any* lock is held, so unbounded this turns one open modal into an app-wide stall |
 | `RECONNECT_DELAYS_MS` | `engineEventBus.ts:53` | 250/500/1000/2000/5000 ms | Capped backoff; the counter resets on every successful connection |
 | `POLL_MS` | `useAgentRequests.ts` | 700 ms | Renderer poll while streaming. One synchronous main-process map lookup per tick |
