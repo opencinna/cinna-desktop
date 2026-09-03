@@ -28,16 +28,26 @@ import {
  * Every card names the file it reads, and the three that are editable write
  * straight back to that file through the stamp guard — there is no separate
  * "agent record" behind this page, and no state that survives deleting the
- * folder. What the page cannot do yet it shows disabled rather than hiding:
- * chatting with a folder agent, running a command and choosing a runtime all
- * arrive with the local engine, and the shape of the finished page should be
- * legible before then.
+ * folder. Choosing a runtime still arrives later; it is shown disabled
+ * rather than hidden so the shape of the finished page is legible before
+ * then.
+ *
+ * **Start chat was a Phase 6 leftover, not new work.** The runner shipped in
+ * Phase 6 ("chat with a folder agent through the local engine") fully able
+ * to serve a turn — this button was simply never flipped on, and nothing in
+ * the renderer had a way to reach a chat bound to a folder agent at all. It
+ * uses the exact mechanism the remote-agent status overlay already uses
+ * (`AgentStatusOverlay`'s own "Start chat": `setActiveView('chat')` +
+ * `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`), not a
+ * new one — this button was the one piece of that path missing a caller.
  */
 export function LocalAgentPage(): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const pendingDraftAgentId = useUIStore((s) => s.pendingDraftAgentId)
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
+  const setActiveView = useUIStore((s) => s.setActiveView)
+  const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const draft = useDraftLocalAgent()
   const rescan = useRescanLocalAgents()
@@ -163,11 +173,14 @@ export function LocalAgentPage(): React.JSX.Element {
               </button>
               <button
                 type="button"
-                disabled
-                title="Chatting with a folder agent arrives with the local engine"
+                onClick={() => {
+                  setActiveView('chat')
+                  setPendingAgentId(agent.id)
+                }}
+                title={`Start a new chat with ${agent.name}`}
                 className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5
                   text-xs font-medium text-[var(--color-on-accent)]
-                  disabled:cursor-not-allowed disabled:opacity-40"
+                  hover:bg-[var(--color-accent-hover)] transition-colors"
               >
                 <MessageSquare size={12} />
                 Start chat
