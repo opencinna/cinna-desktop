@@ -8,5 +8,10 @@
     <true/>
     <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
+    <!-- Required to drive Terminal/iTerm via osascript for "Open in…" on a
+         local agent folder. Without it a hardened-runtime build is refused by
+         TCC with error -1743 instead of prompting the user. -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
   </dict>
 </plist>
