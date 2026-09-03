@@ -22,6 +22,9 @@ import type {
 } from '../../shared/agentMetadata'
 import { extractCliCommands, type CliCommand } from '../../shared/cliCommands'
 import { FOLDER_AGENT_ID_PREFIX } from '../../shared/localAgents'
+import { getLayoutView } from '../kit/contractStore'
+import { readCommandCatalog } from '../kit/validator'
+import { localAgentService } from './localAgents/localAgentService'
 
 const logger = createLogger('agents')
 
@@ -473,14 +476,53 @@ export const agentService = {
   },
 
   /**
+   * The composer's `/` popup and the agent page's Commands card, for a folder
+   * agent: `docs/CLI_COMMANDS.yaml`, read fresh (no cache — the file is on
+   * disk and can change under an open chat the same way any other kit file
+   * can) and mapped into the same {@link CliCommand} shape the remote-agent
+   * branch below returns, so neither `useCliCommands` nor `CliCommandPopup`
+   * needs to know which kind of agent it is looking at. `command` is always
+   * `/run:<name>` — the exact reference grammar `commandService.matchRunCommand`
+   * (main-side) and `validateAgentFolder` (`status_refresh_command`) both
+   * check against, so an entry this returns is always runnable.
+   *
+   * Never throws: a locate failure (folder moved, root gone) or an unreadable
+   * catalog is exactly the state `readCommandCatalog` itself already treats
+   * as "nothing to show" rather than an error — this is a low-stakes fetch
+   * backing a popup, not a page that should show a fault for it.
+   */
+  listFolderCliCommands(userId: string, agentId: string): CliCommand[] {
+    try {
+      const { root, agentDir } = localAgentService.locate(userId, agentId)
+      const layout = getLayoutView(root.path)
+      const catalog = readCommandCatalog(agentDir, layout.layout.agent.command_catalog)
+      return catalog.commands.map((command) => ({
+        slug: command.name,
+        name: command.name,
+        description: command.description,
+        command: `/run:${command.name}`
+      }))
+    } catch (err) {
+      logger.warn('folder agent CLI commands could not be read', { agentId, error: String(err) })
+      return []
+    }
+  },
+
+  /**
    * Fetch the agent card fresh and extract CLI command skills
    * (`cinna.run.*` / `tags: ["cinna-run"]`). Returns [] for non-A2A agents or
    * agents without a card URL. Does not persist — the card cache is driven by
    * `testAgent`.
+   *
+   * A folder agent is dispatched to {@link listFolderCliCommands} — its own
+   * branch, not folded in here, because it reads a file rather than making a
+   * network call and has nothing in common with the reauth/fetch machinery
+   * below.
    */
   async listCliCommands(userId: string, agentId: string): Promise<CliCommand[]> {
     const agent = agentRepo.getOwned(userId, agentId)
     if (!agent) throw new AgentError('not_found', 'Agent not found')
+    if (agent.source === 'folder') return this.listFolderCliCommands(userId, agentId)
     if (agent.protocol !== 'a2a' || !agent.cardUrl) return []
     const accessToken = await this.resolveAccessToken(userId, agent)
     const started = Date.now()

@@ -9,6 +9,7 @@ import { a2aStreamingService } from '../services/a2aStreamingService'
 import { resolveTurnRunner } from '../services/agentTurn'
 import { isFolderAgent } from '../services/agentTurn/runner'
 import { pendingRequests } from '../services/agentTurn/pendingRequests'
+import { resolveCommandRunner } from '../services/localAgents/commandService'
 import type { PermissionReply } from '../../shared/localAgentRequests'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -246,6 +247,15 @@ export function registerA2AHandlers(): void {
         attachments
       })
 
+      // `/run:<name>` for a folder agent is intercepted **here**, before the
+      // runner is ever reached — OpenCode has no such convention, so the
+      // desktop itself has to recognise the message. Deliberately not inside
+      // `resolveTurnRunner`/`LocalAgentTurnRunner`: those are the seam Phase
+      // 6's mutation audit hardened, and a command is not a model turn. See
+      // `resolveCommandRunner`'s own docstring for why the decision lives
+      // there, tested, rather than inline here.
+      const effectiveRunner = resolveCommandRunner(isFolder, wireContent, agentOwnerId, agentId, runner)
+
       let accessToken: string | undefined
       try {
         if (!isFolder) accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
@@ -263,7 +273,7 @@ export function registerA2AHandlers(): void {
       }
 
       await a2aStreamingService.streamToAgent({
-        runner,
+        runner: effectiveRunner,
         chatId,
         agentId,
         agentName: agent.name,
