@@ -35,10 +35,43 @@
  * racing a config change. One in-flight promise serves every caller; the second
  * caller never spawns a second engine.
  *
- * **The app quitting mid-start.** `stop()` sets a flag that the start path
- * checks at each step and honours by killing whatever it just created. A
- * download in flight is not interrupted — it is up to 50 MB and interrupting it
- * saves nothing — but the process it would have spawned is never spawned.
+ * **The app quitting mid-start.** A start carries the {@link stopEpoch} it
+ * began under and checks it at each step, honouring a bump by killing whatever
+ * it just created. A download in flight is not interrupted — it is up to 50 MB
+ * and interrupting it saves nothing — but the process it would have spawned is
+ * never spawned.
+ *
+ * ## Facts about the process, not beliefs about it
+ *
+ * The one structural rule here, and the one four separate bugs came from
+ * breaking. Anything this module needs to know about *the engine that is
+ * running* is recorded on {@link RunningEngine} and dies with the process:
+ * {@link RunningEngine.loaded} is what that `opencode serve` actually read at
+ * spawn — a digest of its config and prompt files, a digest of its credential
+ * environment, and the key maps it was built from.
+ *
+ * So "does the engine need restarting" is a comparison against a fact, not a
+ * flag somebody remembered to set. A stored "a restart is owed" boolean is
+ * wrong twice over: nothing reconciles it against reality, so a restart from
+ * Settings can pay the debt without clearing it and buy one more restart of a
+ * healthy engine; and it is set from a comparison of config *bytes*, which
+ * cannot see a rotated API key, because a key is never in those bytes
+ * (Invariant 4). Equally, "the last config we generated" is not "the config the
+ * engine is running" — a change deferred past a streaming turn is precisely a
+ * generation the engine never loaded — so {@link engineManager.agentKey} and
+ * {@link engineManager.lastSkips} answer from the loaded record and are silent
+ * about anything else.
+ *
+ * The same rule settles the deferral. Because the comparison is in memory, a
+ * change that is going to be deferred can be discovered *before* anything is
+ * written — so a deferred change writes **nothing at all**: no config, no
+ * prompt files, no prune of a departed agent's prompt. That matters beyond
+ * tidiness. `writeEngineConfig` deletes the generated prompt file of an agent
+ * that is no longer in the set, and whether OpenCode resolves
+ * `{file:./prompts/<key>.md}` at config load or per request decides whether
+ * deleting one underneath a live turn changes what that agent *is* mid-reply.
+ * Not writing makes the question moot; the restart regenerates everything from
+ * scratch, which it already did.
  *
  * ## The engine's environment, and why it is narrow
  *
@@ -79,7 +112,14 @@ import {
   resolveEngineBinaryWith,
   type ResolvedEngineBinary
 } from './binaryResolver'
-import { buildEngineConfig, writeEngineConfig, type WrittenEngineConfig } from './configGenerator'
+import {
+  buildEngineConfig,
+  digestEngineConfig,
+  writeEngineConfig,
+  type BuiltEngineConfig,
+  type EngineConfigDigest,
+  type SkippedAgent
+} from './configGenerator'
 import { collectEngineConfigInput } from './engineConfigSource'
 import type { EngineSkips, EngineState } from '../../shared/engine'
 
@@ -117,11 +157,28 @@ const STDERR_KEEP = 4_000
  */
 const ENGINE_USERNAME = 'opencode'
 
+/**
+ * What one engine process read at spawn.
+ *
+ * Recorded on the process rather than in a module variable so it cannot outlive
+ * the thing it describes: when the process dies this goes with it, and there is
+ * no window in which a stale record claims to describe a running engine.
+ */
+interface LoadedConfig {
+  digest: EngineConfigDigest
+  /** Our agent id → the OpenCode agent key **this process** knows. */
+  agentKeys: Map<string, string>
+  /** What **this process's** config left out, and why. */
+  skippedAgents: SkippedAgent[]
+}
+
 interface RunningEngine {
   child: ChildProcess
   baseUrl: string
   authHeader: string
   port: number
+  /** The config and credentials this process actually loaded. */
+  loaded: LoadedConfig
 }
 
 let state: EngineState = {
@@ -136,8 +193,22 @@ let state: EngineState = {
 
 let running: RunningEngine | null = null
 let startInFlight: Promise<EngineState> | null = null
-let stopRequested = false
-let lastConfig: WrittenEngineConfig | null = null
+/**
+ * How many times a stop has been *asked for*, ever.
+ *
+ * A counter rather than a boolean because a restart is a stop followed by a
+ * start issued by this module itself, and a boolean cannot tell that stop from
+ * the user's. It could not: `ensureRunning` cleared the flag unconditionally on
+ * its way into a start, so a Stop pressed — or a `will-quit` fired — while a
+ * reconcile was restarting got erased by the restart it was meant to cancel,
+ * and the engine came back up under a user who had just turned it off. During a
+ * quit that is an `opencode serve` left running with no window to stop it from.
+ *
+ * A start captures this value when it begins and treats any later value as
+ * "somebody asked for a stop after I started"; an internal restart uses
+ * {@link halt}, which stops without asking, so it cannot cancel itself.
+ */
+let stopEpoch = 0
 /** Cached across starts: resolving the binary can mean a 50 MB download. */
 let binary: ResolvedEngineBinary | null = null
 /**
@@ -149,24 +220,18 @@ let binary: ResolvedEngineBinary | null = null
  */
 let binaryResolvedFor: string | null = null
 /**
- * A config change that has been written but not yet loaded, because applying it
- * would have restarted the engine underneath a streaming turn.
- *
- * See {@link engineManager.applyConfigChange} for why deferring is the only
- * correct answer, and {@link engineManager.ensureRunning} for where the debt is
- * paid off.
- */
-let configRestartDeferred = false
-/**
  * The reconcile {@link engineManager.ensureRunning} runs when the engine is
  * already up, shared between concurrent callers.
  *
- * Two chats opening at once would otherwise each regenerate, and the second
- * would compare against bytes the first had already written — reporting no
- * change while the first was still stopping, and handing back a state that
- * says stopped for an engine that is coming back up.
+ * Two chats opening at once would otherwise each restart, and the second would
+ * hand back a state that says stopped for an engine that is coming back up.
  */
 let reconcileInFlight: Promise<EngineState> | null = null
+
+/** True once somebody asked for a stop after the given epoch was captured. */
+function cancelled(epoch: number): boolean {
+  return stopEpoch !== epoch
+}
 
 const listeners = new Set<(next: EngineState) => void>()
 
@@ -269,11 +334,11 @@ async function healthy(engine: RunningEngine): Promise<boolean> {
  * process that exited in the first 200 ms — which is exactly what a bad config
  * or a taken port looks like.
  */
-async function waitForHealth(engine: RunningEngine): Promise<boolean> {
+async function waitForHealth(engine: RunningEngine, epoch: number): Promise<boolean> {
   const deadline = Date.now() + ENGINE_TIMEOUTS.healthMs
   while (Date.now() < deadline) {
     if (engine.child.exitCode !== null || engine.child.signalCode !== null) return false
-    if (stopRequested) return false
+    if (cancelled(epoch)) return false
     if (await healthy(engine)) return true
     await new Promise((resolve) => setTimeout(resolve, ENGINE_TIMEOUTS.pollMs))
   }
@@ -298,15 +363,23 @@ function killEngine(engine: RunningEngine): void {
   }, ENGINE_TIMEOUTS.stopGraceMs).unref?.()
 }
 
-/** One spawn attempt. Resolves to a healthy engine, or null. */
+/**
+ * One spawn attempt. Resolves to a healthy engine, or null.
+ *
+ * Takes the whole built config rather than just its environment, because the
+ * process that comes back has to carry a record of what it loaded — and the
+ * only honest moment to take that record is the moment the bytes are handed
+ * over.
+ */
 async function spawnAttempt(
   binaryPath: string,
   configPath: string,
-  credentials: Record<string, string>
+  built: BuiltEngineConfig,
+  epoch: number
 ): Promise<RunningEngine | null> {
   const port = await pickLoopbackPort()
   const password = randomBytes(32).toString('hex')
-  const env = await engineEnv(configPath, password, credentials)
+  const env = await engineEnv(configPath, password, built.env)
   const root = engineRootDir()
   mkdirSync(root, { recursive: true })
 
@@ -332,7 +405,12 @@ async function spawnAttempt(
     child,
     port,
     baseUrl: `http://127.0.0.1:${port}`,
-    authHeader: `Basic ${Buffer.from(`${ENGINE_USERNAME}:${password}`).toString('base64')}`
+    authHeader: `Basic ${Buffer.from(`${ENGINE_USERNAME}:${password}`).toString('base64')}`,
+    loaded: {
+      digest: digestEngineConfig(built),
+      agentKeys: built.agentKeys,
+      skippedAgents: built.skippedAgents
+    }
   }
 
   let stderr = ''
@@ -362,7 +440,7 @@ async function spawnAttempt(
     })
   })
 
-  if (await waitForHealth(engine)) return engine
+  if (await waitForHealth(engine, epoch)) return engine
 
   logger.warn('engine did not become healthy', {
     port,
@@ -373,7 +451,7 @@ async function spawnAttempt(
   return null
 }
 
-async function startEngine(userId: string): Promise<EngineState> {
+async function startEngine(userId: string, epoch: number): Promise<EngineState> {
   const configured = configuredBinaryPath()
   if (!binary || binaryResolvedFor !== configured) {
     setState({ status: 'installing', error: null })
@@ -393,19 +471,26 @@ async function startEngine(userId: string): Promise<EngineState> {
     binaryPath: binary.path,
     version: binary.version
   })
-  if (stopRequested) {
+  if (cancelled(epoch)) {
     setState({ status: 'stopped', pid: null, error: null })
     return state
   }
 
   setState({ status: 'starting', error: null })
-  const built = await regenerateConfig(userId, true)
+  // A start is the one place that always generates fresh — models refreshed,
+  // config and prompt files written, stale prompts pruned. That is what makes
+  // the deferral above able to write nothing: whatever a deferred change would
+  // have put on disk, the restart that loads it puts there anyway.
+  const built = buildEngineConfig(await collectEngineConfigInput(userId, { refreshModels: true }))
+  const root = engineRootDir()
+  mkdirSync(root, { recursive: true })
+  const written = writeEngineConfig(root, built)
 
   for (let attempt = 0; attempt < START_ATTEMPTS; attempt += 1) {
-    if (stopRequested) break
-    const engine = await spawnAttempt(binary.path, built.configPath, built.env)
+    if (cancelled(epoch)) break
+    const engine = await spawnAttempt(binary.path, written.configPath, built, epoch)
     if (engine) {
-      if (stopRequested) {
+      if (cancelled(epoch)) {
         killEngine(engine)
         break
       }
@@ -415,7 +500,7 @@ async function startEngine(userId: string): Promise<EngineState> {
     }
   }
 
-  if (stopRequested) {
+  if (cancelled(epoch)) {
     setState({ status: 'stopped', pid: null, error: null })
     return state
   }
@@ -428,22 +513,44 @@ async function startEngine(userId: string): Promise<EngineState> {
 }
 
 /**
- * Rebuild and write the config. Returns what was written, changed or not.
+ * Which half of what the engine loaded has moved, in a form safe to log.
  *
- * `refreshModels` is false on the reconcile path — see
- * `collectEngineConfigInput` for why a per-turn model refresh would put a
- * provider API call in front of every message.
+ * Null when neither has. Never the digests themselves: the credential digest is
+ * taken over live API keys, and this module's rule is that key material has no
+ * safe representation in a log, digested or not.
  */
-async function regenerateConfig(
-  userId: string,
-  refreshModels: boolean
-): Promise<WrittenEngineConfig> {
-  const root = engineRootDir()
-  mkdirSync(root, { recursive: true })
-  const built = buildEngineConfig(await collectEngineConfigInput(userId, { refreshModels }))
-  const written = writeEngineConfig(root, built)
-  lastConfig = written
-  return written
+function whatMoved(loaded: EngineConfigDigest, desired: EngineConfigDigest): string | null {
+  const config = loaded.config !== desired.config
+  const credentials = loaded.env !== desired.env
+  if (config && credentials) return 'config and credentials'
+  if (config) return 'config'
+  if (credentials) return 'credentials'
+  return null
+}
+
+/**
+ * Take the engine down, **without** asking for a stop.
+ *
+ * The body of {@link engineManager.stop} minus the epoch bump, so a restart
+ * this module issues itself cannot look like a user's Stop to the start that
+ * follows it — and, symmetrically, cannot hide a user's Stop that lands while
+ * it runs.
+ */
+async function halt(): Promise<void> {
+  const pending = startInFlight
+  if (pending) {
+    // A start in flight will see the epoch move and clean up after itself, but
+    // only once it reaches its next checkpoint — so wait for it rather than
+    // returning while a process is still being spawned behind us.
+    await pending.catch(() => undefined)
+  }
+  const engine = running
+  running = null
+  if (engine) {
+    logger.info('stopping the engine', { pid: engine.child.pid })
+    killEngine(engine)
+  }
+  setState({ status: 'stopped', pid: null, error: null })
 }
 
 export const engineManager = {
@@ -467,26 +574,6 @@ export const engineManager = {
    */
   async ensureRunning(userId: string): Promise<EngineState> {
     if (running && state.status === 'running') {
-      // A config change deferred earlier is applied **here**, at the moment of
-      // use, rather than by whoever changed the credential. That is what keeps
-      // this correct without enumerating call sites: there are at least five
-      // ways to invalidate a generated config — a credential added or deleted,
-      // an account-config sync that materialises managed providers with no IPC
-      // call at all, a managed chat mode's model, the default chat mode the
-      // Default runtime falls back to, and a per-agent runtime write — and a
-      // sixth added later would silently defeat a list of hooks.
-      if (configRestartDeferred && !turnLock.anyHeld()) {
-        configRestartDeferred = false
-        logger.info('applying a config change that was deferred past a streaming turn')
-        // Restart **directly**, not by way of `applyConfigChange`. The deferred
-        // change already wrote its bytes to disk, so a second regeneration
-        // finds them identical and reports `changed: false` — routing through
-        // it here would clear the debt without ever loading the new config,
-        // and the engine would keep serving the old one until something else
-        // happened to change it again.
-        await this.stop()
-        return this.ensureRunning(userId)
-      }
       // **Reconcile, rather than return early.** This is the choke point: at
       // least five things invalidate a generated config — a credential added
       // or deleted, an account-config sync materialising managed providers on
@@ -496,6 +583,13 @@ export const engineManager = {
       // input silently defeats. Deriving from current state at the moment the
       // engine is about to be used is correct for inputs nobody has thought of
       // yet, including the ones with nowhere to put a hook.
+      //
+      // A change deferred past an earlier streaming turn needs no separate
+      // branch here, and used to have one. It is the same question — does what
+      // this process loaded still match what we would generate — asked of the
+      // running process rather than of a flag, so it answers itself for as long
+      // as the answer stays true, and stops answering the moment a restart
+      // makes it false, whoever caused that restart.
       if (reconcileInFlight) return reconcileInFlight
       const reconcile = this.applyConfigChange(userId).finally(() => {
         if (reconcileInFlight === reconcile) reconcileInFlight = null
@@ -505,16 +599,16 @@ export const engineManager = {
     }
     if (startInFlight) return startInFlight
 
-    // Cleared **here**, synchronously, not inside `startEngine`. `startEngine`
-    // runs a microtask later, so clearing it there would let a `stop()` issued
-    // in between be erased by the start it was meant to cancel — the app
-    // quitting mid-start, which is precisely the case the flag exists for.
-    stopRequested = false
+    // Captured **here**, synchronously, not inside `startEngine`. `startEngine`
+    // runs a microtask later, so reading the epoch there would let a `stop()`
+    // issued in between look like it had happened before this start — the app
+    // quitting mid-start, which is precisely the case the epoch exists for.
+    const epoch = stopEpoch
     // Deferred through a resolved promise for the reason `getShellEnv` does it:
     // a synchronous throw in the body would run `finally` before `startInFlight`
     // was ever assigned, leaving a stale in-flight promise behind.
     const run = Promise.resolve()
-      .then(() => startEngine(userId))
+      .then(() => startEngine(userId, epoch))
       .catch((err) => {
         logger.error('engine start failed', { error: String(err) })
         setState({
@@ -533,21 +627,37 @@ export const engineManager = {
   },
 
   /**
-   * Regenerate the config and restart the engine **only if it changed**.
+   * Rebuild the config and restart the engine **only if the running one is out
+   * of date**.
    *
    * Called whenever something the config is derived from moves: a credential
-   * added or removed, a runtime chosen, a folder rescanned. The no-change case
-   * has to be cheap, because a rescan fires on every file the user's assistant
-   * saves — restarting the engine on each one would kill a live conversation to
-   * apply a config identical to the one already loaded.
+   * added, removed or rotated, a runtime chosen, a folder rescanned. The
+   * no-change case has to be cheap, because a rescan fires on every file the
+   * user's assistant saves — restarting the engine on each one would kill a live
+   * conversation to apply a config identical to the one already loaded.
+   *
+   * **Out of date is decided against the running process, not against the
+   * disk.** Two things follow, and both were bugs before they were properties.
+   * A rotated API key never touches the config file — it is an `{env:…}`
+   * reference there and a value in the process environment (Invariant 4) — so a
+   * comparison of bytes on disk reports "unchanged" for the one change that
+   * makes every turn fail to authenticate; the credential digest is what sees
+   * it. And because the comparison needs no write to happen first, a change
+   * that is going to be deferred is discovered before anything is written.
    *
    * **A changed config does not restart a busy engine.** One `opencode serve`
    * serves every folder agent, so a restart ends every conversation in flight,
    * not only the one whose folder changed — Invariant 3, at the coarsest
-   * granularity it has. When any turn holds a lock the new config is written to
-   * disk and the restart is deferred; {@link ensureRunning} applies it at the
-   * next turn boundary, when ending the previous turn costs nothing because it
-   * has already ended.
+   * granularity it has. When any turn holds a lock, this returns having done
+   * nothing at all: nothing written, nothing pruned, no state moved. There is no
+   * debt to record, because the next {@link ensureRunning} asks the same
+   * question of the same running process and gets the same answer for as long
+   * as it stays true.
+   *
+   * **It never starts an engine.** Starting is an explicit act — Settings, or a
+   * turn (see `engine.ipc.ts`). A manifest save fires this on every field edit,
+   * and a failed start clears the binary cache, so restarting from here would
+   * re-run binary resolution — up to a 46 MB download — once per edit.
    *
    * This is also why there is no enumerated list of "things that call me". The
    * account-config sync can materialise a managed provider on a timer with no
@@ -556,65 +666,79 @@ export const engineManager = {
    * turn (which is `ensureRunning`).
    */
   async applyConfigChange(userId: string): Promise<EngineState> {
-    if (state.status === 'stopped' && !running) {
-      // Nothing is loaded, so there is nothing to reconcile; the next start
-      // will generate a fresh config anyway.
-      return state
-    }
-    let written: WrittenEngineConfig
+    // Captured before the first await, so a Stop — or a `will-quit` — arriving
+    // anywhere in what follows is still visible at the moment this decides to
+    // restart.
+    const epoch = stopEpoch
+    if (!running || state.status !== 'running') return state
+    let built: BuiltEngineConfig
     try {
-      written = await regenerateConfig(userId, false)
+      built = buildEngineConfig(await collectEngineConfigInput(userId, { refreshModels: false }))
     } catch (err) {
-      logger.error('could not regenerate the engine config', { error: String(err) })
+      logger.error('could not rebuild the engine config', { error: String(err) })
       return state
     }
-    if (!written.changed) return state
+    // Re-read after the await: the engine may have been stopped, or have died,
+    // while the config was being collected.
+    const engine = running
+    if (!engine || state.status !== 'running') return state
+
+    const moved = whatMoved(engine.loaded.digest, digestEngineConfig(built))
+    if (!moved) return state
     if (turnLock.anyHeld()) {
-      // Written to disk, not loaded. The next turn picks it up; ending someone
-      // else's streaming reply to load it now would be the worse trade.
-      configRestartDeferred = true
-      logger.info('engine config changed while a turn is streaming; deferring the restart')
+      logger.info('the engine config changed while a turn is streaming; deferring', { moved })
       return state
     }
-    configRestartDeferred = false
-    logger.info('engine config changed, restarting')
-    await this.stop()
+    logger.info('the engine config changed, restarting', { moved })
+    // `halt`, not `stop`: this is our own restart, and asking for a stop here
+    // would leave the start that follows unable to tell it from the user's.
+    await halt()
+    if (cancelled(epoch)) return state
     return this.ensureRunning(userId)
   },
 
-  /** Stop the engine. Safe to call when it is not running, or mid-start. */
+  /**
+   * Stop the engine, on somebody's explicit say-so. Safe to call when it is not
+   * running, or mid-start.
+   *
+   * The epoch bump is the "somebody asked" part, and it is what an internal
+   * restart deliberately does not do — see {@link halt}.
+   */
   async stop(): Promise<void> {
-    stopRequested = true
-    const pending = startInFlight
-    if (pending) {
-      // A start in flight will see `stopRequested` and clean up after itself,
-      // but only once it reaches its next checkpoint — so wait for it rather
-      // than returning while a process is still being spawned behind us.
-      await pending.catch(() => undefined)
-    }
-    const engine = running
-    running = null
-    if (engine) {
-      logger.info('stopping the engine', { pid: engine.child.pid })
-      killEngine(engine)
-    }
-    setState({ status: 'stopped', pid: null, error: null })
+    stopEpoch += 1
+    await halt()
   },
 
   /**
-   * Which OpenCode agent key a folder agent became in the current config.
+   * Which OpenCode agent key a folder agent became **in the config the running
+   * engine loaded**.
    *
-   * Phase 6 needs this to open a session against the right agent entry; it is
-   * null when the agent was skipped, which is the same thing as "this agent
-   * cannot run right now".
+   * Phase 6 opens a session against this key, so it has to name an entry the
+   * engine actually has. Null means "this agent cannot be addressed right now",
+   * which covers all three ways that happens: the engine is not running, the
+   * generation that produced it skipped the agent, or the agent was added or
+   * fixed after this process started and the restart that would load it is
+   * still waiting on a streaming turn. Answering from the last config
+   * *generated* instead would hand back a real-looking key for an entry the
+   * engine has never heard of.
    */
   agentKey(agentId: string): string | null {
-    return lastConfig?.agentKeys.get(agentId) ?? null
+    return running?.loaded.agentKeys.get(agentId) ?? null
   },
 
-  /** What the last generation refused to include, for the Runtime card's reason line. */
+  /**
+   * What the **running** engine's config left out, for the Runtime card's
+   * reason line.
+   *
+   * The running engine's, not the last generation's — an agent whose credential
+   * was deleted a moment ago is still being served perfectly well until the
+   * restart lands, and a reason line saying it cannot run would be describing a
+   * config nothing has loaded. It follows that this only ever moves when
+   * `running` moves, and every one of those transitions pushes a state change,
+   * which is exactly the signal `useEngine` re-reads this on.
+   */
   lastSkips(): EngineSkips {
-    return { agents: lastConfig?.skippedAgents ?? [] }
+    return { agents: running?.loaded.skippedAgents ?? [] }
   },
 
   /**
@@ -645,7 +769,11 @@ export const engineManager = {
  * from. Signalling inside the handler body is what actually gets it killed.
  */
 function stopEngineNow(): void {
-  stopRequested = true
+  // The epoch, not a flag, and for the reason the epoch exists: a reconcile
+  // that is mid-restart when the quit lands would otherwise resume, start an
+  // engine, and leave an `opencode serve` behind a window that no longer
+  // exists.
+  stopEpoch += 1
   const engine = running
   running = null
   if (!engine) return
@@ -660,4 +788,21 @@ function stopEngineNow(): void {
 /** Stop the engine when the app quits. Registered from the IPC composition root. */
 export function registerEngineShutdown(): void {
   app.on('will-quit', stopEngineNow)
+}
+
+/**
+ * Drop the module state a stop does not clear. **Tests only.**
+ *
+ * Everything about a *running* engine now lives on {@link RunningEngine} and
+ * dies with the process, so a stop leaves nothing behind that could describe
+ * one. The binary cache is the deliberate exception — it exists precisely to
+ * outlive a stop, so a restart does not re-download 46 MB — which makes it the
+ * one thing that leaks from one test into the next, silently: a test that
+ * changes the configured engine path would otherwise keep running the previous
+ * test's binary. Reset it explicitly rather than trusting that no test ever
+ * does.
+ */
+export function resetEngineStateForTests(): void {
+  binary = null
+  binaryResolvedFor = null
 }

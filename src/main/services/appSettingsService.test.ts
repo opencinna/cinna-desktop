@@ -78,4 +78,46 @@ describe('app settings', () => {
     expect(() => appSettingsService.set('nope', true)).toThrow(/Unknown app setting/i)
     expect(() => appSettingsService.set('__proto__', true)).toThrow(/Unknown app setting/i)
   })
+
+  /**
+   * The engine path had no test of its own at all: removing its `isAbsolute`
+   * guard entirely left the whole suite green, because every case above names
+   * `localAgentsHome`, whose check is a different function.
+   *
+   * The rules are deliberately not the agents home's. This is a path to an
+   * *executable*, not a folder this app writes into, so `assertUsableRoot`'s
+   * "inside your home or on a mounted volume" does not apply — `/usr/local/bin`
+   * is a perfectly good place for it and the home's check would refuse it.
+   */
+  it('accepts an absolute engine path outside the agents home rules', () => {
+    appSettingsService.set('localAgentsEnginePath', '/usr/local/bin/opencode')
+    expect(appSettingsService.getAll().localAgentsEnginePath).toBe('/usr/local/bin/opencode')
+  })
+
+  it('refuses a relative engine path, which would resolve against the launch directory', () => {
+    // For a packaged app `process.cwd()` is wherever the OS happened to launch
+    // it from, so a relative path names a different file run to run — or
+    // nothing at all.
+    expect(() => appSettingsService.set('localAgentsEnginePath', 'bin/opencode')).toThrow(
+      /absolute path/i
+    )
+    expect(appSettingsService.getAll().localAgentsEnginePath).toBe('')
+  })
+
+  it('accepts empty, which means "resolve an engine for me"', () => {
+    appSettingsService.set('localAgentsEnginePath', '/usr/local/bin/opencode')
+    appSettingsService.set('localAgentsEnginePath', '')
+    expect(appSettingsService.getAll().localAgentsEnginePath).toBe('')
+  })
+
+  /**
+   * Whether the file exists and runs is `binaryResolver`'s question, not this
+   * one's: a user pasting a path before installing the binary should be able to
+   * save it and hear about the problem from the engine's status line.
+   */
+  it('does not require the engine path to exist', () => {
+    const missing = join(homedir(), 'nothing-is-installed-here', 'opencode')
+    expect(() => appSettingsService.set('localAgentsEnginePath', missing)).not.toThrow()
+    expect(appSettingsService.getAll().localAgentsEnginePath).toBe(missing)
+  })
 })

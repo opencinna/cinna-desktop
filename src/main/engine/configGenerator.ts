@@ -347,6 +347,100 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
 }
 
 /**
+ * A fingerprint of everything one engine process loads, split in two.
+ *
+ * Two digests rather than one because the two halves reach the engine by
+ * different routes and only one of them is safe to name in a log: `config` is
+ * bytes on disk, `env` is live API keys. {@link engineManager} compares them
+ * separately so it can say "credentials moved" without saying which, or what.
+ */
+export interface EngineConfigDigest {
+  /** The generated config bytes **and** every prompt file written beside them. */
+  config: string
+  /** The credential environment — key names and key values. **Never logged.** */
+  env: string
+}
+
+/**
+ * Length-prefix a string so a concatenation cannot be forged.
+ *
+ * A prompt is the user's own `WORKFLOW_PROMPT.md`, so it is arbitrary text that
+ * can contain any delimiter this function might otherwise pick. Prefixing each
+ * piece with its length makes the encoding unambiguous: no rearrangement of
+ * agent keys and prompt bodies can produce the same byte stream as a different
+ * one.
+ *
+ * **This is not ceremony, and the direction of the failure is why.** A
+ * delimiter collision here does not produce a spurious restart — it produces a
+ * *false negative*: two genuinely different configs digesting to the same
+ * value, so {@link engineManager.applyConfigChange} concludes nothing moved and
+ * never restarts. The engine then keeps serving the previous prompt while the
+ * app believes it is serving the new one, and **every test still passes**,
+ * because a false negative is invisible to anything that is not looking for it.
+ * That is the same shape as the two `isIgnoredPath` defects in
+ * `src/main/kit/validator.ts` — both false negatives in a secret check, both
+ * survivors of a green suite.
+ *
+ * The prompt bodies are the one input to this digest that is arbitrary
+ * user-controlled text, which makes them the one place the collision is
+ * reachable rather than theoretical. Length-prefixing costs a few bytes per
+ * entry and removes the class. Do not "simplify" it back to a join.
+ */
+function framed(value: string): string {
+  return `${value.length}:${value}`
+}
+
+/**
+ * What this config *is*, for the "does the running engine still match" check.
+ *
+ * The two halves are the whole point, and they are separate because the change
+ * each one sees is invisible to the other.
+ *
+ * **`config`** covers the serialised config object and the prompt files —
+ * exactly the set {@link writeEngineConfig} puts on disk, because that is the
+ * set the engine reads at load. Serialised the same way it is written, so the
+ * digest moves when and only when the bytes would.
+ *
+ * **`env`** covers {@link BuiltEngineConfig.env} and nothing else: the map of
+ * `CINNA_ENGINE_KEY_…` names to decrypted keys. This is the half that exists
+ * because of Invariant 4 — a key is never written into the config, only an
+ * `{env:…}` reference is, so **rotating a key leaves the config bytes byte for
+ * byte identical**. A change-detector that looked only at the config would
+ * conclude nothing had moved and never restart, leaving the engine serving a
+ * key the user has already replaced: every turn 401s while the UI shows a valid
+ * credential and a healthy engine.
+ *
+ * It digests `built.env` specifically, and not the environment the child is
+ * actually spawned with. That environment (`engineEnv`) carries a fresh
+ * `randomBytes(32)` password per spawn plus the whole login shell, so a digest
+ * of it would differ from the running process's on every single comparison —
+ * and since one `opencode serve` backs every folder agent, that would restart
+ * the engine, and end every streaming turn, on every reconcile. `built.env` is
+ * deterministic by construction: the names come from `credentialEnvName` and
+ * the values are the stored keys.
+ *
+ * Entries are sorted here rather than trusting {@link buildEngineConfig}'s
+ * provider sort to stay put — this is the input to a restart decision, and it
+ * should not be one refactor upstream away from restarting on map order.
+ */
+export function digestEngineConfig(built: BuiltEngineConfig): EngineConfigDigest {
+  const config = createHash('sha256')
+  config.update(framed(`${JSON.stringify(built.config, null, 2)}\n`))
+  for (const [key, text] of [...built.prompts].sort(([a], [b]) => a.localeCompare(b))) {
+    config.update(framed(key))
+    config.update(framed(text))
+  }
+
+  const env = createHash('sha256')
+  for (const [name, value] of Object.entries(built.env).sort(([a], [b]) => a.localeCompare(b))) {
+    env.update(framed(name))
+    env.update(framed(value))
+  }
+
+  return { config: config.digest('hex'), env: env.digest('hex') }
+}
+
+/**
  * The conversation profile with a manifest's `runtime.permissions` merged over
  * it, one permission name at a time.
  *

@@ -34,7 +34,16 @@ export const appSettingsRepo = {
       .get()
     if (!row) return DEFAULTS[key]
     try {
-      return JSON.parse(row.value) as AppSettingsSchema[K]
+      const parsed: unknown = JSON.parse(row.value)
+      // The same type-drift rule {@link appSettingsRepo.getAll} applies, for the
+      // same reason: the store is untyped at rest and the schema mixes types, so
+      // a row whose value drifted from its key's type would otherwise be handed
+      // to a caller that trusts the declared type. `configuredBinaryPath` in
+      // `engineManager` defends itself against a non-string today, but that is
+      // one caller remembering — and the two readers of the same store
+      // disagreeing about what "corrupt" means is the drift worth closing.
+      if (typeof parsed !== typeof DEFAULTS[key]) return DEFAULTS[key]
+      return parsed as AppSettingsSchema[K]
     } catch {
       // Corrupt value — fall back to the default rather than crashing the
       // feature that asked for the setting.

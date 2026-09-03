@@ -10,7 +10,13 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { credentialEnvName, type EngineConfigInput } from './configGenerator'
+import {
+  credentialEnvName,
+  engineAgentKey,
+  type EngineAgentInput,
+  type EngineConfigInput,
+  type EngineProviderInput
+} from './configGenerator'
 
 /**
  * The engine as a **real subprocess**.
@@ -43,8 +49,40 @@ import { credentialEnvName, type EngineConfigInput } from './configGenerator'
  * merely died early. Absence is asserted on artefacts the **parent** writes —
  * the generated `opencode.json` — which is synchronous and cannot race.
  *
- * Every assertion here was mutation-checked, including the ones that had to be
- * rewritten because their first version could not fail.
+ * ## What is *not* pinned here, named rather than implied
+ *
+ * A blanket "everything here was mutation-checked" used to stand at the bottom
+ * of this comment. It was false, and a false claim of coverage is worse than no
+ * claim: it is the thing that stops the next person from checking. Two gaps
+ * found by actually running the mutations, left in place deliberately:
+ *
+ * - **The stop epoch is not pinned by the two tests that read as if it were.**
+ *   Removing the post-`halt()` `cancelled(epoch)` check in `applyConfigChange`
+ *   and the `stopEpoch += 1` in `stopEngineNow` — separately or together —
+ *   leaves this file green. What actually fails "does not undo an explicit
+ *   stop…" and "spawns no engine when the app quits…" is the re-read of
+ *   `running` after the await: `holdGeneration` parks the reconcile *before*
+ *   that re-read, so by the time it resumes the stop has already nulled
+ *   `running` and the epoch is never consulted. The epoch still guards the
+ *   narrower window — a stop landing *during* `await halt()` — which these
+ *   fakes cannot open, because they can only hold config generation.
+ * - **`await pending` in `halt()` is not pinned.** Replacing it with
+ *   `void pending` leaves the entire suite — not just this file — green.
+ *   Observing it needs a start parked *between* its last cancellation
+ *   checkpoint and the `spawn` call, which means a hold inside `getShellEnv`
+ *   rather than inside config generation; and even then the difference shows up
+ *   only as a race on whether the child is killed before `stop()` resolves. A
+ *   test that reached it with the fakes as they stand would be passing on
+ *   timing luck, which is worse than the gap.
+ * - **`resetEngineStateForTests()` is belt-and-braces, not coverage.** Emptying
+ *   its body leaves this file green: every `beforeEach` points
+ *   `settings.enginePath` at a fresh temp dir, so the production
+ *   `binaryResolvedFor !== configured` guard already forces re-resolution. It
+ *   is called anyway, so that a future test which *does* reuse a path does not
+ *   inherit the previous test's binary.
+ *
+ * All three are correct code that happens to be unexercised — not known-broken
+ * behaviour. They are listed so the next person checks rather than assumes.
  */
 
 const logs: { message: string; meta?: unknown }[] = vi.hoisted(() => [])
@@ -62,9 +100,25 @@ const configInput = vi.hoisted(() => ({
   modelRefreshes: 0
 }))
 const paths = vi.hoisted(() => ({ userData: '' }))
+/**
+ * Electron's `app.on` handlers, kept rather than dropped.
+ *
+ * `will-quit` is the only way to reach `stopEngineNow`, and that path is
+ * *synchronous* on purpose — Electron does not await a quit handler. A test
+ * that cannot fire it cannot see what a quit does to work that is already in
+ * flight, which is exactly where an orphan `opencode serve` would be born.
+ */
+const appEvents = vi.hoisted(() => ({ handlers: new Map<string, (() => void)[]>() }))
 
 vi.mock('electron', () => ({
-  app: { getPath: () => paths.userData, on: () => undefined }
+  app: {
+    getPath: () => paths.userData,
+    on: (event: string, handler: () => void) => {
+      const list = appEvents.handlers.get(event) ?? []
+      list.push(handler)
+      appEvents.handlers.set(event, list)
+    }
+  }
 }))
 /**
  * The scoped logger, captured rather than silenced.
@@ -119,7 +173,8 @@ vi.mock('../shell/env', () => ({
   }
 }))
 
-const { ENGINE_TIMEOUTS, engineManager } = await import('./engineManager')
+const { ENGINE_TIMEOUTS, engineManager, registerEngineShutdown, resetEngineStateForTests } =
+  await import('./engineManager')
 // The real lock, not a fake: what is being tested is that the engine consults
 // the same lock a turn actually takes, and a stubbed one would let the engine
 // consult nothing at all and still pass.
@@ -222,30 +277,60 @@ async function until(predicate: () => boolean, timeoutMs = 10_000): Promise<void
   throw new Error('timed out waiting for a condition')
 }
 
-function agentConfig(prompt: string): EngineConfigInput {
+/**
+ * One credential. The key is a parameter because **rotating it changes nothing
+ * on disk** — a key never enters the config file, only the process environment
+ * (Invariant 4) — which is the whole shape of the bug this file now covers.
+ */
+function provider(apiKey = 'sk-ant-THE-SECRET'): EngineProviderInput {
+  return { id: 'p1', type: 'anthropic', name: 'Anthropic', apiKey, baseUrl: null, models: [] }
+}
+
+function agent(agentId: string, prompt: string, providerId = 'p1'): EngineAgentInput {
   return {
-    providers: [
-      {
-        id: 'p1',
-        type: 'anthropic',
-        name: 'Anthropic',
-        apiKey: 'sk-ant-THE-SECRET',
-        baseUrl: null,
-        models: []
-      }
-    ],
-    agents: [
-      {
-        agentId: 'folder:aaa',
-        slug: 'demo',
-        description: 'demo',
-        prompt,
-        providerId: 'p1',
-        modelId: 'claude-sonnet-4-5',
-        permissions: null
-      }
-    ]
+    agentId,
+    slug: agentId.replace('folder:', ''),
+    description: 'demo',
+    prompt,
+    providerId,
+    modelId: 'claude-sonnet-4-5',
+    permissions: null
   }
+}
+
+function agentConfig(prompt: string): EngineConfigInput {
+  return { providers: [provider()], agents: [agent('folder:aaa', prompt)] }
+}
+
+/** The generated prompt file for a folder agent, as the engine reads it. */
+function promptPath(agentId: string): string {
+  const slug = agentId.replace('folder:', '')
+  return join(userData, 'engine', 'prompts', `${engineAgentKey(agentId, slug)}.md`)
+}
+
+/**
+ * A one-shot hold on config generation.
+ *
+ * Returns a promise that resolves once the manager is *inside* the generation
+ * it was told to park on, and a release. `skip` lets a test wave past the
+ * generations it does not care about — the reconcile builds a config to compare
+ * before the restart builds one to load, and only one of the two is ever the
+ * window a test is aiming at.
+ */
+function holdGeneration(next: EngineConfigInput, skip = 0) {
+  let release: () => void = () => {}
+  let entered: () => void = () => {}
+  const reached = new Promise<void>((resolve) => (entered = resolve))
+  let seen = 0
+  configInput.generate = async () => {
+    seen += 1
+    if (seen <= skip) return next
+    configInput.generate = null
+    entered()
+    await new Promise<void>((resolve) => (release = resolve))
+    return next
+  }
+  return { reached, release: () => release() }
 }
 
 beforeEach(() => {
@@ -267,6 +352,12 @@ function spawnLogCount(): number {
 afterEach(async () => {
   turnLock.releaseAll()
   await engineManager.stop()
+  // Module state, cleared explicitly rather than left to luck. The binary cache
+  // and the Settings value it was resolved against outlive a stop by design —
+  // they exist so a restart does not re-download 46 MB — so without this a test
+  // that changes `settings.enginePath` inherits the previous test's resolution.
+  resetEngineStateForTests()
+  appEvents.handlers.clear()
   rmSync(userData, { recursive: true, force: true })
   rmSync(scripts, { recursive: true, force: true })
 })
@@ -565,26 +656,245 @@ describe('engineManager', () => {
     expect(configInput.modelRefreshes).toBe(afterStart)
   })
 
-  it('does not restart a busy engine, and writes the new config anyway', async () => {
+  it('does not restart a busy engine, and writes nothing at all', async () => {
     // One `opencode serve` serves every folder agent, so a restart ends every
     // conversation in flight — not only the one whose folder changed. A
     // credential saved in Settings must not end somebody's streaming reply.
+    //
+    // **And it writes nothing.** The deferral used to write the new bytes and
+    // hold only the restart back, which protected the process but not the
+    // files: the same call rewrote every prompt file and deleted the ones whose
+    // agent had gone. Whether that reaches a streaming turn depends on when
+    // OpenCode resolves `{file:./prompts/<key>.md}`, which is not a question
+    // this repo can answer — so the answer is not to write. The restart
+    // regenerates everything from scratch anyway.
     configInput.current = agentConfig('the prompt')
     const first = await engineManager.ensureRunning('user-1')
+    const onDisk = readFileSync(configPath(), 'utf8')
 
     // A turn on a *different* agent than the one being edited: the case a
-    // per-agent lock check would get wrong.
+    // per-agent lock check would get wrong. The change adds an agent rather
+    // than rewording one, so it moves `opencode.json` itself — a reworded
+    // prompt only moves a `.md` file beside it, and the assertion below would
+    // then be unable to fail.
     turnLock.acquire('folder:someone-else', 'turn')
-    configInput.current = agentConfig('a completely different prompt')
+    configInput.current = {
+      providers: [provider()],
+      agents: [agent('folder:aaa', 'the prompt'), agent('folder:bbb', 'another')]
+    }
     const after = await engineManager.applyConfigChange('user-1')
 
     expect(after.pid).toBe(first.pid)
     expect(envDumps()).toHaveLength(1)
-    // Deferred, not dropped. The bytes are on disk; only the restart waits.
-    expect(readFileSync(join(userData, 'engine', 'opencode.json'), 'utf8')).toBeTruthy()
-    const prompts = dumps()
-    expect(prompts).toHaveLength(1)
+    // Byte-for-byte what the start wrote. `toBeTruthy()` used to stand here and
+    // could not fail: the start had already written the file.
+    expect(readFileSync(configPath(), 'utf8')).toBe(onDisk)
+    expect(existsSync(promptPath('folder:bbb'))).toBe(false)
     expect(() => process.kill(first.pid as number, 0)).not.toThrow()
+  })
+
+  it('leaves the prompt file of a streaming agent alone, even when its folder is gone', async () => {
+    // The sharpest form of the above. Deleting an agent prunes its generated
+    // prompt file immediately — and that file is what the engine resolves the
+    // agent's system prompt from. Deferring the restart but pruning the file
+    // anyway is a deletion landing underneath a live turn: Invariant 3 at the
+    // one place in the engine that deletes anything.
+    configInput.current = { providers: [provider()], agents: [agent('folder:aaa', 'the original')] }
+    await engineManager.ensureRunning('user-1')
+    expect(readFileSync(promptPath('folder:aaa'), 'utf8')).toBe('the original')
+
+    const streaming = turnLock.acquire('folder:aaa', 'turn')
+    configInput.current = { providers: [provider()], agents: [] }
+    await engineManager.applyConfigChange('user-1')
+
+    expect(existsSync(promptPath('folder:aaa'))).toBe(true)
+    expect(readFileSync(promptPath('folder:aaa'), 'utf8')).toBe('the original')
+
+    // And it really is pruned once the restart lands — the file is deferred,
+    // not kept forever.
+    streaming.release()
+    await engineManager.ensureRunning('user-1')
+    expect(existsSync(promptPath('folder:aaa'))).toBe(false)
+  })
+
+  it('restarts when only a credential key changed', async () => {
+    // A key is **never** written into the config (Invariant 4): it is an
+    // `{env:CINNA_ENGINE_KEY_…}` reference in the file and a real value in the
+    // process environment, read once at spawn. So rotating a key in Settings
+    // produces byte-identical config bytes, and a restart decision computed
+    // from those bytes says "nothing changed" — leaving the engine serving the
+    // revoked key until something unrelated restarts it. What the user sees is
+    // every folder-agent turn failing to authenticate while Settings shows a
+    // valid credential and the strip shows a green, running engine.
+    configInput.current = agentConfig('the prompt')
+    const first = await engineManager.ensureRunning('user-1')
+    const beforeRotation = readFileSync(configPath(), 'utf8')
+
+    configInput.current = { providers: [provider('sk-ant-ROTATED')], agents: [agent('folder:aaa', 'the prompt')] }
+    const after = await engineManager.ensureRunning('user-1')
+
+    expect(after.status).toBe('running')
+    expect(after.pid).not.toBe(first.pid)
+    const envs = envDumps()
+    expect(envs).toHaveLength(2)
+    expect(envs[0][credentialEnvName('p1')]).toBe('sk-ant-THE-SECRET')
+    expect(envs[1][credentialEnvName('p1')]).toBe('sk-ant-ROTATED')
+    // The point of the test, stated as an assertion: the config on disk did not
+    // move across the rotation, so nothing that compares config bytes could
+    // ever have noticed.
+    expect(readFileSync(configPath(), 'utf8')).toBe(beforeRotation)
+  })
+
+  it('does not undo an explicit stop that lands during a reconcile', async () => {
+    // The reconcile restarts by stopping and starting again. Told only "a stop
+    // was requested", the start it issues cannot tell its own stop from the
+    // user's — so a Stop pressed while a reconcile is in flight was swallowed
+    // and the engine came back up under a user who had just turned it off.
+    //
+    // **What this actually pins is the post-await re-read of `running` in
+    // `applyConfigChange`, not the stop epoch.** Weakening that guard so the
+    // reconcile starts an engine instead of returning fails this test;
+    // *removing the `cancelled(epoch)` check after `await halt()` does not*.
+    // `holdGeneration` parks the reconcile before the re-read, so by the time
+    // it resumes, `stop()` has already nulled `running` and the epoch is never
+    // consulted. The epoch is still correct and still necessary — it covers a
+    // stop landing later, during `await halt()` — but nothing here reaches that
+    // window, so do not delete the re-read believing the epoch covers it.
+    configInput.current = agentConfig('the prompt')
+    const first = await engineManager.ensureRunning('user-1')
+
+    const held = holdGeneration(agentConfig('a completely different prompt'))
+    const reconciling = engineManager.ensureRunning('user-1')
+    await held.reached
+    const stopping = engineManager.stop()
+    held.release()
+    await Promise.all([reconciling, stopping])
+
+    expect(engineManager.getState().status).toBe('stopped')
+    expect(engineManager.getState().pid).toBeNull()
+    expect(spawnLogCount()).toBe(1)
+    await until(() => {
+      try {
+        process.kill(first.pid as number, 0)
+        return false
+      } catch {
+        return true
+      }
+    })
+  })
+
+  it('spawns no engine when the app quits during a reconcile', async () => {
+    // Same mechanism, worse consequence. `will-quit` handlers are not awaited,
+    // so the quit runs synchronously through `stopEngineNow` and Electron then
+    // tears this process down — a reconcile that resumes afterwards and starts
+    // an engine leaves an `opencode serve` on the user's machine with no window
+    // left to stop it from.
+    //
+    // **Pinned by the same line as the test above** — the post-await re-read of
+    // `running` — and not by `stopEngineNow`'s `stopEpoch += 1`, which can be
+    // deleted with this file still green. What the quit contributes here that a
+    // plain `stop()` does not is that it is *synchronous*: `registerEngineShutdown`
+    // and firing the handler prove the `will-quit` path reaches `stopEngineNow`
+    // at all, which is the part Electron gives us no second chance at.
+    registerEngineShutdown()
+    const willQuit = appEvents.handlers.get('will-quit') ?? []
+    expect(willQuit).not.toHaveLength(0)
+
+    configInput.current = agentConfig('the prompt')
+    await engineManager.ensureRunning('user-1')
+
+    const held = holdGeneration(agentConfig('a completely different prompt'))
+    const reconciling = engineManager.ensureRunning('user-1')
+    await held.reached
+    for (const handler of willQuit) handler()
+    held.release()
+    await reconciling
+
+    expect(spawnLogCount()).toBe(1)
+    expect(dumps()).toHaveLength(1)
+  })
+
+  it('reports the agent keys of the config the engine actually loaded', async () => {
+    // Phase 6 opens a session against this key. A key for an entry the running
+    // engine has never seen is worse than a null: null means "this agent cannot
+    // run right now", which is true and actionable, while a real-looking key
+    // means "address the engine with this" and the engine has no such agent.
+    configInput.current = { providers: [provider()], agents: [agent('folder:aaa', 'a')] }
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.agentKey('folder:aaa')).toBe(engineAgentKey('folder:aaa', 'aaa'))
+    expect(engineManager.agentKey('folder:bbb')).toBeNull()
+
+    // A second agent appears while somebody is streaming, so the restart is
+    // deferred and the running engine still knows nothing about it.
+    const streaming = turnLock.acquire('folder:aaa', 'turn')
+    configInput.current = {
+      providers: [provider()],
+      agents: [agent('folder:aaa', 'a'), agent('folder:bbb', 'b')]
+    }
+    await engineManager.applyConfigChange('user-1')
+    expect(engineManager.agentKey('folder:bbb')).toBeNull()
+
+    streaming.release()
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.agentKey('folder:bbb')).toBe(engineAgentKey('folder:bbb', 'bbb'))
+  })
+
+  it('reports the skips of the config the engine actually loaded', async () => {
+    configInput.current = { providers: [provider()], agents: [agent('folder:aaa', 'a')] }
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.lastSkips().agents).toEqual([])
+
+    // The agent's credential is deleted mid-turn. The engine is still serving
+    // that agent perfectly well, so a Runtime card saying it cannot run would be
+    // describing a config nothing has loaded.
+    const streaming = turnLock.acquire('folder:aaa', 'turn')
+    configInput.current = { providers: [], agents: [agent('folder:aaa', 'a')] }
+    await engineManager.applyConfigChange('user-1')
+    expect(engineManager.lastSkips().agents).toEqual([])
+
+    // Once the restart lands it is true, and the state push that comes with the
+    // restart is what tells the renderer to re-read it.
+    streaming.release()
+    await engineManager.ensureRunning('user-1')
+    expect(engineManager.lastSkips().agents.map((skip) => skip.agentId)).toEqual(['folder:aaa'])
+  })
+
+  it('does not restart again after a manual restart already loaded a deferred change', async () => {
+    // A deferral recorded as a stored debt is paid off by whoever *clears* it,
+    // not by whoever loads the config — and a start always generates fresh, so
+    // a user restarting from Settings loads the change without ever knowing a
+    // debt existed. The debt then buys one more restart, which ends a healthy
+    // engine to load a config it is already running.
+    configInput.current = agentConfig('the prompt')
+    await engineManager.ensureRunning('user-1')
+    const handle = turnLock.acquire('folder:a', 'turn')
+    configInput.current = agentConfig('changed once')
+    await engineManager.applyConfigChange('user-1')
+    handle.release()
+
+    await engineManager.stop()
+    const restarted = await engineManager.ensureRunning('user-1')
+
+    const nextTurn = await engineManager.ensureRunning('user-1')
+    expect(nextTurn.pid).toBe(restarted.pid)
+    expect(spawnLogCount()).toBe(2)
+  })
+
+  it('does not start a failed engine just because the config changed', async () => {
+    // Starting is always an explicit act — Settings, or a turn (`engine.ipc`).
+    // `local-agent:update-field` fires this on every manifest save, and a failed
+    // start clears the binary cache, so a restart from here would re-run binary
+    // resolution — up to a 46 MB download — once per edit.
+    configInput.current = agentConfig('the prompt')
+    const first = await engineManager.ensureRunning('user-1')
+    process.kill(first.pid as number, 'SIGKILL')
+    await until(() => engineManager.getState().status === 'failed')
+
+    configInput.current = agentConfig('a completely different prompt')
+    const after = await engineManager.applyConfigChange('user-1')
+
+    expect(after.status).toBe('failed')
+    expect(spawnLogCount()).toBe(1)
   })
 
   it('applies the deferred config change at the next turn boundary', async () => {
