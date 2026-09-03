@@ -762,3 +762,45 @@ Two consequences, opposite in sign:
    and fails with a **401** rather than hanging — visible and recoverable, which is the direction
    this whole design errs in — but it is a real 160 ms hole and nothing distinguishes the two
    `anthropic`s from outside. Recorded rather than engineered around; see §7 item 11.
+
+### 9.5.9 A custom entry's models have no limits, and zero becomes `max_tokens: 0`
+
+Found by the first live turn on the fixed config, then reproduced without a
+credential. A **canonical** provider key is a models.dev key, so its models arrive with real
+windows — `anthropic/claude-sonnet-4-6` carries `limit: {context: 1000000, output: 128000}`. A
+**custom** entry has no catalog behind it, and a model the config declares as
+`{"claude-sonnet-4-6": {"name": "…"}}` lands in `GET /api/model` as:
+
+```json
+{ "limit": {"context": 0, "output": 0}, "capabilities": {"tools": false, "input": [], "output": []},
+  "cost": [] }
+```
+
+`SessionRunnerModel` passes `limits: {context: x.limit.context, output: x.limit.output}` straight
+into the request executor, and the **Anthropic** transport sends that as `max_tokens`. Two custom
+entries differing only in `limit`, both pointed at a probe server, one turn each:
+
+```
+POST /messages   max_tokens = 0       stream = true   tools: 12    ← no `limit` in the config
+POST /messages   max_tokens = 32000   stream = true   tools: 12    ← limit {context, output}
+```
+
+The first is the live failure verbatim: `400 invalid_request_error "stream cannot be true when
+max_tokens is 0"`.
+
+Four things worth keeping:
+
+- **The config key is `models.<id>.limit` and its shape is `{context, output, input?}`** —
+  `context` and `output` are required, `input` optional (`ConfigProviderV1.Model`). There is **no
+  per-provider default to set instead**: the provider schema is `api`, `name`, `env`, `id`, `npm`,
+  `whitelist`, `blacklist`, `options` and carries no `limit`, so per-model is the only lever.
+- **The OpenAI-compatible transport omits `max_tokens` entirely**, so the identical zero limit is
+  invisible on a gateway and shows up only on Anthropic. A fix aimed at the symptom would have been
+  aimed at one transport.
+- **`capabilities.tools: false` does not turn tool calling off.** Both turns above carried **12
+  tools**. Setting `tool_call` in the config would be worse than leaving it: the migration builds
+  `capabilities` from `{tools: tool_call ?? false, input: modalities?.input ?? [], output:
+  modalities?.output ?? []}`, so declaring `tool_call` alone empties the modality lists, which
+  `model.small()` filters on.
+- **`cost: []` had no effect on the request.** It would affect the engine's own `model.small()`
+  choice for title generation; the desktop does not use that path.

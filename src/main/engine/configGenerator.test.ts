@@ -164,9 +164,26 @@ describe('buildEngineConfig', () => {
     expect((entry.options as Record<string, unknown>).baseURL).toBe('https://gw.example.com/v1')
     expect(entry.env).toEqual([credentialEnvName('gw')])
     expect(Object.hasOwn(entry.options as object, 'apiKey')).toBe(false)
+    // Per **provider type**, not one number for everything: the ceiling that is
+    // valid for Anthropic is not valid for a gateway.
+    expect(entry.models).toEqual({
+      'gpt-4o': { name: 'GPT-4o', limit: { context: 128_000, output: 8_192 } }
+    })
     expect(entry.npm).toBe('@ai-sdk/openai-compatible')
-    expect(entry.models).toEqual({ 'gpt-4o': { name: 'GPT-4o' } })
     expect(JSON.stringify(built.config)).not.toContain('gw-secret-value')
+  })
+
+  it('leaves a canonical entry’s models to models.dev, limits included', () => {
+    // The other half of the rule, and the one that keeps the table above from
+    // spreading. A canonical key *is* a models.dev key, so the engine already
+    // has every model with its real context and output windows — emitting our
+    // floors over the top would replace true numbers with approximate ones, and
+    // a `models` map on a canonical entry would also narrow it to just the
+    // models this desktop happens to list.
+    const built = buildEngineConfig(input({ agents: [] }))
+    const entry = (built.config.provider as Record<string, Record<string, unknown>>).anthropic
+    expect(Object.hasOwn(entry, 'models')).toBe(false)
+    expect(JSON.stringify(entry)).not.toContain('limit')
   })
 
   it('does not put an options block on a canonical provider that has no baseURL', () => {
@@ -218,7 +235,16 @@ describe('buildEngineConfig', () => {
     expect(second).not.toBe('anthropic')
     const entry = (built.config.provider as Record<string, Record<string, unknown>>)[second]
     expect(entry.npm).toBe('@ai-sdk/anthropic')
-    expect(entry.models).toEqual({ 'claude-sonnet-4-5': { name: 'Sonnet' } })
+    // **`limit` on the model, and this is the assertion the live bug needed.**
+    // A custom entry gets no models.dev catalog, and the engine defaults a
+    // model's limit to `{context: 0, output: 0}` — which the Anthropic
+    // transport sends as `max_tokens: 0`, and the provider rejects with
+    // `400 "stream cannot be true when max_tokens is 0"`. Watched at a probe
+    // server: without this the body carried `"max_tokens": 0`; with it, 32000.
+    // Mutation: drop `limit` from the emitted model → this fails.
+    expect(entry.models).toEqual({
+      'claude-sonnet-4-5': { name: 'Sonnet', limit: { context: 200_000, output: 32_000 } }
+    })
 
     // The same assignment **whichever order the rows arrive in**. Without a
     // deterministic sort the two fight over the canonical `anthropic` key and
