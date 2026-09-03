@@ -57,7 +57,7 @@ import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 const logger = createLogger('local-agent-command')
 
 /** Combined stdout+stderr cap. A runaway script must not grow the DB row without bound. */
-const MAX_OUTPUT_BYTES = 200_000
+export const MAX_OUTPUT_BYTES = 200_000
 
 /**
  * Backstop on top of the turn lock: a hung script must not hold this agent's

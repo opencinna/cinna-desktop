@@ -62,7 +62,7 @@ vi.mock('node:child_process', async (importOriginal) => {
   }
 })
 
-const { commandService, resolveCommandRunner } = await import('./commandService')
+const { commandService, resolveCommandRunner, MAX_OUTPUT_BYTES } = await import('./commandService')
 const { turnLock } = await import('./turnLock')
 const { LocalAgentError } = await import('../../errors')
 const { clearContractCache } = await import('../../kit/contractStore')
@@ -257,6 +257,21 @@ describe('success', () => {
     expect(result.exitCode).toBe(0)
     expect(result.output).toContain('hello-from-command')
   })
+
+  it('truncates output past the cap rather than growing the row without bound', async () => {
+    // A plain hole until now: `truncate()` existed and was never exercised —
+    // every other test's output is a few bytes, so a mutation deleting the
+    // whole truncation branch would have passed the entire suite.
+    const over = MAX_OUTPUT_BYTES + 50_000
+    writeCatalog(
+      `commands:\n  - name: noisy\n    description: x\n    command: head -c ${over} /dev/zero | tr '\\0' 'a'\n`
+    )
+    const result = await commandService.run(USER, AGENT_ID, 'noisy')
+    expect(result.ok).toBe(true)
+    expect(result.output.length).toBeLessThan(over)
+    expect(result.output.endsWith('…output truncated…')).toBe(true)
+    expect(result.output.startsWith('a'.repeat(100))).toBe(true)
+  }, 10_000)
 })
 
 describe('the turn lock', () => {
