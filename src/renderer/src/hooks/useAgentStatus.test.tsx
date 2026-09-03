@@ -223,6 +223,94 @@ describe('a partial failure is raised, not swallowed', () => {
   })
 })
 
+describe('a per-agent success does not clear a standing remote failure', () => {
+  it('keeps the degradation marker when one agent refreshes successfully', async () => {
+    // `patchAgentStatusCache` writes `remoteError: prev?.remoteError ?? null`,
+    // and a one-token edit to `null` would make any per-card success — or any
+    // "Refresh all" — **silently clear the degradation strip while the remote
+    // leg is still down**. That is the precise failure this phase exists to
+    // prevent, sitting behind a comment that asserts the invariant and, until
+    // now, no test that defends it. A comment guarding an invariant nothing
+    // tests is the shape that produced the `timestamp` defect.
+    const api = stubApi({
+      // The batch fetch hangs, so nothing but the per-agent patch can touch the
+      // cache. Without that, a refetch landing mid-test would supply the
+      // `remoteError` this test is supposed to prove the *patch* preserved.
+      list: vi.fn(() => new Promise(() => {})),
+      get: vi.fn().mockResolvedValue({
+        success: true,
+        item: { agentId: 'folder:alpha', severity: 'ok', summary: 'fresh' }
+      })
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    client.setQueryData(
+      ['agent-status'],
+      {
+        items: [{ agentId: 'folder:alpha', severity: 'warning', summary: 'stale' }],
+        remoteError: { code: 'remote_unreachable', message: 'Failed to reach Cinna backend' }
+      },
+      { updatedAt: Date.now() }
+    )
+    const seeded = ({ children }: { children: ReactNode }): React.JSX.Element =>
+      createElement(QueryClientProvider, { client }, children)
+
+    const { result } = renderHook(
+      () => ({ status: useAgentStatus(), refresh: useForceRefreshAgentStatus() }),
+      { wrapper: seeded }
+    )
+    await act(async () => {
+      await result.current.refresh.mutateAsync('folder:alpha')
+    })
+
+    // The patch has to have actually landed, or the rest of this test passes by
+    // doing nothing. Read the cache, not the hook: with the batch fetch parked,
+    // the observer's re-render is not guaranteed to have run by now, and a
+    // *stale* hook view would report the old `remoteError` under the very
+    // mutation this test exists to catch.
+    await waitFor(() =>
+      expect(
+        client.getQueryData<{ items: Array<{ summary: string }> }>(['agent-status'])?.items[0]
+          ?.summary
+      ).toBe('fresh')
+    )
+    // Consequence: the standing failure survived the patch.
+    expect(
+      client.getQueryData<{ remoteError: { code: string } | null }>(['agent-status'])?.remoteError
+        ?.code
+    ).toBe('remote_unreachable')
+    // And it is still what the surfaces render.
+    await waitFor(() => expect(result.current.status.error?.code).toBe('remote_unreachable'))
+    expect(api.get).toHaveBeenCalled()
+  })
+})
+
+describe('the poll is a poll', () => {
+  it('refetches on the 45-second cadence the cache-only route is sized for', async () => {
+    // The whole feature is a background poll and the interval was unasserted:
+    // `refetchInterval: false` passed the entire suite, which would leave every
+    // status surface frozen after its first fetch with nothing to notice.
+    vi.useFakeTimers()
+    try {
+      const api = stubApi()
+      const { unmount } = renderHook(() => useAgentStatus(), { wrapper })
+      await vi.waitFor(() => expect(api.list).toHaveBeenCalledTimes(1))
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(45_000)
+      })
+      expect(api.list).toHaveBeenCalledTimes(2)
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(45_000)
+      })
+      expect(api.list).toHaveBeenCalledTimes(3)
+      unmount()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('Refresh all asks the two agent kinds different questions', () => {
   it('force-refreshes a remote agent and only re-reads a folder agent', async () => {
     const api = stubApi()
