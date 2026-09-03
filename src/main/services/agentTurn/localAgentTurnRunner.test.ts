@@ -84,16 +84,23 @@ function fakeEngine(overrides: Record<string, () => Response> = {}): {
       })
       return new Response(stream, { status: 200 })
     }
-    const override = overrides[`${method} ${path}`] ?? overrides[path]
+    // Overrides match on the route, so a test does not have to spell the
+    // location query the readiness probe appends.
+    const route = path.split('?')[0]
+    const override =
+      overrides[`${method} ${path}`] ??
+      overrides[path] ??
+      overrides[`${method} ${route}`] ??
+      overrides[route]
     if (override) return override()
     // The readiness probes a turn makes before it opens a session. A cold
     // engine answers its health check ~30–60s before either of these is
     // populated, so the fake answers them the way a *warm* one does and the
     // tests that care about the cold window override them.
-    if (path === '/api/agent') {
+    if (route === '/api/agent') {
       return new Response(JSON.stringify({ data: [{ id: 'assistant_ab12' }] }), { status: 200 })
     }
-    if (path === '/api/model') {
+    if (route === '/api/model') {
       return new Response(
         JSON.stringify({ data: [{ providerID: 'anthropic', id: 'claude-sonnet-4-6' }] }),
         { status: 200 }
@@ -352,9 +359,15 @@ describe('LocalAgentTurnRunner', () => {
     // order is identical. The await is about the socket being *live*, which
     // this fake resolves too quickly to distinguish. The next test is the one
     // that pins it.
+    // The readiness probes carry the folder the session will be opened in: the
+    // engine's catalog and agent registry are per-location, and an unscoped
+    // probe answers for the engine's own cwd, which is always warm. Mutation:
+    // drop the `location[directory]` query → this fails, and in production the
+    // first turn in a fresh folder goes out with no system prompt.
+    const at = '?location%5Bdirectory%5D=%2Fagents%2Fhelper'
     expect(paths(h)).toEqual([
-      'GET /api/agent',
-      'GET /api/model',
+      `GET /api/agent${at}`,
+      `GET /api/model${at}`,
       'POST /api/session',
       'GET /api/event',
       'POST /api/session/ses_new/prompt'

@@ -219,7 +219,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
   }): Promise<RunAgentTurnResult> {
     const { agent, agentKey, model, signal, wireContent, chatId, agentId } = ctx
 
-    const notReady = await this.awaitEngineReady(agent.name, agentKey, model)
+    const notReady = await this.awaitEngineReady(agent.name, agent.path, agentKey, model)
     if (notReady) {
       logger.warn('the engine never became ready for this turn', { agentId, agentKey, model })
       return fail(notReady)
@@ -527,20 +527,33 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
    * The two questions are asked in that order and the cheap one first: an
    * unloaded config fails both, and `GET /api/agent` is a handful of entries
    * where `GET /api/model` is every model of every available provider.
+   *
+   * **Both are scoped to the folder the session will be opened in, and that is
+   * the whole point rather than a refinement.** The engine's catalog and agent
+   * registry are per-*location*: it boots a location's services the first time
+   * something uses that location, and an unscoped probe answers for the
+   * engine's own working directory — which is warm from the moment it starts
+   * and says nothing about the folder a turn is about to run in. Watched on
+   * 3 Sep 2026: with an unscoped probe reporting ready, the first turn in a
+   * fresh folder still went out **with no system prompt**; with the probe
+   * scoped, the same first turn carried it. The probe is therefore also what
+   * warms the location.
    */
   private async awaitEngineReady(
     agentName: string,
+    directory: string,
     agentKey: string,
     model: EngineModelRef | null
   ): Promise<string | null> {
+    const at = `?location%5Bdirectory%5D=${encodeURIComponent(directory)}`
     const deadline = Date.now() + (this.deps.engineReadyMs ?? ENGINE_READY_MS)
     let missing: string | null = null
     for (;;) {
-      const agents = await this.readList('/api/agent')
+      const agents = await this.readList(`/api/agent${at}`)
       if (agents === null) return null
       if (agents.some((entry) => entry.id === agentKey)) {
         if (!model) return null
-        const models = await this.readList('/api/model')
+        const models = await this.readList(`/api/model${at}`)
         if (models === null) return null
         if (models.some((m) => m.providerID === model.providerID && m.id === model.id)) return null
         missing = `“${agentName}” is set to run on ${model.providerID}/${model.id}, and the local engine has no such model. Check the agent’s Runtime, then restart the engine from Settings.`

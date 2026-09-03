@@ -687,6 +687,16 @@ the variable turned out to be *first turn after start* rather than anything in t
 probe should run one throwaway turn before measuring, and any future reading of "the agent ignored
 its prompt" should check the clock first.
 
+**And the wait is per *location*, which is the part that is easy to get wrong.** `GET /api/agent`
+and `GET /api/model` take a `location` query parameter — a **deep object**, so
+`?location[directory]=/path` (`location=/path` is a schema rejection and a 400), and the engine
+`boots location services` for a directory the first time anything uses it. Unscoped, both endpoints
+answer for the server's own working directory, which is warm within seconds and says nothing about
+the folder a session will run in. Watched both ways on a fresh process: with an **unscoped** probe
+reporting agent-and-model ready, the first turn in a fresh folder still went out **with no system
+prompt**; with the probe **scoped to that folder**, the same first turn carried it. A readiness
+check is therefore only meaningful at the location it is about — and asking is also what warms it.
+
 ### 9.5.7 Reproducing this
 
 ```bash

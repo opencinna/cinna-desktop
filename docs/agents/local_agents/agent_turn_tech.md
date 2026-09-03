@@ -131,7 +131,7 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 
 | Step | Line | Notes |
 |---|---|---|
-| `awaitEngineReady` | impl below `heal` | `GET /api/agent` must list the agent key and `GET /api/model` must list the model, polled at 1 s up to `ENGINE_READY_MS`. A probe that cannot be read (non-OK, unparseable, thrown) returns "ready" and the turn proceeds — a diagnostic must not refuse a turn on its own trouble |
+| `awaitEngineReady` | impl below `heal` | `GET /api/agent` must list the agent key and `GET /api/model` must list the model, polled at 1 s up to `ENGINE_READY_MS`. **Both carry `?location[directory]=<the agent folder>`**: the engine's catalog and agent registry are per-location and boot lazily, so an unscoped probe answers for the engine's own cwd — always warm, and silent about the folder the turn will run in ([contract](opencode_contract.md) §9.5.6). The probe is also what warms that location. A probe that cannot be read (non-OK, unparseable, thrown) returns "ready" and the turn proceeds — a diagnostic must not refuse a turn on its own trouble |
 | `openSession` | impl after `readList` | Verify a remembered id with `GET /api/session/{id}`; on hit, re-point it with `POST …/agent` **and `POST …/model`** (both best-effort) so a conversation survives an agent-key or runtime move; on miss, `POST /api/session {agent, model?, location:{directory}}` and require a `ses`-prefixed id |
 | Build `TurnStream` + `StreamPartsAccumulator` | `:190-199` | `deltaPort.postMessage` forwards to `input.onEvent?.()` — direct chat sends it to the MessagePort, orchestrated mode wraps it, a buffered turn passes no sink |
 | `settle` / `finished` | `:201-209` | Idempotent: first outcome wins |
@@ -253,9 +253,11 @@ runTurn(input)
  ├ agentModel(agentId)
  └ withLock(agentId, 'turn')
     └ stream()
-       ├ awaitEngineReady → GET /api/agent   (does it know the agent?)
-       │                  → GET /api/model   (does it know the model?)
-       │                    neither is true for ~30-60s after a healthy start
+       ├ awaitEngineReady → GET /api/agent?location[directory]=<folder>
+       │                  → GET /api/model?location[directory]=<folder>
+       │                    neither is true for ~30-60s after a healthy start,
+       │                    and the location scoping is what makes the answer
+       │                    about the folder rather than the engine's own cwd
        ├ openSession → GET /api/session/{remembered}       (verify)
        │              → POST /api/session/{id}/agent       (re-point)
        │              → POST /api/session/{id}/model       (re-point)
