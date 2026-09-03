@@ -615,6 +615,23 @@ describe('scanning a workshop', () => {
     expect(agent.status?.body).toContain('# Detail')
   })
 
+  it('reads the timestamp key the contract\u2019s own update_status.py writes', () => {
+    const dir = scaffold('alpha')
+    // Byte-for-byte the shape `render_status()` emits — the contract's
+    // `scripts/update_status.py` writes `status:`/`summary:`/`timestamp:`, and
+    // `timestamp` was the one key `readStatus` did not accept, so every
+    // scaffolded agent's status arrived with no time on it.
+    writeFileSync(
+      join(dir, 'app-data/storage/STATUS.md'),
+      '---\nstatus: attention\nsummary: "3 invoices without a PO number"\ntimestamp: 2026-09-02T10:15:00Z\n---\n\nOptional detail.\n'
+    )
+
+    const agent = scannerService.scanRoot(USER, root).agents[0]
+    expect(agent.status?.updatedAt).toBe('2026-09-02T10:15:00Z')
+    expect(agent.status?.state).toBe('attention')
+    expect(agent.status?.summary).toBe('3 invoices without a PO number')
+  })
+
   it('keeps the desktop-owned state out of the renderer’s reach', () => {
     const dir = scaffold('alpha')
     writeFileSync(

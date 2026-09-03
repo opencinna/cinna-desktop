@@ -205,7 +205,12 @@ export function readStatus(agentDir: string, statusFile: string): LocalAgentStat
   return {
     summary: pick('summary', 'status_summary', 'headline'),
     state: pick('state', 'status', 'health'),
-    updatedAt: pick('updated', 'updated_at', 'last_updated', 'generated_at'),
+    // `timestamp` is first because it is what the contract's own
+    // `scripts/update_status.py` writes (`render_status`, template
+    // `scripts/update_status.py:59`) — every STATUS.md a scaffolded agent
+    // produces uses that key, and without it the status the desktop shows has
+    // no time on it at all. The rest are the synonyms a hand-written file uses.
+    updatedAt: pick('timestamp', 'updated', 'updated_at', 'last_updated', 'generated_at'),
     body: parsed.body
   }
 }

@@ -249,6 +249,17 @@ export interface CommandRunOutcome {
    * the error surface on abort) must not log or display it as one.
    */
   aborted: boolean
+  /**
+   * The per-agent turn lock refused this run — a model turn, an editor save or
+   * another command holds it. Always `ok: false`, but like {@link aborted} it
+   * is not a failure *of the command*: nothing ran, and the same call a moment
+   * later may well succeed. Without this flag the refusal is structurally
+   * indistinguishable from a script that exited non-zero, because
+   * `turnLock.acquire`'s `LocalAgentError('turn_in_progress')` reaches the
+   * outer catch as a plain message. `statusRefresh` treats it as a soft no-op
+   * — the same shape as the remote `get` swallowing a 429.
+   */
+  busy: boolean
   /** Set when `ok` is false: a short, user-facing reason. */
   error?: string
 }
@@ -290,7 +301,10 @@ export const commandService = {
       const message =
         err instanceof LocalAgentError ? err.message : 'That agent is no longer in your agents folder.'
       logger.warn('command run: agent could not be located', { agentId, error: String(err) })
-      return { ok: false, name, localCommand: '', output: '', exitCode: null, aborted: false, error: message }
+      return {
+        ok: false, name, localCommand: '', output: '', exitCode: null,
+        aborted: false, busy: false, error: message
+      }
     }
     const { root, agentDir } = located
 
@@ -313,6 +327,7 @@ export const commandService = {
           output: '',
           exitCode: null,
           aborted: false,
+          busy: false,
           error: `No command named "${name}" in ${catalogPath}.`
         }
       }
@@ -328,6 +343,7 @@ export const commandService = {
         output: '',
         exitCode: null,
         aborted: false,
+        busy: false,
         error: `The command catalog could not be read: ${message}`
       }
     }
@@ -345,6 +361,7 @@ export const commandService = {
             output: outcome.output,
             exitCode: null,
             aborted: false,
+            busy: false,
             error: `"${localCommand}" could not run: ${outcome.spawnError}`
           }
         }
@@ -360,6 +377,7 @@ export const commandService = {
             output: outcome.output,
             exitCode: outcome.exitCode,
             aborted: false,
+            busy: false,
             error: `"${localCommand}" did not finish within ${Math.ceil(timeoutMs / 1000)}s and was stopped.`
           }
         }
@@ -371,6 +389,7 @@ export const commandService = {
             output: outcome.output,
             exitCode: outcome.exitCode,
             aborted: true,
+            busy: false,
             error: `"${localCommand}" was cancelled.`
           }
         }
@@ -382,10 +401,14 @@ export const commandService = {
             output: outcome.output,
             exitCode: outcome.exitCode,
             aborted: false,
+            busy: false,
             error: `"${localCommand}" exited with code ${outcome.exitCode}.`
           }
         }
-        return { ok: true, name, localCommand, output: outcome.output, exitCode: 0, aborted: false }
+        return {
+          ok: true, name, localCommand, output: outcome.output, exitCode: 0,
+          aborted: false, busy: false
+        }
       })
     } catch (err) {
       // `turnLock.acquire` throws `LocalAgentError('turn_in_progress', …)` and
@@ -393,8 +416,15 @@ export const commandService = {
       // `AgentTurnRunner.runTurn`) is that it never throws, so this is caught
       // here rather than left for the IPC handler to rediscover.
       const message = err instanceof Error ? err.message : String(err)
-      logger.warn('command could not start', { agentId, name, error: message })
-      return { ok: false, name, localCommand, output: '', exitCode: null, aborted: false, error: message }
+      // The lock refusing is the *expected* outcome of an unlucky moment, not
+      // a fault: `warn` is reserved for a start that genuinely failed.
+      const busy = err instanceof LocalAgentError && err.code === 'turn_in_progress'
+      if (busy) logger.debug('command deferred: agent busy', { agentId, name })
+      else logger.warn('command could not start', { agentId, name, error: message })
+      return {
+        ok: false, name, localCommand, output: '', exitCode: null,
+        aborted: false, busy, error: message
+      }
     }
   },
 
