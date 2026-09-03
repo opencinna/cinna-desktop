@@ -392,6 +392,11 @@ Not weaker evidence — **no evidence**. Each is a place to look first when some
     model.**~~ **Settled 3 Sep 2026 — §9.5.4. Nothing.** `prompt.admitted` and `prompted` arrive and
     then the stream is silent; the desktop waits on its own ceiling. A *provider* failure is the
     opposite — `session.next.step.failed` carries it — which is why the two must not be conflated.
+11. **The 160 ms window in which every models.dev provider is "available"** (§9.5.8). A readiness
+    probe for a *canonical* provider id can pass inside it, before our config has supplied the
+    credential, and the turn then 401s at the provider. Whether it is worth closing — and it is not
+    obvious that it can be closed from outside, since the config's `anthropic` and models.dev's
+    `anthropic` are the same id — is open.
 
 ---
 
@@ -516,24 +521,28 @@ same "broken config" failure §6 recorded, a property of the free `opencode` gat
 else, is **not determined**; it was only ever observed on `opencode/muse-spark-*`, which is the
 only model that resolved in this engine.
 
-### 9.4 What the desktop should do about it (not yet done)
+### 9.4 What the desktop did about it — done, 3 Sep 2026
 
-- **Send `model: {providerID, id}` on `POST /api/session`, from the config the running engine
-  loaded** (`engineManager` already records `agentKeys` per process; it needs the agent's
-  `provider/model` split the same way), and `POST /api/session/{id}/model` on a remembered session
-  next to the existing `/agent` re-point. A wrong model then fails loudly as
-  `ModelUnavailableError` instead of running on whatever the engine picked.
-- **Surface `Failed to drain Session` / `ModelUnavailableError` as a turn error the moment it
-  arrives**, and check what the desktop's `/api/event` subscription actually receives for it — the
-  probe sessions show only the user message afterwards, so it may not be a `session.next.*` event.
-- **Establish how a config-file key becomes an *available* connection in 1.18.27** before Phase 7b
-  builds anything else on the engine. Candidates, all untested: the v2 credential surface
-  (`POST /api/integration/{id}/connect/key`, `POST/DELETE /api/credential/{id}`, the empty
-  `credential(integration_id, method_id, value, …)` table in `opencode.db`); the canonical env
-  names each integration advertises (`GET /api/integration` → `methods:[{type:"env",names:[…]}]`,
-  e.g. `ANTHROPIC_API_KEY`) — the one attempt at this ran with an empty variable by mistake and
-  proves nothing. §8's own recipe passed the key as `{env:OPENAI_API_KEY}` **and** had
-  `OPENAI_API_KEY` in the process environment, which may be why that probe resolved at all.
+All three items this section originally listed as open are closed. **§9.5 is the evidence**; this is
+the index from finding to change.
+
+| Finding | Change | Commit |
+|---|---|---|
+| The session's `model` is the only per-session input (§9.2) | `buildEngineConfig` records each agent's `{providerID, id}`; `engineManager.agentModel` answers it from the config the running process **loaded**; `openSession` sends it at create and re-points a remembered session with `POST …/model` | `49ff879` |
+| `available()` never saw our config at all (§9.5.3) | `OPENCODE_CONFIG_DIR` points the v2 reader at `<userData>/engine` | `01971a2` |
+| The v2 reader substitutes neither `{env:}` nor `{file:}` (§9.5.4) | provider entries carry `env: ["CINNA_ENGINE_KEY_…"]`; an agent's prompt is inlined | `01971a2` |
+| `ModelUnavailableError` reaches no event (§9.5.5) | a turn asks `GET /api/agent` and `GET /api/model` before it opens a session, and fails with a sentence naming what is missing | `a9c72cb` |
+| Catalog and agents are per-location and boot lazily (§9.5.6) | that probe carries `?location[directory]=<the agent folder>`, which is also what warms the location | `acadf19` |
+| The wait holds the per-agent lock, and `anyHeld()` blocks every reconcile | the readiness wait ends on the turn's abort signal | `c848baf` |
+
+The credential question the original text listed as the blocker — the v2 credential surface
+(`POST /api/integration/{id}/connect/key`, `POST/DELETE /api/credential/{id}`, the `credential`
+table in `opencode.db`) — **was never reached and should stay unreached.** `provider.<key>.env`
+does the job with no write to the user-global store at all, which matters for the same reason §4
+matters: that store is shared with the user's own OpenCode install. The guess in the original text
+that §8's recipe resolved because `OPENAI_API_KEY` was *also* in the process environment was
+right in mechanism and wrong in detail — it is the integration's env method that supplies the
+credential, and naming our own variable in the config is what registers one.
 
 ---
 
@@ -725,3 +734,31 @@ curl -s -u c:p -X POST localhost:47401/api/session/$SES/prompt \
 
 A `401` from the provider in the log is the pass. `ModelUnavailableError` is the failure this
 section is about. Drop `OPENCODE_CONFIG_DIR` to see it come back.
+
+### 9.5.8 The catalog's first publish is a false-ready window
+
+Polled `GET /api/model` at 50 ms through a fresh start, against the desktop's own generated config:
+
+```
+t= 1.00s   0 models   providers: []
+t= 1.42s  7502 models providers: [302ai, abacus, …, anthropic, …, opencode, …]   ← ~200 of them
+t= 1.58s    49 models providers: [anthropic, anthropic-41989285,
+                                  openai-compatible-f266bfdc, opencode]
+```
+
+The middle state is the whole models.dev catalog. It exists because
+`providerAvailable`'s last branch — `integrationID === undefined && !integration` — is true for
+every provider until the *integration* list is populated, so for ~160 ms everything is "available".
+Two consequences, opposite in sign:
+
+1. **"Non-empty but missing the model" is a real transient, not a config mismatch.** Our custom
+   entries (`anthropic-<hash>`, `openai-compatible-<hash>`) exist only after the config transform
+   lands, and they are exactly what a second credential of a type and every OpenAI-compatible
+   gateway become. A readiness check that failed fast on a non-empty catalog would break those and
+   nothing else. **This is why `awaitEngineReady` polls rather than deciding on the first answer.**
+2. **A canonical entry can pass the check too early.** `anthropic/claude-sonnet-4-6` is present at
+   `t=1.42s` from models.dev, before our config has loaded, so a probe in that window says ready
+   for a provider that has no credential yet. The turn then reaches the provider unauthenticated
+   and fails with a **401** rather than hanging — visible and recoverable, which is the direction
+   this whole design errs in — but it is a real 160 ms hole and nothing distinguishes the two
+   `anthropic`s from outside. Recorded rather than engineered around; see §7 item 11.

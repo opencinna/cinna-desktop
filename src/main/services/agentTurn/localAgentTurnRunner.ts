@@ -557,6 +557,16 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
    * unloaded config fails both, and `GET /api/agent` is a handful of entries
    * where `GET /api/model` is every model of every available provider.
    *
+   * **It polls rather than deciding on the first answer, and a non-empty
+   * catalog missing the model is not evidence of a misconfiguration.** Polled
+   * at 50 ms through a fresh start, `GET /api/model` goes empty → *the whole
+   * models.dev catalog* (~7500 models, every provider "available" because the
+   * integration list has not populated yet) → the four our config defines, over
+   * about 160 ms. Custom provider entries — a second credential of a type, and
+   * every OpenAI-compatible gateway — exist only after the last of those
+   * transforms. Failing fast on "the catalog has models but not yours" would
+   * break exactly those and nothing else. See the contract, §9.5.8.
+   *
    * **Both are scoped to the folder the session will be opened in, and that is
    * the whole point rather than a refinement.** The engine's catalog and agent
    * registry are per-*location*: it boots a location's services the first time
