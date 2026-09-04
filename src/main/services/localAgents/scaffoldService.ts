@@ -44,19 +44,49 @@ import { AGENTS_SUBDIR, slugifyAgentName } from '../../../shared/localAgents'
 const logger = createLogger('local-agent-scaffold')
 
 /**
- * Files whose `{{TOKEN}}` placeholders are substituted. Everything else is
- * copied byte-for-byte — a template that is not text must survive untouched,
- * and a script must never have its contents rewritten by a name the user typed.
+ * TOML basic-string body: backslash and quote escaped, control characters as
+ * escapes. A description containing a quote must not produce an unparsable
+ * `pyproject.toml` any more than it may produce invalid JSON in the manifest.
  */
-const SUBSTITUTED_FILES = new Set([
-  'AGENTS.md',
-  'CLAUDE.md',
-  'README.md',
-  'WORKFLOW_PROMPT.md',
-  'ENTRYPOINT_PROMPT.md',
-  'REFINER_PROMPT.md'
-])
+function tomlBasicString(value: string): string {
+  return value.replace(/[\\"\u0000-\u001f\u007f]/g, (ch) => {
+    switch (ch) {
+      case '\\':
+        return '\\\\'
+      case '"':
+        return '\\"'
+      case '\n':
+        return '\\n'
+      case '\r':
+        return '\\r'
+      case '\t':
+        return '\\t'
+      default:
+        return `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`
+    }
+  })
+}
 
+/**
+ * Files whose `{{TOKEN}}` placeholders are substituted, each with the escaping
+ * its syntax needs. Everything else is copied byte-for-byte — a template that is
+ * not text must survive untouched, and a script must never have its contents
+ * rewritten by a name the user typed.
+ *
+ * `pyproject.toml` is here because `uv run` parses it before Python starts: a
+ * scaffold that leaves `name = "{{SLUG}}"` in place makes every `/run:` command
+ * of the agent fail with a TOML error, and nothing short of running `uv` in the
+ * created folder notices (`e2e/specs/scaffold.spec.ts` does exactly that).
+ */
+const SUBSTITUTED_FILES: ReadonlyMap<string, (value: string) => string> = new Map([
+  ['AGENTS.md', (v: string) => v],
+  ['CLAUDE.md', (v: string) => v],
+  ['README.md', (v: string) => v],
+  ['WORKFLOW_PROMPT.md', (v: string) => v],
+  ['ENTRYPOINT_PROMPT.md', (v: string) => v],
+  ['REFINER_PROMPT.md', (v: string) => v],
+  ['pyproject.toml', tomlBasicString]
+])
 
 export interface ScaffoldAgentInput {
   /** Absolute path of the workshop root. Already validated by the caller. */
@@ -85,9 +115,13 @@ export function slugify(name: string): string {
   return slugifyAgentName(name)
 }
 
-function substituteTokens(text: string, values: Record<string, string>): string {
+function substituteTokens(
+  text: string,
+  values: Record<string, string>,
+  escape: (value: string) => string
+): string {
   return text.replace(/\{\{([A-Z_]+)\}\}/g, (match, token: string) =>
-    Object.hasOwn(values, token) ? values[token] : match
+    Object.hasOwn(values, token) ? escape(values[token]) : match
   )
 }
 
@@ -136,8 +170,9 @@ function copyTree(
     const destination = join(destRoot, ...(renames.get(relPath) ?? relPath).split('/'))
     mkdirSync(dirname(destination), { recursive: true })
     const raw = readFileSync(source)
-    if (SUBSTITUTED_FILES.has(entry.name)) {
-      writeFileSync(destination, substituteTokens(raw.toString('utf8'), values))
+    const escape = SUBSTITUTED_FILES.get(entry.name)
+    if (escape) {
+      writeFileSync(destination, substituteTokens(raw.toString('utf8'), values, escape))
     } else {
       writeFileSync(destination, raw)
     }
