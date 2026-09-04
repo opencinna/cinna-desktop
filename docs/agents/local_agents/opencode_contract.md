@@ -864,8 +864,10 @@ Five things that answers:
   the `limit` on a Gemini entry does not shape the request; it feeds the engine's own context
   accounting, and Google applies its own default reply ceiling.
 
-**What this does not establish**, and it is the whole of the remaining risk: no request has ever
-reached Google. That the endpoint accepts this body, this model id and this key format is inference
-from Google's published compatibility layer, not observation. A live turn on a real Gemini key
-settles it, and the failure would be loud — a 4xx from Google, surfaced as
-`session.next.step.failed` (§9.5.5) — rather than another hang.
+**Settled live on 3 Sep 2026.** When this section was first written no request had ever reached
+Google, and the body, the bare model id and the key format were inference from Google's published
+compatibility layer rather than observation. A live desktop turn on a real Gemini key then answered
+through this route, so Google accepts all three as written. Both provider paths the desktop emits
+are now confirmed against a real credential: an Anthropic second credential as a custom
+`@ai-sdk/anthropic` entry, and Gemini as a custom `@ai-sdk/openai-compatible` entry here. An
+`openai` custom entry has still never been exercised on the wire against the real provider.
