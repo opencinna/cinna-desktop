@@ -63,7 +63,14 @@ function indexFolder(): void {
       id: 'folder:6f1a-uuid',
       name: 'Invoice Checker',
       description: null,
-      localPath: '/w/Local/invoice-checker'
+      localPath: '/w/Local/invoice-checker',
+      remoteMetadata: {
+        entrypoint_prompt: null,
+        example_prompts: [],
+        session_mode: null,
+        ui_color_preset: null,
+        protocol_versions: []
+      }
     }
   ])
 }
@@ -155,7 +162,19 @@ describe('an unstamped folder agent, whose id is positional rather than portable
 
   it('resolves on the device it came from, so the origin does not report needing setup', () => {
     agentRepo.replaceFolderIndex(USER, 'r1', [
-      { id: legacyId, name: 'Invoice Checker', description: null, localPath: '/w/Local/ic' }
+      {
+        id: legacyId,
+        name: 'Invoice Checker',
+        description: null,
+        localPath: '/w/Local/ic',
+        remoteMetadata: {
+          entrypoint_prompt: null,
+          example_prompts: [],
+          session_mode: null,
+          ui_color_preset: null,
+          protocol_versions: []
+        }
+      }
     ])
     expect(resolveFolderAgent(legacyDesc)).toBe(legacyId)
   })
@@ -167,7 +186,19 @@ describe('an unstamped folder agent, whose id is positional rather than portable
     // being searched for elsewhere. The descriptor strips the prefix on the way
     // out and this puts it back; the round trip has to be exact.
     agentRepo.replaceFolderIndex(USER, 'r1', [
-      { id: legacyId, name: 'Invoice Checker', description: null, localPath: '/w/Local/ic' }
+      {
+        id: legacyId,
+        name: 'Invoice Checker',
+        description: null,
+        localPath: '/w/Local/ic',
+        remoteMetadata: {
+          entrypoint_prompt: null,
+          example_prompts: [],
+          session_mode: null,
+          ui_color_preset: null,
+          protocol_versions: []
+        }
+      }
     ])
     expect(resolveFolderAgent(legacyDesc)?.startsWith('folder:')).toBe(true)
   })

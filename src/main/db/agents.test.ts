@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from './testSupport/nodeSqlite'
+import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 /**
  * `agentRepo.replaceFolderIndex` is the one write that can *delete* a user's
@@ -22,11 +23,28 @@ vi.mock('./client', () => ({
 }))
 
 const { agentRepo } = await import('./agents')
+type FolderIndexEntry = Parameters<typeof agentRepo.replaceFolderIndex>[2][number]
 
 const USER = '__default__'
 
-function entry(id: string, name = id): { id: string; name: string; description: string | null; localPath: string } {
-  return { id, name, description: null, localPath: `/w/Local/${id}` }
+/**
+ * `remoteMetadata` is per-entry rather than a shared constant on purpose: it is
+ * synthesized from each folder's own manifest, so a fixture that gave every
+ * entry the same object could not fail a test about the right one reaching the
+ * right row. The example prompt names the agent it came from.
+ */
+function meta(id: string): RemoteAgentMetadata {
+  return {
+    entrypoint_prompt: null,
+    example_prompts: [`ask ${id} something`],
+    session_mode: null,
+    ui_color_preset: null,
+    protocol_versions: []
+  }
+}
+
+function entry(id: string, name = id): FolderIndexEntry {
+  return { id, name, description: null, localPath: `/w/Local/${id}`, remoteMetadata: meta(id) }
 }
 
 function ids(rows: Array<{ id: string }>): string[] {
@@ -92,7 +110,13 @@ describe('replaceFolderIndex', () => {
     const created = agentRepo.getOwned(USER, 'folder:a')?.createdAt
 
     agentRepo.replaceFolderIndex(USER, 'r1', [
-      { id: 'folder:a', name: 'Renamed', description: 'now described', localPath: '/w/Local/a2' }
+      {
+        id: 'folder:a',
+        name: 'Renamed',
+        description: 'now described',
+        localPath: '/w/Local/a2',
+        remoteMetadata: meta('folder:a-rescanned')
+      }
     ])
 
     const row = agentRepo.getOwned(USER, 'folder:a')
@@ -169,7 +193,13 @@ describe('replaceFolderIndex', () => {
       agentRepo.replaceFolderIndex(USER, 'r1', [
         entry('folder:a'),
         // `name` is NOT NULL — this insert throws mid-transaction.
-        { id: 'folder:c', name: null as unknown as string, description: null, localPath: '/w/c' }
+        {
+          id: 'folder:c',
+          name: null as unknown as string,
+          description: null,
+          localPath: '/w/c',
+          remoteMetadata: meta('folder:c')
+        }
       ])
     ).toThrow()
 
@@ -185,5 +215,54 @@ describe('pruneFolderIndexForRoot', () => {
 
     expect(agentRepo.pruneFolderIndexForRoot(USER, 'r1')).toBe(2)
     expect(ids(agentRepo.listFolder(USER))).toEqual(['folder:c'])
+  })
+})
+
+/**
+ * The folder row's `remoteMetadata` is synthesized from the folder's manifest
+ * and is a cache over it, in the same sense `name` and `description` are. What
+ * matters is that **all three** writers refresh it, because the one that is
+ * easiest to miss is the one that matters most: a rescan takes the *update*
+ * branch, and the single-folder path is the watcher, which is what fires when
+ * someone edits `cinna-agent.json` — precisely when these values change.
+ */
+describe('the synthesized manifest metadata on a folder row', () => {
+  it('lands on a newly indexed folder', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
+    expect(agentRepo.getOwned(USER, 'folder:a')?.remoteMetadata).toEqual(meta('folder:a'))
+  })
+
+  it('is refreshed by a rescan, which takes the update branch', () => {
+    // The trap: writing it only on insert leaves every pre-existing folder row
+    // without one forever, because a rescan never inserts again.
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
+    agentRepo.replaceFolderIndex(USER, 'r1', [
+      { ...entry('folder:a'), remoteMetadata: meta('edited') }
+    ])
+    expect(agentRepo.getOwned(USER, 'folder:a')?.remoteMetadata).toEqual(meta('edited'))
+  })
+
+  it('is refreshed by the single-folder update, which is the watcher path', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
+    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), remoteMetadata: meta('edited') }, 'r1')
+    expect(agentRepo.getOwned(USER, 'folder:a')?.remoteMetadata).toEqual(meta('edited'))
+  })
+
+  it('follows the row through a rekey, without being listed anywhere', () => {
+    // `rekeyFolderRow` is a whole-row spread rather than a field list, so it
+    // carries any column added later for free. Asserted rather than assumed —
+    // it is the one folder-row writer this change did not have to touch, and a
+    // future edit to a field list there would be silent.
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:legacy:r1:a')])
+    agentRepo.rekeyFolderRow(USER, 'folder:legacy:r1:a', 'folder:stamped-uuid')
+    expect(agentRepo.getOwned(USER, 'folder:stamped-uuid')?.remoteMetadata).toEqual(
+      meta('folder:legacy:r1:a')
+    )
+  })
+
+  it('gives two folders their own metadata rather than one shared object', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a'), entry('folder:b')])
+    expect(agentRepo.getOwned(USER, 'folder:a')?.remoteMetadata).toEqual(meta('folder:a'))
+    expect(agentRepo.getOwned(USER, 'folder:b')?.remoteMetadata).toEqual(meta('folder:b'))
   })
 })

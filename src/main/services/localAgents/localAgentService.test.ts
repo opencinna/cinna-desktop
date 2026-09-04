@@ -640,6 +640,24 @@ describe('reindexAgent', () => {
     expect(row?.localRootId).toBe(root.id)
     expect(localAgentService.get(USER, agentId).path).toBe(renamed)
   })
+
+  it('refreshes the row’s manifest metadata, which is why the watcher path matters', () => {
+    // This is the single-folder update, and it is what the watcher calls when
+    // `cinna-agent.json` changes — so it is the path that runs at exactly the
+    // moment `example_prompts` is edited. A full rescan would eventually catch
+    // up, but nothing guarantees one runs, and until it did the composer's `#`
+    // list and the agent's own tool description would show the old prompts.
+    const manifest = readManifest(manifestPath(agentDir))
+    manifest.example_prompts = ['ask about last quarter']
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+
+    const root = agentRootRepo.getDefault(USER)!
+    localAgentService.reindexAgent(USER, root, agentDir)
+
+    expect(agentRepo.getOwned(USER, agentId)?.remoteMetadata?.example_prompts).toEqual([
+      'ask about last quarter'
+    ])
+  })
 })
 
 describe('openPath', () => {

@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { shell } from 'electron'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
+import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { getLayoutView, resolveContract } from '../../kit/contractStore'
 import {
@@ -282,7 +283,8 @@ export const localAgentService = {
       id: dto.id,
       name: dto.name,
       description: dto.description === '' ? null : dto.description,
-      localPath: dto.path
+      localPath: dto.path,
+      remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest)
     }
     if (existing) {
       // `localPath` and `localRootId` are refreshed too, not just the display
@@ -290,12 +292,7 @@ export const localAgentService = {
       // same row at a new path, and leaving the old one behind would strand
       // `locate()` — and with it the page and every write — until something
       // triggered a full root scan.
-      agentRepo.updateFolderIndex(userId, dto.id, {
-        name: entry.name,
-        description: entry.description,
-        localPath: entry.localPath,
-        localRootId: root.id
-      })
+      agentRepo.updateFolderIndex(userId, entry, root.id)
       return dto
     }
     // A folder that appeared between scans: a full root scan is the only thing

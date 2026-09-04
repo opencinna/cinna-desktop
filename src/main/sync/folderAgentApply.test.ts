@@ -99,7 +99,14 @@ function indexWorkshop(): void {
       id: 'folder:6f1a-uuid',
       name: 'Invoice Checker',
       description: null,
-      localPath: '/w/Local/invoice-checker'
+      localPath: '/w/Local/invoice-checker',
+      remoteMetadata: {
+        entrypoint_prompt: null,
+        example_prompts: [],
+        session_mode: null,
+        ui_color_preset: null,
+        protocol_versions: []
+      }
     }
   ])
 }

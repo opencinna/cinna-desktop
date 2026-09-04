@@ -18,6 +18,7 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
+import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { getLayoutView, resolveContract } from '../../kit/contractStore'
 import type { LayoutView } from '../../kit/layout'
@@ -577,7 +578,10 @@ export const scannerService = {
         id: dto.id,
         name: dto.name,
         description: dto.description === '' ? null : dto.description,
-        localPath: dto.path
+        localPath: dto.path,
+        // Free here: the manifest is already parsed on the DTO, so the row's
+        // copy is built at the one moment the files have just been read.
+        remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest)
       })
     }
 

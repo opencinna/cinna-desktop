@@ -704,3 +704,86 @@ describe('scanning a workshop', () => {
     expect(scannerService.scanRoot(USER, root).agents).toEqual([])
   })
 })
+
+/**
+ * The manifest metadata the chat surfaces read, end to end from real bytes.
+ *
+ * `remoteMetadata` was built for backend-synced agents and a folder row always
+ * carried null, which left two things dead: the composer's `#` prompt list, and
+ * the "Example tasks: …" clause of the description the orchestrator LLM sees
+ * for the agent-as-tool. Both read `example_prompts` off that column and
+ * nothing else.
+ *
+ * These go through the real scaffolder, the real manifest writer and the real
+ * scanner rather than a hand-built fixture, because a fixture written from a
+ * format's documentation rather than its emitter is how a defect survives —
+ * this project has one that lasted from Phase 3 that way.
+ */
+describe('the manifest metadata a folder row carries', () => {
+  it('carries the folder’s example prompts onto the row', () => {
+    const dir = scaffold('alpha', 'Alpha')
+    const manifest = readManifest(manifestPath(dir))
+    manifest.example_prompts = ['dad-joke: tell me one', 'Summarise today']
+    writeManifest(manifestPath(dir), manifest)
+
+    scannerService.scanRoot(USER, root)
+
+    expect(agentRepo.listFolder(USER)[0].remoteMetadata?.example_prompts).toEqual([
+      'dad-joke: tell me one',
+      'Summarise today'
+    ])
+  })
+
+  it('follows an edit to them, which is a rescan and therefore an update', () => {
+    // The trap this design exists to defeat: a rescan never inserts again, so a
+    // write on the insert branch alone would leave the row's copy frozen at
+    // whatever the folder said the first time it was seen.
+    const dir = scaffold('alpha', 'Alpha')
+    const manifest = readManifest(manifestPath(dir))
+    manifest.example_prompts = ['first']
+    writeManifest(manifestPath(dir), manifest)
+    scannerService.scanRoot(USER, root)
+
+    manifest.example_prompts = ['second', 'third']
+    writeManifest(manifestPath(dir), manifest)
+    scannerService.markAllRootsDirty()
+    scannerService.scanRoot(USER, root)
+
+    expect(agentRepo.listFolder(USER)[0].remoteMetadata?.example_prompts).toEqual([
+      'second',
+      'third'
+    ])
+  })
+
+  it('drops junk an editor put in `example_prompts` before it reaches the row', () => {
+    // Written as real bytes because that is the only way to show the guard is
+    // reachable in production: `parseManifest` proves the file is a JSON object
+    // and nothing more, and the scanner indexes a folder whose manifest is
+    // invalid as long as its *identity* resolved. The validator does flag this
+    // — but it flags it as a finding, and a finding does not stop the row being
+    // written. Whatever survives here is joined into an LLM-facing description.
+    const dir = scaffold('alpha', 'Alpha')
+    const manifest = readManifest(manifestPath(dir))
+    ;(manifest as Record<string, unknown>).example_prompts = [1, null, {}, '  ', 'the real one']
+    writeManifest(manifestPath(dir), manifest)
+
+    scannerService.scanRoot(USER, root)
+
+    expect(agentRepo.listFolder(USER)[0].remoteMetadata?.example_prompts).toEqual(['the real one'])
+  })
+
+  it('leaves an empty list, not a null column, for a folder that lists none', () => {
+    // A scaffolded manifest has no `example_prompts`. The row still gets an
+    // object, so `#` and the tool description read an empty list rather than
+    // stepping through a null the way they did before.
+    scaffold('alpha', 'Alpha')
+    scannerService.scanRoot(USER, root)
+
+    const meta = agentRepo.listFolder(USER)[0].remoteMetadata
+    expect(meta?.example_prompts).toEqual([])
+    // No `cinna_mcp`: `A2AAsMcpProvider` builds a better tool from its own
+    // fallbacks than a descriptor synthesized from the manifest blurb would,
+    // and the remote write path omits the key in the same situation.
+    expect(meta?.cinna_mcp).toBeUndefined()
+  })
+})

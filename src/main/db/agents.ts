@@ -87,6 +87,21 @@ export interface FolderIndexEntry {
   description: string | null
   /** Absolute path of the agent folder. */
   localPath: string
+  /**
+   * The folder's manifest, in the shape the chat surfaces already read —
+   * `synthesizeFolderAgentMetadata`. Carried on the entry rather than written
+   * by each writer separately, because there are three of them and one is easy
+   * to miss: `replaceFolderIndex`'s insert branch, its *update* branch (which
+   * is what a rescan takes, so an insert-only write would never reach an
+   * existing row), and `updateFolderIndex` (which is the **watcher** path — the
+   * one that fires when `cinna-agent.json` is edited, i.e. exactly when these
+   * values change). A field on this type reaches all three; `rekeyFolderRow` is
+   * a whole-row spread and carries it for free.
+   *
+   * Required, not optional: an omitted field would write `undefined` over a
+   * good value at the one moment a rescan should be refreshing it.
+   */
+  remoteMetadata: RemoteAgentMetadata
 }
 
 /** What {@link agentRepo.rekeyFolderRow} moved. */
@@ -391,7 +406,8 @@ export const agentRepo = {
               description: entry.description,
               source: 'folder',
               localPath: entry.localPath,
-              localRootId: rootId
+              localRootId: rootId,
+              remoteMetadata: entry.remoteMetadata
             })
             .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
             .run()
@@ -421,6 +437,11 @@ export const agentRepo = {
               source: 'folder',
               localPath: entry.localPath,
               localRootId: rootId,
+              // Named for the column it shares with backend-synced agents, but
+              // synthesized here from the folder's own manifest — see
+              // `synthesizeFolderAgentMetadata`. It is a cache over the files
+              // in exactly the sense `name` and `description` above are.
+              remoteMetadata: entry.remoteMetadata,
               createdAt: new Date()
             })
             .run()
@@ -437,26 +458,23 @@ export const agentRepo = {
    * Update one folder row's index fields. The single-folder counterpart of
    * {@link replaceFolderIndex}, for a rescan that knows exactly which agent
    * changed. `enabled` is untouched, as everywhere else.
+   *
+   * Takes the whole {@link FolderIndexEntry} rather than a hand-listed patch so
+   * the two writers cannot drift: a field added to the entry reaches this path
+   * as a compile error rather than as a row that quietly stops being refreshed.
+   * The caller already builds an entry — it used to re-list its fields here.
    */
-  updateFolderIndex(
-    userId: string,
-    agentId: string,
-    patch: {
-      name: string
-      description: string | null
-      localPath: string
-      localRootId: string
-    }
-  ): void {
+  updateFolderIndex(userId: string, entry: FolderIndexEntry, localRootId: string): void {
     getDb()
       .update(agents)
       .set({
-        name: patch.name,
-        description: patch.description,
-        localPath: patch.localPath,
-        localRootId: patch.localRootId
+        name: entry.name,
+        description: entry.description,
+        localPath: entry.localPath,
+        localRootId,
+        remoteMetadata: entry.remoteMetadata
       })
-      .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
+      .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
       .run()
   },
 
