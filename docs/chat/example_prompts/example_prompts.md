@@ -2,11 +2,11 @@
 
 ## Purpose
 
-Surfaces a remote agent's suggested starter prompts in two places — as a clickable tag cloud above the new-chat input when that agent is selected, and as a `#`-triggered picker inside any chat input. Lets users jump into a pre-written prompt without retyping it.
+Surfaces an agent's suggested starter prompts in two places — as a clickable tag cloud above the new-chat input when that agent is selected, and as a `#`-triggered picker inside any chat input. Lets users jump into a pre-written prompt without retyping it.
 
 ## Core Concepts
 
-- **Example Prompt** — A string on a remote agent's `remoteMetadata.example_prompts` list. Typical shape: `label: full prompt text` (e.g. `dad-joke: tell me a dad joke`). The portion before the colon is the **label** (shown on the tag); the portion after is the **full** prompt (sent as the actual message).
+- **Example Prompt** — A string on an agent's `remoteMetadata.example_prompts` list. Typical shape: `label: full prompt text` (e.g. `dad-joke: tell me a dad joke`). The portion before the colon is the **label** (shown on the tag); the portion after is the **full** prompt (sent as the actual message).
 - **Tag cloud** — Animated row of pill buttons rendered above the ChatInput on the new-chat screen when the currently-selected agent has example prompts. Clicking a tag starts a new chat with the full prompt as the first message.
 - **`#` trigger** — Typing `#` at the start of a word inside ChatInput opens a popup listing example prompts (same keyboard behaviour as the `@`-mention popup). Selecting a prompt replaces the `#filter` token with the full prompt text.
 - **Prompt-source agent** — The agent whose example prompts populate the popup. In an active chat, this is the chat's bound agent. On the new-chat screen, it is the currently selected agent.
@@ -32,7 +32,8 @@ Surfaces a remote agent's suggested starter prompts in two places — as a click
 
 ## Business Rules
 
-- Example prompts only come from remote agents — local agents store `remoteMetadata: null` and contribute no prompts
+- Prompts come from `remoteMetadata.example_prompts` whatever the agent's source, and the renderer never asks where the column's contents came from. Two sources fill it: a **remote** agent's are fetched from the Cinna backend by the agent sync, and a **folder** agent's are synthesized locally from `cinna-agent.json` at scan time (see [Folder Agents as Counterparties](../../agents/local_agents/counterparty.md)). A hand-added **local** A2A agent still stores `remoteMetadata: null` and contributes no prompts
+- A folder agent's prompts are bounded before they reach the row — at most 20 entries of at most 500 characters each, the schema's own limits, with over-long and malformed entries **dropped rather than truncated**. The `#` list is not why: the same field feeds the tool description an orchestrating model reads on every turn, where an unbounded manifest costs context per turn
 - A string is parsed as `label: full` only when it starts with a non-space, non-colon character followed by `:` and whitespace within 40 characters. Otherwise the full string is used as both label (truncated to 32 chars with an ellipsis) and full prompt
 - Empty and non-string entries in `example_prompts` are filtered out
 - The tag-cloud row always occupies `min-h-10` on the new-chat screen so the centered column's geometry does not reflow when tags appear or disappear
@@ -45,11 +46,18 @@ Surfaces a remote agent's suggested starter prompts in two places — as a click
 ## Architecture Overview
 
 ```
-Backend sync:
+Two writers, one column:
   Cinna backend /api/v1/external/agents
     → agentService.syncRemoteAgents
-      → agentRepo.syncRemote
+      → agentRepo.syncRemote                      (source = 'remote')
         → agents.remote_metadata column (JSON RemoteAgentMetadata)
+
+  cinna-agent.json on disk
+    → scannerService.scanRoot / localAgentService.reindexAgent
+      → synthesizeFolderAgentMetadata
+        → FolderIndexEntry.remoteMetadata
+          → agentRepo.replaceFolderIndex / .updateFolderIndex   (source = 'folder')
+            → the same column
 
 Renderer:
   useAgents() → AgentData.remoteMetadata.example_prompts
@@ -66,6 +74,7 @@ Renderer:
 
 ## Integration Points
 
-- [Remote Agents](../../agents/remote_agents/remote_agents.md) — Source of `example_prompts`; the backend sync stores them under `remoteMetadata`
-- [Agents](../../agents/agents/agents.md) — The `#` picker works in any chat bound to a remote agent, including sessions that were themselves started via a tag click
+- [Remote Agents](../../agents/remote_agents/remote_agents.md) — one source of `example_prompts`; the backend sync stores them under `remoteMetadata`
+- [Folder Agents as Counterparties](../../agents/local_agents/counterparty.md) — the other source: a folder agent's manifest, synthesized into the same column at scan time. That doc also owns the caveat that the column's *name* is accurate for only half its rows
+- [Agents](../../agents/agents/agents.md) — The `#` picker works in any chat bound to an agent that has prompts, including sessions that were themselves started via a tag click
 - [Messaging](../messaging/messaging.md) — A tag click drives the standard new-chat flow; a `#` pick becomes ordinary message text that travels the same streaming pipeline

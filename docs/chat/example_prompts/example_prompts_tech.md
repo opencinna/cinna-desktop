@@ -13,14 +13,15 @@
 | File | Role |
 |------|------|
 | `src/main/services/agentService.ts` | `syncRemoteAgents()` fetches `/api/v1/external/agents`, copies `example_prompts` (and the other typed fields) into the `metadata` payload handed to the repo. `synthesizeRemoteSkills()` also derives skill placeholders from the first five prompts so the existing skills UI remains populated. |
-| `src/main/db/agents.ts` | `RemoteTarget.metadata` is typed as `RemoteAgentMetadata`. `agentRepo.syncRemote()` writes it to the `remote_metadata` column on upsert. |
+| `src/main/db/agents.ts` | `RemoteTarget.metadata` is typed as `RemoteAgentMetadata`. `agentRepo.syncRemote()` writes it to the `remote_metadata` column on upsert — the **remote** writer. `FolderIndexEntry.remoteMetadata` (required, not optional) carries the **folder** writer's value into `replaceFolderIndex()` (both branches) and `updateFolderIndex()`. |
+| `src/main/services/localAgents/folderAgentMetadata.ts` | `synthesizeFolderAgentMetadata(manifest)` — builds the blob for a folder row from `cinna-agent.json`. Pure: no filesystem, no database. Only `example_prompts` is populated; the other four required fields are `null`/`[]` deliberately. |
 | `src/main/db/schema.ts` | `agents.remoteMetadata` column: `text('remote_metadata', { mode: 'json' }).$type<RemoteAgentMetadata>()`. |
 
 ### Renderer
 
 | File | Role |
 |------|------|
-| `src/renderer/src/utils/examplePrompts.ts` | `extractExamplePrompts(agent)` reads `agent.remoteMetadata?.example_prompts` and returns `ExamplePrompt[]`. `splitPrompt()` parses `label: body` via regex; entries without a recognisable label get a truncated label and the full string as the body. |
+| `src/renderer/src/utils/examplePrompts.ts` | `extractExamplePrompts(agent)` reads `agent.remoteMetadata?.example_prompts` and returns `ExamplePrompt[]` — it does not test the agent's `source`, which is why a folder agent reaches it unchanged. Three consumers: `ChatInput.tsx:504` (the `#` popup), `MainArea.tsx:97` (the new-chat tag cloud) and `hooks/useHintContext.ts:40` (hint gating). `splitPrompt()` parses `label: body` via regex; entries without a recognisable label get a truncated label and the full string as the body. |
 | `src/renderer/src/components/chat/ExamplePromptTags.tsx` | Animated tag cloud on the new-chat screen. Keeps its own `displayPrompts` / `displayKey` / `leaving` state so it can hold the current tags rendered while they fade out (400 ms) before unmounting. Uses `wasVisibleRef` to detect the non-empty → empty transition without reading stale state. Always renders its container (`min-h-10`) so the parent column does not reflow. |
 | `src/renderer/src/components/chat/ExamplePromptPopup.tsx` | Thin wrapper around the shared [Mention Popups](../mention_popups/mention_popups.md) primitive — binds `ExamplePrompt`, declares the `Hash` icon, `Example Prompts` header, `w-80` width, and the `prompt.full` 2-line-clamped secondary line. |
 | `src/renderer/src/components/chat/AgentMentionPopup.tsx` | Companion wrapper for the `@` trigger over the same shared primitive — see [Mention Popups](../mention_popups/mention_popups.md). |
@@ -33,7 +34,7 @@
 - Table: `agents`
 - Column: `remote_metadata` (`text` in JSON mode, nullable)
 - Typed in Drizzle as `$type<RemoteAgentMetadata>()` via `src/main/db/schema.ts`
-- Populated only for rows with `source='remote'`; local agents write `null`
+- Populated for `source='remote'` rows (backend sync) and `source='folder'` rows (synthesized from the manifest at scan time); hand-added `source='local'` A2A agents write `null`
 - Migration: `src/main/db/migrations/agents.ts` adds the column; no migration was needed for this feature — the column already exists and this change narrows its TS type only
 
 ## IPC Channels

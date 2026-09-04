@@ -8,7 +8,7 @@
 - `sync/syncEngine.ts` — `runSyncCycle(userId, subjectId, umk, version)`, `bootstrap(userId, subjectId, umk)`: cursor advance, push batch build, pull drain, LWW conflict apply, back-pressure limits. Takes both the local-profile `userId` (repo/cursor scoping) and the `subjectId` (backend user id) used **only** as the crypto AAD identity. Threads the peer's `client_updated_at` + a per-cycle `ResolveCache` into every `apply`; recomputes the push watermark from the post-apply max. `applyServerRecord` returns an `ApplyOutcome` (`applied`/`skipped`/`undecryptable`); decrypt failures are caught, skipped, and tallied into `CycleResult.decryptSkipped`, and `pullLoop` escalates to an `error` log when a whole page decrypts to nothing.
 - `sync/collections.ts` — per-collection `encode`/`decode`: `COLLECTION_MAPPERS`, `MAPPERS_BY_COLLECTION`, `ApplyContext`. The job mapper emits `{modeName, deps[]}` (the portable manifest, verbatim from `jobs.sync_deps`) and on apply stores it verbatim then materializes join rows via the resolvers. All DB access delegated to domain repos.
 - `sync/identity.ts` — portable-identity normalizers (`normalizeUrl`, `mcpIdentityKey`, `agentIdentityKey`, `modeKey`) + row→descriptor builders (`mcpRowToDescriptor`, `agentRowToDescriptor`). The single pinned keying module so encode + resolve agree byte-for-byte.
-- `sync/resolvers.ts` — descriptor→local-id resolution on the apply path (`resolveMode/resolveRemoteAgent/resolveLocalAgent/resolveMcp`), Default-Scope disabled auto-create, per-pass `ResolveCache`, plus the list-badge index (`buildResolveIndex`/`manifestNeedsSetup`) and finder helpers (`findMcp`/`findLocalAgent`).
+- `sync/resolvers.ts` — descriptor→local-id resolution on the apply path (`resolveMode/resolveRemoteAgent/resolveLocalAgent/resolveMcp/resolveFolderAgent`), Default-Scope disabled auto-create (**not** for `resolveFolderAgent`, which never creates), per-pass `ResolveCache`, plus the list-badge index (`buildResolveIndex`/`manifestNeedsSetup`) and finder helpers (`findMcp`/`findLocalAgent`/`findFolderAgent`). `resolveFolderAgent` reconstructs `folder:<manifestId>` and does a point `getOwned` in the **settings** scope, which it re-derives itself rather than inheriting from the caller.
 - `sync/manifest.ts` — `buildJobManifest()`/`rebuildJobManifest()`: derive a job's `sync_deps` manifest from current local state on a local edit (the one place descriptors are built from join rows; apply stores the wire manifest verbatim). Carries forward genuinely-unresolvable (foreign-server) remote-agent descriptors so a local edit doesn't drop them.
 - `sync/umkVault.ts` — in-memory UMK store keyed by user id: `setUmk`, `getUmk`, `isUnlocked`, `lock`, `lockAll`.
 
@@ -45,7 +45,7 @@
 
 **Mutation hooks (dirty signals)**
 - `services/notesService.ts` — `markDirty()` on note/folder create, update, soft-delete, restore, permanent-delete, empty-trash, reorder (notes + folders).
-- `services/jobService.ts` — `markDirty()` on job/folder create, update, delete, set-agents/MCPs, reorder; also `rebuildJobManifest()` after create / mode change / set-agents / set-MCPs so `sync_deps` tracks local edits. `getDependencyStatus()` (→ `job:dep-status` IPC) resolves a job's manifest against local state for the UX; `list()` adds a `needsSetup` flag via `buildResolveIndex`/`manifestNeedsSetup`.
+- `services/jobService.ts` — `markDirty()` on job/folder create, update, delete, set-agents/MCPs, reorder; also `rebuildJobManifest()` after create / mode change / set-agents / set-MCPs so `sync_deps` tracks local edits. `getDependencyStatus()` (→ `job:dep-status` IPC) resolves a job's manifest against local state for the UX — its folder-agent arm is the one that emits `unavailable` for a missing workshop and reserves `needs-setup` for the case the app can act on (the row is here, switched off); `list()` adds a `needsSetup` flag via `buildResolveIndex`/`manifestNeedsSetup`.
 
 ### Preload (`src/preload/`)
 - `preload/index.ts` — `window.api.sync.*` bindings.
@@ -61,7 +61,7 @@
 - `stores/ui.store.ts` — `SettingsMenu` union + `PROFILE_SCOPE_TABS` include `profile-sync`.
 
 ### Shared (`src/shared/`)
-- `shared/sync.ts` — cross-bridge types: `SyncState` (incl. `paused` = explicit user-pause on a trusted device, and `disconnected` = this device opted out of online sync), `SyncStatus`, `UnlockMethod`, `SyncDeviceInfo`, `SyncInitResult`, `SyncUnlockRequest`, `PairingOffer` (code + QR; no SAS), `PairingPollResult` (`{sas, done}`), `IncomingPairing` (auto-discovered request), `SyncEvent`, `SyncCollection`; plus the portable-dependency types `JobDepDescriptor`, `JobSyncManifest`, `JobDependencyStatus`, `McpTransport`. No key material.
+- `shared/sync.ts` — cross-bridge types: `SyncState` (incl. `paused` = explicit user-pause on a trusted device, and `disconnected` = this device opted out of online sync), `SyncStatus`, `UnlockMethod`, `SyncDeviceInfo`, `SyncInitResult`, `SyncUnlockRequest`, `PairingOffer` (code + QR; no SAS), `PairingPollResult` (`{sas, done}`), `IncomingPairing` (auto-discovered request), `SyncEvent`, `SyncCollection`; plus the portable-dependency types `JobDepDescriptor` (agent variants: `remote`, `local`, `folder`), `JobSyncManifest`, `JobDependencyStatus`, `McpTransport`. No key material.
 
 ## Database Schema
 

@@ -29,7 +29,7 @@ The one that catches people: an agent folder has its own `Local/<slug>/docs/` ho
 - **Stamp identity** — The offered, never automatic, write of a fresh UUID `id` into a legacy manifest — which also **re-keys** the agent's row rather than re-creating it
 - **AI draft** — The one-shot LLM call that follows a scaffold, filling the workflow prompt, three example prompts and the router trigger
 - **Readiness strip** — The line at the top of the agent page saying whether this folder can run, with the validator's own findings under it
-- **Counterparty exclusion** — `canBeCounterparty()`, the temporary reason a folder agent does not appear in the composer `@`-list or the Job agent picker
+- **Counterparty exclusion** — the temporary reason a folder agent did not appear in the composer `@`-list or the Job agent picker while the page's own chat controls were disabled. A named predicate, deliberately not the `enabled` column; gone with the runner that made it unnecessary — see [Folder Agents as Counterparties](counterparty.md)
 
 ## User Stories / Flows
 
@@ -189,11 +189,13 @@ Typing in the folder field holds the raw text rather than normalising per keystr
 
 ### Chat controls render disabled
 
-The runner is Phase 6. **Start chat** on the page header and **Run** on each command row are present, disabled and titled with why. Hiding them would make the finished page's shape invisible; enabling them would produce an error where the user expected a reply.
+The runner is Phase 6. **Start chat** on the page header and **Run** on each command row are present, disabled and titled with why. Hiding them would make the finished page's shape invisible; enabling them would produce an error where the user expected a reply. (Both are live now: `/run:<name>` in [Catalog Commands](commands.md), **Start chat** with it.)
 
 (The Runtime card's pickers were disabled in Phase 3 for the same reason and became interactive in Phase 5, which also gave the card an engine status line and a skip line — see [The Local Engine](engine.md).)
 
-The same restriction elsewhere is `canBeCounterparty(agent)` — a **temporary** exclusion of folder agents from the composer `@`-mention list and the Job agent picker. It is deliberately *not* expressed by clearing `enabled`: `enabled` means only the user's own choice and survives every rescan, so borrowing it here would make "the user turned this off" and "no runner exists yet" indistinguishable exactly when the runner arrives. The predicate and its two call sites are deleted, not migrated, in Phase 6.
+The same restriction elsewhere was a named predicate — a **temporary** exclusion of folder agents from the composer `@`-mention list and the Job agent picker. It was deliberately *not* expressed by clearing `enabled`: `enabled` means only the user's own choice and survives every rescan, so borrowing it here would have made "the user turned this off" and "no runner exists yet" indistinguishable exactly when the runner arrived.
+
+The predicate and its two call sites were deleted rather than migrated, in **Phase 7c** — not Phase 6, which built the runner but did not open the pickers to it. Both filters now read `a.enabled` alone. See [Folder Agents as Counterparties](counterparty.md).
 
 ### Readiness, drafting and stamping share one strip
 
@@ -260,7 +262,7 @@ Settings ── Local Agents ──► LocalAgentsSettingsSection
 - [AI Functions](../../llm/ai_functions/ai_functions.md) — the single-shot primitive the draft runs on; the draft resolves the adapter from the user's **default chat mode**
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — the default mode supplies the Runtime card's fallback model and the Settings readiness line's credential check
 - [Notes](../../notes/notes/notes.md) — the inline-editor pattern (no edit mode, autosave on pause and blur) this page reuses over files instead of rows
-- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) and [Jobs](../../jobs/jobs/jobs.md) — the two `canBeCounterparty()` call sites that keep folder agents out of counterparty pickers until the runner lands
+- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) and [Jobs](../../jobs/jobs/jobs.md) — the two counterparty pickers this page's agents are offered in, and what an attached folder agent does once picked
 - [App Shell](../../ui/app_shell/app_shell.md) and [Settings](../../ui/settings/settings.md) — the tab strip, the view routing and the settings menu this phase extends
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — Local Agents is machine-local, so its settings section sits in the **default** menu, not the profile one
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session

@@ -75,7 +75,7 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 ### Starting a chat from a status tile
 
 1. Clicking the chat button on a card, or "Start Chat" in the detail view, closes the overlay, switches to the chat view with no active chat, preselects the agent and focuses the input
-2. **It reaches a folder agent today, and that makes the tree inconsistent rather than restrictive.** The preselect resolves the id against the *unfiltered* agents list, so it never meets the `canBeCounterparty` exclusion — while the composer's `@` picker and the Jobs agent picker both still refuse to offer that same agent. So a folder agent can be started from a status tile but not chosen from either picker, and Phase 7c's deletion of `canBeCounterparty` **removes an inconsistency rather than adding a capability**
+2. **It reaches a folder agent, and it did so before either picker would offer one.** The preselect resolves the id against the *unfiltered* agents list, so it never met the counterparty exclusion that the composer's `@` picker and the Jobs agent picker both applied — a folder agent could be started from a status tile but not chosen from either picker. Phase 7c deleted that exclusion, so the three entry points now agree; **it removed an inconsistency rather than adding a capability**, and this tile is the surface that proves the runner path was already reachable from a real UI. See [Folder Agents as Counterparties](../local_agents/counterparty.md)
 
 ## Business Rules
 

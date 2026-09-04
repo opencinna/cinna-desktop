@@ -13,8 +13,7 @@ Implementation reference for [Agents Tab & Agent Page](agents_tab.md). Path conv
   - `DraftLocalAgentResult`, `LocalAgentDraftParts`
   - The `{ field: 'stamp_identity' }` variant of `LocalAgentFieldUpdate` — value-less by design: the UUID is minted in main, and a `value` here would be an id-setter any other card could reach
   - `describeAgentSlug(name)` / `AgentSlugCheck` / `AgentSlugProblem`, sharing `reduceToSlugCharacters` with `slugifyAgentName`
-  - `canBeCounterparty(agent)` — temporary, removed in Phase 6
-- `src/shared/localAgents.test.ts` — `canBeCounterparty` is independent of `enabled`; id prefix round-trip
+- `src/shared/localAgents.test.ts` — the id prefix round-trip. The counterparty predicate this file also exported, and the suite pinning it, were removed in **Phase 7c** (not Phase 6, which shipped the runner without opening the pickers); the claim they pinned is now pinned in reverse, in the two pickers themselves
 
 ### Main process
 - `src/main/ipc/local_agent.ipc.ts` — all handlers; the module-private `withCode()` wrapper that converts a thrown `DomainError` into a `LocalAgentOutcome` failure; the one-time `localAgentService.configure()` composition-root call
@@ -60,7 +59,7 @@ Adding the tab is four edits (renderer seam 10 of `plans/local-agents.md`), the 
 - `src/renderer/src/components/layout/MainArea.tsx` — an early return for `activeView === 'local-agent'`
 - `src/renderer/src/components/settings/SettingsPage.tsx` — a `sectionTitles` key and a render line
 - `src/renderer/src/App.tsx` — `useLocalAgentWatch()` mounted once in `Shell`
-- `src/renderer/src/components/chat/ChatInput.tsx`, `src/renderer/src/components/jobs/JobEditForm.tsx` — the two `canBeCounterparty()` filters
+- `src/renderer/src/components/chat/ChatInput.tsx`, `src/renderer/src/components/jobs/JobEditForm.tsx` — the two counterparty filters, `a.enabled` and nothing else
 
 ## IPC Channels
 

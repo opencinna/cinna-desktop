@@ -35,7 +35,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 - **Turn Lock** — A per-agent, in-process lock. The runner holds it for the length of a turn; editors refuse to save while it is held; the watcher defers its rescan until it is released
 - **Stamp** — `{mtimeMs, size, hash}` for a file the page can edit, round-tripped through a save so a write over a file that changed underneath is refused
 - **Desktop State** — `app-data/desktop.json`, the one file in an agent folder the desktop owns
-- **Counterparty** — An agent the user can pick and then expect an answer from. Temporarily *not* a folder agent, because the runner does not exist yet
+- **Counterparty** — An agent the user can pick and then expect an answer from. A folder agent is one, on the same terms as every other source: the pickers filter on `enabled` and nothing else. See [Folder Agents as Counterparties](counterparty.md)
 
 ## User Stories / Flows
 
@@ -148,7 +148,9 @@ Two more properties:
 - It is never overwritten by a rescan and no file states it — it is deliberately the one column the folder does not own. Newly indexed folder agents insert **enabled**
 - The scanner cannot know it, so the service overlays the row's value back onto every scanned snapshot before it reaches the renderer
 
-The temporary "folder agents have no runner yet" restriction is therefore **not** carried by `enabled`. It is a separate named predicate, `canBeCounterparty(agent)`, applied at exactly two places: the `@`-mention list in `src/renderer/src/components/chat/ChatInput.tsx` and the agent list in `src/renderer/src/components/jobs/JobEditForm.tsx`. Borrowing `enabled` for it would make the two meanings indistinguishable exactly when the runner arrives — nothing could then safely turn back on the agents that were only ever off because the feature did not exist. The predicate is deleted, not migrated, when the runner lands.
+The "folder agents have no runner yet" restriction was therefore never carried by `enabled`. It lived in a separate named predicate applied at exactly two places — the `@`-mention list in `src/renderer/src/components/chat/ChatInput.tsx` and the agent list in `src/renderer/src/components/jobs/JobEditForm.tsx` — and both of those filters now read `a.enabled` alone. Borrowing `enabled` would have made the two meanings indistinguishable exactly when the runner arrived: nothing could then have safely turned back on the agents that were only ever off because the feature did not exist.
+
+**That is why lifting the restriction was a deletion rather than a migration** — no column had to be rewritten and no user's toggle had to be guessed at. See [Folder Agents as Counterparties](counterparty.md).
 
 Every other consumer of the agents list looks an agent up by id for display, which is already correct for a folder agent.
 
@@ -257,6 +259,6 @@ Files on disk  ── truth ──►  agents rows + agent_roots rows  ── de
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — folder agents are machine-local and live in the default (settings) scope
 - [Database Migrations](../../development/migrations/migrations_llm.md) — `agent_roots`, the `agents` columns, and why the chain moved into its own module
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session
-- [Jobs](../../jobs/jobs/jobs.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — both pick counterparties from the agents list, and both exclude folder agents until the runner lands
+- [Jobs](../../jobs/jobs/jobs.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — both pick counterparties from the agents list, and both offer folder agents; see [Folder Agents as Counterparties](counterparty.md)
 
 Sub-doc: [Technical Details](folder_index_tech.md)

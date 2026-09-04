@@ -5,8 +5,8 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 ## File Locations
 
 ### Shared
-- `src/shared/localAgents.ts` — the whole wire contract: `FOLDER_AGENT_ID_PREFIX` (`folder:`), `FOLDER_AGENT_SOURCE` (`folder`), `FOLDER_AGENT_PROTOCOL` (`local-folder`), `AGENTS_SUBDIR` (`Local`), `LOCAL_AGENT_CHANGED_CHANNEL`, `isFolderAgentId()`, `folderAgentId()`, `canBeCounterparty()`, and the DTOs (`LocalAgentDto`, `AgentRootDto`, `LocalAgentReadiness`, `LocalAgentValidation`, `LocalAgentCredentialState`, `LocalAgentCommand`, `LocalAgentStatusSummary`, `LocalAgentDesktopSummary`, `FileStamp`, `CreateLocalAgentInput`, `UpdateLocalAgentFieldInput`, `LocalAgentFieldUpdate`, `OpenLocalAgentPathInput`, `RescanResult`, `LocalAgentChangedPayload`). Also the pieces the renderer needs to save correctly: `LOCAL_AGENT_PROMPT_PATHS`, `fieldFilePath(update)` (which file a given update writes, i.e. which stamp to send), `STALE_WRITE_ERROR_CODES` / `isStaleWriteError(error)`, and `slugifyAgentName()` — the slug rule lives here so the new-agent form previews the exact folder the scaffolder will create
-- `src/shared/localAgents.test.ts` — `canBeCounterparty` is independent of `enabled`; id prefix round-trip
+- `src/shared/localAgents.ts` — the whole wire contract: `FOLDER_AGENT_ID_PREFIX` (`folder:`), `FOLDER_AGENT_SOURCE` (`folder`), `FOLDER_AGENT_PROTOCOL` (`local-folder`), `AGENTS_SUBDIR` (`Local`), `LOCAL_AGENT_CHANGED_CHANNEL`, `isFolderAgentId()`, `folderAgentId()`, and the DTOs (`LocalAgentDto`, `AgentRootDto`, `LocalAgentReadiness`, `LocalAgentValidation`, `LocalAgentCredentialState`, `LocalAgentCommand`, `LocalAgentStatusSummary`, `LocalAgentDesktopSummary`, `FileStamp`, `CreateLocalAgentInput`, `UpdateLocalAgentFieldInput`, `LocalAgentFieldUpdate`, `OpenLocalAgentPathInput`, `RescanResult`, `LocalAgentChangedPayload`). Also the pieces the renderer needs to save correctly: `LOCAL_AGENT_PROMPT_PATHS`, `fieldFilePath(update)` (which file a given update writes, i.e. which stamp to send), `STALE_WRITE_ERROR_CODES` / `isStaleWriteError(error)`, and `slugifyAgentName()` — the slug rule lives here so the new-agent form previews the exact folder the scaffolder will create
+- `src/shared/localAgents.test.ts` — the id prefix round-trip. It is the whole file: the suite that pinned the folder-agent counterparty exclusion was **replaced** rather than deleted, by two suites that pin the opposite claim in the pickers where it now lives (`ChatInput.agentMention.test.tsx`, `JobEditForm.agentPicker.test.tsx`)
 - `src/shared/appSettings.ts` — `localAgentsHome` joins `AppSettingsSchema`. First non-boolean setting in the store
 
 ### Main process — database
@@ -47,7 +47,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 
 ### Renderer
 - `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useValidateLocalAgent`
-- `src/renderer/src/components/chat/ChatInput.tsx` and `src/renderer/src/components/jobs/JobEditForm.tsx` — the two `canBeCounterparty()` call sites
+- `src/renderer/src/components/chat/ChatInput.tsx` and `src/renderer/src/components/jobs/JobEditForm.tsx` — the two counterparty pickers. Both filter on `a.enabled` alone; see [Folder Agents as Counterparties](counterparty.md)
 
 ## Database Schema
 
