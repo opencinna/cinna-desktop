@@ -14,6 +14,17 @@ import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './logger/broadcast'
 
+// A disposable profile for the E2E suite (`e2e/`). Read once, before anything
+// derives a path from `userData` — the startup log, the database, the session
+// file and the engine folder all do. `sessionData` is set too: since Electron
+// 21 it no longer follows `userData`, and a test run must not leave Chromium
+// cache in the real profile.
+const overrideUserData = process.env['CINNA_USER_DATA']
+if (overrideUserData) {
+  app.setPath('userData', overrideUserData)
+  app.setPath('sessionData', join(overrideUserData, 'session-data'))
+}
+
 let mainWindow: BrowserWindow | null = null
 let startupComplete = false
 const bootLogger = createLogger('boot')

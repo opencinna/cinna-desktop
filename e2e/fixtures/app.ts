@@ -1,0 +1,159 @@
+import { test as base, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import electronPath from 'electron'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { repoRoot } from '../playwright.config'
+import { installCachedEngine } from './engine-cache'
+
+/**
+ * One launched app per test, in a sandbox nobody else can see.
+ *
+ * The sandbox is a fresh `HOME`: the app derives its agents home from
+ * `homedir()` and refuses agent roots outside it, and the seam in
+ * `src/main/index.ts` puts `userData` under it too. Without both, a fresh
+ * profile registers the developer's real `~/Documents/CinnaAgents` as its home
+ * and the test is running against their files — the spike that preceded this
+ * suite did exactly that once.
+ *
+ * `PATH` is written into the sandbox's shell rc files: the app probes the
+ * login shell for its environment, and a home with no rc files yields a bare
+ * `PATH` in which `uv` and `opencode` do not exist.
+ */
+export interface Sandbox {
+  /** The sandbox root; removed after a passing test, kept after a failure. */
+  root: string
+  /** `$HOME` inside the app. */
+  home: string
+  /** Where `app.getPath('userData')` points. */
+  userData: string
+}
+
+export interface CinnaApp {
+  sandbox: Sandbox
+  readonly electronApp: ElectronApplication
+  /** The main window (`index.html`), never the tray panel. */
+  readonly page: Page
+  /** Quit and start again in the same sandbox, as a user restarting the app. */
+  relaunch(): Promise<void>
+  /** Make the next OS directory picker return `dir` and any confirm box say yes. */
+  stubDirectoryPicker(dir: string): Promise<void>
+  /** Get past the first-run screen the way a user who has no key yet would. */
+  skipOnboarding(): Promise<void>
+}
+
+export function makeSandbox(): Sandbox {
+  const root = mkdtempSync(join(tmpdir(), 'cinna-e2e-'))
+  const home = join(root, 'home')
+  const userData = join(root, 'userData')
+  mkdirSync(home, { recursive: true })
+  mkdirSync(userData, { recursive: true })
+  const realPath = process.env.PATH ?? ''
+  const exportPath = `export PATH=${JSON.stringify(realPath)}\n`
+  writeFileSync(join(home, '.zprofile'), exportPath)
+  writeFileSync(join(home, '.zshrc'), exportPath)
+  writeFileSync(join(home, '.bash_profile'), exportPath)
+  writeFileSync(join(home, '.profile'), exportPath)
+  return { root, home, userData }
+}
+
+function launchEnv(sandbox: Sandbox): Record<string, string> {
+  const realHome = process.env.HOME ?? ''
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value
+  env.HOME = sandbox.home
+  env.CINNA_USER_DATA = sandbox.userData
+  // Reuse the developer's tool caches so `uv run` in a test does not
+  // re-provision an interpreter per sandbox.
+  env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')
+  env.XDG_CACHE_HOME ??= join(realHome, '.cache')
+  return env
+}
+
+export async function launch(sandbox: Sandbox): Promise<{ electronApp: ElectronApplication; page: Page }> {
+  const electronApp = await electron.launch({
+    executablePath: electronPath as unknown as string,
+    // The repo root, not the entry file: `app.getAppPath()` follows the argument,
+    // and the kit contract is resolved as `<appPath>/resources/...`.
+    // `--use-mock-keychain`: with HOME pointed at the sandbox, macOS resolves
+    // the login keychain under it and `safeStorage.encryptString` fails with
+    // "A keychain cannot be found to store …". Chromium's mock keychain keeps
+    // the real safeStorage code path and never touches the user's keychain.
+    args: [repoRoot, '--use-mock-keychain'],
+    cwd: repoRoot,
+    env: launchEnv(sandbox),
+    timeout: 60_000
+  })
+  const isMain = (page: Page): boolean => page.url().endsWith('index.html')
+  const page =
+    electronApp.windows().find(isMain) ??
+    (await electronApp.waitForEvent('window', { predicate: isMain, timeout: 60_000 }))
+  await page.waitForLoadState('domcontentloaded')
+  return { electronApp, page }
+}
+
+export interface CinnaOptions {
+  /**
+   * Put the pinned engine binary into the sandbox before launch, as a real
+   * install has it after its first download. Off by default: only a spec that
+   * makes a folder agent *answer* needs it. `test.use({ engine: true })`.
+   */
+  engine: boolean
+}
+
+export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
+  engine: [false, { option: true }],
+  cinna: async ({ engine }, use, testInfo) => {
+    const sandbox = makeSandbox()
+    if (engine) installCachedEngine(sandbox.userData)
+    let current = await launch(sandbox)
+
+    const cinna: CinnaApp = {
+      sandbox,
+      get electronApp() {
+        return current.electronApp
+      },
+      get page() {
+        return current.page
+      },
+      async relaunch() {
+        await current.electronApp.close()
+        current = await launch(sandbox)
+      },
+      async stubDirectoryPicker(dir: string) {
+        await current.electronApp.evaluate(({ dialog }, picked) => {
+          dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog
+          dialog.showMessageBox = (async () => ({ response: 0, checkboxChecked: false })) as typeof dialog.showMessageBox
+        }, dir)
+      },
+      async skipOnboarding() {
+        // After a relaunch the choice is already persisted and the shell shows
+        // straight away; wait for whichever of the two screens comes first.
+        const page = current.page
+        const skip = page.getByRole('button', { name: 'Skip for now' })
+        const shell = page.getByRole('button', { name: 'Chats', exact: true })
+        await skip.or(shell).first().waitFor()
+        if (await skip.isVisible()) await skip.click()
+        await shell.waitFor()
+      }
+    }
+
+    await use(cinna)
+
+    await current.electronApp.close()
+    if (testInfo.status === testInfo.expectedStatus) {
+      rmSync(sandbox.root, { recursive: true, force: true })
+    } else {
+      testInfo.annotations.push({ type: 'sandbox', description: sandbox.root })
+    }
+  }
+})
+
+export { expect } from '@playwright/test'
+
+/** A directory under the sandbox `$HOME`, where the app's path rules allow agent roots. */
+export function homeDir(cinna: CinnaApp, ...segments: string[]): string {
+  const dir = join(cinna.sandbox.home, ...segments)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  return dir
+}
