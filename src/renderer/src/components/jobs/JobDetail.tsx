@@ -395,11 +395,27 @@ function MissingChip({ label }: { label: string }): React.JSX.Element {
 }
 
 /**
- * "Finish setup on this device" — surfaces a synced job's dependencies that
- * didn't fully resolve here: `needs-setup` (amber — an MCP/agent shell was
- * auto-created but is disabled and missing credentials) and `unavailable`
- * (grey — can't resolve here, e.g. a remote agent from a server this profile
- * isn't on). The seamless path renders nothing.
+ * Surfaces a job's dependencies that didn't fully resolve here: `needs-setup`
+ * (amber — an MCP/agent shell was auto-created but is disabled and missing
+ * credentials) and `unavailable` (grey — can't resolve here, e.g. a remote
+ * agent from a server this profile isn't on, or a folder agent whose workshop
+ * is not on this machine). The seamless path renders nothing.
+ *
+ * **The chrome is chosen from what the list actually holds.** It used to be
+ * fixed: "Finish setup on this device", above "These dependencies need
+ * attention on this device before the job can run as configured." That is a
+ * promise for `needs-setup` and a falsehood for `unavailable` — a state that by
+ * definition cannot be finished here. `jobService.getDependencyStatus` spends
+ * twelve lines of comment keeping those two apart, and a fixed heading
+ * collapsed them again at the last step.
+ *
+ * It cannot be a flat swap either. `manifest.ts` builds one flat `deps` array
+ * holding agent and MCP descriptors together, and `getDependencyStatus` assigns
+ * state per-arm, so **one job can carry an `unavailable` folder agent and a
+ * `needs-setup` MCP at the same time** — attach both, then move the workshop
+ * directory. The mixed heading has to be true of both at once, which is why it
+ * promises nothing and points at the rows, whose per-row labels already say
+ * which is which.
  */
 function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | null {
   const { data: deps } = useJobDependencyStatus(jobId)
@@ -410,6 +426,8 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
     () => (deps ?? []).filter((d) => d.state !== 'resolved'),
     [deps]
   )
+  const hasNeedsSetup = pending.some((d) => d.state === 'needs-setup')
+  const hasUnavailable = pending.some((d) => d.state === 'unavailable')
   if (pending.length === 0) return null
 
   /**
@@ -441,11 +459,18 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
     >
       <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-warning)]">
         <AlertTriangle size={13} />
-        Finish setup on this device
+        {hasNeedsSetup && hasUnavailable
+          ? 'Dependencies need attention'
+          : hasUnavailable
+            ? 'Not available on this device'
+            : 'Finish setup on this device'}
       </div>
       <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
-        These dependencies need attention on this device before the job can run as
-        configured.
+        {hasNeedsSetup && hasUnavailable
+          ? "Some of these can be set up on this device. Others didn't resolve here at all — each row says which."
+          : hasUnavailable
+            ? "These dependencies didn't resolve on this device, so the job can't run as configured here."
+            : 'These dependencies need attention on this device before the job can run as configured.'}
       </p>
       <div className="space-y-1.5 pt-0.5">
         {pending.map((d) => {

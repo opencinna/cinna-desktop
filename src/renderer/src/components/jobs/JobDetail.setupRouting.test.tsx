@@ -4,8 +4,8 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { JobDependencyStatus } from '../../../../shared/sync'
 
 /**
- * Where the "Finish setup on this device" list sends the user, and when it
- * offers to send them anywhere at all.
+ * What the pending-dependency section says, where it sends the user, and when
+ * it offers to send them anywhere at all.
  *
  * `JobDependencyStatus.kind` is `'agent'` for three sources that live on three
  * different settings pages, and it is the only thing the row rendered on. That
@@ -92,6 +92,52 @@ function renderWith(list: JobDependencyStatus[]): void {
 
 beforeEach(() => {
   deps.current = []
+})
+
+describe('the pending-dependency section heading', () => {
+  /*
+    `getDependencyStatus` goes to real length to keep `unavailable` apart from
+    `needs-setup` — a missing workshop cannot be repaired inside the app, a
+    disabled shell can. The section then put a single heading over both:
+    "Finish setup on this device", above "These dependencies need attention on
+    this device before the job can run as configured." For an `unavailable` row
+    that is an instruction the user cannot carry out.
+
+    A mixed list is reachable, which is why this cannot be a flat swap:
+    `manifest.ts` builds one flat `deps` array carrying agent and MCP
+    descriptors together, and the folder-agent arm and the MCP arm assign
+    different states, so one job holds both at once.
+  */
+
+  it('offers to finish setup when every pending dependency can be finished here', () => {
+    renderWith([dep({ localId: 'nanoid123' })])
+    expect(screen.getByText('Finish setup on this device')).toBeTruthy()
+  })
+
+  it('does not offer to finish setup for a dependency that cannot be finished here', () => {
+    renderWith([dep({ state: 'unavailable', label: 'Missing Workshop' })])
+    expect(screen.getByText('Not available on this device')).toBeTruthy()
+    expect(screen.queryByText('Finish setup on this device')).toBeNull()
+    // The instruction, not just the heading: the lead-in carried the same claim.
+    expect(document.body.textContent ?? '').not.toMatch(/need attention on this device/)
+  })
+
+  it('claims neither one when the list holds both states at once', () => {
+    // The case a flat swap gets wrong. Either fixed heading is false about half
+    // of this list, so the chrome states nothing and defers to the rows.
+    renderWith([
+      dep({ key: 'agent:0', state: 'unavailable', label: 'Missing Workshop' }),
+      dep({ key: 'mcp:0', kind: 'mcp', state: 'needs-setup', localId: 'm_1', label: 'Weather' })
+    ])
+    expect(screen.getByText('Dependencies need attention')).toBeTruthy()
+    expect(screen.queryByText('Finish setup on this device')).toBeNull()
+    expect(screen.queryByText('Not available on this device')).toBeNull()
+    // Both rows are still listed and still labelled individually.
+    expect(screen.getByText('Missing Workshop')).toBeTruthy()
+    expect(screen.getByText('Weather')).toBeTruthy()
+    expect(screen.getByText('unavailable')).toBeTruthy()
+    expect(screen.getByText('needs setup')).toBeTruthy()
+  })
 })
 
 describe('the "Set up" button on a pending dependency', () => {
