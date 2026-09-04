@@ -178,9 +178,17 @@ export function JobDetail(): React.JSX.Element {
               right here. For that user the sentence was not merely unverifiable
               — it was false, and it sent them looking for a second machine.
               Making it conditional would need a sync-origin flag on the DTO for
-              a copy nicety; softening it says less without being truer. The
-              dependency rows below already name the agent and mark it
-              unavailable, which is the part that is always true.
+              a copy nicety. The dependency rows below already name the agent and
+              mark it unavailable, which is the part that is always true.
+
+              If you are here to put that sentence back with a hedge — "it may
+              run on a device where that agent is set up" — that does not fix
+              it. A hedge on a claim that is false for a whole class of users
+              who reach this panel by their own local action is still a claim
+              about a device that does not exist. The charge was never that we
+              lacked certainty and should soften; it is that the sentence
+              asserted something often untrue. Softening an untrue claim leaves
+              it untrue and makes it harder to notice.
             */}
             <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
               This job needs an agent that isn't available on this device, so it can't

@@ -71,7 +71,21 @@ function job(over: Partial<JobDetailData> = {}): JobDetailData {
   } as unknown as JobDetailData
 }
 
-/** Exactly what `jobService.executeLocal` throws, before the wire touches it. */
+/*
+  `REFUSAL` is the sentence `jobService.executeLocal` writes. What the tests
+  inject is the WIRE form below — prefix, class name and all. Keep that split.
+
+  An earlier version of this file injected `REFUSAL` directly and passed. A
+  fixture is the one part of a test nobody mutates: a mutation campaign
+  perturbs the code under test, never the input that decides what the test is
+  *about*. So a wrong fixture survives a rigorous campaign untouched, with
+  every mutation firing correctly against a string that never crosses the wire.
+  Both tests here were written that way, the same morning, by a process that
+  was mutation-checking every assertion it wrote.
+
+  Inject the clean sentence and these tests still pass — while the app shows
+  `Error invoking remote method 'job:execute': JobError: …`.
+*/
 const REFUSAL =
   "This job can't run on this device. It needs an agent that isn't " +
   'available here: Invoice Checker.'

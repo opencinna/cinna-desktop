@@ -58,7 +58,28 @@ vi.mock('./useAppSettings', () => ({ useAppSettings: () => ({ data: {} }) }))
 
 const { useExecuteJob } = await import('./useJobs')
 
-/** What `jobService.executeLocal` throws. */
+/*
+  `REFUSAL` is the sentence `jobService.executeLocal` writes. What the tests
+  inject is the WIRE form below — prefix, class name and all. Keep that split.
+
+  An earlier version of this file injected `REFUSAL` directly and passed. A
+  fixture is the one part of a test nobody mutates: a mutation campaign
+  perturbs the code under test, never the input that decides what the test is
+  *about*. So a wrong fixture survives a rigorous campaign untouched, with
+  every mutation firing correctly against a string that never crosses the wire.
+  Both tests here were written that way, the same morning, by a process that
+  was mutation-checking every assertion it wrote.
+
+  Inject the clean sentence and these tests still pass — while the app shows
+  `Error invoking remote method 'job:execute': JobError: …`.
+*/
+/*
+  Same family, one line down: the log assertion below was a bare
+  `toMatchObject({error: REFUSAL})`, which would have passed on the wrapped
+  string too. The assertion that "proved" the log carried the message was as
+  blind as the fixture feeding it. It is an exact match plus explicit absence
+  checks now.
+*/
 const REFUSAL =
   "This job can't run on this device. It needs an agent that isn't " +
   'available here: Invoice Checker.'
