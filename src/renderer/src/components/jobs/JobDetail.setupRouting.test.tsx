@@ -21,9 +21,13 @@ import type { JobDependencyStatus } from '../../../../shared/sync'
  * nothing to open. That is the missing-workshop case, whose repair is copying a
  * directory onto this machine.
  *
- * The dependency *state* is deliberately unchanged by all of this. Both folder
- * misses stay `needs-setup` and are told apart by `localId`, which is the
- * distinction `folderAgentApply.test.ts` already pins on the main-process side.
+ * The state side of this is settled separately, in `folderAgentApply.test.ts`:
+ * a **missing** folder agent is `unavailable` (nothing in the app resolves a
+ * directory that is not on the machine) and a **disabled** one is
+ * `needs-setup`. That removes the dead button for the missing case at the
+ * produce site. It does not remove it for the disabled case, which is what the
+ * routing here is for — that row has a real id, renders amber, and was being
+ * sent to a page it cannot appear on.
  */
 
 const deps = vi.hoisted(() => ({ current: [] as JobDependencyStatus[] }))
@@ -116,11 +120,24 @@ describe('the "Set up" button on a pending dependency', () => {
   })
 
   it('offers no button when nothing resolved, because no page can show a missing row', () => {
-    // The missing-workshop case. The row is still listed — the user needs to
-    // know the job depends on something absent — but the repair is copying a
-    // directory, and no settings page can do that.
+    // Reachable, and not only through folder agents — worth stating, because a
+    // reader who knows the folder arm now yields `unavailable` will assume this
+    // guard is dead. Both the MCP arm and the local-agent arm of
+    // `getDependencyStatus` call a `find*` that does **not** auto-create, and
+    // emit `needs-setup` with `localId: null` when the row is gone. That is the
+    // shell the sync apply created and the user later deleted: amber, with
+    // nothing on any settings page to open. So the gate fixes a pre-existing
+    // dead button for the other two sources as well as this one.
     renderWith([dep({ localId: null })])
     expect(screen.getByText('Invoice Checker')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /set up/i })).toBeNull()
+  })
+
+  it('offers no button for an MCP whose auto-created shell was deleted', () => {
+    // The same hole through the arm that predates this work. `findMcp` has no
+    // auto-create, so a deleted provider comes back `needs-setup` with no id.
+    renderWith([dep({ key: 'mcp:0', kind: 'mcp', localId: null, label: 'Weather' })])
+    expect(screen.getByText('Weather')).toBeTruthy()
     expect(screen.queryByRole('button', { name: /set up/i })).toBeNull()
   })
 
