@@ -11,6 +11,8 @@ import {
 } from './identity'
 import { profileServerUrl } from './resolvers'
 import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
+import { FOLDER_AGENT_SOURCE } from '../../shared/localAgents'
+import { createLogger } from '../logger/logger'
 
 /**
  * Build a job's portable dependency manifest from its *current local state*
@@ -25,6 +27,8 @@ import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
  * This is the ONE place descriptors are derived from join rows; the sync apply
  * path instead stores the wire manifest verbatim (see `collections.ts`).
  */
+const logger = createLogger('sync-manifest')
+
 export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
   const { agentRefs, mcpRefs } = jobsRepo.listRefs(job.id)
   const settingsScope = getSettingsScopeUserId()
@@ -47,7 +51,24 @@ export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
       agentRepo.getOwned(settingsScope, agentId) ?? agentRepo.getOwned(userId, agentId)
     if (!row) continue
     const desc = agentRowToDescriptor(row, row.source === 'remote' ? serverUrl : null)
-    if (desc) remember(desc)
+    if (desc) {
+      remember(desc)
+    } else if (row.source === FOLDER_AGENT_SOURCE) {
+      // A folder row yields no descriptor only when its id carries no manifest
+      // id — which nothing produces today, since every writer of a folder row
+      // builds the id from the prefix. That makes it a latent trap rather than
+      // a defect, and it is logged here rather than at the `return null` inside
+      // `identity.ts` for two reasons: this is where the *consequence* happens
+      // (the dependency leaves the job's manifest, which is the failure the
+      // descriptor exists to prevent), and `identity.ts` is the one module in
+      // this directory with no runtime imports at all — the logger reaches
+      // `src/main/index.ts`, so importing it there would pull Electron into two
+      // pure test files and cost more than the log is worth.
+      logger.warn('folder agent dropped from a job manifest: its id carries no manifest id', {
+        jobId: job.id,
+        agentId: row.id
+      })
+    }
   }
 
   // MCP providers live in Default Scope.

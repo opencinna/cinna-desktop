@@ -12,6 +12,7 @@ import {
   type ResolveCache
 } from './resolvers'
 import type { SyncCollection, JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
+import { createLogger } from '../logger/logger'
 
 /**
  * Per-collection encode/decode. `client_entity_id` is the row's existing
@@ -45,6 +46,8 @@ export interface DirtyRecord {
  * dependencies across the pass so N jobs referencing the same missing MCP
  * create exactly one provider.
  */
+const logger = createLogger('sync-collections')
+
 export interface ApplyContext {
   clientUpdatedAt: number
   cache: ResolveCache
@@ -326,7 +329,19 @@ const jobMapper: CollectionMapper = {
         // directory on disk, and a shell row would assert one exists here. A
         // miss stays out of the join rows and shows up as `manifestNeedsSetup`.
         const aid = resolveFolderAgent(desc)
-        if (aid) agentIds.push(aid)
+        if (aid) {
+          agentIds.push(aid)
+        } else {
+          // The single point at which a folder dependency stops being part of
+          // this job on this device. The local-agent arm below logs its
+          // auto-create, so without this the one arm of the three that drops
+          // something — and the only one that cannot recover on its own — is
+          // also the only one that leaves no trace.
+          logger.warn('job depends on a folder agent this device does not have', {
+            jobId: id,
+            manifestId: desc.manifestId
+          })
+        }
       } else {
         agentIds.push(resolveLocalAgent(desc, ctx.cache))
       }

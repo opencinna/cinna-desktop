@@ -43,10 +43,16 @@ vi.mock('../services/cinnaApiService', () => ({
   cinnaApiService: {}
 }))
 vi.mock('../services/syncService', () => ({ syncService: { markDirty: () => undefined } }))
+/**
+ * The logger is captured rather than silenced: two of the paths under test are
+ * ones where a folder dependency *leaves* the job, and a log is the only trace
+ * either of them produces. A no-op double could not fail a test about that.
+ */
+const warnings = vi.hoisted(() => [] as Array<{ msg: string; meta?: unknown }>)
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({
     info: () => undefined,
-    warn: () => undefined,
+    warn: (msg: string, meta?: unknown) => warnings.push({ msg, meta }),
     error: () => undefined,
     debug: () => undefined
   })
@@ -54,7 +60,7 @@ vi.mock('../logger/logger', () => ({
 
 const { COLLECTION_MAPPERS, newResolveCache } = await import('./collections')
 const { agentRepo } = await import('../db/agents')
-const { jobsRepo } = await import('../db/jobs')
+const { jobsRepo, jobAgentRepo } = await import('../db/jobs')
 const { buildJobManifest } = await import('./manifest')
 const { jobService } = await import('../services/jobService')
 
@@ -113,6 +119,7 @@ function indexWorkshop(): void {
 
 beforeEach(() => {
   holder.current = createTestDatabase()
+  warnings.length = 0
 })
 
 afterEach(() => {
@@ -221,5 +228,75 @@ describe('the Jobs detail dependency list for a folder agent', () => {
     const [dep] = jobService.getDependencyStatus(USER, JOB_ID)
     expect(dep.state).toBe('needs-setup')
     expect(dep.localId).toBe('folder:6f1a-uuid')
+  })
+})
+
+/**
+ * The two places a folder dependency can leave a job without anyone being told.
+ *
+ * Both are silent by construction rather than by oversight: the apply path
+ * deliberately does not auto-create a shell, and the manifest path deliberately
+ * returns null rather than emitting a descriptor it cannot key. Deliberate and
+ * unlogged is the combination that makes an incident unreconstructable — the
+ * arm beside each of them logs what it did, so these were the only ones that
+ * left no trace at all.
+ */
+describe('what gets said when a folder dependency goes missing', () => {
+  it('warns when a synced job cannot find the workshop it depends on', () => {
+    applyIncomingJob([folderDep])
+    // The join rows are the observable effect; the log is what makes it
+    // explicable afterwards, and it carries the manifest id so the workshop can
+    // actually be identified.
+    expect(jobsRepo.listRefs(JOB_ID).agentRefs).toEqual([])
+    const warned = warnings.find((w) => w.msg.includes('folder agent this device does not have'))
+    expect(warned).toBeTruthy()
+    expect(warned?.meta).toMatchObject({ jobId: JOB_ID, manifestId: '6f1a-uuid' })
+  })
+
+  it('says nothing when the workshop is present, so the warning stays a signal', () => {
+    indexWorkshop()
+    applyIncomingJob([folderDep])
+    expect(warnings.filter((w) => w.msg.includes('folder agent this device does not have'))).toEqual([])
+  })
+
+  it('warns when a folder row carries an id with no manifest id behind it', () => {
+    // Unreachable today — every writer of a folder row builds the id from the
+    // prefix — which is exactly why it is worth a log rather than a silent
+    // `return null`: the day something produces such a row, the dependency
+    // vanishes from the manifest and the job runs without it.
+    agentRepo.replaceFolderIndex(USER, 'r1', [
+      {
+        id: 'folder:',
+        name: 'Nameless',
+        description: null,
+        localPath: '/w/Local/nameless',
+        remoteMetadata: {
+          entrypoint_prompt: null,
+          example_prompts: [],
+          session_mode: null,
+          ui_color_preset: null,
+          protocol_versions: []
+        }
+      }
+    ])
+    const job = jobsRepo.create(USER, { type: 'local', title: 'J', prompt: 'p' })
+    jobAgentRepo.setAgentIds(job.id, ['folder:'])
+
+    const manifest = buildJobManifest(USER, jobsRepo.getById(USER, job.id)!)
+
+    // The consequence first: the dependency is not in the manifest, which is
+    // the silent drop the log exists to explain.
+    expect(manifest.deps).toEqual([])
+    const warned = warnings.find((w) => w.msg.includes('carries no manifest id'))
+    expect(warned).toBeTruthy()
+    expect(warned?.meta).toMatchObject({ jobId: job.id, agentId: 'folder:' })
+  })
+
+  it('says nothing for a well-formed folder row on the same path', () => {
+    indexWorkshop()
+    const job = jobsRepo.create(USER, { type: 'local', title: 'J', prompt: 'p' })
+    jobAgentRepo.setAgentIds(job.id, ['folder:6f1a-uuid'])
+    buildJobManifest(USER, jobsRepo.getById(USER, job.id)!)
+    expect(warnings.filter((w) => w.msg.includes('carries no manifest id'))).toEqual([])
   })
 })
