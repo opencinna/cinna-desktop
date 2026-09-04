@@ -73,7 +73,7 @@
 
 ## Persistence
 
-- `localStorage` key `cinna-verbose-mode` — value `'1'` means verbose on, anything else (including absence) means compact. Mirrors the existing `cinna-logger-enabled` pattern in the same store.
+- `localStorage` key `cinna-verbose-mode` — value `'1'` means verbose on, anything else (including absence) means compact. Same pattern the store used for the since-removed `cinna-logger-enabled` key.
 
 ## Styling
 

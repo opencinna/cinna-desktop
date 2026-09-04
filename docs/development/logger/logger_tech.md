@@ -21,11 +21,10 @@
 
 ### Renderer
 - `src/renderer/src/stores/logger.store.ts` — Zustand `useLoggerStore`; holds entries + subscription state; `createLogger(scope)` for renderer code; `append`, `setAll`, `clear`, `log`, `subscribe`
-- `src/renderer/src/stores/ui.store.ts` — `loggerEnabled`, `logsOpen`, `setLoggerEnabled`, `setLogsOpen`; persists `loggerEnabled` to `localStorage('cinna-logger-enabled')`
+- `src/renderer/src/stores/ui.store.ts` — `logsOpen`, `setLogsOpen` (the former `loggerEnabled` switch and its localStorage key were removed in `4cdeed3`)
 - `src/renderer/src/components/logger/LogsOverlay.tsx` — Overlay shell + header (filter input, level toggles, count, selection copy/clear, pause, clear, close); `LogRow` sub-component; subscribes to `onToggleOverlay` and handles `Escape`. Owns selection state (`selected: Set<id>`, `anchorIndex`, `dragRef`), expand state (`expandedIds: Set<id>`, lifted out of the row), and the `formatEntryForCopy` helper.
-- `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — "Debug" section with "Enable Logger" switch
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Wires `development` tab to `DevelopmentSettingsSection`
-- `src/renderer/src/components/layout/Sidebar.tsx` — Adds `Development` menu item (before the Trash separator); renders terminal icon in footer when `loggerEnabled`
+- `src/renderer/src/components/layout/InterfaceMenu.tsx` — Footer popover (trigger `title="Interface"`) holding the *App logs (⌘`)* button that flips `logsOpen`
 - `src/renderer/src/App.tsx` — Mounts `<LogsOverlay />` inside `AuthGate`
 
 ## Database Schema
@@ -51,13 +50,11 @@ None — logger is in-memory only.
 - `src/main/logger/logger.ts:serializeData(data)` — Converts `Error` to `{name, message, stack}`; **every other value is walked by `redact()` first** — any key matching `/(api[_-]?key|access[_-]?token|refresh[_-]?token|password|authorization|bearer|secret|token|cookie)/i` with a non-empty value becomes `'[REDACTED]'`, cycles become `'[Circular]'` — and only then goes through `JSON.parse(JSON.stringify(...))`, with a `String(data)` fallback
 - `src/renderer/src/stores/logger.store.ts:subscribe()` — Guards against double-subscription; seeds state with `getAll()`, then wires `onEntry` listener
 - `src/renderer/src/stores/logger.store.ts:createLogger(scope)` — Renderer convenience; each call goes through `window.api.logger.log`
-- `src/renderer/src/stores/ui.store.ts:setLoggerEnabled(enabled)` — Writes `cinna-logger-enabled` localStorage key; forces `logsOpen: false` when disabling
 
 ## Renderer Components
 
 - `LogsOverlay` — Reads `logsOpen`, `setLogsOpen` from `ui.store`; `entries`, `subscribe`, `clear` from `logger.store`. Subscribes on first open. Keyboard: `Escape` clears the selection if non-empty, otherwise closes; `⌘`` / `⌘~` handled via `onToggleOverlay` IPC listener (not DOM keydown). Drag selection is finalized by a single `window` `mouseup` listener that clears the `dragRef`.
 - `LogRow` — Row body is a `<div>` (not a `<button>`) so `mouseenter` fires while a mouse button is held down — that's how drag-extend works. Three pointer paths: chevron click → `onChevronClick` toggles `expandedIds`; row `mousedown` → `onMouseDown` mutates `selected` based on `shift` / `meta|ctrl` modifiers and seeds `dragRef`; row `mouseenter` while `dragRef` is set → `onMouseEnter` recomputes the range `[min(anchor,i), max(anchor,i)]` against `filteredRef.current` and unions it with the base selection. The chevron's `mousedown` stops propagation so toggling expand never starts a selection drag. Selection IDs are stable across filter/level changes because the row identity is the `LogEntry.id`, not its filtered index.
-- `DevelopmentSettingsSection` — Reads/writes `loggerEnabled` via `ui.store`; toggle styling matches `LLMProviderCard` / `AgentCard` switches
 
 ## Known gaps
 
@@ -71,7 +68,6 @@ Each entry carries the date it was checked and the method.
 
 - `MAX_ENTRIES = 2000` (hard-coded in both `src/main/logger/logger.ts` and `src/renderer/src/stores/logger.store.ts`)
 - `BROADCAST_CHANNEL = 'logger:entry'` — now in `src/main/logger/broadcast.ts`, not `logger.ts`
-- `LOGGER_KEY = 'cinna-logger-enabled'` (localStorage key in `ui.store.ts`)
 - `data` payloads on `[cinna-oauth]` / `[a2a-client]` HTTP error logs are trimmed to 2000 chars to keep the buffer bounded
 
 ## Security

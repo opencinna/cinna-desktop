@@ -8,7 +8,7 @@ In-app debug logger for tracing activity across the main and renderer processes 
 
 - **Log Entry** — A single record with `id`, `timestamp`, `level` (`debug`/`info`/`warn`/`error`), `scope` (e.g. `A2A`, `cinna-oauth`, `MCP`), `source` (`main` or `renderer`), `message`, and optional structured `data`
 - **Scope** — A string tag identifying the subsystem that emitted the entry; created once per module via `createLogger(scope)` and reused for every call
-- **Logger Enabled** — User-level toggle persisted in localStorage (`cinna-logger-enabled`); when off, the log icon and overlay are hidden and the keyboard shortcut is a no-op
+- **Always available** — There is no enable switch any more (removed in `4cdeed3`); the overlay, the sidebar entry and the shortcut work in every build
 - **Ring Buffer** — Both main and renderer cap stored entries at 2000; oldest entries are dropped on overflow
 - **Sink** — The one destination a live entry is handed to beyond the buffer and the console. Exactly one exists: the renderer broadcast, installed at startup. The buffer module knows nothing about it beyond its signature
 - **Logs Overlay** — Full-window (with ~5vmin padding) panel that renders entries terminal-style with filtering, auto-scroll, and clear
@@ -16,11 +16,9 @@ In-app debug logger for tracing activity across the main and renderer processes 
 
 ## User Stories / Flows
 
-### Enabling the logger
-1. User opens Settings > Development > Debug
-2. Toggles "Enable Logger" on — a terminal icon appears in the sidebar footer (left of the theme switch)
-3. Clicks the terminal icon (or presses ⌘` / ⌘~) to open the overlay
-4. Interacts with the app; log entries stream into the overlay live
+### Opening the logger
+1. User clicks the **Interface** button in the sidebar footer and then **App logs** in its popover — or presses ⌘` / ⌘~ (View → *Toggle App Logs*)
+2. Interacts with the app; log entries stream into the overlay live
 
 ### Reading logs
 1. Entries render with timestamp, level badge, `[source]`, `[scope]`, and message
@@ -52,9 +50,8 @@ In-app debug logger for tracing activity across the main and renderer processes 
 
 ## Business Rules
 
-- The overlay is mounted regardless of `loggerEnabled` — it simply renders nothing until `logsOpen` is true
+- The overlay is always mounted — it simply renders nothing until `logsOpen` is true
 - The keyboard shortcut (`⌘`` / `⌘~`) is registered as a real Electron menu accelerator so that macOS does not consume it for "Cycle Through Windows"
-- The shortcut is a no-op when the logger is disabled — turning the toggle off also closes the overlay if it's open
 - The renderer-side store lazily subscribes to the main-process broadcast the first time the overlay is opened; before then, no IPC traffic happens for the logger
 - Disabling the logger does **not** stop emitting entries in the main process — they still land in the main-process buffer and will become visible if the user re-enables the logger and opens the overlay
 - The logger is **not** a persistence mechanism — entries live only in memory for the current session
@@ -92,11 +89,11 @@ LogsOverlay (on first open)
 Menu accelerator (⌘` / ⌘~)
   -> Main 'View' menu click handler
   -> webContents.send('logger:toggle-overlay')
-  -> Renderer toggles ui.store.logsOpen (gated on loggerEnabled)
+  -> Renderer toggles ui.store.logsOpen
 ```
 
 ## Integration Points
 
-- **UI / Settings** — Switch lives in the new `development` settings tab; see [Settings](../../ui/settings/settings.md)
-- **Sidebar** — Terminal icon in footer is conditionally rendered on `loggerEnabled`
+- **Sidebar** — The *App logs* entry lives in the footer's Interface popover (`InterfaceMenu`)
+- **E2E** — Live streaming, hydration on first open and redaction are exercised against the real app in `e2e/specs/logger.spec.ts`; see [End-to-End Tests](../e2e/e2e.md)
 - **Existing subsystems** — `A2A`, `a2a-client`, `MCP`, `cinna-oauth`, `auth`, `remote-sync` scopes already route their operational logs through this module; see [MCP Connections](../../mcp/connections/connections.md), [Agents](../../agents/agents/agents.md), [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md)
