@@ -1,5 +1,18 @@
-import { BrowserWindow } from 'electron'
-import { getMainWindow } from '../index'
+/**
+ * The log buffer and the log formatting, and nothing else.
+ *
+ * This module has **no imports**, by rule. It used to import `BrowserWindow`
+ * from electron and `getMainWindow` from `../index` so that `push` could
+ * broadcast to the renderer itself, which meant every module that logged —
+ * which is most of them — dragged the whole main-process entry point and
+ * Electron into its graph. Tests of pure functions three layers away had to
+ * stub the logger just to *load*, and a file that failed to load showed up as
+ * a smaller test count rather than as a failure.
+ *
+ * The broadcast is now a sink that `logger/broadcast.ts` installs from
+ * `index.ts` at startup. Keep this file importless: an import here is paid for
+ * by every caller.
+ */
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error'
 
@@ -20,18 +33,23 @@ export interface ScopedLogger {
   error: (message: string, data?: unknown) => void
 }
 
+/** Somewhere to send each entry as it is logged, beyond the buffer and the console. */
+export type LogSink = (entry: LogEntry) => void
+
 const MAX_ENTRIES = 2000
-const BROADCAST_CHANNEL = 'logger:entry'
 
 let nextId = 1
 const buffer: LogEntry[] = []
+let sink: LogSink | null = null
 
-function getWindow(): BrowserWindow | null {
-  try {
-    return getMainWindow()
-  } catch {
-    return null
-  }
+/**
+ * Install (or, with `null`, remove) the destination for live entries.
+ *
+ * `index.ts` installs the renderer broadcast at startup via
+ * `logger/broadcast.ts`. Tests pass `null` to put it back.
+ */
+export function setLogSink(next: LogSink | null): void {
+  sink = next
 }
 
 const SENSITIVE_KEY_RE = /(api[_-]?key|access[_-]?token|refresh[_-]?token|password|authorization|bearer|secret|token|cookie)/i
@@ -75,9 +93,24 @@ function serializeData(data: unknown): unknown {
 function push(entry: LogEntry): void {
   buffer.push(entry)
   if (buffer.length > MAX_ENTRIES) buffer.shift()
-  const win = getWindow()
-  if (win && !win.isDestroyed()) {
-    win.webContents.send(BROADCAST_CHANNEL, entry)
+
+  // No sink yet is the normal state, not an error: modules log from their own
+  // module top level, so the first entries are written while `index.ts` is
+  // still evaluating and long before it installs the broadcast. They are
+  // buffered and console-written like any other, and the renderer collects
+  // them with `logger:get-all` when it mounts. Nothing is lost, nothing throws.
+  //
+  // (This replaces a `try { getMainWindow() } catch` that guarded a different
+  // hazard — the circular import meant that binding could still be in its
+  // temporal dead zone when an early log fired. That failure mode is gone with
+  // the import. The catch below is for a live sink that throws, e.g.
+  // `webContents.send` racing window teardown: a module that merely logged
+  // must never be taken down by the logger's delivery.)
+  if (!sink) return
+  try {
+    sink(entry)
+  } catch {
+    // Delivery is best-effort; the entry is already buffered.
   }
 }
 

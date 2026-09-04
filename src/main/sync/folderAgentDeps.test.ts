@@ -4,19 +4,14 @@ import { derivePattern } from '../../shared/commPattern'
 import type { AgentRow } from '../db/agents'
 import type { JobDepDescriptor } from '../../shared/sync'
 
-// `resolvers.ts` reaches Electron through the logger (`logger → src/main/index`
-// — the inversion this project has tracked as open debt since Phase 6), and
-// through `db/client` for `app.getPath`. Neither is exercised by
-// `manifestNeedsSetup`, which is pure map lookups over an index the caller
-// hands it, so both are stubbed rather than stood up.
-vi.mock('../logger/logger', () => ({
-  createLogger: () => ({
-    info: () => undefined,
-    warn: () => undefined,
-    error: () => undefined,
-    debug: () => undefined
-  })
-}))
+// `resolvers.ts` reaches Electron through `db/client` for `app.getPath`, which
+// `manifestNeedsSetup` — pure map lookups over an index the caller hands it —
+// does not exercise, so it is stubbed rather than stood up.
+//
+// The logger used to need the same treatment, and for a worse reason: it
+// imported `src/main/index`, so *every* module that logged pulled in the whole
+// entry point. That stub is gone because the import is (see
+// `logger/logger.test.ts`); the real logger loads here now.
 vi.mock('../db/client', () => ({
   getDb: () => {
     throw new Error('no database in this test')

@@ -12,10 +12,17 @@ import { syncService } from './services/syncService'
 import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
+import { installLogBroadcast } from './logger/broadcast'
 
 let mainWindow: BrowserWindow | null = null
 let startupComplete = false
 const bootLogger = createLogger('boot')
+
+// The logger buffers and console-writes on its own; this is the only thing that
+// puts entries in front of the renderer, and it lives here because the window
+// lives here. `getMainWindow` is a hoisted function declaration and reads
+// `mainWindow` lazily, so installing before there is a window is correct.
+installLogBroadcast(getMainWindow)
 
 const STARTUP_LOG_NAME = 'cinna-errors.log'
 const STARTUP_LOG_MAX_BYTES = 1024 * 1024
