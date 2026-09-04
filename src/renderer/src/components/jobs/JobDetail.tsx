@@ -17,6 +17,8 @@ import { derivePattern } from '../../../../shared/commPattern'
 import { CommPatternBadge } from '../chat/CommPatternBadge'
 import { JobRunRow } from './JobRunRow'
 import type { JobDetailData } from '../../../../shared/jobs'
+import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
+import { isFolderAgentId } from '../../../../shared/localAgents'
 
 const CINNA_DEFAULT_PRIORITY = 'normal'
 
@@ -316,9 +318,26 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
   )
   if (pending.length === 0) return null
 
-  const openSetup = (kind: 'agent' | 'mcp' | 'mode'): void => {
+  /**
+   * Where "Set up" goes, decided by the dependency's **resolved local id**
+   * rather than by its `kind`.
+   *
+   * `kind` is `'agent'` for three different sources that live on three
+   * different settings pages. Settings → Agents renders only
+   * `source === 'local' && protocol === 'a2a'`, which is exactly what the
+   * auto-created shells from `resolveLocalAgent` are — so that route stays
+   * right for them. A folder agent is `source: 'folder'`, appears there under
+   * no circumstances, and belongs on Settings → Local Agents. Its row id is
+   * `folder:<manifest id>`, which is the one thing here that can tell them
+   * apart, and it is already on the DTO.
+   */
+  const openSetup = (dep: JobDependencyStatusDto): void => {
     setActiveView('settings')
-    setSettingsMenu(kind === 'mcp' ? 'mcp' : 'agents')
+    if (dep.kind === 'mcp') {
+      setSettingsMenu('mcp')
+      return
+    }
+    setSettingsMenu(isFolderAgentId(dep.localId ?? '') ? 'local-agents' : 'agents')
   }
 
   return (
@@ -357,10 +376,17 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
               <span className="text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">
                 {amber ? 'needs setup' : 'unavailable'}
               </span>
-              {amber && d.kind !== 'mode' && (
+              {/*
+                No local id, no button. Every settings page this could open
+                shows a *row*, so with nothing resolved there is nothing for it
+                to land on — which is the missing-folder-agent case, where the
+                repair is copying a directory onto this machine and no page in
+                the app can do it.
+              */}
+              {amber && d.kind !== 'mode' && d.localId !== null && (
                 <button
                   type="button"
-                  onClick={() => openSetup(d.kind)}
+                  onClick={() => openSetup(d)}
                   className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5 rounded
                     text-[10px] font-medium text-[var(--color-accent)]
                     hover:bg-[var(--color-bg-hover)] transition-colors"

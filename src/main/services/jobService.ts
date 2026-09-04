@@ -259,26 +259,18 @@ export const jobService = {
           localId: id
         })
       } else if (desc.source === 'folder') {
-        // The two misses are different states, and this is the arm where they
-        // come apart. A local agent or an MCP auto-creates a disabled shell on
-        // apply, so a miss there is always `needs-setup`: the row exists and
-        // the user finishes configuring it in the app. A folder agent creates
-        // nothing, so an absent row means the *workshop is not on this device*
-        // — nothing in the app can resolve it, because the repair is copying a
-        // directory. That is `unavailable`, the same state a remote agent from
-        // a server this profile is not on gets, and for the same reason.
-        //
-        // `needs-setup` is kept for the one folder case the app can act on: the
-        // row is here and the user has switched it off. The distinction is not
-        // cosmetic — `JobDetail.tsx` gates its "Set up" button on the amber
-        // state, so calling a missing workshop `needs-setup` offered a button
-        // that could not lead anywhere.
+        // Same shape as the local arm, different lookup and a different meaning
+        // for a miss: a local agent auto-creates a disabled shell on apply, so
+        // `needs-setup` there means "finish configuring the row you have". A
+        // folder agent creates nothing, so `needs-setup` here means "this
+        // workshop is not on this device" — the only honest thing to say about
+        // a directory that is somewhere else.
         const row = findFolderAgent(desc)
         out.push({
           key: `agent:${i}`,
           kind: 'agent',
           label: row?.name ?? desc.name ?? 'Agent',
-          state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'unavailable',
+          state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'needs-setup',
           localId: row?.id ?? null
         })
       } else {
