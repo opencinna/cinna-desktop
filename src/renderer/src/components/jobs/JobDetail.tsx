@@ -19,6 +19,7 @@ import { JobRunRow } from './JobRunRow'
 import type { JobDetailData } from '../../../../shared/jobs'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
 import { isFolderAgentId } from '../../../../shared/localAgents'
+import { unwrapIpcError } from '../../utils/ipcError'
 
 const CINNA_DEFAULT_PRIORITY = 'normal'
 
@@ -52,10 +53,18 @@ export function JobDetail(): React.JSX.Element {
   }
 
   const running = executeJob.isPending
+  /*
+    Unwrapped, not raw. The refusal is authored in `jobService.executeLocal` as
+    a sentence for the user, but it reaches here through `ipcMain.handle`, which
+    rewrites a rejection's message to `Error invoking remote method
+    '<channel>': …`, and through `_wrap.ts`, which sets `outbound.name` — so the
+    alert box was opening with `Error invoking remote method 'job:execute':
+    JobError:` before it got to the part addressed to the reader. The panel
+    above is careful about every word it says; this is the same sentence
+    arriving with the plumbing still attached.
+  */
   const runError = executeJob.error
-    ? executeJob.error instanceof Error
-      ? executeJob.error.message
-      : String(executeJob.error)
+    ? unwrapIpcError(executeJob.error, 'The run could not be started.')
     : null
 
   const handleRun = (): void => {

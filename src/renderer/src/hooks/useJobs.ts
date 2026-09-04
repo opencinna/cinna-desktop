@@ -15,6 +15,7 @@ import { useAppSettings } from './useAppSettings'
 import { resolveDefaultModeId } from '../../../shared/chatModeDefaults'
 import { resolveModel } from './useNewChatFlow'
 import { createLogger } from '../stores/logger.store'
+import { unwrapIpcError } from '../utils/ipcError'
 
 const jobRunLog = createLogger('job-run')
 
@@ -311,7 +312,12 @@ export function useExecuteJob() {
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
       jobRunLog.error('run failed to start', {
         jobId,
-        error: error instanceof Error ? error.message : String(error)
+        // The log overlay is the only surface a refused sidebar run reaches, so
+        // this string is read by a person, not just by a crash report — it goes
+        // in unwrapped for the same reason the job screen's does. The entry
+        // already carries `renderer:job-run`, so the channel name the wrapper
+        // prepends adds nothing here that the entry did not already say.
+        error: unwrapIpcError(error, 'The run could not be started.')
       })
     }
   })

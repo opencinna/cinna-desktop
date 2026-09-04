@@ -13,7 +13,14 @@ import type { JobDetailData } from '../../../../shared/jobs'
  *
  * The refusal's own message is the third surface, and it arrives as a thrown
  * `Error` — the only channel that survives `ipcMain.handle` + `contextBridge`,
- * which drop a DomainError's `code`. The last test holds that path open.
+ * which drop a DomainError's `code`. The last two tests hold that path open.
+ *
+ * Those two inject the message in the form the wire actually delivers, prefix
+ * and class name and all. The earlier version of this test injected an
+ * already-clean sentence — the one string this path never produces — so it went
+ * on passing while the alert box read `Error invoking remote method
+ * 'job:execute': JobError: …` in the running app. A fixture that skips the
+ * transport is not a fixture for a transport bug.
  */
 
 const jobState = vi.hoisted(() => ({ current: null as JobDetailData | null }))
@@ -61,6 +68,11 @@ function job(over: Partial<JobDetailData> = {}): JobDetailData {
     ...over
   } as unknown as JobDetailData
 }
+
+/** Exactly what `jobService.executeLocal` throws, before the wire touches it. */
+const REFUSAL =
+  "This job can't run on this device. It needs an agent that isn't " +
+  'available here: Invoice Checker.'
 
 function runButton(): HTMLButtonElement {
   return screen.getByRole('button', { name: /Run/ }) as HTMLButtonElement
@@ -116,15 +128,36 @@ describe('the job detail view for a job this device cannot run', () => {
     expect(exec.mutate).toHaveBeenCalledWith({ jobId: 'job-1', navigate: true })
   })
 
-  it('shows the main process refusal verbatim when a run is attempted anyway', () => {
+  it('shows the main process refusal with no IPC plumbing in front of it', () => {
     // The stale-list race: the list said runnable, main disagreed. The thrown
     // message is the entire explanation — the error `code` does not survive the
     // trip — so it has to reach the screen unedited, agent names and all.
+    //
+    // `ipcMain.handle` rewrites a rejection's message and `_wrap.ts` sets
+    // `outbound.name`, so this is the literal string the renderer receives.
     exec.error = new Error(
-      "This job can't run on this device. It needs an agent that isn't " +
-        'available here: Invoice Checker.'
+      "Error invoking remote method 'job:execute': JobError: " + REFUSAL
     )
     render(<JobDetail />)
-    expect(screen.getByText(/Invoice Checker/)).toBeTruthy()
+
+    const alert = screen.getByRole('alert')
+    // Presence is the weaker half: /Invoice Checker/ matched the wrapped string
+    // too, which is how this went unnoticed. The absence assertions are the
+    // ones that fail when the unwrap is removed.
+    expect(alert.textContent).toBe(REFUSAL)
+    expect(alert.textContent ?? '').not.toContain('invoking remote method')
+    expect(alert.textContent ?? '').not.toContain('JobError')
+  })
+
+  it('leaves a message that never crossed IPC exactly as it is', () => {
+    // The over-correction guard. Unwrapping must strip the transport and
+    // nothing else — a failure raised renderer-side carries no prefix, and
+    // trimming a leading word off it, or swapping in the fallback, would lose
+    // the only account of the failure the user gets.
+    exec.error = new Error('Chat has no model/provider configured.')
+    render(<JobDetail />)
+    expect(screen.getByRole('alert').textContent).toBe(
+      'Chat has no model/provider configured.'
+    )
   })
 })

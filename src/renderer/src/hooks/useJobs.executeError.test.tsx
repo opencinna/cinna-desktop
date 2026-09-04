@@ -18,6 +18,15 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
  * makes the row acquire its marker and the dead click explain itself. The log
  * is what carries the reason, since the message is the only part of the error
  * that survives `ipcMain.handle` + `contextBridge`.
+ *
+ * Which is also why the rejection is injected in its wire form. The log overlay
+ * is the *only* surface a refused sidebar run reaches, so what lands in it is
+ * read by a person — and `ipcMain.handle` rewrites the message while `_wrap.ts`
+ * sets `outbound.name`, so `error.message` arrives as `Error invoking remote
+ * method 'job:execute': JobError: …`. This test previously injected the clean
+ * sentence and asserted it came back, which is true of any code at all: it
+ * could not distinguish a log that carried the explanation from one that
+ * carried our channel name first.
  */
 
 const execute = vi.hoisted(() => vi.fn())
@@ -49,9 +58,13 @@ vi.mock('./useAppSettings', () => ({ useAppSettings: () => ({ data: {} }) }))
 
 const { useExecuteJob } = await import('./useJobs')
 
+/** What `jobService.executeLocal` throws. */
 const REFUSAL =
   "This job can't run on this device. It needs an agent that isn't " +
   'available here: Invoice Checker.'
+
+/** What `window.api.jobs.execute` actually rejects with, after the wire. */
+const WIRE = "Error invoking remote method 'job:execute': JobError: " + REFUSAL
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) =>
@@ -68,7 +81,7 @@ beforeEach(() => {
 
 describe('a job run the main process refuses', () => {
   it('refetches the job list, so the row can show why the click did nothing', async () => {
-    execute.mockRejectedValue(new Error(REFUSAL))
+    execute.mockRejectedValue(new Error(WIRE))
     const client = new QueryClient({
       defaultOptions: { mutations: { retry: false }, queries: { retry: false } }
     })
@@ -82,7 +95,7 @@ describe('a job run the main process refuses', () => {
   })
 
   it('records the refusal, message and all, where the user can read it', async () => {
-    execute.mockRejectedValue(new Error(REFUSAL))
+    execute.mockRejectedValue(new Error(WIRE))
     const client = new QueryClient({
       defaultOptions: { mutations: { retry: false }, queries: { retry: false } }
     })
@@ -93,7 +106,28 @@ describe('a job run the main process refuses', () => {
     await waitFor(() => expect(logged).toHaveLength(1))
     // The agent's name has to be in here. "A dependency is missing" leaves the
     // user with nothing to do next, which is how this failure stayed invisible.
+    // And it has to be the sentence alone — an exact match, because a
+    // `toContain` would pass on the wrapped string that started this.
     expect(logged[0].data).toMatchObject({ jobId: 'job-1', error: REFUSAL })
+    const logged0 = (logged[0].data as { error: string }).error
+    expect(logged0).not.toContain('invoking remote method')
+    expect(logged0).not.toContain('JobError')
+  })
+
+  it('logs a failure that never crossed IPC unchanged', async () => {
+    // The over-correction guard: unwrapping strips the transport, not the
+    // message. A rejection raised renderer-side has no prefix to remove, and
+    // the log is the only place its text is ever seen.
+    execute.mockRejectedValue(new Error('Network request timed out.'))
+    const client = new QueryClient({
+      defaultOptions: { mutations: { retry: false }, queries: { retry: false } }
+    })
+
+    const { result } = renderHook(() => useExecuteJob(), { wrapper: wrapper(client) })
+    result.current.mutate({ jobId: 'job-1', navigate: false })
+
+    await waitFor(() => expect(logged).toHaveLength(1))
+    expect(logged[0].data).toMatchObject({ error: 'Network request timed out.' })
   })
 
   it('leaves the successful run alone', async () => {
