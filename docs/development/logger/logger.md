@@ -10,6 +10,7 @@ In-app debug logger for tracing activity across the main and renderer processes 
 - **Scope** — A string tag identifying the subsystem that emitted the entry; created once per module via `createLogger(scope)` and reused for every call
 - **Logger Enabled** — User-level toggle persisted in localStorage (`cinna-logger-enabled`); when off, the log icon and overlay are hidden and the keyboard shortcut is a no-op
 - **Ring Buffer** — Both main and renderer cap stored entries at 2000; oldest entries are dropped on overflow
+- **Sink** — The one destination a live entry is handed to beyond the buffer and the console. Exactly one exists: the renderer broadcast, installed at startup. The buffer module knows nothing about it beyond its signature
 - **Logs Overlay** — Full-window (with ~5vmin padding) panel that renders entries terminal-style with filtering, auto-scroll, and clear
 - **Row Selection** — Visible log entries can be marked as selected so a contiguous range or arbitrary subset can be copied to the clipboard as plain text. Selection state is local to the overlay session (not persisted) and survives filter / level-toggle changes — entries that drop out of the filtered view stay selected and re-appear highlighted if they return
 
@@ -58,7 +59,10 @@ In-app debug logger for tracing activity across the main and renderer processes 
 - Disabling the logger does **not** stop emitting entries in the main process — they still land in the main-process buffer and will become visible if the user re-enables the logger and opens the overlay
 - The logger is **not** a persistence mechanism — entries live only in memory for the current session
 - `console.log/warn/error/debug` is still called in parallel with every structured entry, so terminal-based dev workflows are unaffected
-- Entries attach serialized `data` — Errors are reduced to `{name, message, stack}`; all other values go through `JSON.parse(JSON.stringify(...))` with a string fallback so circular references don't crash the logger
+- Entries attach serialized `data` — Errors are reduced to `{name, message, stack}`; every other value is **redacted by key name first** (anything matching api key / access token / refresh token / password / authorization / bearer / secret / token / cookie becomes `[REDACTED]`, cycles become `[Circular]`) and then goes through `JSON.parse(JSON.stringify(...))` with a string fallback so circular references don't crash the logger
+- **The buffer module imports nothing.** Logging must not cost a module a runtime edge to Electron or to the main-process entry point. The renderer broadcast is a *sink* installed at startup, and the module that owns it takes the window getter as a parameter rather than importing it — otherwise the cycle would only move, not be cut. See [Main-Process Layering](../main_layering/main_layering_llm.md)
+- **No sink installed is the normal state, not an error.** Modules log from their own top level, so the first entries are written while `index.ts` is still evaluating. They are buffered and console-written like any other and reach the renderer through `logger:get-all` when the overlay mounts — nothing is lost and nothing throws
+- **Sink delivery is best-effort and its failures are swallowed.** An entry is already buffered before the sink is called, so a throw from `webContents.send` racing a window teardown can never take down the module that merely logged. The cost is stated in [Known gaps](logger_tech.md): a *permanently* broken sink is retried forever and reported nowhere
 - Row click is a **selection** gesture, not an expand gesture — to expand the `data` panel the user clicks the chevron in the row's left gutter. Plain click replaces the selection with that row; ⌘/Ctrl-click toggles a single row; Shift-click extends from the last anchor; mouse-down + drag across rows extends a range from the press anchor. The anchor row is whatever the last non-shift click landed on.
 - Copy formats each selected entry on one line as `[HH:MM:SS.mmm] LVL [source:scope] message`, followed by an indented dump of the attached `data` (if any). Entries are emitted in monotonically-increasing `id` order regardless of the order they were clicked, so the clipboard output is always chronological. Clipboard writes go through `navigator.clipboard.writeText`; failures flip the button to `Failed` for ~1.2 s instead of throwing.
 
@@ -67,8 +71,15 @@ In-app debug logger for tracing activity across the main and renderer processes 
 ```
 Main subsystem -> createLogger('scope').info(msg, data)
   -> push to main ring buffer
-  -> webContents.send('logger:entry', entry) -> Renderer
+  -> installed sink, if any (best-effort, failures swallowed)
+       broadcast.ts: getWindow() -> webContents.send('logger:entry', entry) -> Renderer
   -> also console.log for terminal
+
+Startup wiring (the only place electron and the logger meet)
+  index.ts owns the window
+    -> installLogBroadcast(getMainWindow)   [index.ts:25]
+      -> setLogSink(entry => ...)           [broadcast.ts]
+  logger.ts itself imports nothing.
 
 Renderer subsystem -> createLogger('scope').info(msg, data)
   -> ipcRenderer.invoke('logger:log', payload)

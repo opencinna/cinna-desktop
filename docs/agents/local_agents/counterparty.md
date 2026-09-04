@@ -2,7 +2,7 @@
 
 ## Purpose
 
-A **counterparty** is an agent the user picks and then expects an answer from. This slice (Phase 7c of Local Agents) makes a folder agent one of those everywhere the app offers a choice: the composer's `@` picker and `[+]` capability picker, the Jobs agent picker, the `#` example-prompt list, the description an orchestrating model reads about it, and a job's synced dependency list on a second device.
+A **counterparty** is an agent the user picks and then expects an answer from. This slice (Phase 7c of Local Agents) makes a folder agent one of those everywhere the app offers a choice: the composer's `@` picker and `[+]` capability picker, the Jobs agent picker, the `#` example-prompt list, the description an orchestrating model reads about it, and a job's dependency list wherever that job is opened.
 
 Nothing here builds a new way to run a folder agent — [the runner](agent_turn.md) already existed and [a status tile could already start a chat with one](../agent_status/agent_status.md). What existed was a set of surfaces that refused to offer the agent, and a set of surfaces that offered it while knowing nothing about it.
 
@@ -12,7 +12,7 @@ Nothing here builds a new way to run a folder agent — [the runner](agent_turn.
 - **Counterparty exclusion** (removed) — The named predicate that kept folder agents out of the two pickers while no local runner existed. Deliberately never expressed by clearing `enabled`, which is why lifting it was a deletion rather than a migration of anyone's saved state.
 - **Synthesized metadata** — The `agents.remote_metadata` blob a folder row now carries, built from that folder's `cinna-agent.json` at scan time. Same column as a remote agent's backend-supplied metadata, entirely different provenance.
 - **Folder job dependency** — The portable descriptor a job carries for an attached folder agent, keyed on the agent's **manifest id**. Alone among the descriptors that resolve against *this machine's* own resources, it creates nothing when it cannot be resolved.
-- **Workshop** — An agents root: the registered directory a folder agent lives under. "The workshop is not on this device" is the thing a folder dependency can fail on, and the repair is copying a directory.
+- **Workshop** — An agents root: the registered directory a folder agent lives under. "The workshop is not on this device" is the thing a folder dependency can fail on. There is **no in-app repair**: no page produces a directory, and the app deliberately does not tell the user to copy one here — see [Local Agents Are Not Synced](local_only.md).
 
 ## User Stories / Flows
 
@@ -33,12 +33,15 @@ Nothing here builds a new way to run a folder agent — [the runner](agent_turn.
 
 All four read one field. Before it was filled, all four were silently inert for a folder agent — three visibly (nothing rendered) and one invisibly (a thinner tool description, with nothing on screen to say so).
 
-### Depending on a folder agent from a job, on two devices
+### Depending on a folder agent from a job, where the folder isn't
+
+**A job bound to a folder agent is a local-only job** — [that position, and why it is a position rather than a limitation, is stated once in Local Agents Are Not Synced](local_only.md). This flow is what the app does when such a job is opened somewhere the folder is not.
 
 1. The user attaches a folder agent to a job on the machine that holds the workshop. The job runs normally.
-2. The job syncs. Its dependency manifest carries a descriptor naming the agent's **manifest id** — the `id` inside `cinna-agent.json`, which both machines would derive identically if both held the folder.
-3. On a peer that has the workshop, the descriptor resolves to the local row and the job is attached to the real agent.
-4. On a peer that does not, **nothing is created**. The job's detail view lists the dependency as **unavailable**, with no "Set up" button, because no page in the app can produce a directory.
+2. The job's dependency manifest records a descriptor naming the agent's **manifest id** — the `id` inside `cinna-agent.json`. The manifest is rebuilt on every agent/MCP/mode change whether or not sync is on, so this happens for a purely local user too.
+3. Where the folder is **not** found — another machine, or this one after the directory was moved or deleted — **nothing is created**. The job's detail view lists the dependency as **unavailable**, with no "Set up" button, and a red **Incomplete setup** panel says the job cannot run here. The Run button is disabled and the sidebar's run-now button is not rendered.
+4. Attempting the run anyway is **refused in main**: `executeLocal` recomputes the condition from the manifest and throws, naming the missing agents. See "The run is now blocked" below.
+5. The descriptor also resolves wherever the key happens to match — the same machine after a re-auth or reinstall (the case it is for), or a peer that happens to hold a folder with the same manifest id (**a mechanism, not a supported workflow**). Do not document the second as a way to use the product.
 
 ### Repairing a job after "Stamp identity"
 
@@ -90,19 +93,35 @@ Stated carefully, because the loose version is wrong in a way that matters. Two 
 - The button is additionally gated on the dependency having **resolved to a local id**, and routed on whether that id is a folder agent's — a folder agent goes to Settings → **Local Agents**, everything else to Settings → **Agents**, which is correct for the auto-created shells because those are hand-added-A2A-shaped by construction. A folder agent appears on Settings → Agents under no circumstances.
 - That local-id gate is **not** folder-specific and was not dead once `unavailable` took the folder case away. The MCP and local-agent arms both resolve without auto-creating, so a shell the sync created and the user later **deleted** comes back amber with nothing to open — the same dead button, in two places that predate all of this work.
 
-### The cross-device gap was a silent wrong run, not a limitation
+### The run is now blocked, and where the block actually lives
+
+Added after this slice, in `c15ef51` and the review round that followed it (`57b5310`..`ea297ec`). This closes the entry the Known gaps section below used to carry as open.
+
+- **The gate asks the manifest, because nothing else remembers.** `executeLocal` used to read the `job_agents` join rows and nothing else. Those rows are the *resolved* subset — `collections.ts` pushes one only when a descriptor resolved — so an agent that is not on this device leaves **no row and no trace**. The `missing_dependency` throw already there compares that list against the subset of it that still exists, so on an absent dependency both sides are `[]` and it cannot fire. The manifest is the only record that the agent was ever part of the job, so the manifest is what the gate asks.
+- **Blocked = an agent descriptor, folder or remote, that resolves to nothing here** — the same set `getDependencyStatus` already calls `unavailable`. `unresolvableAgentLabels` computes it against a prebuilt `ResolveIndex` so the job *list* can flag every row in one pass.
+- **Three things are deliberately outside the gate.** An **MCP** dependency and a **`source: 'local'` A2A** dependency both auto-create a disabled shell the user finishes inside the app, so blocking them would break the ordinary sync-then-configure path. A **present-but-disabled row** is a toggle, not an absence: `getDependencyStatus` calls it `needs-setup` and its "Set up" button leads somewhere real.
+- **Two mechanisms, and only one of them is a shield.** `JobData.incompleteSetup` on both the list and detail DTOs tells the UI before the click — disabled Run button, red sidebar marker, no sidebar run-now button, an "Agent unavailable" chip in the summary. The throw in `executeLocal` is what actually stops the run, and it **recomputes** rather than trusting the flag, so a renderer working from a stale job list still cannot start one.
+- **The whole explanation goes in the message, not the code.** A `DomainError`'s `code` does not survive `ipcMain.handle` + `contextBridge`, so a renderer guard on `err.code` would silently never fire. `JobError('incomplete_setup', …)` exists for this process's own log; the *sentence* is the wire contract, and it names which agents are missing because "a dependency is missing" leaves the user nothing to act on.
+- **`unresolvableAgentLabels` applies a `serverUrl` guard that `ResolveIndex.remoteAgent` lacks.** That map is keyed on target type and id with no server, while `resolveRemoteAgent` — which the detail panel goes through — refuses a foreign-server descriptor. Without the guard the gate and the panel would disagree, permissively, in exactly the direction the gate exists to close.
+- **The sidebar marker is shown unconditionally, unlike the amber one.** "Finish setup" (amber, `needsSetup`) is advisory and stays suppressed while hovering, which is what keeps resting rows clean. "Incomplete setup" (red, `incompleteSetup`) *is* about the run-now button, so hiding it on hover hid it at the one moment the user was reaching for that button. The row still shows exactly one 16px trailing element in every state, because the run-now button is not rendered on a blocked row at all.
+- **The refusal says what is true and stops.** It does not tell the user to copy the agent's folder here, and it no longer names a device where the job would work. Both omissions are deliberate and are argued in [Local Agents Are Not Synced](local_only.md); putting either sentence back — even hedged — reintroduces the defect.
+
+### The gap this closed had been a silent wrong run, not a limitation
 
 - Before the folder descriptor existed, a folder agent's dependency could not be encoded at all: the descriptor builder ends on a card-or-endpoint URL and a folder row has both null. The dependency was **dropped from the manifest entirely**, so the peer reported the job as fully set up, rebuilt it with no agent, derived the plain-LLM pattern from an empty agent list, ran it, and recorded a success. **A wrong run reported as a success is worse than a job that refuses to start.**
-- The descriptor is emitted even for an **unstamped** folder agent, whose id is positional (`legacy:<rootId>:<name>`) and names a directory on one machine. It resolves on the device it came from and cannot match on a peer — which is the point: an unresolvable dependency the user can see beats an invisible one.
+- The descriptor is emitted even for an **unstamped** folder agent, whose id is positional (`legacy:<rootId>:<name>`) and names a directory on one machine. It resolves on the device it came from and cannot match anywhere else — which is the point: an unresolvable dependency the user can see, and is now stopped by, beats an invisible one.
 - **A dropped field in a sync layer is not a local loss — it replicates.** A peer that cannot resolve a dependency re-encodes the job from what it has, so without a carry-forward it would hand a third device the job one dependency lighter. The carry-forward now covers folder descriptors as well as remote ones, which is what stops the original defect from copying itself onward.
 - The manifest is also where a **stamped** identity used to strand a job. See the flow above; the repair drops the one descriptor naming the agent's previous identity, at the only place that identity is still knowable.
 
-### What is still true after all of this
+### Known gaps
 
-- **The silent wrong run is still live, and 7c did not close it.** Running a local job reads the `job_agents` join rows and nothing else — never the manifest, never the dependency states, never the `needsSetup` flag. On a device without the workshop the join row is *absent* rather than dangling, so the missing-dependency error does not fire, the plain-LLM pattern is derived, and the run completes and is recorded as a success. What changed is that the condition is now **visible on two surfaces** if the user looks. Whether to block the run, warn and confirm, or annotate the run as degraded is a product decision.
-- The sidebar's amber warning glyph shares its slot with the run button and is **hidden while hovering** — which is exactly when the user is reaching for Run.
-- The stamp repair is **outbound only**. It corrects this device's manifests and does not mark the job edited, so it does not propagate until the job is next changed. A peer that already received the stale descriptor keeps it, and if that peer edits the job first its own carry-forward sends the ghost back.
-- The one place a folder dependency silently leaves a job on a peer now **logs** it, matching the local-agent arm beside it, which had always logged its auto-create. The equivalent drop inside the descriptor builder is unreachable today — every producer of a folder row id builds it from the prefix — and is logged as a latent trap rather than left silent.
+**Every entry here carries the date it was checked and the method.** A gaps list is read as current by construction, so a stale one is worse than none — this section previously carried two entries that had stopped being true, and both were quoted as current before anyone re-read them.
+
+- **CLOSED — the silent wrong run.** This section used to read *"The silent wrong run is still live, and 7c did not close it… Whether to block the run, warn and confirm, or annotate the run as degraded is a product decision."* That decision was taken: the run is **blocked**. `executeLocal` now recomputes the unresolvable-agent set from the manifest and throws `JobError('incomplete_setup', …)` before anything is created. Retained as closed rather than deleted, because a gaps list that silently loses entries cannot be audited. Rechecked at `12686f0` on 4 Sep 2026 by reading `src/main/services/jobService.ts` `executeLocal` and running `src/main/services/jobService.executeLocal.test.ts`, which reproduces the silent success against the pre-fix behaviour before asserting the refusal.
+- **CLOSED — the sidebar glyph hidden on hover.** Used to read *"The sidebar's amber warning glyph shares its slot with the run button and is hidden while hovering — which is exactly when the user is reaching for Run."* True of the amber `needsSetup` glyph, which is advisory and still behaves that way **on purpose**. The blocking red `incompleteSetup` marker added in `57b5310` is shown unconditionally, and the run-now button it warns about is not rendered on that row at all. **Note what this correction does and does not say:** the hover rule was not removed, it was scoped — repairing this entry by deleting it would have implied the amber glyph changed, which it did not. Rechecked at `12686f0` on 4 Sep 2026 by reading `src/renderer/src/components/jobs/JobItem.tsx:145` and `:186` and running `JobItem.incompleteSetup.test.tsx`.
+- **STILL OPEN — a deleted local-A2A shell reproduces the identical failure.** A `source: 'local'` dependency whose auto-created shell the user later *deletes* resolves to nothing, leaves no join row, and still runs agentless reporting success. It is knowingly outside the gate: the shell is repairable inside the app (the same reason MCPs are out), and `getDependencyStatus` calls that case `needs-setup`, so blocking it would put the gate and the panel the user reads into disagreement. Recorded at `c15ef51` in a comment at the gate itself. Confirmed still open at `12686f0` on 4 Sep 2026 by reading `unresolvableAgentLabels`, which tests only `source === 'remote' | 'folder'`.
+- **STILL OPEN — the stamp repair is outbound only.** It corrects this device's manifests and does not mark the job edited, so it does not propagate until the job is next changed. A peer that already received the stale descriptor keeps it, and if that peer edits the job first its own carry-forward sends the ghost back. Unchanged by the run gate; confirmed still open at `12686f0` on 4 Sep 2026 by reading `rebuildManifestsForRekeyedAgent`, which writes only this device's manifests and does not mark the job edited.
+- **Still true, not a gap** — the one place a folder dependency silently leaves a job now **logs** it, matching the local-agent arm beside it, which had always logged its auto-create. The equivalent drop inside the descriptor builder is unreachable today — every producer of a folder row id builds it from the prefix — and is logged as a latent trap rather than left silent.
 
 ## Architecture Overview
 
@@ -127,17 +146,34 @@ Picking a counterparty
       ├─ '[+]' capability picker      → chat_on_demand_agents → derivePattern → runner or orchestrator
       └─ Jobs agent picker            → job_agents
 
-A job's folder dependency, across devices
+A job's folder dependency, wherever the job is opened
 
   origin:  job_agents row → agentRowToDescriptor → {source:'folder', manifestId} → jobs.sync_deps
-  peer:    sync_deps → resolveFolderAgent (settings scope, point lookup, no auto-create)
+  elsewhere (or here, after the folder moved):
+           sync_deps → resolveFolderAgent (settings scope, point lookup, no auto-create)
              ├─ hit  → job_agents row rebuilt
              └─ miss → nothing created, descriptor kept, logged,
                        dependency listed as 'unavailable' (no button)
+
+Running a job whose agent is not here
+
+  job:execute
+    → jobService.executeLocal
+      → unresolvableAgentLabels(job.syncDeps, buildResolveIndex, profileServerUrl)
+        ├─ []      → the run proceeds as before
+        └─ [names] → logger.warn + throw JobError('incomplete_setup', <sentence naming them>)
+                       → ipcMain.handle strips the code, keeps the message
+                         → useJobs unwrapIpcError → the sentence, alone, in the run-error alert
+
+  and, before the click:
+    JobData.incompleteSetup (job:list and job:get)
+      ├─ JobDetail   → Run disabled + red "Incomplete setup" panel + "Agent unavailable" chip
+      └─ JobItem     → red marker shown unconditionally, no run-now button
 ```
 
 ## Integration Points
 
+- [Local Agents Are Not Synced](local_only.md) — **the governing product position**: a job bound to a folder agent is local-only, the descriptor exists to make that visible and blocking, and peer resolution is a mechanism rather than a workflow. Read it before writing any sentence about this dependency crossing machines.
 - [The Agent Turn Runner](agent_turn.md) — what actually answers once a folder agent is picked. This slice adds no dispatch of its own; jobs inherit the resolver by not dispatching at all.
 - [Agents Home, Scanner & Folder Index](folder_index.md) — where the synthesized metadata is computed and which writers carry it, and the `enabled` rule that made the exclusion removable in one line.
 - [Agents Tab & Agent Page](agents_tab.md) — the page whose chat controls were disabled for the same reason, and the "Stamp identity" action whose job repair is described above.

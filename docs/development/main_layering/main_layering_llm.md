@@ -46,7 +46,7 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`) sit beside the s
 - Wrap every handler with `ipcHandle(channel, fn)` from `ipc/_wrap.ts` (NOT `ipcMain.handle` directly) — this gives uniform DomainError serialization and structured error logs
 - For streaming (MessagePort) handlers, use `ipcMain.on` directly and check `userActivation.isActivated()` manually (cannot throw — must post error to port and close)
 - Auth-flow handlers that show inline form errors return a discriminated `{ success: true, ... } | { success: false, error }` shape — wrap the service call in try/catch and use `ipcErrorShape(err).message`
-- All other handlers let DomainError flow through `ipcHandle` (renderer's `invoke()` rejects with the error code preserved)
+- All other handlers let DomainError flow through `ipcHandle`. **The renderer's `invoke()` rejects with the message only — the code does NOT survive.** See "Errors" below before writing any renderer branch on `err.code`
 
 ## Errors — `src/main/errors.ts`
 
@@ -60,9 +60,37 @@ Every domain has a typed error class with a string-literal code union:
 | `ChatError` | `not_found`, `not_configured`, `adapter_unavailable`, `not_activated` |
 | `AgentError` | `not_found`, `not_activated`, `unsupported_protocol`, `no_card_url`, `no_endpoint`, `remote_immutable`, `invalid_id`, `sync_reauth_required`, `sync_failed` |
 
-All extend `DomainError<TCode>` which carries `code` + `detail` across the IPC boundary (re-attached as enumerable own properties on the thrown Error so they survive structured-clone serialization).
+**The table above is a sample, not the roster.** `errors.ts` defines 14 `DomainError` subclasses at `12686f0` (adding `KitError`, `LocalAgentError`, `LocalToolsError`, `ChatModeError`, `AgentStatusError`, `JobError`, `NoteError`, `CinnaApiError`). Read `errors.ts` for the current set; counted on 4 Sep 2026 by reading the `export class … extends DomainError` lines.
 
-Use `ipcErrorShape(err)` to extract `{ code, message, detail? }` for inline `{ success: false, error }` responses.
+All extend `DomainError<TCode>`, which carries `code` + `detail` **inside the main process**.
+
+### `code` does NOT reach the renderer — two boundaries discard it
+
+This paragraph previously claimed the opposite ("re-attached as enumerable own properties … so they survive structured-clone serialization"). **That was never true at any commit**, and `src/main/ipc/_wrap.ts` says so in its own docstring, which records the same false claim being fixed there after `isStaleWriteError` silently answered `false` for every refused write until it was probed in a running app. Corrected here at `12686f0` on 4 Sep 2026 by reading `_wrap.ts:32-99` and `errors.ts:191-215`.
+
+1. `ipcMain.handle` serialises a rejection to `message` + `stack` only, and rewrites the message as `Error invoking remote method '<channel>': <Class>Error: <message>`.
+2. `contextBridge` then clones whatever preload throws into the renderer's world as a fresh `Error` — so re-attaching the code in preload does not help either; it lands on the wrong side of this one.
+
+What the renderer receives is a plain `Error` whose only own properties are `message` and `stack`. `ipcHandle` still sets `outbound.code` faithfully, and that is still worth doing — it is read by callers *inside* main and it makes the logged error self-describing. **It is not a wire contract.**
+
+**So a handler whose failure code must drive renderer behaviour has to return the code as data rather than throw it.** Two established shapes:
+
+- `{ success: false, code, error }` — the older, more widespread convention. The renderer builds the `Error` and sets `.code` itself (`useAgents.ts:234` `useApplyBundleUpdate` is the worked example), so the code never goes near the wire.
+- `LocalAgentOutcome<T>` in `src/shared/localAgents.ts` — main returns `{ok: false, code, name, message}` and the **renderer**, not preload, turns it back into a throw.
+
+**A renderer `catch` that reads `err.code` off a rejected `invoke()` is a silent no-op**, and it looks correct in review. Check what the channel does before writing one: a handler that catches internally and returns an outcome gives you a code; a bare `ipcHandle` that lets a `DomainError` throw does not.
+
+For a failure that is only ever *shown as a sentence*, throwing is fine — but strip the transport first. `src/renderer/src/utils/ipcError.ts` `unwrapIpcError(err, fallback)` removes the `Error invoking remote method '<channel>': ` prefix and the leading `<Class>Error: `, so the user reads the sentence main authored rather than the name of our IPC channel.
+
+Use `ipcErrorShape(err)` to extract `{ code, message, detail? }` for inline `{ success: false, error }` responses — main-side, before the value crosses.
+
+## Logging — `src/main/logger/logger.ts`
+
+- `createLogger('domain')` from `logger/logger.ts`. **109 files import it at `12686f0`** — 76 non-test modules under `src/main/`, the rest tests (counted by grep on 4 Sep 2026). That population is why the next rule exists.
+- **`logger/logger.ts` must stay importless.** No `electron`, no `../index`, nothing. An import there is paid for by every caller: it used to import `getMainWindow` from `src/main/index.ts` so it could broadcast to the renderer itself, so a test of a pure function three layers away had to stub the logger and `db/client` just to *load* — and a file that fails to load reports as a **smaller test count**, not as a failure (importing `kit/validator.ts` into one pure test dropped the suite 991 → 977 with nothing to point at).
+- **The renderer broadcast is a sink, installed from the entry point.** `logger.ts` exposes `setLogSink(fn | null)`; `logger/broadcast.ts` holds the Electron half and takes the window getter **as an argument** — importing `getMainWindow` there would move the cycle rather than cut it. `index.ts` owns the window, so `index.ts` supplies it. `broadcast.ts`'s only import is type-only and erased at compile time.
+- **Apply the same test to any new cross-cutting module.** If most of `src/main/` will import it, it may not import anything that reaches `index.ts` or `electron` at runtime. `src/main/sync/identity.ts` and `src/shared/kit/manifest.ts` are held to this for the same reason.
+- Full detail: [Logger](../logger/logger.md) and [Logger — Technical Details](../logger/logger_tech.md).
 
 ## Activation Gate
 

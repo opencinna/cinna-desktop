@@ -52,7 +52,7 @@ Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server 
 - Validates `installId` against `UUID_RE`, throwing `AgentError('invalid_id')` before any request is built
 - `POST /api/v1/external/agents/{installId}/apply-update` via the shared `cinnaFetch` → returns the post-update `BundleVersionInfo` snapshot
 - Logs `apply bundle update start` / `done` (with `installedRevision`, `latestRevision`, `durationMs`) / `failed` (with the `CinnaApiError.code`)
-- Error contract inherited from `cinnaFetch`: 401/403 → `CinnaApiError('reauth_required')`, other non-2xx → `request_failed`. `ipcErrorShape` maps the `DomainError.code` through the handler so the renderer still branches on `err.code === 'reauth_required'`
+- Error contract inherited from `cinnaFetch`: 401/403 → `CinnaApiError('reauth_required')`, other non-2xx → `request_failed`. The renderer can branch on `err.code === 'reauth_required'` **because the handler returns the code as data, not because it survives a throw**: `agent:apply-bundle-update` catches internally, calls `ipcErrorShape(err)`, and returns `{success:false, code, error}`, which `useApplyBundleUpdate` turns back into a `code`-tagged `Error` renderer-side. A thrown `DomainError` loses its `code` at two boundaries — see [Main-Process Layering](../../development/main_layering/main_layering_llm.md). This distinction is load-bearing: the `catalog:*` channels throw, and their `reauth_required` branches are dead as a result
 - Server applies the latest revision in place (stop env → swap bundle folders → restart → refresh prompts); per-bundle App Data + credentials preserved
 
 ### `cinnaFetch<T>(userId, path, opts)` (`src/main/services/cinna-http.ts`)

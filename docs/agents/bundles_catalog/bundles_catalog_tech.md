@@ -97,7 +97,7 @@ Flow inside `handleInstall(bundleId, displayName)`:
 2. `quickInstall.mutateAsync(bundleId)` — the mutation's `onSuccess` runs `useRefreshCatalogState()` internally
 3. `queryClient.fetchQuery(['catalog', 'setup-status', installId], () => window.api.catalog.setupStatus(installId))` — populates the cache so the modal's `useSetupStatus` reads from cache on first render
 4. Branches on `status`: `ready` → success toast; otherwise → `setActiveSetup({...})`
-5. Errors translate `err.code === 'reauth_required'` to a re-auth-prompted toast
+5. Errors on the **update** path translate `err.code === 'reauth_required'` to a re-auth-prompted toast (the code is available because `agent:apply-bundle-update` returns it as data). The **install** path attempts the same branch off a thrown `catalog:quick-install` rejection and cannot reach it
 
 ### `CatalogCard`
 Thin orchestrator. Owns only the local `expanded` UI state and renders the card header (status dot, name, version, install/installed indicator, expand chevron) plus the expanded body wrapper (description, publisher line, bundle-id pill). Delegates the rest:
@@ -158,5 +158,7 @@ No catalog-specific env vars or settings; the feature inherits its surface area 
 - IPC handlers gate on `userActivation.requireActivated()` and the active profile's user id (`getProfileScopeUserId()`) — a deactivated session can't proxy catalog calls
 - `setup-status` returns *names and types only*; no credential secrets cross the IPC boundary
 - `install-context` proxy is bisected at the projection layer: `quickInstall` consumes the raw shape (which carries `suggested_credential_id` UUIDs needed to build the install body) entirely inside the main process, while `getInstallContext` re-projects the response into `InstallContextDto` and *drops* the UUIDs so the renderer-facing surface only carries a `hasSuggestedMatch: boolean` per spec
-- `CinnaApiError` codes survive serialization via `_wrap.ts` so the renderer can branch on `err.code === 'reauth_required'` instead of regex-matching error strings
+- **`CinnaApiError` codes do NOT survive a thrown rejection, and this doc used to claim they did.** `ipcMain.handle` serialises a rejection to message + stack and `contextBridge` re-clones it, so `_wrap.ts`'s re-attached `code` never reaches the renderer — `_wrap.ts:32-99` states this and records the same false claim being fixed there. Corrected at `12686f0` on 4 Sep 2026 by reading `_wrap.ts`, `catalog.ipc.ts` and `agent.ipc.ts:105`. See [Main-Process Layering](../../development/main_layering/main_layering_llm.md). Where a code *is* available to the renderer it is because the handler **returned** it rather than threw it:
+  - `agent:apply-bundle-update` (`agent.ipc.ts:105`) catches internally and returns `{success:false, code, error}`; `useApplyBundleUpdate` (`useAgents.ts:234`) rebuilds the `Error` renderer-side and sets `.code`. **`AgentCard.tsx:101` and `CatalogSettingsSection.tsx:137` therefore work.**
+  - Every `catalog:*` channel (`catalog.ipc.ts`) is a bare `ipcHandle` that lets the `CinnaApiError` throw. **`CatalogSettingsSection.tsx:107` and `useCatalogPicker.ts:100` read `err.code` off that rejection, so their `reauth_required` branch is dead** — see Known gaps in [Bundles Catalog](./bundles_catalog.md).
 - The server-supplied `setup_url` is treated as the authoritative frontend host; the desktop never substitutes its own host (matches the trust model used by existing cinna-server deep links in `JobRunRow.tsx` / `CinnaTaskRunView.tsx`)
