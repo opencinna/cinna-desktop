@@ -197,7 +197,36 @@ describe('running a job whose agent this device cannot resolve', () => {
     // is told a dependency is missing and never which one.
     applyIncomingJob([folderDep])
     expect(() => run()).toThrow(/Invoice Checker/)
-    expect(() => run()).toThrow(/isn't compatible with this setup/)
+    expect(() => run()).toThrow(/can't run on this device/)
+  })
+
+  it('stops at what is true, and does not tell the user to copy the agent here', () => {
+    // Local agents are not synced and the cross-machine matching semantics are
+    // undesigned, so an instruction to hand-copy the folder would promise a
+    // workflow the product has not got. It would clear the block today, which
+    // is exactly what makes it unsafe to say.
+    applyIncomingJob([folderDep])
+    let message = ''
+    try {
+      run()
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err)
+    }
+    expect(message).not.toMatch(/copy|move|re-?create|folder|directory/i)
+  })
+
+  it('carries its own code, distinct from a dangling reference', () => {
+    // The code never reaches the renderer — two serialisation boundaries eat it
+    // — but it is read here, in main's own log, where "the agent is not on this
+    // device" and "the reference has gone dangling" are different incidents.
+    // Reusing `missing_dependency` for both would merge them in every grep.
+    applyIncomingJob([folderDep])
+    try {
+      run()
+      throw new Error('expected the run to be refused')
+    } catch (err) {
+      expect((err as { code?: string }).code).toBe('incomplete_setup')
+    }
   })
 
   it('names every unresolvable agent, not just the first', () => {
@@ -324,10 +353,50 @@ describe('incompleteSetup is not needsSetup', () => {
   })
 
   it('is carried by `getDetail`, not only by `list`', () => {
-    // `needsSetup` was documented as list-only and left false on the detail
-    // DTO. A blocked flag with that habit would read false in the one view
-    // whose Run button it has to disable.
+    // Both, because a gate and the surface that displays it must not hold
+    // different opinions — the detail view is where the Run button is disabled.
+    // (`needsSetup` is computed in both too. Its doc comment claimed otherwise
+    // for a while, which is how this test nearly acquired the wrong reason.)
     applyIncomingJob([folderDep])
     expect(jobService.getDetail(USER, JOB_ID).incompleteSetup).toBe(true)
+  })
+})
+
+/**
+ * The gate is scoped to **folder and remote** agent sources. That is the whole
+ * claim of this block — not that what happens to a `local` one is right.
+ *
+ * A `source: 'local'` A2A dependency auto-creates a disabled shell on apply, so
+ * it normally resolves. Delete that shell and it resolves to nothing, leaves no
+ * join row, and the run goes ahead agentless and reports success: the same
+ * defect this file was written for, still live, deliberately out of scope. It
+ * is out because the shell is repairable in the app (the reasoning that also
+ * excludes MCPs) and because `getDependencyStatus` calls it `needs-setup` —
+ * blocking it here would put the gate and the panel into disagreement.
+ *
+ * So this asserts the **scope**, not the behaviour. It does not call `run()`,
+ * because a test asserting that the local case runs would pin a known defect as
+ * a contract. When the scope widens, this test changes with it and says so.
+ */
+describe('the gate is scoped to folder and remote sources', () => {
+  const localDep: JobDepDescriptor = {
+    kind: 'agent',
+    source: 'local',
+    cardUrl: 'https://local.example/.well-known/agent.json',
+    name: 'Local Helper'
+  }
+
+  it('does not treat a deleted local A2A shell as blocking', () => {
+    applyIncomingJob([localDep])
+    const shell = agentRepo.list(USER).find((a) => a.createdBySync)
+    if (!shell) throw new Error('sync did not auto-create the local agent shell')
+    agentRepo.delete(USER, shell.id)
+
+    expect(jobService.getDetail(USER, JOB_ID).incompleteSetup).toBe(false)
+    // And the panel still routes it to the in-app repair, which is the reason
+    // the gate leaves it alone. If either of these two flips, they flip
+    // together.
+    const [dep] = jobService.getDependencyStatus(USER, JOB_ID)
+    expect(dep.state).toBe('needs-setup')
   })
 })

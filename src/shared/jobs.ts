@@ -35,8 +35,12 @@ export interface JobData {
   /**
    * True when this job synced in with a dependency (MCP/agent/mode) that isn't
    * fully set up on this device. Drives the sidebar "finish setup" badge.
-   * Defaults to false. Only `job:list` populates it; `job:get` (JobDetailData)
-   * leaves it false and the detail view derives richer per-dep status instead.
+   * Populated by both `job:list` and `job:get`. This comment used to say
+   * `job:get` left it false; it never did — `getDetail` has always computed
+   * `manifestNeedsSetup` — and the sentence was believed and repeated by the
+   * next person to read it. The detail view *additionally* derives richer
+   * per-dependency status from `job:dep-status`, which is what the sentence was
+   * reaching for.
    */
   needsSetup: boolean
   /**

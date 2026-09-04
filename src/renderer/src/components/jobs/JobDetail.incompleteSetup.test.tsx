@@ -73,11 +73,22 @@ beforeEach(() => {
 })
 
 describe('the job detail view for a job this device cannot run', () => {
-  it('says the job is not compatible with this setup', () => {
+  it('says the job cannot run here, and where it can', () => {
     jobState.current = job({ incompleteSetup: true })
     render(<JobDetail />)
     expect(screen.getByText('Incomplete setup')).toBeTruthy()
-    expect(screen.getByText(/isn't compatible with this setup/)).toBeTruthy()
+    expect(screen.getByText(/needs an agent that isn't available on this device/)).toBeTruthy()
+    expect(screen.getByText(/will run on a device where that agent is set up/)).toBeTruthy()
+  })
+
+  it('does not tell the user to copy the agent onto this machine', () => {
+    // Local agents are not synced and the matching semantics across machines
+    // are undesigned, so a hand-copy instruction promises a workflow that does
+    // not exist. It would clear the block today — that is what makes it unsafe
+    // to print. The panel is the surface where such a sentence would land.
+    jobState.current = job({ incompleteSetup: true })
+    const { container } = render(<JobDetail />)
+    expect(container.textContent ?? '').not.toMatch(/copy|move it|re-?create|folder|directory/i)
   })
 
   it('disables Run, and the disabled control still explains itself', () => {
@@ -110,8 +121,8 @@ describe('the job detail view for a job this device cannot run', () => {
     // message is the entire explanation — the error `code` does not survive the
     // trip — so it has to reach the screen unedited, agent names and all.
     exec.error = new Error(
-      "This job isn't compatible with this setup. It needs an agent that isn't " +
-        'available on this device: Invoice Checker.'
+      "This job can't run on this device. It needs an agent that isn't " +
+        'available here: Invoice Checker.'
     )
     render(<JobDetail />)
     expect(screen.getByText(/Invoice Checker/)).toBeTruthy()

@@ -69,6 +69,16 @@ export type JobErrorCode =
   | 'not_activated'
   | 'unsupported_type'
   | 'missing_dependency'
+  /**
+   * The job names an agent that does not exist on this device at all, so it
+   * cannot run here. Distinct from `missing_dependency`, which means a
+   * reference the job holds has gone dangling. Neither code reaches the
+   * renderer — `ipcMain.handle` drops it (see `ipc/_wrap.ts`) — but they
+   * separate two genuinely different conditions in the main-side log, and a
+   * code reused across conditions teaches the next person grepping it the
+   * wrong thing.
+   */
+  | 'incomplete_setup'
   | 'invalid_input'
 
 export type NoteErrorCode =

@@ -54,8 +54,9 @@ export interface JobDetail extends JobRow {
   needsSetup: boolean
   /**
    * Whether the manifest names an agent that resolves to nothing here, which
-   * blocks the run outright. Unlike `needsSetup` this IS populated on the
-   * detail DTO — it is what the detail view's Run button is disabled on.
+   * blocks the run outright. Computed here as well as in `list`, because a
+   * gate and the surface that displays it must not hold different opinions —
+   * this is what the detail view's Run button is disabled on.
    */
   incompleteSetup: boolean
 }
@@ -471,18 +472,31 @@ export const jobService = {
     // process's own log; the sentence is the wire contract, and it names the
     // agents because "a dependency is missing" without saying which one leaves
     // the user with nothing to act on.
+    //
+    // The message stops at *what is true*. It does not tell the user to copy
+    // the agent's folder onto this machine, even though that is what would
+    // clear it today: local agents are not synced, and how an agent on one
+    // machine corresponds to one on another is undesigned. Advice that happens
+    // to work is still a promise the product has not made.
+    //
+    // **What this gate deliberately does not cover.** A `source: 'local'` A2A
+    // dependency whose auto-created shell the user later *deletes* resolves to
+    // nothing, leaves no join row, and still runs agentless reporting success —
+    // the identical failure, knowingly left live. It is out because the shell is
+    // repairable inside the app, which is the same reason MCPs are out, and
+    // because `getDependencyStatus` calls that case `needs-setup`: blocking it
+    // would put this gate and the panel the user reads into disagreement. If
+    // that changes, the `getDependencyStatus` local arm moves with it.
     const blocked = job.syncDeps
       ? unresolvableAgentLabels(job.syncDeps, buildResolveIndex(userId), profileServerUrl(userId))
       : []
     if (blocked.length > 0) {
       logger.warn('refused to run a job with an unresolvable agent', { jobId, blocked })
       throw new JobError(
-        'missing_dependency',
-        `This job isn't compatible with this setup. It needs ${
+        'incomplete_setup',
+        `This job can't run on this device. It needs ${
           blocked.length === 1 ? 'an agent' : 'agents'
-        } that ${blocked.length === 1 ? "isn't" : "aren't"} available on this device: ` +
-          `${blocked.join(', ')}. It can't run here until ` +
-          `${blocked.length === 1 ? 'that agent is' : 'those agents are'} added to this device.`
+        } that ${blocked.length === 1 ? "isn't" : "aren't"} available here: ${blocked.join(', ')}.`
       )
     }
 

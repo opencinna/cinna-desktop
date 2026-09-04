@@ -50,8 +50,8 @@ vi.mock('./useAppSettings', () => ({ useAppSettings: () => ({ data: {} }) }))
 const { useExecuteJob } = await import('./useJobs')
 
 const REFUSAL =
-  "This job isn't compatible with this setup. It needs an agent that isn't " +
-  'available on this device: Invoice Checker.'
+  "This job can't run on this device. It needs an agent that isn't " +
+  'available here: Invoice Checker.'
 
 function wrapper(client: QueryClient) {
   return ({ children }: { children: ReactNode }) =>

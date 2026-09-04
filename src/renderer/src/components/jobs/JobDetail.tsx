@@ -151,10 +151,17 @@ export function JobDetail(): React.JSX.Element {
               <AlertTriangle size={13} />
               Incomplete setup
             </div>
+            {/*
+              The second sentence says what the app does; it does not tell the
+              user to copy the agent's folder here. Local agents are not synced
+              and the cross-machine matching semantics are undesigned, so a
+              hand-copy instruction would promise a workflow that does not
+              exist — it happens to work today, which is what makes promising it
+              dangerous. Where the truthful answer is unavailable, say less.
+            */}
             <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
-              This job isn't compatible with this setup. It needs an agent that isn't
-              available on this device, so it can't run here. Add the agent to this
-              device and this clears on its own.
+              This job needs an agent that isn't available on this device, so it can't
+              run here. It will run on a device where that agent is set up.
             </p>
           </section>
         )}
