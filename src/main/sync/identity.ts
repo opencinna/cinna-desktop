@@ -1,6 +1,11 @@
 import type { JobDepDescriptor, McpTransport } from '../../shared/sync'
 import type { McpProviderRow } from '../db/mcpProviders'
 import type { AgentRow } from '../db/agents'
+import {
+  FOLDER_AGENT_ID_PREFIX,
+  FOLDER_AGENT_SOURCE,
+  isFolderAgentId
+} from '../../shared/localAgents'
 
 /**
  * Portable-identity normalizers (plan: data-sync-portable-deps §3).
@@ -47,12 +52,26 @@ export function mcpIdentityKey(d: Extract<JobDepDescriptor, { kind: 'mcp' }>): s
   return `${d.transport}|${normalizeUrl(d.url)}`
 }
 
-/** Identity key for an agent descriptor. */
+/**
+ * Identity key for an agent descriptor.
+ *
+ * Written as an exhaustive switch on `source` rather than
+ * `if (remote) … else <local>`: the `else` form typechecks against a *new*
+ * union member and quietly keys it as a local agent, which is how a folder
+ * descriptor would have been asked for under a `local|` key that can never
+ * exist. A missing case here is a compile error instead.
+ */
 export function agentIdentityKey(d: Extract<JobDepDescriptor, { kind: 'agent' }>): string {
-  if (d.source === 'remote') {
-    return `remote|${d.remoteTargetType}|${d.remoteTargetId}`
+  switch (d.source) {
+    case 'remote':
+      return `remote|${d.remoteTargetType}|${d.remoteTargetId}`
+    case 'local':
+      return `local|${normalizeUrl(d.cardUrl)}`
+    case 'folder':
+      // Exact, not normalized: this is an opaque id from `cinna-agent.json`,
+      // not a URL, and two folders that differ only in case are two folders.
+      return `folder|${d.manifestId}`
   }
-  return `local|${normalizeUrl(d.cardUrl)}`
 }
 
 /** Normalized chat-mode name used for cross-device matching. */
@@ -82,6 +101,12 @@ export function mcpRowToDescriptor(
  * Build a portable agent descriptor from a local `agents` row. Returns null
  * when the row lacks the field that gives it portable identity (a remote agent
  * without a backend UUID, or a local agent with no card/endpoint URL).
+ *
+ * The folder branch has to sit **above** the `cardUrl ?? endpointUrl` fallback,
+ * not below it: a folder agent has both columns null by construction, so a
+ * branch placed after that check is dead code and the row returns null — which
+ * dropped the dependency from the manifest entirely and let the peer run the
+ * job as a plain-LLM chat, reporting success with the agent missing.
  */
 export function agentRowToDescriptor(
   row: AgentRow,
@@ -97,6 +122,16 @@ export function agentRowToDescriptor(
       serverUrl: serverUrl ?? null,
       name: row.name
     }
+  }
+  if (row.source === FOLDER_AGENT_SOURCE) {
+    // The row id is `folder:<manifest id>`; the manifest id is what crosses
+    // devices, so the prefix — which is this desktop's own row-keying scheme —
+    // is stripped rather than transmitted.
+    const manifestId = isFolderAgentId(row.id)
+      ? row.id.slice(FOLDER_AGENT_ID_PREFIX.length)
+      : ''
+    if (!manifestId) return null
+    return { kind: 'agent', source: 'folder', manifestId, name: row.name }
   }
   const cardUrl = row.cardUrl ?? row.endpointUrl
   if (!cardUrl) return null

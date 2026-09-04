@@ -40,7 +40,7 @@ export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
     deps.push(desc)
   }
 
-  // Agents: a job attachment is either a Default-Scope local agent or a
+  // Agents: a job attachment is a Default-Scope local *or folder* agent, or a
   // profile-scoped remote agent — try both lookups.
   for (const agentId of agentRefs) {
     const row =
@@ -57,14 +57,18 @@ export function buildJobManifest(userId: string, job: JobRow): JobSyncManifest {
     remember(mcpRowToDescriptor(row))
   }
 
-  // Carry forward unresolved remote-agent descriptors from the prior manifest.
-  // (Local agents / MCPs auto-create on apply, so they always have a join row;
-  // a remote agent on a foreign server is the only thing that can be in the
-  // manifest yet have no join row to rebuild from.)
+  // Carry forward descriptors the prior manifest holds that this device cannot
+  // rebuild from a join row. Local agents and MCPs auto-create on apply, so
+  // they always have one; the two that can sit in a manifest with no row behind
+  // them are a remote agent on a foreign server and a **folder agent whose
+  // workshop is not on this machine** — the latter deliberately does not
+  // auto-create a shell, so without this a local edit here would drop it and
+  // hand the next device a job with one fewer dependency than it was given.
   const prior = job.syncDeps ?? null
   if (prior?.deps) {
     for (const desc of prior.deps) {
-      if (desc.kind === 'agent' && desc.source === 'remote') remember(desc)
+      if (desc.kind !== 'agent') continue
+      if (desc.source === 'remote' || desc.source === 'folder') remember(desc)
     }
   }
 

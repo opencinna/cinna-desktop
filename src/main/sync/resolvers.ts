@@ -1,5 +1,11 @@
 import { chatModeRepo } from '../db/chatModes'
 import { agentRepo, type AgentRow } from '../db/agents'
+import {
+  FOLDER_AGENT_ID_PREFIX,
+  FOLDER_AGENT_SOURCE,
+  folderAgentId,
+  isFolderAgentId
+} from '../../shared/localAgents'
 import { mcpProviderRepo, type McpProviderRow } from '../db/mcpProviders'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { getCinnaServerUrl } from '../services/cinnaApiService'
@@ -124,6 +130,26 @@ export function resolveLocalAgent(
 }
 
 /**
+ * Resolve a folder agent by its manifest id in Default Scope. Returns null on a
+ * miss, and **never auto-creates** — a folder agent is a directory on disk, so
+ * a row without one would claim an agent this device does not have. The caller
+ * leaves it out of the join rows, and `manifestNeedsSetup` reports the job as
+ * needing setup, which is how the user learns the workshop is missing here.
+ *
+ * The row id is reconstructed rather than searched for: `folder:<manifestId>`
+ * *is* the id, so this is a point lookup, and it is the same derivation the
+ * scanner uses when it indexes the folder.
+ */
+export function resolveFolderAgent(
+  desc: Extract<JobDepDescriptor, { kind: 'agent'; source: 'folder' }>
+): string | null {
+  if (!desc.manifestId) return null
+  const row = agentRepo.getOwned(getSettingsScopeUserId(), folderAgentId(desc.manifestId))
+  if (!row || row.source !== FOLDER_AGENT_SOURCE) return null
+  return row.id
+}
+
+/**
  * Resolve an MCP provider by connection identity in Default Scope; on a miss
  * auto-create a disabled, not-connected provider from the coords. Env values /
  * auth tokens never sync, so the shell starts credential-less.
@@ -167,6 +193,8 @@ export interface ResolveIndex {
   localAgent: Map<string, boolean>
   /** remote agentIdentityKeys present for the profile. */
   remoteAgent: Set<string>
+  /** folder agentIdentityKey → enabled. */
+  folderAgent: Map<string, boolean>
   /** normalized chat-mode names available in Default Scope. */
   modeNames: Set<string>
   hasDefaultMode: boolean
@@ -185,6 +213,16 @@ export function buildResolveIndex(profileUserId: string): ResolveIndex {
     if (!cardUrl) continue
     localAgent.set(agentIdentityKey({ kind: 'agent', source: 'local', cardUrl }), a.enabled)
   }
+  // Folder agents live in the settings scope beside hand-added local agents,
+  // so they are indexed from the same `agentRepo.list` the loop above walks —
+  // the `source !== 'local'` continue there is what skipped them.
+  const folderAgent = new Map<string, boolean>()
+  for (const a of agentRepo.list(settingsScope)) {
+    if (a.source !== FOLDER_AGENT_SOURCE || !isFolderAgentId(a.id)) continue
+    const manifestId = a.id.slice(FOLDER_AGENT_ID_PREFIX.length)
+    if (!manifestId) continue
+    folderAgent.set(agentIdentityKey({ kind: 'agent', source: 'folder', manifestId }), a.enabled)
+  }
   const remoteAgent = new Set<string>()
   for (const a of agentRepo.listRemote(profileUserId)) {
     if (!a.remoteTargetType || !a.remoteTargetId) continue
@@ -200,7 +238,7 @@ export function buildResolveIndex(profileUserId: string): ResolveIndex {
   const modes = chatModeRepo.list(settingsScope)
   const modeNames = new Set(modes.map((m) => modeKey(m.name)))
   const hasDefaultMode = modes.some((m) => m.isDefault)
-  return { mcp, localAgent, remoteAgent, modeNames, hasDefaultMode }
+  return { mcp, localAgent, remoteAgent, folderAgent, modeNames, hasDefaultMode }
 }
 
 /**
@@ -222,6 +260,13 @@ export function manifestNeedsSetup(
       if (idx.mcp.get(mcpIdentityKey(desc)) !== true) return true
     } else if (desc.source === 'remote') {
       if (!idx.remoteAgent.has(agentIdentityKey(desc))) return true
+    } else if (desc.source === 'folder') {
+      // Named explicitly, and this is the one branch here the compiler could
+      // not have demanded: `agentIdentityKey` accepts the whole agent union, so
+      // a folder descriptor falling to the `local` arm below would typecheck
+      // and then look itself up under a `local|` key that cannot exist —
+      // reporting "needs setup" on the very device the agent lives on.
+      if (idx.folderAgent.get(agentIdentityKey(desc)) !== true) return true
     } else {
       if (idx.localAgent.get(agentIdentityKey(desc)) !== true) return true
     }
@@ -239,6 +284,21 @@ export function findMcp(
       .list(getSettingsScopeUserId())
       .find((p) => mcpIdentityKey(mcpRowToDescriptor(p)) === want) ?? null
   )
+}
+
+/**
+ * Find an existing folder agent matching a descriptor (no auto-create).
+ *
+ * The read-only twin of {@link resolveFolderAgent}, for the Jobs detail view's
+ * per-dependency status list. Returns the row so the caller can label it and
+ * report the user's own enabled toggle; null means the workshop is not on this
+ * device, which the list shows as "needs setup".
+ */
+export function findFolderAgent(
+  desc: Extract<JobDepDescriptor, { kind: 'agent'; source: 'folder' }>
+): AgentRow | null {
+  const id = resolveFolderAgent(desc)
+  return id ? agentRepo.getOwned(getSettingsScopeUserId(), id) ?? null : null
 }
 
 /** Find an existing local A2A agent matching a descriptor (no auto-create). */

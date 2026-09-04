@@ -81,10 +81,42 @@ const remoteAgentRow = {
   createdAt: new Date()
 } as unknown as AgentRow
 
+/**
+ * A folder agent: run by the local engine, so `cardUrl` and `endpointUrl` are
+ * both null and its portable identity is the `id` in its `cinna-agent.json`.
+ * It is in the round-trip fixture because a descriptor variant that does not
+ * survive the trip byte-for-byte re-encodes differently on the peer, and the
+ * server then reports a change on every sync forever.
+ */
+const folderAgentRow = {
+  id: 'folder:6f1a-uuid',
+  userId: '__default__',
+  name: 'Invoice Checker',
+  description: null,
+  protocol: 'local-folder',
+  cardUrl: null,
+  endpointUrl: null,
+  protocolInterfaceUrl: null,
+  protocolInterfaceVersion: null,
+  accessTokenEncrypted: null,
+  cardData: null,
+  skills: null,
+  enabled: true,
+  source: 'folder',
+  remoteTargetType: null,
+  remoteTargetId: null,
+  remoteMetadata: null,
+  localPath: '/w/Local/invoice-checker',
+  localRootId: 'r1',
+  createdBySync: false,
+  createdAt: new Date()
+} as unknown as AgentRow
+
 function deviceAManifest(): JobSyncManifest {
   const deps: JobDepDescriptor[] = [
     mcpRowToDescriptor(mcpRow),
-    agentRowToDescriptor(remoteAgentRow, 'https://srv.io') as JobDepDescriptor
+    agentRowToDescriptor(remoteAgentRow, 'https://srv.io') as JobDepDescriptor,
+    agentRowToDescriptor(folderAgentRow) as JobDepDescriptor
   ]
   return { modeName: 'Deep Work', deps }
 }
@@ -150,5 +182,21 @@ describe('manifest byte-stability across a sync round trip', () => {
     }
     const canonRebuilt = canonicalJson(encodeJobPlaintext(fields, rebuilt))
     expect(canonRebuilt).not.toBe(canonA)
+  })
+})
+
+describe('a folder-agent descriptor on the wire', () => {
+  it('carries the manifest id and no URL of any kind', () => {
+    const canon = canonicalJson(
+      encodeJobPlaintext(
+        { title: 'X', prompt: 'Y', folderId: null, position: 0 },
+        deviceAManifest()
+      )
+    )
+    expect(canon).toContain('"source":"folder"')
+    expect(canon).toContain('"manifestId":"6f1a-uuid"')
+    // Not a path: the workshop directory is this machine's business, and a peer
+    // that received one would learn a local filesystem layout it has no use for.
+    expect(canon).not.toContain('/w/Local/invoice-checker')
   })
 })

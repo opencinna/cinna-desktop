@@ -149,6 +149,29 @@ export type JobDepDescriptor =
       name?: string
     }
   | {
+      kind: 'agent'
+      source: 'folder'
+      /**
+       * The folder agent's `agents` row id without its `folder:` prefix — the
+       * `id` written into `cinna-agent.json` at scaffold, so two devices that
+       * hold the same agent folder derive the same key.
+       *
+       * A folder that has never been stamped carries a *positional* id instead
+       * (`legacy:<rootId>:<name>`), which names a directory on this machine and
+       * cannot match on a peer. It is emitted anyway: an unresolvable
+       * dependency makes the peer report the job as needing setup, whereas
+       * omitting it made the peer rebuild the job with no agent at all, call
+       * `derivePattern([], [])`, get `'AI'`, and run it silently as a plain-LLM
+       * job that reported success.
+       *
+       * Unlike a local A2A agent, a miss must NOT auto-create a shell: a folder
+       * agent *is* a directory on disk, and a row without one would be a lie
+       * about what exists.
+       */
+      manifestId: string
+      name?: string
+    }
+  | {
       kind: 'mcp'
       transport: McpTransport
       /** http/sse connection URL. */

@@ -4,6 +4,7 @@ import { buildJobManifest } from './manifest'
 import {
   resolveMode,
   resolveMcp,
+  resolveFolderAgent,
   resolveLocalAgent,
   resolveRemoteAgent,
   profileServerUrl,
@@ -228,6 +229,15 @@ function parseDeps(v: unknown): JobDepDescriptor[] {
           cardUrl,
           name: typeof d.name === 'string' ? d.name : undefined
         })
+      } else if (d.source === 'folder') {
+        const manifestId = str(d.manifestId)
+        if (!manifestId) continue
+        out.push({
+          kind: 'agent',
+          source: 'folder',
+          manifestId,
+          name: typeof d.name === 'string' ? d.name : undefined
+        })
       }
     }
   }
@@ -311,6 +321,12 @@ const jobMapper: CollectionMapper = {
       } else if (desc.source === 'remote') {
         const aid = resolveRemoteAgent(userId, desc, profileServerUrl(userId))
         if (aid) agentIds.push(aid) // foreign-server agent stays unresolved
+      } else if (desc.source === 'folder') {
+        // No auto-create, unlike the local-agent arm below: a folder agent is a
+        // directory on disk, and a shell row would assert one exists here. A
+        // miss stays out of the join rows and shows up as `manifestNeedsSetup`.
+        const aid = resolveFolderAgent(desc)
+        if (aid) agentIds.push(aid)
       } else {
         agentIds.push(resolveLocalAgent(desc, ctx.cache))
       }

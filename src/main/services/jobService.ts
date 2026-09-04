@@ -30,6 +30,7 @@ import {
   resolveRemoteAgent,
   profileServerUrl,
   findMcp,
+  findFolderAgent,
   findLocalAgent,
   buildResolveIndex,
   manifestNeedsSetup
@@ -256,6 +257,21 @@ export const jobService = {
           label: desc.name ?? 'Remote agent',
           state: id ? 'resolved' : 'unavailable',
           localId: id
+        })
+      } else if (desc.source === 'folder') {
+        // Same shape as the local arm, different lookup and a different meaning
+        // for a miss: a local agent auto-creates a disabled shell on apply, so
+        // `needs-setup` there means "finish configuring the row you have". A
+        // folder agent creates nothing, so `needs-setup` here means "this
+        // workshop is not on this device" — the only honest thing to say about
+        // a directory that is somewhere else.
+        const row = findFolderAgent(desc)
+        out.push({
+          key: `agent:${i}`,
+          kind: 'agent',
+          label: row?.name ?? desc.name ?? 'Agent',
+          state: row ? (row.enabled ? 'resolved' : 'needs-setup') : 'needs-setup',
+          localId: row?.id ?? null
         })
       } else {
         const row = findLocalAgent(desc)
