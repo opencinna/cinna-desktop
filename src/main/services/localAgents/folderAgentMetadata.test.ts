@@ -101,3 +101,71 @@ describe('synthesizeFolderAgentMetadata', () => {
     ])
   })
 })
+
+/**
+ * The two size caps, which the earlier version of this function did not have.
+ *
+ * They are the validator's own numbers (`manifest.example_prompts.too_many`,
+ * `manifest.example_prompts.item_too_long`), and they matter here rather than
+ * only there for the reason the shape guards matter here: the validator reports
+ * and the scanner indexes anyway. The per-item cap is the load-bearing one —
+ * `fallbackDescription` joins the first three entries into the tool description
+ * the orchestrating model reads on every turn, and it caps the count at three
+ * while capping the length not at all.
+ */
+describe('synthesizeFolderAgentMetadata size caps', () => {
+  const long = 'x'.repeat(501)
+
+  it('keeps an unbounded manifest from spending kilobytes of model context per turn', () => {
+    const meta = synthesizeFolderAgentMetadata(
+      manifest({ example_prompts: [long, long, long, 'a short one'] })
+    )
+    // The consequence first: what `fallbackDescription` would put in the tool
+    // description is now bounded. Unclamped this was ~1.5 KB for these three
+    // alone, and a realistic manifest makes it ten times that.
+    expect(meta.example_prompts.slice(0, 3).join('; ').length).toBeLessThan(500)
+    expect(meta.example_prompts).toEqual(['a short one'])
+  })
+
+  it('drops an entry over 500 characters rather than truncating it', () => {
+    // Truncation would produce a third thing — neither what the author wrote
+    // nor absent — and show a severed sentence in the `#` list.
+    const meta = synthesizeFolderAgentMetadata(manifest({ example_prompts: [long] }))
+    expect(meta.example_prompts).toEqual([])
+  })
+
+  it('keeps an entry of exactly 500 characters, which the validator allows', () => {
+    // The boundary is `> 500`, not `>= 500`. Asserted because an off-by-one
+    // here silently discards a legal prompt and nothing would report it.
+    const exact = 'y'.repeat(500)
+    expect(synthesizeFolderAgentMetadata(manifest({ example_prompts: [exact] })).example_prompts)
+      .toEqual([exact])
+  })
+
+  it('measures the untrimmed length, as the validator does', () => {
+    // A 498-character prompt padded to 502 is one the validator rejects. If this
+    // measured the trimmed length the two would disagree about exactly the
+    // entries sitting on the boundary, which is the drift the shared numbers
+    // exist to prevent.
+    const padded = `  ${'z'.repeat(498)}  `
+    expect(padded.length).toBe(502)
+    expect(synthesizeFolderAgentMetadata(manifest({ example_prompts: [padded] })).example_prompts)
+      .toEqual([])
+  })
+
+  it('keeps the first 20 entries and no more', () => {
+    const many = Array.from({ length: 25 }, (_, i) => `prompt ${i}`)
+    const meta = synthesizeFolderAgentMetadata(manifest({ example_prompts: many }))
+    expect(meta.example_prompts).toHaveLength(20)
+    expect(meta.example_prompts[0]).toBe('prompt 0')
+    expect(meta.example_prompts[19]).toBe('prompt 19')
+  })
+
+  it('counts toward the 20 only what survives, so junk cannot crowd out real prompts', () => {
+    // 20 unusable entries followed by a real one: filtering before counting is
+    // what keeps the real prompt. Capping the raw array first would drop it.
+    const stuffed = [...Array.from({ length: 20 }, () => '   '), 'the real one']
+    expect(synthesizeFolderAgentMetadata(manifest({ example_prompts: stuffed })).example_prompts)
+      .toEqual(['the real one'])
+  })
+})

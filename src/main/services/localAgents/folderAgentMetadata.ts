@@ -34,12 +34,44 @@ import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { RemoteAgentMetadata } from '../../../shared/agentMetadata'
 
 /**
+ * The bounds the kit contract puts on `example_prompts`, mirrored from
+ * `validator.ts` — `manifest.example_prompts.too_many` (`:268`) and
+ * `manifest.example_prompts.item_too_long` (`:283`). **Change both together.**
+ *
+ * They are duplicated here rather than imported because the validator states
+ * them inline inside a report-building function; a shared constant is the right
+ * fix and is more than this change should reach for. Naming the codes is the
+ * next best thing: a future editor changing one can grep the other.
+ */
+const MAX_EXAMPLE_PROMPTS = 20
+const MAX_EXAMPLE_PROMPT_CHARS = 500
+
+/**
  * `example_prompts` is typed `string[]` on the manifest, but `parseManifest`
  * only proves the file is a JSON *object* — every field beyond that is a cast
  * over whatever a person or an assistant last wrote. So the value here can be
  * any JSON at runtime, and a folder whose manifest carries junk is still
  * indexed (only an unreadable *identity* keeps a folder out of the index).
- * Anything that is not a non-blank string is dropped.
+ *
+ * The validator reports all four of these violations, and reporting is not
+ * blocking: it writes a finding into `dto.validation` and sets
+ * `readiness: 'invalid'`, and the scanner indexes the row anyway. So the shape
+ * rules and the *size* rules both have to be enforced here, for the same
+ * reason — the earlier version of this function applied that argument to the
+ * shape rules only, and the caps are where it actually costs something.
+ *
+ * What it costs: `A2AAsMcpProvider.fallbackDescription` ends
+ * `examples.slice(0, 3).join('; ')`, which bounds the *count* at three and the
+ * *length* not at all. Three unbounded entries go into the tool description the
+ * orchestrating model reads on every turn — an agent whose manifest holds three
+ * 5 000-character prompts spends ~15 KB of context per turn describing itself.
+ * The per-item cap is what makes that finite; the count cap bounds the `#` list
+ * and the stored row.
+ *
+ * Over-long and malformed entries are **dropped rather than truncated**: the
+ * validator calls them errors, the agent page shows the user why, and a
+ * silently truncated prompt would be a third thing — neither what was written
+ * nor absent.
  */
 function readExamplePrompts(manifest: CinnaAgentManifest): string[] {
   const raw: unknown = manifest.example_prompts
@@ -47,8 +79,12 @@ function readExamplePrompts(manifest: CinnaAgentManifest): string[] {
   const out: string[] = []
   for (const item of raw) {
     if (typeof item !== 'string') continue
+    // Untrimmed length, matching the validator's own `prompt.length > 500`, so
+    // the two cannot disagree about a padded entry sitting on the boundary.
+    if (item.length > MAX_EXAMPLE_PROMPT_CHARS) continue
     const trimmed = item.trim()
     if (trimmed) out.push(trimmed)
+    if (out.length === MAX_EXAMPLE_PROMPTS) break
   }
   return out
 }
