@@ -186,13 +186,15 @@ describe('re-encoding a synced job on the device that could not resolve it', () 
 })
 
 describe('the Jobs detail dependency list for a folder agent', () => {
-  it('names it as needing setup where the workshop is absent, not as an unknown agent', () => {
+  it('calls a missing workshop `unavailable`, because nothing in the app can fix it', () => {
     applyIncomingJob([folderDep])
     const [dep] = jobService.getDependencyStatus(USER, JOB_ID)
-    // The state first: this is what paints the amber "finish setup" row. Before
-    // the variant existed the descriptor never reached this list at all, so the
-    // job showed no dependency and looked complete.
-    expect(dep.state).toBe('needs-setup')
+    // `needs-setup` is the state whose repair lives in the app, and
+    // `JobDetail.tsx` gates its "Set up" button on it. A folder agent is a
+    // directory: the repair is copying files, so the button would lead nowhere.
+    // Its two neighbours in this dispatch auto-create a shell on a miss and are
+    // genuinely `needs-setup`; this arm is the one where the two come apart.
+    expect(dep.state).toBe('unavailable')
     expect(dep.kind).toBe('agent')
     // The descriptor's own `name` is the only label available here — there is
     // no local row to read one from.
@@ -208,9 +210,11 @@ describe('the Jobs detail dependency list for a folder agent', () => {
     expect(dep.localId).toBe('folder:6f1a-uuid')
   })
 
-  it('reports the user’s own toggle separately from the workshop being missing', () => {
-    // Both render as `needs-setup`, but only this one has a `localId` — the row
-    // exists and is switched off, which is a different thing to fix.
+  it('keeps `needs-setup` for the one folder case the app can act on', () => {
+    // The row is here and the user switched it off — a toggle away, in the app,
+    // which is exactly what `needs-setup` and its "Set up" button mean. This is
+    // the assertion that stops the fix above from collapsing both misses into
+    // `unavailable` and losing the actionable one.
     indexWorkshop()
     agentRepo.update(USER, 'folder:6f1a-uuid', { enabled: false })
     applyIncomingJob([folderDep])

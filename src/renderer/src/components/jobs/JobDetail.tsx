@@ -331,8 +331,8 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
         Finish setup on this device
       </div>
       <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
-        This job synced from another device. These dependencies need attention here
-        before it can run as configured.
+        These dependencies need attention on this device before the job can run as
+        configured.
       </p>
       <div className="space-y-1.5 pt-0.5">
         {pending.map((d) => {
