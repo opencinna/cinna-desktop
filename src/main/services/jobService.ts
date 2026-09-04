@@ -33,9 +33,11 @@ import {
   findFolderAgent,
   findLocalAgent,
   buildResolveIndex,
-  manifestNeedsSetup
+  manifestNeedsSetup,
+  type ResolveIndex
 } from '../sync/resolvers'
-import type { JobDependencyStatus } from '../../shared/sync'
+import { agentIdentityKey, normalizeUrl } from '../sync/identity'
+import type { JobDependencyStatus, JobSyncManifest } from '../../shared/sync'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
@@ -50,6 +52,12 @@ export interface JobDetail extends JobRow {
    * the richer per-dependency `job:dep-status` query for the setup surface.
    */
   needsSetup: boolean
+  /**
+   * Whether the manifest names an agent that resolves to nothing here, which
+   * blocks the run outright. Unlike `needsSetup` this IS populated on the
+   * detail DTO — it is what the detail view's Run button is disabled on.
+   */
+  incompleteSetup: boolean
 }
 
 /**
@@ -62,6 +70,61 @@ function filterExistingAgents(agentIds: string[]): string[] {
   if (agentIds.length === 0) return []
   const scopes = getAgentLookupScope()
   return agentIds.filter((id) => scopes.some((scope) => !!agentRepo.getOwned(scope, id)))
+}
+
+/**
+ * Agent dependencies the manifest names that resolve to **nothing** on this
+ * device: a folder agent whose workshop directory isn't here, or a remote agent
+ * from a server this profile isn't on. Returns their display labels, in
+ * manifest order — the labels are the message, see `executeLocal`.
+ *
+ * This is the same set `getDependencyStatus` reports as
+ * `kind: 'agent', state: 'unavailable'`, computed against a prebuilt index so
+ * the job *list* can flag every row in one pass instead of one table scan per
+ * dependency. `jobService.executeLocal.test.ts` pins the two answers together
+ * so an edit to either shows up as a failure rather than as drift.
+ *
+ * Three things are deliberately **not** here:
+ *
+ *  - **MCP deps.** A miss auto-creates a disabled shell the user finishes
+ *    configuring in the app, so blocking on one would break the ordinary
+ *    sync-then-configure path.
+ *  - **`source: 'local'` A2A agents.** `resolveLocalAgent` auto-creates a shell
+ *    too, so a miss there is the same finish-in-app case as an MCP.
+ *  - **A row that is present but disabled.** That is a toggle, not an absence:
+ *    the row exists, `getDependencyStatus` calls it `needs-setup`, and its
+ *    "Set up" button leads somewhere real.
+ *
+ * The `serverUrl` guard is not decoration. `ResolveIndex.remoteAgent` is keyed
+ * on target type + id alone and carries no server, while `resolveRemoteAgent`
+ * — which the detail panel goes through — refuses a descriptor naming a
+ * different server. Without the guard here the two would disagree, permissively
+ * and in exactly the direction this whole gate exists to close.
+ */
+function unresolvableAgentLabels(
+  manifest: JobSyncManifest | null,
+  idx: ResolveIndex,
+  serverUrl: string | null
+): string[] {
+  if (!manifest) return []
+  const out: string[] = []
+  for (const desc of manifest.deps) {
+    if (desc.kind !== 'agent') continue
+    if (desc.source === 'remote') {
+      const foreign =
+        !!desc.serverUrl &&
+        !!serverUrl &&
+        normalizeUrl(desc.serverUrl) !== normalizeUrl(serverUrl)
+      if (foreign || !idx.remoteAgent.has(agentIdentityKey(desc))) {
+        out.push(desc.name ?? 'Remote agent')
+      }
+    } else if (desc.source === 'folder') {
+      if (!idx.folderAgent.has(agentIdentityKey(desc))) {
+        out.push(desc.name ?? 'Agent')
+      }
+    }
+  }
+  return out
 }
 
 const RECENT_RUNS_LIMIT = 10
@@ -107,6 +170,12 @@ export interface JobListItem extends JobRow {
    * sidebar "finish setup" badge.
    */
   needsSetup: boolean
+  /**
+   * True when the manifest names an agent that resolves to nothing on this
+   * device. Drives the sidebar's blocked marker — and, unlike `needsSetup`,
+   * means the run is refused rather than merely unconfigured.
+   */
+  incompleteSetup: boolean
 }
 
 export const jobService = {
@@ -117,10 +186,14 @@ export const jobService = {
     // actually carries a synced manifest — non-Cinna / never-synced workspaces
     // skip the work entirely.
     const index = rows.some((j) => j.syncDeps) ? buildResolveIndex(userId) : null
+    const serverUrl = index ? profileServerUrl(userId) : null
     return rows.map((j) => ({
       ...j,
       inProgressRunsCount: counts.get(j.id) ?? 0,
-      needsSetup: index ? manifestNeedsSetup(j.syncDeps, index) : false
+      needsSetup: index ? manifestNeedsSetup(j.syncDeps, index) : false,
+      incompleteSetup: index
+        ? unresolvableAgentLabels(j.syncDeps, index, serverUrl).length > 0
+        : false
     }))
   },
 
@@ -131,10 +204,12 @@ export const jobService = {
     const recentRuns = jobRunsRepo
       .listByJob(userId, jobId)
       .slice(0, RECENT_RUNS_LIMIT)
-    const needsSetup = job.syncDeps
-      ? manifestNeedsSetup(job.syncDeps, buildResolveIndex(userId))
+    const index = job.syncDeps ? buildResolveIndex(userId) : null
+    const needsSetup = index ? manifestNeedsSetup(job.syncDeps, index) : false
+    const incompleteSetup = index
+      ? unresolvableAgentLabels(job.syncDeps, index, profileServerUrl(userId)).length > 0
       : false
-    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup }
+    return { ...job, agentIds, mcpProviderIds, recentRuns, needsSetup, incompleteSetup }
   },
 
   create(userId: string, input: JobCreateInput): JobRow {
@@ -371,6 +446,44 @@ export const jobService = {
     const job = requireJob(userId, jobId)
     if (job.type !== 'local') {
       throw new JobError('unsupported_type', 'executeLocal called on non-local job')
+    }
+
+    // **This is the block.** The `incompleteSetup` flag on the job DTO reports
+    // the same condition to the UI so the user sees it before clicking, but a
+    // flag only tells; this refusal is what actually stops the run, and it is
+    // recomputed here so a renderer working from a stale job list still cannot
+    // start one.
+    //
+    // The check the join rows below cannot make. They are the *resolved*
+    // subset: `collections.ts` pushes a row only when a descriptor resolved, so
+    // an agent that isn't on this device leaves no row and no trace. The
+    // `missing_dependency` throw further down compares those rows against
+    // themselves and is therefore blind to it — both sides are `[]` — and the
+    // run went ahead with no agent, `derivePattern` answered `'AI'`, and a
+    // plain-LLM chat reported success. The manifest is the only record that the
+    // agent was ever part of this job, so the manifest is what gets asked.
+    //
+    // The whole explanation goes in the *message* on purpose. A `DomainError`'s
+    // `code` does not survive the trip to the renderer — `ipcMain.handle`
+    // serialises a rejection to message + stack and `contextBridge` re-clones
+    // it (see the comment in `src/main/ipc/_wrap.ts`) — so a renderer guard on
+    // `err.code` would silently never fire. The code below is for this
+    // process's own log; the sentence is the wire contract, and it names the
+    // agents because "a dependency is missing" without saying which one leaves
+    // the user with nothing to act on.
+    const blocked = job.syncDeps
+      ? unresolvableAgentLabels(job.syncDeps, buildResolveIndex(userId), profileServerUrl(userId))
+      : []
+    if (blocked.length > 0) {
+      logger.warn('refused to run a job with an unresolvable agent', { jobId, blocked })
+      throw new JobError(
+        'missing_dependency',
+        `This job isn't compatible with this setup. It needs ${
+          blocked.length === 1 ? 'an agent' : 'agents'
+        } that ${blocked.length === 1 ? "isn't" : "aren't"} available on this device: ` +
+          `${blocked.join(', ')}. It can't run here until ` +
+          `${blocked.length === 1 ? 'that agent is' : 'those agents are'} added to this device.`
+      )
     }
 
     // Attached agents (multi). A missing reference is a hard dependency break,

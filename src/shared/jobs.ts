@@ -39,6 +39,24 @@ export interface JobData {
    * leaves it false and the detail view derives richer per-dep status instead.
    */
   needsSetup: boolean
+  /**
+   * True when the job's synced manifest names an **agent** that resolves to
+   * nothing on this device — a folder agent whose workshop directory isn't
+   * here, or a remote agent from a server this profile isn't on. Such a job
+   * cannot run here at all: with no agent to attach, `derivePattern` answers
+   * `'AI'` and the run would go ahead as a plain-LLM chat and report success.
+   *
+   * Deliberately NOT `needsSetup`, which is also true for a disabled MCP or
+   * local-agent shell — those are finish-configuring cases with an in-app
+   * repair, not blocked ones. A surface that gated "can't run here" on
+   * `needsSetup` would refuse jobs that run fine.
+   *
+   * This flag is advisory: it exists so the UI can say so *before* the click.
+   * The actual refusal lives in `jobService.executeLocal` (main process), which
+   * recomputes the same condition — a renderer that missed a list invalidation
+   * still cannot start the run. Populated by both `job:list` and `job:get`.
+   */
+  incompleteSetup: boolean
 }
 
 /**
