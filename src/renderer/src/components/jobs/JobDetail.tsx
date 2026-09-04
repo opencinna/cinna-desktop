@@ -97,17 +97,30 @@ export function JobDetail(): React.JSX.Element {
             >
               <Pencil size={12} />
             </button>
-            <button
-              type="button"
-              onClick={handleRun}
-              disabled={running}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
-                bg-[var(--color-success)] hover:brightness-110 text-white
-                disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+            {/*
+              A disabled button swallows its own mouse events in Chromium, so
+              the tooltip has to hang on a wrapper — otherwise the one control
+              that needs to explain itself is the one that cannot.
+            */}
+            <span
+              title={
+                job.incompleteSetup
+                  ? "This job can't run on this device — incomplete setup"
+                  : undefined
+              }
             >
-              {running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
-              Run
-            </button>
+              <button
+                type="button"
+                onClick={handleRun}
+                disabled={running || job.incompleteSetup}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium
+                  bg-[var(--color-success)] hover:brightness-110 text-white
+                  disabled:opacity-30 disabled:cursor-not-allowed transition-all"
+              >
+                {running ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />}
+                Run
+              </button>
+            </span>
           </div>
         </header>
 
@@ -119,6 +132,31 @@ export function JobDetail(): React.JSX.Element {
           >
             {runError}
           </div>
+        )}
+
+        {/*
+          Above the per-dependency list, not inside it: that list is the amber
+          "finish setup" surface, and its rows already name which dependency is
+          unavailable. This panel answers the different question the user has
+          when the Run button is greyed out — whether the job is broken (it is
+          not) and what would fix it (something outside the app).
+        */}
+        {job.incompleteSetup && (
+          <section
+            role="alert"
+            className="rounded-lg border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5
+              px-4 py-3 space-y-1.5"
+          >
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--color-danger)]">
+              <AlertTriangle size={13} />
+              Incomplete setup
+            </div>
+            <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+              This job isn't compatible with this setup. It needs an agent that isn't
+              available on this device, so it can't run here. Add the agent to this
+              device and this clears on its own.
+            </p>
+          </section>
         )}
 
         <JobSummary job={job} />

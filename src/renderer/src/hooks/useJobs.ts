@@ -14,6 +14,9 @@ import { useModels } from './useModels'
 import { useAppSettings } from './useAppSettings'
 import { resolveDefaultModeId } from '../../../shared/chatModeDefaults'
 import { resolveModel } from './useNewChatFlow'
+import { createLogger } from '../stores/logger.store'
+
+const jobRunLog = createLogger('job-run')
 
 export function useJobList() {
   return useQuery({
@@ -288,6 +291,28 @@ export function useExecuteJob() {
       } else {
         startLlm(chatId, prompt)
       }
+    },
+    /*
+      There was no `onError` here at all. `JobDetail` reads
+      `executeJob.error.message` and so shows something, but `JobItem` fires
+      `mutate()` from the sidebar and had nowhere to put a rejection — the run
+      that main refuses is exactly the one the sidebar swallowed in silence.
+
+      Two things, because neither alone is enough. The invalidate is the part
+      the user sees: the most common way to land here is a job list that went
+      stale (the agent's folder was removed after the list was fetched), so
+      re-fetching makes the row acquire its "incomplete setup" marker and the
+      failed click explains itself in place. The log is the part that carries
+      the *reason* — no toast system yet, same as `useMcp.ts` — and the message
+      is the whole explanation, since a DomainError's `code` does not survive
+      the trip out of main.
+    */
+    onError: (error, { jobId }) => {
+      queryClient.invalidateQueries({ queryKey: ['jobs'] })
+      jobRunLog.error('run failed to start', {
+        jobId,
+        error: error instanceof Error ? error.message : String(error)
+      })
     }
   })
 }

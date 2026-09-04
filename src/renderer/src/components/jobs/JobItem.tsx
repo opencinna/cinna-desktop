@@ -124,16 +124,37 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
     >
       <span className="flex-1 truncate">{job.title}</span>
       {/*
-        "Finish setup" indicator for a job that synced from another device with
-        a dependency not yet resolved here. Suppressed while running (the run
-        spinner takes the trailing slot) and while hovering an idle row (the
-        run-now button does).
+        Two different warnings share this slot, and only one of them may be
+        hidden by a hover.
+
+        "Finish setup" (amber, `needsSetup`) is advisory — a dependency that
+        still resolves, or an MCP shell to configure — so it keeps its original
+        behaviour: suppressed while running (the spinner takes the trailing
+        slot) and while hovering an idle row (the run-now button does), which
+        is what keeps resting rows clean.
+
+        "Incomplete setup" (red, `incompleteSetup`) is not advisory: the job
+        *cannot run here*, and the run-now button is the thing it is warning
+        about. Suppressing it on hover hid it at the one moment the user was
+        reaching for that button — so it is shown unconditionally, and the
+        button is not rendered at all on such a row (below). The row therefore
+        still shows exactly one 16px trailing element in every state; the
+        cleanliness the hover rule protects is untouched, because a blocked job
+        is not a resting one.
       */}
-      {job.needsSetup && !isRunning && !hovering && (
+      {(job.incompleteSetup || (job.needsSetup && !hovering)) && !isRunning && (
         <span
-          className="inline-flex items-center justify-center w-4 h-4 shrink-0 text-[var(--color-warning)]"
-          title="A dependency needs setup on this device"
-          aria-label="Needs setup"
+          className={`inline-flex items-center justify-center w-4 h-4 shrink-0 ${
+            job.incompleteSetup
+              ? 'text-[var(--color-danger)]'
+              : 'text-[var(--color-warning)]'
+          }`}
+          title={
+            job.incompleteSetup
+              ? "Incomplete setup — this job can't run on this device"
+              : 'A dependency needs setup on this device'
+          }
+          aria-label={job.incompleteSetup ? 'Incomplete setup' : 'Needs setup'}
         >
           <AlertTriangle size={11} />
         </span>
@@ -159,7 +180,11 @@ export function JobItem({ job, onDropJob }: JobItemProps): React.JSX.Element {
           <Loader2 size={12} className="animate-spin" />
         </span>
       ) : (
-        hovering && (
+        // No run-now button on a job this device cannot run: main refuses it,
+        // so the button would only ever produce an error the sidebar has no
+        // room to show. The red marker above holds the slot and says why.
+        hovering &&
+        !job.incompleteSetup && (
           <button
             type="button"
             onClick={handleRunNow}
