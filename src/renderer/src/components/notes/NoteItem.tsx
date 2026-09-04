@@ -21,7 +21,6 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const deleteNote = useDeleteNote()
-  const [hovering, setHovering] = useState(false)
   const [dropTarget, setDropTarget] = useState(false)
   const { drag, setDrag } = useNotesDrag()
 
@@ -84,8 +83,6 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
         setActiveNoteId(note.id)
         setActiveView('note-detail')
       }}
-      onMouseEnter={() => setHovering(true)}
-      onMouseLeave={() => setHovering(false)}
       className={`group flex items-center gap-1.5 px-2.5 py-1.5 rounded-md cursor-pointer text-xs transition-colors ${
         isActive
           ? 'app-nav-active text-[var(--color-text)]'
@@ -95,19 +92,23 @@ export function NoteItem({ note, onDropNote }: NoteItemProps): React.JSX.Element
       }`}
     >
       <span className="flex-1 truncate">{note.title || 'Untitled note'}</span>
-      {hovering && (
-        <button
-          onClick={(e) => {
-            e.stopPropagation()
-            deleteNote.mutate(note.id)
-          }}
-          className="p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors shrink-0"
-          title="Delete note"
-          aria-label="Delete note"
-        >
-          <Trash2 size={12} />
-        </button>
-      )}
+      {/*
+        Hover is CSS-driven, not React state: after a delete the row under the
+        cursor belongs to a different keyed NoteItem, and the browser fires no
+        mouseenter for a pointer that never moved — a state-tracked button
+        would stay hidden. :hover is re-evaluated on hit-test, so it doesn't.
+      */}
+      <button
+        onClick={(e) => {
+          e.stopPropagation()
+          deleteNote.mutate(note.id)
+        }}
+        className="opacity-0 group-hover:opacity-100 focus:opacity-100 p-0.5 rounded hover:bg-[var(--color-danger)]/20 text-[var(--color-text-muted)] hover:text-[var(--color-danger)] transition-colors shrink-0"
+        title="Delete note"
+        aria-label="Delete note"
+      >
+        <Trash2 size={12} />
+      </button>
     </div>
   )
 }
