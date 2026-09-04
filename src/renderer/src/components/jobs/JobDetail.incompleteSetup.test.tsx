@@ -85,12 +85,28 @@ beforeEach(() => {
 })
 
 describe('the job detail view for a job this device cannot run', () => {
-  it('says the job cannot run here, and where it can', () => {
+  it('says the job cannot run here', () => {
     jobState.current = job({ incompleteSetup: true })
     render(<JobDetail />)
     expect(screen.getByText('Incomplete setup')).toBeTruthy()
     expect(screen.getByText(/needs an agent that isn't available on this device/)).toBeTruthy()
-    expect(screen.getByText(/will run on a device where that agent is set up/)).toBeTruthy()
+  })
+
+  it('does not promise a device where the job will run instead', () => {
+    // This assertion replaces one that required the opposite sentence, and the
+    // reversal is the point rather than a casualty of it.
+    //
+    // "It will run on a device where that agent is set up" describes a machine
+    // the app has no way to know exists. `rebuildJobManifest` is called on
+    // every local edit with no sync guard, so a single-machine user who never
+    // enabled sync still gets a manifest — attach a folder agent, move its
+    // directory, and this panel appears. The sentence was false for them, and
+    // it pointed them at a second computer they do not own.
+    jobState.current = job({ incompleteSetup: true })
+    const { container } = render(<JobDetail />)
+    expect(container.textContent ?? '').not.toMatch(
+      /will run on|another device|a device where|other device/i
+    )
   })
 
   it('does not tell the user to copy the agent onto this machine', () => {

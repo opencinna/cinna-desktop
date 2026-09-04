@@ -161,16 +161,30 @@ export function JobDetail(): React.JSX.Element {
               Incomplete setup
             </div>
             {/*
-              The second sentence says what the app does; it does not tell the
-              user to copy the agent's folder here. Local agents are not synced
-              and the cross-machine matching semantics are undesigned, so a
-              hand-copy instruction would promise a workflow that does not
-              exist — it happens to work today, which is what makes promising it
-              dangerous. Where the truthful answer is unavailable, say less.
+              Two sentences this panel deliberately does not contain.
+
+              It does not tell the user to copy the agent's folder here. Local
+              agents are not synced and the cross-machine matching semantics are
+              undesigned, so a hand-copy instruction would promise a workflow
+              that does not exist — it happens to work today, which is what
+              makes promising it dangerous.
+
+              And it no longer says "It will run on a device where that agent is
+              set up." That named a device the app cannot know exists. This
+              state is reachable by one user on one machine who has never
+              enabled sync: `rebuildJobManifest` runs unconditionally on every
+              local edit, so every job carries a manifest, and attaching a
+              folder agent then moving or deleting its directory blocks the job
+              right here. For that user the sentence was not merely unverifiable
+              — it was false, and it sent them looking for a second machine.
+              Making it conditional would need a sync-origin flag on the DTO for
+              a copy nicety; softening it says less without being truer. The
+              dependency rows below already name the agent and mark it
+              unavailable, which is the part that is always true.
             */}
             <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
               This job needs an agent that isn't available on this device, so it can't
-              run here. It will run on a device where that agent is set up.
+              run here.
             </p>
           </section>
         )}
