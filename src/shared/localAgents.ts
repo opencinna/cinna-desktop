@@ -108,26 +108,6 @@ export function duplicateFolderAgentId(rootId: string, folderName: string): stri
 }
 
 /**
- * Whether an agent can currently be offered as a chat or Job **counterparty** —
- * something the user picks and then expects an answer from.
- *
- * TEMPORARY. Folder agents have no runner until the local engine lands (plan
- * phase 6); until then, offering one in a picker produces an error where the
- * user expected a reply. This is deliberately *not* expressed by disabling the
- * row: `enabled` is the user's own toggle, survives rescans, and is the one
- * column the folder does not own — borrowing it for "not implemented yet" would
- * make the two meanings indistinguishable exactly when the runner arrives.
- *
- * **Remove this function and its two call sites** (`ChatInput`'s `@`-mention
- * picker and `JobEditForm`'s agent picker) when the runner can serve a folder
- * agent. Nothing else needs to change: every other consumer of the agents list
- * looks agents up by id for display, which is already correct for a folder.
- */
-export function canBeCounterparty(agent: { source: string }): boolean {
-  return agent.source !== FOLDER_AGENT_SOURCE
-}
-
-/**
  * How ready a folder is to run.
  *
  * - `ok` — validates, and every required credential slot is filled.

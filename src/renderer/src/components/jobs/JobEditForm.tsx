@@ -11,7 +11,6 @@ import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerMod
 import { CommPatternBadge } from '../chat/CommPatternBadge'
 import { presetForAgentId } from '../../utils/agentColors'
 import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
-import { canBeCounterparty } from '../../../../shared/localAgents'
 
 interface JobEditFormProps {
   job: JobDetailData
@@ -168,9 +167,10 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
   )
 
   const enabledAgents = useMemo(
-    // `canBeCounterparty` is a temporary exclusion of folder agents, which have
-    // no runner yet — see its docstring for the removal condition.
-    () => (agents ?? []).filter((a) => a.enabled && canBeCounterparty(a)),
+    // `enabled` and nothing else: it is the user's own toggle for this agent.
+    // The folder-agent exclusion that used to sit beside it was a capability
+    // gap — no local runner — and it is gone with the runner that closed it.
+    () => (agents ?? []).filter((a) => a.enabled),
     [agents]
   )
 

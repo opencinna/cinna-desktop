@@ -22,7 +22,7 @@ import { useCliCommands } from './useCliCommands'
  * harness; mounting it to pin one id derivation was judged disproportionate
  * for this phase. That link is verified by code inspection only — `boundAgent`
  * resolves from `useAgents()`'s unfiltered list by `chatData.agentId`, with
- * no `canBeCounterparty`-style gate anywhere in that path — not by a test.
+ * no source-based gate anywhere in that path — not by a test.
  */
 
 function wrapper({ children }: { children: ReactNode }): React.JSX.Element {

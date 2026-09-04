@@ -58,10 +58,12 @@ describe('replaceFolderIndex', () => {
     expect(alpha?.localRootId).toBe('r1')
     expect(alpha?.localPath).toBe('/w/Local/folder:a')
     // Enabled, like any other newly-added agent. `enabled` is the user's toggle
-    // and nothing else; the fact that no runner can serve a folder agent yet is
-    // expressed by `canBeCounterparty` at the pickers, not by this column —
-    // otherwise "the user turned it off" and "it predates the runner" would be
-    // the same value.
+    // and nothing else. While no runner could serve a folder agent, that gap was
+    // expressed by a separate predicate at the pickers rather than by this
+    // column — otherwise "the user turned it off" and "it predates the runner"
+    // would have been the same value, and nothing could safely have turned them
+    // back on. The runner landed, the predicate is gone, and this column still
+    // means only what it always meant.
     expect(alpha?.enabled).toBe(true)
   })
 

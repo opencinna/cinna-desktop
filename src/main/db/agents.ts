@@ -411,11 +411,12 @@ export const agentRepo = {
               cardData: null,
               skills: null,
               // `enabled` means one thing only: the user's toggle. It is never
-              // overwritten by a rescan, and it must not be borrowed to express
-              // "no runner exists yet" — the two would be indistinguishable the
-              // moment one does, so nothing could safely turn them back on.
-              // That restriction lives in the two pickers that present agents
-              // as counterparties, where it can be deleted rather than migrated.
+              // overwritten by a rescan, and it was never borrowed to express
+              // "no runner exists yet" — the two would have been
+              // indistinguishable the moment one existed, so nothing could
+              // safely have turned them back on. That restriction lived in the
+              // two pickers instead, and was deleted there when the local
+              // runner landed, exactly as intended.
               enabled: true,
               source: 'folder',
               localPath: entry.localPath,
