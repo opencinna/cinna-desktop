@@ -80,6 +80,10 @@ What the renderer receives is a plain `Error` whose only own properties are `mes
 
 **A renderer `catch` that reads `err.code` off a rejected `invoke()` is a silent no-op**, and it looks correct in review. Check what the channel does before writing one: a handler that catches internally and returns an outcome gives you a code; a bare `ipcHandle` that lets a `DomainError` throw does not.
 
+**This defect class is invisible to ordinary testing**, which is why it keeps recurring. The branch is unreachable rather than wrong, so nothing throws, nothing logs, and the code reads correctly at the call site — `isStaleWriteError` answered `false` for every genuinely stale write and the reload prompt it gates simply never appeared. `src/main/ipc/localAgentOutcome.test.ts` exists specifically because *"the property being restored is invisible at every call site … so nothing else would notice it breaking again."* A test that asserts the outcome shape is the only thing that catches a regression here.
+
+**The fullest treatment, with the two channels that motivated the outcome shape and the reason unwrapping must happen in the renderer rather than in preload, is [Agents Tab & Agent Page](../../agents/local_agents/agents_tab.md) → "IPC error codes do not survive a thrown rejection".** Read it before adding a channel whose failure code drives behaviour. It is linked here rather than restated because this file having said the *opposite* for as long as it did is what let a reader find support for either belief and act on whichever they met first.
+
 For a failure that is only ever *shown as a sentence*, throwing is fine — but strip the transport first. `src/renderer/src/utils/ipcError.ts` `unwrapIpcError(err, fallback)` removes the `Error invoking remote method '<channel>': ` prefix and the leading `<Class>Error: `, so the user reads the sentence main authored rather than the name of our IPC channel.
 
 Use `ipcErrorShape(err)` to extract `{ code, message, detail? }` for inline `{ success: false, error }` responses — main-side, before the value crosses.
