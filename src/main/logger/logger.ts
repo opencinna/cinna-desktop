@@ -110,7 +110,16 @@ function push(entry: LogEntry): void {
   try {
     sink(entry)
   } catch {
-    // Delivery is best-effort; the entry is already buffered.
+    // Delivery is best-effort; the entry is already buffered, and the console
+    // write in `logEntry` happens after this and is unaffected.
+    //
+    // Known and accepted: this swallows *silently and forever*. A sink that
+    // throws on every entry is retried on every entry and reported nowhere —
+    // the overlay would simply stop updating while the app looked healthy.
+    // Nothing is built here to detect that, deliberately: the alternative is
+    // logging about the logger, and the only sink that exists is three lines
+    // in `broadcast.ts` whose failure mode is a window that is going away
+    // anyway. Revisit if a second sink ever appears.
   }
 }
 

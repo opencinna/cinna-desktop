@@ -38,6 +38,26 @@ import {
 
 const LOGGER_SOURCE = readFileSync(new URL('./logger.ts', import.meta.url), 'utf-8')
 
+/**
+ * The sink and the buffer are module state, so the cleanup below is not
+ * ceremony — but it is not currently load-bearing either, and it is worth
+ * knowing which.
+ *
+ * Measured with two probe files, one installing a sink and never removing it
+ * and one checking what the next file sees: under this repo's config nothing
+ * crosses (`vitest.config.ts` sets no `isolate`, so it defaults to true and
+ * every file gets a fresh module registry). Run the same two probes with
+ * `--no-isolate --pool=threads --poolOptions.threads.singleThread` and the
+ * leak is real and immediate: the second file's buffer came back as
+ * `["probe-a","probe-b"]` and the first file's sink fired for the second
+ * file's log.
+ *
+ * So the `afterEach` guards a config change, not today's runs, and the
+ * `beforeEach` reset is what actually keeps these tests independent of each
+ * other. Both stay: the failure it prevents is cross-file and would surface as
+ * an unrelated test failing, which is the expensive kind to chase.
+ */
+
 beforeEach(() => {
   clearLogEntries()
   setLogSink(null)
@@ -120,6 +140,26 @@ describe('log sink', () => {
 
     expect(() => createLogger('mcp').error('connect failed')).not.toThrow()
     expect(getLogEntries()).toHaveLength(1)
+  })
+
+  it('keeps retrying a sink that always throws, and says nothing about it', () => {
+    // Pins the wart rather than hiding it: a permanently broken sink is
+    // swallowed on every entry and surfaces nowhere, so the overlay would go
+    // quiet while the app looked healthy. Accepted (see the comment in
+    // `push`) because the only sink is `broadcast.ts` and its failure mode is
+    // a window that is going away regardless. If that stops being true, this
+    // test is the one to change first.
+    let calls = 0
+    setLogSink(() => {
+      calls++
+      throw new Error('always')
+    })
+
+    createLogger('mcp').error('first')
+    createLogger('mcp').error('second')
+
+    expect(calls).toBe(2)
+    expect(getLogEntries()).toHaveLength(2)
   })
 })
 
