@@ -137,6 +137,27 @@ export const MANIFEST_TOKENS = [
 
 export type ManifestToken = (typeof MANIFEST_TOKENS)[number]
 
+/**
+ * Bounds the schema puts on `example_prompts`, declared beside the field rather
+ * than inside either of the two places that enforce them.
+ *
+ * There are two enforcement points because reporting is not blocking.
+ * `validator.ts` records a violation
+ * (`manifest.example_prompts.too_many`, `manifest.example_prompts.item_too_long`)
+ * and the scanner indexes the folder regardless, so
+ * `synthesizeFolderAgentMetadata` applies the same bounds again to the row that
+ * reaches the composer's `#` list and the agent-as-tool description an
+ * orchestrating model reads. Neither can be dropped in favour of the other:
+ * one tells the author, the other bounds what the model is sent.
+ *
+ * They live here because the bound is part of the manifest contract, not of the
+ * code that happens to check it — and because this file is types and constants
+ * with no runtime imports, so both enforcement points can read it without
+ * either of them pulling in the other's dependencies.
+ */
+export const MAX_EXAMPLE_PROMPTS = 20
+export const MAX_EXAMPLE_PROMPT_CHARS = 500
+
 /** Slug rule from the schema: folder name and cloud reference. */
 export const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{1,62}$/
 

@@ -37,6 +37,8 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
 import {
+  MAX_EXAMPLE_PROMPTS,
+  MAX_EXAMPLE_PROMPT_CHARS,
   ENV_PREFIX_PATTERN,
   MANIFEST_FILE,
   RUN_REFERENCE_PATTERN,
@@ -265,10 +267,10 @@ function checkExamplePrompts(report: Report, manifest: CinnaAgentManifest): void
     report.error('manifest.example_prompts.type', '`example_prompts` must be an array.', MANIFEST_FILE)
     return
   } else {
-    if (prompts.length > 20) {
+    if (prompts.length > MAX_EXAMPLE_PROMPTS) {
       report.error(
         'manifest.example_prompts.too_many',
-        '`example_prompts` holds at most 20 entries.',
+        `\`example_prompts\` holds at most ${MAX_EXAMPLE_PROMPTS} entries.`,
         MANIFEST_FILE
       )
     }
@@ -279,10 +281,10 @@ function checkExamplePrompts(report: Report, manifest: CinnaAgentManifest): void
           `\`example_prompts[${index}]\` must be a non-empty string.`,
           MANIFEST_FILE
         )
-      } else if (prompt.length > 500) {
+      } else if (prompt.length > MAX_EXAMPLE_PROMPT_CHARS) {
         report.error(
           'manifest.example_prompts.item_too_long',
-          `\`example_prompts[${index}]\` is longer than 500 characters.`,
+          `\`example_prompts[${index}]\` is longer than ${MAX_EXAMPLE_PROMPT_CHARS} characters.`,
           MANIFEST_FILE
         )
       }

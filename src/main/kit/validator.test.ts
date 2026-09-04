@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  MAX_EXAMPLE_PROMPTS,
+  MAX_EXAMPLE_PROMPT_CHARS
+} from '../../shared/kit/manifest'
+import {
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -115,6 +119,48 @@ describe('validateAgentFolder — a freshly scaffolded agent', () => {
   it('warns only about what is genuinely not filled in yet', () => {
     const report = validateAgentFolder(agentDir, OPTIONS)
     expect(codes(report.warnings).sort()).toEqual(['cloud.example_prompts.missing', 'cloud.unroutable'])
+  })
+
+  it('rejects more example prompts than the contract allows', () => {
+    // Untested until now, and the bound is enforced twice: here, where the
+    // author is told, and in `synthesizeFolderAgentMetadata`, which bounds what
+    // actually reaches the composer and the agent-as-tool description. Both
+    // read `MAX_EXAMPLE_PROMPTS` from the manifest module, so this test is also
+    // what makes changing that constant visible on this side.
+    patchManifest(agentDir, (m) => {
+      m.example_prompts = Array.from(
+        { length: MAX_EXAMPLE_PROMPTS + 1 },
+        (_, i) => `prompt ${i}`
+      )
+    })
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.example_prompts.too_many')
+  })
+
+  it('accepts exactly as many example prompts as the contract allows', () => {
+    // The boundary is `>`, not `>=`. Without this, tightening the check by one
+    // would reject a legal manifest and the suite above would still pass.
+    patchManifest(agentDir, (m) => {
+      m.example_prompts = Array.from({ length: MAX_EXAMPLE_PROMPTS }, (_, i) => `prompt ${i}`)
+    })
+    expect(codes(validateAgentFolder(agentDir, OPTIONS).errors)).not.toContain(
+      'manifest.example_prompts.too_many'
+    )
+  })
+
+  it('rejects an example prompt longer than the contract allows', () => {
+    patchManifest(agentDir, (m) => {
+      m.example_prompts = ['x'.repeat(MAX_EXAMPLE_PROMPT_CHARS + 1)]
+    })
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.example_prompts.item_too_long')
+  })
+
+  it('accepts an example prompt of exactly the allowed length', () => {
+    patchManifest(agentDir, (m) => {
+      m.example_prompts = ['x'.repeat(MAX_EXAMPLE_PROMPT_CHARS)]
+    })
+    expect(codes(validateAgentFolder(agentDir, OPTIONS).errors)).not.toContain(
+      'manifest.example_prompts.item_too_long'
+    )
   })
 
   it('is cloud-ready once it has example prompts', () => {

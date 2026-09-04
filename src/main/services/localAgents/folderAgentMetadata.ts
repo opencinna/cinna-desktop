@@ -30,21 +30,12 @@
  * scan time, and carried to the row on {@link FolderIndexEntry} so that every
  * writer of a folder row supplies it rather than one remembering to.
  */
-import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
+import {
+  MAX_EXAMPLE_PROMPTS,
+  MAX_EXAMPLE_PROMPT_CHARS,
+  type CinnaAgentManifest
+} from '../../../shared/kit/manifest'
 import type { RemoteAgentMetadata } from '../../../shared/agentMetadata'
-
-/**
- * The bounds the kit contract puts on `example_prompts`, mirrored from
- * `validator.ts` — `manifest.example_prompts.too_many` (`:268`) and
- * `manifest.example_prompts.item_too_long` (`:283`). **Change both together.**
- *
- * They are duplicated here rather than imported because the validator states
- * them inline inside a report-building function; a shared constant is the right
- * fix and is more than this change should reach for. Naming the codes is the
- * next best thing: a future editor changing one can grep the other.
- */
-const MAX_EXAMPLE_PROMPTS = 20
-const MAX_EXAMPLE_PROMPT_CHARS = 500
 
 /**
  * `example_prompts` is typed `string[]` on the manifest, but `parseManifest`
@@ -53,7 +44,9 @@ const MAX_EXAMPLE_PROMPT_CHARS = 500
  * any JSON at runtime, and a folder whose manifest carries junk is still
  * indexed (only an unreadable *identity* keeps a folder out of the index).
  *
- * The validator reports all four of these violations, and reporting is not
+ * The validator reports all four of these violations — and the two bounds are
+ * the contract's, imported from the manifest module both sides already read,
+ * so the numbers cannot drift. Reporting is not
  * blocking: it writes a finding into `dto.validation` and sets
  * `readiness: 'invalid'`, and the scanner indexes the row anyway. So the shape
  * rules and the *size* rules both have to be enforced here, for the same
