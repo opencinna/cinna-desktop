@@ -37,7 +37,9 @@ vi.mock('../../hooks/useJobs', () => ({
   useJobDependencyStatus: () => ({ data: [] })
 }))
 vi.mock('../../hooks/useCinnaRunPoll', () => ({ useCinnaRunPoll: () => undefined }))
-vi.mock('../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
+vi.mock('../../hooks/useAgents', () => ({
+  useAgents: () => ({ data: [{ id: 'a1', name: 'Invoice Checker' }] })
+}))
 vi.mock('../../hooks/useChatModes', () => ({ useChatModes: () => ({ data: [] }) }))
 vi.mock('../../hooks/useMcp', () => ({ useMcpProviders: () => ({ data: [] }) }))
 vi.mock('../../hooks/useCinna', () => ({ useCinnaAgents: () => ({ data: [] }) }))
@@ -117,6 +119,40 @@ describe('the job detail view for a job this device cannot run', () => {
     jobState.current = job({ incompleteSetup: true })
     const { container } = render(<JobDetail />)
     expect(container.textContent ?? '').not.toMatch(/copy|move it|re-?create|folder|directory/i)
+  })
+
+  it('does not badge a blocked job as a plain local-LLM chat', () => {
+    // `CommPatternBadge` is fed `derivePattern(job.agentIds, job.mcpProviderIds)`,
+    // and `agentIds` holds join rows — which is exactly what the unresolved
+    // dependency does not have. So a blocked job reached `derivePattern([], [])`
+    // and got `'AI'`: the badge announced a local-model chat with no agents,
+    // sitting under a panel saying the job needs an agent. That is the same
+    // wrong answer `executeLocal` now refuses to record.
+    jobState.current = job({ incompleteSetup: true })
+    render(<JobDetail />)
+    expect(screen.queryByRole('status')).toBeNull()
+  })
+
+  it('does not present a blocked job as having no agents', () => {
+    // The absence was the lie: no agent chip at all reads as "this job uses no
+    // agents". The chip does not name the agent — the dependency rows below do
+    // that — it only stops the summary from claiming there is none.
+    jobState.current = job({ incompleteSetup: true })
+    render(<JobDetail />)
+    expect(screen.getByText('Agent unavailable')).toBeTruthy()
+  })
+
+  it('leaves a runnable job\'s summary exactly as it was', () => {
+    // The over-correction guard. Suppressing the badge and adding a chip must
+    // happen only on the blocked job — stripping the pattern badge from every
+    // job, or captioning healthy ones as unavailable, trades one false summary
+    // for another.
+    jobState.current = job({ agentIds: ['a1'] })
+    render(<JobDetail />)
+    const badge = screen.getByRole('status')
+    expect(badge.getAttribute('aria-label')).toBe('Direct A2A connection')
+    expect(screen.queryByText('Agent unavailable')).toBeNull()
+    expect(screen.getByText('Invoice Checker')).toBeTruthy()
   })
 
   it('disables Run, and the disabled control still explains itself', () => {

@@ -252,6 +252,22 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
     agentNames.forEach((name, idx) => {
       chips.push(<AgentChip key={`agent-${idx}`} name={name} />)
     })
+    /*
+      `agentNames` comes from `job.agentIds` — the join rows — and the one
+      dependency that failed to resolve is precisely the one with no join row.
+      So on a blocked job this list is silently short, and with a single
+      unresolved agent it is empty: the summary rendered no agent chip at all,
+      directly under a panel saying the job needs an agent.
+
+      This chip does not name the agent. Naming it would need the sync manifest
+      plumbed into a component that has never seen it, and the dependency rows
+      below already name it and mark it unavailable. What the chip is here to
+      prevent is the *absence* — a summary that quietly reads as "this job uses
+      no agents" is a wrong answer, not a missing one.
+    */
+    if (job.incompleteSetup) {
+      chips.push(<MissingChip key="unavailable-agent" label="Agent unavailable" />)
+    }
     if (mode) {
       chips.push(<ModeChip key="mode" name={mode.name} colorPreset={mode.colorPreset} />)
     }
@@ -285,7 +301,17 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
       {(chips.length > 0 || job.type === 'local') && (
         <div className="border-t border-[var(--color-border)] pt-3 flex flex-wrap items-center gap-1.5">
           {chips}
-          {job.type === 'local' && (
+          {/*
+            No badge on a blocked job. `derivePattern` reads the same join rows,
+            so for a job whose only agent could not resolve it is called as
+            `derivePattern([], [])` and returns `'AI'` — badging the job as a
+            plain local-LLM chat with no agents. That is the identical wrong
+            answer, from the identical function, on the identical empty array,
+            that `executeLocal` now refuses to *record*; it was still being
+            *displayed*. The honest pattern is unknowable here until the
+            dependency resolves, so nothing is claimed.
+          */}
+          {job.type === 'local' && !job.incompleteSetup && (
             <div className="ml-auto">
               <CommPatternBadge pattern={localPattern} />
             </div>
