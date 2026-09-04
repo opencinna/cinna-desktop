@@ -241,22 +241,34 @@
   }
 
   /* Animated collapse/expand. The wrap reserves layout width (so flex siblings
-     reflow correctly) while the inner panel is absolutely positioned — that
-     lets its `box-shadow` render outside the wrap's box instead of being
-     clipped to a rectangle. On collapse we slide the inner left and fade it,
-     so the shadow disappears with it (no residual strip). */
+     reflow correctly) while the tab rail and the panel are absolutely
+     positioned — that lets the card's `box-shadow` render outside the wrap's
+     box instead of being clipped to a rectangle. On collapse the wrap itself
+     carries the slide + fade, so the rail and the page move as ONE piece and
+     the shadow leaves with them (no residual strip). */
   .app-sidebar-wrap {
     --sidebar-page-width: 240px;
     --sidebar-tab-rail: 28px;
     --sidebar-width: calc(var(--sidebar-page-width) + var(--sidebar-tab-rail));
     position: relative;
     width: var(--sidebar-width);
-    transition: width 260ms cubic-bezier(0.2, 0.85, 0.3, 1);
-    will-change: width;
+    transition:
+      width 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
+      opacity 220ms ease-out;
+    will-change: width, transform, opacity;
     flex-shrink: 0;
   }
+  /* Translating by the full rail+page width (rather than a per-element
+     `translateX(-100%)`, which resolves against each element's own width —
+     28px for the rail vs 240px for the card) keeps the tabs welded to the
+     page's left edge for the whole slide. Fading the group as a whole also
+     keeps the active tab's seam-cover from showing through the card. */
   .app-sidebar-wrap.is-collapsed {
     width: 0;
+    transform: translateX(calc(-1 * var(--sidebar-width)));
+    opacity: 0;
+    pointer-events: none;
   }
   .app-sidebar-wrap > .app-sidebar {
     position: absolute;
@@ -267,22 +279,6 @@
     left: var(--sidebar-tab-rail);
     bottom: 0;
     width: var(--sidebar-page-width);
-    transition:
-      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
-      opacity 220ms ease-out;
-    will-change: transform, opacity;
-  }
-  .app-sidebar-wrap.is-collapsed > .app-sidebar,
-  .app-sidebar-wrap.is-collapsed > .app-sidebar-tabs {
-    transform: translateX(-100%);
-    opacity: 0;
-    pointer-events: none;
-  }
-  .app-sidebar-wrap > .app-sidebar-tabs {
-    transition:
-      transform 260ms cubic-bezier(0.2, 0.85, 0.3, 1),
-      opacity 220ms ease-out;
-    will-change: transform, opacity;
   }
 
   /* Draggable strips for the (windowless) macOS title-bar area. */

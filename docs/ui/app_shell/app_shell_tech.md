@@ -32,9 +32,9 @@
   - `.app-sidebar` / `[data-theme="dark"] .app-sidebar` — rounded card surface, border, shadow, dark-theme translucent blur
   - `.app-popover-surface` / `[data-theme="dark"] .app-popover-surface` — shared frosted-glass utility for floating panels (profile dropdown, register/sign-out modals, interface-toggles popover). Translucent fill + `backdrop-filter: blur(14px) saturate(140%)`, theme-aware tint
   - `.app-nav-active` / `[data-theme="dark"] .app-nav-active` — translucent tint for active sidebar nav rows (chat item, settings menu, Trash). Replaces solid `bg-tertiary` so the sidebar's frosted background shows through
-  - `.app-sidebar-wrap` — `--sidebar-width: 240px`, width transition (collapse/expand)
-  - `.app-sidebar-wrap > .app-sidebar` — absolute position with `top: calc(var(--topbar-h) + 4px)` so the visible card sits below the overlaid TopBar (the wrap itself stays full-height to keep the width-collapse animation pristine); `bottom: 0`; transform/opacity transitions
-  - `.app-sidebar-wrap.is-collapsed > .app-sidebar` — `translateX(-100%)` + `opacity: 0` + `pointer-events: none`
+  - `.app-sidebar-wrap` — `--sidebar-page-width: 240px` + `--sidebar-tab-rail: 28px` (`--sidebar-width` is their sum), and the width / transform / opacity transitions (collapse/expand)
+  - `.app-sidebar-wrap > .app-sidebar` — absolute position with `top: calc(var(--topbar-h) + 4px)` so the visible card sits below the overlaid TopBar (the wrap itself stays full-height to keep the width-collapse animation pristine); `left: var(--sidebar-tab-rail)` leaves room for the tab rail; `bottom: 0`
+  - `.app-sidebar-wrap.is-collapsed` — `width: 0` + `transform: translateX(calc(-1 * var(--sidebar-width)))` + `opacity: 0` + `pointer-events: none`. The slide and fade live on the **wrap**, not on the rail and the card separately: a per-element `translateX(-100%)` resolves against each element's own width (28 px vs 240 px), which tore the tabs off the page mid-animation
   - `.app-drag-strip` — `-webkit-app-region: drag`, with `no-drag` exception for buttons/anchors
 
 ### Removed
@@ -113,7 +113,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
-- **Sidebar width** — `--sidebar-width: 240px` on `.app-sidebar-wrap`. Both the wrapper `width` and the inner `width` consume it; the collapse animation translates `-100%` of that value.
+- **Sidebar width** — `--sidebar-page-width: 240px` and `--sidebar-tab-rail: 28px` on `.app-sidebar-wrap`; `--sidebar-width` is their sum. The wrapper `width` uses the sum, the inner card uses the page width (inset by the rail), and the collapse animation translates the wrapper by the sum so rail + card leave together.
 - **Shell layering** — `App.tsx` `Shell` is a `relative` flex column with symmetric `p-2` (8 px) window padding. The sidebar/main row is the only in-flow child; `TopBar` is absolutely positioned with the same 8 px inset (`top-2 left-2 right-2`) so the row claims the full Shell height instead of losing it to a flex-sibling header. The horizontal `gap-2` between Sidebar and MainArea stays at 8 px. Visible content in each view clears the bar through `var(--topbar-h)`-derived top padding (sidebar card via CSS `top`, `MessageStream` / `SettingsPage` / new-chat view via `pt-[calc(var(--topbar-h)+12px)]`).
 - **App icons** — `resources/cinna-desktop-icon-{dark,light}.png`, loaded via `?asset` in `src/main/services/appIconService.ts`. Build-time installer icons (`build/icon.png`, `build/icon.icns`) are the dark variant (default theme). Windows `build/icon.ico` is built externally — regenerate from `build/icon.png` after icon changes.
 
