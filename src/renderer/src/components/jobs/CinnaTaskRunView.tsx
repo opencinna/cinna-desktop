@@ -26,6 +26,7 @@ import { markdownComponents } from '../../utils/markdownComponents'
 import { formatRelativeFromServer } from '../../utils/cinnaTime'
 import { AttachmentList } from '../chat/AttachmentBadge'
 import { isContentComment } from '../../../../shared/cinnaTaskView'
+import { unwrapIpcError } from '../../utils/ipcError'
 import type {
   CinnaTaskAttachmentDto,
   CinnaTaskCommentDto
@@ -122,10 +123,11 @@ export function CinnaTaskRunView(): React.JSX.Element {
   }
 
   const loading = taskView.isLoading
+  // `cinna:get-task-view` throws, so its message reaches here as
+  // `Error invoking remote method '…': CinnaApiError: …`. The alert box below
+  // is the whole account the user gets of a failed fetch.
   const fetchError = taskView.error
-    ? taskView.error instanceof Error
-      ? taskView.error.message
-      : String(taskView.error)
+    ? unwrapIpcError(taskView.error, 'This task could not be loaded.')
     : null
   const data = taskView.data
 

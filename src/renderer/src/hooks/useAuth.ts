@@ -4,6 +4,7 @@ import { useAuthStore } from '../stores/auth.store'
 import { useReauthStore } from '../stores/reauth.store'
 import { useChatStore } from '../stores/chat.store'
 import { REMOTE_SYNC_STATUS_KEY, type RemoteSyncStatus } from './useAgents'
+import { unwrapIpcError } from '../utils/ipcError'
 
 export function useUsers() {
   return useQuery({
@@ -98,8 +99,15 @@ export function useStartup(): { state: StartupState; retry: () => void } {
         startupPromise = undefined
         if (cancelled) return
         setState({
+          /*
+            This message is the entire startup-failure screen. `App.tsx` hands
+            it to `<StartupError>`, which renders on an otherwise empty window
+            — there is no surrounding UI to read it against, so
+            `Error invoking remote method 'auth:get-startup': AuthError: …`
+            was the first and only sentence a user with a failed startup saw.
+          */
           status: 'error',
-          message: err instanceof Error ? err.message : String(err)
+          message: unwrapIpcError(err, 'The app could not start.')
         })
       })
 

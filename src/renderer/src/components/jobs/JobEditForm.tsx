@@ -11,6 +11,7 @@ import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerMod
 import { CommPatternBadge } from '../chat/CommPatternBadge'
 import { presetForAgentId } from '../../utils/agentColors'
 import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
+import { unwrapIpcError } from '../../utils/ipcError'
 
 interface JobEditFormProps {
   job: JobDetailData
@@ -149,8 +150,10 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
           await updateJob.mutateAsync({ jobId: job.id, patch })
           return { ok: true }
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err)
-          return { ok: false, error: msg }
+          // Unwrapped at the catch, rendered one level up: `JobEditPage`
+          // does `setError(result.error)`. `job:update` throws, so without
+          // this a failed save shows the user the channel name first.
+          return { ok: false, error: unwrapIpcError(err, 'Could not save the job.') }
         }
       }
     }),

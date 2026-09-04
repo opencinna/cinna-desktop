@@ -18,6 +18,7 @@ import { useShowChatInList } from '../../hooks/useChat'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useUIStore } from '../../stores/ui.store'
 import { createLogger } from '../../stores/logger.store'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { isContentComment } from '../../../../shared/cinnaTaskView'
 
@@ -139,7 +140,10 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         onError: (err) =>
           log.warn('cinna run refresh failed', {
             runId: run.id,
-            error: err instanceof Error ? err.message : String(err)
+            // The log overlay is the only surface this failure reaches — the
+            // spinner just stops. The entry already carries its scope, so the
+            // channel name the wrapper prepends adds nothing.
+            error: unwrapIpcError(err, 'The run could not be refreshed.')
           }),
         onSettled: () => {
           const elapsed = Date.now() - startedAt
