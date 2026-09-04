@@ -609,6 +609,26 @@ export const jobAgentRepo = {
       .map((r) => r.id)
   },
 
+  /**
+   * Every job attached to this agent, with the id of the user that owns it.
+   *
+   * The owner comes back with the job rather than being supplied by the caller
+   * on purpose. A folder agent lives in the **settings** scope and is a property
+   * of the machine, while jobs live in the **profile** scope — so a caller
+   * holding a folder agent has the wrong scope in hand by construction, and a
+   * second profile on the same machine can attach the same agent to jobs of its
+   * own. Reading `jobs.user_id` here means no caller has to guess, and none can
+   * quietly rebuild only the active profile's half.
+   */
+  listJobRefsForAgent(agentId: string): Array<{ jobId: string; userId: string }> {
+    return getDb()
+      .select({ jobId: jobAgents.jobId, userId: jobs.userId })
+      .from(jobAgents)
+      .innerJoin(jobs, eq(jobAgents.jobId, jobs.id))
+      .where(eq(jobAgents.agentId, agentId))
+      .all()
+  },
+
   setAgentIds(jobId: string, ids: string[]): void {
     const db = getDb()
     // Dedup so a repeated id can't hit the (jobId, agentId) PK mid-txn.

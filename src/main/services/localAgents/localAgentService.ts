@@ -33,6 +33,8 @@ import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { shell } from 'electron'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
+import { jobAgentRepo, jobsRepo } from '../../db/jobs'
+import { rebuildJobManifest } from '../../sync/manifest'
 import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { getLayoutView, resolveContract } from '../../kit/contractStore'
@@ -49,6 +51,7 @@ import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
 import {
+  FOLDER_AGENT_ID_PREFIX,
   FOLDER_AGENT_SOURCE,
   folderAgentId,
   isFolderAgentId,
@@ -180,6 +183,75 @@ function optionalString(value: unknown, label: string, max: number): string | nu
 }
 
 let started = false
+
+/**
+ * Rebuild the synced dependency manifest of every job attached to a folder
+ * agent that has just been re-keyed.
+ *
+ * A job carries its dependencies as portable descriptors in `jobs.sync_deps`,
+ * and a folder agent's descriptor is keyed on its **manifest id**. "Stamp
+ * identity" changes that id — `folder:legacy:<rootId>:<name>` becomes
+ * `folder:<uuid>` — and `rekeyFolderRow` moves the `job_agents` join rows with
+ * it, but nothing rebuilt the manifests. The stored descriptor then named an id
+ * no row has, so the origin device reported "needs setup" about an agent
+ * sitting right there and working, with no action available that would clear
+ * it; and the next edit to the job re-emitted **both** descriptors, since the
+ * old and new ids produce different `agentIdentityKey`s and `remember()`'s
+ * dedupe compares keys. The ghost has no join row and never will, so every
+ * later rebuild carried it forward and every peer received it.
+ *
+ * The deeper cause is worth stating because it will recur: the carry-forward in
+ * `buildJobManifest` was written for remote agents, whose `remoteTargetId` is a
+ * backend UUID that never changes — so a carried-forward remote descriptor can
+ * be stale about *reachability* but never about *identity*. A folder agent's
+ * manifest id is **mutable by design**; the app ships a button for changing it.
+ * The carry-forward silently inherited "ids are stable" from the remote case.
+ *
+ * The owner id comes from each job rather than from this caller: a folder agent
+ * is a settings-scope, machine-wide row while jobs are profile-scoped, so the
+ * `userId` in hand here is the wrong one — passing it would make
+ * `rebuildJobManifest` find no job and return silently, which is a fix that
+ * looks applied and does nothing. It also means a second profile's jobs are
+ * repaired too, rather than only the active one's.
+ */
+function rebuildManifestsForRekeyedAgent(oldAgentId: string, newAgentId: string): void {
+  const staleManifestId = oldAgentId.slice(FOLDER_AGENT_ID_PREFIX.length)
+  // Queried by the *new* id: `rekeyFolderRow` repoints the join rows before
+  // returning, so by now these are the jobs that just moved.
+  const refs = jobAgentRepo.listJobRefsForAgent(newAgentId)
+  for (const ref of refs) {
+    // Rebuilding alone is not enough, and the test for this says so: the
+    // carry-forward in `buildJobManifest` re-adds any folder descriptor the
+    // prior manifest held that has no join row — which after a rekey is
+    // precisely the stale one. The rebuild would emit the new descriptor and
+    // carry the old one back beside it, leaving a ghost that no later rebuild
+    // can shed. So the stale descriptor is dropped from the stored manifest
+    // first, and the rebuild then re-derives the dependency from the join row.
+    //
+    // This is a targeted repair, not a change to the carry-forward's policy:
+    // the only descriptor removed is the previous identity of the one agent
+    // that just moved, which is knowable *here* and nowhere else. Remote
+    // descriptors, and folder descriptors for any other agent, are untouched.
+    const job = jobsRepo.getById(ref.userId, ref.jobId)
+    const prior = job?.syncDeps
+    if (prior) {
+      const kept = prior.deps.filter(
+        (d) =>
+          !(d.kind === 'agent' && d.source === 'folder' && d.manifestId === staleManifestId)
+      )
+      if (kept.length !== prior.deps.length) {
+        jobsRepo.setSyncDeps(ref.userId, ref.jobId, { ...prior, deps: kept })
+      }
+    }
+    rebuildJobManifest(ref.userId, ref.jobId)
+  }
+  if (refs.length > 0) {
+    logger.info('rebuilt job manifests after a folder agent was stamped', {
+      newAgentId,
+      jobs: refs.length
+    })
+  }
+}
 
 export const localAgentService = {
   /**
@@ -492,6 +564,7 @@ export const localAgentService = {
         rekeyed: rekey.moved,
         repointed: rekey.repointed
       })
+      if (rekey.moved) rebuildManifestsForRekeyedAgent(input.agentId, stampedId)
     }
 
     scannerService.markRootDirty(root.id)

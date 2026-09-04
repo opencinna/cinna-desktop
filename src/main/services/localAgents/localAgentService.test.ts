@@ -60,6 +60,9 @@ const { scannerService } = await import('./scannerService')
 const { localAgentService } = await import('./localAgentService')
 const { turnLock } = await import('./turnLock')
 const { isBlockedWriteError, isStaleWriteError } = await import('../../../shared/localAgents')
+const { jobsRepo, jobAgentRepo } = await import('../../db/jobs')
+const { rebuildJobManifest } = await import('../../sync/manifest')
+const { buildResolveIndex, manifestNeedsSetup } = await import('../../sync/resolvers')
 
 const USER = '__default__'
 const WORKFLOW = 'docs/WORKFLOW_PROMPT.md'
@@ -669,5 +672,130 @@ describe('openPath', () => {
 
   it('accepts an agent-relative path', () => {
     expect(() => localAgentService.openPath(USER, { agentId, relPath: WORKFLOW })).not.toThrow()
+  })
+})
+
+/**
+ * "Stamp identity" and the jobs that already depend on the folder.
+ *
+ * Stamping changes a folder agent's identity — `folder:legacy:<rootId>:<name>`
+ * becomes `folder:<uuid>` — and `rekeyFolderRow` moves the `job_agents` join
+ * rows with it. A job's *synced* dependency, though, lives in `jobs.sync_deps`
+ * as a descriptor keyed on the manifest id, and nothing rebuilt it: the stored
+ * descriptor went on naming an id no row has.
+ *
+ * Two things followed, and the first is what the user sees. The job reported
+ * "needs setup" about an agent sitting right there and working, with no action
+ * in the app that would clear it. And the next edit to the job re-emitted
+ * **both** descriptors — old and new produce different `agentIdentityKey`s, so
+ * `remember()`'s dedupe does not merge them — leaving a ghost with no join row
+ * that every later rebuild carried forward and every peer received.
+ *
+ * The job here is owned by a **different user id** from the agent on purpose.
+ * A folder agent is a settings-scope row and a property of the machine; jobs
+ * are profile-scoped. A repair that passed the agent's own `userId` to
+ * `rebuildJobManifest` would find no job and return silently — a fix that looks
+ * applied and does nothing — and under a fixture where both scopes were the
+ * same string, no test could tell the difference.
+ */
+describe('stamp_identity with a job already depending on the folder', () => {
+  const JOB_OWNER = 'profile-1'
+
+  function writeLegacyManifest(): void {
+    const manifest = readManifest(manifestPath(agentDir))
+    delete manifest.id
+    delete manifest.contract_version
+    manifest.schema_version = 1
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+  }
+
+  /** A legacy-indexed agent, and a job in another scope that depends on it. */
+  function legacyAgentWithJob(): { legacyId: string; jobId: string } {
+    writeLegacyManifest()
+    scannerService.markAllRootsDirty()
+    const legacyId = scannerService.scanRoot(USER, agentRootRepo.list(USER)[0]).agents[0].id
+
+    const job = jobsRepo.create(JOB_OWNER, {
+      type: 'local',
+      title: 'Nightly check',
+      prompt: 'Check the invoices'
+    })
+    jobAgentRepo.setAgentIds(job.id, [legacyId])
+    rebuildJobManifest(JOB_OWNER, job.id)
+    return { legacyId, jobId: job.id }
+  }
+
+  function folderDeps(jobId: string): Array<Record<string, unknown>> {
+    const deps = jobsRepo.getById(JOB_OWNER, jobId)?.syncDeps?.deps ?? []
+    return deps.filter(
+      (d) => d.kind === 'agent' && d.source === 'folder'
+    ) as unknown as Array<Record<string, unknown>>
+  }
+
+  function stamp(legacyId: string): string {
+    const before = localAgentService.get(USER, legacyId)
+    return localAgentService.updateField(USER, {
+      agentId: legacyId,
+      update: { field: 'stamp_identity' },
+      expectedStamp: before.stamps[MANIFEST]!
+    }).id
+  }
+
+  it('leaves the job resolvable instead of reporting setup it cannot need', () => {
+    const { legacyId, jobId } = legacyAgentWithJob()
+    // Sanity: before stamping, the job is fully set up.
+    expect(
+      manifestNeedsSetup(jobsRepo.getById(JOB_OWNER, jobId)?.syncDeps ?? null, buildResolveIndex(JOB_OWNER))
+    ).toBe(false)
+
+    stamp(legacyId)
+
+    // The consequence first. The agent did not move, was not disabled and was
+    // not deleted — the user pressed a button offered as a repair — so anything
+    // but `false` here is the app contradicting itself on screen.
+    expect(
+      manifestNeedsSetup(jobsRepo.getById(JOB_OWNER, jobId)?.syncDeps ?? null, buildResolveIndex(JOB_OWNER))
+    ).toBe(false)
+  })
+
+  it('re-keys the stored descriptor to the id the row now has', () => {
+    const { legacyId, jobId } = legacyAgentWithJob()
+    expect(folderDeps(jobId)[0].manifestId).toMatch(/^legacy:/)
+
+    const newId = stamp(legacyId)
+
+    expect(folderDeps(jobId)[0].manifestId).toBe(newId.replace('folder:', ''))
+    expect(jobAgentRepo.listAgentIds(jobId)).toEqual([newId])
+  })
+
+  it('leaves exactly one folder descriptor behind, not a ghost beside it', () => {
+    // The ghost is the expensive half: it has no join row and never will, so
+    // every later rebuild carries it forward and every peer receives a job with
+    // a dependency that cannot be satisfied anywhere.
+    const { legacyId, jobId } = legacyAgentWithJob()
+    stamp(legacyId)
+    expect(folderDeps(jobId)).toHaveLength(1)
+  })
+
+  it('survives a second rebuild, which is where the carry-forward would resurrect it', () => {
+    // `buildJobManifest` carries forward folder descriptors from the prior
+    // manifest so an unresolvable dependency is not silently dropped. That is
+    // correct, and it is also what would have preserved the stale id forever
+    // had the rekey not repaired it at the source.
+    const { legacyId, jobId } = legacyAgentWithJob()
+    const newId = stamp(legacyId)
+    rebuildJobManifest(JOB_OWNER, jobId)
+    expect(folderDeps(jobId)).toHaveLength(1)
+    expect(folderDeps(jobId)[0].manifestId).toBe(newId.replace('folder:', ''))
+  })
+
+  it('repairs a job in a scope the stamping caller does not hold', () => {
+    // The job's owner is read off the job, never supplied by the caller. This
+    // asserts it directly: the agent is stamped under `__default__` while the
+    // job belongs to `profile-1`, and the repair still reaches it.
+    const { legacyId, jobId } = legacyAgentWithJob()
+    expect(jobsRepo.getById(USER, jobId)).toBeFalsy()
+    const newId = stamp(legacyId)
+    expect(folderDeps(jobId)[0].manifestId).toBe(newId.replace('folder:', ''))
   })
 })
