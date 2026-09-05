@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { LocalDevConsentPanel } from './LocalDevConsentPanel'
@@ -36,6 +36,12 @@ export function LocalDevOnboardingStep({
   const state = useLocalDev()
   const [agentsHome, setAgentsHome] = useState('')
 
+  // Held in a ref because the callers pass an inline arrow: as a dependency it
+  // changes identity on every render, which would restart the grace timer below
+  // each time and could keep it from ever firing.
+  const done = useRef(onDone)
+  done.current = onDone
+
   useEffect(() => {
     let cancelled = false
     void window.api.localAgents
@@ -56,15 +62,15 @@ export function LocalDevOnboardingStep({
 
   // Nothing to ask: leave immediately rather than flashing a panel.
   useEffect(() => {
-    if (state.phase === 'unsupported' || state.phase === 'declined') onDone()
-  }, [state.phase, onDone])
+    if (state.phase === 'unsupported' || state.phase === 'declined') done.current()
+  }, [state.phase])
 
   // Still waiting on the first reconcile answer — do not hold first run hostage.
   useEffect(() => {
     if (state.phase !== 'idle') return
-    const timer = setTimeout(onDone, IDLE_GRACE_MS)
+    const timer = setTimeout(() => done.current(), IDLE_GRACE_MS)
     return () => clearTimeout(timer)
-  }, [state.phase, onDone])
+  }, [state.phase])
 
   if (state.phase === 'idle' || state.phase === 'unsupported' || state.phase === 'declined') {
     return (
