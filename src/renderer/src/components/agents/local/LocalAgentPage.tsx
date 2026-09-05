@@ -1,5 +1,5 @@
-import { useEffect, useRef } from 'react'
-import { MessageSquare, RefreshCw } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Circle, MessageSquare } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useDraftLocalAgent,
@@ -9,37 +9,56 @@ import {
   useStampAgentIdentity
 } from '../../../hooks/useLocalAgents'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
-import { RuntimeCard } from './RuntimeCard'
+import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { describedAs } from '../../../utils/localAgents'
+import { RuntimePanel } from './RuntimePanel'
 import { ReadinessStrip } from './ReadinessStrip'
-import { OpenInRow } from './OpenInRow'
+import { OpenInMenu } from './OpenInMenu'
+import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { PromptDocCard } from './PromptDocCard'
-import {
-  CommandsCard,
-  CredentialsCard,
-  PublishedCard,
-  RunsCard,
-  StatusCard
-} from './ReadOnlyCards'
+import { CommandsCard, StatusCard } from './ReadOnlyCards'
+import { FolderTab } from './FolderTab'
+
+export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'folder'
+
+const TABS: { id: AgentPageTab; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
+  { id: 'prompts', label: 'Prompts' },
+  { id: 'commands', label: 'Commands' },
+  { id: 'folder', label: 'Folder' }
+]
+
+/** Dot colour for a folder's readiness. Severity tokens, never a raw colour. */
+function readinessDot(agent: LocalAgentDto): { cls: string; title: string } {
+  switch (agent.readiness) {
+    case 'ok':
+      return { cls: 'text-[var(--color-success)]', title: 'Ready' }
+    case 'credentials_needed':
+      return { cls: 'text-[var(--color-warning)]', title: 'Credentials needed' }
+    default:
+      return { cls: 'text-[var(--color-danger)]', title: agent.readinessReason ?? 'Not ready' }
+  }
+}
 
 /**
- * A folder agent's page: a viewer over the folder on disk.
+ * A folder agent's page.
  *
- * Every card names the file it reads, and the three that are editable write
- * straight back to that file through the stamp guard — there is no separate
- * "agent record" behind this page, and no state that survives deleting the
- * folder. Choosing a runtime still arrives later; it is shown disabled
- * rather than hidden so the shape of the finished page is legible before
- * then.
+ * Above the fold: what the user *does* with an agent — open its folder in
+ * their own tool, start a chat, and choose what it runs with. The page used to
+ * be eleven stacked cards, each a viewer over one file, which was faithful to
+ * the folder and useless as a control surface: the runtime picker was the
+ * seventh card down. Everything that is information rather than a control now
+ * lives under four tabs, and the readiness banner appears only when something
+ * needs attention — the dot beside the name covers the rest.
  *
- * **Start chat was a Phase 6 leftover, not new work.** The runner shipped in
- * Phase 6 ("chat with a folder agent through the local engine") fully able
- * to serve a turn — this button was simply never flipped on, and nothing in
- * the renderer had a way to reach a chat bound to a folder agent at all. It
- * uses the exact mechanism the remote-agent status overlay already uses
- * (`AgentStatusOverlay`'s own "Start chat": `setActiveView('chat')` +
- * `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`), not a
- * new one — this button was the one piece of that path missing a caller.
+ * Still a viewer over the folder on disk: every card names the file it reads,
+ * the editable ones write straight back through the stamp guard, and there is
+ * no state that survives deleting the folder.
+ *
+ * **Start chat** uses the exact mechanism the remote-agent status overlay
+ * already uses (`AgentStatusOverlay`'s own "Start chat": `setActiveView('chat')`
+ * + `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`).
  */
 export function LocalAgentPage(): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
@@ -53,6 +72,14 @@ export function LocalAgentPage(): React.JSX.Element {
   const rescan = useRescanLocalAgents()
   const openPath = useOpenAgentPath()
   const stamp = useStampAgentIdentity()
+  // Kept across agents on purpose: someone working through the prompts of
+  // three agents does not want to click "Prompts" three times.
+  const [tab, setTab] = useState<AgentPageTab>('overview')
+  // One slot for every header action's refusal (Open in, Rescan, Reveal,
+  // Terminal, Stamp). Two menus each drawing their own absolutely-positioned
+  // message produced two unreadable overlapping boxes; and an old message
+  // must not outlive the next action.
+  const [actionError, setActionError] = useState<string | null>(null)
 
   // A freshly scaffolded agent asks for its one-shot draft here rather than in
   // the form that created it: the call outlives that form, and this is the
@@ -66,6 +93,9 @@ export function LocalAgentPage(): React.JSX.Element {
   // folder that drafted fine. A ref is written synchronously and is what the
   // second invocation actually sees; the Zustand setter is not.
   const draftedRef = useRef<string | null>(null)
+  useEffect(() => {
+    setActionError(null)
+  }, [activeLocalAgentId])
   useEffect(() => {
     if (!pendingDraftAgentId || pendingDraftAgentId !== activeLocalAgentId) return
     if (draftedRef.current === pendingDraftAgentId) return
@@ -119,7 +149,7 @@ export function LocalAgentPage(): React.JSX.Element {
           type="button"
           onClick={() => rescan.mutate(undefined)}
           className="px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)]
-            text-[var(--color-on-accent)] hover:bg-[var(--color-accent-hover)] transition-colors"
+            text-white hover:bg-[var(--color-accent-hover)] transition-colors"
         >
           Rescan agents folders
         </button>
@@ -137,63 +167,84 @@ export function LocalAgentPage(): React.JSX.Element {
   // Invariant 3 applies to stamping like every other write: the stamp handed
   // back is the one this render read, not one taken at click time.
   const manifestStamp = agent.stamps[MANIFEST_FILE] ?? null
+  const dot = readinessDot(agent)
+  const description = describedAs(agent)
+  const hasDescription = description !== ''
+  const findings = agent.validation.errors.length + agent.validation.warnings.length
 
   return (
-    <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
+    <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
       <div className="mx-auto max-w-3xl space-y-3 px-6 py-6">
-        <header className="space-y-2">
-          <div className="flex items-start gap-3">
-            <div className="min-w-0 flex-1">
-              <h1 className="truncate text-xl font-semibold text-[var(--color-text)]">
-                {agent.name}
-              </h1>
+        <header className="flex items-start gap-3">
+          <div className="min-w-0 flex-1">
+            <h1 className="flex items-center gap-2 text-xl font-semibold text-[var(--color-text)]">
+              <Circle
+                size={8}
+                className={`shrink-0 fill-current ${dot.cls}`}
+                aria-label={dot.title}
+              />
+              <span className="truncate">{agent.name}</span>
+            </h1>
+            {hasDescription ? (
+              <p className="mt-0.5 line-clamp-2 text-xs text-[var(--color-text-secondary)]">
+                {description}
+              </p>
+            ) : (
               <button
                 type="button"
-                onClick={() => openPath.mutate({ agentId: agent.id })}
-                title="Reveal this folder"
-                className="mt-0.5 block max-w-full truncate font-mono text-[10px] text-[var(--color-text-muted)]
-                  hover:text-[var(--color-text-secondary)] transition-colors"
+                onClick={() => setTab('overview')}
+                className="mt-0.5 text-xs text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)]"
               >
-                {agent.path}
+                No description yet — add one under Overview.
               </button>
-            </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button
-                type="button"
-                onClick={() => rescan.mutate(agent.rootId)}
-                disabled={rescan.isPending}
-                title="Re-read this agents folder"
-                className="flex items-center gap-1.5 rounded-md border border-[var(--color-border)] px-2.5 py-1.5
-                  text-[10px] font-medium text-[var(--color-text-secondary)]
-                  hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors
-                  disabled:opacity-40"
-              >
-                <RefreshCw size={11} />
-                Rescan
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveView('chat')
-                  setPendingAgentId(agent.id)
-                }}
-                title={`Start a new chat with ${agent.name}`}
-                className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5
-                  text-xs font-medium text-[var(--color-on-accent)]
-                  hover:bg-[var(--color-accent-hover)] transition-colors"
-              >
-                <MessageSquare size={12} />
-                Start chat
-              </button>
-            </div>
+            )}
+            <button
+              type="button"
+              onClick={() => openPath.mutate({ agentId: agent.id })}
+              title="Reveal this folder"
+              className="mt-1 block max-w-full truncate font-mono text-[10px] text-[var(--color-text-muted)]
+                hover:text-[var(--color-text-secondary)] transition-colors"
+            >
+              {agent.path}
+            </button>
           </div>
-          <OpenInRow agent={agent} />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <OpenInMenu agent={agent} onError={setActionError} />
+            <button
+              type="button"
+              onClick={() => {
+                setActiveView('chat')
+                setPendingAgentId(agent.id)
+              }}
+              title={`Start a new chat with ${agent.name}`}
+              className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5
+                text-xs font-medium text-white
+                hover:bg-[var(--color-accent-hover)] transition-colors"
+            >
+              <MessageSquare size={12} />
+              Start chat
+            </button>
+            <AgentActionsMenu agent={agent} onError={setActionError} />
+          </div>
         </header>
+        {/*
+          Always rendered, exactly one line: a refusal appearing here must not
+          push the panel below it down, and the macOS automation message wraps
+          to two lines at the minimum window width. The full text is in `title`.
+        */}
+        <div
+          role="alert"
+          title={actionError ?? undefined}
+          className="h-4 truncate text-right text-[10px] leading-4 text-[var(--color-danger)]"
+        >
+          {actionError}
+        </div>
 
         <ReadinessStrip
           agent={agent}
           drafting={draft.isPending}
           draftNote={draftNote}
+          onShowDetails={() => setTab('folder')}
           onStampIdentity={
             manifestStamp
               ? () =>
@@ -210,35 +261,88 @@ export function LocalAgentPage(): React.JSX.Element {
           stampError={stamp.error ? stamp.error.message : null}
         />
 
-        <DescriptionCard agent={agent} />
-        <ExamplePromptsCard agent={agent} />
-        <PromptDocCard
-          agentId={agent.id}
-          prompt="workflow"
-          title="Workflow prompt"
-          hint="This document is the agent: it is loaded as the system prompt for every conversation."
-          placeholder="Describe what this agent does, step by step, addressed to the agent."
-        />
-        <PromptDocCard
-          agentId={agent.id}
-          prompt="entrypoint"
-          title="Entrypoint prompt"
-          hint="The first message of an unattended run, with nobody there to answer a question."
-          placeholder="One or two self-contained sentences telling the agent what to do."
-        />
-        <PromptDocCard
-          agentId={agent.id}
-          prompt="refiner"
-          title="Refiner prompt"
-          hint="Defaults and required inputs — what to assume when a request does not say."
-          placeholder="List the mandatory inputs and the defaults to fill in."
-        />
-        <RuntimeCard agent={agent} />
-        <CredentialsCard agent={agent} />
-        <CommandsCard agent={agent} />
-        <StatusCard agent={agent} />
-        <PublishedCard agent={agent} />
-        <RunsCard agent={agent} />
+        <RuntimePanel agent={agent} />
+
+        <nav
+          role="tablist"
+          aria-label="Agent details"
+          className="flex gap-1 border-b border-[var(--color-border)]"
+        >
+          {TABS.map((entry) => {
+            const active = entry.id === tab
+            return (
+              <button
+                key={entry.id}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(entry.id)}
+                className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                  active
+                    ? 'border-[var(--color-accent)] text-[var(--color-text)]'
+                    : 'border-transparent text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]'
+                }`}
+              >
+                {entry.label}
+                {entry.id === 'commands' && agent.commands.length > 0 && (
+                  <span className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]">
+                    {agent.commands.length}
+                  </span>
+                )}
+                {/*
+                  Warning-severity findings on an otherwise ready folder are the
+                  one thing the top of the page no longer mentions; the count
+                  here is what makes them discoverable without opening the tab.
+                */}
+                {entry.id === 'folder' && findings > 0 && (
+                  <span
+                    className="ml-1.5 rounded bg-[var(--color-warning)]/15 px-1 text-[10px] text-[var(--color-warning)]"
+                    title={`${findings} validation finding${findings === 1 ? '' : 's'}`}
+                  >
+                    {findings}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </nav>
+
+        <div role="tabpanel" className="space-y-3">
+          {tab === 'overview' && (
+            <>
+              <StatusCard agent={agent} />
+              <DescriptionCard agent={agent} />
+              <ExamplePromptsCard agent={agent} />
+            </>
+          )}
+          {tab === 'prompts' && (
+            <>
+              <PromptDocCard
+                agentId={agent.id}
+                prompt="workflow"
+                title="Workflow prompt"
+                hint="This document is the agent: it is loaded as the system prompt for every conversation."
+                placeholder="Describe what this agent does, step by step, addressed to the agent."
+              />
+              <PromptDocCard
+                agentId={agent.id}
+                prompt="entrypoint"
+                title="Entrypoint prompt"
+                hint="The first message of an unattended run, with nobody there to answer a question."
+                placeholder="One or two self-contained sentences telling the agent what to do."
+              />
+              <PromptDocCard
+                agentId={agent.id}
+                prompt="refiner"
+                title="Refiner prompt"
+                hint="Defaults and required inputs — what to assume when a request does not say."
+                placeholder="List the mandatory inputs and the defaults to fill in."
+              />
+            </>
+          )}
+          {tab === 'commands' && <CommandsCard agent={agent} />}
+          {tab === 'folder' && <FolderTab agent={agent} />}
+        </div>
       </div>
     </div>
   )

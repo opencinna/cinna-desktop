@@ -7,7 +7,14 @@ import {
   useRemoveAgentRoot,
   useRescanLocalAgents
 } from '../../hooks/useLocalAgents'
-import { useLocalTools, useOpenIn, useRefreshLocalTools } from '../../hooks/useLocalTools'
+import {
+  useDefaultTool,
+  useLocalTools,
+  useOpenIn,
+  useRefreshLocalTools,
+  useSetDefaultTool
+} from '../../hooks/useLocalTools'
+import { isLocalToolId } from '../../../../shared/localTools'
 import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
 import { useEngineState, useStartEngine, useStopEngine } from '../../hooks/useEngine'
@@ -37,6 +44,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const stopEngine = useStopEngine()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
+  const { tool: defaultTool, launchable } = useDefaultTool()
+  const setDefaultTool = useSetDefaultTool()
   const [error, setError] = useState<string | null>(null)
 
   const savedEnginePath = appSettings?.localAgentsEnginePath ?? ''
@@ -368,6 +377,53 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
           )}
           <div className="mt-2 text-[10px] text-[var(--color-text-muted)]">
             Kit contract {contractVersion ?? 'unknown'} · bundled with this app
+          </div>
+        </div>
+        <div className="space-y-2 border-t border-[var(--color-border)] px-4 py-2.5">
+          <div className="flex items-center gap-3">
+            <label
+              htmlFor="local-agents-default-tool"
+              className="shrink-0 text-xs text-[var(--color-text)]"
+            >
+              Open agents with
+            </label>
+            <select
+              id="local-agents-default-tool"
+              value={defaultTool?.id ?? ''}
+              onChange={(event) => {
+                const next = event.target.value
+                setDefaultTool(isLocalToolId(next) ? next : null)
+              }}
+              className="min-w-0 flex-1 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)]
+                px-2 py-1 text-xs text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none"
+            >
+              <option value="">Ask each time</option>
+              {launchable.map((tool) => (
+                <option key={tool.id} value={tool.id}>
+                  {tool.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <label
+            className={`flex items-center gap-2 text-[11px] ${
+              defaultTool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-text-muted)]'
+            }`}
+          >
+            <input
+              type="checkbox"
+              checked={appSettings?.localAgentsAutoOpen === true}
+              disabled={!defaultTool}
+              onChange={(event) =>
+                setAppSetting.mutate({ key: 'localAgentsAutoOpen', value: event.target.checked })
+              }
+              className="accent-[var(--color-accent)]"
+            />
+            Open a new agent there right after creating it, without asking
+          </label>
+          <div className="text-[10px] text-[var(--color-text-muted)]">
+            The agent page&apos;s Open-in button uses this tool. Picking a different one from its
+            menu makes that the default instead.
           </div>
         </div>
       </div>
