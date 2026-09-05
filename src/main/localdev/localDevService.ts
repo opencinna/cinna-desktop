@@ -68,7 +68,11 @@ import {
   probeCliCapabilities,
   type CliCapabilities
 } from './cliCapabilities'
-import { toolchain, type ToolchainPins, type ToolchainToolId } from './toolchain'
+import {
+  toolchain,
+  type ToolchainPins,
+  type ToolchainProgressUpdate
+} from './toolchain'
 import {
   LOCAL_DEV_STATE_CHANNEL,
   type CinnaLocalDev,
@@ -163,12 +167,15 @@ function resetTasks(): void {
  * still showed three as pending would be lying about work that demonstrably
  * happened.
  */
-function markActive(id: LocalDevTaskId, detail?: string): void {
+function markActive(id: LocalDevTaskId, detail?: string, percent?: number): void {
   const index = tasks.findIndex((task) => task.id === id)
   if (index === -1) return
   tasks = tasks.map((task, i) => {
-    if (i < index) return task.status === 'failed' ? task : { ...task, status: 'done' }
-    if (i === index) return { ...task, status: 'active', detail }
+    // A finished stage shows a full bar, not the last fraction it happened to
+    // report — the row above the active one must read as done at a glance.
+    if (i < index)
+      return task.status === 'failed' ? task : { ...task, status: 'done', percent: 100 }
+    if (i === index) return { ...task, status: 'active', detail, percent }
     return task
   })
 }
@@ -178,6 +185,7 @@ function markAllDone(detail?: string): void {
   tasks = tasks.map((task, i) => ({
     ...task,
     status: 'done',
+    percent: 100,
     detail: i === tasks.length - 1 ? (detail ?? task.detail) : task.detail
   }))
 }
@@ -197,8 +205,8 @@ function markFailed(detail: string): void {
  * step text, so renaming a user-facing label cannot silently stop the checklist
  * advancing.
  */
-function onToolchainProgress(step: string, percent?: number, tool?: ToolchainToolId): void {
-  if (tool) markActive(tool, step)
+function onToolchainProgress({ step, percent, tool, toolPercent }: ToolchainProgressUpdate): void {
+  if (tool) markActive(tool, step, toolPercent)
   setState({ phase: 'installing', step, percent: toolchainPercent(percent) })
 }
 
@@ -206,12 +214,42 @@ let state: LocalDevState = { phase: 'idle' }
 /** One reconcile at a time; a second caller joins the run in flight. */
 let inFlight: Promise<LocalDevState> | null = null
 
+/** Last logged phase and percent decade, so progress ticks do not flood the log. */
+let lastLogged = { phase: '', decade: -1 }
+
+/**
+ * What is worth a log line, out of the hundreds of progress reports a download
+ * produces.
+ *
+ * Every transition used to be logged, which for one install meant two hundred
+ * identical `{ phase: 'installing' }` lines — a log that says nothing, at the
+ * one moment somebody reading it wants to know what happened. A phase change is
+ * always worth a line; a progress tick is worth one every ten percent.
+ */
+function shouldLog(next: LocalDevState): boolean {
+  const decade =
+    next.phase === 'installing' && next.percent !== undefined
+      ? Math.floor(next.percent / 10)
+      : -1
+  if (next.phase === lastLogged.phase && decade === lastLogged.decade) return false
+  lastLogged = { phase: next.phase, decade }
+  return true
+}
+
 function setState(next: LocalDevState): void {
   // Attached here rather than at every call site: the checklist is a property
   // of the run, not of any one transition, and threading it through forty
   // `setState` calls is forty chances to drop it.
   state = { ...next, tasks: tasks.length ? tasks : undefined }
-  logger.info('local dev state', { phase: next.phase })
+  if (shouldLog(next)) {
+    logger.info('local dev state', {
+      phase: next.phase,
+      ...(next.phase === 'installing' ? { step: next.step, percent: next.percent } : {}),
+      ...(next.phase === 'attention' ? { reason: next.reason, detail: next.detail } : {}),
+      ...(next.phase === 'unsupported' ? { reason: next.reason } : {}),
+      ...(next.phase === 'ready' ? { workspacePath: next.workspacePath, cliVersion: next.cliVersion, protocol: next.protocol } : {})
+    })
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(LOCAL_DEV_STATE_CHANNEL, next)
   }
@@ -442,7 +480,9 @@ async function createWorkspace(
       if (line.status !== 'start') return
       // cinna-cli's own `step n of m` — the only progress the desktop has for
       // this half, and it is real: each line is a step actually beginning.
-      markActive('workspace', line.message)
+      const within =
+        line.step && line.total ? Math.round((line.step / line.total) * 100) : undefined
+      markActive('workspace', line.message, within)
       setState({
         phase: 'installing',
         step: line.message,
@@ -636,7 +676,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   }
 
   if (!(await isFile(accountConfigPath(workspacePath)))) {
-    markActive('workspace', 'Creating…')
+    markActive('workspace', 'Creating…', 0)
     const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin, caps)
     if (failure) {
       markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CheckCircle, Loader2, TerminalSquare, XCircle } from 'lucide-react'
+import { LocalDevTaskList } from './LocalDevTaskList'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import type { LocalDevState } from '../../../../shared/localDevState'
 
@@ -44,31 +45,47 @@ export function LocalDevConsentPanel({
   const [busy, setBusy] = useState(false)
 
   if (state.phase === 'installing') {
+    const overall =
+      state.percent === undefined
+        ? null
+        : Math.round(Math.max(0, Math.min(100, state.percent)))
     return (
       <div className="space-y-4">
-        <div className="flex flex-col items-center gap-3 py-6">
-          <Loader2 size={28} className="text-[var(--color-accent)] animate-spin" />
-          <div className="text-sm text-[var(--color-text-secondary)] text-center break-words">
-            {state.step}
+        <div className="space-y-3 py-2">
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="text-sm font-medium text-[var(--color-text)]">
+              Setting up local development
+            </div>
+            {overall !== null && (
+              <div className="text-[11px] text-[var(--color-text-muted)] tabular-nums shrink-0">
+                {overall}%
+              </div>
+            )}
           </div>
-          {state.percent !== undefined && (
-            <div className="w-full space-y-1">
-              <div className="h-1 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
-                <div
-                  className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
-                  style={{ width: `${Math.max(0, Math.min(100, state.percent))}%` }}
-                />
-              </div>
-              {/* The number as well as the bar. A bar an inch wide moving a
-                  pixel a second is indistinguishable from a stuck one; a
-                  changing digit is not. */}
-              <div className="text-[11px] text-[var(--color-text-muted)] text-right tabular-nums">
-                {Math.round(Math.max(0, Math.min(100, state.percent)))}%
-              </div>
+          {overall !== null && (
+            <div className="h-1 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
+              <div
+                className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
+                style={{ width: `${overall}%` }}
+              />
             </div>
           )}
-          <div className="text-[11px] text-[var(--color-text-muted)] text-center">
-            This downloads a few hundred megabytes the first time. You can leave this running.
+
+          {/* The per-component list, not just the current step. Watching one
+              line change is no way to tell what is left — the whole point is
+              seeing that Mutagen is downloading *and* that cinna-cli and the
+              workspace are still ahead of it. */}
+          {(state.tasks?.length ?? 0) > 0 ? (
+            <LocalDevTaskList tasks={state.tasks ?? []} />
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
+              <Loader2 size={14} className="text-[var(--color-accent)] animate-spin" />
+              {state.step}
+            </div>
+          )}
+
+          <div className="text-[11px] text-[var(--color-text-muted)]">
+            This downloads a few hundred megabytes the first time. You can leave it running.
           </div>
         </div>
         {/* Leaving is always allowed. The reconciler runs in the main process

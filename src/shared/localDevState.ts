@@ -49,6 +49,14 @@ export interface LocalDevTask {
   status: LocalDevTaskStatus
   /** A line under the label: the current step, a version, or a failure. */
   detail?: string
+  /**
+   * 0..100 for **this component alone**, when it is measurable.
+   *
+   * Absent where there is nothing honest to report — the account-token check is
+   * one round trip, and a bar for it would be decoration. A row without this
+   * still shows its status; only the bar is omitted.
+   */
+  percent?: number
 }
 
 export type LocalDevPhase =

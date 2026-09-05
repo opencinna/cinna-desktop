@@ -225,7 +225,7 @@ describe('paths and the spawn environment', () => {
 describe('ensure', () => {
   it('installs uv, Mutagen and cinna-cli, and reports each step', async () => {
     const steps: string[] = []
-    const result = await createToolchain(deps()).ensure(PINS, (step) => steps.push(step))
+    const result = await createToolchain(deps()).ensure(PINS, ({ step }) => steps.push(step))
 
     expect(steps).toEqual([
       'Installing uv',
@@ -254,7 +254,7 @@ describe('ensure', () => {
     downloads = []
     runs = []
     const reports: { step: string; percent?: number }[] = []
-    const result = await tc.ensure(PINS, (step, percent) => reports.push({ step, percent }))
+    const result = await tc.ensure(PINS, ({ step, percent }) => reports.push({ step, percent }))
     expect(result.cliVersion).toBe('0.4.0')
     expect(downloads).toEqual([])
     // Not even a `--version` probe: the recorded state answers it.
@@ -271,7 +271,7 @@ describe('ensure', () => {
     // reads as a restart — worse than no bar.
     const tc = createToolchain(deps())
     const percents: number[] = []
-    await tc.ensure(PINS, (_step, percent) => {
+    await tc.ensure(PINS, ({ percent }) => {
       if (percent !== undefined) percents.push(percent)
     })
     expect(percents.length).toBeGreaterThan(0)
@@ -292,7 +292,7 @@ describe('ensure', () => {
           writeFileSync(dest, BYTES)
         }
       })
-    ).ensure(PINS, (step, percent) => reports.push({ step, percent }))
+    ).ensure(PINS, ({ step, percent }) => reports.push({ step, percent }))
 
     const halfway = reports.find((r) => r.step.startsWith('Downloading uv'))
     expect(halfway?.step).toBe('Downloading uv — 5.0 of 10.0 MB')
@@ -311,7 +311,7 @@ describe('ensure', () => {
           writeFileSync(dest, BYTES)
         }
       })
-    ).ensure(PINS, (step) => reports.push(step))
+    ).ensure(PINS, ({ step }) => reports.push(step))
 
     expect(reports).toContain('Downloading uv — 3.5 MB')
   })

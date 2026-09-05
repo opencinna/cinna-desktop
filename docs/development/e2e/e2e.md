@@ -27,6 +27,10 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 1. Ask for it: `/cinna-desktop.e2e.write <the user scenario>` launches the `e2e-test-writer` agent (`.claude/agents/e2e-test-writer.md`), which follows [Writing E2E Tests](e2e_llm.md)
 2. Or write it by hand from that same guide: exact strings first, arrange over IPC, act through the UI, pass twice, run the whole suite
 
+### Looking at a flow by hand
+
+`make demo-localdev SERVER=<backend origin>` launches the app in a throwaway profile aimed at a running cinna-core, for reviewing the one-click onboarding UI. It is not a test and asserts nothing — it exists because a spec tears its window down in seconds, and some screens (the several-minute local-dev install) can only be judged while they are on screen. See [Local Development](../../agents/local_dev/local_dev_tech.md).
+
 ### Cross-repo integration runs
 
 `make e2e-integration` is the only thing in this repository that talks to a running server. It exists because one-click onboarding is a contract between three programs — cinna-desktop, cinna-core and cinna-cli — and a suite that fakes two of them proves nothing about the contract itself. `cinna-integration.spec.ts` drives the whole path: a `cinna://connect` link, the real PKCE loopback OAuth flow, the toolchain really downloaded and digest-verified, cinna-cli really installed from PyPI at the version the *server* pinned, and `cinna account setup` really creating an account workspace from a really-minted single-use token.

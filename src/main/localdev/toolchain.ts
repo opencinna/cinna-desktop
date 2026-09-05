@@ -227,12 +227,30 @@ export interface ToolchainPaths {
 /** Which of the three managed tools a progress report is about. */
 export type ToolchainToolId = 'uv' | 'mutagen' | 'cinna-cli'
 
-/**
- * `step` is user-visible copy, `percent` is the overall 0..100, and `tool`
- * names which tool it concerns so a caller can keep a per-tool checklist
- * without parsing the copy — a label is written for people and will change.
- */
-export type ToolchainProgress = (step: string, percent?: number, tool?: ToolchainToolId) => void
+export interface ToolchainProgressUpdate {
+  /** User-visible copy for the current step. */
+  step: string
+  /** 0..100 across the whole toolchain — what one overall bar shows. */
+  percent?: number
+  /**
+   * Which tool this concerns. Named rather than parsed out of `step`, because
+   * a label is written for people and will be reworded.
+   */
+  tool?: ToolchainToolId
+  /**
+   * 0..100 **within `tool` alone**, for a per-component bar.
+   *
+   * Separate from `percent` because the two answer different questions and a
+   * caller showing a row per tool needs both: "Mutagen is 40% downloaded" and
+   * "the toolchain is 34% done" are not interchangeable, and deriving one from
+   * the other means the UI re-implementing the stage weighting.
+   */
+  toolPercent?: number
+}
+
+/** One object rather than positional arguments: there are four fields now, and
+ *  three of them are optional. */
+export type ToolchainProgress = (update: ToolchainProgressUpdate) => void
 
 export interface ToolchainResult {
   paths: ToolchainPaths
@@ -486,17 +504,23 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       if (total === null) {
         // No `content-length`. Count up honestly rather than inventing a
         // denominator; the bar holds at the stage start and the label moves.
-        onProgress(`Downloading ${label} — ${mb(received)} MB`, stage.from, tool)
+        onProgress({
+          step: `Downloading ${label} — ${mb(received)} MB`,
+          percent: stage.from,
+          tool
+        })
         return
       }
-      onProgress(
-        `Downloading ${label} — ${mb(received)} of ${mb(total)} MB`,
+      const fraction = received / total
+      onProgress({
+        step: `Downloading ${label} — ${mb(received)} of ${mb(total)} MB`,
         // The download is most of a download-and-unpack stage, but not all of
         // it; leaving the last slice for verify + unpack keeps the bar from
         // sitting at the stage's end while tar is still running.
-        at(stage, (received / total) * 0.9),
-        tool
-      )
+        percent: at(stage, fraction * 0.9),
+        tool,
+        toolPercent: Math.round(fraction * 90)
+      })
     }
   }
 
@@ -507,10 +531,10 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
   ): Promise<void> {
     const p = paths(pins)
     if (await isFile(p.uvBin)) {
-      onProgress?.('Installing uv', STAGES.uv.to, 'uv')
+      onProgress?.({ step: 'uv', percent: STAGES.uv.to, tool: 'uv', toolPercent: 100 })
       return
     }
-    onProgress?.('Installing uv', STAGES.uv.from, 'uv')
+    onProgress?.({ step: 'Installing uv', percent: STAGES.uv.from, tool: 'uv', toolPercent: 0 })
     try {
       await installPinnedAsset({
         root: p.root,
@@ -541,10 +565,10 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     const p = paths(pins)
     const mutagenBin = join(p.mutagenDir, 'mutagen')
     if (await isFile(mutagenBin)) {
-      onProgress?.('Installing Mutagen', STAGES.mutagen.to, 'mutagen')
+      onProgress?.({ step: 'Mutagen', percent: STAGES.mutagen.to, tool: 'mutagen', toolPercent: 100 })
       return
     }
-    onProgress?.('Installing Mutagen', STAGES.mutagen.from, 'mutagen')
+    onProgress?.({ step: 'Installing Mutagen', percent: STAGES.mutagen.from, tool: 'mutagen', toolPercent: 0 })
     try {
       await installPinnedAsset({
         root: p.root,
@@ -616,7 +640,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       }
     }
 
-    onProgress?.('Installing cinna-cli', STAGES.cli.from, 'cinna-cli')
+    onProgress?.({ step: 'Installing cinna-cli', percent: STAGES.cli.from, tool: 'cinna-cli', toolPercent: 0 })
     const env = await toolchainEnv(pins)
     // `uv tool install` is idempotent for the same version and replaces a
     // different one, so the version change *is* the upgrade path; `--reinstall`
@@ -658,7 +682,13 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
           // so counting them against a fixed total would be a guess.
           // Capped short of the stage end so the bar cannot claim to be finished
           // while uv is still running; the stage's own completion sets 100.
-          onProgress(line, at(STAGES.cli, (1 - Math.pow(0.75, seen)) * 0.9), 'cinna-cli')
+          const fraction = (1 - Math.pow(0.75, seen)) * 0.9
+          onProgress({
+            step: line,
+            percent: at(STAGES.cli, fraction),
+            tool: 'cinna-cli',
+            toolPercent: Math.round(fraction * 100)
+          })
         }
       : undefined
 
@@ -731,7 +761,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     // The one place the bar is allowed to reach the end: everything above caps
     // itself short, so 100% means the toolchain is genuinely installed rather
     // than "the last thing we could measure finished".
-    onProgress?.('Toolchain ready', 100, 'cinna-cli')
+    onProgress?.({ step: 'Toolchain ready', percent: 100, tool: 'cinna-cli', toolPercent: 100 })
     return { paths: p, cliVersion }
   }
 

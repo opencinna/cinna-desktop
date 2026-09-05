@@ -25,7 +25,7 @@ Three trees are discussed and they look alike, so they are written differently t
 - `cliRunner.ts` — `runCinnaCli(opts)`; types `CliRunOptions`, `CliRunOutcome`, `CliProgressLine`, `CliResultLine`
 - `cliCapabilities.ts` — `probeCliCapabilities(bin, version, env)`, `clearCliCapabilityCache()`; type `CliCapabilities`
 
-Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `managedAsset.ts` reports `(received, total | null)` off the same counter that enforces `MAX_ARCHIVE_BYTES`, throttled to 150 ms; `installPinnedAsset` forwards it as `onDownloadProgress`; `toolchain.ts` maps each stage onto a weighted slice of 0–100 (`STAGES` = uv 0–20, mutagen 20–55, cinna-cli 55–100) and tags every report with a `ToolchainToolId`; `localDevService` scales that by `TOOLCHAIN_SHARE` (0.7) and maps cinna-cli's `step n of m` onto `WORKSPACE_FROM`–`WORKSPACE_TO` (70–97), so one monotonic bar covers the whole reconcile. `runCapture` gained an optional per-line stderr callback, which is how `uv tool install` — the one stage with no byte count — reports anything at all.
+Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `managedAsset.ts` reports `(received, total | null)` off the same counter that enforces `MAX_ARCHIVE_BYTES`, throttled to 150 ms; `installPinnedAsset` forwards it as `onDownloadProgress`; `toolchain.ts` maps each stage onto a weighted slice of 0–100 (`STAGES` = uv 0–20, mutagen 20–55, cinna-cli 55–100) and reports a `ToolchainProgressUpdate` carrying both `percent` (overall) and `toolPercent` (within that tool alone) — the two answer different questions and deriving one from the other would make the UI re-implement the stage weighting; `localDevService` scales that by `TOOLCHAIN_SHARE` (0.7) and maps cinna-cli's `step n of m` onto `WORKSPACE_FROM`–`WORKSPACE_TO` (70–97), so one monotonic bar covers the whole reconcile. `runCapture` gained an optional per-line stderr callback, which is how `uv tool install` — the one stage with no byte count — reports anything at all.
 - `toolchain.test.ts`, `cliRunner.test.ts`, `cliCapabilities.test.ts`, `localDevService.test.ts`
 
 ### Main process — `src/main/managed/`
@@ -54,7 +54,8 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 - `src/renderer/src/components/localdev/LocalDevOnboardingStep.tsx` — the `localdev` onboarding step
 - `src/renderer/src/components/localdev/LocalDevConsentModal.tsx` — the same panel over an app that is past first run
 - `src/renderer/src/components/localdev/LocalDevStatusButton.tsx` — the sidebar-footer indicator, and the only way into the detail modal
-- `src/renderer/src/components/localdev/LocalDevDetailModal.tsx` — the per-task checklist, opened from that button
+- `src/renderer/src/components/localdev/LocalDevDetailModal.tsx` — the checklist over a running app, opened from that button. Rendered through a **portal to `document.body`**: the sidebar establishes a containing block for `position: fixed` (`.app-sidebar-wrap` has `will-change: transform`, and in dark theme `.app-sidebar` has a `backdrop-filter`), so a plain `fixed inset-0` fills the sidebar card instead of the window
+- `src/renderer/src/components/localdev/LocalDevTaskList.tsx` — the one component that renders `state.tasks`, shared by the modal and the progress panel
 - `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` (+ `.test.tsx`) — Settings → Local Development
 - `src/renderer/src/components/settings/SettingsPage.tsx`, `src/renderer/src/components/layout/Sidebar.tsx`, `src/renderer/src/stores/ui.store.ts` — the `'local-dev'` settings tab
 - `src/renderer/src/App.tsx` — `<LocalDevConsentModal />`, mounted **inside** `OnboardingGate` so it and the onboarding step never ask the same question at once
@@ -161,7 +162,8 @@ It reads `cinna account setup --help` for `--json` and `cinna account --help` fo
 | `LocalDevConsentPanel` | Question → progress → (`ready` \| `attention`), in **one** component: two would mean the user clicking Set up and watching the screen change under them for no reason. "Continue in the background" is always available during `installing` — the reconciler runs in main and keeps going |
 | `LocalDevConsentModal` | Renders **only** for `consent`, and only past first run. No Escape/backdrop dismissal: dismissing has to record an answer. Closes itself once answered so `installing` does not keep it up |
 | `LocalDevStatusButton` | Renders for `installing`, `attention` and `ready`; nothing for `idle`, `unsupported`, `consent` and `declined`. Clicking opens `LocalDevDetailModal` — it never starts work itself, so a mis-click on a footer glyph cannot trigger a reinstall. The **dot**, not the icon, marks `attention` |
-| `LocalDevDetailModal` | The checklist (`state.tasks`), the current step and percentage, and Repair — hidden while `installing`, so a click cannot restart a running job. Renders what main reports and derives nothing locally |
+| `LocalDevDetailModal` | The checklist (`state.tasks`), the current step and percentage, and Repair — hidden while `installing`, so a click cannot restart a running job. Renders what main reports and derives nothing locally. Portalled to `document.body` |
+| `LocalDevTaskList` | One row per component, all five always present. A bar only on the `active` row, and only when that task carries a `percent`; a finished row shows a tick rather than `100%`, so the single number on screen is the one that is changing |
 | `LocalDevSettingsSection` | The only surface that shows every phase. `host` comes from the state for `consent`/`declined`, from the profile's `cinnaServerUrl` for `ready`, and is `null` otherwise — with no host the Consent card is left out rather than resetting a guess |
 
 Both StrictMode-sensitive subscriptions (`localDev.store`, `connectIntent.store`) set `subscribed: true` **before** their first `await`, because a mount effect is double-invoked in development and two runs would attach two IPC listeners.
@@ -178,6 +180,14 @@ Both StrictMode-sensitive subscriptions (`localDev.store`, `connectIntent.store`
 | `CINNA_CLI_SOURCE` | process environment | An absolute path to a local cinna-cli checkout, installed `--editable` **instead of** the pinned release. Set only by the cross-repo E2E run; a relative value is refused and ignored. While set the version pin does not apply, the install is never stamped (a working tree changes underneath), and every install logs a warning saying so |
 | `local_dev.mutagen_version` | server discovery | Must exist in `MUTAGEN_ASSETS` or the answer is "update Cinna Desktop" |
 | `local_dev.setup_token_endpoint` | server discovery | Absolute or path-relative; empty falls back to `/api/v1/cli/account/setup-tokens` |
+
+## Looking at it by hand
+
+`make demo-localdev SERVER=http://localhost:8000` builds and launches the app in a throwaway profile, opening on the connect-confirm step through the same argv funnel the OS uses for `cinna://`. Everything after that is the real flow, browser authorization included.
+
+It exists because the E2E suite cannot serve this purpose: it proves the flow works and then tears the window down in seconds, while the part worth *looking* at — several minutes of per-component progress — only exists during a cold install. Delete the sandbox it prints for another cold run; keep it to land straight in `ready`.
+
+The sandbox is a fresh `HOME` and `userData`, so the agents home and the account workspace never touch `~/Documents`. `scripts/demo-localdev.sh` says why each environment variable is set.
 
 ## Security
 

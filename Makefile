@@ -6,7 +6,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine
+.PHONY: help test typecheck build demo-localdev e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -19,6 +19,10 @@ typecheck: ## Type-check main, preload, renderer and e2e
 
 build: ## Production build into out/ (what the E2E suite launches)
 	npx electron-vite build
+
+demo-localdev: ## Drive one-click onboarding by hand in a throwaway profile: make demo-localdev SERVER=http://localhost:8000
+	npx electron-vite build
+	sh scripts/demo-localdev.sh
 
 e2e: ## Build, then run every E2E spec (live specs skip without OPENAI_API_KEY in .env)
 	npm run test:e2e

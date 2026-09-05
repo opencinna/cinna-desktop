@@ -13,10 +13,11 @@
  * eventually disagree with the thing actually doing the work.
  */
 import { useEffect } from 'react'
-import { AlertTriangle, Check, Loader2, Minus, RefreshCw, X } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { AlertTriangle, RefreshCw, X } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { useLocalDevStore } from '../../stores/localDev.store'
-import type { LocalDevTask } from '../../../../shared/localDevState'
+import { LocalDevTaskList } from './LocalDevTaskList'
 
 export interface LocalDevDetailModalProps {
   onClose: () => void
@@ -24,41 +25,6 @@ export interface LocalDevDetailModalProps {
 
 const btnSecondaryClass =
   'px-3 py-1.5 text-xs rounded-md border border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)] transition-colors disabled:opacity-50'
-
-function TaskRow({ task }: { task: LocalDevTask }): React.JSX.Element {
-  const icon =
-    task.status === 'done' ? (
-      <Check size={14} className="text-[var(--color-success)]" />
-    ) : task.status === 'active' ? (
-      <Loader2 size={14} className="text-[var(--color-accent)] animate-spin" />
-    ) : task.status === 'failed' ? (
-      <AlertTriangle size={14} className="text-[var(--color-danger)]" />
-    ) : (
-      <Minus size={14} className="text-[var(--color-text-muted)]" />
-    )
-
-  return (
-    <li className="flex items-start gap-2.5 py-1.5">
-      <span className="mt-0.5 shrink-0">{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span
-          className={
-            task.status === 'pending'
-              ? 'text-[13px] text-[var(--color-text-muted)]'
-              : 'text-[13px] text-[var(--color-text)]'
-          }
-        >
-          {task.label}
-        </span>
-        {task.detail && (
-          <span className="block text-[11px] text-[var(--color-text-muted)] break-words">
-            {task.detail}
-          </span>
-        )}
-      </span>
-    </li>
-  )
-}
 
 export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): React.JSX.Element {
   const state = useLocalDev()
@@ -84,7 +50,16 @@ export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): Reac
         ? 100
         : null
 
-  return (
+  // Rendered through a portal to `document.body`, not in place.
+  //
+  // The button that opens this lives in the sidebar, and two ancestors there
+  // establish a containing block for `position: fixed`: `.app-sidebar-wrap` has
+  // `will-change: width, transform, opacity` for the collapse animation, and in
+  // dark theme `.app-sidebar` has a `backdrop-filter`. Either is enough to make
+  // `fixed inset-0` mean "fill the sidebar card" instead of "fill the window",
+  // which is exactly where this modal first appeared. A portal is the fix; do
+  // not "simplify" it away.
+  return createPortal(
     <div
       role="dialog"
       aria-modal="true"
@@ -153,11 +128,9 @@ export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): Reac
         </div>
 
         {tasks.length > 0 ? (
-          <ul className="px-5 py-2 divide-y divide-[var(--color-border)]">
-            {tasks.map((task) => (
-              <TaskRow key={task.id} task={task} />
-            ))}
-          </ul>
+          <div className="px-5 py-2">
+            <LocalDevTaskList tasks={tasks} />
+          </div>
         ) : (
           // Before the first reconcile there is genuinely nothing to report,
           // and inventing five pending rows would imply work is queued when
@@ -186,6 +159,7 @@ export function LocalDevDetailModal({ onClose }: LocalDevDetailModalProps): Reac
           )}
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

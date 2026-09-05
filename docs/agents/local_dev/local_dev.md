@@ -216,9 +216,22 @@ The three toolchain stages are weighted by how long they really take rather than
 
 Where the server sends no `content-length`, the number counts up and the bar holds: a denominator that was invented is worse than one that is absent.
 
+### Every component at once, not one at a time
+
+The install shows a **list**: uv, Mutagen, cinna-cli, the account workspace, the account token — all five from the start, each `pending`, `active`, `done` or `failed`, and each with its own bar while it is the one moving.
+
+Showing only the current step was the first attempt and it was not enough. "Installing Mutagen…" says something is happening; it does not say what is already finished, what is still ahead, or how much of *this* piece is left — so a user four minutes into a first run cannot tell whether they are two steps from the end or ten. The list is the answer to "what else is pending while this downloads".
+
+Two rules keep it readable:
+
+- **A bar appears only on the row that is moving.** A finished row shows a tick, not `100%`, and a pending row shows nothing, so the one number on screen is the one actually changing.
+- **A component with nothing honest to measure gets no bar.** The account-token check is a single round trip; a bar for it would be decoration, and a bar that never moves is precisely what this list exists to remove.
+
+The same list renders in the onboarding/progress panel and in the status modal, from one component, so the two cannot describe the same install differently. Above it sits one overall bar for the whole reconcile.
+
 ### The status checklist
 
-The sidebar button opens a checklist — uv, Mutagen, cinna-cli, the account workspace, the account token — each `pending`, `active`, `done` or `failed`. It answers the two questions a single progress line cannot: how much is left, and *which part* broke.
+The sidebar button opens the same checklist over a running app. It answers the two questions a single progress line cannot: how much is left, and *which part* broke.
 
 Reaching a step implies the ones before it finished, so the checklist is advanced by naming the current step rather than by an explicit completion per step — the reconciler cannot reach the workspace without having installed the toolchain, and a list that still showed the toolchain pending would be lying about work that demonstrably happened.
 
