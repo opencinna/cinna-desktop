@@ -13,6 +13,12 @@ import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './logger/broadcast'
+import {
+  connectIntentService,
+  connectUrlFromArgv,
+  registerConnectScheme
+} from './services/connectIntentService'
+import { focusMainWindow, installWindowResolver } from './window/focus'
 
 // A disposable profile for the E2E suite (`e2e/`). Read once, before anything
 // derives a path from `userData` — the startup log, the database, the session
@@ -34,6 +40,49 @@ const bootLogger = createLogger('boot')
 // lives here. `getMainWindow` is a hoisted function declaration and reads
 // `mainWindow` lazily, so installing before there is a window is correct.
 installLogBroadcast(getMainWindow)
+installWindowResolver(getMainWindow)
+connectIntentService.install(getMainWindow)
+
+// ── The `cinna://` deep link ────────────────────────────────────────────────
+//
+// All of this is at module scope, before `whenReady`, and that is the whole
+// trick. On macOS a cold launch from a link fires `open-url` *before* the app
+// is ready — a handler installed inside `startup()` would miss the one delivery
+// the feature exists for. `connectIntentService` buffers whatever arrives until
+// there is a renderer to show it to, so being early costs nothing.
+//
+// The single-instance lock is what makes the running-app case work at all:
+// without it a second click launches a second copy of Cinna, which registers
+// nothing, shows its own window, and leaves the user's real profile behind the
+// new one. With it, the second process exits and the first receives the URL
+// through `second-instance`.
+//
+// Registration is skipped for the E2E suite's throwaway profile: claiming the
+// machine's `cinna://` handler is a change to the developer's OS, and a test
+// that leaves it pointing at a temporary sandbox has broken the machine it ran
+// on. The suite drives the same funnel through `--cinna-connect-intent=`.
+if (!overrideUserData) registerConnectScheme()
+
+if (!app.requestSingleInstanceLock()) {
+  // A second copy started (a link click, a double-launch). The primary instance
+  // is being handed our argv through `second-instance` right now; there is
+  // nothing left for this process to do and staying alive would only fight over
+  // the database.
+  app.exit(0)
+} else {
+  app.on('second-instance', (_event, argv) => {
+    const url = connectUrlFromArgv(argv)
+    if (url) connectIntentService.deliver(url, 'second-instance')
+    // A second launch with no link is still the user asking for the app —
+    // typically a Dock or launcher click while the window is behind something.
+    else focusMainWindow()
+  })
+
+  app.on('open-url', (event, url) => {
+    event.preventDefault()
+    connectIntentService.deliver(url, 'open-url')
+  })
+}
 
 const STARTUP_LOG_NAME = 'cinna-errors.log'
 const STARTUP_LOG_MAX_BYTES = 1024 * 1024
@@ -288,6 +337,18 @@ function startup(): void {
 
   createWindow()
   initAutoUpdater()
+
+  // Linux (and, later, Windows) deliver the URL by re-launching the app with it
+  // appended to argv rather than through `open-url`; the E2E suite uses the
+  // `--cinna-connect-intent=` form of the same thing. Both land in the funnel
+  // the OS hooks above use, so nothing downstream can tell them apart.
+  const startupIntentUrl = connectUrlFromArgv(process.argv)
+  if (startupIntentUrl) {
+    connectIntentService.deliver(
+      startupIntentUrl,
+      startupIntentUrl.startsWith('cinna://') ? 'argv' : 'test-argv'
+    )
+  }
 
   // Pause periodic sync around OS sleep so a token refresh can't be suspended
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +

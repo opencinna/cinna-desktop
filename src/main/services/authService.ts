@@ -11,6 +11,8 @@ import { storeCinnaTokens, clearCinnaTokens } from '../auth/cinna-tokens'
 import { syncService } from './syncService'
 import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { focusMainWindow } from '../window/focus'
+import { connectIntentService } from './connectIntentService'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 
 const logger = createLogger('auth')
@@ -175,6 +177,15 @@ export const authService = {
         stack: err instanceof Error ? err.stack : undefined
       })
       throw new AuthError('oauth_failed', message)
+    } finally {
+      // The user is in their browser looking at "you can close this tab". On
+      // macOS the browser keeps focus unless the app takes it back, so without
+      // this they have to find Cinna in the Dock to see that it worked — or
+      // that it failed, which is why this is in `finally` rather than after the
+      // success path. A deep link that arrived mid-flow is released here too:
+      // it was buffered precisely because this flow was running.
+      focusMainWindow()
+      connectIntentService.flush()
     }
 
     const username = tokens.profile.email
@@ -276,6 +287,11 @@ export const authService = {
         message
       })
       throw new AuthError('oauth_failed', message)
+    } finally {
+      // Same reason as `registerCinna`: bring the user back from the browser,
+      // and release any deep link that was held while this flow ran.
+      focusMainWindow()
+      connectIntentService.flush()
     }
 
     if (tokens.profile.email !== row.username) {

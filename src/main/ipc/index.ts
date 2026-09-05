@@ -20,6 +20,7 @@ import { registerSyncHandlers } from './sync.ipc'
 import { registerLocalToolsHandlers } from './local_tools.ipc'
 import { registerLocalAgentHandlers } from './local_agent.ipc'
 import { registerEngineHandlers } from './engine.ipc'
+import { registerConnectHandlers } from './connect.ipc'
 
 export function registerAllIpcHandlers(): void {
   registerLoggerHandlers()
@@ -44,4 +45,5 @@ export function registerAllIpcHandlers(): void {
   registerLocalToolsHandlers()
   registerLocalAgentHandlers()
   registerEngineHandlers()
+  registerConnectHandlers()
 }

@@ -219,6 +219,18 @@ async function fetchCinnaUserInfo(
 }
 
 /**
+ * Whether a browser authorization is in flight right now.
+ *
+ * Read by `connectIntentService`: a deep link that arrives mid-flow is buffered
+ * rather than raised, because the confirm step it would open sits on top of the
+ * screen the user is waiting on, and connecting a second server while the first
+ * one is half-authorized is not a state worth having.
+ */
+export function isCinnaOAuthInProgress(): boolean {
+  return activeAbort !== undefined
+}
+
+/**
  * Abort an in-progress OAuth flow.
  */
 export function abortCinnaOAuthFlow(): void {

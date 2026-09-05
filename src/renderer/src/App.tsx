@@ -6,6 +6,7 @@ import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
 import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { ReauthModal } from './components/auth/ReauthModal'
+import { ConnectIntentModal } from './components/auth/ConnectIntentModal'
 import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
@@ -14,6 +15,7 @@ import { useAuthStore } from './stores/auth.store'
 import { flagReauthFromError } from './stores/reauth.store'
 import { useProviders } from './hooks/useProviders'
 import { useStartup } from './hooks/useAuth'
+import { useConnectIntent } from './hooks/useConnectIntent'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useEngineWatch } from './hooks/useEngine'
@@ -121,16 +123,29 @@ function OnboardingGate({ children }: { children: React.ReactNode }): React.JSX.
   // module-level memo in `constants/onboarding`).
   const [forced, setForced] = useState<boolean>(() => consumeForceOnboarding())
   const [dismissed, setDismissed] = useState<boolean>(() => !forced && isOnboardingDismissed())
+  // Subscribed here rather than only in the modal so the gate can decide *which*
+  // surface confirms a deep link. The store dedupes, so the modal reading the
+  // same intent below costs nothing.
+  const { intent, consume } = useConnectIntent()
 
   if (isLoading) return <div className="h-full bg-[var(--color-bg)]" />
 
   const hasProviders = (providers?.length ?? 0) > 0
   // Forced mode bypasses the dismissed flag AND the providers-count gate so
   // we can re-trigger onboarding on a fully configured install for testing.
-  if (!forced && (dismissed || hasProviders)) return <>{children}</>
+  const onboarding = forced || !(dismissed || hasProviders)
+
+  // A deep link on an install that is past first run gets a modal over the app
+  // (rendered by `App`), not a resurrected onboarding screen — the user has an
+  // account and a workspace they are looking at, and replacing it with a
+  // first-run screen to answer one yes/no question would be a bigger
+  // interruption than the question.
+  if (!onboarding) return <>{children}</>
 
   return (
     <OnboardingScreen
+      connectIntent={intent}
+      onConnectIntentDone={consume}
       onComplete={() => {
         markOnboardingDismissed()
         setDismissed(true)
@@ -146,6 +161,11 @@ function App(): React.JSX.Element {
       <AuthGate>
         <OnboardingGate>
           <Shell />
+          {/* Inside the gate on purpose: its children render only once first
+              run is over, which is exactly when the modal — rather than the
+              onboarding screen's own confirm step — is the right surface for a
+              deep link. Outside it, both would show the same intent at once. */}
+          <ConnectIntentModal />
         </OnboardingGate>
         <LogsOverlay />
         <AgentStatusOverlay />

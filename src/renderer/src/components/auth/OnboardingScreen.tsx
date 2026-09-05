@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   ArrowLeft,
   CheckCircle,
@@ -23,9 +23,21 @@ import {
   prependSelfHostedHistory
 } from '../../constants/selfHostedHistory'
 import { pickDefaultModelId } from '../../../../shared/modelDefaults'
+import type { ConnectIntent } from '../../../../shared/connectIntent'
+import { ConnectIntentPanel } from './ConnectIntentPanel'
 
 interface OnboardingScreenProps {
   onComplete: () => void
+  /**
+   * A `cinna://connect` deep link waiting to be confirmed. When present the
+   * screen opens on {@link ConnectIntentPanel} instead of the welcome step —
+   * the user clicked a button that named a server, and asking them to choose
+   * between "API key" and "Cinna Server" first would be asking a question they
+   * have already answered.
+   */
+  connectIntent?: ConnectIntent | null
+  /** Called when the intent has been acted on, whichever way. */
+  onConnectIntentDone?: () => void
 }
 
 type Step =
@@ -34,6 +46,8 @@ type Step =
   | 'provider-key'
   | 'cinna-hosting'
   | 'cinna-waiting'
+  /** The deep link's confirmation. Never reached by navigating; only by arriving. */
+  | 'cinna-confirm'
 
 type ProviderType = 'anthropic' | 'openai' | 'gemini'
 
@@ -83,8 +97,12 @@ const btnSecondaryClass =
 const btnPrimaryClass =
   'px-5 py-2 text-sm rounded-md bg-[var(--color-accent)] text-white hover:opacity-90 transition-opacity disabled:opacity-50'
 
-export function OnboardingScreen({ onComplete }: OnboardingScreenProps): React.JSX.Element {
-  const [step, setStep] = useState<Step>('welcome')
+export function OnboardingScreen({
+  onComplete,
+  connectIntent,
+  onConnectIntentDone
+}: OnboardingScreenProps): React.JSX.Element {
+  const [step, setStep] = useState<Step>(connectIntent ? 'cinna-confirm' : 'welcome')
 
   // Path A — Personal credentials
   const [selectedProvider, setSelectedProvider] = useState<ProviderOption | null>(null)
@@ -106,6 +124,19 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps): React.J
   const upsertChatMode = useUpsertChatMode()
   const register = useRegister()
   const cinnaAbort = useCinnaOAuthAbort()
+
+  // A link can also arrive while the user is already sitting on this screen —
+  // they installed the app, started poking at the provider steps, then went
+  // back to the landing page and clicked the button. Only a *new* intent
+  // redirects: the confirm step consumes the one it acted on, so this cannot
+  // bounce a user who declined straight back into it.
+  const lastIntentAt = useRef<number | null>(connectIntent?.receivedAt ?? null)
+  useEffect(() => {
+    if (!connectIntent) return
+    if (lastIntentAt.current === connectIntent.receivedAt) return
+    lastIntentAt.current = connectIntent.receivedAt
+    setStep('cinna-confirm')
+  }, [connectIntent])
 
   // Drop any stale test result so the "Save & start" button can't proceed
   // against an outdated validation. Called whenever the inputs that feed
@@ -234,6 +265,24 @@ export function OnboardingScreen({ onComplete }: OnboardingScreenProps): React.J
 
   // ─── Rendering ────────────────────────────────────────────────────────────
   const renderStep = (): React.JSX.Element => {
+    if (step === 'cinna-confirm' && connectIntent) {
+      return (
+        <ConnectIntentPanel
+          intent={connectIntent}
+          onDone={(outcome) => {
+            onConnectIntentDone?.()
+            // Connecting (or switching into) a Cinna account *is* a finished
+            // first run — the account's managed credentials and chat modes are
+            // what the rest of onboarding would otherwise be asking for. A
+            // decline leaves the user needing the ordinary choices, so it falls
+            // back to the welcome step rather than closing the screen.
+            if (outcome === 'declined') setStep('welcome')
+            else onComplete()
+          }}
+        />
+      )
+    }
+
     if (step === 'welcome') {
       return (
         <div className="space-y-6">

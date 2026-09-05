@@ -19,6 +19,7 @@ import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { EngineSkips, EngineState } from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
+import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
@@ -1005,6 +1006,28 @@ const api = {
       const listener = (_event: IpcRendererEvent, state: UpdaterState): void => handler(state)
       ipcRenderer.on(UPDATER_BROADCAST_CHANNEL, listener)
       return () => ipcRenderer.off(UPDATER_BROADCAST_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * The `cinna://connect?server=…` deep link a landing page fired.
+   *
+   * What crosses is an **origin and nothing else**, already validated in main.
+   * There is no `connect()` here and there never will be: the renderer's job is
+   * to show the host and get a confirmation, and the connection itself goes
+   * through the ordinary `auth:register` path, so a component cannot be written
+   * that authorizes against a link-supplied server without the confirm step.
+   */
+  connect: {
+    /** The buffered intent, for a renderer that mounted after it arrived. */
+    getPending: (): Promise<ConnectIntent | null> => ipcRenderer.invoke('connect:get-pending'),
+    /** Confirmed, declined, or switched to — either way, drop the buffer. */
+    consume: (): Promise<{ success: true }> => ipcRenderer.invoke('connect:consume'),
+    /** Fires when a link arrives while the app is running. Returns an unsubscribe. */
+    onIntent: (handler: (intent: ConnectIntent) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, intent: ConnectIntent): void => handler(intent)
+      ipcRenderer.on(CONNECT_INTENT_CHANNEL, listener)
+      return () => ipcRenderer.off(CONNECT_INTENT_CHANNEL, listener)
     }
   },
 

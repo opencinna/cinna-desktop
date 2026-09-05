@@ -26,6 +26,16 @@ extraResources:
   # note there before changing any of this.
   - from: resources/cinna-kit-contract
     to: cinna-kit-contract
+# The `cinna://` deep link the server-hosted landing page fires. electron-builder
+# turns this into the macOS bundle's CFBundleURLTypes, the Linux .desktop file's
+# `MimeType=x-scheme-handler/cinna`, and the NSIS registry keys on Windows.
+# A `.deb` registers the handler on install; an AppImage only does so with
+# AppImageLauncher present, which is why the landing page keeps a
+# paste-the-URL fallback.
+protocols:
+  - name: Cinna Desktop
+    schemes:
+      - cinna
 win:
   executableName: cinna-desktop
 nsis:
