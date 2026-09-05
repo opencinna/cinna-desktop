@@ -18,6 +18,17 @@ npm run build    # Production build
 
 Do NOT use bare `npx tsc --noEmit` — it hangs silently in this project.
 
+## Agents
+
+Four specialists live in `.claude/agents/`. Each is worth delegating to because it does something the main thread does *worse*, not merely something it could offload:
+
+- `cinna-desktop-code-reviewer` — reads the diff cold and rules on it. Run it before committing anything that crosses the main/renderer boundary, runs work concurrently, or touches first run. Its independence is the point: it has not been persuaded by the reasoning that produced the code.
+- `cinna-desktop-feature-documenter` — updates the layered docs from the diff. It documents what the code says, not what a summary claims, which is how the two are kept from drifting.
+- `cinna-desktop-release` — drives `docs/development/distribution/release.md`, stopping for a human before every irreversible step.
+- `e2e-test-writer` — Playwright specs against the built app (`/cinna-desktop.e2e.write <scenario>`).
+
+Implementation stays in the main thread: it holds the context, and the round trip of briefing a separate developer agent costs more than it saves.
+
 ## Architecture
 
 See `docs/README.md` for the project index, glossary, and domain map. Feature docs live in `docs/{domain}/{feature}/` following the layered documentation structure (see `.claude/commands/cinna-core.feature.doc.md`).
