@@ -362,6 +362,18 @@ async function readAccountStatus(
 }
 
 async function runReconcile(userId: string, force: boolean): Promise<LocalDevState> {
+  // Whether Repair should reinstall the toolchain, decided *before* the first
+  // `setState` overwrites the reason we are here.
+  //
+  // Repair is one button for every failure, and reinstalling uv, a Python and
+  // the cinna-cli dependency tree takes minutes. Doing that because an account
+  // token expired overnight would turn a two-second fix into a coffee break, so
+  // the heavy path is reserved for the failure that is actually about the
+  // tools. Everything else Repair does — look the server up again, re-check the
+  // token, re-read the workspace — happens either way.
+  const reinstallToolchain =
+    force && state.phase === 'attention' && state.reason === 'toolchain'
+
   const user = userRepo.get(userId)
   if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) {
     // Not an error: a local profile simply has no Cinna server to develop
@@ -422,7 +434,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   let env: NodeJS.ProcessEnv
   try {
     setState({ phase: 'installing', step: 'Checking the local development toolchain…' })
-    const result = force
+    const result = reinstallToolchain
       ? await toolchain.repair(pins, (step, percent) =>
           setState({ phase: 'installing', step, percent })
         )
@@ -447,11 +459,13 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   const cinnaBin = toolchain.paths(pins).cinnaBin
   const workspacePath = workspacePathFor(userId, host)
 
-  // The `Cloud/` parent, not the workspace: cinna-cli creates and populates the
-  // workspace directory, and creating it here first would only teach `account
-  // setup` that something is already there.
+  // Only the `Cloud/` parent. cinna-cli creates the workspace directory itself
+  // and refuses one that already holds a `.cinna/account.json`, so the split is
+  // "the app owns the shape of the agents home, cinna-cli owns the workspace".
+  // `ensureHome` does not make `Cloud/` — it is created on demand, here, the
+  // first time a server needs one.
   try {
-    await mkdir(join(workspacePath, '..'), { recursive: true })
+    await mkdir(dirname(workspacePath), { recursive: true })
   } catch (err) {
     setState({
       phase: 'attention',
