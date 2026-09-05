@@ -5,7 +5,7 @@ import type { LocalDevState } from '../../shared/localDevState'
 import { ipcHandle } from './_wrap'
 
 /**
- * Local development: state in, four verbs out.
+ * Local development: one read, and six verbs that all end in a state.
  *
  * Every verb resolves the **active** profile itself rather than taking a
  * `userId` from the renderer. The reconciler mints account setup tokens with
@@ -19,6 +19,15 @@ import { ipcHandle } from './_wrap'
  * of these is something the UI renders rather than something it catches.
  */
 export function registerLocalDevHandlers(): void {
+  /**
+   * The one channel here not behind `requireActivated()`, deliberately.
+   *
+   * It is read from a mount effect that runs during onboarding — before any
+   * account exists — and what it returns then is `{ phase: 'idle' }`, a
+   * process-global constant. Gating it would trade nothing for a first-run
+   * screen that has to handle a rejection to learn there is nothing to show.
+   * Every channel that *acts* is gated.
+   */
   ipcHandle('localdev:get-state', async (): Promise<LocalDevState> => localDevService.getState())
 
   ipcHandle('localdev:consent', async (_event, host: string, accepted: boolean) => {

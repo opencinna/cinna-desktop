@@ -38,7 +38,7 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 | `consent` | Waiting on the user, per host. Nothing downloaded, nothing written outside `userData` |
 | `declined` | Asked, and the answer was no. Remembered |
 | `installing` | Working. `step` is user-visible text straight from the installer or cinna-cli; `percent` is a coarse hint, not a byte count |
-| `ready` | Carries `workspacePath`, `cliVersion` and `cinnaBinPath` |
+| `ready` | Carries `workspacePath`, `cliVersion`, `cinnaBinPath`, and the `protocol` the installed cinna-cli turned out to support |
 | `attention` | Broken in a way the reconciler can be asked to fix, with a `reason` and a shown `detail` |
 
 **Six phases, not four.** The original design named `unsupported`, `installing`, `ready` and `attention`. `idle` and `declined` were added because each is a distinction the UI cannot make without them:
@@ -183,6 +183,22 @@ The desktop installs and orchestrates. cinna-cli owns setup, the token exchange,
 | killed | the run overstayed its timeout | `attention/network` |
 
 A run that exits non-zero is an **outcome, not a rejection**: `runCinnaCli` never rejects, because a rejection would drop the exit code that says which outcome it is.
+
+### The desktop asks the cinna-cli it was given what it can do
+
+The desktop does not choose the cinna-cli version — the server does, through `local_dev.cinna_cli_version` — so it can legitimately be handed one older than the surface this app prefers. That is not hypothetical: cinna-cli **0.3.0**, the version a real cinna-core pins today, has no `--json`, no `--no-input` and no `cinna account set-token`, and passing it those flags is a usage error that fails before the command does any work.
+
+So before the first real invocation the desktop runs `--help` and reads what is there. `--help` and not a trial run, because 0.3.0 answers `1` to an unknown option, a missing workspace and a network failure alike — an exit code cannot tell "that flag does not exist" from "that would have worked".
+
+Two surfaces result, and `ready` says which one it settled on:
+
+| | `json` | `legacy` |
+|---|---|---|
+| Progress | a step per stage, from cinna-cli's own output | one step |
+| Account token state | read from `cinna account status` | not visible; the desktop learns only that cinna-cli could read the workspace |
+| An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
+
+Everything else works identically, and a `legacy` install really does create a real workspace. This is reported rather than hidden: Settings shows the one sentence about what the older cinna-cli cannot do, next to the version. A working badge that quietly could not refresh a token would be the worse failure.
 
 ### Toolchain failures are not all "try again"
 

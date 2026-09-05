@@ -67,7 +67,7 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 - **Keychain**: the fixture passes `--use-mock-keychain`; do not remove it. Without it `safeStorage` fails under a sandboxed `HOME`.
 - **`uv`, `opencode` on PATH inside the app** come from the sandbox's rc files the fixture writes; the test process's `PATH` is what the app sees.
 - **The welcome step already says "Connect to a Cinna instance…"**, so a "no confirm panel" assertion must use the panel's own exact strings (`Connect to <host>?`, `A link asked Cinna to connect to this Cinna server. Only continue if you recognise it.`), not `/^Connect to /`.
-- **A Cinna account cannot be arranged**: `auth.register({ accountType: 'cinna' })` runs a browser OAuth round trip against a real instance. Everything gated on `user.type === 'cinna_user'` (the local-dev reconciler past `idle`, sync, account config) is `test.fixme` territory for an ordinary spec — the answer is a real instance supplied out of band, never a product-side test hook.
+- **A Cinna account cannot be arranged in an ordinary spec**: `auth.register({ accountType: 'cinna' })` runs a browser OAuth round trip against a real instance, so everything gated on `user.type === 'cinna_user'` (the local-dev reconciler past `idle`, sync, account config) is out of reach. The answer is a real instance supplied out of band — `make e2e-integration` and `cinna-integration.spec.ts`, which stands in for the browser's *approve* click over the API — never a product-side test hook.
 - **Live specs**: `test.beforeEach(() => requireLiveKey())`, one model turn, `test.setTimeout` generously, a question whose expected answer is **not** in the prompt text (`12 times 12` → `144`).
 
 ## Debugging a failure

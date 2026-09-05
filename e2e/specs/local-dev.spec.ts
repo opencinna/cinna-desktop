@@ -85,19 +85,15 @@ test('a declined local-dev consent is remembered across a restart', async ({ cin
   expect(await cinna.page.evaluate(() => window.api.localDev.getConsent())).toEqual({})
 })
 
-test('the reconciler brings a Cinna profile to ready', () => {
-  test.fixme(
-    true,
-    'Needs a real cinna-core instance and an activated Cinna profile holding live OAuth tokens. ' +
-      'The suite can only create local profiles: `auth.register({ accountType: "cinna" })` runs the ' +
-      'browser OAuth flow, and `runReconcile` returns `{ phase: "idle" }` for anything whose ' +
-      '`user.type !== "cinna_user"`. With such a profile the test would assert, first, ' +
-      'expect(await page.evaluate(() => window.api.localDev.getState())).toEqual({ phase: "consent", host: "<instance host>" }) ' +
-      'once `/.well-known/cinna-desktop` has been read and its `local_dev` block found; then, after ' +
-      'window.api.localDev.consent("<instance host>", true) — which mints a setup token at ' +
-      'POST /api/v1/cli/account/setup-tokens and runs `cinna account status --json` — ' +
-      'expect(state).toMatchObject({ phase: "ready", workspacePath: "<AgentsHome>/Cloud/<instance host>" }) ' +
-      'and expect(page.getByLabel("Local development needs attention")).toHaveCount(0). ' +
-      'Nothing short of a server (or a product-side test hook, which is not worth adding) reaches it.'
-  )
-})
+/*
+ * "The reconciler brings a Cinna profile to ready" was a `test.fixme` here,
+ * because it needs a real cinna-core and a profile holding live OAuth tokens
+ * and this file must run on a machine with neither.
+ *
+ * It is now `cinna-integration.spec.ts`, run by `make e2e-integration` against
+ * a server named in `.env` — it asserts exactly what the fixme described
+ * (`consent` for the instance host, then `ready` at `<AgentsHome>/Cloud/<host>`
+ * with a real account token on disk) and rather more besides. The note stays
+ * here so the next person reading this file finds the coverage rather than
+ * concluding there is none.
+ */

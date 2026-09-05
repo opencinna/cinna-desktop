@@ -20,10 +20,11 @@ Three trees are discussed and they look alike, so they are written differently t
 - `src/shared/localTools.ts` — `LocalToolId` gains `'cinna'`; `LocalToolSource` gains `'managed'`
 
 ### Main process — `src/main/localdev/`
-- `localDevService.ts` — the reconciler. `localDevService.{getState, reconcile, setConsent, resetConsent, consent, openWorkspace, addToPath, clear}`, plus module-private `runReconcile`, `mintSetupCommand`, `createWorkspace`, `refreshAccountToken`, `readAccountStatus`, `readConsent`, `writeConsent`, `workspacePathFor`, `hostDirName`, `accountConfigPath`, `fromToolchainError`, `fromCliOutcome`, `setState`
+- `localDevService.ts` — the reconciler. `localDevService.{getState, reconcile, setConsent, resetConsent, consent, openWorkspace, addToPath, clear}`, plus `hostDirName`, `fromToolchainError` and `fromCliOutcome` — exported only so the failure→state mapping can be unit-tested, since the reconciler itself needs a database, a window and a server — and module-private `runReconcile`, `mintSetupCommand`, `createWorkspace`, `refreshAccountToken`, `readAccountStatus`, `protocolFlags`, `readConsent`, `writeConsent`, `workspacePathFor`, `accountConfigPath`, `setState`
 - `toolchain.ts` — `PINNED_UV_VERSION`, `UV_ASSETS`, `MUTAGEN_ASSETS`, `uvAssetUrl()`, `mutagenAssetUrl()`, `createToolchain(deps)`, `toolchain` (the process-wide instance), `realToolchainDeps()`, `localDevRootDir()`, `runCapture()`, `parseVersion()`; types `ToolchainPins`, `ToolchainPaths`, `ToolchainProgress`, `ToolchainResult`, `ToolchainDeps`, `Toolchain`
 - `cliRunner.ts` — `runCinnaCli(opts)`; types `CliRunOptions`, `CliRunOutcome`, `CliProgressLine`, `CliResultLine`
-- `toolchain.test.ts`, `cliRunner.test.ts`
+- `cliCapabilities.ts` — `probeCliCapabilities(bin, version, env)`, `clearCliCapabilityCache()`; type `CliCapabilities`
+- `toolchain.test.ts`, `cliRunner.test.ts`, `cliCapabilities.test.ts`, `localDevService.test.ts`
 
 ### Main process — `src/main/managed/`
 - `managedAsset.ts` — the staged, verified, atomically published install, extracted from `engine/binaryResolver.ts` and shared with it. `installPinnedAsset()`, `downloadToFile()`, `extractArchive()`, `sha256File()`, `findNamedFile()`, `sweepStaging()`, `isFile()`, `ManagedAssetError`, `ManagedAssetErrorCode`, `PinnedAsset`, `InstallPinnedAssetOptions`
@@ -133,6 +134,14 @@ cinna-cli invocations, all with `--no-input --json`:
 
 `spawn` with `stdio: ['ignore', 'pipe', 'pipe']` and **no shell**. Line-buffered stdout; the trailing partial buffer is consumed in `finish`, because the final `{"result":…}` line arrives that way when the process exits promptly after writing it. A line with a string `result` becomes `outcome.result`; a line with `status` + `message` goes to `onProgress`; anything else is dropped, and non-JSON noise is logged up to `MAX_NOISE_LINES` (20). stderr is captured to 8 KB and trimmed to 2000 chars **for a log line, never for a decision**. Default ceiling `DEFAULT_TIMEOUT_MS` 10 min; a timeout `SIGKILL`s and resolves with `timedOut: true` and `exitCode: null`. A spawn that throws resolves with `code: 'spawn_failed'`. **It never rejects.**
 
+### `src/main/localdev/cliCapabilities.ts`
+
+`probeCliCapabilities(bin, version, env)` → `{ json, accountSetToken }`, cached per **(binary, version)** — the path `<localdev>/bin/cinna` is rewritten in place by an upgrade, so caching on the path alone would hand a new binary the old answer. `clearCliCapabilityCache()` is called on a forced reconcile, which may install a different version.
+
+It reads `cinna account setup --help` for `--json` and `cinna account --help` for a `set-token` line (anchored `/^\s*set-token\b/m`, so prose mentioning the command does not match). A probe that cannot run at all answers the *smaller* surface: a reduced install still works, whereas assuming `--json` on a cinna-cli without it fails every command before it starts.
+
+`protocolFlags(caps)` in `localDevService` is the single place that decides whether `--no-input --json` is appended. In `legacy` mode `readAccountStatus` returns no `{"result":…}` line, so the token-state and context-package branches are simply not taken, and `refreshAccountToken` returns `attention/token_expired` with copy naming the cause rather than running a command that does not exist.
+
 ### `src/main/managed/managedAsset.ts`
 
 `installPinnedAsset` sequence: `isInstalled()` short-circuit → `.staging-<pid>-<now>/` → `download(url, archive)` → `sha256File` compared against the pin (**mismatch publishes nothing and retries nothing**) → `extract` → `locate(unpacked)` → `chmod 0o755` on the located file (non-Windows) → `rename` of **`dirname(found)`** into `installDir` — the directory holding the located file, not the staging tree, so the final layout is the same however the archive nested it and `installDir` never contains the archive it came from — tolerated on failure **only when `isInstalled()` is now true** (another caller published first, having passed the same check) → `rm(staging)` in a `finally`. Ceilings: `DOWNLOAD_TIMEOUT_MS` 10 min, `EXTRACT_TIMEOUT_MS` 5 min, `MAX_ARCHIVE_BYTES` 200 MB.
@@ -162,6 +171,7 @@ Both StrictMode-sensitive subscriptions (`localDev.store`, `connectIntent.store`
 | `UV_ASSETS` | `toolchain.ts` | `${platform}-${arch}` → `{file, sha256}`. Four rows: `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64` |
 | `MUTAGEN_ASSETS` | `toolchain.ts` | version → platform → `{file, sha256}`. Today `'0.18.1'`. **Adding a version means adding a whole platform row**, not one entry |
 | `local_dev.cinna_cli_version` | server discovery | The cinna-cli version `uv tool install` pins to |
+| `CINNA_CLI_SOURCE` | process environment | An absolute path to a local cinna-cli checkout, installed `--editable` **instead of** the pinned release. Set only by the cross-repo E2E run; a relative value is refused and ignored. While set the version pin does not apply, the install is never stamped (a working tree changes underneath), and every install logs a warning saying so |
 | `local_dev.mutagen_version` | server discovery | Must exist in `MUTAGEN_ASSETS` or the answer is "update Cinna Desktop" |
 | `local_dev.setup_token_endpoint` | server discovery | Absolute or path-relative; empty falls back to `/api/v1/cli/account/setup-tokens` |
 
