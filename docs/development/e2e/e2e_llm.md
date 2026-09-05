@@ -19,7 +19,7 @@ Filter noisy output: `2>&1 | grep -v "Electron Security\|Debugger\|nodejs.org"`.
 
 - Import `test`, `expect` from `../fixtures/app` — never from `@playwright/test` directly (the `cinna` fixture is what launches the app).
 - One `test()` per scenario, titled with the manual-plan ID when there is one: `test('C5 blocked really means blocked', …)`. Multi-step scenarios use `test.step`.
-- The `cinna` fixture (`e2e/fixtures/app.ts`): `cinna.page` (main window), `cinna.electronApp`, `cinna.sandbox` (`root`, `home`, `userData`), `relaunch()`, `stubDirectoryPicker(dir)`, `skipOnboarding()`. Option: `test.use({ engine: true })` when a folder agent must *answer*.
+- The `cinna` fixture (`e2e/fixtures/app.ts`): `cinna.page` (main window), `cinna.electronApp`, `cinna.sandbox` (`root`, `home`, `userData`), `relaunch()`, `stubDirectoryPicker(dir)`, `skipOnboarding()`. Options: `test.use({ engine: true })` when a folder agent must *answer*; `test.use({ launchArgs: [...] })` for argv the app reads at startup (the `cinna://` deep link). `relaunch(extraArgs?)` starts *without* `launchArgs` unless given its own — a restart is not a second link click.
 - Arrange helpers: `e2e/fixtures/seed.ts` (`addAgentRoot`, `createFolderAgent`), `e2e/fixtures/live.ts` (`requireLiveKey`, `OPENAI_API_KEY`), `seedOpenAiDefaultMode` and `sendFirstMessage` in `live.spec.ts`.
 - Sandbox is deleted after a pass and kept after a failure (path in the test's annotations).
 
@@ -46,10 +46,12 @@ Filter noisy output: `2>&1 | grep -v "Electron Security\|Debugger\|nodejs.org"`.
 | Provider + default mode | see `seedOpenAiDefaultMode` — model must come from `providers.listModels()`, not from the live probe |
 | A log entry with a payload | `logger.log({ level, scope, message, data })` — goes through redaction and the live broadcast |
 | Engine | `engine.start()` → `{ status, binarySource, error }` · `engine.skips()` |
+| A `cinna://` deep link | `test.use({ launchArgs: ['--cinna-connect-intent=cinna://connect?server=https://host'] })` — the test-only argv form (`src/shared/connectIntent.ts`); `open-url` cannot be raised from Playwright. Inspect/clear the buffer with `connect.getPending()` / `connect.consume()`. Never click **Connect**: it opens a real browser |
+| Local development state | `localDev.getState()` (`{ phase: 'idle' }` for a non-Cinna profile) · `localDev.consent(host, false)` / `getConsent()` / `resetConsent(host)` — persisted in the `localDevConsent` app setting, so they survive `relaunch()` |
 
 ## Known accessible names
 
-Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `Skip for now`, `API key…`, `OpenAI…`, `Test`, `Save & start` · composer: textbox by **placeholder** `Type a message...` (no accessible name), send with `press('Enter')` (the button is unlabelled), `[+]` = `Add to chat` · popups: listbox `Agents and MCP servers`, listbox `Example prompts` · footer `Interface` → `App logs (⌘`)`, `Agent status` · logger: heading `App Logs`, `Clear logs`, `Expand data`, filter by placeholder `Filter by scope, message, source...`, rows `[data-log-index]` · jobs: row = title text (a div, not a button), marker `getByLabel('Incomplete setup')` / `getByLabel('Needs setup')`, `Run this job` (row, on hover), `Run` (detail), `Edit job`, `Save`, `Add` (agent picker), dialog `Agents & Connectors`, `Set up` · settings heading = section title (`Local Agents`).
+Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `Skip for now`, `API key…`, `OpenAI…`, `Test`, `Save & start` · composer: textbox by **placeholder** `Type a message...` (no accessible name), send with `press('Enter')` (the button is unlabelled), `[+]` = `Add to chat` · popups: listbox `Agents and MCP servers`, listbox `Example prompts` · footer `Interface` → `App logs (⌘`)`, `Agent status` · logger: heading `App Logs`, `Clear logs`, `Expand data`, filter by placeholder `Filter by scope, message, source...`, rows `[data-log-index]` · jobs: row = title text (a div, not a button), marker `getByLabel('Incomplete setup')` / `getByLabel('Needs setup')`, `Run this job` (row, on hover), `Run` (detail), `Edit job`, `Save`, `Add` (agent picker), dialog `Agents & Connectors`, `Set up` · settings heading = section title (`Local Agents`, `Local Development`); Settings itself is reached through the footer user menu, whose trigger is named by the profile's **generated** display name — read it with `auth.getCurrent()`, never hardcode it — then `Settings` · connect deep link: `Connect to <host>?` (a div, not a heading), the `Server` label above the full origin, buttons `Not now` / `Connect` / `Switch to it`, modal dialog `Connect to a Cinna server` · local dev footer: `Setting up local development` / `Local development needs attention` (both absent in every other phase).
 
 ## Gotchas that have already cost time
 
@@ -62,6 +64,8 @@ Sidebar tabs `Chats` `Jobs` `Notes` `Agents` (use `exact: true`) · onboarding `
 - **`getByText` matches concatenated text content**, and `getByRole('alert')` may match more than one banner. Scope to a container.
 - **Keychain**: the fixture passes `--use-mock-keychain`; do not remove it. Without it `safeStorage` fails under a sandboxed `HOME`.
 - **`uv`, `opencode` on PATH inside the app** come from the sandbox's rc files the fixture writes; the test process's `PATH` is what the app sees.
+- **The welcome step already says "Connect to a Cinna instance…"**, so a "no confirm panel" assertion must use the panel's own exact strings (`Connect to <host>?`, `A link asked Cinna to connect to this Cinna server. Only continue if you recognise it.`), not `/^Connect to /`.
+- **A Cinna account cannot be arranged**: `auth.register({ accountType: 'cinna' })` runs a browser OAuth round trip against a real instance. Everything gated on `user.type === 'cinna_user'` (the local-dev reconciler past `idle`, sync, account config) is `test.fixme` territory for an ordinary spec — the answer is a real instance supplied out of band, never a product-side test hook.
 - **Live specs**: `test.beforeEach(() => requireLiveKey())`, one model turn, `test.setTimeout` generously, a question whose expected answer is **not** in the prompt text (`12 times 12` → `144`).
 
 ## Debugging a failure

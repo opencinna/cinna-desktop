@@ -34,8 +34,15 @@ export interface CinnaApp {
   readonly electronApp: ElectronApplication
   /** The main window (`index.html`), never the tray panel. */
   readonly page: Page
-  /** Quit and start again in the same sandbox, as a user restarting the app. */
-  relaunch(): Promise<void>
+  /**
+   * Quit and start again in the same sandbox, as a user restarting the app.
+   *
+   * Deliberately does **not** repeat `launchArgs`: a restart is the user
+   * reopening the app, and a one-shot launch argument (a `cinna://` deep link
+   * the OS appended) is not part of that. Pass `extraArgs` to repeat one on
+   * purpose.
+   */
+  relaunch(extraArgs?: readonly string[]): Promise<void>
   /** Make the next OS directory picker return `dir` and any confirm box say yes. */
   stubDirectoryPicker(dir: string): Promise<void>
   /** Get past the first-run screen the way a user who has no key yet would. */
@@ -70,7 +77,20 @@ function launchEnv(sandbox: Sandbox): Record<string, string> {
   return env
 }
 
-export async function launch(sandbox: Sandbox): Promise<{ electronApp: ElectronApplication; page: Page }> {
+/**
+ * Launch the built app in `sandbox`, with `extraArgs` appended to argv.
+ *
+ * `extraArgs` is how a spec drives something the app only learns from its
+ * command line — today that is `--cinna-connect-intent=cinna://connect?server=…`,
+ * the test-only form of the `cinna://` deep link (`src/shared/connectIntent.ts`):
+ * a real `open-url` cannot be raised from Playwright, and the app never
+ * registers the scheme when `CINNA_USER_DATA` is set, so this is the only way
+ * into that funnel. Anything else the app reads from argv goes here too.
+ */
+export async function launch(
+  sandbox: Sandbox,
+  extraArgs: readonly string[] = []
+): Promise<{ electronApp: ElectronApplication; page: Page }> {
   const electronApp = await electron.launch({
     executablePath: electronPath as unknown as string,
     // The repo root, not the entry file: `app.getAppPath()` follows the argument,
@@ -79,7 +99,7 @@ export async function launch(sandbox: Sandbox): Promise<{ electronApp: ElectronA
     // the login keychain under it and `safeStorage.encryptString` fails with
     // "A keychain cannot be found to store …". Chromium's mock keychain keeps
     // the real safeStorage code path and never touches the user's keychain.
-    args: [repoRoot, '--use-mock-keychain'],
+    args: [repoRoot, '--use-mock-keychain', ...extraArgs],
     cwd: repoRoot,
     env: launchEnv(sandbox),
     timeout: 60_000
@@ -99,14 +119,21 @@ export interface CinnaOptions {
    * makes a folder agent *answer* needs it. `test.use({ engine: true })`.
    */
   engine: boolean
+  /**
+   * Extra argv for the app's *first* launch, e.g.
+   * `test.use({ launchArgs: ['--cinna-connect-intent=cinna://connect?server=https://example.com'] })`.
+   * `relaunch()` starts without them unless it is given its own.
+   */
+  launchArgs: readonly string[]
 }
 
 export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   engine: [false, { option: true }],
-  cinna: async ({ engine }, use, testInfo) => {
+  launchArgs: [[], { option: true }],
+  cinna: async ({ engine, launchArgs }, use, testInfo) => {
     const sandbox = makeSandbox()
     if (engine) installCachedEngine(sandbox.userData)
-    let current = await launch(sandbox)
+    let current = await launch(sandbox, launchArgs)
 
     const cinna: CinnaApp = {
       sandbox,
@@ -116,9 +143,9 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       get page() {
         return current.page
       },
-      async relaunch() {
+      async relaunch(extraArgs: readonly string[] = []) {
         await current.electronApp.close()
-        current = await launch(sandbox)
+        current = await launch(sandbox, extraArgs)
       },
       async stubDirectoryPicker(dir: string) {
         await current.electronApp.evaluate(({ dialog }, picked) => {
