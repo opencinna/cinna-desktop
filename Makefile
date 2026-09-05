@@ -6,7 +6,7 @@
 
 PW := npx playwright test -c e2e/playwright.config.ts
 
-.PHONY: help test typecheck build e2e e2e-only e2e-one e2e-live e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine
+.PHONY: help test typecheck build e2e e2e-only e2e-one e2e-live e2e-integration e2e-offline e2e-engine e2e-ui e2e-trace e2e-clean e2e-clean-engine
 
 help: ## List targets
 	@grep -E '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -33,6 +33,13 @@ e2e-one: ## One spec file, optionally one test: make e2e-one SPEC=blocked-job GR
 e2e-live: ## Only the specs that talk to a real model (needs OPENAI_API_KEY in .env)
 	@grep -qE '^OPENAI_API_KEY=.+' .env 2>/dev/null || (echo "OPENAI_API_KEY is empty in .env (copy .env.example)"; exit 2)
 	$(PW) live
+
+e2e-integration: ## Cross-repo: desktop + a running cinna-core + cinna-cli (needs CINNA_E2E_* in .env)
+	@grep -qE '^CINNA_E2E_SERVER_URL=.+' .env 2>/dev/null || (echo "CINNA_E2E_SERVER_URL is empty in .env (copy .env.example)"; exit 2)
+	@grep -qE '^CINNA_E2E_EMAIL=.+' .env 2>/dev/null || (echo "CINNA_E2E_EMAIL is empty in .env"; exit 2)
+	@grep -qE '^CINNA_E2E_PASSWORD=.+' .env 2>/dev/null || (echo "CINNA_E2E_PASSWORD is empty in .env"; exit 2)
+	npx electron-vite build
+	CINNA_E2E_INTEGRATION=1 $(PW) cinna-integration
 
 e2e-offline: ## Everything that needs no network: no key, no engine download
 	OPENAI_API_KEY= CINNA_E2E_SKIP_ENGINE=1 $(PW)
