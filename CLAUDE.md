@@ -20,14 +20,14 @@ Do NOT use bare `npx tsc --noEmit` — it hangs silently in this project.
 
 ## Agents
 
-Four specialists live in `.claude/agents/`. Each is worth delegating to because it does something the main thread does *worse*, not merely something it could offload:
+`/cinna-desktop.feature <request>` runs the whole loop — build, review, fix, document, commit. **The steps below are the default with or without it. Do them unprompted; the user should not have to ask for a review.**
 
-- `cinna-desktop-code-reviewer` — reads the diff cold and rules on it. Run it before committing anything that crosses the main/renderer boundary, runs work concurrently, or touches first run. Its independence is the point: it has not been persuaded by the reasoning that produced the code.
-- `cinna-desktop-feature-documenter` — updates the layered docs from the diff. It documents what the code says, not what a summary claims, which is how the two are kept from drifting.
-- `cinna-desktop-release` — drives `docs/development/distribution/release.md`, stopping for a human before every irreversible step.
-- `e2e-test-writer` — Playwright specs against the built app (`/cinna-desktop.e2e.write <scenario>`).
+- **Before committing** anything that crosses the main/renderer boundary, runs work concurrently, touches first run, or changes an IPC payload → launch `cinna-desktop-code-reviewer`. Verify each finding yourself before acting on it, then re-review the delta if the fixes were substantial. This is where the expensive bugs are caught: a change can pass its tests, look right in a screenshot, and still never reach the renderer.
+- **Once the code settles** → launch `cinna-desktop-feature-documenter`. It works from the diff, so when it contradicts your summary of your own change, it is usually right.
+- **When a user-visible flow changes** → `/cinna-desktop.e2e.write <scenario>` (the `e2e-test-writer` agent).
+- **Cutting a release** → `cinna-desktop-release`, which drives `docs/development/distribution/release.md` and stops for a human before every irreversible step.
 
-Implementation stays in the main thread: it holds the context, and the round trip of briefing a separate developer agent costs more than it saves.
+Implementation stays in the main thread — it holds the context, and briefing a separate developer agent costs more than it saves. Delegate for **independence** (judging or describing your own work) or **context economy** (a search that would otherwise flood you); if a delegation gives neither, do it yourself.
 
 ## Architecture
 
