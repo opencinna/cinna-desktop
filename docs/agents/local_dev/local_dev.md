@@ -254,7 +254,9 @@ localDevService.reconcile(userId, force)      ← single-flight, idempotent
 
 Carried honestly rather than implied as passing.
 
-- **There is no `localDevService` test.** The toolchain, the CLI runner, the managed-asset installer and the Settings section each have one; the reconciler that sequences them — including the 403 role branch, the token-refresh branch and the single-flight collapse — is covered only through those parts
-- **The install sequence has never run end to end against real assets.** `managedAsset` is tested with real tar/zip archives and real digests, but the pinned uv and Mutagen URLs have not been fetched by the app itself in a test
+- **The reconciler's *sequence* is not unit-tested.** `localDevService.test.ts` covers the part that is a contract — how a toolchain code and a cinna-cli exit code become what the user is told — but the ordering itself, the 403 role branch, the token-refresh branch and the single-flight collapse are exercised only through `cinna-integration.spec.ts` and through their parts. A reconciler test needs a database, a window and a server, which is why it was left to the live run
+- **Three branches have never executed anywhere.** The `unsupported/role` 403 (the account used for the live run is an admin), the expired-token refresh (no expired token to hand), and `addToPath` (no test at all)
 - **Windows is absent from both pin tables**, because the desktop does not build for it. A musl-only Linux distribution is the same known gap the engine has
 - **The context-package refresh is fire-and-forget.** A repeated failure is logged and never surfaced anywhere the user can see
+- **The OS `open-url` hook and the packaged scheme registration are untested.** Playwright cannot raise a Launch Services event, so the E2E specs enter the funnel through the test-only argv flag and everything below the hook is real — but that a *packaged* build actually claims `cinna://` has only been asserted by the `protocols:` block in `electron-builder.yml`, never by installing a DMG and clicking a link
+- **`localDevConsent` is installation-global, not per profile.** Two Cinna profiles on the same host share one consent answer. The host is the key because the toolchain and the workspace are per host too, but a second profile on the same instance inherits the first's decision without being asked
