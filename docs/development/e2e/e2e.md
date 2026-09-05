@@ -18,13 +18,27 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 ### Running the suite (`make help` lists everything)
 1. `make e2e` builds `out/` and runs every spec, one Electron per worker, one worker; `make e2e-only` skips the build
 2. `make e2e-one SPEC=blocked-job GREP="C5"` runs one spec or one test; `make e2e-live` runs only the model-backed specs; `make e2e-offline` runs with no key and no engine download
-3. `make e2e-engine` fills the per-machine engine cache once; `make e2e-ui` and `make e2e-trace TRACE=…` step through runs and failures
-4. A failed test keeps its sandbox (path in the test annotations) plus a trace, screenshots and the aria snapshot at failure under `e2e/test-results/`
-5. The suite is a manual, user-decided step — it is not wired into `npm test`. CI runs it on `macos-latest` (`.github/workflows/e2e.yml`)
+3. `make e2e-integration` runs the one cross-repo spec against a **running cinna-core**, with the real cinna-cli it installs itself — see [Cross-repo integration runs](#cross-repo-integration-runs)
+4. `make e2e-engine` fills the per-machine engine cache once; `make e2e-ui` and `make e2e-trace TRACE=…` step through runs and failures
+5. A failed test keeps its sandbox (path in the test annotations) plus a trace, screenshots and the aria snapshot at failure under `e2e/test-results/`
+6. The suite is a manual, user-decided step — it is not wired into `npm test`. CI runs it on `macos-latest` (`.github/workflows/e2e.yml`)
 
 ### Adding a scenario
 1. Ask for it: `/cinna-desktop.e2e.write <the user scenario>` launches the `e2e-test-writer` agent (`.claude/agents/e2e-test-writer.md`), which follows [Writing E2E Tests](e2e_llm.md)
 2. Or write it by hand from that same guide: exact strings first, arrange over IPC, act through the UI, pass twice, run the whole suite
+
+### Cross-repo integration runs
+
+`make e2e-integration` is the only thing in this repository that talks to a running server. It exists because one-click onboarding is a contract between three programs — cinna-desktop, cinna-core and cinna-cli — and a suite that fakes two of them proves nothing about the contract itself. `cinna-integration.spec.ts` drives the whole path: a `cinna://connect` link, the real PKCE loopback OAuth flow, the toolchain really downloaded and digest-verified, cinna-cli really installed from PyPI at the version the *server* pinned, and `cinna account setup` really creating an account workspace from a really-minted single-use token.
+
+Configure it in `.env` (see `.env.example`): `CINNA_E2E_SERVER_URL` is the **backend** origin — the one serving `/.well-known/cinna-desktop`, not the SPA dev server — plus `CINNA_E2E_EMAIL` and `CINNA_E2E_PASSWORD` for an account on that instance. Without all three the spec skips.
+
+Two things are deliberate and worth knowing before it puzzles someone:
+
+- **It is excluded from every other run.** `playwright.config.ts` ignores the file unless `CINNA_E2E_INTEGRATION=1`, which only the make target sets. Otherwise a developer who filled in `.env` once would get a multi-minute toolchain install as part of every `make e2e`.
+- **One step is substituted, and only one.** The suite cannot click "Approve" in a browser window, so `approveDesktopAuth` in `e2e/fixtures/liveCinna.ts` performs exactly that — sign in, read the consent nonce cinna-core minted, approve it, request the loopback URL. Everything either side of it is the real flow. `shell.openExternal` is stubbed in the main process for the same reason: an unstubbed run would open a browser on the machine running the tests.
+
+`preflight()` runs before the app is touched, so a stack that cannot serve the run is a **skip naming the reason** rather than a failure four steps in. The reason it most often names is not a desktop problem at all: cinna-core builds its discovery endpoints from `BACKEND_BASE_URL`, so an instance answering perfectly well on `http://localhost:8000` can advertise an `authorization_endpoint` on a tunnel that is down. Point `BACKEND_BASE_URL` at the same origin as `CINNA_E2E_SERVER_URL` for local integration runs.
 
 ### Encoding a manual test
 1. One `test()` per `###` item of the manual document, named with the ID (`A1 …`) so the two stay cross-referenced

@@ -10,6 +10,7 @@ Concise rules for adding a Playwright spec under `e2e/` that drives the built Ci
 | `make e2e-one SPEC=<file stem> GREP="<title fragment>"` | One spec / one test against the existing `out/` |
 | `make e2e-only` | Every spec, no rebuild. **Rebuild after any `src/` change** — specs run `out/`, not `src/` |
 | `make e2e-live` | Only `live.spec.ts`; needs `OPENAI_API_KEY` in `.env` |
+| `make e2e-integration` | Only `cinna-integration.spec.ts`: a **running cinna-core** plus the real cinna-cli. Needs `CINNA_E2E_SERVER_URL` / `_EMAIL` / `_PASSWORD` in `.env`. Excluded from every other run by `testIgnore` unless `CINNA_E2E_INTEGRATION=1`, because it really installs a toolchain and really creates an account workspace |
 | `make e2e-ui` / `make e2e-trace TRACE=…` | Step through a run / open a failure's trace |
 | `npm run typecheck:e2e` | Types for `e2e/**` (includes `window.api` from `src/preload/index.d.ts`) |
 
@@ -21,6 +22,7 @@ Filter noisy output: `2>&1 | grep -v "Electron Security\|Debugger\|nodejs.org"`.
 - One `test()` per scenario, titled with the manual-plan ID when there is one: `test('C5 blocked really means blocked', …)`. Multi-step scenarios use `test.step`.
 - The `cinna` fixture (`e2e/fixtures/app.ts`): `cinna.page` (main window), `cinna.electronApp`, `cinna.sandbox` (`root`, `home`, `userData`), `relaunch()`, `stubDirectoryPicker(dir)`, `skipOnboarding()`. Options: `test.use({ engine: true })` when a folder agent must *answer*; `test.use({ launchArgs: [...] })` for argv the app reads at startup (the `cinna://` deep link). `relaunch(extraArgs?)` starts *without* `launchArgs` unless given its own — a restart is not a second link click.
 - Arrange helpers: `e2e/fixtures/seed.ts` (`addAgentRoot`, `createFolderAgent`), `e2e/fixtures/live.ts` (`requireLiveKey`, `OPENAI_API_KEY`), `seedOpenAiDefaultMode` and `sendFirstMessage` in `live.spec.ts`.
+- Cross-repo helpers: `e2e/fixtures/liveCinna.ts` — `requireLiveCinna()` (skip without `.env`), `preflight()` (checks the instance can serve the run and names what is wrong when it cannot), `approveDesktopAuth()` (does over the API the one thing a human does in a browser: approve the desktop's authorization).
 - Sandbox is deleted after a pass and kept after a failure (path in the test's annotations).
 
 ## Procedure for a new scenario
