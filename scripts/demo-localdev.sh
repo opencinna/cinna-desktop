@@ -8,8 +8,8 @@
 # Everything lives under a sandbox directory: a fresh HOME, so the agents home
 # and the account workspace land there and never in ~/Documents, and a fresh
 # userData, so the toolchain downloads from scratch and the per-component
-# progress bars have something to show. Delete the sandbox to get a cold run
-# again; keep it to land straight in the ready state.
+# progress bars have something to show. `make demo-clean` deletes the sandbox
+# for a cold run again; keep it to land straight in the ready state.
 #
 #   make demo-localdev SERVER=http://localhost:8000
 #
