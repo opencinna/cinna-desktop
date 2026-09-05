@@ -34,22 +34,31 @@
  * establish that what arrives is what was pinned, not that what was pinned is
  * trustworthy. Bumping the version means recomputing all six.
  *
- * A failed verification must leave nothing behind that a later run could
- * mistake for a good install. Everything happens in a staging directory and
- * only a fully downloaded, verified, unpacked tree is renamed into its final
- * name — so the presence of `<engine>/opencode-<version>/opencode` *is* the
+ * The staging, verifying and atomic publishing itself now lives in
+ * `../managed/managedAsset.ts`, because the local-dev toolchain installs uv and
+ * Mutagen the same way and a second copy of that logic is a second place for
+ * the "nothing partial is ever published" invariant to be got wrong. This
+ * module keeps what is genuinely about *the engine*: the pin table, the three
+ * sources and their precedence, and the `--version` probe. The guarantee is
+ * unchanged — the presence of `<engine>/opencode-<version>/opencode` *is* the
  * proof that its bytes were checked.
  */
 
 import { spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, type Dirent } from 'node:fs'
-import { chmod, mkdir, readdir, rename, rm, stat } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
-import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { join } from 'node:path'
 import { app } from 'electron'
 import { createLogger } from '../logger/logger'
+import {
+  downloadToFile,
+  extractArchive,
+  findNamedFile,
+  installPinnedAsset,
+  isFile,
+  ManagedAssetError,
+  sha256File,
+  type ManagedAssetErrorCode,
+  type PinnedAsset
+} from '../managed/managedAsset'
 import { which } from '../shell/env'
 import { PINNED_ENGINE_VERSION, type EngineBinarySource } from '../../shared/engine'
 
@@ -61,25 +70,14 @@ const BINARY_NAME = process.platform === 'win32' ? 'opencode.exe' : 'opencode'
 /** Ceiling on the `--version` probe. A wedged binary must not wedge a start. */
 const VERSION_TIMEOUT_MS = 10_000
 
-/** Ceiling on the whole download. Generous — this is ~50 MB over the internet. */
-const DOWNLOAD_TIMEOUT_MS = 10 * 60_000
-
-/** Ceiling on the unpack. bsdtar on 50 MB is seconds; this only catches a hang. */
-const EXTRACT_TIMEOUT_MS = 5 * 60_000
-
 /**
- * Refuse an archive larger than this. The pinned assets are all under 65 MB;
- * the guard is against a redirect landing somewhere that streams forever, which
- * would otherwise fill the user's disk before the digest was ever checked.
+ * Re-exported so existing callers (and the tests) keep one import site for the
+ * engine's download machinery, even though it is generic now.
  */
-const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024
+export { downloadToFile, extractArchive, sha256File }
 
-export interface EngineAsset {
-  /** Asset file name in the release. */
-  file: string
-  /** SHA-256 of the asset's exact bytes, hex. */
-  sha256: string
-}
+/** The engine's name for {@link PinnedAsset}; kept so callers read naturally. */
+export type EngineAsset = PinnedAsset
 
 /**
  * The pinned release assets, keyed `${process.platform}-${process.arch}`.
@@ -165,74 +163,34 @@ export interface BinaryResolverDeps {
   version: string
 }
 
-export class EngineBinaryError extends Error {
-  readonly code: string
-  constructor(code: string, message: string) {
-    super(message)
-    this.name = 'EngineBinaryError'
-    this.code = code
-  }
-}
-
-async function isFile(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isFile()
-  } catch {
-    return false
-  }
-}
-
-/** SHA-256 of a file's bytes, hex, streamed so a 50 MB archive is not buffered. */
-export function sha256File(path: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = createHash('sha256')
-    const stream = createReadStream(path)
-    stream.on('error', reject)
-    stream.on('data', (chunk) => hash.update(chunk))
-    stream.on('end', () => resolve(hash.digest('hex')))
-  })
-}
+/**
+ * Two failure codes on top of {@link ManagedAssetErrorCode}, both about the
+ * path a user typed into Settings rather than about a download.
+ */
+export type EngineBinaryErrorCode =
+  | ManagedAssetErrorCode
+  | 'configured_missing'
+  | 'configured_unusable'
 
 /**
- * Find the `opencode` executable somewhere under `dir`.
+ * Errors this module raises itself.
  *
- * The macOS and Windows archives hold the binary at the root; the Linux
- * tarballs have historically nested it one level down. Rather than encode
- * either shape, walk a couple of levels and take the first match — and fail
- * loudly if there is none, because an archive that unpacked to something else
- * entirely is exactly the case where guessing would install nonsense.
+ * The install path now throws {@link ManagedAssetError} directly — same `code`
+ * strings, same messages, and `instanceof ManagedAssetError` catches both — so
+ * anything branching on `err.code` is unaffected by the extraction.
  */
-async function findBinary(dir: string, depth = 2): Promise<string | null> {
-  // Explicitly typed rather than inferred from `readdir`: the declaration has a
-  // Buffer overload, and `ReturnType<typeof readdir>` picks *that* one, which
-  // then types every `entry.name` as a Buffer and breaks the string compares
-  // below in a way whose error message points nowhere near the cause.
-  const entries = await readdir(dir, { withFileTypes: true }).catch(
-    (): Dirent<string>[] => []
-  )
-  const dirs: string[] = []
-  for (const entry of entries) {
-    const full = join(dir, entry.name)
-    if (entry.isFile() && entry.name === BINARY_NAME) return full
-    if (entry.isDirectory()) dirs.push(full)
-  }
-  if (depth <= 0) return null
-  for (const sub of dirs) {
-    const found = await findBinary(sub, depth - 1)
-    if (found) return found
-  }
-  return null
-}
+export class EngineBinaryError extends ManagedAssetError<EngineBinaryErrorCode> {}
 
 /**
  * Install the pinned engine into `<engineRoot>/opencode-<version>/`, if it is
  * not already there.
  *
- * Concurrency and crash safety come from the same mechanism: all work happens
- * under a per-attempt staging directory, and the final `rename` is the only
- * thing that publishes it. A crash mid-download leaves a `.staging-*` directory
- * — junk, but junk that no code path treats as an install — and a second caller
- * that wins the race simply finds the directory already there and keeps it.
+ * Concurrency and crash safety belong to {@link installPinnedAsset}: work
+ * happens under a per-attempt staging directory and a single `rename`
+ * publishes it, so a crash leaves junk no code path treats as an install and a
+ * lost race keeps the winner. What is decided *here* is the engine's own part
+ * — which asset this platform gets, where it is published, and how the binary
+ * is found inside whatever shape the archive turned out to have.
  */
 async function installPinned(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
   const key = deps.platformKey()
@@ -247,64 +205,26 @@ async function installPinned(deps: BinaryResolverDeps): Promise<ResolvedEngineBi
   const root = deps.engineRoot()
   const installDir = join(root, `opencode-${deps.version}`)
   const installed = join(installDir, BINARY_NAME)
-  if (await isFile(installed)) {
-    return { path: installed, source: 'managed', version: await deps.probeVersion(installed) }
-  }
 
-  await mkdir(root, { recursive: true })
-  const staging = join(root, `.staging-${process.pid}-${Date.now()}`)
-  const unpacked = join(staging, 'unpacked')
-  const archive = join(staging, asset.file)
+  const { installed: didInstall } = await installPinnedAsset({
+    root,
+    installDir,
+    label: 'engine',
+    archiveName: asset.file,
+    url: assetUrl(deps.version, asset.file),
+    sha256: asset.sha256,
+    // The published directory is whichever one holds the binary, so
+    // `<root>/opencode-<version>/opencode` is the path no matter how the
+    // archive nested it — which keeps "is it installed" one `stat`, not a walk.
+    locate: (dir) => findNamedFile(dir, BINARY_NAME),
+    isInstalled: () => isFile(installed),
+    download: deps.download,
+    extract: deps.extract,
+    notFoundMessage: 'The downloaded engine archive did not contain an opencode executable.'
+  })
 
-  try {
-    await mkdir(unpacked, { recursive: true })
-    const url = assetUrl(deps.version, asset.file)
-    logger.info('downloading the engine', { version: deps.version, platform: key })
-    await deps.download(url, archive)
-
-    const digest = await sha256File(archive)
-    if (digest !== asset.sha256) {
-      // Loud, and nothing survives it. A mismatch is either a corrupted
-      // transfer or a substituted asset, and the two are indistinguishable
-      // from here — so both are refused rather than "retried without the
-      // check", which is how a verification quietly becomes decoration.
-      logger.error('engine download failed verification', {
-        platform: key,
-        expected: asset.sha256,
-        actual: digest
-      })
-      throw new EngineBinaryError(
-        'checksum_mismatch',
-        'The downloaded engine did not match its expected checksum, so it was discarded. Check your connection and try again.'
-      )
-    }
-
-    await deps.extract(archive, unpacked)
-    const found = await findBinary(unpacked)
-    if (!found) {
-      throw new EngineBinaryError(
-        'extract_failed',
-        'The downloaded engine archive did not contain an opencode executable.'
-      )
-    }
-    if (process.platform !== 'win32') await chmod(found, 0o755)
-
-    // Publish the *directory that holds the binary*, not the whole staging
-    // tree, so the final layout is `<root>/opencode-<version>/opencode`
-    // regardless of how the archive nested it.
-    const src = dirname(found)
-    try {
-      await rename(src, installDir)
-    } catch (err) {
-      // Lost the race: another caller published first. Its tree passed the
-      // same digest check, so keep it.
-      if (!(await isFile(installed))) throw err
-    }
-    logger.info('engine installed', { version: deps.version, platform: key })
-    return { path: installed, source: 'managed', version: await deps.probeVersion(installed) }
-  } finally {
-    await rm(staging, { recursive: true, force: true }).catch(() => undefined)
-  }
+  if (didInstall) logger.info('engine installed', { version: deps.version, platform: key })
+  return { path: installed, source: 'managed', version: await deps.probeVersion(installed) }
 }
 
 /**
@@ -383,103 +303,6 @@ export function probeEngineVersion(path: string): Promise<string | null> {
       const trimmed = out.trim().split('\n')[0]?.trim() ?? ''
       finish(code === 0 && trimmed !== '' ? trimmed : null)
     })
-  })
-}
-
-/**
- * Stream a URL to a file, following redirects (GitHub release assets always
- * redirect to a CDN).
- *
- * `fetch` is Node's built-in and Electron's — no dependency is added for this.
- * The bytes go to disk as they arrive rather than into memory, and the file is
- * removed if anything goes wrong, so the caller's digest check is never handed
- * a truncated file that happens to exist.
- */
-export async function downloadToFile(url: string, dest: string): Promise<void> {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
-  try {
-    const response = await fetch(url, { redirect: 'follow', signal: controller.signal })
-    if (!response.ok || !response.body) {
-      throw new EngineBinaryError(
-        'download_failed',
-        `Could not download the engine (HTTP ${response.status}).`
-      )
-    }
-    const declared = Number(response.headers.get('content-length') ?? '0')
-    if (declared > MAX_ARCHIVE_BYTES) {
-      throw new EngineBinaryError('download_failed', 'The engine download was unexpectedly large.')
-    }
-    const sink = createWriteStream(dest)
-    let total = 0
-    const counted = new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        total += chunk.byteLength
-        if (total > MAX_ARCHIVE_BYTES) {
-          throw new EngineBinaryError(
-            'download_failed',
-            'The engine download was unexpectedly large.'
-          )
-        }
-        controller.enqueue(chunk)
-      }
-    })
-    await pipeline(Readable.fromWeb(response.body.pipeThrough(counted) as never), sink)
-  } catch (err) {
-    await rm(dest, { force: true }).catch(() => undefined)
-    throw err
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-/**
- * Unpack an archive with the system `tar`.
- *
- * Both shapes the release ships are handled by one command: `bsdtar` — macOS's
- * `/usr/bin/tar` and Windows 10 1803+'s `tar.exe` — reads zip as well as
- * tar.gz, and Linux only ever gets a tar.gz. That is worth a sentence because
- * the obvious reading of "we `tar -xf` a `.zip`" is that it cannot work.
- *
- * The alternative was an unzip dependency, which this phase is not adding.
- */
-export function extractArchive(archive: string, dest: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn('tar', ['-xf', archive, '-C', dest], { stdio: ['ignore', 'ignore', 'pipe'] })
-    let stderr = ''
-    let settled = false
-    const finish = (err: Error | null): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timer)
-      if (err) reject(err)
-      else resolve()
-    }
-    const timer = setTimeout(() => {
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        /* already gone */
-      }
-      finish(new EngineBinaryError('extract_failed', 'Unpacking the engine timed out.'))
-    }, EXTRACT_TIMEOUT_MS)
-    child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (chunk: string) => {
-      stderr += chunk
-    })
-    child.on('error', (err) =>
-      finish(new EngineBinaryError('extract_failed', `Could not unpack the engine: ${err.message}`))
-    )
-    child.on('close', (code) =>
-      finish(
-        code === 0
-          ? null
-          : new EngineBinaryError(
-              'extract_failed',
-              `Could not unpack the engine: ${stderr.trim().slice(0, 200) || `tar exited ${code}`}`
-            )
-      )
-    )
   })
 }
 
