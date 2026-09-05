@@ -15,6 +15,7 @@ export type LocalToolId =
   | 'git'
   | 'make'
   | 'python3'
+  | 'cinna'
 
 /**
  * How a tool is offered:
@@ -24,8 +25,17 @@ export type LocalToolId =
  */
 export type LocalToolKind = 'cli-assistant' | 'editor' | 'runtime'
 
-/** Where the executable was found. */
-export type LocalToolSource = 'path' | 'app-bundle'
+/**
+ * Where the executable was found.
+ *
+ * `managed` is the desktop's own copy under `userData` — today only cinna-cli,
+ * installed by `src/main/localdev/toolchain.ts`. It ranks *below* `path` here
+ * on purpose: this list answers "what can the user open a folder with", and a
+ * `cinna` the user installed themselves is the one their terminal will run.
+ * Desktop-spawned processes take the opposite view and always use the managed
+ * copy, because that is the one whose version the app pins.
+ */
+export type LocalToolSource = 'path' | 'app-bundle' | 'managed'
 
 export interface DetectedTool {
   id: LocalToolId
@@ -35,7 +45,10 @@ export interface DetectedTool {
   /** Absolute path to the executable, or to the macOS `.app` bundle. */
   path: string | null
   available: boolean
-  /** `app-bundle` means there is no CLI shim — launch through the bundle. */
+  /**
+   * `app-bundle` means there is no CLI shim — launch through the bundle.
+   * `managed` means Cinna installed it into its own data directory.
+   */
   source: LocalToolSource | null
 }
 

@@ -3,6 +3,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { clearToolCache, which } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
+import { toolchain } from '../../localdev/toolchain'
 import type { DetectedTool, LocalToolId, LocalToolKind } from '../../../shared/localTools'
 
 const logger = createLogger('local-tools')
@@ -20,6 +21,17 @@ interface ToolSpec {
    * an editor they can plainly see in their Dock as missing.
    */
   macBundles?: string[]
+  /**
+   * A copy this app installed into its own data directory, tried after PATH and
+   * the bundles. Last on purpose: a tool the user installed themselves is the
+   * one their shell runs, and this list is about what *they* can open a folder
+   * with. Desktop-spawned processes go straight to the managed copy through
+   * `toolchainEnv()` and never consult this.
+   *
+   * A thunk, not a path: resolving it reads `app.getPath`, which is not safe to
+   * call at module load.
+   */
+  managed?: () => string | null
 }
 
 /** Every tool the desktop knows how to detect, in display order. */
@@ -40,6 +52,16 @@ const TOOL_SPECS: readonly ToolSpec[] = [
     label: 'Cursor',
     bin: 'cursor',
     macBundles: ['/Applications/Cursor.app']
+  },
+  {
+    id: 'cinna',
+    // A `runtime`, not a `cli-assistant`: its presence gates local development,
+    // but "open this agent folder in cinna" is not a thing anyone wants, and
+    // `cli-assistant` is what puts a tool in the Open-in row.
+    kind: 'runtime',
+    label: 'Cinna CLI',
+    bin: 'cinna',
+    managed: () => join(toolchain.root(), 'bin', 'cinna')
   },
   { id: 'uv', kind: 'runtime', label: 'uv', bin: 'uv' },
   { id: 'git', kind: 'runtime', label: 'Git', bin: 'git' },
@@ -64,6 +86,28 @@ async function isDirectory(path: string): Promise<boolean> {
   }
 }
 
+async function isFile(path: string): Promise<boolean> {
+  try {
+    return (await stat(path)).isFile()
+  } catch {
+    return false
+  }
+}
+
+/**
+ * The managed copy's path, or null when there is none or the app data dir is
+ * not available. The `try` is not defensive noise: detection runs from tests
+ * and from early startup paths where Electron's `app` may not be ready, and a
+ * missing optional tool must never take the whole detection pass down with it.
+ */
+function managedCandidate(spec: ToolSpec): string | null {
+  try {
+    return spec.managed?.() ?? null
+  } catch {
+    return null
+  }
+}
+
 async function detect(spec: ToolSpec): Promise<DetectedTool> {
   const onPath = await which(spec.bin)
   if (onPath) {
@@ -80,6 +124,18 @@ async function detect(spec: ToolSpec): Promise<DetectedTool> {
         available: true,
         source: 'app-bundle'
       }
+    }
+  }
+
+  const managed = managedCandidate(spec)
+  if (managed && (await isFile(managed))) {
+    return {
+      id: spec.id,
+      kind: spec.kind,
+      label: spec.label,
+      path: managed,
+      available: true,
+      source: 'managed'
     }
   }
 

@@ -242,3 +242,31 @@ export function ipcErrorShape(err: unknown): IpcErrorShape {
   const msg = err instanceof Error ? err.message : String(err)
   return { code: 'unknown', message: msg }
 }
+
+/**
+ * The managed local-dev toolchain: uv, Mutagen and cinna-cli, installed into
+ * `<userData>/localdev` by `src/main/localdev/toolchain.ts`.
+ *
+ * These codes are the contract between the installer and the local-dev
+ * reconciler, which turns each one into a user-facing "needs attention" reason
+ * — so a code is never reused for a second condition and never renamed without
+ * changing that mapping.
+ */
+export type ToolchainErrorCode =
+  /** No pinned uv build for this `${platform}-${arch}`. The UI explains; it does not retry. */
+  | 'unsupported_platform'
+  /**
+   * The server pinned a Mutagen version this desktop holds no digest for. The
+   * honest answer is "update Cinna Desktop" — never an unverified download.
+   */
+  | 'unknown_mutagen_version'
+  /** The bytes never arrived: HTTP error, timeout, dead socket. Retryable. */
+  | 'download_failed'
+  /** The bytes arrived and were not the pinned ones. Nothing was published. */
+  | 'checksum_mismatch'
+  /** The archive would not unpack, or held none of what was expected. */
+  | 'extract_failed'
+  /** `uv tool install cinna-cli` failed, or produced no runnable `cinna`. */
+  | 'install_failed'
+
+export class ToolchainError extends DomainError<ToolchainErrorCode> {}
