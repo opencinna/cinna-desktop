@@ -295,7 +295,7 @@ function attentionHint(reason: LocalDevAttentionReason): string {
     case 'token_expired':
       return 'The account token in the workspace is no longer valid. Repair mints a new one.'
     case 'workspace':
-      return 'The account workspace could not be created or read. Repair rebuilds it.'
+      return 'The account workspace could not be created or read. Repair tries again — but if the folder already belongs to a different Cinna account, move it aside first.'
   }
 }
 
