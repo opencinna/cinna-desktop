@@ -226,3 +226,53 @@ export async function approveDesktopAuth(
   // one the desktop's callback server is sitting on.
   await fetchWithTimeout(redirectTo, { redirect: 'manual' }, 15_000)
 }
+
+/**
+ * The ids of the account CLI tokens this instance currently holds for the
+ * configured user.
+ *
+ * The pair {@link listAccountTokenIds} / {@link revokeAccountTokens} exists so
+ * the run can clean up after itself *precisely*. A run really mints an account
+ * CLI token — a live credential on a real server — and a suite that leaves one
+ * behind on every invocation is a suite that quietly fills someone's account
+ * with junk.
+ *
+ * Revoking by **difference** rather than by machine name is the point:
+ * cinna-cli names a token after the machine, so a real Cinna Desktop install on
+ * the same laptop has a token with the same name, and a name-based cleanup
+ * would revoke the developer's own working setup.
+ */
+export async function listAccountTokenIds(config: LiveCinnaConfig): Promise<string[]> {
+  try {
+    const token = await signIn(config)
+    const response = await fetchWithTimeout(`${config.serverUrl}/api/v1/cli/account/tokens`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+    })
+    if (!response.ok) return []
+    const body = (await response.json()) as { data?: { id: string }[] }
+    return (body.data ?? []).map((row) => row.id)
+  } catch {
+    // Cleanup must never be the reason a run fails, in either direction.
+    return []
+  }
+}
+
+/** Revoke exactly the tokens in `ids`. Best effort, and silent about it. */
+export async function revokeAccountTokens(
+  config: LiveCinnaConfig,
+  ids: readonly string[]
+): Promise<void> {
+  if (ids.length === 0) return
+  try {
+    const token = await signIn(config)
+    for (const id of ids) {
+      await fetchWithTimeout(`${config.serverUrl}/api/v1/cli/account/tokens/${id}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' }
+      })
+    }
+  } catch {
+    // Best effort: an un-revoked test token is untidy, not unsafe, and failing
+    // a passing run over it would be worse.
+  }
+}

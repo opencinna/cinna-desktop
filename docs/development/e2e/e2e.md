@@ -38,6 +38,10 @@ Two things are deliberate and worth knowing before it puzzles someone:
 - **It is excluded from every other run.** `playwright.config.ts` ignores the file unless `CINNA_E2E_INTEGRATION=1`, which only the make target sets. Otherwise a developer who filled in `.env` once would get a multi-minute toolchain install as part of every `make e2e`.
 - **One step is substituted, and only one.** The suite cannot click "Approve" in a browser window, so `approveDesktopAuth` in `e2e/fixtures/liveCinna.ts` performs exactly that — sign in, read the consent nonce cinna-core minted, approve it, request the loopback URL. Everything either side of it is the real flow. `shell.openExternal` is stubbed in the main process for the same reason: an unstubbed run would open a browser on the machine running the tests.
 
+The run mints a **real** account CLI token on the instance, so it revokes it again in `afterEach` — by diffing the token list around the run rather than by machine name, because cinna-cli names a token after the machine and a name-based cleanup would revoke a real Cinna Desktop install on the same laptop.
+
+`CINNA_E2E_CLI_SOURCE` points the run at a local cinna-cli checkout, installed with `uv tool install --editable` instead of the version the server pinned. That is how the run exercises the cinna-cli being developed alongside this app before it reaches PyPI; the desktop reads it as `CINNA_CLI_SOURCE` and logs a warning on every install, because the pin — cinna-cli's only supply-chain guarantee — does not apply while it is set.
+
 `preflight()` runs before the app is touched, so a stack that cannot serve the run is a **skip naming the reason** rather than a failure four steps in. The reason it most often names is not a desktop problem at all: cinna-core builds its discovery endpoints from `BACKEND_BASE_URL`, so an instance answering perfectly well on `http://localhost:8000` can advertise an `authorization_endpoint` on a tunnel that is down. Point `BACKEND_BASE_URL` at the same origin as `CINNA_E2E_SERVER_URL` for local integration runs.
 
 ### Encoding a manual test

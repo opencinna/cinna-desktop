@@ -55,7 +55,7 @@
 
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { app } from 'electron'
 import { ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
@@ -242,6 +242,17 @@ export interface ToolchainDeps {
   extract: (archive: string, dest: string) => Promise<void>
   /** The login-shell environment every spawned tool starts from. */
   shellEnv: () => Promise<NodeJS.ProcessEnv>
+  /**
+   * A local cinna-cli checkout to install `--editable` instead of the pinned
+   * PyPI release, or null for the normal path.
+   *
+   * This exists for one situation, and it is a real one: the cross-repo
+   * integration run has to exercise the cinna-cli that is being *developed*
+   * alongside this app, which by definition is not on PyPI yet. Reading it from
+   * the environment rather than from a setting keeps it out of the app's own
+   * UI — there is no way for a user to turn this on by clicking something.
+   */
+  cliSourceOverride: () => string | null
   /** Run a binary to completion, capturing its output. */
   run: (
     bin: string,
@@ -487,8 +498,14 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     onProgress?: ToolchainProgress
   ): Promise<string> {
     const p = paths(pins)
+    const source = deps.cliSourceOverride()
 
-    if (!reinstall) {
+    // A local checkout is never "already installed": an editable install tracks
+    // a working tree that changes under it, and the version it reports is
+    // whatever that tree says — usually *not* the version the server pinned.
+    // Skipping the install because a stamp matched would silently keep running
+    // yesterday's checkout.
+    if (!reinstall && !source) {
       // The cheap path, and the reason `state.json` exists at all: a reconcile
       // runs on every activation, on resume and after re-auth, and spawning a
       // Python entry point just to read a version number back is a visible
@@ -516,13 +533,27 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     // `uv tool install` is idempotent for the same version and replaces a
     // different one, so the version change *is* the upgrade path; `--reinstall`
     // is only for Repair, where the install may be intact but broken.
-    const args = [
-      'tool',
-      'install',
-      ...(reinstall ? ['--reinstall'] : []),
-      `cinna-cli==${pins.cinnaCliVersion}`
-    ]
-    logger.info('installing cinna-cli', { version: pins.cinnaCliVersion, reinstall })
+    //
+    // `--editable <path>` replaces the pin entirely when a source override is
+    // set. That is a development affordance and it is loud about it: the
+    // version pin, and with it the only thing resembling a supply-chain
+    // guarantee for cinna-cli, does not apply to a working tree on this disk.
+    const args = source
+      ? ['tool', 'install', '--reinstall', '--editable', source]
+      : [
+          'tool',
+          'install',
+          ...(reinstall ? ['--reinstall'] : []),
+          `cinna-cli==${pins.cinnaCliVersion}`
+        ]
+    if (source) {
+      logger.warn('installing cinna-cli from a local checkout, ignoring the server pin', {
+        source,
+        pinned: pins.cinnaCliVersion
+      })
+    } else {
+      logger.info('installing cinna-cli', { version: pins.cinnaCliVersion, reinstall })
+    }
     const result = await deps.run(p.uvBin, args, env, INSTALL_TIMEOUT_MS).catch((err: unknown) => {
       throw new ToolchainError(
         'install_failed',
@@ -548,7 +579,10 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         p.cinnaBin
       )
     }
-    await writeState(p.root, { cinnaCliVersion: installed })
+    // Not stamped for an editable install: the stamp's only job is to let a
+    // later run skip the install, and a working tree is exactly the thing that
+    // must not be skipped.
+    if (!source) await writeState(p.root, { cinnaCliVersion: installed })
     logger.info('cinna-cli installed', { version: installed })
     return installed
   }
@@ -661,8 +695,32 @@ export function realToolchainDeps(): ToolchainDeps {
     download: downloadToFile,
     extract: extractArchive,
     shellEnv: getShellEnv,
-    run: runCapture
+    run: runCapture,
+    cliSourceOverride: localCliSource
   }
+}
+
+/**
+ * `CINNA_CLI_SOURCE`: a local cinna-cli checkout to install instead of the
+ * pinned release.
+ *
+ * Set only by the cross-repo integration run (`make e2e-integration` passes it
+ * through from `.env`), and never by anything a user can reach. A relative
+ * value is refused rather than resolved: for a packaged app `process.cwd()` is
+ * wherever the OS happened to launch it from, so a relative path here means
+ * something different on every machine and is far more likely to be a mistake
+ * than an intent.
+ */
+export function localCliSource(): string | null {
+  const raw = (process.env['CINNA_CLI_SOURCE'] ?? '').trim()
+  if (!raw) return null
+  if (!isAbsolute(raw)) {
+    logger.warn('ignoring CINNA_CLI_SOURCE: it must be an absolute path', {
+      length: raw.length
+    })
+    return null
+  }
+  return raw
 }
 
 /** The process-wide toolchain. Phase C's reconciler is its only caller. */

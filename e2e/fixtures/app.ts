@@ -74,6 +74,13 @@ function launchEnv(sandbox: Sandbox): Record<string, string> {
   // re-provision an interpreter per sandbox.
   env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')
   env.XDG_CACHE_HOME ??= join(realHome, '.cache')
+  // The cross-repo integration run installs the cinna-cli checkout being
+  // developed beside this app rather than the pinned PyPI release — see
+  // `localCliSource()` in `src/main/localdev/toolchain.ts`. Passed through
+  // under the app's own variable name so the product reads one thing and the
+  // suite configures it under a `CINNA_E2E_*` name like every other knob here.
+  const cliSource = (process.env.CINNA_E2E_CLI_SOURCE ?? '').trim()
+  if (cliSource) env.CINNA_CLI_SOURCE = cliSource
   return env
 }
 

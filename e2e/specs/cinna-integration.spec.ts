@@ -3,9 +3,11 @@ import { join } from 'node:path'
 import { test, expect } from '../fixtures/app'
 import {
   approveDesktopAuth,
+  listAccountTokenIds,
   liveCinnaConfig,
   preflight,
   requireLiveCinna,
+  revokeAccountTokens,
   type Discovery
 } from '../fixtures/liveCinna'
 
@@ -58,8 +60,25 @@ const RUN_TIMEOUT_MS = 20 * 60_000
 /** How long to wait for the local-dev reconciler to finish its whole job. */
 const READY_TIMEOUT_MS = 15 * 60_000
 
+/**
+ * Account CLI tokens the instance held before the run, so the teardown can
+ * revoke exactly the ones it added. Module-scoped because the value is produced
+ * inside the test and consumed after it; the suite runs one worker and one
+ * test, so there is nothing here to interleave.
+ */
+let tokensBefore: string[] = []
+
 test.describe('desktop + cinna-core + cinna-cli', () => {
   test.use({ launchArgs: CONNECT_LINK })
+
+  test.afterEach(async () => {
+    const live = liveCinnaConfig()
+    if (!live) return
+    const after = await listAccountTokenIds(live)
+    const minted = after.filter((id) => !tokensBefore.includes(id))
+    await revokeAccountTokens(live, minted)
+    tokensBefore = []
+  })
 
   test('a link, one authorization, and the machine is ready', async ({ cinna }) => {
     const live = requireLiveCinna()
@@ -71,6 +90,12 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
     test.skip(!ready.ok, ready.ok ? '' : `live cinna-core not usable: ${ready.reason}`)
     const discovery = (ready as { ok: true; discovery: Discovery }).discovery
     const host = new URL(live.serverUrl).host
+
+    // A successful run mints a real account CLI token on a real server. Note
+    // what is there first; the teardown below revokes only what this run added
+    // — see `revokeAccountTokens` for why the difference, and not the machine
+    // name, is what identifies it.
+    tokensBefore = await listAccountTokenIds(live)
 
     await test.step('the link lands on the confirm step, naming the host', async () => {
       await expect(cinna.page.getByText(`Connect to ${host}?`, { exact: true })).toBeVisible()
@@ -214,9 +239,19 @@ test.describe('desktop + cinna-core + cinna-cli', () => {
       expect(cinnaBin.startsWith(join(cinna.sandbox.userData, 'localdev'))).toBe(true)
       expect(existsSync(cinnaBin)).toBe(true)
 
-      // And it is the version the *server* pinned, not one the desktop chose.
+      // And it is the version the *server* pinned, not one the desktop chose —
+      // unless `.env` deliberately points at a local checkout, in which case the
+      // whole point is that the pin does *not* apply and asserting it would be
+      // asserting the override does not work.
       const cliVersion = (final as { cliVersion: string }).cliVersion
-      expect(cliVersion).toContain(discovery.local_dev!.cinna_cli_version)
+      if (process.env.CINNA_E2E_CLI_SOURCE?.trim()) {
+        test.info().annotations.push({
+          type: 'cinna-cli source',
+          description: `installed editable from ${process.env.CINNA_E2E_CLI_SOURCE.trim()} (server pin ${discovery.local_dev!.cinna_cli_version} not applied)`
+        })
+      } else {
+        expect(cliVersion).toContain(discovery.local_dev!.cinna_cli_version)
+      }
 
       // Which protocol the run settled on is not asserted — the server picks
       // the cinna-cli version, so both `json` and `legacy` are correct answers

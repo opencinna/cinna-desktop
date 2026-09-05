@@ -46,11 +46,16 @@ let downloads: string[]
 let runs: { bin: string; args: string[]; env: NodeJS.ProcessEnv }[]
 /** What the fake `cinna --version` reports; null means "not installed". */
 let installedCli: string | null
+/** What an `--editable` install of the fake checkout reports. */
+const editableCliVersion = '0.9.9-dev'
 
 function deps(overrides: Partial<ToolchainDeps> = {}): ToolchainDeps {
   return {
     root: () => root,
     platformKey: () => 'test-arch',
+    // No local checkout by default: the override is the integration run's, and
+    // every other case here is the ordinary pinned-release path.
+    cliSourceOverride: () => null,
     uvVersion: '1.2.3',
     uvAssets: { 'test-arch': { file: 'uv.tar.gz', sha256: SHA } },
     mutagenAssets: { '9.9.9': { 'test-arch': { file: 'mutagen.tar.gz', sha256: SHA } } },
@@ -77,11 +82,15 @@ function deps(overrides: Partial<ToolchainDeps> = {}): ToolchainDeps {
           ? { code: 1, stdout: '', stderr: 'not found' }
           : { code: 0, stdout: `cinna, version ${installedCli}\n`, stderr: '' }
       }
-      // `uv tool install cinna-cli==<v>` — drop the shim where uv would.
-      const pinned = /cinna-cli==(.+)$/.exec(args[args.length - 1] ?? '')?.[1] ?? null
+      // `uv tool install …` — drop the shim where uv would, and report the
+      // version uv would end up with: the pin for a release, and whatever the
+      // working tree says for `--editable`, which is the whole reason an
+      // editable install cannot be skipped on a version match.
       mkdirSync(join(root, 'bin'), { recursive: true })
       writeFileSync(join(root, 'bin', 'cinna'), '#!/bin/sh\n')
-      installedCli = pinned
+      installedCli = args.includes('--editable')
+        ? editableCliVersion
+        : (/cinna-cli==(.+)$/.exec(args[args.length - 1] ?? '')?.[1] ?? null)
       return { code: 0, stdout: '', stderr: '' }
     },
     ...overrides
@@ -384,5 +393,42 @@ describe('parseVersion', () => {
     expect(parseVersion('0.4.0\n')).toBe('0.4.0')
     expect(parseVersion('cinna 1.2.3-rc.1')).toBe('1.2.3-rc.1')
     expect(parseVersion('')).toBeNull()
+  })
+})
+
+describe('a local cinna-cli checkout', () => {
+  /**
+   * The cross-repo integration run has to exercise the cinna-cli being
+   * developed beside this app, which by definition is not on PyPI. These are
+   * the two properties that make that safe rather than merely possible: the pin
+   * is visibly abandoned, and the result is never remembered.
+   */
+  it('installs the checkout editable instead of the pinned release', async () => {
+    const tc = createToolchain(deps({ cliSourceOverride: () => '/src/cinna-cli' }))
+    const result = await tc.ensure(PINS)
+
+    const install = runs.find((r) => r.args[0] === 'tool')
+    expect(install?.args).toEqual([
+      'tool',
+      'install',
+      '--reinstall',
+      '--editable',
+      '/src/cinna-cli'
+    ])
+    // Nothing mentions the pinned version: the override replaces it rather
+    // than adding to it, which is what makes the log warning honest.
+    expect(install?.args.join(' ')).not.toContain(PINS.cinnaCliVersion)
+    expect(result.cliVersion).toBe(editableCliVersion)
+  })
+
+  it('reinstalls on every pass, because a working tree changes underneath', async () => {
+    const tc = createToolchain(deps({ cliSourceOverride: () => '/src/cinna-cli' }))
+    await tc.ensure(PINS)
+    const first = runs.filter((r) => r.args[0] === 'tool').length
+    await tc.ensure(PINS)
+    const second = runs.filter((r) => r.args[0] === 'tool').length
+    // The stamp would have skipped the second one on the pinned path; here it
+    // must not, or a run would silently be testing yesterday's checkout.
+    expect(second).toBeGreaterThan(first)
   })
 })
