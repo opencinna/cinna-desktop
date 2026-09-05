@@ -1,12 +1,5 @@
 import { useState } from 'react'
-import {
-  AlertTriangle,
-  FolderOpen,
-  Link2,
-  Loader2,
-  RefreshCw,
-  TerminalSquare
-} from 'lucide-react'
+import { AlertTriangle, FolderOpen, Link2, Loader2, RefreshCw, TerminalSquare } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import { useAuthStore } from '../../stores/auth.store'
@@ -135,7 +128,10 @@ export function LocalDevSettingsSection(): React.JSX.Element {
                   <PrimaryButton onClick={() => run(repair)} busy={busy}>
                     Set up
                   </PrimaryButton>
-                  <SecondaryButton onClick={() => run(() => consent(state.host, false))} busy={busy}>
+                  <SecondaryButton
+                    onClick={() => run(() => consent(state.host, false))}
+                    busy={busy}
+                  >
                     Not now
                   </SecondaryButton>
                 </Actions>
@@ -333,9 +329,7 @@ function Card({ children }: { children: React.ReactNode }): React.JSX.Element {
 }
 
 function Line({ children }: { children: React.ReactNode }): React.JSX.Element {
-  return (
-    <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">{children}</p>
-  )
+  return <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">{children}</p>
 }
 
 function Actions({ children }: { children: React.ReactNode }): React.JSX.Element {
