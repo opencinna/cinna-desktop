@@ -7,7 +7,8 @@ Drive the *built* Electron app with Playwright so that user scenarios — the on
 ## Core Concepts
 
 - **Sandbox** — A throwaway directory per test holding a fresh `HOME` and a `userData`. The app derives its agents home from `homedir()` and refuses agent roots outside it, so both must point into the sandbox or the test is running against the developer's real `~/Documents/CinnaAgents`
-- **`CINNA_USER_DATA`** — The one seam in the app: when set, `src/main/index.ts` calls `app.setPath('userData', …)` (and `sessionData`) before anything derives a path from it. The app has no other test-mode behaviour
+- **`CINNA_USER_DATA`** — The profile seam: when set, `src/main/index.ts` calls `app.setPath('userData', …)` (and `sessionData`) before anything derives a path from it
+- **`CINNA_BACKGROUND_WINDOW`** — The only other thing the suite tells the app. Set to `1` by the fixture: the window is shown but never brought forward, so a run does not take the machine over. Both are harness environment variables read once at startup, with no route into the app's own UI, and they are the app's only test-mode behaviour
 - **Main window vs. tray panel** — `firstWindow()` is the tray panel; the fixture selects the window whose URL ends in `index.html`
 - **Three ways to drive** — real UI via role/label locators for the step under test; `page.evaluate(() => window.api.…)` for arrange steps; `electronApp.evaluate(({dialog, app}) => …)` for main-process seams such as stubbing the OS directory picker
 - **`@live`** — Specs that need a model read a key from `.env` (loaded only by the Playwright config, never by the app) and skip without one
@@ -65,6 +66,8 @@ The run mints a **real** account CLI token on the instance, so it revokes it aga
 - The sandbox writes the test process's `PATH` into the sandbox's shell rc files, because the app probes the login shell for its environment (see [Shell Environment Resolution](../shell_environment/shell_environment.md)) and a bare home yields a `PATH` without `uv` or `opencode`
 - `UV_CACHE_DIR` and `XDG_CACHE_HOME` point at the developer's real caches so `uv run` inside a test does not re-provision an interpreter per sandbox
 - The app is launched with the repo root as its argument, not the entry file: `app.getAppPath()` follows the argument and the kit contract resolves as `<appPath>/resources/cinna-kit-contract`
+- **A run stays in the background.** The suite launches a real app per test, and on macOS a real app that shows a window takes the foreground — repeatedly, for the length of a run, on the machine the developer is trying to work on. `CINNA_BACKGROUND_WINDOW=1` gives up the one thing Playwright does not use: it drives the renderer over CDP and never needs focus, and screenshots still render correctly. **Both halves are needed** — `app.setActivationPolicy('accessory')` before any window exists (an accessory app has no Dock tile and cannot become the active application) *and* `showInactive()` instead of `show()`, because `showInactive` alone still activates the app the first time it is called. `focusMainWindow()` does the same split: the visible half (restore, `showInactive`) and none of `app.focus({ steal: true })`
+- **`make demo-localdev` does not set it**, and must not: it exists so a developer can *watch* a several-minute install, and a window that will not come forward is the opposite of that
 - E2E never runs under vitest and is not part of `npm test`
 - The app is launched with `--use-mock-keychain`: with `HOME` in the sandbox, macOS resolves the login keychain under it and `safeStorage.encryptString` fails with "A keychain cannot be found to store …". The mock keeps the real safeStorage path and never touches the user's keychain; `smoke.spec.ts` round-trips a string through it
 - On the new-chat screen the composer accepts a send before the renderer's model list has loaded, and refuses it as "no chat mode configured"; `live.spec.ts` retries that one refusal rather than sleeping
@@ -77,7 +80,8 @@ The run mints a **real** account CLI token on the instance, so it revokes it aga
 ## Architecture Overview
 
 ```
-playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CINNA_USER_DATA=sandbox)
+playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CINNA_USER_DATA=sandbox,
+                                                      CINNA_BACKGROUND_WINDOW=1)
                                         -> out/main/index.js (real main process, real SQLite, real dialogs)
                                         -> main window (index.html)  <- page.getByRole / page.evaluate(window.api.*)
 ```
@@ -100,7 +104,8 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `.github/workflows/e2e.yml` — typecheck, unit and E2E on `macos-latest`; the key reaches the E2E step only for pushes to `main`; the engine cache is restored by `actions/cache`
 - `Makefile` — the user-facing entry points (`make help`)
 - `.claude/agents/e2e-test-writer.md`, `.claude/commands/cinna-desktop.e2e.write.md` — the agent that writes and debugs specs, and the command that launches it
-- `src/main/index.ts` — the `CINNA_USER_DATA` seam
+- `src/main/index.ts` — the `CINNA_USER_DATA` seam, and the `accessory` activation policy plus `showInactive()` under a background run
+- `src/main/window/focus.ts` — `BACKGROUND_WINDOW`, and the branch in `focusMainWindow()` that shows without stealing
 - `src/main/services/localAgents/scaffoldService.test.ts` — the unit-level token sweep (no Electron needed)
 - `.env.example` — the keys the suite reads
 

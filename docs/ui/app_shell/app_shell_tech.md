@@ -21,7 +21,7 @@
 
 ### Renderer — Shared UI / Hooks
 
-- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion; placements `above-left | above-right | below-right`
+- `src/renderer/src/components/ui/usePopover.ts` — Generic popover wiring: trigger ref, popover ref, fixed-position computation, outside-click handler with portal-aware exclusion, and a horizontal clamp back inside the window; placements `above-left | above-right | below-right`
 - `src/renderer/src/hooks/useStartNewChat.ts` — Stable callback: clears `activeChatId`, sets `activeView` to `chat`
 
 ### Renderer — Styles
@@ -108,6 +108,14 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - Computes `position: fixed` style from the trigger's `getBoundingClientRect`, with a `GAP = 8` (above) or `BELOW_GAP = 4`
 - `mousedown` handler closes when target is outside both the trigger ref and the popover ref
 - Re-measures on `window resize`; consumer is responsible for re-measuring on scroll if relevant (current shell does not scroll the trigger)
+
+**Edge clamping.** Every placement anchors one *horizontal side* to the trigger, which is right for a trigger in a corner — where this hook started, in the sidebar footer — and wrong for one in the middle of a dialog, where a wide popover anchored two thirds of the way across a narrow window hangs off the far side. A `max-w` caps the width; it does not move anything. So a `useLayoutEffect` measures the popover once it is laid out and applies a horizontal `translateX` (`EDGE = 8` px minimum gap), leaving the anchor logic alone. Three details, each a trap worth not re-introducing:
+
+- It measures **with the current shift already applied** and compares against it, so the corrected position is a fixed point rather than an oscillation.
+- The left-edge correction runs **only when the popover fits** (`width <= vw - EDGE * 2`). One wider than the window cannot satisfy both edges, and trying moves it back and forth forever.
+- A **zero-width rect returns early**. That covers an element not yet laid out *and* jsdom, where every rect is zero and "it starts before the left edge" would otherwise be true forever — a real infinite-render failure in the unit suite, not a hypothetical.
+
+Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion instead: `e2e/specs/connect-intent.spec.ts` resizes to 620 px, opens the local-dev explainer and asserts the popover's box stays within the viewport.
 
 ## Configuration
 

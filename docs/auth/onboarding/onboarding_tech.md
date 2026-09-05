@@ -41,7 +41,7 @@ No schema changes. The feature only writes to existing tables via existing servi
 
 | Channel | Purpose in onboarding |
 |---------|----------------------|
-| `provider:list` | Gate detection — `OnboardingGate` short-circuits when the list is non-empty |
+| `provider:list` | Gate detection — read **once**, to decide the first-run session; a later refetch (sign-in calls `resetQueries()`) never re-opens or closes the gate |
 | `provider:test-key` | Validate the user's API key by calling `adapter.listModels()` before persisting |
 | `provider:upsert` | Persist the new LLM provider with encrypted API key |
 | `chatmode:upsert` | Create the default chat mode bound to the new provider |
@@ -68,7 +68,8 @@ The renderer-only feature delegates all server-side work through existing servic
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` ends on `setStep('localdev')` rather than `onComplete()`; only the `localdev` step calls `onComplete`
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `handleSaveAndFinish()` orchestrates the API-key save: blocking `upsertProvider`, then non-blocking `upsertChatMode`, then `onComplete()`
 - `src/renderer/src/components/auth/OnboardingScreen.tsx` — `connectSelfHosted()` mirrors `RegisterForm.tsx:connectSelfHosted()`; on success it calls `prependSelfHostedHistory()` and persists via `writeSelfHostedHistory()`
-- `src/renderer/src/App.tsx` — `OnboardingGate` uses `useProviders()` + `useState` initializers seeded from `consumeForceOnboarding()` and `isOnboardingDismissed()`, plus `useConnectIntent()` for the `connectIntent` / `onConnectIntentDone` props
+- `src/renderer/src/App.tsx` — `OnboardingGate` uses `useProviders()` + `useState` initializers seeded from `consumeForceOnboarding()` and `isOnboardingDismissed()`, plus `useConnectIntent()` for the `connectIntent` / `onConnectIntentDone` props. The first-run answer is latched in a `useRef<boolean | null>` **assigned during render**, not in an effect — an effect runs a frame late and that frame is a flash of the wrong screen — and the blank div is shown only while it is still `null`. `onComplete` sets a `finished` state (a state, not the ref: ending first run has to re-render) instead of writing back to `dismissed`/`forced`, so a `resetQueries()` on sign-in cannot unmount the screen mid-flow
+- `src/renderer/src/components/auth/OnboardingScreen.tsx` — the `Step` union carries the matching invariant: **every terminal step must call `onComplete`**. It is the contract the session change created, and the one thing a future step-adder has to know — nothing above the screen will end first run for them
 - `src/renderer/src/App.tsx` — `<ConnectIntentModal />` and `<LocalDevConsentModal />` are mounted **inside** `OnboardingGate`, i.e. among the children it renders only once first run is over. During first run each question is a step of the screen instead, and two surfaces asking it at once would be two answers racing to be recorded
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — "Testing" subsection with a `role="switch"` toggle matching the styling used by `LLMProviderCard` and `AgentCard` (w-9 h-5 rounded pill, accent-colored when on)
 

@@ -20,10 +20,10 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 1. The user clicks the landing page's button. The OS launches the freshly installed app with the URL
 2. On macOS `open-url` fires **before** the app is ready; on Linux and Windows the URL arrives appended to argv. Either way it lands in the funnel and is buffered
 3. The window opens; `OnboardingGate` reads the buffered intent and opens `OnboardingScreen` on its `cinna-confirm` step instead of the welcome step — the user clicked a button that named a server, and asking them to choose between "API key" and "Cinna Server" first would be asking a question they have already answered
-4. The panel shows **"Connect to cinna.acme.com?"**, the full origin unabbreviated, and two buttons: **Not now** and **Connect**
+4. In order: **"Connect to cinna.acme.com?"**, the full origin unabbreviated in its own box, an **Enable local development** checkbox directly under it and left-aligned — it is a setting for *this connection*, not a second action competing with the button — then **Connect** centred, then **Not now** as quiet text. The checkbox is ticked unless this machine already holds an answer for that host, and its (?) opens **upward**, so reading what will be installed never means covering the button that installs it
 5. **Connect** runs the ordinary self-hosted `auth:register` OAuth flow against that origin. The waiting state and its Cancel button are the same ones the typed-URL path uses
-6. On success the origin is written into the shared self-hosted history — the same history a typed URL populates, so the deep link and the paste fallback build one list rather than two
-7. The screen advances to the [`localdev`](../../agents/local_dev/local_dev.md) step
+6. On success the origin is written into the shared self-hosted history — the same history a typed URL populates, so the deep link and the paste fallback build one list rather than two — and the checkbox's answer is recorded for that host, ticked or not
+7. The screen advances to the [`localdev`](../../agents/local_dev/local_dev.md) step, which now has nothing left to ask and shows the install instead
 
 ### A link while the app is already running
 1. The second launch is stopped by the single-instance lock; the primary instance receives the argv through `second-instance`
@@ -55,7 +55,10 @@ A landing page on a self-hosted cinna-core instance can hand a freshly installed
 Anything on the machine can ask the OS to open a `cinna://` URL — a web page through a browser prompt, another app, a shortcut a user was mailed. So:
 
 - The service **never starts an OAuth flow and never opens a browser** on its own. It buffers one intent and shows it to the user, who reads the host and decides
-- `ConnectIntentPanel` renders the origin **large and unabbreviated**, offers **no "remember this"** affordance, and makes declining a plain always-available button rather than a corner ×
+- `ConnectIntentPanel` renders the origin **large and unabbreviated** — with no caption above it, which only pushed it further from the button that acts on it — and offers **no "remember this"** affordance
+- **Declining stays a real, always-available button**, never a corner ×. It is quieter than the action the user came here for, and that is the whole of the difference
+- The panel carries **one** extra decision, the local-development checkbox, and it is about this machine rather than about the link. It changes nothing the panel guarantees: the origin is still what the user reads, and Connect is still the only thing that starts an OAuth flow
+- **A stored answer beats the default tick.** This panel is also the surface an already-onboarded install shows, and **Switch to it** can name a profile whose owner declined local development deliberately; a box that re-ticked itself would reverse that decision and spend a few hundred megabytes doing it. A link must not be able to undo a choice the user has already made on this machine
 - A link that silently connected an app to a server would be a phishing primitive no amount of parsing would fix
 - The panel is shared by the onboarding step and the modal, so "the link never connects anything without a confirmation" is one component's property rather than two screens' habit
 
@@ -124,6 +127,9 @@ landing page  ──►  cinna://connect?server=https://cinna.acme.com
         └─ past it    → ConnectIntentModal ────────────────────┴─► ConnectIntentPanel
                                                                     ├─ Connect  → auth:register (OAuth)
                                                                     ├─ Switch to it → auth:login
+                                                                    ├─ [x] Enable local development
+                                                                    │        seeded from localdev:get-consent
+                                                                    │        → localdev:consent(host, checked)
                                                                     └─ Not now
                                                                           │
                                                                     connect:consume
@@ -135,7 +141,7 @@ landing page  ──►  cinna://connect?server=https://cinna.acme.com
 - [Cinna Accounts](../cinna_accounts/cinna_accounts.md) — **Connect** runs the unchanged self-hosted OAuth flow; the intent carries no credential of any kind
 - [Cinna Re-authentication](../cinna_accounts/reauthentication.md) — shares `focusMainWindow()`, and releases a held intent in its own `finally`
 - [User Accounts](../user_accounts/user_accounts.md) — **Switch to it** is the ordinary `auth:login`, and a password-locked profile is deferred to the account menu
-- [Local Development](../../agents/local_dev/local_dev.md) — where a confirmed connection goes next
+- [Local Development](../../agents/local_dev/local_dev.md) — where a confirmed connection goes next, and whose per-host consent this panel's checkbox answers so nothing asks again after sign-in
 - [Release & Distribution](../../development/distribution/release.md) — `protocols:` in `electron-builder.yml` is what puts the scheme in the installed bundle
 
 ## Technical Reference
