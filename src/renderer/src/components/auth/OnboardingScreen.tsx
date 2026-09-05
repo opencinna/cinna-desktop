@@ -41,6 +41,15 @@ interface OnboardingScreenProps {
   onConnectIntentDone?: () => void
 }
 
+/**
+ * The steps of first run.
+ *
+ * **Every terminal step must call `onComplete`.** The gate above no longer
+ * decides for itself when first run is over — it used to end the moment a
+ * provider appeared, which is what let a sign-in unmount this screen mid-flow —
+ * so a terminal step that does not report finishing leaves the user here with
+ * no way out.
+ */
 type Step =
   | 'welcome'
   | 'provider-type'

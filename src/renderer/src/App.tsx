@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/layout/Sidebar'
 import { TopBar } from './components/layout/TopBar'
@@ -118,30 +118,61 @@ function Shell(): React.JSX.Element {
   )
 }
 
+/**
+ * First run is a **session, not a derived boolean**.
+ *
+ * The decision is taken once — from the force flag, the dismissed flag and
+ * whether any provider exists — and then it is held until the screen itself
+ * says it is finished. It used to be re-derived on every render, which was
+ * wrong in a way that only showed up on the path that matters most: signing in
+ * calls `queryClient.resetQueries()`, so the providers query goes back to
+ * loading, this gate renders its blank div, and the onboarding screen
+ * *unmounts*. Moments later a Cinna account's managed providers have not
+ * arrived yet, so it mounts again — freshly, with the deep link already
+ * consumed, which lands it back on the welcome card. The user, who had just
+ * finished authorizing in their browser, got half a second of "API key or Cinna
+ * Server?" before the app appeared. The local-development step it should have
+ * been showing was lost with the unmount.
+ *
+ * Holding the session also makes the screen's own step machine the only thing
+ * that ends first run, which is what it was always written as: every terminal
+ * path — Save & start, Skip for now, the local-dev step falling through — calls
+ * `onComplete`.
+ */
 function OnboardingGate({ children }: { children: React.ReactNode }): React.JSX.Element {
   const { data: providers, isLoading } = useProviders()
   // Consume the force-onboarding flag once per session (StrictMode-safe via
   // module-level memo in `constants/onboarding`).
-  const [forced, setForced] = useState<boolean>(() => consumeForceOnboarding())
-  const [dismissed, setDismissed] = useState<boolean>(() => !forced && isOnboardingDismissed())
+  const [forced] = useState<boolean>(() => consumeForceOnboarding())
+  const [dismissed] = useState<boolean>(() => !forced && isOnboardingDismissed())
+  // The screen reporting that it is done. A state rather than the ref below,
+  // because ending first run has to re-render; the ref only has to survive one.
+  const [finished, setFinished] = useState(false)
   // Subscribed here rather than only in the modal so the gate can decide *which*
   // surface confirms a deep link. The store dedupes, so the modal reading the
   // same intent below costs nothing.
   const { intent, consume } = useConnectIntent()
+  // `null` until the first answer is available. Assigned during render rather
+  // than in an effect, because an effect runs a frame too late — and that frame
+  // is a flash of the wrong screen.
+  const session = useRef<boolean | null>(null)
 
-  if (isLoading) return <div className="h-full bg-[var(--color-bg)]" />
+  if (finished) return <>{children}</>
+  if (session.current === null && isLoading) return <div className="h-full bg-[var(--color-bg)]" />
 
-  const hasProviders = (providers?.length ?? 0) > 0
-  // Forced mode bypasses the dismissed flag AND the providers-count gate so
-  // we can re-trigger onboarding on a fully configured install for testing.
-  const onboarding = forced || !(dismissed || hasProviders)
+  if (session.current === null) {
+    const hasProviders = (providers?.length ?? 0) > 0
+    // Forced mode bypasses the dismissed flag AND the providers-count gate so
+    // we can re-trigger onboarding on a fully configured install for testing.
+    session.current = forced || !(dismissed || hasProviders)
+  }
 
   // A deep link on an install that is past first run gets a modal over the app
   // (rendered by `App`), not a resurrected onboarding screen — the user has an
   // account and a workspace they are looking at, and replacing it with a
   // first-run screen to answer one yes/no question would be a bigger
   // interruption than the question.
-  if (!onboarding) return <>{children}</>
+  if (!session.current) return <>{children}</>
 
   return (
     <OnboardingScreen
@@ -149,8 +180,7 @@ function OnboardingGate({ children }: { children: React.ReactNode }): React.JSX.
       onConnectIntentDone={consume}
       onComplete={() => {
         markOnboardingDismissed()
-        setDismissed(true)
-        setForced(false)
+        setFinished(true)
       }}
     />
   )
