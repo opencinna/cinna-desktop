@@ -75,6 +75,15 @@ export interface CliRunOutcome {
   result: CliResultLine | null
   /** stderr, trimmed and capped — for a log line, never for a decision. */
   stderr: string
+  /**
+   * Raw stdout, only when {@link CliRunOptions.captureStdout} asked for it.
+   *
+   * Off by default because in JSON mode stdout is the protocol and keeping a
+   * second copy of it invites a caller to parse the text instead of the lines.
+   * The capability probe is the one caller that wants text: `--help` is prose,
+   * and its shape is what it is asking about.
+   */
+  stdout: string
   /** True when the run was cut short by {@link CliRunOptions.timeoutMs}. */
   timedOut: boolean
 }
@@ -90,6 +99,8 @@ export interface CliRunOptions {
   cwd?: string
   onProgress?: (line: CliProgressLine) => void
   timeoutMs?: number
+  /** Keep raw stdout in the outcome. Only the `--help` capability probe does. */
+  captureStdout?: boolean
   /**
    * Argv rendered for the log, with any secret already replaced. Required so
    * that logging a command is a deliberate act rather than a default that one
@@ -126,12 +137,14 @@ export function runCinnaCli(opts: CliRunOptions): Promise<CliRunOutcome> {
         exitCode: null,
         result: { result: 'error', code: 'spawn_failed', detail: String(err) },
         stderr: String(err),
+        stdout: '',
         timedOut: false
       })
       return
     }
 
     let stdoutBuffer = ''
+    let stdoutRaw = ''
     let stderr = ''
     let result: CliResultLine | null = null
     let noise = 0
@@ -171,7 +184,13 @@ export function runCinnaCli(opts: CliRunOptions): Promise<CliRunOutcome> {
       // exits promptly after writing it.
       consumeLine(stdoutBuffer)
       stdoutBuffer = ''
-      resolve({ exitCode, result, stderr: stderr.trim().slice(0, 2000), timedOut })
+      resolve({
+        exitCode,
+        result,
+        stderr: stderr.trim().slice(0, 2000),
+        stdout: stdoutRaw,
+        timedOut
+      })
     }
 
     const timer = setTimeout(() => {
@@ -187,6 +206,7 @@ export function runCinnaCli(opts: CliRunOptions): Promise<CliRunOutcome> {
 
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (chunk: string) => {
+      if (opts.captureStdout && stdoutRaw.length < 64 * 1024) stdoutRaw += chunk
       stdoutBuffer += chunk
       let newline = stdoutBuffer.indexOf('\n')
       while (newline !== -1) {

@@ -63,6 +63,11 @@ import { getLayout } from '../kit/contractStore'
 import { CinnaApiError, ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { runCinnaCli, type CliRunOutcome } from './cliRunner'
+import {
+  clearCliCapabilityCache,
+  probeCliCapabilities,
+  type CliCapabilities
+} from './cliCapabilities'
 import { toolchain, type ToolchainPins } from './toolchain'
 import {
   LOCAL_DEV_STATE_CHANNEL,
@@ -285,12 +290,24 @@ async function mintSetupCommand(
   }
 }
 
+/**
+ * The flags that only a cinna-cli new enough to have them may be given.
+ *
+ * Passing `--json` to one that does not is not a no-op — it is a usage error
+ * that fails before the command does any work, which is precisely how a
+ * server pinning an older cinna-cli would break every one of these calls.
+ */
+function protocolFlags(caps: CliCapabilities): string[] {
+  return caps.json ? ['--no-input', '--json'] : []
+}
+
 async function createWorkspace(
   userId: string,
   localDev: CinnaLocalDev,
   workspacePath: string,
   env: NodeJS.ProcessEnv,
-  cinnaBin: string
+  cinnaBin: string,
+  caps: CliCapabilities
 ): Promise<LocalDevState | null> {
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
@@ -307,10 +324,9 @@ async function createWorkspace(
       workspacePath,
       '--name',
       hostname(),
-      '--no-input',
-      '--json'
+      ...protocolFlags(caps)
     ],
-    logArgs: ['account', 'setup', '<setup-command>', '--dir', workspacePath, '--json'],
+    logArgs: ['account', 'setup', '<setup-command>', '--dir', workspacePath, ...protocolFlags(caps)],
     env,
     // `--dir` is absolute, so cinna-cli does not consult the working directory
     // — but a spawn that inherits whatever the OS launched Electron from is a
@@ -329,16 +345,28 @@ async function refreshAccountToken(
   localDev: CinnaLocalDev,
   workspacePath: string,
   env: NodeJS.ProcessEnv,
-  cinnaBin: string
+  cinnaBin: string,
+  caps: CliCapabilities
 ): Promise<LocalDevState | null> {
+  if (!caps.accountSetToken) {
+    // Nothing to fall back on: the top-level `cinna set-token` refreshes an
+    // *agent* workspace and would refuse this one. Say so rather than running
+    // it and reporting whatever it made of the attempt.
+    return {
+      phase: 'attention',
+      reason: 'token_expired',
+      detail:
+        'The account token has expired, and the cinna-cli version your server pins cannot refresh one in place. Repair sets the workspace up again.'
+    }
+  }
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
 
   setState({ phase: 'installing', step: 'Refreshing your account token…' })
   const outcome = await runCinnaCli({
     bin: cinnaBin,
-    args: ['account', 'set-token', minted.command, '--no-input', '--json'],
-    logArgs: ['account', 'set-token', '<setup-command>', '--json'],
+    args: ['account', 'set-token', minted.command, ...protocolFlags(caps)],
+    logArgs: ['account', 'set-token', '<setup-command>', ...protocolFlags(caps)],
     env,
     cwd: workspacePath
   })
@@ -349,12 +377,13 @@ async function refreshAccountToken(
 async function readAccountStatus(
   workspacePath: string,
   env: NodeJS.ProcessEnv,
-  cinnaBin: string
+  cinnaBin: string,
+  caps: CliCapabilities
 ): Promise<CliRunOutcome> {
   return runCinnaCli({
     bin: cinnaBin,
-    args: ['account', 'status', '--no-input', '--json'],
-    logArgs: ['account', 'status', '--json'],
+    args: ['account', 'status', ...protocolFlags(caps)],
+    logArgs: ['account', 'status', ...protocolFlags(caps)],
     env,
     cwd: workspacePath,
     timeoutMs: 60_000
@@ -386,7 +415,12 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   // every activation — but wrong for Repair, whose whole point is "look again".
   // A server that has just started offering local development, or bumped a
   // pinned version, is exactly what the user is pressing the button about.
-  if (force) clearEndpointCache()
+  if (force) {
+    clearEndpointCache()
+    // Repair may install a different cinna-cli, and a cached answer for the
+    // previous one is wrong in exactly the case that matters.
+    clearCliCapabilityCache()
+  }
 
   let localDev: CinnaLocalDev | undefined
   try {
@@ -457,6 +491,10 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   }
 
   const cinnaBin = toolchain.paths(pins).cinnaBin
+  // Asked once per (binary, version), before the first real invocation: a
+  // server may pin a cinna-cli older than the protocol this app prefers, and
+  // handing that one `--json` fails it before it does anything.
+  const caps = await probeCliCapabilities(cinnaBin, cliVersion, env)
   const workspacePath = workspacePathFor(userId, host)
 
   // Only the `Cloud/` parent. cinna-cli creates the workspace directory itself
@@ -476,7 +514,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   }
 
   if (!(await isFile(accountConfigPath(workspacePath)))) {
-    const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin)
+    const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin, caps)
     if (failure) {
       setState(failure)
       return state
@@ -484,7 +522,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   }
 
   setState({ phase: 'installing', step: 'Checking your account token…' })
-  let status = await readAccountStatus(workspacePath, env, cinnaBin)
+  let status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
   if (status.exitCode !== EXIT_OK) {
     setState(fromCliOutcome(status, 'Reading the workspace'))
     return state
@@ -492,12 +530,19 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
 
   const parsed = status.result as unknown as AccountStatus | null
   if (parsed?.token === 'expired') {
-    const failure = await refreshAccountToken(userId, localDev, workspacePath, env, cinnaBin)
+    const failure = await refreshAccountToken(
+      userId,
+      localDev,
+      workspacePath,
+      env,
+      cinnaBin,
+      caps
+    )
     if (failure) {
       setState(failure)
       return state
     }
-    status = await readAccountStatus(workspacePath, env, cinnaBin)
+    status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
     if (status.exitCode !== EXIT_OK) {
       setState(fromCliOutcome(status, 'Reading the workspace'))
       return state
@@ -531,7 +576,13 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     }
   }
 
-  setState({ phase: 'ready', workspacePath, cliVersion, cinnaBinPath: cinnaBin })
+  setState({
+    phase: 'ready',
+    workspacePath,
+    cliVersion,
+    cinnaBinPath: cinnaBin,
+    protocol: caps.json ? 'json' : 'legacy'
+  })
   return state
 }
 

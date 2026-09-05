@@ -57,7 +57,24 @@ export type LocalDevState =
    * can show where the toolchain lives and so the PATH opt-in has one source of
    * truth for what it links.
    */
-  | { phase: 'ready'; workspacePath: string; cliVersion: string; cinnaBinPath: string }
+  | {
+      phase: 'ready'
+      workspacePath: string
+      cliVersion: string
+      cinnaBinPath: string
+      /**
+       * Which cinna-cli surface this install actually has.
+       *
+       * `json` is the full one: machine-readable progress, a token state the
+       * desktop can read, and `cinna account set-token` to refresh an expired
+       * token in place. `legacy` is a cinna-cli that predates those — the
+       * server pins the version, so the desktop can be handed one — and it
+       * still works, with two visible costs: the install shows one step rather
+       * than several, and an expired account token cannot be refreshed
+       * silently. Settings says so; it is not hidden behind a working badge.
+       */
+      protocol: 'json' | 'legacy'
+    }
   /** Broken in a way re-running the reconciler can fix. `detail` is shown. */
   | { phase: 'attention'; reason: LocalDevAttentionReason; detail: string }
 

@@ -15,7 +15,7 @@ import type { CliRunOutcome } from './cliRunner'
  * Settings for a broken install when their wifi dropped.
  */
 function outcome(patch: Partial<CliRunOutcome>): CliRunOutcome {
-  return { exitCode: 0, result: null, stderr: '', timedOut: false, ...patch }
+  return { exitCode: 0, result: null, stderr: '', stdout: '', timedOut: false, ...patch }
 }
 
 describe('hostDirName', () => {

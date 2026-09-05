@@ -186,6 +186,17 @@ export function LocalDevSettingsSection(): React.JSX.Element {
                 <Field label="Account workspace" value={state.workspacePath} />
                 <Field label="cinna-cli" value={state.cliVersion} />
                 <Field label="Managed binary" value={state.cinnaBinPath} />
+                {state.protocol === 'legacy' && (
+                  // Not a warning banner: everything works. It is the one
+                  // consequence a user would otherwise meet as a surprise —
+                  // an expired token that needs Repair instead of fixing
+                  // itself — said once, where the version is shown.
+                  <Line>
+                    Your server pins a cinna-cli older than the machine-readable protocol, so
+                    progress is reported as a single step and an expired account token cannot be
+                    refreshed on its own — Repair sets the workspace up again when that happens.
+                  </Line>
+                )}
                 <Actions>
                   <PrimaryButton onClick={() => run(openWorkspace)} busy={busy}>
                     <FolderOpen size={13} /> Open folder

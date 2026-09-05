@@ -58,13 +58,34 @@ describe('LocalDevSettingsSection', () => {
     expect(screen.getByRole('button', { name: /repair/i })).toBeTruthy()
   })
 
+  it('says what an older pinned cinna-cli cannot do, without calling it broken', () => {
+    // The server picks the cinna-cli version, so a desktop can be handed one
+    // that predates the machine-readable protocol. Everything works; one thing
+    // (silent token refresh) does not, and meeting that as a surprise later is
+    // worse than a sentence here.
+    withState({
+      phase: 'ready',
+      workspacePath: '/Users/x/Agents/Cloud/cinna.example.com',
+      cliVersion: '0.3.0',
+      cinnaBinPath: '/Users/x/Library/Application Support/cinna/bin/cinna',
+      protocol: 'legacy' as const
+    })
+    render(<LocalDevSettingsSection />)
+
+    expect(screen.getByText(/older than the machine-readable protocol/i)).toBeTruthy()
+    expect(screen.getByText(/expired account token cannot be refreshed on its own/i)).toBeTruthy()
+    // Still ready: no warning icon, no attention copy.
+    expect(screen.queryByText(/needs attention/i)).toBeNull()
+  })
+
   it('shows where things are when ready, and surfaces a PATH refusal inline', async () => {
     addToPath.mockResolvedValue({ ok: false, reason: '~/.local/bin is not writable.' })
     withState({
       phase: 'ready',
       workspacePath: '/Users/x/Agents/Cloud/cinna.example.com',
       cliVersion: '0.4.2',
-      cinnaBinPath: '/Users/x/Library/Application Support/cinna/bin/cinna'
+      cinnaBinPath: '/Users/x/Library/Application Support/cinna/bin/cinna',
+      protocol: 'json' as const
     })
     render(<LocalDevSettingsSection />)
 
