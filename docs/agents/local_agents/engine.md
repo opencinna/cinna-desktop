@@ -313,6 +313,8 @@ Answering these prompts and persisting "always" grants is Phase 6's; this phase 
 
 Three sources, in order: a configured path, the login-shell PATH, the pinned download.
 
+> **The staging, verifying and atomic publishing described below is no longer the engine's own.** It now lives in `src/main/managed/managedAsset.ts` and is shared with the [local-development toolchain](../local_dev/local_dev.md), which installs uv and Mutagen the same way — a second copy of that logic would be a second place for "nothing partial is ever published" to be got wrong. `binaryResolver.ts` keeps what is genuinely about the engine: the pin table, the three sources and their precedence, and the `--version` probe. Every guarantee in this section is unchanged, and `EngineBinaryError` still widens the shared `ManagedAssetError` codes with its two "your configured path is wrong" cases.
+
 - **A configured path that is not a runnable file is an error, not a silent fallback.** The user pointed at something specific; quietly running a different engine than the one they named is worse than saying the path is wrong. No version pin is applied to it — the point of setting it is to run the one you named
 - **A `which` hit that will not run is not fatal** — it falls through to the managed copy rather than stranding the user on a broken install
 - **The pinned download is verified against a recorded SHA-256 before anything is unpacked.** The digests pin *those exact bytes*: a re-tagged release, a compromised CDN edge or a truncated transfer all fail and nothing is unpacked. They are **not** a signature — they establish that what arrives is what was pinned, not that what was pinned is trustworthy. Bumping the version means recomputing all six
