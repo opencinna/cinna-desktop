@@ -251,8 +251,8 @@ functions, not as current line numbers.
 The desktop ships a TypeScript port of this command. For the two scaffolders to produce
 **byte-identical** folders, `kit.py new` needs:
 
-- **`--description "<sentence>"`** — the desktop's New-agent flow starts from one sentence,
-  and writes it as the manifest `description`. Today the description appears to come from the
+- **`--description "<sentence>"`** — the desktop's New-agent flow takes a name and an optional
+  sentence, and writes the sentence — or the name, when none was given — as the manifest `description`. Today the description appears to come from the
   template only (`template_description()` at :918 suggests a template default exists).
 - **`--json`** — emit the created agent's path, slug, id and contract version as JSON on
   stdout, so a conformance suite (and any other tool) can drive the command without scraping

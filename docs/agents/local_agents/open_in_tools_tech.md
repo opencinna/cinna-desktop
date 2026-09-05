@@ -3,7 +3,8 @@
 ## File Locations
 
 ### Shared
-- `src/shared/localTools.ts` — `LocalToolId`, `LocalToolKind` (`cli-assistant | editor | runtime`), `LocalToolSource` (`path | app-bundle`), `DetectedTool`, `OpenInAction`, `OpenInRequest`. Shared so preload, renderer and the main-process services see one set of shapes
+- `src/shared/localTools.ts` — `LOCAL_TOOL_IDS` (the runtime list `LocalToolId` is derived from, so a setting can be validated against it without the two drifting), `isLocalToolId()`, `LocalToolKind` (`cli-assistant | editor | runtime`), `LAUNCHABLE_TOOL_KINDS` (`cli-assistant`, `editor` — the only kinds that may be the default), `actionForTool(tool)` (`editor` → `'editor'`, else `'terminal-command'`), `LocalToolSource`, `DetectedTool`, `OpenInAction`, `OpenInRequest`. Shared so preload, renderer and the main-process services see one set of shapes
+- `src/shared/appSettings.ts` — `localAgentsDefaultTool: string` (a `LocalToolId` or `''`), `localAgentsAutoOpen: boolean`
 
 ### Main Process
 - `src/main/services/localAgents/toolDetectionService.ts` — the tool table and the cached detection pass
@@ -11,6 +12,8 @@
 - `src/main/services/localAgents/terminalCommand.ts` — pure command construction, quoting and the root-containment test. No Electron, no `node:fs`, so the escaping rules are directly unit tested
 - `src/main/services/localAgents/terminalCommand.test.ts` — coverage for the quoting, argv building and containment rules
 - `src/main/errors.ts` — `LocalToolsError` / `LocalToolsErrorCode`, a `DomainError` subclass, alongside the other domain error codes
+- `src/main/services/appSettingsService.ts` — the `localAgentsDefaultTool` entry of `VALUE_CHECKS`: empty, or `isLocalToolId`, else `AppSettingsError('invalid_value')`. `localAgentsAutoOpen` has only the generic `typeof` gate against its `false` default (`src/main/db/appSettings.ts`)
+- `src/main/services/appSettingsService.test.ts` — `codex` and `''` accepted, `vim` refused, the boolean round-trips
 - `src/main/ipc/local_tools.ipc.ts` — the three thin handlers
 - `src/main/shell/env.ts` — `which()` and the resolved `PATH`; see [Shell Environment Resolution](../../development/shell_environment/shell_environment_tech.md)
 
@@ -18,7 +21,12 @@
 - `src/preload/index.ts` — `window.api.localTools.list()`, `.refresh()`, `.openIn(request)`
 
 ### Renderer
-- `src/renderer/src/hooks/useLocalTools.ts` — `useLocalTools()`, `useAvailableTools(kind)`, `useRefreshLocalTools()`, `useOpenIn()`
+- `src/renderer/src/hooks/useLocalTools.ts` — `useLocalTools()`, `useAvailableTools(kind)`, `useRefreshLocalTools()`, `useOpenIn()`, `useDefaultTool()`, `useSetDefaultTool()`
+- `src/renderer/src/utils/localAgents.ts` — `launchableTools(tools)` (available assistants, then available editors, detection order within each) and `resolveDefaultTool(launchable, settingId)` (`null` for `''` or an id not in the launchable list); pure, tested in `localAgents.test.ts`
+- `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu; `OpenInMenu.test.tsx`
+- `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — Reveal and Terminal again, from the ⋯ menu
+- `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the "Build it with…" step
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Open agents with** select and the auto-open checkbox in the Developer tools card
 
 ### Packaging
 - `build/entitlements.mac.plist` — `com.apple.security.automation.apple-events`
@@ -71,15 +79,19 @@ All three call `userActivation.requireActivated()` and are wrapped by `ipcHandle
 ## Renderer
 
 - `useLocalTools()` — TanStack Query over `local-tools:list` with `staleTime: Infinity`; the main-process cache makes it cheap after the first call and `useRefreshLocalTools` is the only invalidation
-- `useAvailableTools(kind)` — filters to `available && kind === …`, which is what the Open-in row renders
+- `useAvailableTools(kind)` — filters to `available && kind === …`; the Settings tools card's list
 - `useRefreshLocalTools()` — mutation over `local-tools:refresh`, writing the result straight into the query cache
 - `useOpenIn()` — mutation over `local-tools:open-in`. Main re-validates the folder, so a rejection here is expected and must be surfaced, not swallowed
+- `useDefaultTool()` — `{tool, launchable, autoOpen}`, memoised over the tools query and the app-settings query. `tool` is `null` when the setting is empty **or** names a tool that is not currently launchable; `autoOpen` is true only when `tool` resolved and `localAgentsAutoOpen` is on. This is where an uninstalled default degrades to "ask"
+- `useSetDefaultTool()` — `(toolId | null) => void` over `useSetAppSetting`; `null` writes `''` **and** `localAgentsAutoOpen: false`, since "ask each time" with auto-open armed would re-arm it on the next pick. Called by the Open-in menu and the "Build it with…" step on a pick that differs from the current default, and by the Settings select. Pinned by `src/renderer/src/hooks/useLocalTools.test.tsx`
 
 ## Configuration
 
 - `build/entitlements.mac.plist` — `com.apple.security.automation.apple-events` (required for `osascript` to drive Terminal/iTerm under the hardened runtime)
 - `electron-builder.yml` — `NSAppleEventsUsageDescription` in `mac.extendInfo`, the string macOS shows in the Automation prompt
 - `OSASCRIPT_TIMEOUT_MS` — 15 s, the ceiling on `osascript` and `open`
+- `localAgentsDefaultTool` (`app_settings`, default `''`) — the default tool's id, or empty for "ask". Validated on write against `LOCAL_TOOL_IDS` (any known id, runtimes included), resolved on read against the launchable list
+- `localAgentsAutoOpen` (`app_settings`, default `false`) — launch the default at a freshly created folder without the "Build it with…" step
 
 ## Security
 
@@ -88,5 +100,5 @@ All three call `userActivation.requireActivated()` and are wrapped by `ipcHandle
 - **No path is concatenated into a command line** except in the macOS AppleScript, where it is shell-quoted and then AppleScript-quoted
 - **`open -a`, never `shell.openExternal`** for the bundle-launch path — nothing user-influenced is ever parsed as a URL, and both operands stay discrete arguments
 - **Refusals log no paths** — root count and path length only, so the log cannot serve as a filesystem oracle
-- **Tool ids are an allowlist** — `toolDetectionService.get` returns `undefined` for anything not in `TOOL_SPECS`, and only an absolute path the detector itself found is ever executed
+- **Tool ids are an allowlist** — `toolDetectionService.get` returns `undefined` for anything not in `TOOL_SPECS`, and only an absolute path the detector itself found is ever executed. The default-tool setting is held to the same list on write (`isLocalToolId`), so a value that reaches `open-in` from persistence was never an arbitrary string
 - Every IPC channel is behind `requireActivated()`

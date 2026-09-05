@@ -97,6 +97,7 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/logger.spec.ts` — section B: live entries with the overlay open, the View → Toggle App Logs menu item, history hydration after a restart, `[REDACTED]` in expanded data
 - `e2e/specs/blocked-job.spec.ts` — section C: a job bound to a folder agent, the folder moved *out of the root* while the app is quit (a rename inside `Local/` re-indexes the same manifest id), red marker, hover, detail panel a–h, refused `job:execute` with no run row, recovery; a switched-off agent's amber marker and the Set up → Local Agents route
 - `e2e/specs/folder-agent.spec.ts` — section D without a model: `#` example prompts after attaching via `@` (D1), the job picker's `Local` group and `LOCAL-FOLDER` tag (D3), the status overlay and tray panel on an empty profile (D4)
+- `e2e/specs/agent-page.spec.ts` — the agent page: a name-only create → "Build it with…" → Not now → the page → Delete agent via ⋯ and the confirm dialog, with `shell.trashItem` stubbed in main so the sandbox folder never reaches the developer's Trash; and an IPC create with no description (the name stands in, readiness `ok`)
 - `e2e/specs/live.spec.ts` — `@live`: onboarding through the real API-key screen, a one-turn chat round trip, and D2: a folder agent given a secret word in its prompt documents, attached with `@` inside a model chat, answering through the engine
 - `e2e/fixtures/seed.ts` — `addAgentRoot`, `createFolderAgent`
 - `e2e/fixtures/live.ts` — `OPENAI_API_KEY` and `requireLiveKey()`

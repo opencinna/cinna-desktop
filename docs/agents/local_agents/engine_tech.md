@@ -29,7 +29,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 ### Main process — elsewhere
 - `src/main/ipc/engine.ipc.ts` — `registerEngineHandlers()`; four channels plus the state push. Calls `registerEngineShutdown()`
 - `src/main/ipc/index.ts` — `registerEngineHandlers()` in `registerAllIpcHandlers()` (required by the registration guard, seam 15)
-- `src/main/ipc/local_agent.ipc.ts:114-119` — the one per-site reconcile: a successful `update-field` fires `void engineManager.applyConfigChange(...)`, fire-and-forget
+- `src/main/ipc/local_agent.ipc.ts` — the two per-site reconciles, both `void engineManager.applyConfigChange(...)` fire-and-forget: after a successful `update-field` (`:125-129`) and after a successful `delete` (`:147`)
 - `src/main/services/localAgents/runtimeService.ts` — `runtimeService.{resolveDefault, resolve, applyToManifest}`, exported `findCredential()`, module-private `normaliseRef`, `isUsable`
 - `src/main/services/localAgents/promptAssembly.ts` — `assembleAgentPrompt()`, `resolveDesktopPromptContext()`, `stripHtmlComments()`, `listKnowledgeTopics()`, module-private `readTextFile`, `handoverSection`, `desktopContextSection`
 - `src/main/services/localAgents/turnLock.ts` — `turnLock.anyHeld()` (added for the engine; the rest is Phase 2)
@@ -41,7 +41,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 
 ### Renderer
 - `src/renderer/src/hooks/useEngine.ts` — `ENGINE_STATE_KEY`, `ENGINE_SKIPS_KEY`, `useEngineState`, `useEngineWatch`, `useEngineSkips`, `useStartEngine`, `useStopEngine`
-- `src/renderer/src/components/agents/local/RuntimeCard.tsx` — the credential and model pickers, the module-private `EngineLine` and `EngineSkipLine`
+- `src/renderer/src/components/agents/local/RuntimePanel.tsx` — the "Runs with" panel: the credential and model pickers, the module-private `EngineStatus`, `SecretsLine` and `EngineSkipLine`. Replaced `RuntimeCard.tsx` when the agent page was reorganised around its controls (see [Agents Tab & Agent Page](agents_tab.md))
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the readiness "Local engine" line, Start/Stop, and the engine-path field
 - `src/renderer/src/App.tsx:103` — `useEngineWatch()` mounted once in `Shell`, beside `useLocalAgentWatch()`
 
@@ -203,8 +203,8 @@ Bundling binaries as `extraResources` is deferred with a `TODO(packaging)` in th
 | `useEngineWatch` | One `engine:state` subscription for the app's lifetime; writes the pushed state straight into the cache and invalidates `['engine-skips']`. Mounted in `Shell` |
 | `useEngineSkips` | `['engine-skips']` from `engine:skips`. Only ever recomputed by a config generation, and every generation moves the state — so the push *is* the staleness signal |
 | `useStartEngine` / `useStopEngine` | Mutations that write the returned state into the cache. `isPending` covers the download. **A failed start resolves**, so callers render `data.error`, not a mutation error |
-| `RuntimeCard` | Credential `<select>` (usable providers, by **name**), model `<select>` (registry models for the effective provider), `EngineLine`, `EngineSkipLine`, the not-editable notes. Writes via `useSetLocalAgentRuntime` → `local-agent:update-field` with the manifest stamp |
-| `EngineLine` (private) | One line of engine status plus a Start button; hidden when running |
+| `RuntimePanel` | Credential `<select>` (usable providers, by **name**), model `<select>` (registry models for the effective provider), `EngineStatus`, `SecretsLine`, `EngineSkipLine`, the not-editable notes. Writes via `useSetLocalAgentRuntime` → `local-agent:update-field` with the manifest stamp |
+| `EngineStatus` (private) | The engine's state as a dot and a word, plus a Start button shown whenever it is not running |
 | `EngineSkipLine` (private) | "The engine skipped this agent because …" for this agent id |
 | `LocalAgentsSettingsSection` | The "Local engine" readiness line (status, version, which source), Start/Stop, and the engine-path field |
 
@@ -263,7 +263,7 @@ Generated files, none of which is ever inside an agent folder:
 - The download **sequence** (`downloadToFile` → `extractArchive` → `chmod` → `rename`, including the lost-race branch). Every piece is hand-verified against the real binary; the sequence has only run against fakes
 - `writeIfDifferent`'s atomicity under interruption — a writer killed between write and rename must leave the previous config intact. Needs a crash, not a mock. The visible consequence (no surviving `.tmp`) *is* tested
 - The `knowledge/` topic sort (pre-existing: `readdirSync` already returns name order on APFS)
-- **Every renderer change in this phase.** `vitest.config.ts` runs `environment: 'node'`; there is no jsdom or testing-library in the repo, so `RuntimeCard`, the engine-path field, the Start/Stop button and the skip line are typechecked and bundled but **never rendered**
+- **Every renderer change in this phase.** `RuntimePanel` (formerly `RuntimeCard`), the engine-path field, the Start/Stop button and the skip line are typechecked and bundled but **never rendered** by a test. The repo does have a jsdom project and testing-library now (this bullet used to say it did not — see the closed gap in [Agents Tab & Agent Page](agents_tab.md#known-gaps)), but `LocalAgentPage.test.tsx` mocks `RuntimePanel` to a marker, so its pickers are still unexercised
 - The reconcile's cost. Per turn it does a keychain decrypt per credential and a full prompt re-assembly per agent — file reads plus the `knowledge/` walk, since `scannerService.scanRootCached` caches only the folder *scan*. Reasoned to be a few milliseconds, never measured. **If Phase 6 sees unexplained turn latency, look here first**
 
 **Test conventions specific to this slice:**

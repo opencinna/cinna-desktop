@@ -43,10 +43,10 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/ipc/agent_a2a.ipc.ts` and `src/main/services/a2aAsMcpProvider.ts` — handle the `null` endpoint a folder agent resolves to
 
 ### Preload
-- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, which belongs to the Agents tab slice). Typed by inference; there is no hand-written interface
+- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft` and `delete`, which belong to the Agents tab slice). Typed by inference; there is no hand-written interface
 
 ### Renderer
-- `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useValidateLocalAgent`
+- `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useDeleteLocalAgent`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useValidateLocalAgent`
 - `src/renderer/src/components/chat/ChatInput.tsx` and `src/renderer/src/components/jobs/JobEditForm.tsx` — the two counterparty pickers. Both filter on `a.enabled` alone; see [Folder Agents as Counterparties](counterparty.md)
 
 ## Database Schema
@@ -100,6 +100,7 @@ Nothing about boot behaviour changed: `client.ts` still owns the connection, `jo
 | `local-agent:root-add` | invoke | `() → { cancelled: true } \| { cancelled: false; root: AgentRootDto }` — **takes no path** |
 | `local-agent:root-remove` | invoke | `(rootId) → { pruned: number }` |
 | `local-agent:draft` | invoke | `(agentId) → DraftLocalAgentResult` — the post-scaffold AI draft. Belongs to the Agents tab slice, not this one; separate from `:create` because the folder must exist the instant the user asks, and a draft can take half a minute |
+| `local-agent:delete` | invoke | `(agentId) → LocalAgentOutcome<DeleteLocalAgentResult>` — `shell.trashItem` under the turn lock, then `scanRoot`; the row leaves through the ordinary prune. Also the Agents tab slice's; listed here because it is the one caller that *relies* on the prune to drop a row |
 | `local-agent:changed` | main → renderer | `LocalAgentChangedPayload` — `{ rootId, agentId \| null, reason: 'watch' \| 'rescan' \| 'create' }` |
 
 Every handler calls `userActivation.requireActivated()`, resolves its user with `getSettingsScopeUserId()`, and is wrapped by `ipcHandle()`. They hold no logic beyond that. `registerLocalAgentHandlers()` calls `localAgentService.configure(getSettingsScopeUserId)` first — the composition root — so the open-in roots provider and the watcher callbacks are wired before any handler can run.
@@ -126,7 +127,7 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
 ### `src/main/services/localAgents/scannerService.ts`
 - `scanAgentFolder(agentDir, root)` — one folder → `LocalAgentDto`. Never throws
 - `listAgentDirs(rootPath)` — `Local/*/`, dot-entries skipped, symlinks `stat`ed. `null` means the root could not be listed
-- `scanRoot(userId, root)` — the full scan and index rebuild. Returns `{agents, rootMissing, indexed, pruned}`
+- `scanRoot(userId, root)` — the full scan and index rebuild. Returns `{agents, rootMissing, indexed, pruned}`. The row's `description` is `describedAs(dto) || null` (`src/shared/localAgents.ts`) — `null` when the manifest's description is only the name repeated, so the `@` / `[+]` / Jobs pickers, which read the column and never the manifest, do not show the name twice for a name-only agent. `reindexAgent` applies the same
 - `scanRootCached(userId, root)` — what the read paths use
 - `markRootDirty(rootId)` / `markAllRootsDirty()` — the cache's **exact** invalidation. Every path that can change a folder marks its root dirty; nothing else serves stale data. Before this cache existed, `local-agent:list` re-walked, parsed, validated and re-indexed every agent in every root synchronously on every call — and the renderer refetches on every change push, so watcher bursts compounded
 - `readEnvKeys(agentDir)` / `readStatus(agentDir, statusFile)` — exported for tests; names-only and frontmatter-only respectively
@@ -158,7 +159,7 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 - `get(userId, agentId)` — always a fresh scan; the agent page is watched while editing
 - `locate(userId, agentId)` — id → `{root, agentDir}` **through the index row**, never from a renderer-supplied string
 - `reindexAgent(userId, root, agentDir)` — single-folder update; falls back to a full `scanRoot` when the folder has no row yet, because only `replaceFolderIndex` inserts
-- `rescan(userId, rootId?)`, `create(userId, input)`, `updateField(userId, input)`, `validate(userId, agentId)`, `openPath(userId, input)`, `listRoots`, `addRoot`, `removeRoot`
+- `rescan(userId, rootId?)`, `create(userId, input)` (a missing `description` becomes the name), `updateField(userId, input)`, `delete(userId, agentId)` (trash, lock, rescan — see [Agents Tab — Technical Details](agents_tab_tech.md)), `validate(userId, agentId)`, `openPath(userId, input)`, `listRoots`, `addRoot`, `removeRoot`
 - `writeTextIfUnchanged()` (module-private) — the prompt-document counterpart of `manifestIo.writeIfUnchanged`, reusing `manifestIo.stampsMatch` rather than re-implementing the comparison. Atomic: temp → `fsync` → rename
 - Field limits: name 255, description 2000, ≤ 20 example prompts of 2000, router trigger 2000, status command 1024, prompt document 512 KB
 

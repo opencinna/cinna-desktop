@@ -46,7 +46,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 4. Each root starts being watched
 
 ### Creating an agent
-1. The user supplies a name and one sentence describing what the agent should do
+1. The user supplies a name, and optionally one sentence describing what the agent should do. Absent or blank, the name is written as the description — the kit schema requires a non-empty one, and a folder invalid from its first second is a worse start than a redundant sentence. The index row's `description` column is `null` in that case, so no picker renders the name twice
 2. A slug is derived from the name unless one was given
 3. The agent skeleton is copied out of the active contract's `templates/agent/` into a hidden staging directory, `{{TOKEN}}` placeholders are substituted, the dotless `gitignore` files are restored to their dotted names, and a manifest is written carrying a fresh UUID `id`, the contract version and the kit version
 4. The staging directory is renamed into `Local/<slug>/` — all-or-nothing, so no half-agent is ever visible to the scanner or the watcher
@@ -140,6 +140,8 @@ Two more properties:
 
 - Pruning is **scoped to one root**, so an agent folder moved between roots keeps its row (the upsert repoints `local_root_id`) and keeps its chats
 - Removing a root is the explicit, unscoped prune — the only path that drops rows the scan did not disprove
+
+**Deleting an agent from its page is not a fourth path.** The page's Delete moves the folder to the OS Trash (under the agent's turn lock, so a turn in flight refuses it) and then rescans the root; the row goes because the scan walked the root and the folder was not there — ground 1 failing, honestly. Nothing deletes an `agents` row by id. A second removal path with its own idea of what to drop is how the cascade reasoning above would stop being the whole story. See [Agents Tab & Agent Page](agents_tab.md#delete-goes-to-the-trash-and-through-the-prune).
 
 ### What `enabled` means
 
