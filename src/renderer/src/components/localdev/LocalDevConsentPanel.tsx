@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CheckCircle, Loader2, TerminalSquare, XCircle } from 'lucide-react'
+import { LocalDevExplainer } from './LocalDevExplainer'
 import { LocalDevTaskList } from './LocalDevTaskList'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import type { LocalDevState } from '../../../../shared/localDevState'
@@ -168,22 +169,7 @@ export function LocalDevConsentPanel({
         </div>
       </div>
 
-      <ul className="space-y-1.5 text-[11px] text-[var(--color-text-secondary)]">
-        <li>
-          Installs <span className="text-[var(--color-text)]">uv</span>,{' '}
-          <span className="text-[var(--color-text)]">cinna-cli</span> and{' '}
-          <span className="text-[var(--color-text)]">Mutagen</span> inside Cinna&rsquo;s own data
-          folder — not into your system or your Python.
-        </li>
-        <li>
-          Creates{' '}
-          <span className="text-[var(--color-text)] break-all">
-            {agentsHomeHint}/{host.replace(/:/g, '_') || 'your-server'}
-          </span>{' '}
-          for this server.
-        </li>
-        <li>Nothing is synced and no agent is downloaded.</li>
-      </ul>
+      <LocalDevExplainer host={host} agentsHomeHint={agentsHomeHint} />
 
       <div className="flex justify-end gap-2 pt-1">
         <button

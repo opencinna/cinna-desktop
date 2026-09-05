@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { Loader2 } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
+import { useLocalDevStore } from '../../stores/localDev.store'
+import { useAgentsHomeHint } from '../../hooks/useAgentsHomeHint'
 import { LocalDevConsentPanel } from './LocalDevConsentPanel'
 
 /**
@@ -34,7 +36,11 @@ export function LocalDevOnboardingStep({
   onDone
 }: LocalDevOnboardingStepProps): React.JSX.Element {
   const state = useLocalDev()
-  const [agentsHome, setAgentsHome] = useState('')
+  // The connect screen's checkbox may already have answered for this host,
+  // with main still turning that answer into an install. Asking again in that
+  // window is the flicker `answeredHosts` exists to prevent.
+  const answeredHosts = useLocalDevStore((s) => s.answeredHosts)
+  const agentsHome = useAgentsHomeHint()
 
   // Held in a ref because the callers pass an inline arrow: as a dependency it
   // changes identity on every render, which would restart the grace timer below
@@ -42,37 +48,27 @@ export function LocalDevOnboardingStep({
   const done = useRef(onDone)
   done.current = onDone
 
-  useEffect(() => {
-    let cancelled = false
-    void window.api.localAgents
-      .rootsList()
-      .then((roots) => {
-        if (cancelled) return
-        const home = roots.find((r) => r.isDefault) ?? roots[0]
-        // `Cloud` is the kit contract's `workshop.cloud_dir`; it is spelled out
-        // here only as a hint in consent copy, and the main process resolves
-        // the real path from the contract when it creates the folder.
-        if (home) setAgentsHome(`${home.path}/Cloud`)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [])
-
   // Nothing to ask: leave immediately rather than flashing a panel.
   useEffect(() => {
     if (state.phase === 'unsupported' || state.phase === 'declined') done.current()
   }, [state.phase])
 
-  // Still waiting on the first reconcile answer — do not hold first run hostage.
+  const alreadyAnswered = state.phase === 'consent' && answeredHosts.includes(state.host)
+
+  // Still waiting on the first reconcile answer, or on main acting on an answer
+  // already given — do not hold first run hostage for either.
   useEffect(() => {
-    if (state.phase !== 'idle') return
+    if (state.phase !== 'idle' && !alreadyAnswered) return
     const timer = setTimeout(() => done.current(), IDLE_GRACE_MS)
     return () => clearTimeout(timer)
-  }, [state.phase])
+  }, [state.phase, alreadyAnswered])
 
-  if (state.phase === 'idle' || state.phase === 'unsupported' || state.phase === 'declined') {
+  if (
+    state.phase === 'idle' ||
+    state.phase === 'unsupported' ||
+    state.phase === 'declined' ||
+    alreadyAnswered
+  ) {
     return (
       <div className="flex flex-col items-center gap-3 py-8">
         <Loader2 size={28} className="text-[var(--color-accent)] animate-spin" />

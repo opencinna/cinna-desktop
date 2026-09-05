@@ -18,30 +18,21 @@
  */
 import { useEffect, useState } from 'react'
 import { useLocalDev } from '../../hooks/useLocalDev'
+import { useLocalDevStore } from '../../stores/localDev.store'
+import { useAgentsHomeHint } from '../../hooks/useAgentsHomeHint'
 import { LocalDevConsentPanel } from './LocalDevConsentPanel'
 
 export function LocalDevConsentModal(): React.JSX.Element | null {
   const state = useLocalDev()
-  const [agentsHome, setAgentsHome] = useState('')
+  // Answered on the connect screen, and main has not finished acting on it yet.
+  // Popping this modal in that window would ask a question the user has just
+  // answered — see `answeredHosts`.
+  const answeredHosts = useLocalDevStore((s) => s.answeredHosts)
+  // Asked only while this modal is actually about to render the question.
+  const agentsHome = useAgentsHomeHint(state.phase === 'consent')
   // Closed once answered, so the progress that follows does not keep the modal
   // up — `installing` is the sidebar's job.
   const [answered, setAnswered] = useState(false)
-
-  useEffect(() => {
-    if (state.phase !== 'consent') return
-    let cancelled = false
-    void window.api.localAgents
-      .rootsList()
-      .then((roots) => {
-        if (cancelled) return
-        const home = roots.find((r) => r.isDefault) ?? roots[0]
-        if (home) setAgentsHome(`${home.path}/Cloud`)
-      })
-      .catch(() => undefined)
-    return () => {
-      cancelled = true
-    }
-  }, [state.phase])
 
   // A later reconcile that lands back on `consent` (the user reset it in
   // Settings) is a new question, not the one already answered.
@@ -49,7 +40,7 @@ export function LocalDevConsentModal(): React.JSX.Element | null {
     if (state.phase === 'consent') setAnswered(false)
   }, [state.phase])
 
-  if (state.phase !== 'consent' || answered) return null
+  if (state.phase !== 'consent' || answered || answeredHosts.includes(state.host)) return null
 
   return (
     <div

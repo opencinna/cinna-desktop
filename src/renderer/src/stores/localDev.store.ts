@@ -16,6 +16,17 @@ const log = createLogger('local-dev')
 interface LocalDevStore {
   state: LocalDevState
   subscribed: boolean
+  /**
+   * Hosts this renderer has already answered the consent question for.
+   *
+   * Main records the answer and then reconciles, and until that reconcile has
+   * moved off `consent` the broadcast state still says "waiting on the user" —
+   * which is how a screen that just took the answer ends up asking it again for
+   * half a second. The surfaces that ask check this before rendering the
+   * question; nothing else may read it, because it is a fact about this window,
+   * not about the machine.
+   */
+  answeredHosts: string[]
   subscribe: () => Promise<void>
   set: (state: LocalDevState) => void
   consent: (host: string, accepted: boolean) => Promise<void>
@@ -27,6 +38,7 @@ interface LocalDevStore {
 export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   state: { phase: 'idle' },
   subscribed: false,
+  answeredHosts: [],
 
   set: (state) => set({ state }),
 
@@ -45,13 +57,34 @@ export const useLocalDevStore = create<LocalDevStore>((set, get) => ({
   },
 
   consent: async (host, accepted) => {
-    // The answer comes back as the next state — main reconciles immediately on
-    // an accept — so there is nothing to invalidate and no window in which the
-    // UI shows a decision that has not been recorded.
-    set({ state: await window.api.localDev.consent(host, accepted) })
+    // Marked answered before the call, not after: the whole point is to cover
+    // the window while main is still working the answer through a reconcile.
+    set((s) => ({
+      answeredHosts: s.answeredHosts.includes(host) ? s.answeredHosts : [...s.answeredHosts, host]
+    }))
+    try {
+      // The answer comes back as the next state — main reconciles immediately
+      // on an accept — so there is nothing to invalidate and no window in which
+      // the UI shows a decision that has not been recorded.
+      set({ state: await window.api.localDev.consent(host, accepted) })
+    } catch (err) {
+      // Rolled back, or the marker outlives the answer it was covering for:
+      // the channel is gated on an activated profile, and a rejection there
+      // would otherwise suppress the question in both surfaces that ask it for
+      // the life of this window — and nothing would ever set local development
+      // up until the app was restarted.
+      set((s) => ({ answeredHosts: s.answeredHosts.filter((h) => h !== host) }))
+      log.error('could not record the local dev consent answer', {
+        host,
+        message: (err as Error).message
+      })
+    }
   },
 
   resetConsent: async (host) => {
+    // Settings asking for the question back is the one thing that clears the
+    // marker; otherwise the prompt it just re-armed would never be shown.
+    set((s) => ({ answeredHosts: s.answeredHosts.filter((h) => h !== host) }))
     set({ state: await window.api.localDev.resetConsent(host) })
   },
 
