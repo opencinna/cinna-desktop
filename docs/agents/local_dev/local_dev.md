@@ -176,7 +176,7 @@ The desktop installs and orchestrates. cinna-cli owns setup, the token exchange,
 |---|---|---|
 | `0` | ok | continue |
 | `10` | the setup token was rejected (invalid, expired, already used) | `attention/token_expired` — almost always a token that expired between minting and use, and re-running mints a new one, so Repair is a real fix rather than a dead end |
-| `11` | the token belongs to a different account than the workspace | `attention/workspace`, with copy saying to move the folder aside. No retry fixes this |
+| `11` | the token belongs to a different account than the workspace | `attention/workspace`, with copy saying to move the folder aside. Repair tries again, but no retry fixes this one |
 | `12` | the platform could not be reached | `attention/network` |
 | `2` | the desktop called cinna-cli wrongly | `attention/workspace` (the default branch) |
 | `1` | everything else | `attention/workspace` |
@@ -190,7 +190,13 @@ A run that exits non-zero is an **outcome, not a rejection**: `runCinnaCli` neve
 
 ### Repair
 
-`reconcile(force)` differs from an ordinary run in four ways: it clears the discovery cache first (discovery is cached for the session, which is right for a check that runs on every activation and wrong for a button whose whole point is "look again" — a server that has just started offering local development, or bumped a pin, is exactly what the user is pressing about), it records consent and proceeds, it calls `toolchain.repair` instead of `toolchain.ensure`, and repair deliberately **destroys the proof of a good install before rebuilding it** — the point of Repair is that the files may be there and still wrong. It removes the install directories and `state.json` but keeps the uv cache and the downloaded Python, which is the difference between a repair that takes seconds and one that re-downloads a hundred megabytes.
+`reconcile(force)` differs from an ordinary run in three ways:
+
+- **It clears the discovery cache first.** Discovery is cached for the session, which is right for a check that runs on every activation and wrong for a button whose whole point is "look again" — a server that has just started offering local development, or bumped a pin, is exactly what the user is pressing about
+- **It records consent and proceeds.** Repair and Settings' **Set up** are the only ways to pass `force`, and pressing a button whose copy says what it will do *is* the consent
+- **It reinstalls the toolchain only when the toolchain is what broke** — that is, when the state Repair was pressed on was `attention/toolchain`, decided before the first `setState` overwrites the reason. Repair is one button for every failure and reinstalling uv, a Python and the cinna-cli dependency tree takes minutes; doing that because an account token expired overnight would turn a two-second fix into a coffee break. Everything else Repair does — look the server up again, re-check the token, re-read the workspace — happens either way
+
+When the heavy path *is* taken, it deliberately **destroys the proof of a good install before rebuilding it**: the point of Repair is that the files may be there and still wrong. It removes the install directories and `state.json` but keeps the uv cache and the downloaded Python, which is the difference between a repair that takes seconds and one that re-downloads a hundred megabytes.
 
 ## Architecture Overview
 
