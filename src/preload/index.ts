@@ -20,6 +20,7 @@ import type { EngineSkips, EngineState } from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
+import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState } from '../shared/localDevState'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
@@ -1028,6 +1029,42 @@ const api = {
       const listener = (_event: IpcRendererEvent, intent: ConnectIntent): void => handler(intent)
       ipcRenderer.on(CONNECT_INTENT_CHANNEL, listener)
       return () => ipcRenderer.off(CONNECT_INTENT_CHANNEL, listener)
+    }
+  },
+
+  /**
+   * Local development: the managed toolchain (uv, cinna-cli, Mutagen) and the
+   * cinna-cli account workspace under the Agents Home.
+   *
+   * Every verb acts on the **active profile**, which main resolves itself —
+   * there is no `userId` parameter here and there should not be one. What
+   * crosses back is always a {@link LocalDevState}: a refused install, a
+   * rejected token and a missing role are all things the UI renders, and a
+   * rejection would lose the reason on the way over.
+   */
+  localDev: {
+    getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
+    /** Answer the per-host consent prompt. `false` is remembered too. */
+    consent: (host: string, accepted: boolean): Promise<LocalDevState> =>
+      ipcRenderer.invoke('localdev:consent', host, accepted),
+    /** Forget the answer for a host so the prompt returns. */
+    resetConsent: (host: string): Promise<LocalDevState> =>
+      ipcRenderer.invoke('localdev:reset-consent', host),
+    /** Re-run everything, overriding a remembered decline. Backs Repair. */
+    repair: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:repair'),
+    /** The recorded per-host answers, for Settings. */
+    getConsent: (): Promise<Record<string, boolean>> =>
+      ipcRenderer.invoke('localdev:get-consent'),
+    openWorkspace: (): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke('localdev:open-workspace'),
+    /** Opt in to a `~/.local/bin/cinna` symlink. Never done automatically. */
+    addToPath: (): Promise<{ ok: boolean; path?: string; reason?: string }> =>
+      ipcRenderer.invoke('localdev:add-to-path'),
+    /** Fires on every state transition. Returns an unsubscribe. */
+    onState: (handler: (state: LocalDevState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: LocalDevState): void => handler(state)
+      ipcRenderer.on(LOCAL_DEV_STATE_CHANNEL, listener)
+      return () => ipcRenderer.off(LOCAL_DEV_STATE_CHANNEL, listener)
     }
   },
 

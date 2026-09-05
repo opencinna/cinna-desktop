@@ -10,7 +10,8 @@ import {
   Package,
   Cloud,
   FolderCog,
-  SlidersHorizontal
+  SlidersHorizontal,
+  TerminalSquare
 } from 'lucide-react'
 import { useEffect } from 'react'
 import { useUIStore, PROFILE_SCOPE_TABS } from '../../stores/ui.store'
@@ -24,6 +25,7 @@ import { SidebarTabs } from './SidebarTabs'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
+import { LocalDevStatusButton } from '../localdev/LocalDevStatusButton'
 import { InterfaceMenu } from './InterfaceMenu'
 import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
@@ -31,6 +33,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
   { id: 'chats', label: 'Chats', icon: MessageSquare },
   { id: 'agents', label: 'Agents', icon: Bot },
   { id: 'local-agents', label: 'Local Agents', icon: FolderCog },
+  { id: 'local-dev', label: 'Local Development', icon: TerminalSquare },
   { id: 'llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
   { id: 'accounts', label: 'User Accounts', icon: Users },
@@ -173,6 +176,7 @@ export function Sidebar(): React.JSX.Element {
               and go. With nothing to report it renders a plain glyph with no
               severity dot. */}
           <AgentStatusButton />
+          <LocalDevStatusButton />
           <UpdateStatusButton />
           <InterfaceMenu />
         </div>

@@ -7,6 +7,7 @@ import { LoginScreen } from './components/auth/LoginScreen'
 import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { ReauthModal } from './components/auth/ReauthModal'
 import { ConnectIntentModal } from './components/auth/ConnectIntentModal'
+import { LocalDevConsentModal } from './components/localdev/LocalDevConsentModal'
 import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
@@ -166,6 +167,10 @@ function App(): React.JSX.Element {
               onboarding screen's own confirm step — is the right surface for a
               deep link. Outside it, both would show the same intent at once. */}
           <ConnectIntentModal />
+          {/* Also inside the gate: during first run the same question is a
+              step of the onboarding screen, and two surfaces asking it at once
+              would be two answers racing to be recorded. */}
+          <LocalDevConsentModal />
         </OnboardingGate>
         <LogsOverlay />
         <AgentStatusOverlay />

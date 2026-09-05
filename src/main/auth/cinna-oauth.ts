@@ -4,6 +4,7 @@ import os from 'node:os'
 import { app } from 'electron'
 import { findAvailablePort, waitForOAuthCallback } from '../mcp/oauth-callback'
 import { createLogger } from '../logger/logger'
+import type { CinnaLocalDev } from '../../shared/localDevState'
 
 const logger = createLogger('cinna-oauth')
 
@@ -14,6 +15,18 @@ export interface CinnaEndpoints {
   authorization_endpoint: string
   token_endpoint: string
   userinfo_endpoint: string
+  /**
+   * Optional. Present only on instances that offer local development to
+   * desktops; its absence is `unsupported/server` and not an error. Typed here
+   * rather than re-fetched elsewhere because the discovery document is already
+   * fetched and cached on this path, and a second fetch would be a second
+   * chance for the two to disagree.
+   *
+   * The three required fields are validated above; everything else — this
+   * block, `instance_name`, `version` — is read through and left alone, which
+   * is what makes the block backward compatible in both directions.
+   */
+  local_dev?: CinnaLocalDev
 }
 
 export interface CinnaUserProfile {

@@ -24,6 +24,7 @@ vi.mock('../agents/local/LocalAgentsList', () => ({ LocalAgentsList: () => null 
 vi.mock('./SidebarTabs', () => ({ SidebarTabs: () => null }))
 vi.mock('../auth/UserMenu', () => ({ UserMenu: () => null }))
 vi.mock('../updater/UpdateStatusButton', () => ({ UpdateStatusButton: () => null }))
+vi.mock('../localdev/LocalDevStatusButton', () => ({ LocalDevStatusButton: () => null }))
 vi.mock('./InterfaceMenu', () => ({ InterfaceMenu: () => null }))
 
 // `ui.store.ts` calls `window.api.app.setTheme(...)` at module scope, so the

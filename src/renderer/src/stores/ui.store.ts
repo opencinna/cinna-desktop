@@ -15,6 +15,7 @@ export type SettingsMenu =
   | 'mcp'
   | 'agents'
   | 'local-agents'
+  | 'local-dev'
   | 'accounts'
   | 'features'
   | 'development'

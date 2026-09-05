@@ -5,7 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
-import { initSession } from './auth/session'
+import { getCurrentUserId, initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
 import { syncService } from './services/syncService'
@@ -13,6 +13,7 @@ import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
 import { installLogBroadcast } from './logger/broadcast'
+import { localDevService } from './localdev/localDevService'
 import {
   connectIntentService,
   connectUrlFromArgv,
@@ -354,7 +355,16 @@ function startup(): void {
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +
   // catch up on resume. `powerMonitor` is only available after the app is ready.
   powerMonitor.on('suspend', () => syncService.setSystemSuspended(true))
-  powerMonitor.on('resume', () => syncService.setSystemSuspended(false))
+  powerMonitor.on('resume', () => {
+    syncService.setSystemSuspended(false)
+    // A laptop that was closed for a week wakes with an expired account token
+    // and possibly a server that has bumped its pins. The reconciler is
+    // idempotent and single-flight, so this is a cheap check that costs nothing
+    // when everything is already right.
+    // `reconcile` answers `idle` for a local profile, so no guard is needed
+    // here beyond asking the session who is active.
+    void localDevService.reconcile(getCurrentUserId())
+  })
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

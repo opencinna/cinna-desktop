@@ -22,7 +22,9 @@ export const DEFAULTS: AppSettingsSchema = {
   // rather than `string | null` so `appSettingsService`'s typeof check works.
   localAgentsHome: '',
   // Empty = resolve one (PATH first, then the pinned managed download).
-  localAgentsEnginePath: ''
+  localAgentsEnginePath: '',
+  // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
+  localDevConsent: ''
 }
 
 export const appSettingsRepo = {

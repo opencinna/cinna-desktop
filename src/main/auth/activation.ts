@@ -9,6 +9,7 @@ import {
   stopAccountConfigPeriodicSync
 } from '../services/account-config-sync'
 import { syncService } from '../services/syncService'
+import { localDevService } from '../localdev/localDevService'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
 
@@ -94,12 +95,22 @@ class UserActivation {
       startAccountConfigPeriodicSync(userId)
       // Activate cloud data-sync (silent device-key unlock + periodic push/pull).
       void syncService.ensureActivated(userId)
+      // Bring local development to its target state: the managed toolchain and
+      // the cinna-cli account workspace. Idempotent and cheap when it is
+      // already there, so it belongs on every activation rather than only on
+      // the first — a pinned version the server bumped, a token that expired
+      // overnight and a workspace the user deleted are all discovered here.
+      void localDevService.reconcile(userId)
     }
   }
 
   /** Tear down the active session without loading any providers. */
   async deactivate(): Promise<void> {
     this._activated = false
+    // The local-dev state names a host and a folder belonging to the profile
+    // that is going away; leaving it up would show the next profile someone
+    // else's workspace path.
+    localDevService.clear()
     stopPeriodicSync()
     stopAccountConfigPeriodicSync()
     // Zero all UMKs + clear sync timers on profile switch / sign-out.

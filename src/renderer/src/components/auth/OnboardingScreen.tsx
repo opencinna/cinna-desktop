@@ -25,6 +25,7 @@ import {
 import { pickDefaultModelId } from '../../../../shared/modelDefaults'
 import type { ConnectIntent } from '../../../../shared/connectIntent'
 import { ConnectIntentPanel } from './ConnectIntentPanel'
+import { LocalDevOnboardingStep } from '../localdev/LocalDevOnboardingStep'
 
 interface OnboardingScreenProps {
   onComplete: () => void
@@ -48,6 +49,12 @@ type Step =
   | 'cinna-waiting'
   /** The deep link's confirmation. Never reached by navigating; only by arriving. */
   | 'cinna-confirm'
+  /**
+   * Offered only after a Cinna account is connected, and only when the server
+   * and the account actually offer local development. It skips itself
+   * otherwise — see {@link LocalDevOnboardingStep}.
+   */
+  | 'localdev'
 
 type ProviderType = 'anthropic' | 'openai' | 'gemini'
 
@@ -239,7 +246,10 @@ export function OnboardingScreen({
       const next = prependSelfHostedHistory(selfHostedHistory, trimmedUrl)
       writeSelfHostedHistory(next)
       setSelfHostedHistory(next)
-      onComplete()
+      // Not straight to the app: the account is connected, and the one question
+      // left is whether to prepare this machine for building agents on it. The
+      // step gets out of the way by itself when there is nothing to ask.
+      setStep('localdev')
     } else {
       setCinnaError(result.error ?? 'Authentication failed')
       setStep('cinna-hosting')
@@ -277,10 +287,14 @@ export function OnboardingScreen({
             // decline leaves the user needing the ordinary choices, so it falls
             // back to the welcome step rather than closing the screen.
             if (outcome === 'declined') setStep('welcome')
-            else onComplete()
+            else setStep('localdev')
           }}
         />
       )
+    }
+
+    if (step === 'localdev') {
+      return <LocalDevOnboardingStep onDone={onComplete} />
     }
 
     if (step === 'welcome') {

@@ -50,6 +50,20 @@ export interface AppSettingsSchema {
    * rejected setting.
    */
   localAgentsEnginePath: string
+  /**
+   * Which Cinna hosts the user has agreed to set up local development for, as
+   * a JSON object of `{ "<host>": true | false }`.
+   *
+   * A string rather than a nested object because this store is one flat KV
+   * table validated by `typeof`, and because consent is genuinely per host: one
+   * desktop can hold accounts on several instances, and agreeing to install a
+   * toolchain and create a folder for one says nothing about another. `false`
+   * is a real answer — the user declined — and is what keeps the prompt from
+   * reappearing on every launch; Settings can flip it back.
+   *
+   * Absent host = never asked.
+   */
+  localDevConsent: string
 }
 
 export type AppSettingKey = keyof AppSettingsSchema

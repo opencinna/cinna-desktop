@@ -9,7 +9,8 @@
  * observability stay identical across every Cinna call.
  *
  * Error contract:
- *   - 401/403            → `CinnaApiError('reauth_required')`
+ *   - 401/403            → `CinnaApiError('reauth_required')`, `detail` = the status
+ *                          (a 403 on a role-gated route is not a dead session)
  *   - other non-2xx      → `CinnaApiError('request_failed', '<status>: <detail>')`
  *   - network failure    → `CinnaApiError('request_failed', <message>)`
  *   - non-JSON 2xx body  → `CinnaApiError('invalid_response', <message>)`
@@ -80,6 +81,31 @@ function extractErrorDetail(text: string): string {
   return trimmed.slice(0, 200)
 }
 
+/**
+ * Resolve `path` against the profile's server.
+ *
+ * A leading `/` is the ordinary case and the only one most callers use. An
+ * **absolute URL** is accepted for the endpoints an instance publishes in its
+ * discovery document: on a split-host deployment the API lives on a different
+ * origin than the one the user typed, so `${base}${path}` would 404. Those
+ * endpoints are exactly as trusted as the server itself — the OAuth
+ * `token_endpoint` and `userinfo_endpoint` are already followed the same way —
+ * but the bearer is only ever sent over TLS (or to loopback, for a developer
+ * running a server locally), which is the one guarantee worth restating here.
+ */
+function resolveUrl(baseUrl: string, path: string): string {
+  if (!/^https?:\/\//i.test(path)) return `${baseUrl}${path}`
+  const url = new URL(path)
+  const loopback = url.hostname === 'localhost' || url.hostname === '127.0.0.1'
+  if (url.protocol !== 'https:' && !loopback) {
+    throw new CinnaApiError(
+      'request_failed',
+      'Refusing to send account credentials over an unencrypted connection.'
+    )
+  }
+  return url.toString()
+}
+
 export async function cinnaFetch<T>(
   userId: string,
   path: string,
@@ -87,7 +113,7 @@ export async function cinnaFetch<T>(
 ): Promise<T> {
   const baseUrl = resolveBaseUrl(userId)
   const authHeader = await resolveAuthHeader(userId)
-  const url = `${baseUrl}${path}`
+  const url = resolveUrl(baseUrl, path)
   const method = opts.method ?? 'GET'
 
   const headers: Record<string, string> = {
@@ -118,7 +144,17 @@ export async function cinnaFetch<T>(
       durationMs: Date.now() - started
     })
     if (response.status === 401 || response.status === 403) {
-      throw new CinnaApiError('reauth_required', `Cinna ${response.status}`)
+      // The status travels in `detail` because 401 and 403 are the same code
+      // here but not the same situation: a 403 on the setup-token mint means
+      // "your account lacks the agent-developer role", which is a supported
+      // state the local-dev reconciler explains rather than a session to
+      // re-authenticate. Callers that only care about "the session is gone"
+      // keep switching on the code and never look at this.
+      throw new CinnaApiError(
+        'reauth_required',
+        `Cinna ${response.status}`,
+        String(response.status)
+      )
     }
     const detail = extractErrorDetail(text) || response.statusText
     throw new CinnaApiError('request_failed', `Cinna API ${response.status}: ${detail}`)

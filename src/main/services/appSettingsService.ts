@@ -92,6 +92,33 @@ const VALUE_CHECKS: {
    * before installing the binary should be able to save it and be told about
    * the problem by the engine's own status line rather than by a rejected save.
    */
+  /**
+   * A JSON object of `{ "<host>": boolean }`, or empty. The generic `typeof`
+   * gate only proves it is a string, and this value is written by the
+   * local-dev consent flow *and* reachable through the generic `settings:set`
+   * channel — so the shape is checked here rather than defended at every read.
+   */
+  localDevConsent: (value) => {
+    if (value.trim() === '') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw new AppSettingsError('invalid_value', 'Local development consent must be JSON.')
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new AppSettingsError('invalid_value', 'Local development consent must be an object.')
+    }
+    for (const entry of Object.values(parsed as Record<string, unknown>)) {
+      if (typeof entry !== 'boolean') {
+        throw new AppSettingsError(
+          'invalid_value',
+          'Local development consent maps a host to true or false.'
+        )
+      }
+    }
+  },
+
   localAgentsEnginePath: (value) => {
     const trimmed = value.trim()
     if (trimmed === '') return

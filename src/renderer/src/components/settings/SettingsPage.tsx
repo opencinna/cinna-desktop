@@ -3,6 +3,7 @@ import { LLMSettingsSection } from './LLMSettingsSection'
 import { MCPSettingsSection } from './MCPSettingsSection'
 import { AgentsSettingsSection } from './AgentsSettingsSection'
 import { LocalAgentsSettingsSection } from './LocalAgentsSettingsSection'
+import { LocalDevSettingsSection } from './LocalDevSettingsSection'
 import { TrashSection } from './TrashSection'
 import { ChatModesSection } from './ChatModesSection'
 import { ProfileChatModesSection } from './ProfileChatModesSection'
@@ -18,6 +19,7 @@ const sectionTitles = {
   llm: 'AI Credentials',
   agents: 'Agents',
   'local-agents': 'Local Agents',
+  'local-dev': 'Local Development',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
   features: 'Features',
@@ -41,6 +43,7 @@ export function SettingsPage(): React.JSX.Element {
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
         {settingsTab === 'agents' && <AgentsSettingsSection key="agents" scope="default" />}
         {settingsTab === 'local-agents' && <LocalAgentsSettingsSection key="local-agents" />}
+        {settingsTab === 'local-dev' && <LocalDevSettingsSection key="local-dev" />}
         {settingsTab === 'profile-agents' && (
           <AgentsSettingsSection key="profile-agents" scope="profile" />
         )}
