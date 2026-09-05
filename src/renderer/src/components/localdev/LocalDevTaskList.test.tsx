@@ -18,8 +18,11 @@ const MID_INSTALL: LocalDevTask[] = [
     detail: 'Downloading Mutagen — 12.4 of 47.1 MB',
     percent: 26
   },
-  { id: 'cinna-cli', label: 'cinna-cli', status: 'pending' },
-  { id: 'workspace', label: 'Account workspace', status: 'pending' },
+  // A measurable component is pending *at zero* — the reconciler sends the
+  // whole checklist with its tracks from the first frame. The account token is
+  // the one row with nothing to measure, so it has no percentage at all.
+  { id: 'cinna-cli', label: 'cinna-cli', status: 'pending', percent: 0 },
+  { id: 'workspace', label: 'Account workspace', status: 'pending', percent: 0 },
   { id: 'token', label: 'Account token', status: 'pending' }
 ]
 
@@ -38,6 +41,51 @@ describe('LocalDevTaskList', () => {
     // the number that is actually changing.
     expect(screen.getByText('26%')).toBeTruthy()
     expect(screen.queryByText('100%')).toBeNull()
+  })
+
+  it('keeps a track under every measurable row, whatever it is doing', () => {
+    // Four of the five rows can be measured, and each has its track from the
+    // first frame: empty while pending, filling while active, full when done.
+    // Bars that appear as each row starts make the list reflow under the user
+    // precisely while they are reading how much is left.
+    const { container } = render(<LocalDevTaskList tasks={MID_INSTALL} />)
+    const widths = [...container.querySelectorAll<HTMLElement>('[style*="width"]')].map(
+      (el) => el.style.width
+    )
+    expect(widths).toEqual(['100%', '26%', '0%', '0%'])
+  })
+
+  it('shows several components in flight at once', () => {
+    // uv, Mutagen and cinna-cli install concurrently, so more than one row
+    // spinning is the list working rather than a glitch.
+    render(
+      <LocalDevTaskList
+        tasks={[
+          { id: 'mutagen', label: 'Mutagen', status: 'active', percent: 26 },
+          { id: 'cinna-cli', label: 'cinna-cli', status: 'active', percent: 8 }
+        ]}
+      />
+    )
+    expect(screen.getByText('26%')).toBeTruthy()
+    expect(screen.getByText('8%')).toBeTruthy()
+  })
+
+  it('does not paint a stalled component as if it were still working', () => {
+    // When one component fails the others stop, keeping whatever they had
+    // actually downloaded. An accent bar there would say "this part is fine and
+    // still going" next to a row saying the run stopped.
+    const { container } = render(
+      <LocalDevTaskList
+        tasks={[
+          { id: 'uv', label: 'uv', status: 'failed', detail: 'nope', percent: 10 },
+          { id: 'mutagen', label: 'Mutagen', status: 'pending', percent: 42 }
+        ]}
+      />
+    )
+    const fills = [...container.querySelectorAll<HTMLElement>('[style*="width"]')]
+    expect(fills[0]?.className).toContain('--color-danger')
+    expect(fills[1]?.className).toContain('--color-text-muted')
+    expect(fills[1]?.style.width).toBe('42%')
   })
 
   it('shows no bar for a component with nothing honest to measure', () => {
@@ -60,9 +108,10 @@ describe('LocalDevTaskList', () => {
             id: 'mutagen',
             label: 'Mutagen',
             status: 'failed',
-            detail: 'Mutagen 0.18.1 could not be verified.'
+            detail: 'Mutagen 0.18.1 could not be verified.',
+            percent: 42
           },
-          { id: 'cinna-cli', label: 'cinna-cli', status: 'pending' }
+          { id: 'cinna-cli', label: 'cinna-cli', status: 'pending', percent: 0 }
         ]}
       />
     )
@@ -71,5 +120,8 @@ describe('LocalDevTaskList', () => {
     // The steps after a failure stay pending rather than being marked done —
     // they genuinely did not run.
     expect(screen.getByText('cinna-cli')).toBeTruthy()
+    // A failed row keeps its track, in the danger colour, rather than dropping
+    // it and letting the list jump.
+    expect(detail.parentElement?.querySelector('.bg-\\[var\\(--color-danger\\)\\]')).toBeTruthy()
   })
 })

@@ -104,6 +104,13 @@ describe('the checklist', () => {
    * pending after it demonstrably happened.
    */
   it('has one row per real step, in the order the reconciler does them', () => {
-    expect(TASK_ORDER).toEqual(['uv', 'mutagen', 'cinna-cli', 'workspace', 'token'])
+    expect(TASK_ORDER).toEqual([
+      'uv',
+      'mutagen',
+      'cinna-cli',
+      'engine',
+      'workspace',
+      'token'
+    ])
   })
 })

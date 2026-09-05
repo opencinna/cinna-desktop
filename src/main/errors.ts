@@ -269,4 +269,23 @@ export type ToolchainErrorCode =
   /** `uv tool install cinna-cli` failed, or produced no runnable `cinna`. */
   | 'install_failed'
 
-export class ToolchainError extends DomainError<ToolchainErrorCode> {}
+/**
+ * A managed-toolchain failure, naming the component it happened in.
+ *
+ * `tool` is `'uv' | 'mutagen' | 'cinna-cli'` — a `ToolchainToolId`, spelled as
+ * a string here so this module stays free of imports from the installer that
+ * imports it. It exists because the components install *concurrently*: the
+ * reconciler can no longer work out which checklist row a failure belongs to by
+ * asking which one is currently active, since several are, and marking the
+ * wrong row failed accuses a download that is downloading perfectly well.
+ * `detail` is not a substitute — it carries a stderr tail or a path in exactly
+ * the cases that matter most.
+ */
+export class ToolchainError extends DomainError<ToolchainErrorCode> {
+  readonly tool?: string
+
+  constructor(code: ToolchainErrorCode, message: string, detail?: string, tool?: string) {
+    super(code, message, detail)
+    this.tool = tool
+  }
+}

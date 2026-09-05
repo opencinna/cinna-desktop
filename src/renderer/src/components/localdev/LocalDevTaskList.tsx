@@ -10,7 +10,15 @@ import type { LocalDevTask } from '../../../../shared/localDevState'
  * single "Installing Mutagen…" line answers "is something happening" and
  * nothing else: it cannot say what is already done, what is still to come, or
  * how much of *this* piece is left. On a first run that is several minutes of
- * not knowing whether the app is two steps from finishing or ten.
+ * not knowing whether the app is two steps from finishing or ten. Several rows
+ * are genuinely in flight together — the installs run concurrently — so more
+ * than one may be spinning, and that is the list working, not a glitch.
+ *
+ * A measurable row keeps its bar for its whole life: empty while pending,
+ * filling while active, full behind the tick when it is done. The track is
+ * therefore in the same place from the first frame to the last, which is what
+ * makes the list readable as a whole rather than as five things that appear one
+ * at a time.
  *
  * A row with no `percent` shows no bar rather than an empty one. The
  * account-token check is a single round trip; a bar for it would be decoration,
@@ -32,10 +40,15 @@ export function LocalDevTaskList({ tasks }: { tasks: LocalDevTask[] }): React.JS
 function TaskRow({ task }: { task: LocalDevTask }): React.JSX.Element {
   const percent =
     task.percent === undefined ? null : Math.round(Math.max(0, Math.min(100, task.percent)))
-  // A bar on a pending row would imply work is under way; on a done row it is
-  // redundant next to the tick. It earns its place only while something is
-  // actually moving.
-  const showBar = task.status === 'active' && percent !== null
+  // The track belongs to any component that can be measured, whatever it is
+  // doing right now — see the note above about the list not reflowing while it
+  // is being read. A finished row is drawn full regardless of the last fraction
+  // it happened to report.
+  const showBar = percent !== null
+  const fill = task.status === 'done' ? 100 : percent
+  // The number is only on the row that is moving. A column of "0%" and "100%"
+  // buries the one figure the eye is looking for.
+  const showPercent = task.status === 'active' && percent !== null
 
   return (
     <li>
@@ -52,7 +65,7 @@ function TaskRow({ task }: { task: LocalDevTask }): React.JSX.Element {
         >
           {task.label}
         </span>
-        {showBar && (
+        {showPercent && (
           <span className="shrink-0 text-[11px] text-[var(--color-text-muted)] tabular-nums">
             {percent}%
           </span>
@@ -64,8 +77,21 @@ function TaskRow({ task }: { task: LocalDevTask }): React.JSX.Element {
           {showBar && (
             <div className="h-1 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
               <div
-                className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
-                style={{ width: `${percent}%` }}
+                className={`h-full transition-[width] duration-200 ${
+                  task.status === 'failed'
+                    ? 'bg-[var(--color-danger)]'
+                    : task.status === 'done'
+                      ? 'bg-[var(--color-success)]'
+                      : task.status === 'pending'
+                        ? // A pending row is usually empty, but not always: a
+                          // component that was downloading when a *different*
+                          // one failed goes back to pending with the bytes it
+                          // really did fetch. Accent there would read as "still
+                          // working", beside a row that says the run stopped.
+                          'bg-[var(--color-text-muted)]'
+                        : 'bg-[var(--color-accent)]'
+                }`}
+                style={{ width: `${fill}%` }}
               />
             </div>
           )}

@@ -246,6 +246,16 @@ export interface ToolchainProgressUpdate {
    * the other means the UI re-implementing the stage weighting.
    */
   toolPercent?: number
+  /**
+   * Whether `tool` is still being worked on or has finished.
+   *
+   * Explicit, because the installs run concurrently and a caller can no longer
+   * infer "the previous one finished" from "a later one started". Getting that
+   * wrong is not cosmetic: it would tick Mutagen off while it is still
+   * downloading, which is precisely the lie a per-component checklist exists to
+   * make impossible.
+   */
+  toolStatus?: 'active' | 'done'
 }
 
 /** One object rather than positional arguments: there are four fields now, and
@@ -317,15 +327,20 @@ export interface Toolchain {
  * reconciler can catch one family, and the message names the tool, which the
  * generic installer cannot do as well as the caller can.
  */
-function asToolchainError(err: unknown, label: string): ToolchainError {
+function asToolchainError(err: unknown, label: string, tool: ToolchainToolId): ToolchainError {
   if (err instanceof ManagedAssetError) {
     // Every ManagedAssetErrorCode is also a ToolchainErrorCode; that overlap is
     // the point, so a reason does not change its name on the way up.
-    return new ToolchainError(err.code, err.message, label)
+    return new ToolchainError(err.code, err.message, label, tool)
   }
   if (err instanceof ToolchainError) return err
   const message = err instanceof Error ? err.message : String(err)
-  return new ToolchainError('download_failed', `Could not install ${label}: ${message}`, label)
+  return new ToolchainError(
+    'download_failed',
+    `Could not install ${label}: ${message}`,
+    label,
+    tool
+  )
 }
 
 /** First version-looking token in a `--version` line: "cinna, version 0.4.0" → "0.4.0". */
@@ -437,7 +452,8 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       throw new ToolchainError(
         'unsupported_platform',
         `Cinna has no verified uv build for ${key}, so local development cannot be set up on this machine.`,
-        key
+        key,
+        'uv'
       )
     }
     const forVersion = deps.mutagenAssets[pins.mutagenVersion]
@@ -445,7 +461,8 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       throw new ToolchainError(
         'unknown_mutagen_version',
         `This version of Cinna Desktop has no verified Mutagen ${pins.mutagenVersion}. Update Cinna Desktop to set up local development.`,
-        pins.mutagenVersion
+        pins.mutagenVersion,
+        'mutagen'
       )
     }
     const mutagen = forVersion[key]
@@ -453,14 +470,15 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       throw new ToolchainError(
         'unsupported_platform',
         `Cinna has no verified Mutagen build for ${key}, so local development cannot be set up on this machine.`,
-        key
+        key,
+        'mutagen'
       )
     }
     return { uv, mutagen }
   }
 
   /**
-   * Where each stage sits on the overall bar.
+   * What share of the overall bar each tool is worth.
    *
    * Weighted by how long each actually takes on a cold profile rather than
    * split evenly: uv is a few MB, Mutagen is tens, and `uv tool install`
@@ -468,73 +486,104 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
    * dominates. An even three-way split would sit at 66% for most of the wait,
    * which is exactly the "is it stuck?" the bar exists to answer.
    *
-   * A skipped stage still advances the bar to its end, so a second run that
-   * only has cinna-cli left starts at 55% instead of pretending to redo the
-   * downloads.
+   * A *weighting* rather than the fixed 0-20 / 20-55 / 55-100 ranges this used
+   * to be, because the installs no longer happen in that order — Mutagen
+   * downloads while uv is installing cinna-cli, and a range-based bar would
+   * have to jump backwards to report it. The numbers are unchanged for a
+   * sequential run: uv alone finishing is still 20%, uv and Mutagen still 55%.
    */
-  const STAGES = {
-    uv: { from: 0, to: 20 },
-    mutagen: { from: 20, to: 55 },
-    cli: { from: 55, to: 100 }
-  } as const
-
-  /** Map a 0..1 fraction within a stage onto the overall bar. */
-  function at(stage: { from: number; to: number }, fraction: number): number {
-    const clamped = Math.max(0, Math.min(1, fraction))
-    return Math.round(stage.from + (stage.to - stage.from) * clamped)
+  const TOOL_WEIGHT: Record<ToolchainToolId, number> = {
+    uv: 0.2,
+    mutagen: 0.35,
+    'cinna-cli': 0.45
   }
 
   /**
-   * A download's progress as a step label and an overall percentage.
+   * The overall bar, assembled from the per-tool ones.
+   *
+   * Every report names its tool and its own 0..100; this keeps the highest
+   * figure seen for each and hands the caller the weighted sum. Two properties
+   * matter and both are enforced here rather than trusted: a tool's percentage
+   * never goes down (a retry that restarts a download must not un-fill the
+   * row), and the overall never goes down either (a bar that jumps back reads
+   * as a restart, which is worse than no bar).
+   *
+   * A skipped tool reports 100 at once, so a warm run starts where the work
+   * already done leaves it instead of pretending to redo the downloads.
+   */
+  function aggregate(onProgress?: ToolchainProgress): ToolchainProgress {
+    if (!onProgress) return () => {}
+    const perTool: Record<ToolchainToolId, number> = { uv: 0, mutagen: 0, 'cinna-cli': 0 }
+    let overall = 0
+    return (update) => {
+      if (update.tool && update.toolPercent !== undefined) {
+        const clamped = Math.max(0, Math.min(100, update.toolPercent))
+        perTool[update.tool] = Math.max(perTool[update.tool], clamped)
+      }
+      const sum = (Object.keys(perTool) as ToolchainToolId[]).reduce(
+        (acc, id) => acc + perTool[id] * TOOL_WEIGHT[id],
+        0
+      )
+      overall = Math.max(overall, Math.round(sum))
+      onProgress({ ...update, percent: overall })
+    }
+  }
+
+  /**
+   * Where the installs report, right now.
+   *
+   * Deliberately a mutable slot on the toolchain rather than an argument
+   * threaded through each install. {@link once} makes a second run *join* an
+   * install already under way instead of starting a second copy of it, and that
+   * joined install is a closure created by the first run — with an argument it
+   * would keep reporting to a caller that has already gone, leaving the run
+   * that is actually waiting on it with a row stuck at pending for the whole
+   * download. The latest run is always the one that wants to hear, and
+   * `reconcile` guarantees there is only ever one.
+   */
+  let report: ToolchainProgress = () => {}
+
+  /**
+   * A download's progress as a step label and a per-tool percentage.
    *
    * The label carries the size because a percentage alone cannot distinguish
    * "slow network" from "stuck": watching `12.4 / 47.1 MB` move is what tells
    * someone the app is still doing something, and it is the first thing they
    * report back when it genuinely is stuck.
    */
-  function downloadReporter(
-    label: string,
-    tool: ToolchainToolId,
-    stage: { from: number; to: number },
-    onProgress?: ToolchainProgress
-  ): DownloadProgress | undefined {
-    if (!onProgress) return undefined
+  function downloadReporter(label: string, tool: ToolchainToolId): DownloadProgress {
     return (received, total) => {
       const mb = (bytes: number): string => (bytes / 1_000_000).toFixed(1)
       if (total === null) {
         // No `content-length`. Count up honestly rather than inventing a
-        // denominator; the bar holds at the stage start and the label moves.
-        onProgress({
+        // denominator; the bar holds where it is and the label moves.
+        report({
           step: `Downloading ${label} — ${mb(received)} MB`,
-          percent: stage.from,
-          tool
+          tool,
+          toolStatus: 'active'
         })
         return
       }
       const fraction = received / total
-      onProgress({
+      report({
         step: `Downloading ${label} — ${mb(received)} of ${mb(total)} MB`,
-        // The download is most of a download-and-unpack stage, but not all of
-        // it; leaving the last slice for verify + unpack keeps the bar from
-        // sitting at the stage's end while tar is still running.
-        percent: at(stage, fraction * 0.9),
         tool,
-        toolPercent: Math.round(fraction * 90)
+        // The download is most of a download-and-unpack stage, but not all of
+        // it; leaving the last slice for verify + unpack keeps the row from
+        // sitting full while tar is still running.
+        toolPercent: Math.round(fraction * 90),
+        toolStatus: 'active'
       })
     }
   }
 
-  async function ensureUv(
-    pins: ToolchainPins,
-    asset: PinnedAsset,
-    onProgress?: ToolchainProgress
-  ): Promise<void> {
+  async function ensureUv(pins: ToolchainPins, asset: PinnedAsset): Promise<void> {
     const p = paths(pins)
     if (await isFile(p.uvBin)) {
-      onProgress?.({ step: 'uv', percent: STAGES.uv.to, tool: 'uv', toolPercent: 100 })
+      report({ step: 'uv', tool: 'uv', toolPercent: 100, toolStatus: 'done' })
       return
     }
-    onProgress?.({ step: 'Installing uv', percent: STAGES.uv.from, tool: 'uv', toolPercent: 0 })
+    report({ step: 'Installing uv', tool: 'uv', toolPercent: 0, toolStatus: 'active' })
     try {
       await installPinnedAsset({
         root: p.root,
@@ -547,28 +596,30 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         // holds `uv` also keeps its `uvx` sibling, which is free and correct.
         locate: (dir) => findNamedFile(dir, 'uv'),
         isInstalled: () => isFile(p.uvBin),
-        onDownloadProgress: downloadReporter('uv', 'uv', STAGES.uv, onProgress),
+        onDownloadProgress: downloadReporter('uv', 'uv'),
         download: deps.download,
         extract: deps.extract,
         notFoundMessage: 'The downloaded uv archive did not contain a uv executable.'
       })
     } catch (err) {
-      throw asToolchainError(err, 'uv')
+      throw asToolchainError(err, 'uv', 'uv')
     }
+    report({ step: 'uv installed', tool: 'uv', toolPercent: 100, toolStatus: 'done' })
   }
 
-  async function ensureMutagen(
-    pins: ToolchainPins,
-    asset: PinnedAsset,
-    onProgress?: ToolchainProgress
-  ): Promise<void> {
+  async function ensureMutagen(pins: ToolchainPins, asset: PinnedAsset): Promise<void> {
     const p = paths(pins)
     const mutagenBin = join(p.mutagenDir, 'mutagen')
     if (await isFile(mutagenBin)) {
-      onProgress?.({ step: 'Mutagen', percent: STAGES.mutagen.to, tool: 'mutagen', toolPercent: 100 })
+      report({ step: 'Mutagen', tool: 'mutagen', toolPercent: 100, toolStatus: 'done' })
       return
     }
-    onProgress?.({ step: 'Installing Mutagen', percent: STAGES.mutagen.from, tool: 'mutagen', toolPercent: 0 })
+    report({
+      step: 'Installing Mutagen',
+      tool: 'mutagen',
+      toolPercent: 0,
+      toolStatus: 'active'
+    })
     try {
       await installPinnedAsset({
         root: p.root,
@@ -582,14 +633,20 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         // start a session without the agent bundle next to its binary.
         locate: (dir) => findNamedFile(dir, 'mutagen'),
         isInstalled: () => isFile(mutagenBin),
-        onDownloadProgress: downloadReporter('Mutagen', 'mutagen', STAGES.mutagen, onProgress),
+        onDownloadProgress: downloadReporter('Mutagen', 'mutagen'),
         download: deps.download,
         extract: deps.extract,
         notFoundMessage: 'The downloaded Mutagen archive did not contain a mutagen executable.'
       })
     } catch (err) {
-      throw asToolchainError(err, 'Mutagen')
+      throw asToolchainError(err, 'Mutagen', 'mutagen')
     }
+    report({
+      step: 'Mutagen installed',
+      tool: 'mutagen',
+      toolPercent: 100,
+      toolStatus: 'done'
+    })
   }
 
   /** `cinna --version`, or null when it is absent or will not run. */
@@ -604,11 +661,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     return parseVersion(`${result.stdout}\n${result.stderr}`)
   }
 
-  async function ensureCli(
-    pins: ToolchainPins,
-    reinstall: boolean,
-    onProgress?: ToolchainProgress
-  ): Promise<string> {
+  async function ensureCli(pins: ToolchainPins, reinstall: boolean): Promise<string> {
     const p = paths(pins)
     const source = deps.cliSourceOverride()
 
@@ -627,6 +680,12 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       // costs one probe, never a wrong answer.
       const state = await readState(p.root)
       if (state.cinnaCliVersion === pins.cinnaCliVersion && (await isFile(p.cinnaBin))) {
+        report({
+          step: 'cinna-cli',
+          tool: 'cinna-cli',
+          toolPercent: 100,
+          toolStatus: 'done'
+        })
         return state.cinnaCliVersion
       }
       // No stamp, or a stamp that disagrees. A `cinna` installed by an older
@@ -636,11 +695,22 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       const probed = await probeCli(pins)
       if (probed === pins.cinnaCliVersion) {
         await writeState(p.root, { cinnaCliVersion: probed })
+        report({
+          step: 'cinna-cli',
+          tool: 'cinna-cli',
+          toolPercent: 100,
+          toolStatus: 'done'
+        })
         return probed
       }
     }
 
-    onProgress?.({ step: 'Installing cinna-cli', percent: STAGES.cli.from, tool: 'cinna-cli', toolPercent: 0 })
+    report({
+      step: 'Installing cinna-cli',
+      tool: 'cinna-cli',
+      toolPercent: 0,
+      toolStatus: 'active'
+    })
     const env = await toolchainEnv(pins)
     // `uv tool install` is idempotent for the same version and replaces a
     // different one, so the version change *is* the upgrade path; `--reinstall`
@@ -672,25 +742,23 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     // prints is a real step finishing, which is enough to tell "working" from
     // "wedged" even though the percentage cannot move honestly.
     let seen = 0
-    const onLine = onProgress
-      ? (line: string): void => {
-          if (!UV_PROGRESS_LINE.test(line)) return
-          seen += 1
-          // Asymptotic: each recognised line closes some of the remaining gap,
-          // so the bar always advances and never reaches the end early. uv
-          // prints a different number of these depending on what it has cached,
-          // so counting them against a fixed total would be a guess.
-          // Capped short of the stage end so the bar cannot claim to be finished
-          // while uv is still running; the stage's own completion sets 100.
-          const fraction = (1 - Math.pow(0.75, seen)) * 0.9
-          onProgress({
-            step: line,
-            percent: at(STAGES.cli, fraction),
-            tool: 'cinna-cli',
-            toolPercent: Math.round(fraction * 100)
-          })
-        }
-      : undefined
+    const onLine = (line: string): void => {
+      if (!UV_PROGRESS_LINE.test(line)) return
+      seen += 1
+      // Asymptotic: each recognised line closes some of the remaining gap, so
+      // the bar always advances and never reaches the end early. uv prints a
+      // different number of these depending on what it has cached, so counting
+      // them against a fixed total would be a guess. Capped short of the end so
+      // the bar cannot claim to be finished while uv is still running; the
+      // component's own completion sets 100.
+      const fraction = (1 - Math.pow(0.75, seen)) * 0.9
+      report({
+        step: line,
+        tool: 'cinna-cli',
+        toolPercent: Math.round(fraction * 100),
+        toolStatus: 'active'
+      })
+    }
 
     const result = await deps
       .run(p.uvBin, args, env, INSTALL_TIMEOUT_MS, onLine)
@@ -698,7 +766,8 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         throw new ToolchainError(
           'install_failed',
           'Could not run uv to install cinna-cli.',
-          err instanceof Error ? err.message : String(err)
+          err instanceof Error ? err.message : String(err),
+          'cinna-cli'
         )
       })
     if (result.code !== 0) {
@@ -707,7 +776,8 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       throw new ToolchainError(
         'install_failed',
         `Installing cinna-cli ${pins.cinnaCliVersion} failed.`,
-        result.stderr.trim().slice(-500) || `uv exited ${result.code}`
+        result.stderr.trim().slice(-500) || `uv exited ${result.code}`,
+        'cinna-cli'
       )
     }
 
@@ -716,7 +786,8 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       throw new ToolchainError(
         'install_failed',
         'cinna-cli was installed but will not run.',
-        p.cinnaBin
+        p.cinnaBin,
+        'cinna-cli'
       )
     }
     // Not stamped for an editable install: the stamp's only job is to let a
@@ -724,14 +795,43 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     // must not be skipped.
     if (!source) await writeState(p.root, { cinnaCliVersion: installed })
     logger.info('cinna-cli installed', { version: installed })
+    report({
+      step: 'cinna-cli installed',
+      tool: 'cinna-cli',
+      toolPercent: 100,
+      toolStatus: 'done'
+    })
     return installed
   }
 
+  /**
+   * Install everything, running the parts that do not need each other at once.
+   *
+   * The dependency is real but narrow: `uv tool install cinna-cli` needs uv,
+   * and nothing needs Mutagen. So Mutagen's download runs alongside uv's and
+   * then alongside the cinna-cli install, which on a cold profile is the long
+   * pole by minutes — the tens of megabytes of Mutagen arrive inside a wait
+   * that was happening anyway instead of after it.
+   *
+   * They write to different directories and publish through
+   * {@link installPinnedAsset}'s own atomic rename, so concurrency costs no
+   * safety here. What it does cost is a failure that lands while a sibling is
+   * still running: `Promise.all` rejects at once and the sibling keeps going in
+   * the background. That is deliberate — killing an in-flight download to
+   * report a failure faster would throw away bytes the user has already paid
+   * for, and the next reconcile joins the same promise through {@link once}
+   * rather than starting a second one. Callers must simply not treat a late
+   * progress report from a run they have already failed as news; the reconciler
+   * ignores anything from a superseded run.
+   */
   async function run(
     pins: ToolchainPins,
     reinstall: boolean,
-    onProgress?: ToolchainProgress
+    rawProgress?: ToolchainProgress
   ): Promise<ToolchainResult> {
+    // The slot, not a local: an install this run only *joins* was created by an
+    // earlier one and reports through whatever `report` names at the time.
+    report = aggregate(rawProgress)
     const p = paths(pins)
     const assets = requireAssets(pins)
     await mkdir(p.root, { recursive: true })
@@ -751,17 +851,24 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       await rm(join(p.root, 'state.json'), { force: true })
     }
 
-    await once(`uv:${deps.uvVersion}:${reinstall}`, () => ensureUv(pins, assets.uv, onProgress))
-    await once(`mutagen:${pins.mutagenVersion}:${reinstall}`, () =>
-      ensureMutagen(pins, assets.mutagen, onProgress)
+    const uvThenCli = once(`uv:${deps.uvVersion}:${reinstall}`, () =>
+      ensureUv(pins, assets.uv)
+    ).then(() =>
+      once(`cinna:${pins.cinnaCliVersion}:${reinstall}`, () => ensureCli(pins, reinstall))
     )
-    const cliVersion = await once(`cinna:${pins.cinnaCliVersion}:${reinstall}`, () =>
-      ensureCli(pins, reinstall, onProgress)
+    const mutagen = once(`mutagen:${pins.mutagenVersion}:${reinstall}`, () =>
+      ensureMutagen(pins, assets.mutagen)
     )
+    const [cliVersion] = await Promise.all([uvThenCli, mutagen])
     // The one place the bar is allowed to reach the end: everything above caps
     // itself short, so 100% means the toolchain is genuinely installed rather
     // than "the last thing we could measure finished".
-    onProgress?.({ step: 'Toolchain ready', percent: 100, tool: 'cinna-cli', toolPercent: 100 })
+    report({
+      step: 'Toolchain ready',
+      tool: 'cinna-cli',
+      toolPercent: 100,
+      toolStatus: 'done'
+    })
     return { paths: p, cliVersion }
   }
 

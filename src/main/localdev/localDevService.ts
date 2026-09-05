@@ -62,6 +62,7 @@ import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { getLayout } from '../kit/contractStore'
 import { CinnaApiError, ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
+import { prefetchEngineBinary } from '../engine/binaryResolver'
 import { runCinnaCli, type CliRunOutcome } from './cliRunner'
 import {
   clearCliCapabilityCache,
@@ -121,6 +122,68 @@ const TOOLCHAIN_SHARE = 0.7
 const WORKSPACE_FROM = 70
 const WORKSPACE_TO = 97
 
+/**
+ * How much of the overall bar the engine pre-fetch is worth.
+ *
+ * It runs alongside everything else rather than in sequence, so it cannot have
+ * a *range* the way the toolchain and the workspace do — it is a share, added
+ * to whatever the sequential part has reached. Without it the bar would sit at
+ * 97% for the length of a 46 MB download, which is the one shape a progress bar
+ * exists to avoid.
+ *
+ * 0.15 because it is one download against a toolchain that is several, and
+ * because it is very often already satisfied: a developer with their own
+ * `opencode` reports 100 immediately and simply starts the bar at 15.
+ */
+const ENGINE_SHARE = 0.15
+
+/** This run's engine progress, 0..100. Reset with the checklist. */
+let enginePercent = 0
+
+/**
+ * The engine was not cached this run, and its row must survive the closing
+ * tick. See {@link prefetchEngine} for why that is `pending` rather than a
+ * failure.
+ */
+let engineSkipped = false
+
+/**
+ * The last figure the *sequential* part reported, kept so the engine can move
+ * the bar on its own.
+ *
+ * Without it the blended percentage only changes when something sequential
+ * calls `setState`, and the one moment that matters is the one where nothing
+ * does: a warm toolchain and a warm workspace reach the token check in seconds
+ * and then wait on a cold 46 MB download, with the bar frozen at the token
+ * check's number. That is exactly the stuck bar {@link ENGINE_SHARE} exists to
+ * prevent. It has to be the *raw* figure, too — re-blending an already-blended
+ * `state.percent` would fold the engine's share in twice and move the bar
+ * backwards.
+ */
+let sequentialPercent: number | undefined
+
+/** The highest figure published this run. Nothing may be published below it. */
+let publishedPercent = 0
+
+/**
+ * The sequential part's figure, plus the engine's share of its own, and never
+ * less than the last number the user saw.
+ *
+ * The two inputs each only move forward, but the *sequence* of sequential
+ * figures does not: the token check publishes 97, and a token that turns out to
+ * be expired sends the refresh back to 70. A bar that jumps back reads as a
+ * restart — worse than no bar — so the clamp is here rather than at the one
+ * call site that needs it today, in the same shape as the toolchain's own
+ * aggregation.
+ */
+function overall(sequential: number | undefined): number | undefined {
+  if (sequential === undefined) return undefined
+  sequentialPercent = sequential
+  const blended = Math.round(sequential * (1 - ENGINE_SHARE) + enginePercent * ENGINE_SHARE)
+  publishedPercent = Math.max(publishedPercent, blended)
+  return publishedPercent
+}
+
 /** The toolchain's own 0..100, as a fraction of the whole reconcile. */
 function toolchainPercent(percent: number | undefined): number | undefined {
   return percent === undefined ? undefined : Math.round(percent * TOOLCHAIN_SHARE)
@@ -141,12 +204,15 @@ function workspacePercent(step: number | undefined, total: number | undefined): 
  * done, and which step is the one that broke — needs the history the phase
  * throws away on every transition.
  */
-const TASK_LABELS: { id: LocalDevTaskId; label: string }[] = [
-  { id: 'uv', label: 'uv' },
-  { id: 'mutagen', label: 'Mutagen' },
-  { id: 'cinna-cli', label: 'cinna-cli' },
-  { id: 'workspace', label: 'Account workspace' },
-  { id: 'token', label: 'Account token' }
+const TASK_LABELS: { id: LocalDevTaskId; label: string; measurable: boolean }[] = [
+  { id: 'uv', label: 'uv', measurable: true },
+  { id: 'mutagen', label: 'Mutagen', measurable: true },
+  { id: 'cinna-cli', label: 'cinna-cli', measurable: true },
+  { id: 'engine', label: 'opencode engine', measurable: true },
+  { id: 'workspace', label: 'Account workspace', measurable: true },
+  // One round trip. A bar for it would be decoration, and a bar that never
+  // moves is exactly the thing the checklist exists to remove.
+  { id: 'token', label: 'Account token', measurable: false }
 ]
 
 /** The ids in order, exported so the ordering rule can be asserted. */
@@ -154,63 +220,220 @@ export const TASK_ORDER: LocalDevTaskId[] = TASK_LABELS.map((t) => t.id)
 
 let tasks: LocalDevTask[] = []
 
-function resetTasks(): void {
-  tasks = TASK_LABELS.map(({ id, label }) => ({ id, label, status: 'pending' }))
-}
-
 /**
- * Mark `id` active with `detail`, and everything before it done.
+ * The checklist as it looks before anything has happened.
  *
- * Deriving "earlier tasks are finished" from the order rather than requiring an
- * explicit completion for each is what keeps the caller honest: the reconciler
- * cannot reach step four without having passed step three, so a checklist that
- * still showed three as pending would be lying about work that demonstrably
- * happened.
+ * A measurable row starts at `percent: 0` rather than undefined so its (empty)
+ * bar is on screen from the first frame. The alternative — bars appearing as
+ * each row starts — makes the list reflow under the user precisely while they
+ * are trying to read how much is left.
  */
-function markActive(id: LocalDevTaskId, detail?: string, percent?: number): void {
-  const index = tasks.findIndex((task) => task.id === id)
-  if (index === -1) return
-  tasks = tasks.map((task, i) => {
-    // A finished stage shows a full bar, not the last fraction it happened to
-    // report — the row above the active one must read as done at a glance.
-    if (i < index)
-      return task.status === 'failed' ? task : { ...task, status: 'done', percent: 100 }
-    if (i === index) return { ...task, status: 'active', detail, percent }
-    return task
-  })
-}
-
-/** Everything done, with an optional closing detail on the last one. */
-function markAllDone(detail?: string): void {
-  tasks = tasks.map((task, i) => ({
-    ...task,
-    status: 'done',
-    percent: 100,
-    detail: i === tasks.length - 1 ? (detail ?? task.detail) : task.detail
+function resetTasks(): void {
+  enginePercent = 0
+  engineSkipped = false
+  sequentialPercent = undefined
+  publishedPercent = 0
+  tasks = TASK_LABELS.map(({ id, label, measurable }) => ({
+    id,
+    label,
+    status: 'pending',
+    ...(measurable ? { percent: 0 } : {})
   }))
 }
 
-/** The active task became the reason the run stopped. */
-function markFailed(detail: string): void {
-  const active = tasks.findIndex((task) => task.status === 'active')
-  const index = active === -1 ? tasks.findIndex((task) => task.status === 'pending') : active
-  if (index === -1) return
-  tasks = tasks.map((task, i) => (i === index ? { ...task, status: 'failed', detail } : task))
+function patchTask(id: LocalDevTaskId, patch: Partial<LocalDevTask>): void {
+  tasks = tasks.map((task) => (task.id === id ? { ...task, ...patch } : task))
 }
 
 /**
- * One toolchain report → a checklist tick and an `installing` state.
+ * Mark `id` as the thing being worked on right now.
+ *
+ * Several rows can be active at once: uv, Mutagen and cinna-cli no longer run
+ * in single file. So this says nothing about the rows around it — completion is
+ * always reported explicitly by whoever finished the work, because with
+ * concurrent installs "a later step started" is no longer evidence that an
+ * earlier one ended.
+ */
+function markActive(id: LocalDevTaskId, detail?: string, percent?: number): void {
+  patchTask(id, { status: 'active', detail, ...(percent === undefined ? {} : { percent }) })
+}
+
+/** This component is finished. A full bar, and no leftover progress detail. */
+function markDone(id: LocalDevTaskId, detail?: string): void {
+  const task = tasks.find((t) => t.id === id)
+  if (!task) return
+  patchTask(id, {
+    status: 'done',
+    detail,
+    // Only rows that had a bar keep one; the token row's tick is the whole
+    // report.
+    ...(task.percent === undefined ? {} : { percent: 100 })
+  })
+}
+
+/**
+ * Everything done, with an optional closing detail on the last one.
+ *
+ * A `failed` row is left alone, and so is the engine row when its pre-fetch did
+ * not happen. Local development can be ready while the engine was not cached —
+ * it is an optimisation, and the engine is fetched at first use exactly as it
+ * always was — and painting either row green on the way past would be claiming
+ * something this run knows to be untrue.
+ */
+function markAllDone(detail?: string): void {
+  tasks = tasks.map((task, i) => {
+    if (task.status === 'failed') return task
+    if (task.id === 'engine' && engineSkipped) return task
+    return {
+      ...task,
+      status: 'done',
+      ...(task.percent === undefined ? {} : { percent: 100 }),
+      detail: i === tasks.length - 1 ? (detail ?? task.detail) : task.detail
+    }
+  })
+}
+
+/**
+ * A component became the reason the run stopped.
+ *
+ * `id` when the caller knows which one — a toolchain error names the tool it
+ * was installing — and otherwise the first row still in flight. Whichever it
+ * is, the *other* in-flight rows drop back to pending: their work may well
+ * still be running in the background, but a spinner beside a failure reads as
+ * "and this part is fine", which is not something this run can claim.
+ */
+function markFailed(detail: string, id?: LocalDevTaskId): void {
+  const named = id ? tasks.findIndex((task) => task.id === id) : -1
+  const active = tasks.findIndex((task) => task.status === 'active')
+  const fallback = active === -1 ? tasks.findIndex((task) => task.status === 'pending') : active
+  const index = named === -1 ? fallback : named
+  if (index === -1) return
+  tasks = tasks.map((task, i) => {
+    if (i === index) return { ...task, status: 'failed', detail }
+    return task.status === 'active' ? { ...task, status: 'pending' } : task
+  })
+}
+
+/** `Could not reach X.` → `could not reach X.`, so it reads mid-sentence. */
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1)
+}
+
+/**
+ * The checklist row a toolchain failure belongs to, from the component the
+ * error names.
+ *
+ * `ToolchainError.tool` and {@link LocalDevTaskId} share these three spellings
+ * on purpose, but the check is a membership test rather than a cast: `tool` is
+ * a plain string on the error, and a row is not something to guess at when
+ * getting it wrong marks a healthy download as the failure.
+ */
+function taskForTool(tool: string | undefined): LocalDevTaskId | undefined {
+  return tool === 'uv' || tool === 'mutagen' || tool === 'cinna-cli' ? tool : undefined
+}
+
+/**
+ * One toolchain report → a checklist tick and an `installing` state, for the
+ * run identified by `generation`.
  *
  * The tool id comes from the toolchain rather than being parsed out of the
  * step text, so renaming a user-facing label cannot silently stop the checklist
  * advancing.
+ *
+ * The generation check is not defensive tidiness. The toolchain installs
+ * concurrently, so a failure in one component returns while another is still
+ * downloading, and that survivor keeps reporting progress afterwards — without
+ * this, its next line would overwrite the `attention` state the user is being
+ * shown with a cheerful `installing`, and the failure would vanish from the
+ * screen while remaining true.
  */
-function onToolchainProgress({ step, percent, tool, toolPercent }: ToolchainProgressUpdate): void {
-  if (tool) markActive(tool, step, toolPercent)
-  setState({ phase: 'installing', step, percent: toolchainPercent(percent) })
+function progressFor(generation: number): (update: ToolchainProgressUpdate) => void {
+  return ({ step, percent, tool, toolPercent, toolStatus }) => {
+    if (generation !== activeRun) return
+    if (tool) {
+      if (toolStatus === 'done') markDone(tool)
+      else markActive(tool, step, toolPercent)
+    }
+    setState({ phase: 'installing', step, percent: overall(toolchainPercent(percent)) })
+  }
+}
+
+/**
+ * Fetch the opencode engine alongside everything else, and tick its row.
+ *
+ * The engine is not part of the cinna-cli toolchain and this module does not
+ * install it — {@link prefetchEngineBinary} resolves it through the engine's
+ * own three sources, so a configured path or a developer's own `opencode`
+ * answers the row in milliseconds and downloads nothing. What is decided here
+ * is only *when*: a user who has just asked for local development is about to
+ * sync an agent and run it, and the alternative is meeting a 46 MB download at
+ * the moment they press send.
+ *
+ * Best effort by design. A failure marks the row and nothing else: local
+ * development is genuinely ready without it, and the engine is fetched at first
+ * use exactly as it was before this existed. Returning a promise rather than
+ * awaiting inline is the point — it runs while the toolchain installs and the
+ * workspace is created, and is only waited on at the end.
+ */
+function prefetchEngine(generation: number): Promise<void> {
+  markActive('engine', 'Checking…', 0)
+  const mb = (bytes: number): string => (bytes / 1_000_000).toFixed(1)
+  return prefetchEngineBinary((received, total) => {
+    if (generation !== activeRun) return
+    enginePercent = total === null ? enginePercent : Math.round((received / total) * 100)
+    const step =
+      total === null
+        ? `Downloading opencode — ${mb(received)} MB`
+        : `Downloading opencode — ${mb(received)} of ${mb(total)} MB`
+    markActive('engine', step, total === null ? undefined : enginePercent)
+    // Progress *within* whatever the reconcile is already doing rather than a
+    // transition of its own — but the bar and the headline still have to move,
+    // because for the last stretch of a run this is the only thing happening.
+    // Every other component narrates the same way while it works.
+    setState(
+      state.phase === 'installing'
+        ? { phase: 'installing', step, percent: overall(sequentialPercent) }
+        : state
+    )
+  }).then((result) => {
+    if (generation !== activeRun) return
+    enginePercent = 100
+    if (result.ok) {
+      // Where it came from matters on this row: "we did not download 46 MB
+      // because you already have one" is the good outcome, and a tick with no
+      // explanation reads like the download simply flashed past.
+      markDone('engine', result.source === 'managed' ? undefined : 'Already on this machine')
+    } else {
+      // `pending`, not `failed`. Nothing is broken: the engine is fetched at
+      // first use exactly as it was before this pre-fetch existed, so a red row
+      // would sit under a green "ready" for the rest of the session,
+      // contradicted by an app that works. Not-yet-done is the truth, and the
+      // detail says who will do it.
+      engineSkipped = true
+      patchTask('engine', {
+        status: 'pending',
+        percent: 0,
+        detail: `Not cached — ${lowerFirst(result.error)} It will be fetched the first time you run an agent.`
+      })
+    }
+    setState(state)
+  })
 }
 
 let state: LocalDevState = { phase: 'idle' }
+/**
+ * The reconcile whose progress reports are worth listening to, or `null`
+ * between runs.
+ *
+ * Cleared when a run ends rather than only when the next one starts, because
+ * the window that matters is *after* a failure: the toolchain installs
+ * concurrently, so a run can return `attention` while a sibling download is
+ * still going, and that survivor keeps reporting for as long as it takes to
+ * finish. Left un-cleared, its next line would replace the failure the user is
+ * looking at with a progress bar that nothing will ever complete.
+ */
+let activeRun: number | null = null
+let runGeneration = 0
 /** One reconcile at a time; a second caller joins the run in flight. */
 let inFlight: Promise<LocalDevState> | null = null
 
@@ -250,8 +473,13 @@ function setState(next: LocalDevState): void {
       ...(next.phase === 'ready' ? { workspacePath: next.workspacePath, cliVersion: next.cliVersion, protocol: next.protocol } : {})
     })
   }
+  // `state`, not `next`: the checklist is attached two lines above and the
+  // renderer replaces its whole copy on every push. Sending `next` published a
+  // task-less state on every transition, so the per-component list existed in
+  // main and never survived a single broadcast — which is what left the UI
+  // showing one "Installing…" line for a five-part install.
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(LOCAL_DEV_STATE_CHANNEL, next)
+    if (!win.isDestroyed()) win.webContents.send(LOCAL_DEV_STATE_CHANNEL, state)
   }
 }
 
@@ -456,7 +684,11 @@ async function createWorkspace(
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
 
-  setState({ phase: 'installing', step: 'Creating your account workspace…', percent: WORKSPACE_FROM })
+  setState({
+    phase: 'installing',
+    step: 'Creating your account workspace…',
+    percent: overall(WORKSPACE_FROM)
+  })
   const outcome = await runCinnaCli({
     bin: cinnaBin,
     // The setup command is argv element 2 and appears nowhere else.
@@ -486,7 +718,7 @@ async function createWorkspace(
       setState({
         phase: 'installing',
         step: line.message,
-        percent: workspacePercent(line.step, line.total)
+        percent: overall(workspacePercent(line.step, line.total))
       })
     }
   })
@@ -516,7 +748,11 @@ async function refreshAccountToken(
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
 
-  setState({ phase: 'installing', step: 'Refreshing your account token…', percent: WORKSPACE_FROM })
+  setState({
+    phase: 'installing',
+    step: 'Refreshing your account token…',
+    percent: overall(WORKSPACE_FROM)
+  })
   const outcome = await runCinnaCli({
     bin: cinnaBin,
     args: ['account', 'set-token', minted.command, ...protocolFlags(caps)],
@@ -545,6 +781,22 @@ async function readAccountStatus(
 }
 
 async function runReconcile(userId: string, force: boolean): Promise<LocalDevState> {
+  const generation = ++runGeneration
+  activeRun = generation
+  try {
+    return await reconcileOnce(userId, force, generation)
+  } finally {
+    // Only if nothing newer has claimed it: `reconcile` serializes runs, but a
+    // future caller that does not must not have its generation retired here.
+    if (activeRun === generation) activeRun = null
+  }
+}
+
+async function reconcileOnce(
+  userId: string,
+  force: boolean,
+  generation: number
+): Promise<LocalDevState> {
   // Whether Repair should reinstall the toolchain, decided *before* the first
   // `setState` overwrites the reason we are here.
   //
@@ -554,8 +806,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   // the heavy path is reserved for the failure that is actually about the
   // tools. Everything else Repair does — look the server up again, re-check the
   // token, re-read the workspace — happens either way.
-  const reinstallToolchain =
-    force && state.phase === 'attention' && state.reason === 'toolchain'
+  const reinstallToolchain = force && state.phase === 'attention' && state.reason === 'toolchain'
 
   const user = userRepo.get(userId)
   if (!user || user.type !== 'cinna_user' || !user.cinnaServerUrl) {
@@ -622,21 +873,31 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     mutagenVersion: localDev.mutagen_version
   }
 
+  // Started here, awaited at the end: it shares the wait with the toolchain
+  // install and the workspace creation rather than adding to it.
+  const engine = prefetchEngine(generation)
+
   let cliVersion: string
   let env: NodeJS.ProcessEnv
   try {
-    setState({ phase: 'installing', step: 'Checking the local development toolchain…', percent: 0 })
+    setState({
+      phase: 'installing',
+      step: 'Checking the local development toolchain…',
+      percent: overall(0)
+    })
+    const onToolchainProgress = progressFor(generation)
     const result = reinstallToolchain
       ? await toolchain.repair(pins, onToolchainProgress)
       : await toolchain.ensure(pins, onToolchainProgress)
     cliVersion = result.cliVersion
+    // Whatever the individual reports said, the three tools are installed once
+    // this returns — belt and braces for a toolchain path that skipped work
+    // without narrating it.
+    for (const id of ['uv', 'mutagen', 'cinna-cli'] as const) markDone(id)
     // The version is the useful detail on that row once it is installed —
     // "which cinna-cli am I actually running" is the first thing anyone asks
     // when the behaviour surprises them.
-    markActive('workspace')
-    tasks = tasks.map((task) =>
-      task.id === 'cinna-cli' ? { ...task, detail: cliVersion } : task
-    )
+    tasks = tasks.map((task) => (task.id === 'cinna-cli' ? { ...task, detail: cliVersion } : task))
     env = await toolchain.toolchainEnv(pins)
   } catch (err) {
     const failure =
@@ -647,7 +908,10 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
             reason: 'toolchain' as const,
             detail: err instanceof Error ? err.message : String(err)
           }
-    markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
+    markFailed(
+      failure.phase === 'attention' ? failure.detail : 'Failed.',
+      err instanceof ToolchainError ? taskForTool(err.tool) : undefined
+    )
     setState(failure)
     return state
   }
@@ -667,11 +931,13 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   try {
     await mkdir(dirname(workspacePath), { recursive: true })
   } catch (err) {
-    setState({
-      phase: 'attention',
-      reason: 'workspace',
-      detail: `Could not create the agents folder: ${err instanceof Error ? err.message : String(err)}`
-    })
+    const detail = `Could not create the agents folder: ${err instanceof Error ? err.message : String(err)}`
+    // Through `markFailed` rather than straight to `setState`, like every other
+    // stopping failure: it puts the reason on the workspace row and takes the
+    // spinners off whatever was still running, which beside a red error would
+    // read as "and those parts are fine".
+    markFailed(detail, 'workspace')
+    setState({ phase: 'attention', reason: 'workspace', detail })
     return state
   }
 
@@ -685,8 +951,13 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     }
   }
 
+  markDone('workspace')
   markActive('token', 'Checking…')
-  setState({ phase: 'installing', step: 'Checking your account token…', percent: WORKSPACE_TO })
+  setState({
+    phase: 'installing',
+    step: 'Checking your account token…',
+    percent: overall(WORKSPACE_TO)
+  })
   let status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
   if (status.exitCode !== EXIT_OK) {
     const failure = fromCliOutcome(status, 'Reading the workspace')
@@ -747,6 +1018,11 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     }
   }
 
+  // The last thing between a synced agent and a first turn, so `ready` waits
+  // for it. It has usually finished long before this line; when it has not, the
+  // engine row is the only one still moving and the bar says so.
+  await engine
+
   markAllDone('Valid')
   setState({
     phase: 'ready',
@@ -799,10 +1075,21 @@ export const localDevService = {
     return run
   },
 
-  /** Record the consent answer for a host, then act on it. */
+  /**
+   * Record the consent answer for a host, then act on it.
+   *
+   * The wait matters. The answer now arrives from the connect screen, which
+   * gives it moments after the account is activated — while the reconcile that
+   * activation kicked off is very likely still running. That run read the
+   * consent before this one wrote it, so joining it (which is what `reconcile`
+   * does with a call already in flight) would return "still waiting for an
+   * answer" and quietly drop the one just given. Letting it finish first costs
+   * a discovery round trip and makes the accept always take effect.
+   */
   async setConsent(userId: string, host: string, accepted: boolean): Promise<LocalDevState> {
     writeConsent({ ...readConsent(), [host]: accepted })
     logger.info('local dev consent recorded', { host, accepted })
+    if (inFlight) await inFlight.catch(() => undefined)
     return this.reconcile(userId)
   },
 

@@ -1,10 +1,11 @@
 /**
  * Local development readiness, for the active Cinna profile.
  *
- * "Local development" here means the three things a user needs before they can
- * work on a Cinna agent on their own machine: a desktop-owned toolchain (uv,
- * cinna-cli, Mutagen), a cinna-cli **account workspace** under the Agents Home,
- * and a valid account token in it. The desktop installs and orchestrates; every
+ * "Local development" here means the things a user needs before they can work on
+ * a Cinna agent on their own machine: a desktop-owned toolchain (uv, cinna-cli,
+ * Mutagen), a cinna-cli **account workspace** under the Agents Home, a valid
+ * account token in it, and the opencode engine cached so the first turn does not
+ * begin with a download. The desktop installs and orchestrates; every
  * bit of workspace and sync semantics belongs to cinna-cli, which is why none of
  * the phases below describe files — only where the whole thing has got to.
  *
@@ -32,12 +33,32 @@ export type LocalDevAttentionReason =
  * those are the two questions people actually have. The ids are stable and the
  * labels are what the UI shows.
  */
-export type LocalDevTaskId = 'uv' | 'mutagen' | 'cinna-cli' | 'workspace' | 'token'
+export type LocalDevTaskId =
+  | 'uv'
+  | 'mutagen'
+  | 'cinna-cli'
+  /**
+   * The opencode engine — pre-fetched here rather than owned here.
+   *
+   * It is not part of the cinna-cli toolchain and this feature does not
+   * install it: `prefetchEngineBinary()` resolves it through the engine's own
+   * three sources, so a developer's existing `opencode` answers the row
+   * without downloading anything. It earns a place on this checklist
+   * because it is the last thing between a synced agent and a first turn, and
+   * a user who has just asked for local development is about to need it.
+   */
+  | 'engine'
+  | 'workspace'
+  | 'token'
 
 export type LocalDevTaskStatus =
   /** Not started. */
   | 'pending'
-  /** Being worked on right now — at most one task is ever `active`. */
+  /**
+   * Being worked on right now. Several components can be `active` together —
+   * the installs run concurrently — so this says nothing about the rows around
+   * it.
+   */
   | 'active'
   | 'done'
   /** This is the one that stopped the run; `detail` says how. */

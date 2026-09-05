@@ -167,18 +167,29 @@ export async function findNamedFile(
  * oddity, a file still open) costs disk, while refusing to install over it
  * would cost the user their toolchain.
  *
- * Deliberately *not* aggressive about age or ownership: a concurrently running
- * second instance has its own `.staging-<pid>-<time>` and would be swept out
- * from under itself. That race is survivable — the loser's `rename` fails and
- * it falls back to whatever was published — and the alternative (parsing pids
- * out of directory names and probing liveness) is more machinery than the
- * failure justifies. Callers sweep once at the start of a pass, not per asset.
+ * An install running *in this process* is exempt, and that exemption is load
+ * bearing rather than tidy. The toolchain leaves a download running when a
+ * concurrent sibling fails, precisely so the next pass can join it instead of
+ * starting the megabytes again — and that next pass sweeps before it joins.
+ * Without {@link liveStaging} it would delete the directory of the download it
+ * is about to wait on, which then dies at its own checksum with an ENOENT that
+ * looks like a corrupt release.
+ *
+ * Deliberately *not* aggressive about age or ownership beyond that: a
+ * concurrently running second *instance* has its own `.staging-<pid>-<time>-<n>`
+ * and would be swept out from under itself. That race is survivable — the
+ * loser's `rename` fails and it falls back to whatever was published — and
+ * parsing pids out of directory names and probing liveness is more machinery
+ * than the failure justifies. Callers sweep once at the start of a pass, not
+ * per asset.
  */
 export async function sweepStaging(root: string): Promise<void> {
   const entries = await readdir(root, { withFileTypes: true }).catch((): Dirent<string>[] => [])
   for (const entry of entries) {
     if (!entry.isDirectory() || !entry.name.startsWith('.staging-')) continue
-    await rm(join(root, entry.name), { recursive: true, force: true }).catch(() => undefined)
+    const path = join(root, entry.name)
+    if (liveStaging.has(path)) continue
+    await rm(path, { recursive: true, force: true }).catch(() => undefined)
   }
 }
 
@@ -222,15 +233,31 @@ export interface InstallPinnedAssetOptions {
  * already existed — the caller usually does not care, but a progress reporter
  * does, and so does a test asserting that a second `ensure` downloads nothing.
  */
+/** Distinguishes staging directories created within the same millisecond. */
+let stagingSeq = 0
+
+/**
+ * Staging directories an install in *this* process is using right now.
+ *
+ * Read by {@link sweepStaging}, which must not delete them: an install can
+ * outlive the pass that started it (see the toolchain's concurrent installs),
+ * and the next pass sweeps before it joins the one still running.
+ */
+const liveStaging = new Set<string>()
+
 export async function installPinnedAsset(
   o: InstallPinnedAssetOptions
 ): Promise<{ installed: boolean }> {
   if (await o.isInstalled()) return { installed: false }
 
   await mkdir(o.root, { recursive: true })
-  const staging = join(o.root, `.staging-${process.pid}-${Date.now()}`)
+  // The counter is what makes this safe for two installs running at once —
+  // the toolchain downloads uv and Mutagen in parallel, and a pid and a
+  // millisecond are not enough to tell those two apart.
+  const staging = join(o.root, `.staging-${process.pid}-${Date.now()}-${++stagingSeq}`)
   const unpacked = join(staging, 'unpacked')
   const archive = join(staging, o.archiveName)
+  liveStaging.add(staging)
 
   try {
     await mkdir(unpacked, { recursive: true })
@@ -280,6 +307,7 @@ export async function installPinnedAsset(
     logger.info('installed a pinned asset', { label: o.label, installDir: o.installDir })
     return { installed: true }
   } finally {
+    liveStaging.delete(staging)
     await rm(staging, { recursive: true, force: true }).catch(() => undefined)
   }
 }

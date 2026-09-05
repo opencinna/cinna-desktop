@@ -164,6 +164,38 @@ describe('resolveEngineBinaryWith — the managed install', () => {
     expect(everything()).toEqual(['opencode-9.9.9'])
   })
 
+  it('downloads once when two callers ask at the same time', async () => {
+    // There are two askers now: local development pre-fetches the binary, and a
+    // starting turn resolves it. A user who sends a message while first-run
+    // setup is still going has both in flight at once, and the pre-fetch exists
+    // to spend the 46 MB *once*.
+    let release = (): void => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const seen: number[] = []
+    const deps = harness({
+      download: async (_url, dest, onProgress) => {
+        downloads.push(dest)
+        await held
+        onProgress?.(5, 10)
+        writeFileSync(dest, ARCHIVE_BYTES)
+      }
+    })
+
+    const first = resolveEngineBinaryWith(deps)
+    // The second caller brings the progress callback, and must still hear from
+    // the download the first one started.
+    const second = resolveEngineBinaryWith(deps, (received) => seen.push(received))
+    release()
+    const [a, b] = await Promise.all([first, second])
+
+    expect(downloads).toHaveLength(1)
+    expect(a.path).toBe(b.path)
+    expect(seen).toEqual([5])
+    expect(published()).toEqual(['opencode-9.9.9'])
+  })
+
   it('does not download again once it is installed', async () => {
     await resolveEngineBinaryWith(harness())
     expect(downloads).toHaveLength(1)

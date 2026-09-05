@@ -47,6 +47,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { app } from 'electron'
+import { appSettingsRepo } from '../db/appSettings'
 import { createLogger } from '../logger/logger'
 import {
   downloadToFile,
@@ -56,6 +57,7 @@ import {
   isFile,
   ManagedAssetError,
   sha256File,
+  type DownloadProgress,
   type ManagedAssetErrorCode,
   type PinnedAsset
 } from '../managed/managedAsset'
@@ -146,8 +148,14 @@ export interface BinaryResolverDeps {
   which: (bin: string) => Promise<string | null>
   /** `<userData>/engine`. */
   engineRoot: () => string
-  /** Stream a URL to a file. Must not create the file unless bytes arrive. */
-  download: (url: string, dest: string) => Promise<void>
+  /**
+   * Stream a URL to a file. Must not create the file unless bytes arrive.
+   *
+   * The third parameter is what {@link installPinnedAsset} has always passed;
+   * it was simply not declared here while nothing in this module had anywhere
+   * to put a byte count. Local development's pre-fetch row does.
+   */
+  download: (url: string, dest: string, onProgress?: DownloadProgress) => Promise<void>
   /** Unpack `archive` into the (already created) directory `dest`. */
   extract: (archive: string, dest: string) => Promise<void>
   /** `<binary> --version`, or null when it will not run. */
@@ -192,7 +200,50 @@ export class EngineBinaryError extends ManagedAssetError<EngineBinaryErrorCode> 
  * — which asset this platform gets, where it is published, and how the binary
  * is found inside whatever shape the archive turned out to have.
  */
-async function installPinned(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
+/**
+ * The engine install currently running, so two callers share one download.
+ *
+ * There are genuinely two now: local development pre-fetches the binary, and
+ * the engine resolves it again when a turn starts. Those overlap in the obvious
+ * case — a user who sends a message while first-run setup is still going — and
+ * again when a failed reconcile is retried while its engine download is still
+ * in flight. {@link installPinnedAsset} makes a second download *safe* (the
+ * loser's rename fails and the winner's tree is kept), but safe is not the
+ * point: the pre-fetch exists to spend the bandwidth once, and spending it
+ * twice at the moment the user is waiting is the whole failure.
+ *
+ * The entry is dropped when it settles rather than memoised, for the same
+ * reason the toolchain drops its own: a remembered "already installed" would
+ * make the app confidently wrong about a directory the user has since deleted.
+ */
+let installInFlight: Promise<ResolvedEngineBinary> | null = null
+
+/**
+ * Where the running install reports its bytes. The most recent caller to ask
+ * for progress wins, because a caller that *joins* an install did not create
+ * the closure that is running — and a row stuck at 0% for a download that is
+ * visibly happening is worse than no row. Same reasoning as the toolchain's
+ * reporter slot.
+ */
+let installReport: DownloadProgress | undefined
+
+function installPinned(
+  deps: BinaryResolverDeps,
+  onDownloadProgress?: DownloadProgress
+): Promise<ResolvedEngineBinary> {
+  if (onDownloadProgress) installReport = onDownloadProgress
+  if (installInFlight) return installInFlight
+  const run = runInstall(deps).finally(() => {
+    if (installInFlight === run) {
+      installInFlight = null
+      installReport = undefined
+    }
+  })
+  installInFlight = run
+  return run
+}
+
+async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinary> {
   const key = deps.platformKey()
   const asset = deps.assets[key]
   if (!asset) {
@@ -218,6 +269,7 @@ async function installPinned(deps: BinaryResolverDeps): Promise<ResolvedEngineBi
     // archive nested it — which keeps "is it installed" one `stat`, not a walk.
     locate: (dir) => findNamedFile(dir, BINARY_NAME),
     isInstalled: () => isFile(installed),
+    onDownloadProgress: (received, total) => installReport?.(received, total),
     download: deps.download,
     extract: deps.extract,
     notFoundMessage: 'The downloaded engine archive did not contain an opencode executable.'
@@ -234,9 +286,16 @@ async function installPinned(deps: BinaryResolverDeps): Promise<ResolvedEngineBi
  * fallback: the user pointed at something specific, and quietly running a
  * different engine than the one they named is worse than saying the path is
  * wrong.
+ *
+ * `onDownloadProgress` reports bytes only for the third source, and only when
+ * it actually downloads. The first two resolve in milliseconds and have nothing
+ * to report — a caller drawing a bar for this must be ready for it to be
+ * answered instantly and never move, because the commonest good outcome is
+ * "the user already has one".
  */
 export async function resolveEngineBinaryWith(
-  deps: BinaryResolverDeps
+  deps: BinaryResolverDeps,
+  onDownloadProgress?: DownloadProgress
 ): Promise<ResolvedEngineBinary> {
   const configured = deps.configuredPath()?.trim()
   if (configured) {
@@ -265,7 +324,7 @@ export async function resolveEngineBinaryWith(
     logger.warn('an opencode on PATH would not run; falling back to the managed engine')
   }
 
-  return installPinned(deps)
+  return installPinned(deps, onDownloadProgress)
 }
 
 /** `<binary> --version`, or null when the file will not run. */
@@ -309,6 +368,51 @@ export function probeEngineVersion(path: string): Promise<string | null> {
 /** The engine's own directory inside the app data dir. Never the agents home. */
 export function engineRootDir(): string {
   return join(app.getPath('userData'), 'engine')
+}
+
+/**
+ * The engine path a user pinned in Settings, or null.
+ *
+ * Lives here rather than in the manager because two callers now need the same
+ * answer — starting the engine, and pre-fetching its binary — and the setting
+ * key is exactly the kind of string that gets copied once and then changed in
+ * one place. The resolver core still takes the getter as an injected dep; this
+ * is the app's own wiring of it, not a shortcut past it.
+ */
+export function configuredEnginePath(): string | null {
+  const value = appSettingsRepo.get('localAgentsEnginePath')
+  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
+}
+
+/**
+ * Make sure a usable engine binary is on this machine, without starting one.
+ *
+ * Left alone, the engine arrives *lazily* — at the moment somebody presses send
+ * — which is the worst time for a 46 MB download and the one time the user is
+ * certainly watching. Local development calls this so the fetch happens inside
+ * a wait that is already going on. Nothing else changes: the three sources are
+ * unchanged and in the same order, so a configured path or a developer's own
+ * `opencode` answers instantly and downloads nothing. Pre-caching must never
+ * mean acquiring a second copy of a tool the user already installed.
+ *
+ * **Never throws.** This is an optimisation; a machine that cannot fetch the
+ * engine now fetches it at first use exactly as it did before this existed, and
+ * the caller's job is to say so rather than to fail whatever it was doing.
+ */
+export async function prefetchEngineBinary(
+  onDownloadProgress?: DownloadProgress
+): Promise<{ ok: true; source: EngineBinarySource } | { ok: false; error: string }> {
+  try {
+    const resolved = await resolveEngineBinaryWith(
+      realBinaryResolverDeps(configuredEnginePath),
+      onDownloadProgress
+    )
+    return { ok: true, source: resolved.source }
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err)
+    logger.warn('engine prefetch failed; the first turn will fetch it', { error })
+    return { ok: false, error }
+  }
 }
 
 export function realBinaryResolverDeps(configuredPath: () => string | null): BinaryResolverDeps {

@@ -227,12 +227,22 @@ describe('ensure', () => {
     const steps: string[] = []
     const result = await createToolchain(deps()).ensure(PINS, ({ step }) => steps.push(step))
 
-    expect(steps).toEqual([
+    // Membership rather than a sequence: Mutagen installs alongside the others,
+    // so the *interleaving* of these lines is not a promise the toolchain makes
+    // and a test that pinned it would fail on a fast network rather than on a
+    // bug. What is promised is that each component says it started and said it
+    // finished, and that "Toolchain ready" is last.
+    for (const step of [
       'Installing uv',
+      'uv installed',
       'Installing Mutagen',
+      'Mutagen installed',
       'Installing cinna-cli',
-      'Toolchain ready'
-    ])
+      'cinna-cli installed'
+    ]) {
+      expect(steps, `missing step: ${step}`).toContain(step)
+    }
+    expect(steps.at(-1)).toBe('Toolchain ready')
     expect(result.cliVersion).toBe('0.4.0')
     expect(everything().sort()).toEqual(
       ['bin', 'mutagen-9.9.9', 'state.json', 'uv-1.2.3'].sort()
@@ -248,6 +258,93 @@ describe('ensure', () => {
     expect(installRuns()[0]?.args).toEqual(['tool', 'install', 'cinna-cli==0.4.0'])
   })
 
+  it('downloads Mutagen while cinna-cli is installing, rather than before it', async () => {
+    // The parallelism is the feature, so it is asserted as a *deadlock* rather
+    // than as timings, which do not reproduce: Mutagen's download refuses to
+    // finish until the cinna-cli install has started. Under the old
+    // uv-then-Mutagen-then-cli sequence that is unsatisfiable — cli would be
+    // waiting on the download that is waiting on it — and the run fails with
+    // the message below instead of hanging until the suite times out.
+    let cliStarted = (): void => {}
+    const started = new Promise<void>((resolve) => {
+      cliStarted = resolve
+    })
+    const base = deps()
+    const tc = createToolchain(
+      deps({
+        download: async (url, dest, onProgress) => {
+          if (url.includes('mutagen')) {
+            await Promise.race([
+              started,
+              new Promise((_, reject) =>
+                setTimeout(
+                  () => reject(new Error('cinna-cli did not start while Mutagen was downloading')),
+                  2_000
+                )
+              )
+            ])
+          }
+          await base.download(url, dest, onProgress)
+        },
+        run: async (bin, args, env, timeoutMs, onLine) => {
+          if (args[0] === 'tool') cliStarted()
+          return base.run(bin, args, env, timeoutMs, onLine)
+        }
+      })
+    )
+
+    const result = await tc.ensure(PINS)
+    expect(result.cliVersion).toBe('0.4.0')
+    expect(existsSync(join(root, 'mutagen-9.9.9', 'mutagen'))).toBe(true)
+  })
+
+  it('reports to the run that is waiting, even when the install was started by another', async () => {
+    // `once` makes a second pass *join* an install already under way rather
+    // than start a second copy of it. The joined install is a closure the first
+    // pass created, so if it reported to the callback it captured, the pass
+    // actually waiting on it would show that component pending at zero for the
+    // whole download — which is the state a user hits after pressing Repair on
+    // a run whose sibling failed while this one kept going.
+    let release = (): void => {}
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let downloading = (): void => {}
+    const started = new Promise<void>((resolve) => {
+      downloading = resolve
+    })
+    const base = deps()
+    const tc = createToolchain(
+      deps({
+        download: async (url, dest, onProgress) => {
+          if (url.includes('mutagen')) {
+            downloading()
+            await held
+          }
+          await base.download(url, dest, onProgress)
+        }
+      })
+    )
+
+    const first = tc.ensure(PINS, () => {})
+    // Not a tick count: wait until the first pass is genuinely inside the
+    // Mutagen download, or the second pass may be the one that starts it and
+    // the test proves nothing.
+    await started
+
+    const seen: string[] = []
+    const second = tc.ensure(PINS, ({ tool }) => {
+      if (tool) seen.push(tool)
+    })
+    // Long enough for the second pass to reach its own `once('mutagen')` and
+    // join the download the first pass is holding.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    release()
+    await Promise.all([first, second])
+
+    expect(seen).toContain('mutagen')
+  })
+
   it('is a cheap no-op the second time, and says so instead of saying nothing', async () => {
     const tc = createToolchain(deps())
     await tc.ensure(PINS)
@@ -259,10 +356,24 @@ describe('ensure', () => {
     expect(downloads).toEqual([])
     // Not even a `--version` probe: the recorded state answers it.
     expect(runs).toEqual([])
-    // A stage that is already satisfied still reports its *end* percentage. It
-    // used to report nothing, which left a warm run's bar at zero for its whole
-    // (very short) life — the one shape guaranteed to look stuck.
-    expect(reports.map((r) => r.percent)).toEqual([20, 55, 100])
+    // A component that is already satisfied still reports its *end* percentage.
+    // It used to report nothing, which left a warm run's bar at zero for its
+    // whole (very short) life — the one shape guaranteed to look stuck.
+    //
+    // Asserted as a set and a shape rather than a fixed sequence: the three
+    // skips are concurrent, so which of them lands second is a race, and only
+    // the arithmetic is a promise. The bar leaves zero immediately, never goes
+    // backwards, and ends full.
+    const percents = reports.map((r) => r.percent!)
+    expect(reports.map((r) => r.step).sort()).toEqual([
+      'Mutagen',
+      'Toolchain ready',
+      'cinna-cli',
+      'uv'
+    ])
+    expect(percents[0]).toBeGreaterThan(0)
+    expect([...percents].sort((a, b) => a - b)).toEqual(percents)
+    expect(percents.at(-1)).toBe(100)
   })
 
   it('never moves the bar backwards, whatever the mix of work and skips', async () => {
@@ -280,10 +391,8 @@ describe('ensure', () => {
     expect(Math.min(...percents)).toBeGreaterThanOrEqual(0)
   })
 
-  it('turns a download into a labelled percentage inside its stage', async () => {
-    // uv's stage is 0..20, and the download is capped at 90% of it so verify
-    // and unpack still have somewhere to land.
-    const reports: { step: string; percent?: number }[] = []
+  it('turns a download into a labelled percentage on its own row', async () => {
+    const reports: { step: string; percent?: number; toolPercent?: number }[] = []
     await createToolchain(
       deps({
         download: async (_url, dest, onProgress) => {
@@ -292,11 +401,19 @@ describe('ensure', () => {
           writeFileSync(dest, BYTES)
         }
       })
-    ).ensure(PINS, ({ step, percent }) => reports.push({ step, percent }))
+    ).ensure(PINS, ({ step, percent, toolPercent }) =>
+      reports.push({ step, percent, toolPercent })
+    )
 
     const halfway = reports.find((r) => r.step.startsWith('Downloading uv'))
     expect(halfway?.step).toBe('Downloading uv — 5.0 of 10.0 MB')
-    expect(halfway?.percent).toBe(9)
+    // uv's own row: capped at 90% of the download so verify and unpack still
+    // have somewhere to land.
+    expect(halfway?.toolPercent).toBe(45)
+    // The overall bar carries uv's fifth of that (9) *plus* whatever Mutagen
+    // has managed to report by then — they download together, so which of them
+    // reports first is a race and only the row's own figure is a fixed number.
+    expect(halfway?.percent).toBeGreaterThanOrEqual(9)
   })
 
   it('counts up honestly when the server declares no length', async () => {
@@ -386,7 +503,14 @@ describe('ensure — failures leave the root untouched', () => {
     await expect(tc.ensure(PINS)).rejects.toMatchObject({ code: 'checksum_mismatch' })
     // Not merely that it threw: nothing on disk that a later run — which trusts
     // a present directory absolutely — could take for a finished install.
-    expect(everything()).toEqual([])
+    //
+    // `.staging-*` is excluded rather than asserted absent, and that is not a
+    // loosened invariant. The installs run concurrently, so the sibling of the
+    // one that failed is still working when the rejection surfaces and its
+    // staging directory legitimately exists for a moment longer. Nothing reads
+    // a staging directory as an install: it is swept at the start of the next
+    // pass and removed by its own `finally` regardless.
+    expect(everything().filter((e) => !e.startsWith('.staging-'))).toEqual([])
   })
 
   it('reports a failing uv tool install with the tail of its output', async () => {

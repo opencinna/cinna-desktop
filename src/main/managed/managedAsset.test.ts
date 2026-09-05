@@ -219,6 +219,30 @@ describe('sweepStaging', () => {
   it('is a no-op on a root that does not exist yet', async () => {
     await expect(sweepStaging(join(root, 'absent'))).resolves.toBeUndefined()
   })
+
+  it('spares an install that is still running in this process', async () => {
+    // An install can outlive the pass that started it: the toolchain installs
+    // its components concurrently and lets a download finish when a sibling
+    // fails, precisely so the next pass can join it instead of spending the
+    // megabytes again. That next pass sweeps first — and deleting the staging
+    // directory of the download it is about to wait on kills it at its own
+    // checksum, with an ENOENT that reads like a corrupt release.
+    let swept: string[] = []
+    await installPinnedAsset(
+      options({
+        download: async (_url, dest) => {
+          downloads.push(dest)
+          writeFileSync(dest, BYTES)
+          await sweepStaging(root)
+          swept = everything()
+        }
+      })
+    )
+    // The live staging directory survived the sweep that ran mid-download, and
+    // the install went on to publish normally.
+    expect(swept.some((e) => e.startsWith('.staging-'))).toBe(true)
+    expect(everything()).toEqual(['tool-1.0.0'])
+  })
 })
 
 describe('findNamedFile', () => {

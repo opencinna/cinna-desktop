@@ -106,8 +106,8 @@ import { app } from 'electron'
 import { createLogger } from '../logger/logger'
 import { getShellEnv, shellEnvForChild } from '../shell/env'
 import { turnLock } from '../services/localAgents/turnLock'
-import { appSettingsRepo } from '../db/appSettings'
 import {
+  configuredEnginePath,
   engineRootDir,
   realBinaryResolverDeps,
   resolveEngineBinaryWith,
@@ -284,10 +284,8 @@ function pickLoopbackPort(): Promise<number> {
 }
 
 /** The engine path in Settings, or null for "resolve one for me". */
-function configuredBinaryPath(): string | null {
-  const value = appSettingsRepo.get('localAgentsEnginePath')
-  return typeof value === 'string' && value.trim() !== '' ? value.trim() : null
-}
+/** Re-exported name kept for readability at the call sites below. */
+const configuredBinaryPath = configuredEnginePath
 
 /**
  * The child's environment: the narrowed shell environment, plus exactly what
