@@ -262,7 +262,14 @@ export interface AgentRootDto {
 export interface CreateLocalAgentInput {
   /** Human name. The slug is derived from it unless `slug` is given. */
   name: string
-  description: string
+  /**
+   * One sentence: what the agent does. Optional — a name is all that is needed
+   * to scaffold a folder, and the description is usually written later by the
+   * assistant that builds the agent. Absent or blank, main writes the name in
+   * its place, because the kit schema requires a non-empty `description` and
+   * an invalid folder would be a worse start than a redundant one.
+   */
+  description?: string
   /** Lower-case, hyphenated folder name. Derived from `name` when absent. */
   slug?: string
   /** Root to scaffold into. The default home when absent. */
@@ -337,6 +344,28 @@ export interface RescanResult {
 }
 
 /** `local-agent:open-path` — reveal a file or folder inside an agent. */
+/**
+ * The description worth showing, or `''` when it is only the name repeated.
+ *
+ * A folder created from a name alone carries that name as its `description`
+ * — the kit schema requires one — and every surface that renders a sub-line
+ * under the name (the agent page header, the Agents tab, the `@` and `[+]`
+ * pickers' `agents.description` column) would otherwise say the name twice.
+ * Applied where the index row is built as well as where it is rendered, so
+ * the two agree.
+ */
+export function describedAs(agent: { name: string; description: string }): string {
+  const description = agent.description.trim()
+  return description === agent.name.trim() ? '' : description
+}
+
+/** What `local-agent:delete` returns on success. */
+export interface DeleteLocalAgentResult {
+  agentId: string
+  /** The folder went to the OS trash, never `rm -rf` — it can be put back. */
+  trashed: true
+}
+
 export interface OpenLocalAgentPathInput {
   agentId: string
   /**

@@ -23,6 +23,10 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsHome: '',
   // Empty = resolve one (PATH first, then the pinned managed download).
   localAgentsEnginePath: '',
+  // Empty = ask which tool to open a folder with. Rewritten by the last pick.
+  localAgentsDefaultTool: '',
+  // Only meaningful with a default tool set: skip the "build it with…" step.
+  localAgentsAutoOpen: false,
   // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
   localDevConsent: ''
 }

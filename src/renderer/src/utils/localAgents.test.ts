@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { AgentRootDto, FileStamp, LocalAgentDto } from '../../../shared/localAgents'
+import type { DetectedTool } from '../../../shared/localTools'
 import { describeAgentSlug, fieldFilePath, slugifyAgentName } from '../../../shared/localAgents'
 import {
   agentSubline,
@@ -17,7 +18,8 @@ import {
   saveRequest,
   saveSucceeded,
   seedFileEditor,
-  suggestAgentName
+  launchableTools,
+  resolveDefaultTool
 } from './localAgents'
 
 function stamp(hash: string, size = 100, mtimeMs = 1_000): FileStamp {
@@ -82,6 +84,20 @@ describe('agentSubline', () => {
         })
       )
     ).toBe('12 invoices flagged')
+  })
+
+  it('drops the validator’s backticks, which a sidebar line would show literally', () => {
+    expect(
+      agentSubline(agent({ readiness: 'invalid', readinessReason: '`id` is required.' }))
+    ).toBe('id is required.')
+  })
+
+  it('leaves the line empty when the description is only the name repeated', () => {
+    expect(agentSubline(agent({ name: 'Alpha', description: 'Alpha' }))).toBe('')
+    expect(agentSubline(agent({ name: 'Alpha', description: ' Alpha ' }))).toBe('')
+    expect(agentSubline(agent({ name: 'Alpha', description: 'Watches alpha.' }))).toBe(
+      'Watches alpha.'
+    )
   })
 
   it('falls back to the readiness issue when there is no status', () => {
@@ -173,28 +189,6 @@ describe('groupAgentsByRoot', () => {
     )
     expect(groups[0].agents.map((a) => a.id)).toEqual(['folder:a'])
     expect(groups[1].agents.map((a) => a.id)).toEqual(['folder:b'])
-  })
-})
-
-describe('suggestAgentName', () => {
-  it('builds a name from the head of the sentence', () => {
-    expect(suggestAgentName('watch the invoice inbox and flag missing PO numbers')).toBe(
-      'Watch the Invoice Inbox'
-    )
-  })
-
-  it('strips the framing the user opens with', () => {
-    expect(suggestAgentName('an agent that reviews pull requests')).toBe('Reviews Pull Requests')
-    expect(suggestAgentName('I want it to summarise standup notes')).toBe('Summarise Standup Notes')
-  })
-
-  it('stops at the first clause', () => {
-    expect(suggestAgentName('checks the build, then tells me what broke')).toBe('Checks the Build')
-  })
-
-  it('returns nothing to suggest rather than a placeholder', () => {
-    expect(suggestAgentName('   ')).toBe('')
-    expect(suggestAgentName('an agent')).toBe('')
   })
 })
 
@@ -518,5 +512,37 @@ describe('a save blocked by a running turn', () => {
     state = saveRefused(state, 'what disk says')
     expect(state.conflict).toBe('refused')
     expect(saveRequest(state)).toBeNull()
+  })
+})
+
+describe('the default tool', () => {
+  const tool = (over: Partial<DetectedTool>): DetectedTool => ({
+    id: 'claude',
+    kind: 'cli-assistant',
+    label: 'Claude Code',
+    path: '/bin/claude',
+    available: true,
+    source: 'path',
+    ...over
+  })
+  const tools: DetectedTool[] = [
+    tool({ id: 'code', kind: 'editor', label: 'VS Code' }),
+    tool({ id: 'uv', kind: 'runtime', label: 'uv' }),
+    tool({ id: 'claude' }),
+    tool({ id: 'codex', label: 'Codex', available: false })
+  ]
+
+  it('offers installed assistants before editors, and never a runtime', () => {
+    expect(launchableTools(tools).map((t) => t.id)).toEqual(['claude', 'code'])
+  })
+
+  it('resolves the setting only against what is installed', () => {
+    const launchable = launchableTools(tools)
+    expect(resolveDefaultTool(launchable, 'claude')?.id).toBe('claude')
+    // Chosen once, uninstalled since: the button must ask, not fail.
+    expect(resolveDefaultTool(launchable, 'codex')).toBeNull()
+    expect(resolveDefaultTool(launchable, '')).toBeNull()
+    // A runtime is never launchable, whatever the setting says.
+    expect(resolveDefaultTool(launchable, 'uv')).toBeNull()
   })
 })

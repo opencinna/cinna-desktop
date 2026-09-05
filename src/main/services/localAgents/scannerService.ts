@@ -40,6 +40,7 @@ import {
   type CredentialSlot
 } from '../../../shared/kit/manifest'
 import {
+  describedAs,
   AGENTS_SUBDIR,
   duplicateFolderAgentId,
   folderAgentId,
@@ -577,7 +578,7 @@ export const scannerService = {
       entries.push({
         id: dto.id,
         name: dto.name,
-        description: dto.description === '' ? null : dto.description,
+        description: describedAs(dto) || null,
         localPath: dto.path,
         // Free here: the manifest is already parsed on the DTO, so the row's
         // copy is built at the one moment the files have just been read.

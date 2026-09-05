@@ -4,6 +4,7 @@ import type { DetectedTool, OpenInRequest } from '../shared/localTools'
 import type {
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentResult,
   DraftLocalAgentResult,
   LocalAgentChangedPayload,
   LocalAgentDocDto,
@@ -1135,6 +1136,12 @@ const api = {
       input: UpdateLocalAgentFieldInput
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:update-field', input),
+    /**
+     * Move the folder to the Trash and forget the agent. An outcome, so
+     * `turn_in_progress` survives the crossing — see `get` above.
+     */
+    delete: (agentId: string): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> =>
+      ipcRenderer.invoke('local-agent:delete', agentId),
     /** Re-read one root, or every root. */
     rescan: (rootId?: string): Promise<RescanResult[]> =>
       ipcRenderer.invoke('local-agent:rescan', rootId),

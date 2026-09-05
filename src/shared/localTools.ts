@@ -4,18 +4,30 @@
  * the same shapes the main-process detection service produces.
  */
 
+/**
+ * Every detectable tool, as a runtime list so a setting can be validated
+ * against it (`localAgentsDefaultTool`). {@link LocalToolId} is derived from
+ * it rather than the other way round so the two cannot drift.
+ */
+export const LOCAL_TOOL_IDS = [
+  'claude',
+  'codex',
+  'opencode',
+  'code',
+  'cursor',
+  'uv',
+  'git',
+  'make',
+  'python3',
+  'cinna'
+] as const
+
 /** Stable identifier of a detectable tool. Also the value the renderer sends back. */
-export type LocalToolId =
-  | 'claude'
-  | 'codex'
-  | 'opencode'
-  | 'code'
-  | 'cursor'
-  | 'uv'
-  | 'git'
-  | 'make'
-  | 'python3'
-  | 'cinna'
+export type LocalToolId = (typeof LOCAL_TOOL_IDS)[number]
+
+export function isLocalToolId(value: unknown): value is LocalToolId {
+  return typeof value === 'string' && (LOCAL_TOOL_IDS as readonly string[]).includes(value)
+}
 
 /**
  * How a tool is offered:
@@ -36,6 +48,18 @@ export type LocalToolKind = 'cli-assistant' | 'editor' | 'runtime'
  * copy, because that is the one whose version the app pins.
  */
 export type LocalToolSource = 'path' | 'app-bundle' | 'managed'
+
+/**
+ * The kinds a folder can be *opened with*, and so the only kinds that may be
+ * the user's default tool. A `runtime` tool is detected for feature gating
+ * and never launched.
+ */
+export const LAUNCHABLE_TOOL_KINDS: readonly LocalToolKind[] = ['cli-assistant', 'editor']
+
+/** The open-in action a launchable tool is used with. */
+export function actionForTool(tool: Pick<DetectedTool, 'kind'>): OpenInAction {
+  return tool.kind === 'editor' ? 'editor' : 'terminal-command'
+}
 
 export interface DetectedTool {
   id: LocalToolId

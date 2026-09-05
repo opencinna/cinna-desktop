@@ -115,6 +115,25 @@ describe('app settings', () => {
    * one's: a user pasting a path before installing the binary should be able to
    * save it and hear about the problem from the engine's status line.
    */
+  it('accepts a known tool id as the default tool, and empty to clear it', () => {
+    appSettingsService.set('localAgentsDefaultTool', 'codex')
+    expect(appSettingsService.getAll().localAgentsDefaultTool).toBe('codex')
+    appSettingsService.set('localAgentsDefaultTool', '')
+    expect(appSettingsService.getAll().localAgentsDefaultTool).toBe('')
+  })
+
+  it('refuses a default tool Cinna does not know — that string would be handed to open-in', () => {
+    expect(() => appSettingsService.set('localAgentsDefaultTool', 'vim')).toThrow(
+      /not a tool/i
+    )
+    expect(appSettingsService.getAll().localAgentsDefaultTool).toBe('')
+  })
+
+  it('round-trips the auto-open flag', () => {
+    appSettingsService.set('localAgentsAutoOpen', true)
+    expect(appSettingsService.getAll().localAgentsAutoOpen).toBe(true)
+  })
+
   it('does not require the engine path to exist', () => {
     const missing = join(homedir(), 'nothing-is-installed-here', 'opencode')
     expect(() => appSettingsService.set('localAgentsEnginePath', missing)).not.toThrow()

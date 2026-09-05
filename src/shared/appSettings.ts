@@ -51,6 +51,27 @@ export interface AppSettingsSchema {
    */
   localAgentsEnginePath: string
   /**
+   * The developer tool a local agent folder opens in by default — a
+   * {@link LocalToolId} of a `cli-assistant` or `editor`, or empty for "ask".
+   * The agent page's Open-in button launches it in one click, and picking a
+   * tool from that button's menu (or from the new-agent flow) rewrites it:
+   * most people build every agent with the same assistant, so the last
+   * choice is the right default and nobody should have to go to Settings to
+   * say so. Settings → Local Agents can still set or clear it explicitly.
+   *
+   * Validated against the known ids, not against what is installed: a tool
+   * can be uninstalled after being chosen, and the renderer resolves the id
+   * against the detected list on every read, falling back to "ask".
+   */
+  localAgentsDefaultTool: string
+  /**
+   * When true, creating a local agent opens the new folder in the default tool
+   * straight away instead of asking which tool to build it with. Meaningless
+   * without `localAgentsDefaultTool`; the new-agent flow asks as before when
+   * the default is unset or not installed.
+   */
+  localAgentsAutoOpen: boolean
+  /**
    * Which Cinna hosts the user has agreed to set up local development for, as
    * a JSON object of `{ "<host>": true | false }`.
    *

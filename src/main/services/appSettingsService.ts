@@ -7,6 +7,7 @@ import type {
 import { AppSettingsError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { assertUsableRoot } from './localAgents/pathRules'
+import { isLocalToolId } from '../../shared/localTools'
 
 const logger = createLogger('app-settings')
 
@@ -127,6 +128,20 @@ const VALUE_CHECKS: {
         'invalid_value',
         'The engine path must be an absolute path to the opencode executable.'
       )
+    }
+  },
+
+  /**
+   * A known tool id or empty. Known, not *installed*: the value is read back
+   * against the detected list every time, so a tool that was uninstalled after
+   * being chosen degrades to "ask" rather than to a rejected setting. An
+   * arbitrary string here is what `local-tools:open-in` would otherwise be
+   * asked to launch.
+   */
+  localAgentsDefaultTool: (value) => {
+    if (value === '') return
+    if (!isLocalToolId(value)) {
+      throw new AppSettingsError('invalid_value', 'That is not a tool Cinna knows how to open.')
     }
   }
 }

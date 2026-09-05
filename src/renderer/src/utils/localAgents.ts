@@ -17,6 +17,35 @@ import type {
   LocalAgentDto,
   LocalAgentReadiness
 } from '../../../shared/localAgents'
+import { describedAs } from '../../../shared/localAgents'
+import { LAUNCHABLE_TOOL_KINDS, type DetectedTool } from '../../../shared/localTools'
+
+export { describedAs }
+
+/**
+ * The installed tools a folder can be opened with, assistants before editors,
+ * in detection order within each kind. The order the Open-in menu shows and
+ * the new-agent flow offers.
+ */
+export function launchableTools(tools: readonly DetectedTool[]): DetectedTool[] {
+  return LAUNCHABLE_TOOL_KINDS.flatMap((kind) =>
+    tools.filter((tool) => tool.available && tool.kind === kind)
+  )
+}
+
+/**
+ * The default tool, if it is set **and** installed. A setting naming a tool
+ * that has since been uninstalled (or was set on another machine's idea of
+ * PATH) resolves to null — "ask" — rather than to a button that fails after
+ * the click.
+ */
+export function resolveDefaultTool(
+  launchable: readonly DetectedTool[],
+  settingId: string
+): DetectedTool | null {
+  if (settingId === '') return null
+  return launchable.find((tool) => tool.id === settingId) ?? null
+}
 
 /**
  * The most pressing readiness issue, in the words the list uses. `null` for an
@@ -54,12 +83,14 @@ export function agentSubline(agent: LocalAgentDto): string {
   // readiness strip would normally explain this, is out of reach. The one line
   // in the sidebar is the only place that explanation can land.
   if (agent.readiness === 'invalid') {
-    const reason = agent.readinessReason?.trim()
+    // The validator's own words, minus its markdown: a sidebar line is not
+    // rendered, so "`id` is required." would show its backticks.
+    const reason = agent.readinessReason?.replace(/`/g, '').trim()
     if (reason) return reason
   }
   const issue = readinessLabel(agent.readiness)
   if (issue) return issue
-  return agent.description.trim()
+  return describedAs(agent)
 }
 
 export interface LocalAgentGroup {
@@ -87,88 +118,6 @@ export function groupAgentsByRoot(
       .filter((agent) => agent.rootId === root.id)
       .sort((a, b) => a.name.localeCompare(b.name))
   }))
-}
-
-/** Words a description opens with that say nothing about what to call the agent. */
-const NAME_STOP_PREFIXES = [
-  'an agent that',
-  'a agent that',
-  'an agent which',
-  'the agent that',
-  'an agent to',
-  'an agent',
-  'a bot that',
-  'a bot',
-  'it should',
-  'this should',
-  'i want to',
-  'i want it to',
-  'i need it to',
-  'i need to',
-  'please',
-  'helps me to',
-  'helps me',
-  'help me to',
-  'help me',
-  'should'
-]
-
-const NAME_SMALL_WORDS = new Set([
-  'a',
-  'an',
-  'and',
-  'as',
-  'at',
-  'by',
-  'for',
-  'from',
-  'in',
-  'of',
-  'on',
-  'or',
-  'the',
-  'to',
-  'with'
-])
-
-/**
- * A name to suggest from the sentence the user typed.
- *
- * Deliberately mechanical rather than clever: the user confirms it in the form,
- * and a suggestion that is obviously derived from their own words is easier to
- * correct than one a model invented. Returns `''` when the sentence has nothing
- * to build on, so the caller can leave the field empty rather than offer
- * "Untitled".
- */
-export function suggestAgentName(sentence: string): string {
-  let text = sentence.trim().toLowerCase()
-  if (text === '') return ''
-  // One clause only — the name comes from the head of the sentence.
-  text = text.split(/[.,;:!?\n]/)[0].trim()
-  let changed = true
-  while (changed) {
-    changed = false
-    for (const prefix of NAME_STOP_PREFIXES) {
-      if (text === prefix) return ''
-      if (text.startsWith(`${prefix} `)) {
-        text = text.slice(prefix.length + 1).trim()
-        changed = true
-        break
-      }
-    }
-  }
-  const words = text.split(/\s+/).filter((word) => word !== '')
-  if (words.length === 0) return ''
-  return words
-    .slice(0, 4)
-    .map((word, index) => {
-      const cleaned = word.replace(/[^\p{L}\p{N}'-]/gu, '')
-      if (cleaned === '') return ''
-      if (index > 0 && NAME_SMALL_WORDS.has(cleaned)) return cleaned
-      return cleaned.charAt(0).toUpperCase() + cleaned.slice(1)
-    })
-    .filter((word) => word !== '')
-    .join(' ')
 }
 
 /**

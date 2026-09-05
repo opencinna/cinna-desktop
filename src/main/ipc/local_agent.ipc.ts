@@ -10,6 +10,7 @@ import { ipcHandle } from './_wrap'
 import type {
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentResult,
   DraftLocalAgentResult,
   LocalAgentDocDto,
   LocalAgentDto,
@@ -36,6 +37,16 @@ import { DomainError } from '../errors'
 function withCode<T>(fn: () => T): LocalAgentOutcome<T> {
   try {
     return { ok: true, value: fn() }
+  } catch (err) {
+    if (err instanceof DomainError) return localAgentFailure(err)
+    throw err
+  }
+}
+
+/** {@link withCode} for a handler that awaits — the trash call is async. */
+async function withCodeAsync<T>(fn: () => Promise<T>): Promise<LocalAgentOutcome<T>> {
+  try {
+    return { ok: true, value: await fn() }
   } catch (err) {
     if (err instanceof DomainError) return localAgentFailure(err)
     throw err
@@ -117,6 +128,23 @@ export function registerLocalAgentHandlers(): void {
       if (outcome.ok) {
         void engineManager.applyConfigChange(getSettingsScopeUserId())
       }
+      return outcome
+    }
+  )
+
+  /**
+   * Trash the folder and drop the row. Coded, because `turn_in_progress` is
+   * the one refusal the page has to explain rather than report: the agent is
+   * mid-turn, and the folder is still there.
+   */
+  ipcHandle(
+    'local-agent:delete',
+    async (_event, agentId: string): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> => {
+      userActivation.requireActivated()
+      const userId = getSettingsScopeUserId()
+      const outcome = await withCodeAsync(() => localAgentService.delete(userId, agentId))
+      // The engine's config lists every folder agent; one fewer is a change.
+      if (outcome.ok) void engineManager.applyConfigChange(userId)
       return outcome
     }
   )

@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentResult,
   DraftLocalAgentResult,
   FileStamp,
   LocalAgentDocDto,
@@ -42,6 +43,14 @@ import {
 
 export const LOCAL_AGENTS_KEY = ['local-agents'] as const
 export const LOCAL_AGENT_ROOTS_KEY = ['local-agent-roots'] as const
+/**
+ * `useAgents`' key — the list behind the composer `@` popup, the `[+]` picker
+ * and the Jobs agent picker. A folder agent is a row in that list too, so a
+ * create, a re-key or a delete has to refresh it, or the pickers keep offering
+ * an agent whose runner will answer `not_found`. Otherwise that list is only
+ * refreshed by a remote sync completing.
+ */
+const AGENTS_KEY = ['agents'] as const
 
 export function localAgentKey(agentId: string): readonly unknown[] {
   return ['local-agent', agentId] as const
@@ -124,6 +133,7 @@ export function useLocalAgentWatch(): void {
   useEffect(() => {
     return window.api.localAgents.onChanged((payload) => {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
       if (payload.agentId) {
         void queryClient.invalidateQueries({ queryKey: localAgentKey(payload.agentId) })
         // The prompt documents live in their own cache entries — the DTO
@@ -143,6 +153,7 @@ export function useCreateLocalAgent() {
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
     }
   })
 }
@@ -193,6 +204,7 @@ export function useStampAgentIdentity() {
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
     }
   })
 }
@@ -224,6 +236,37 @@ export function useSetLocalAgentRuntime() {
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/**
+ * Move the agent's folder to the Trash and forget it.
+ *
+ * Only the list is invalidated. The page's own entry is deliberately left
+ * alone: removing it while the page still observes it would make react-query
+ * refetch a row that no longer exists, and the caller clears the selection —
+ * which unmounts that observer — in its own `onSuccess`, right after this
+ * one. The stale entry is garbage-collected with nothing watching it.
+ * `turn_in_progress` arrives with its code intact (an outcome, unwrapped here
+ * like `get`), so the dialog can say the agent is busy rather than that
+ * something failed.
+ */
+export function useDeleteLocalAgent(options?: {
+  /**
+   * Runs at hook level, so it survives the unmount of whatever called
+   * `mutate` — the place to clear a selection the row no longer backs.
+   */
+  onSuccess?: (result: DeleteLocalAgentResult) => void
+}) {
+  const queryClient = useQueryClient()
+  return useMutation<DeleteLocalAgentResult, Error, string>({
+    mutationFn: async (agentId: string) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.delete(agentId)),
+    onSuccess: (result) => {
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      options?.onSuccess?.(result)
     }
   })
 }

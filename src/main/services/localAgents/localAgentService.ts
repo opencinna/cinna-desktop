@@ -51,6 +51,7 @@ import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
 import {
+  describedAs,
   FOLDER_AGENT_ID_PREFIX,
   FOLDER_AGENT_SOURCE,
   folderAgentId,
@@ -58,6 +59,7 @@ import {
   LOCAL_AGENT_PROMPT_PATHS,
   type AgentRootDto,
   type CreateLocalAgentInput,
+  type DeleteLocalAgentResult,
   type FileStamp,
   type LocalAgentDocDto,
   type LocalAgentDto,
@@ -354,7 +356,7 @@ export const localAgentService = {
     const entry: FolderIndexEntry = {
       id: dto.id,
       name: dto.name,
-      description: dto.description === '' ? null : dto.description,
+      description: describedAs(dto) || null,
       localPath: dto.path,
       remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest)
     }
@@ -400,7 +402,11 @@ export const localAgentService = {
    */
   create(userId: string, input: CreateLocalAgentInput): LocalAgentDto {
     const name = requireString(input?.name, 'The name', 255)
-    const description = requireString(input?.description, 'The description', 2000)
+    // The kit schema requires a non-empty `description`, and a folder that
+    // fails validation from its first second is a worse start than a
+    // redundant sentence. The name stands in until the user, or the
+    // assistant they build the agent with, writes the real one.
+    const description = optionalString(input?.description, 'The description', 2000) ?? name
     const slug = (input?.slug?.trim() || scaffoldService.slugify(name))
     if (slug === '') {
       throw new LocalAgentError(
@@ -644,6 +650,47 @@ export const localAgentService = {
       agentId: input.agentId,
       relPath: input?.relPath ?? MANIFEST_FILE
     })
+  },
+
+  /**
+   * Move an agent folder to the OS trash and drop its row.
+   *
+   * Trash, never `rm -rf`: the folder is the agent, it may hold work the user
+   * has not committed anywhere, and a mis-click has to be recoverable. The
+   * row is not deleted directly — the root is rescanned, and the scan prunes
+   * what is no longer on disk through the same path every other removal takes
+   * (`replaceFolderIndex`), so the cascade to `a2a_sessions` and `job_agents`
+   * is the one already reasoned about there. A job bound to this agent is left
+   * with a dependency the manifest can no longer resolve, which is exactly the
+   * visible, blocking state `local_only.md` describes.
+   *
+   * Taken under the per-agent lock, so a turn in flight refuses this with
+   * `turn_in_progress` rather than having its folder vanish mid-stream. The
+   * lock is held across the async trash call and released before the rescan:
+   * the watcher's own rescan defers on that lock, and the explicit one here is
+   * what makes the row disappear now rather than on the next debounce.
+   *
+   * @throws LocalAgentError `not_found`, `turn_in_progress`, `write_failed`
+   */
+  async delete(userId: string, agentId: string): Promise<DeleteLocalAgentResult> {
+    const { root, agentDir } = this.locate(userId, agentId)
+    const handle = turnLock.acquire(agentId, 'delete')
+    try {
+      await shell.trashItem(agentDir)
+    } catch (err) {
+      throw new LocalAgentError(
+        'write_failed',
+        'The folder could not be moved to the Trash.',
+        err instanceof Error ? err.message : String(err)
+      )
+    } finally {
+      handle.release()
+    }
+    scannerService.markRootDirty(root.id)
+    scannerService.scanRoot(userId, root)
+    watcherService.refreshRoot(root.id)
+    logger.info('local agent deleted', { agentId, rootId: root.id })
+    return { agentId, trashed: true }
   },
 
   /** Roots, for the settings screen. */

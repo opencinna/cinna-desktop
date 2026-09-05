@@ -24,6 +24,8 @@ import { createTestDatabase, type TestDatabase } from '../../db/testSupport/node
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
+/** `shell.trashItem`, replaced per test — the default fake is set in `delete`. */
+const trash = vi.hoisted(() => vi.fn<(path: string) => Promise<void>>())
 
 vi.mock('electron', () => ({
   app: {
@@ -32,7 +34,7 @@ vi.mock('electron', () => ({
     getVersion: () => '0.0.0-test',
     on: () => undefined
   },
-  shell: { showItemInFolder: () => undefined },
+  shell: { showItemInFolder: () => undefined, trashItem: trash },
   dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }
 }))
 vi.mock('../../logger/logger', () => ({
@@ -615,10 +617,76 @@ describe('create', () => {
     )
   })
 
-  it('refuses an empty description', () => {
-    expect(() => localAgentService.create(USER, { name: 'Fine', description: '  ' })).toThrow(
-      /cannot be empty/i
-    )
+  it('writes the name as the description when none is given — the schema needs one', () => {
+    const created = localAgentService.create(USER, { name: 'Fine' })
+    expect(created.description).toBe('Fine')
+    expect(created.readiness).toBe('ok')
+    expect(readManifest(manifestPath(created.path)).description).toBe('Fine')
+  })
+
+  it('treats a blank description the same as an absent one', () => {
+    const created = localAgentService.create(USER, { name: 'Blank', description: '  ' })
+    expect(created.description).toBe('Blank')
+  })
+
+  it('leaves the index row’s description empty when it would only repeat the name', () => {
+    // The `@` and `[+]` pickers render `agents.description` under the name;
+    // "Fine — Fine" is not a description, it is the absence of one.
+    const created = localAgentService.create(USER, { name: 'Fine' })
+    expect(agentRepo.getOwned(USER, created.id)?.description ?? null).toBeNull()
+    const real = localAgentService.create(USER, { name: 'Real', description: 'Does things.' })
+    expect(agentRepo.getOwned(USER, real.id)?.description).toBe('Does things.')
+  })
+})
+
+describe('delete', () => {
+  beforeEach(() => {
+    trash.mockReset()
+    // The default fake does what the OS would: the folder is gone afterwards.
+    trash.mockImplementation(async (path: string) => {
+      rmSync(path, { recursive: true, force: true })
+    })
+  })
+
+  it('moves the folder to the trash and prunes the row', async () => {
+    const result = await localAgentService.delete(USER, agentId)
+
+    expect(result).toEqual({ agentId, trashed: true })
+    expect(trash).toHaveBeenCalledWith(agentDir)
+    expect(agentRepo.getOwned(USER, agentId)).toBeUndefined()
+    expect(localAgentService.list(USER).agents).toEqual([])
+    expect(() => localAgentService.get(USER, agentId)).toThrow(/no longer/i)
+  })
+
+  it('refuses while a turn holds the agent, and touches nothing', async () => {
+    const handle = turnLock.acquire(agentId, 'turn')
+    try {
+      await expect(localAgentService.delete(USER, agentId)).rejects.toMatchObject({
+        code: 'turn_in_progress'
+      })
+    } finally {
+      handle.release()
+    }
+    expect(trash).not.toHaveBeenCalled()
+    expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+  })
+
+  it('releases the lock and keeps the row when the trash call fails', async () => {
+    trash.mockRejectedValueOnce(new Error('EPERM'))
+
+    await expect(localAgentService.delete(USER, agentId)).rejects.toMatchObject({
+      code: 'write_failed'
+    })
+    expect(turnLock.isLocked(agentId)).toBe(false)
+    expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+    expect(currentAgent().readiness).toBe('ok')
+  })
+
+  it('refuses an id that is not a folder agent', async () => {
+    await expect(localAgentService.delete(USER, 'remote-1')).rejects.toMatchObject({
+      code: 'not_found'
+    })
+    expect(trash).not.toHaveBeenCalled()
   })
 })
 
