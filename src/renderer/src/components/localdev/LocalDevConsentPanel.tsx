@@ -150,7 +150,7 @@ export function LocalDevConsentPanel({
         <li>
           Creates{' '}
           <span className="text-[var(--color-text)] break-all">
-            {agentsHomeHint}/{host || 'your-server'}
+            {agentsHomeHint}/{host.replace(/:/g, '_') || 'your-server'}
           </span>{' '}
           for this server.
         </li>

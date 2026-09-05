@@ -52,12 +52,12 @@
 
 import { homedir, hostname } from 'node:os'
 import { lstat, mkdir, readlink, stat, symlink, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { BrowserWindow, shell } from 'electron'
 import { userRepo } from '../db/users'
 import { appSettingsRepo } from '../db/appSettings'
 import { cinnaFetch } from '../services/cinna-http'
-import { discoverCinnaEndpoints } from '../auth/cinna-oauth'
+import { clearEndpointCache, discoverCinnaEndpoints } from '../auth/cinna-oauth'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { getLayout } from '../kit/contractStore'
 import { CinnaApiError, ToolchainError } from '../errors'
@@ -137,7 +137,7 @@ function writeConsent(next: Record<string, boolean>): void {
  * hostname cannot contain a path separator, and cinna-core's own default for
  * this folder normalizes the domain the same way.
  */
-function hostDirName(host: string): string {
+export function hostDirName(host: string): string {
   return host.replace(/:/g, '_')
 }
 
@@ -178,7 +178,7 @@ function accountConfigPath(workspacePath: string): string {
  * shipped after this release, bytes that did not match. Lumping them together
  * would offer "try again" for a condition no amount of trying fixes.
  */
-function fromToolchainError(err: ToolchainError): LocalDevState {
+export function fromToolchainError(err: ToolchainError): LocalDevState {
   if (err.code === 'download_failed') {
     return { phase: 'attention', reason: 'network', detail: err.message }
   }
@@ -195,7 +195,7 @@ function fromToolchainError(err: ToolchainError): LocalDevState {
  * different Cinna account, which no retry fixes and which the user has to
  * resolve by moving the folder.
  */
-function fromCliOutcome(outcome: CliRunOutcome, what: string): LocalDevState {
+export function fromCliOutcome(outcome: CliRunOutcome, what: string): LocalDevState {
   const detail = outcome.result?.detail ?? outcome.stderr ?? ''
   if (outcome.timedOut) {
     return { phase: 'attention', reason: 'network', detail: `${what} timed out.` }
@@ -312,6 +312,10 @@ async function createWorkspace(
     ],
     logArgs: ['account', 'setup', '<setup-command>', '--dir', workspacePath, '--json'],
     env,
+    // `--dir` is absolute, so cinna-cli does not consult the working directory
+    // — but a spawn that inherits whatever the OS launched Electron from is a
+    // loose end worth not having.
+    cwd: dirname(workspacePath),
     onProgress: (line) => {
       if (line.status === 'start') setState({ phase: 'installing', step: line.message })
     }
@@ -366,6 +370,12 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     return state
   }
 
+  // Discovery is cached for the session, which is right for a check that runs on
+  // every activation — but wrong for Repair, whose whole point is "look again".
+  // A server that has just started offering local development, or bumped a
+  // pinned version, is exactly what the user is pressing the button about.
+  if (force) clearEndpointCache()
+
   let localDev: CinnaLocalDev | undefined
   try {
     localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
@@ -385,17 +395,23 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
 
   const host = new URL(user.cinnaServerUrl).host
   const consent = readConsent()[host]
-  if (consent === undefined) {
-    setState({ phase: 'consent', host })
-    return state
+  if (!force) {
+    // Never asked, or asked and declined. Both stop here; they are different
+    // states because Settings offers different things for them.
+    if (consent === undefined) {
+      setState({ phase: 'consent', host })
+      return state
+    }
+    if (consent === false) {
+      setState({ phase: 'declined', host })
+      return state
+    }
+  } else if (consent !== true) {
+    // `force` reaches here only from Repair or Settings' "Set up" — the user
+    // pressing a button that says what it will do. That *is* the consent, so
+    // record it; otherwise pressing it would loop straight back to the prompt.
+    writeConsent({ ...readConsent(), [host]: true })
   }
-  if (consent === false && !force) {
-    // Declined, and remembered. `force` is Repair / "Set up" from Settings,
-    // which is the user changing their mind — an explicit action is consent.
-    setState({ phase: 'declined', host })
-    return state
-  }
-  if (consent === false) writeConsent({ ...readConsent(), [host]: true })
 
   const pins: ToolchainPins = {
     cinnaCliVersion: localDev.cinna_cli_version,
@@ -518,6 +534,12 @@ export const localDevService = {
    * simultaneous `uv tool install`s into the same directory is not a race worth
    * having. `force` re-runs the installs and overrides a remembered decline;
    * it is what Repair and "Set up" pass.
+   *
+   * A `force` call that lands while an ordinary run is already going joins that
+   * run rather than starting a second one. That is deliberate: the case is a
+   * user pressing Repair during a long download, and finishing the download is
+   * what they want — restarting it would throw away the bytes already on disk
+   * and look identical from the outside.
    */
   async reconcile(userId: string, force = false): Promise<LocalDevState> {
     if (inFlight) return inFlight
