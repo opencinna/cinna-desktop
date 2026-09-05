@@ -2,6 +2,8 @@
 
 Project-specific UI conventions for the Cinna Desktop renderer. This is an LLM-targeted reference — concise patterns only, skip standard React/Tailwind knowledge.
 
+This file is about what things look like. How a screen *behaves* — what may move while the user types, what goes above the fold, when a banner is allowed, how a destructive action confirms — is in [UX Rules](ux_rules.md), which the `cinna-desktop-ux-reviewer` agent enforces.
+
 ## Color System
 
 All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/assets/main.css` inside `@layer base`. Never hardcode color values.
@@ -121,6 +123,8 @@ Labels: `block text-[10px] text-[var(--color-text-muted)] mb-0.5`
 | Link-style | `text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium` |
 
 All buttons: `px-3 py-1.5 rounded-md text-xs font-medium transition-colors`
+
+Primary and destructive buttons use `text-white`, never `text-[var(--color-on-accent)]`: that token is **dark** in the light theme (`#1a1a1a`), so an accent-filled button styled with it comes out blue with dark text while every settings button is blue with white text. `--color-on-accent` is for the accent-tinted chips and popup highlights that use it today, not for filled buttons.
 
 Disabled: `disabled:opacity-30 disabled:cursor-not-allowed` (or `disabled:opacity-50` for less critical)
 
