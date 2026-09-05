@@ -20,6 +20,22 @@
 
 import { app, type BrowserWindow } from 'electron'
 
+/**
+ * Show windows without ever taking the foreground.
+ *
+ * Set by the E2E fixture and nothing else. A Playwright run launches a real
+ * app, and on macOS a real app that shows a window steals the foreground —
+ * which, over a suite that launches one per test, means a developer cannot use
+ * their machine while the tests run. Playwright drives the renderer over CDP
+ * and never needs the window focused, so the suite gives up the one thing it
+ * does not use.
+ *
+ * Deliberately an environment variable rather than a setting: it exists for the
+ * harness, is read once at startup, and has no reason ever to be reachable from
+ * the app's own UI.
+ */
+export const BACKGROUND_WINDOW = process.env.CINNA_BACKGROUND_WINDOW === '1'
+
 let getWindow: (() => BrowserWindow | null) | null = null
 
 /** Called once from `index.ts`, which owns the window. */
@@ -39,9 +55,16 @@ export function focusMainWindow(): void {
     const win = getWindow?.() ?? null
     if (win && !win.isDestroyed()) {
       if (win.isMinimized()) win.restore()
-      win.show()
-      win.focus()
+      // The whole point of this function is the foreground, so under a
+      // background run it does the visible half and stops: the window is up
+      // and rendered, it simply does not come forward.
+      if (BACKGROUND_WINDOW) win.showInactive()
+      else {
+        win.show()
+        win.focus()
+      }
     }
+    if (BACKGROUND_WINDOW) return
     if (process.platform === 'darwin') app.focus({ steal: true })
     else app.focus()
   } catch {

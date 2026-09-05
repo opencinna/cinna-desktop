@@ -70,6 +70,11 @@ function launchEnv(sandbox: Sandbox): Record<string, string> {
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value
   env.HOME = sandbox.home
   env.CINNA_USER_DATA = sandbox.userData
+  // The suite launches a real app per test, and on macOS a real app that shows
+  // a window takes the foreground. Playwright drives the renderer over CDP and
+  // never needs it, so the app is told to stay in the background and the
+  // machine stays usable while the tests run.
+  env.CINNA_BACKGROUND_WINDOW = '1'
   // Reuse the developer's tool caches so `uv run` in a test does not
   // re-provision an interpreter per sandbox.
   env.UV_CACHE_DIR ??= join(realHome, '.cache', 'uv')

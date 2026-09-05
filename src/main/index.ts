@@ -19,7 +19,7 @@ import {
   connectUrlFromArgv,
   registerConnectScheme
 } from './services/connectIntentService'
-import { focusMainWindow, installWindowResolver } from './window/focus'
+import { BACKGROUND_WINDOW, focusMainWindow, installWindowResolver } from './window/focus'
 
 // A disposable profile for the E2E suite (`e2e/`). Read once, before anything
 // derives a path from `userData` — the startup log, the database, the session
@@ -191,7 +191,12 @@ function createWindow(): void {
   })
 
   mainWindow.on('ready-to-show', () => {
-    mainWindow!.show()
+    // `showInactive` under a background run: showing a window on macOS
+    // activates the app, and an E2E suite that launches one app per test would
+    // otherwise take the foreground away from whatever the developer is doing,
+    // repeatedly. See `BACKGROUND_WINDOW`.
+    if (BACKGROUND_WINDOW) mainWindow!.showInactive()
+    else mainWindow!.show()
   })
 
   // Sync auto-discovery (P4): poll the pairing inbox only while the window is
@@ -261,6 +266,12 @@ app.whenReady().then(() => {
 
 function startup(): void {
   rotateStartupLog()
+
+  // Before any window exists: an `accessory` app has no Dock tile and cannot
+  // become the active application, which is what actually stops a test run from
+  // stealing focus — `showInactive` alone still activates the app the first
+  // time it is called.
+  if (BACKGROUND_WINDOW && process.platform === 'darwin') app.setActivationPolicy('accessory')
 
   electronApp.setAppUserModelId('com.cinna.desktop')
 
