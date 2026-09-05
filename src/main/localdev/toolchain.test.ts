@@ -227,7 +227,12 @@ describe('ensure', () => {
     const steps: string[] = []
     const result = await createToolchain(deps()).ensure(PINS, (step) => steps.push(step))
 
-    expect(steps).toEqual(['Installing uv', 'Installing Mutagen', 'Installing cinna-cli'])
+    expect(steps).toEqual([
+      'Installing uv',
+      'Installing Mutagen',
+      'Installing cinna-cli',
+      'Toolchain ready'
+    ])
     expect(result.cliVersion).toBe('0.4.0')
     expect(everything().sort()).toEqual(
       ['bin', 'mutagen-9.9.9', 'state.json', 'uv-1.2.3'].sort()
@@ -243,18 +248,72 @@ describe('ensure', () => {
     expect(installRuns()[0]?.args).toEqual(['tool', 'install', 'cinna-cli==0.4.0'])
   })
 
-  it('is a cheap no-op the second time', async () => {
+  it('is a cheap no-op the second time, and says so instead of saying nothing', async () => {
     const tc = createToolchain(deps())
     await tc.ensure(PINS)
     downloads = []
     runs = []
-    const steps: string[] = []
-    const result = await tc.ensure(PINS, (step) => steps.push(step))
+    const reports: { step: string; percent?: number }[] = []
+    const result = await tc.ensure(PINS, (step, percent) => reports.push({ step, percent }))
     expect(result.cliVersion).toBe('0.4.0')
     expect(downloads).toEqual([])
     // Not even a `--version` probe: the recorded state answers it.
     expect(runs).toEqual([])
-    expect(steps).toEqual([])
+    // A stage that is already satisfied still reports its *end* percentage. It
+    // used to report nothing, which left a warm run's bar at zero for its whole
+    // (very short) life — the one shape guaranteed to look stuck.
+    expect(reports.map((r) => r.percent)).toEqual([20, 55, 100])
+  })
+
+  it('never moves the bar backwards, whatever the mix of work and skips', async () => {
+    // The invariant a user actually perceives. Percentages come from three
+    // stages plus a byte counter inside two of them, and a bar that jumps back
+    // reads as a restart — worse than no bar.
+    const tc = createToolchain(deps())
+    const percents: number[] = []
+    await tc.ensure(PINS, (_step, percent) => {
+      if (percent !== undefined) percents.push(percent)
+    })
+    expect(percents.length).toBeGreaterThan(0)
+    expect([...percents].sort((a, b) => a - b)).toEqual(percents)
+    expect(percents.at(-1)).toBe(100)
+    expect(Math.min(...percents)).toBeGreaterThanOrEqual(0)
+  })
+
+  it('turns a download into a labelled percentage inside its stage', async () => {
+    // uv's stage is 0..20, and the download is capped at 90% of it so verify
+    // and unpack still have somewhere to land.
+    const reports: { step: string; percent?: number }[] = []
+    await createToolchain(
+      deps({
+        download: async (_url, dest, onProgress) => {
+          downloads.push(dest)
+          onProgress?.(5_000_000, 10_000_000)
+          writeFileSync(dest, BYTES)
+        }
+      })
+    ).ensure(PINS, (step, percent) => reports.push({ step, percent }))
+
+    const halfway = reports.find((r) => r.step.startsWith('Downloading uv'))
+    expect(halfway?.step).toBe('Downloading uv — 5.0 of 10.0 MB')
+    expect(halfway?.percent).toBe(9)
+  })
+
+  it('counts up honestly when the server declares no length', async () => {
+    const reports: string[] = []
+    await createToolchain(
+      deps({
+        download: async (_url, dest, onProgress) => {
+          downloads.push(dest)
+          // A chunked response has no content-length, and a bar filled from an
+          // invented denominator is worse than a number that only counts up.
+          onProgress?.(3_500_000, null)
+          writeFileSync(dest, BYTES)
+        }
+      })
+    ).ensure(PINS, (step) => reports.push(step))
+
+    expect(reports).toContain('Downloading uv — 3.5 MB')
   })
 
   it('de-duplicates concurrent callers into one install', async () => {

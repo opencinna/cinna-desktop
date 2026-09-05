@@ -197,7 +197,15 @@ export interface InstallPinnedAssetOptions {
   locate: (unpackedDir: string) => Promise<string | null>
   /** True when `installDir` already holds a good install (checked before work and after a lost rename race). */
   isInstalled: () => Promise<boolean>
-  download: (url: string, dest: string) => Promise<void>
+  /**
+   * Byte progress for the download stage, when the caller has somewhere to put
+   * it. Nothing else here is measurable — the digest and the unpack are seconds
+   * on a tree that is already local — so this is the only honest source of a
+   * moving number, and the caller decides what fraction of its own bar the
+   * download is worth.
+   */
+  onDownloadProgress?: DownloadProgress
+  download: (url: string, dest: string, onProgress?: DownloadProgress) => Promise<void>
   extract: (archive: string, dest: string) => Promise<void>
   /**
    * Message for the `extract_failed` raised when {@link locate} finds nothing.
@@ -227,7 +235,7 @@ export async function installPinnedAsset(
   try {
     await mkdir(unpacked, { recursive: true })
     logger.info('downloading a pinned asset', { label: o.label, url: o.url })
-    await o.download(o.url, archive)
+    await o.download(o.url, archive, o.onDownloadProgress)
 
     const digest = await sha256File(archive)
     if (digest !== o.sha256) {
@@ -285,7 +293,28 @@ export async function installPinnedAsset(
  * removed if anything goes wrong, so the caller's digest check is never handed
  * a truncated file that happens to exist.
  */
-export async function downloadToFile(url: string, dest: string): Promise<void> {
+/**
+ * How a download reports itself: bytes so far, and the total when the server
+ * declared one.
+ *
+ * `total` is `null` rather than a guess when `content-length` is absent — a
+ * chunked response has no length, and a progress bar filled from an invented
+ * denominator is worse than an honest one that only counts up.
+ */
+export type DownloadProgress = (received: number, total: number | null) => void
+
+/**
+ * Report at most this often. A 40 MB asset arrives in thousands of chunks and
+ * every one of these crosses an IPC boundary and re-renders a React tree; the
+ * eye cannot use more than a handful a second anyway.
+ */
+const PROGRESS_INTERVAL_MS = 150
+
+export async function downloadToFile(
+  url: string,
+  dest: string,
+  onProgress?: DownloadProgress
+): Promise<void> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), DOWNLOAD_TIMEOUT_MS)
   try {
@@ -302,16 +331,28 @@ export async function downloadToFile(url: string, dest: string): Promise<void> {
     }
     const sink = createWriteStream(dest)
     let total = 0
+    let lastReport = 0
+    // The same counter that guards the size is what feeds the progress bar:
+    // one place that knows how many bytes have arrived, so a bar can never
+    // disagree with the limit that is actually enforced.
     const counted = new TransformStream<Uint8Array, Uint8Array>({
       transform(chunk, controller) {
         total += chunk.byteLength
         if (total > MAX_ARCHIVE_BYTES) {
           throw new ManagedAssetError('download_failed', 'The download was unexpectedly large.')
         }
+        const now = Date.now()
+        if (onProgress && now - lastReport >= PROGRESS_INTERVAL_MS) {
+          lastReport = now
+          onProgress(total, declared > 0 ? declared : null)
+        }
         controller.enqueue(chunk)
       }
     })
     await pipeline(Readable.fromWeb(response.body.pipeThrough(counted) as never), sink)
+    // A final report, so a bar that was throttled mid-chunk lands on 100%
+    // rather than stopping at whatever the last tick happened to be.
+    onProgress?.(total, declared > 0 ? declared : total)
   } catch (err) {
     await rm(dest, { force: true }).catch(() => undefined)
     throw err

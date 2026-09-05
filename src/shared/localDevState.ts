@@ -24,7 +24,34 @@ export type LocalDevAttentionReason =
   /** The server could not be reached. Nothing is wrong; try again. */
   | 'network'
 
-export type LocalDevState =
+/**
+ * The pieces of local development, as a checklist a user can open and read.
+ *
+ * A single "Installing…" line answers "is it working"; it does not answer "how
+ * much is left" or "which part failed", and on a first run over a slow link
+ * those are the two questions people actually have. The ids are stable and the
+ * labels are what the UI shows.
+ */
+export type LocalDevTaskId = 'uv' | 'mutagen' | 'cinna-cli' | 'workspace' | 'token'
+
+export type LocalDevTaskStatus =
+  /** Not started. */
+  | 'pending'
+  /** Being worked on right now — at most one task is ever `active`. */
+  | 'active'
+  | 'done'
+  /** This is the one that stopped the run; `detail` says how. */
+  | 'failed'
+
+export interface LocalDevTask {
+  id: LocalDevTaskId
+  label: string
+  status: LocalDevTaskStatus
+  /** A line under the label: the current step, a version, or a failure. */
+  detail?: string
+}
+
+export type LocalDevPhase =
   /**
    * Nothing has been checked yet — no Cinna profile is active, or the first
    * reconcile has not run. Deliberately distinct from `unsupported`: "we have
@@ -77,6 +104,16 @@ export type LocalDevState =
     }
   /** Broken in a way re-running the reconciler can fix. `detail` is shown. */
   | { phase: 'attention'; reason: LocalDevAttentionReason; detail: string }
+
+/**
+ * The broadcast state: a phase, plus the checklist behind it.
+ *
+ * An intersection rather than a field on each variant, so `state.phase ===
+ * 'ready'` still narrows exactly as before and every existing reader keeps
+ * working. `tasks` is empty until a reconcile has run — there is nothing
+ * truthful to say about uv before anybody has looked.
+ */
+export type LocalDevState = LocalDevPhase & { tasks?: LocalDevTask[] }
 
 /** Main → renderer push on every {@link LocalDevState} transition. */
 export const LOCAL_DEV_STATE_CHANNEL = 'localdev:state'

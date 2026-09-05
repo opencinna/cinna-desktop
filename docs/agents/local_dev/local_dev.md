@@ -41,6 +41,8 @@ Naming the non-goals first, because the feature is easy to over-read from its na
 | `ready` | Carries `workspacePath`, `cliVersion`, `cinnaBinPath`, and the `protocol` the installed cinna-cli turned out to support |
 | `attention` | Broken in a way the reconciler can be asked to fix, with a `reason` and a shown `detail` |
 
+Every phase also carries `tasks` — the per-step checklist the status modal renders — once a reconcile has run. It is empty before that, because there is nothing truthful to say about uv before anybody has looked.
+
 **Six phases, not four.** The original design named `unsupported`, `installing`, `ready` and `attention`. `idle` and `declined` were added because each is a distinction the UI cannot make without them:
 
 - `idle` vs `unsupported` — "we have not looked" and "this server does not offer it" produce the same empty screen but opposite answers to *why is there no Repair button*. A local profile is `idle`, and calling it `unsupported` would imply it could never be otherwise.
@@ -199,6 +201,28 @@ Two surfaces result, and `ready` says which one it settled on:
 | An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
 
 Everything else works identically, and a `legacy` install really does create a real workspace. This is reported rather than hidden: Settings shows the one sentence about what the older cinna-cli cannot do, next to the version. A working badge that quietly could not refresh a token would be the worse failure.
+
+### Progress is measured, not implied
+
+The first run downloads a few hundred megabytes, and on an ordinary connection that is minutes. A spinner and a fixed label are indistinguishable from a hang for the whole of it, which is how a working install gets force-quit.
+
+So every part of the wait that *can* be measured is:
+
+- **The uv and Mutagen downloads** report real bytes. The byte counter that enforces the size limit is the same one that feeds the bar, so the two can never disagree, and the label carries `12.4 of 47.1 MB` because a percentage alone still cannot distinguish "slow" from "stuck".
+- **`uv tool install`** has no byte count — it resolves and builds a dependency tree — so uv's own narration stands in. Each recognised line (`Resolved 41 packages`, `Prepared`, `Installed`) closes some of the remaining gap asymptotically, so the bar always advances and never arrives early.
+- **`cinna account setup`** reports `step n of m` over the JSON protocol, which is real: each line is a step actually beginning.
+
+The three toolchain stages are weighted by how long they really take rather than split evenly — an even split would sit at 66% for most of the wait, which is exactly the "is it stuck?" the bar exists to answer — and the whole reconcile is scaled onto **one** monotonic 0–100. A bar that went backwards when the toolchain finished and the workspace began would read as a restart, which is worse than no bar.
+
+Where the server sends no `content-length`, the number counts up and the bar holds: a denominator that was invented is worse than one that is absent.
+
+### The status checklist
+
+The sidebar button opens a checklist — uv, Mutagen, cinna-cli, the account workspace, the account token — each `pending`, `active`, `done` or `failed`. It answers the two questions a single progress line cannot: how much is left, and *which part* broke.
+
+Reaching a step implies the ones before it finished, so the checklist is advanced by naming the current step rather than by an explicit completion per step — the reconciler cannot reach the workspace without having installed the toolchain, and a list that still showed the toolchain pending would be lying about work that demonstrably happened.
+
+The button is now shown when everything is `ready` too, quietly and without a dot. That is a change from hiding it on success: clicking it is the only way to see which cinna-cli is installed and where the workspace went, and a control that vanishes when things work is a control nobody learns exists. The dot, not the icon, distinguishes "fine" from "wants you". It stays hidden for `idle`, `unsupported`, `consent` and `declined` — the consent question has its own surface, and the rest have nothing to report.
 
 ### Toolchain failures are not all "try again"
 

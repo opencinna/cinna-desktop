@@ -24,6 +24,8 @@ Three trees are discussed and they look alike, so they are written differently t
 - `toolchain.ts` — `PINNED_UV_VERSION`, `UV_ASSETS`, `MUTAGEN_ASSETS`, `uvAssetUrl()`, `mutagenAssetUrl()`, `createToolchain(deps)`, `toolchain` (the process-wide instance), `realToolchainDeps()`, `localDevRootDir()`, `runCapture()`, `parseVersion()`; types `ToolchainPins`, `ToolchainPaths`, `ToolchainProgress`, `ToolchainResult`, `ToolchainDeps`, `Toolchain`
 - `cliRunner.ts` — `runCinnaCli(opts)`; types `CliRunOptions`, `CliRunOutcome`, `CliProgressLine`, `CliResultLine`
 - `cliCapabilities.ts` — `probeCliCapabilities(bin, version, env)`, `clearCliCapabilityCache()`; type `CliCapabilities`
+
+Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `managedAsset.ts` reports `(received, total | null)` off the same counter that enforces `MAX_ARCHIVE_BYTES`, throttled to 150 ms; `installPinnedAsset` forwards it as `onDownloadProgress`; `toolchain.ts` maps each stage onto a weighted slice of 0–100 (`STAGES` = uv 0–20, mutagen 20–55, cinna-cli 55–100) and tags every report with a `ToolchainToolId`; `localDevService` scales that by `TOOLCHAIN_SHARE` (0.7) and maps cinna-cli's `step n of m` onto `WORKSPACE_FROM`–`WORKSPACE_TO` (70–97), so one monotonic bar covers the whole reconcile. `runCapture` gained an optional per-line stderr callback, which is how `uv tool install` — the one stage with no byte count — reports anything at all.
 - `toolchain.test.ts`, `cliRunner.test.ts`, `cliCapabilities.test.ts`, `localDevService.test.ts`
 
 ### Main process — `src/main/managed/`
@@ -51,7 +53,8 @@ Three trees are discussed and they look alike, so they are written differently t
 - `src/renderer/src/components/localdev/LocalDevConsentPanel.tsx` — the shared question/progress/failure/ready panel
 - `src/renderer/src/components/localdev/LocalDevOnboardingStep.tsx` — the `localdev` onboarding step
 - `src/renderer/src/components/localdev/LocalDevConsentModal.tsx` — the same panel over an app that is past first run
-- `src/renderer/src/components/localdev/LocalDevStatusButton.tsx` — the sidebar-footer indicator
+- `src/renderer/src/components/localdev/LocalDevStatusButton.tsx` — the sidebar-footer indicator, and the only way into the detail modal
+- `src/renderer/src/components/localdev/LocalDevDetailModal.tsx` — the per-task checklist, opened from that button
 - `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` (+ `.test.tsx`) — Settings → Local Development
 - `src/renderer/src/components/settings/SettingsPage.tsx`, `src/renderer/src/components/layout/Sidebar.tsx`, `src/renderer/src/stores/ui.store.ts` — the `'local-dev'` settings tab
 - `src/renderer/src/App.tsx` — `<LocalDevConsentModal />`, mounted **inside** `OnboardingGate` so it and the onboarding step never ask the same question at once
@@ -157,7 +160,8 @@ It reads `cinna account setup --help` for `--json` and `cinna account --help` fo
 | `LocalDevOnboardingStep` | Waits for the first answer, falls through on `unsupported` / `declined`, and gives up after `IDLE_GRACE_MS` (8 s) — `onDone` is held in a ref, because callers pass an inline arrow whose identity changes every render, and as an effect dependency that would restart the grace timer each time and could keep it from ever firing. Reads the Agents Home from `localAgents.rootsList()` purely for the consent copy |
 | `LocalDevConsentPanel` | Question → progress → (`ready` \| `attention`), in **one** component: two would mean the user clicking Set up and watching the screen change under them for no reason. "Continue in the background" is always available during `installing` — the reconciler runs in main and keeps going |
 | `LocalDevConsentModal` | Renders **only** for `consent`, and only past first run. No Escape/backdrop dismissal: dismissing has to record an answer. Closes itself once answered so `installing` does not keep it up |
-| `LocalDevStatusButton` | Renders **nothing** for `idle`, `unsupported`, `consent`, `declined` **and `ready`**. Two visible states only: working, and needs you. A permanent tick for "the thing you never asked about is fine" is footer noise |
+| `LocalDevStatusButton` | Renders for `installing`, `attention` and `ready`; nothing for `idle`, `unsupported`, `consent` and `declined`. Clicking opens `LocalDevDetailModal` — it never starts work itself, so a mis-click on a footer glyph cannot trigger a reinstall. The **dot**, not the icon, marks `attention` |
+| `LocalDevDetailModal` | The checklist (`state.tasks`), the current step and percentage, and Repair — hidden while `installing`, so a click cannot restart a running job. Renders what main reports and derives nothing locally |
 | `LocalDevSettingsSection` | The only surface that shows every phase. `host` comes from the state for `consent`/`declined`, from the profile's `cinnaServerUrl` for `ready`, and is `null` otherwise — with no host the Consent card is left out rather than resetting a guess |
 
 Both StrictMode-sensitive subscriptions (`localDev.store`, `connectIntent.store`) set `subscribed: true` **before** their first `await`, because a mount effect is double-invoked in development and two runs would attach two IPC listeners.

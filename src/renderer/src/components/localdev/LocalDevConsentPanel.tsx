@@ -48,17 +48,28 @@ export function LocalDevConsentPanel({
       <div className="space-y-4">
         <div className="flex flex-col items-center gap-3 py-6">
           <Loader2 size={28} className="text-[var(--color-accent)] animate-spin" />
-          <div className="text-sm text-[var(--color-text-secondary)] text-center">
+          <div className="text-sm text-[var(--color-text-secondary)] text-center break-words">
             {state.step}
           </div>
           {state.percent !== undefined && (
-            <div className="w-full h-1 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
-              <div
-                className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
-                style={{ width: `${Math.max(0, Math.min(100, state.percent))}%` }}
-              />
+            <div className="w-full space-y-1">
+              <div className="h-1 rounded-full bg-[var(--color-bg-hover)] overflow-hidden">
+                <div
+                  className="h-full bg-[var(--color-accent)] transition-[width] duration-200"
+                  style={{ width: `${Math.max(0, Math.min(100, state.percent))}%` }}
+                />
+              </div>
+              {/* The number as well as the bar. A bar an inch wide moving a
+                  pixel a second is indistinguishable from a stuck one; a
+                  changing digit is not. */}
+              <div className="text-[11px] text-[var(--color-text-muted)] text-right tabular-nums">
+                {Math.round(Math.max(0, Math.min(100, state.percent)))}%
+              </div>
             </div>
           )}
+          <div className="text-[11px] text-[var(--color-text-muted)] text-center">
+            This downloads a few hundred megabytes the first time. You can leave this running.
+          </div>
         </div>
         {/* Leaving is always allowed. The reconciler runs in the main process
             and keeps going; the sidebar picks the progress up from here. */}

@@ -67,6 +67,7 @@ import {
   isFile,
   ManagedAssetError,
   sweepStaging,
+  type DownloadProgress,
   type PinnedAsset
 } from '../managed/managedAsset'
 import { getShellEnv } from '../shell/env'
@@ -82,6 +83,17 @@ const PROBE_TIMEOUT_MS = 30_000
  * tree, which on a slow connection is minutes rather than seconds.
  */
 const INSTALL_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * uv's own progress lines, the ones worth showing a user.
+ *
+ * Matched rather than passed through wholesale because uv also writes warnings,
+ * resolver backtracking chatter and a `Downloading cpython…` spinner's redraws
+ * to stderr, and a progress label that flickers between those reads as noise.
+ * An unrecognised line is still captured for the failure detail — it is only
+ * excluded from the label.
+ */
+const UV_PROGRESS_LINE = /^(Resolved|Prepared|Installed|Downloading|Building|Updated|Uninstalled)\b/
 
 /**
  * The uv version this desktop installs.
@@ -212,8 +224,15 @@ export interface ToolchainPaths {
   cinnaBin: string
 }
 
-/** `step` is user-visible copy; `percent` is a coarse hint, not a byte count. */
-export type ToolchainProgress = (step: string, percent?: number) => void
+/** Which of the three managed tools a progress report is about. */
+export type ToolchainToolId = 'uv' | 'mutagen' | 'cinna-cli'
+
+/**
+ * `step` is user-visible copy, `percent` is the overall 0..100, and `tool`
+ * names which tool it concerns so a caller can keep a per-tool checklist
+ * without parsing the copy — a label is written for people and will change.
+ */
+export type ToolchainProgress = (step: string, percent?: number, tool?: ToolchainToolId) => void
 
 export interface ToolchainResult {
   paths: ToolchainPaths
@@ -238,7 +257,7 @@ export interface ToolchainDeps {
    */
   uvAssets: Readonly<Record<string, PinnedAsset>>
   mutagenAssets: Readonly<Record<string, Readonly<Record<string, PinnedAsset>>>>
-  download: (url: string, dest: string) => Promise<void>
+  download: (url: string, dest: string, onProgress?: DownloadProgress) => Promise<void>
   extract: (archive: string, dest: string) => Promise<void>
   /** The login-shell environment every spawned tool starts from. */
   shellEnv: () => Promise<NodeJS.ProcessEnv>
@@ -258,7 +277,9 @@ export interface ToolchainDeps {
     bin: string,
     args: readonly string[],
     env: NodeJS.ProcessEnv,
-    timeoutMs: number
+    timeoutMs: number,
+    /** Called per line of stderr, for the one stage with no byte count. */
+    onLine?: (line: string) => void
   ) => Promise<{ code: number | null; stdout: string; stderr: string }>
 }
 
@@ -420,14 +441,76 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     return { uv, mutagen }
   }
 
+  /**
+   * Where each stage sits on the overall bar.
+   *
+   * Weighted by how long each actually takes on a cold profile rather than
+   * split evenly: uv is a few MB, Mutagen is tens, and `uv tool install`
+   * downloads a CPython *and* resolves and builds a dependency tree, which
+   * dominates. An even three-way split would sit at 66% for most of the wait,
+   * which is exactly the "is it stuck?" the bar exists to answer.
+   *
+   * A skipped stage still advances the bar to its end, so a second run that
+   * only has cinna-cli left starts at 55% instead of pretending to redo the
+   * downloads.
+   */
+  const STAGES = {
+    uv: { from: 0, to: 20 },
+    mutagen: { from: 20, to: 55 },
+    cli: { from: 55, to: 100 }
+  } as const
+
+  /** Map a 0..1 fraction within a stage onto the overall bar. */
+  function at(stage: { from: number; to: number }, fraction: number): number {
+    const clamped = Math.max(0, Math.min(1, fraction))
+    return Math.round(stage.from + (stage.to - stage.from) * clamped)
+  }
+
+  /**
+   * A download's progress as a step label and an overall percentage.
+   *
+   * The label carries the size because a percentage alone cannot distinguish
+   * "slow network" from "stuck": watching `12.4 / 47.1 MB` move is what tells
+   * someone the app is still doing something, and it is the first thing they
+   * report back when it genuinely is stuck.
+   */
+  function downloadReporter(
+    label: string,
+    tool: ToolchainToolId,
+    stage: { from: number; to: number },
+    onProgress?: ToolchainProgress
+  ): DownloadProgress | undefined {
+    if (!onProgress) return undefined
+    return (received, total) => {
+      const mb = (bytes: number): string => (bytes / 1_000_000).toFixed(1)
+      if (total === null) {
+        // No `content-length`. Count up honestly rather than inventing a
+        // denominator; the bar holds at the stage start and the label moves.
+        onProgress(`Downloading ${label} — ${mb(received)} MB`, stage.from, tool)
+        return
+      }
+      onProgress(
+        `Downloading ${label} — ${mb(received)} of ${mb(total)} MB`,
+        // The download is most of a download-and-unpack stage, but not all of
+        // it; leaving the last slice for verify + unpack keeps the bar from
+        // sitting at the stage's end while tar is still running.
+        at(stage, (received / total) * 0.9),
+        tool
+      )
+    }
+  }
+
   async function ensureUv(
     pins: ToolchainPins,
     asset: PinnedAsset,
     onProgress?: ToolchainProgress
   ): Promise<void> {
     const p = paths(pins)
-    if (await isFile(p.uvBin)) return
-    onProgress?.('Installing uv', 10)
+    if (await isFile(p.uvBin)) {
+      onProgress?.('Installing uv', STAGES.uv.to, 'uv')
+      return
+    }
+    onProgress?.('Installing uv', STAGES.uv.from, 'uv')
     try {
       await installPinnedAsset({
         root: p.root,
@@ -440,6 +523,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         // holds `uv` also keeps its `uvx` sibling, which is free and correct.
         locate: (dir) => findNamedFile(dir, 'uv'),
         isInstalled: () => isFile(p.uvBin),
+        onDownloadProgress: downloadReporter('uv', 'uv', STAGES.uv, onProgress),
         download: deps.download,
         extract: deps.extract,
         notFoundMessage: 'The downloaded uv archive did not contain a uv executable.'
@@ -456,8 +540,11 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
   ): Promise<void> {
     const p = paths(pins)
     const mutagenBin = join(p.mutagenDir, 'mutagen')
-    if (await isFile(mutagenBin)) return
-    onProgress?.('Installing Mutagen', 40)
+    if (await isFile(mutagenBin)) {
+      onProgress?.('Installing Mutagen', STAGES.mutagen.to, 'mutagen')
+      return
+    }
+    onProgress?.('Installing Mutagen', STAGES.mutagen.from, 'mutagen')
     try {
       await installPinnedAsset({
         root: p.root,
@@ -471,6 +558,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
         // start a session without the agent bundle next to its binary.
         locate: (dir) => findNamedFile(dir, 'mutagen'),
         isInstalled: () => isFile(mutagenBin),
+        onDownloadProgress: downloadReporter('Mutagen', 'mutagen', STAGES.mutagen, onProgress),
         download: deps.download,
         extract: deps.extract,
         notFoundMessage: 'The downloaded Mutagen archive did not contain a mutagen executable.'
@@ -528,7 +616,7 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
       }
     }
 
-    onProgress?.('Installing cinna-cli', 70)
+    onProgress?.('Installing cinna-cli', STAGES.cli.from, 'cinna-cli')
     const env = await toolchainEnv(pins)
     // `uv tool install` is idempotent for the same version and replaces a
     // different one, so the version change *is* the upgrade path; `--reinstall`
@@ -554,13 +642,35 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     } else {
       logger.info('installing cinna-cli', { version: pins.cinnaCliVersion, reinstall })
     }
-    const result = await deps.run(p.uvBin, args, env, INSTALL_TIMEOUT_MS).catch((err: unknown) => {
-      throw new ToolchainError(
-        'install_failed',
-        'Could not run uv to install cinna-cli.',
-        err instanceof Error ? err.message : String(err)
-      )
-    })
+    // The longest stage by far on a cold profile — uv downloads a CPython and
+    // then resolves and builds the dependency tree — and the only one with no
+    // byte count to report. uv's own narration is the substitute: each line it
+    // prints is a real step finishing, which is enough to tell "working" from
+    // "wedged" even though the percentage cannot move honestly.
+    let seen = 0
+    const onLine = onProgress
+      ? (line: string): void => {
+          if (!UV_PROGRESS_LINE.test(line)) return
+          seen += 1
+          // Asymptotic: each recognised line closes some of the remaining gap,
+          // so the bar always advances and never reaches the end early. uv
+          // prints a different number of these depending on what it has cached,
+          // so counting them against a fixed total would be a guess.
+          // Capped short of the stage end so the bar cannot claim to be finished
+          // while uv is still running; the stage's own completion sets 100.
+          onProgress(line, at(STAGES.cli, (1 - Math.pow(0.75, seen)) * 0.9), 'cinna-cli')
+        }
+      : undefined
+
+    const result = await deps
+      .run(p.uvBin, args, env, INSTALL_TIMEOUT_MS, onLine)
+      .catch((err: unknown) => {
+        throw new ToolchainError(
+          'install_failed',
+          'Could not run uv to install cinna-cli.',
+          err instanceof Error ? err.message : String(err)
+        )
+      })
     if (result.code !== 0) {
       // The tail of stderr, not the whole of it: a uv resolver failure is
       // hundreds of lines and the last few are the ones that say why.
@@ -618,6 +728,10 @@ export function createToolchain(deps: ToolchainDeps): Toolchain {
     const cliVersion = await once(`cinna:${pins.cinnaCliVersion}:${reinstall}`, () =>
       ensureCli(pins, reinstall, onProgress)
     )
+    // The one place the bar is allowed to reach the end: everything above caps
+    // itself short, so 100% means the toolchain is genuinely installed rather
+    // than "the last thing we could measure finished".
+    onProgress?.('Toolchain ready', 100, 'cinna-cli')
     return { paths: p, cliVersion }
   }
 
@@ -645,7 +759,8 @@ export function runCapture(
   bin: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv,
-  timeoutMs: number
+  timeoutMs: number,
+  onLine?: (line: string) => void
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     let child: ReturnType<typeof spawn>
@@ -677,8 +792,22 @@ export function runCapture(
       stdout += chunk
     })
     child.stderr?.setEncoding('utf8')
+    let pending = ''
     child.stderr?.on('data', (chunk: string) => {
       stderr += chunk
+      if (!onLine) return
+      // uv narrates on stderr, one line per step ("Resolved 41 packages",
+      // "Prepared 12 packages", "Installed cinna-cli"). Reassembling lines
+      // across chunk boundaries is what makes those usable as progress; a raw
+      // chunk is as likely to be half a word.
+      pending += chunk
+      let newline = pending.indexOf('\n')
+      while (newline !== -1) {
+        const line = pending.slice(0, newline).trim()
+        if (line) onLine(line)
+        pending = pending.slice(newline + 1)
+        newline = pending.indexOf('\n')
+      }
     })
     child.on('error', (err) => finish({ code: null, stdout, stderr: `${stderr}${err.message}` }))
     child.on('close', (code) => finish({ code, stdout, stderr }))

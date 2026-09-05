@@ -1,53 +1,71 @@
+import { useState } from 'react'
 import { Loader2, TerminalSquare } from 'lucide-react'
-import { useLocalDevStore } from '../../stores/localDev.store'
 import { useLocalDev } from '../../hooks/useLocalDev'
+import { LocalDevDetailModal } from './LocalDevDetailModal'
 
 const ICON_SIZE = 14
 
 /**
- * The sidebar footer's local-development indicator.
+ * The sidebar footer's local-development indicator, and the way into
+ * {@link LocalDevDetailModal}.
  *
- * It renders **nothing** in every state the user has no reason to think about:
- * before anything has been checked, on a server that does not offer local
- * development, for an account without the role, and — crucially — when
- * everything is ready. A permanent tick for "the thing you never asked about is
- * fine" is footer noise; the footer's job is to say when something wants
- * attention.
+ * It renders nothing in the states a user has no reason to think about: before
+ * anything has been checked, on a server that does not offer local development,
+ * for an account without the role, and while the consent question is pending —
+ * that one is asked properly, in onboarding or a modal, not by a glyph someone
+ * has to discover.
  *
- * So there are exactly two visible states: working, and needs you. Consent is
- * not one of them — that question is asked properly, in onboarding or in a
- * modal, not by a glyph the user has to discover.
+ * It *is* rendered when ready, quietly and with no dot. That is a deliberate
+ * change from "hide it once everything works": clicking it is the only way to
+ * see which cinna-cli is installed and where the workspace went, and a control
+ * that vanishes on success is a control nobody learns exists. The dot, not the
+ * icon, is what distinguishes "fine" from "wants you".
  */
 export function LocalDevStatusButton(): React.JSX.Element | null {
   const state = useLocalDev()
-  const repair = useLocalDevStore((s) => s.repair)
+  const [open, setOpen] = useState(false)
 
-  if (state.phase === 'installing') {
-    return (
-      <div
-        title={`Setting up local development — ${state.step}`}
-        aria-label="Setting up local development"
-        className="p-1.5 rounded-md text-[var(--color-text-muted)]"
-      >
-        <Loader2 size={ICON_SIZE} className="animate-spin" />
-      </div>
-    )
-  }
+  const visible =
+    state.phase === 'installing' || state.phase === 'attention' || state.phase === 'ready'
+  if (!visible) return null
 
-  if (state.phase === 'attention') {
-    return (
+  const title =
+    state.phase === 'installing'
+      ? state.percent === undefined
+        ? `Setting up local development — ${state.step}`
+        : `Setting up local development — ${state.step} (${Math.round(state.percent)}%)`
+      : state.phase === 'attention'
+        ? `Local development needs attention — ${state.detail}`
+        : 'Local development is ready'
+
+  const label =
+    state.phase === 'installing'
+      ? 'Setting up local development'
+      : state.phase === 'attention'
+        ? 'Local development needs attention'
+        : 'Local development is ready'
+
+  return (
+    <>
       <button
         type="button"
-        onClick={() => void repair()}
-        title={`Local development needs attention — ${state.detail}`}
-        aria-label="Local development needs attention"
-        className="relative p-1.5 rounded-md text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
+        onClick={() => setOpen(true)}
+        title={title}
+        aria-label={label}
+        className="relative p-1.5 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] transition-colors"
       >
-        <TerminalSquare size={ICON_SIZE} />
-        <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-warning)]" />
+        {state.phase === 'installing' ? (
+          <Loader2 size={ICON_SIZE} className="animate-spin" />
+        ) : (
+          <TerminalSquare size={ICON_SIZE} />
+        )}
+        {state.phase === 'attention' && (
+          <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-[var(--color-warning)]" />
+        )}
       </button>
-    )
-  }
-
-  return null
+      {/* Repair stays reachable from the modal; the button itself only opens
+          it, so a mis-click on a footer glyph can never start a reinstall. */}
+      {open && <LocalDevDetailModal onClose={() => setOpen(false)} />}
+    </>
+  )
 }

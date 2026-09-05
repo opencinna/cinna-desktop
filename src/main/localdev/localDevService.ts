@@ -68,11 +68,13 @@ import {
   probeCliCapabilities,
   type CliCapabilities
 } from './cliCapabilities'
-import { toolchain, type ToolchainPins } from './toolchain'
+import { toolchain, type ToolchainPins, type ToolchainToolId } from './toolchain'
 import {
   LOCAL_DEV_STATE_CHANNEL,
   type CinnaLocalDev,
-  type LocalDevState
+  type LocalDevState,
+  type LocalDevTask,
+  type LocalDevTaskId
 } from '../../shared/localDevState'
 
 const logger = createLogger('local-dev')
@@ -99,13 +101,117 @@ interface AccountStatus {
   context_package?: { state?: string }
 }
 
+/**
+ * How the reconcile's two measurable halves share one bar.
+ *
+ * The toolchain reports 0..100 for itself and cinna-cli reports `step n of m`
+ * for the workspace, and showing each on its own scale would send the bar back
+ * to near-zero the moment the toolchain finished — which reads as a restart,
+ * and is worse than no bar at all. So each is scaled into a slice of one
+ * monotonic 0..100.
+ *
+ * The toolchain gets the larger share because on a cold profile it *is* the
+ * wait: hundreds of megabytes against three short HTTP calls.
+ */
+const TOOLCHAIN_SHARE = 0.7
+const WORKSPACE_FROM = 70
+const WORKSPACE_TO = 97
+
+/** The toolchain's own 0..100, as a fraction of the whole reconcile. */
+function toolchainPercent(percent: number | undefined): number | undefined {
+  return percent === undefined ? undefined : Math.round(percent * TOOLCHAIN_SHARE)
+}
+
+/** cinna-cli's `step n of m`, as a fraction of what is left after the toolchain. */
+function workspacePercent(step: number | undefined, total: number | undefined): number {
+  if (!step || !total || total <= 0) return WORKSPACE_FROM
+  const fraction = Math.max(0, Math.min(1, step / total))
+  return Math.round(WORKSPACE_FROM + (WORKSPACE_TO - WORKSPACE_FROM) * fraction)
+}
+
+/**
+ * The checklist, in the order the reconciler actually does the work.
+ *
+ * Held beside the phase rather than derived from it: a phase says what is
+ * happening *now*, and the question the checklist answers — what is already
+ * done, and which step is the one that broke — needs the history the phase
+ * throws away on every transition.
+ */
+const TASK_LABELS: { id: LocalDevTaskId; label: string }[] = [
+  { id: 'uv', label: 'uv' },
+  { id: 'mutagen', label: 'Mutagen' },
+  { id: 'cinna-cli', label: 'cinna-cli' },
+  { id: 'workspace', label: 'Account workspace' },
+  { id: 'token', label: 'Account token' }
+]
+
+/** The ids in order, exported so the ordering rule can be asserted. */
+export const TASK_ORDER: LocalDevTaskId[] = TASK_LABELS.map((t) => t.id)
+
+let tasks: LocalDevTask[] = []
+
+function resetTasks(): void {
+  tasks = TASK_LABELS.map(({ id, label }) => ({ id, label, status: 'pending' }))
+}
+
+/**
+ * Mark `id` active with `detail`, and everything before it done.
+ *
+ * Deriving "earlier tasks are finished" from the order rather than requiring an
+ * explicit completion for each is what keeps the caller honest: the reconciler
+ * cannot reach step four without having passed step three, so a checklist that
+ * still showed three as pending would be lying about work that demonstrably
+ * happened.
+ */
+function markActive(id: LocalDevTaskId, detail?: string): void {
+  const index = tasks.findIndex((task) => task.id === id)
+  if (index === -1) return
+  tasks = tasks.map((task, i) => {
+    if (i < index) return task.status === 'failed' ? task : { ...task, status: 'done' }
+    if (i === index) return { ...task, status: 'active', detail }
+    return task
+  })
+}
+
+/** Everything done, with an optional closing detail on the last one. */
+function markAllDone(detail?: string): void {
+  tasks = tasks.map((task, i) => ({
+    ...task,
+    status: 'done',
+    detail: i === tasks.length - 1 ? (detail ?? task.detail) : task.detail
+  }))
+}
+
+/** The active task became the reason the run stopped. */
+function markFailed(detail: string): void {
+  const active = tasks.findIndex((task) => task.status === 'active')
+  const index = active === -1 ? tasks.findIndex((task) => task.status === 'pending') : active
+  if (index === -1) return
+  tasks = tasks.map((task, i) => (i === index ? { ...task, status: 'failed', detail } : task))
+}
+
+/**
+ * One toolchain report → a checklist tick and an `installing` state.
+ *
+ * The tool id comes from the toolchain rather than being parsed out of the
+ * step text, so renaming a user-facing label cannot silently stop the checklist
+ * advancing.
+ */
+function onToolchainProgress(step: string, percent?: number, tool?: ToolchainToolId): void {
+  if (tool) markActive(tool, step)
+  setState({ phase: 'installing', step, percent: toolchainPercent(percent) })
+}
+
 let state: LocalDevState = { phase: 'idle' }
 /** One reconcile at a time; a second caller joins the run in flight. */
 let inFlight: Promise<LocalDevState> | null = null
 
 function setState(next: LocalDevState): void {
-  state = next
-  logger.info('local dev state', next)
+  // Attached here rather than at every call site: the checklist is a property
+  // of the run, not of any one transition, and threading it through forty
+  // `setState` calls is forty chances to drop it.
+  state = { ...next, tasks: tasks.length ? tasks : undefined }
+  logger.info('local dev state', { phase: next.phase })
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send(LOCAL_DEV_STATE_CHANNEL, next)
   }
@@ -312,7 +418,7 @@ async function createWorkspace(
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
 
-  setState({ phase: 'installing', step: 'Creating your account workspace…' })
+  setState({ phase: 'installing', step: 'Creating your account workspace…', percent: WORKSPACE_FROM })
   const outcome = await runCinnaCli({
     bin: cinnaBin,
     // The setup command is argv element 2 and appears nowhere else.
@@ -333,7 +439,15 @@ async function createWorkspace(
     // loose end worth not having.
     cwd: dirname(workspacePath),
     onProgress: (line) => {
-      if (line.status === 'start') setState({ phase: 'installing', step: line.message })
+      if (line.status !== 'start') return
+      // cinna-cli's own `step n of m` — the only progress the desktop has for
+      // this half, and it is real: each line is a step actually beginning.
+      markActive('workspace', line.message)
+      setState({
+        phase: 'installing',
+        step: line.message,
+        percent: workspacePercent(line.step, line.total)
+      })
     }
   })
   if (outcome.exitCode !== EXIT_OK) return fromCliOutcome(outcome, 'Creating the workspace')
@@ -362,7 +476,7 @@ async function refreshAccountToken(
   const minted = await mintSetupCommand(userId, localDev)
   if (!minted.ok) return minted.state
 
-  setState({ phase: 'installing', step: 'Refreshing your account token…' })
+  setState({ phase: 'installing', step: 'Refreshing your account token…', percent: WORKSPACE_FROM })
   const outcome = await runCinnaCli({
     bin: cinnaBin,
     args: ['account', 'set-token', minted.command, ...protocolFlags(caps)],
@@ -441,6 +555,10 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
 
   const host = new URL(user.cinnaServerUrl).host
   const consent = readConsent()[host]
+  // From here on there is real work to describe, so the checklist starts.
+  // Before this point — no Cinna user, no `local_dev` block — there is nothing
+  // to tick off and an empty list is the honest answer.
+  resetTasks()
   if (!force) {
     // Never asked, or asked and declined. Both stop here; they are different
     // states because Settings offers different things for them.
@@ -467,26 +585,30 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   let cliVersion: string
   let env: NodeJS.ProcessEnv
   try {
-    setState({ phase: 'installing', step: 'Checking the local development toolchain…' })
+    setState({ phase: 'installing', step: 'Checking the local development toolchain…', percent: 0 })
     const result = reinstallToolchain
-      ? await toolchain.repair(pins, (step, percent) =>
-          setState({ phase: 'installing', step, percent })
-        )
-      : await toolchain.ensure(pins, (step, percent) =>
-          setState({ phase: 'installing', step, percent })
-        )
+      ? await toolchain.repair(pins, onToolchainProgress)
+      : await toolchain.ensure(pins, onToolchainProgress)
     cliVersion = result.cliVersion
+    // The version is the useful detail on that row once it is installed —
+    // "which cinna-cli am I actually running" is the first thing anyone asks
+    // when the behaviour surprises them.
+    markActive('workspace')
+    tasks = tasks.map((task) =>
+      task.id === 'cinna-cli' ? { ...task, detail: cliVersion } : task
+    )
     env = await toolchain.toolchainEnv(pins)
   } catch (err) {
-    setState(
+    const failure =
       err instanceof ToolchainError
         ? fromToolchainError(err)
         : {
-            phase: 'attention',
-            reason: 'toolchain',
+            phase: 'attention' as const,
+            reason: 'toolchain' as const,
             detail: err instanceof Error ? err.message : String(err)
           }
-    )
+    markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
+    setState(failure)
     return state
   }
 
@@ -514,17 +636,22 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
   }
 
   if (!(await isFile(accountConfigPath(workspacePath)))) {
+    markActive('workspace', 'Creating…')
     const failure = await createWorkspace(userId, localDev, workspacePath, env, cinnaBin, caps)
     if (failure) {
+      markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
       setState(failure)
       return state
     }
   }
 
-  setState({ phase: 'installing', step: 'Checking your account token…' })
+  markActive('token', 'Checking…')
+  setState({ phase: 'installing', step: 'Checking your account token…', percent: WORKSPACE_TO })
   let status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
   if (status.exitCode !== EXIT_OK) {
-    setState(fromCliOutcome(status, 'Reading the workspace'))
+    const failure = fromCliOutcome(status, 'Reading the workspace')
+    markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
+    setState(failure)
     return state
   }
 
@@ -539,18 +666,22 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
       caps
     )
     if (failure) {
+      markFailed(failure.phase === 'attention' ? failure.detail : 'Failed.')
       setState(failure)
       return state
     }
     status = await readAccountStatus(workspacePath, env, cinnaBin, caps)
     if (status.exitCode !== EXIT_OK) {
-      setState(fromCliOutcome(status, 'Reading the workspace'))
+      const readFailure = fromCliOutcome(status, 'Reading the workspace')
+      markFailed(readFailure.phase === 'attention' ? readFailure.detail : 'Failed.')
+      setState(readFailure)
       return state
     }
   } else if (parsed?.token === 'unreachable') {
     // The workspace is fine; the server is not answering. Nothing to repair —
     // and calling this a workspace problem would send the user looking in the
     // wrong place.
+    markFailed('Could not reach your Cinna server to check the account token.')
     setState({
       phase: 'attention',
       reason: 'network',
@@ -576,6 +707,7 @@ async function runReconcile(userId: string, force: boolean): Promise<LocalDevSta
     }
   }
 
+  markAllDone('Valid')
   setState({
     phase: 'ready',
     workspacePath,

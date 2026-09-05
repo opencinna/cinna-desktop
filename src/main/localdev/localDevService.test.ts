@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { ToolchainError } from '../errors'
-import { fromCliOutcome, fromToolchainError, hostDirName } from './localDevService'
+import { fromCliOutcome, fromToolchainError, hostDirName, TASK_ORDER } from './localDevService'
 import type { CliRunOutcome } from './cliRunner'
 
 /**
@@ -92,5 +92,18 @@ describe('fromCliOutcome', () => {
       phase: 'attention',
       reason: 'network'
     })
+  })
+})
+
+describe('the checklist', () => {
+  /**
+   * Only the ordering rule is testable without a database and a server: that
+   * reaching a step implies the ones before it finished. It is worth pinning
+   * because the alternative — an explicit completion call per step — is exactly
+   * the thing a later edit forgets, leaving a checklist that shows work as
+   * pending after it demonstrably happened.
+   */
+  it('has one row per real step, in the order the reconciler does them', () => {
+    expect(TASK_ORDER).toEqual(['uv', 'mutagen', 'cinna-cli', 'workspace', 'token'])
   })
 })
