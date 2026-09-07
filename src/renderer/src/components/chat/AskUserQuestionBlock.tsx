@@ -27,7 +27,7 @@ interface AskUserQuestionBlockProps {
    * second time while the first turn was still waiting.
    */
   liveRequestId?: string
-  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<void>
+  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }
 
 /**
@@ -109,7 +109,7 @@ function AnswerAffordance({
   questions: AskQuestion[]
   chatId: string
   liveRequestId?: string
-  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<void>
+  onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)

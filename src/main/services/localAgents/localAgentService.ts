@@ -84,6 +84,7 @@ import { turnLock } from './turnLock'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
 import { runtimeService } from './runtimeService'
+import { permissionGrantService, type StoredPermissionGrant } from './permissionGrantService'
 
 const logger = createLogger('local-agents')
 
@@ -775,6 +776,38 @@ export const localAgentService = {
       name: row?.name ?? basename(agentDir),
       entryFile
     })
+  },
+
+  /**
+   * The permissions this agent may take without asking again.
+   *
+   * Read through here rather than from the renderer's own idea of where the
+   * folder is: `locate` is what proves the agent belongs to this user before a
+   * path is derived, and it is the same guard every other folder read uses.
+   */
+  listPermissionGrants(userId: string, agentId: string): StoredPermissionGrant[] {
+    const { agentDir } = this.locate(userId, agentId)
+    return permissionGrantService.list(agentDir)
+  },
+
+  /**
+   * Revoke one grant, and answer with what is left.
+   *
+   * The remaining list is returned rather than left to a refetch: revoking is
+   * the one action on that card, and a list that re-reads itself a moment
+   * later would show the row the user just removed until it did.
+   */
+  forgetPermissionGrant(userId: string, agentId: string, key: string): StoredPermissionGrant[] {
+    const { agentDir } = this.locate(userId, agentId)
+    permissionGrantService.forget(agentDir, key)
+    return permissionGrantService.list(agentDir)
+  },
+
+  /** Revoke every grant this agent holds. Returns the empty list it leaves. */
+  forgetAllPermissionGrants(userId: string, agentId: string): StoredPermissionGrant[] {
+    const { agentDir } = this.locate(userId, agentId)
+    permissionGrantService.forgetAll(agentDir)
+    return permissionGrantService.list(agentDir)
   },
 
   /** Validate a folder on demand — the agent page's "check this agent" action. */

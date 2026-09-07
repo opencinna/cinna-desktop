@@ -25,6 +25,18 @@ import { useCallback, useEffect, useState } from 'react'
  * map lookup and keeps one code path for both modes. It stops the moment
  * nothing is streaming.
  */
+/**
+ * What a delivered answer says about itself.
+ *
+ * Only *Always allow* has anything to report: the grant is written on the main
+ * side while the user waits, and `remembered` is false when the store refused
+ * the write — the action still goes ahead, and the block must say "allowed
+ * once" rather than claim a rule that is not on disk.
+ */
+export interface AnswerOutcome {
+  remembered?: boolean
+}
+
 export interface PendingAgentRequest {
   requestId: string
   kind: 'permission' | 'question'
@@ -38,8 +50,11 @@ export function useAgentRequests(
 ): {
   pending: PendingAgentRequest[]
   isPending: (requestId: string) => boolean
-  answerPermission: (requestId: string, reply: 'once' | 'always' | 'reject') => Promise<void>
-  answerQuestion: (requestId: string, answers: string[][]) => Promise<void>
+  answerPermission: (
+    requestId: string,
+    reply: 'once' | 'always' | 'reject'
+  ) => Promise<AnswerOutcome>
+  answerQuestion: (requestId: string, answers: string[][]) => Promise<AnswerOutcome>
 } {
   const [pending, setPending] = useState<PendingAgentRequest[]>([])
 
@@ -76,15 +91,21 @@ export function useAgentRequests(
       requestId: string
       reply?: 'once' | 'always' | 'reject'
       answers?: string[][]
-    }): Promise<void> => {
+    }): Promise<AnswerOutcome> => {
       // The outcome arrives as **data**, not as a rejection: a thrown error
       // loses its code across `ipcMain.handle` and again across
       // `contextBridge`, so branching on one here would silently never fire.
       const result = await window.api.agents.answerRequest(data)
+      // **Only a delivered answer clears the request.** This removal used to
+      // happen first, and a refused answer then took the buttons with it: the
+      // block greyed out, the error line said the request had expired, and
+      // there was no way to answer it any other way. A refusal has to leave the
+      // controls where they were (`ux_rules.md` §6).
+      if (!result.ok) throw new Error(result.reason ?? 'That answer could not be delivered.')
       // Optimistic removal, so the block stops offering buttons immediately
       // rather than at the next poll tick.
       setPending((prev) => prev.filter((p) => p.requestId !== data.requestId))
-      if (!result.ok) throw new Error(result.reason ?? 'That answer could not be delivered.')
+      return { remembered: result.remembered }
     },
     []
   )

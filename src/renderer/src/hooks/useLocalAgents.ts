@@ -13,6 +13,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { LocalAgentRuntimeInput } from '../../../shared/engine'
+import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import {
   isBlockedWriteError,
   isStaleWriteError,
@@ -62,6 +63,11 @@ export function localAgentDocKey(
   prompt: LocalAgentPromptKind
 ): readonly unknown[] {
   return ['local-agent-doc', agentId, prompt] as const
+}
+
+/** Cache key of one agent's standing permission grants. */
+export function localAgentGrantsKey(agentId: string): readonly unknown[] {
+  return ['local-agent-grants', agentId] as const
 }
 
 /** How long the page waits after the last keystroke before saving. */
@@ -174,6 +180,47 @@ export function useUpdateLocalAgentField() {
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/**
+ * What this agent may do without asking again.
+ *
+ * Not part of `useLocalAgent`: grants live in `app-data/desktop.json`, which
+ * the scanner deliberately does not fold into the agent DTO — that file churns
+ * on every turn, and a DTO that moved with it would re-render the whole page
+ * mid-answer. A separate query also means the permissions card refetches only
+ * when it is on screen.
+ */
+export function useLocalAgentGrants(agentId: string | null) {
+  return useQuery<StoredPermissionGrant[]>({
+    queryKey: localAgentGrantsKey(agentId ?? ''),
+    queryFn: () => window.api.localAgents.grantsList(agentId as string),
+    enabled: agentId !== null
+  })
+}
+
+/**
+ * Revoke a grant — one, or all of them.
+ *
+ * Both handlers answer with the list they leave, which is written straight into
+ * the cache: revoking is the only action on that card, and a refetch would keep
+ * the removed row on screen until it landed.
+ *
+ * The mutation is owned by the card, which outlives its own rows — the dialog
+ * lesson from `ux_rules.md` §5 applies to a row that unmounts on success just
+ * as it does to a dialog that closes on it.
+ */
+export function useForgetAgentGrants() {
+  const queryClient = useQueryClient()
+  return useMutation<StoredPermissionGrant[], Error, { agentId: string; key?: string }>({
+    mutationFn: ({ agentId, key }) =>
+      key === undefined
+        ? window.api.localAgents.grantsClear(agentId)
+        : window.api.localAgents.grantForget(agentId, key),
+    onSuccess: (grants, { agentId }) => {
+      queryClient.setQueryData(localAgentGrantsKey(agentId), grants)
     }
   })
 }

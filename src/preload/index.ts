@@ -18,6 +18,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../shared/localAgents'
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
+import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type { EngineSkips, EngineState } from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
@@ -564,7 +565,10 @@ const api = {
       requestId: string
       reply?: 'once' | 'always' | 'reject'
       answers?: string[][]
-    }): Promise<{ ok: boolean; reason?: string }> =>
+      // `remembered` on the result comes back only for a permission answered
+      // `always`: main writes the grant while the user waits and says whether
+      // it landed, so the block can avoid claiming a rule the store refused.
+    }): Promise<{ ok: boolean; reason?: string; remembered?: boolean }> =>
       ipcRenderer.invoke('agent:answer-request', data),
     pendingRequests: (
       chatId: string
@@ -1173,6 +1177,20 @@ const api = {
      */
     openCredentials: (agentId: string): Promise<OpenLocalAgentCredentialsResult> =>
       ipcRenderer.invoke('local-agent:open-credentials', agentId),
+    /**
+     * What this agent may do without asking again — the decisions the user
+     * made with *Always allow*, newest first. Each mutation answers with the
+     * list it leaves, so the card never has to refetch to stop showing a row
+     * that is gone.
+     */
+    grantsList: (agentId: string): Promise<StoredPermissionGrant[]> =>
+      ipcRenderer.invoke('local-agent:grants-list', agentId),
+    /** Revoke one grant. The agent will ask again next time it needs it. */
+    grantForget: (agentId: string, key: string): Promise<StoredPermissionGrant[]> =>
+      ipcRenderer.invoke('local-agent:grant-forget', { agentId, key }),
+    /** Revoke every grant this agent holds. */
+    grantsClear: (agentId: string): Promise<StoredPermissionGrant[]> =>
+      ipcRenderer.invoke('local-agent:grants-clear', agentId),
     rootsList: (): Promise<AgentRootDto[]> => ipcRenderer.invoke('local-agent:roots-list'),
     /** Opens the OS directory picker; the renderer never supplies the path. */
     rootAdd: (): Promise<{ cancelled: true } | { cancelled: false; root: AgentRootDto }> =>

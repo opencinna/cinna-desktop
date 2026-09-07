@@ -3,6 +3,7 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
+import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 import { getMainWindow } from '../index'
 import { engineManager } from '../engine/engineManager'
 import { LocalAgentError } from '../errors'
@@ -201,6 +202,44 @@ export function registerLocalAgentHandlers(): void {
       return localAgentService.openCredentials(getSettingsScopeUserId(), agentId)
     }
   )
+
+  /**
+   * The standing permission grants for one agent, and the two ways to revoke
+   * them.
+   *
+   * The folder path is derived in main from the agent id, never sent by the
+   * renderer — the same rule `open-credentials` follows, and for the same
+   * reason: these handlers read and write a file inside an agent folder, and
+   * the only proof that folder is the caller's is the ownership check
+   * `localAgentService.locate` performs on the id.
+   *
+   * Each mutation answers with the list that is left, so the card does not have
+   * to refetch to stop showing a row the user just removed.
+   */
+  ipcHandle('local-agent:grants-list', (_event, agentId: string): StoredPermissionGrant[] => {
+    userActivation.requireActivated()
+    return localAgentService.listPermissionGrants(getSettingsScopeUserId(), agentId)
+  })
+
+  ipcHandle(
+    'local-agent:grant-forget',
+    (_event, data?: { agentId: string; key: string }): StoredPermissionGrant[] => {
+      userActivation.requireActivated()
+      // `data?.` like its siblings: a payload that never arrived should fail as
+      // `not_found` from the service, with the code the renderer knows, rather
+      // than as a `TypeError` the bridge flattens into an anonymous Error.
+      return localAgentService.forgetPermissionGrant(
+        getSettingsScopeUserId(),
+        data?.agentId as string,
+        data?.key as string
+      )
+    }
+  )
+
+  ipcHandle('local-agent:grants-clear', (_event, agentId: string): StoredPermissionGrant[] => {
+    userActivation.requireActivated()
+    return localAgentService.forgetAllPermissionGrants(getSettingsScopeUserId(), agentId)
+  })
 
   ipcHandle('local-agent:roots-list', (): AgentRootDto[] => {
     userActivation.requireActivated()

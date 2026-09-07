@@ -38,7 +38,20 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useDraftLocalAgent: () => ({ isPending: false, data: undefined, mutate: vi.fn() }),
   useOpenAgentPath: () => ({ mutate: vi.fn() }),
   useRescanLocalAgents: () => ({ mutate: vi.fn(), isPending: false }),
-  useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false, error: null })
+  useStampAgentIdentity: () => ({ mutate: vi.fn(), isPending: false, error: null }),
+  // Two standing grants, so the tab's count badge has something to render. The
+  // card itself is a marker here; its own behaviour is in `PermissionsCard.test.tsx`.
+  useLocalAgentGrants: () => ({
+    data: [
+      { key: 'bash::make test', action: 'bash', pattern: 'make test', decidedAt: 1 },
+      {
+        key: 'webfetch::https://x.test/*',
+        action: 'webfetch',
+        pattern: 'https://x.test/*',
+        decidedAt: 2
+      }
+    ]
+  })
 }))
 
 const marker = (name: string) => () => createElement('div', { 'data-marker': name }, name)
@@ -59,6 +72,7 @@ vi.mock('./ReadOnlyCards', () => ({
   StatusCard: marker('status-card')
 }))
 vi.mock('./FolderTab', () => ({ FolderTab: marker('folder-tab') }))
+vi.mock('./PermissionsCard', () => ({ PermissionsCard: marker('permissions-card') }))
 
 const { LocalAgentPage } = await import('./LocalAgentPage')
 
@@ -124,8 +138,26 @@ describe('LocalAgentPage — layout', () => {
     fireEvent.click(screen.getByRole('tab', { name: /commands/i }))
     expect(screen.getByText('commands-card')).toBeTruthy()
 
+    // Permissions is a tab rather than a card on Overview: in the common case
+    // it is a fixed paragraph plus "nothing remembered yet", which is knowledge
+    // and not a control (`ux_rules.md` §2). Mutation: render
+    // `<PermissionsCard>` under `tab === 'overview'` fails this.
+    expect(screen.queryByText('permissions-card')).toBeNull()
+    fireEvent.click(screen.getByRole('tab', { name: /permissions/i }))
+    expect(screen.getByText('permissions-card')).toBeTruthy()
+
     fireEvent.click(screen.getByRole('tab', { name: /folder/i }))
     expect(screen.getByText('folder-tab')).toBeTruthy()
+  })
+
+  it('counts standing permissions on their tab, the way Commands counts a catalog', () => {
+    // The badge is what makes a grant the user made weeks ago discoverable
+    // without opening the tab — the same rule the Commands and Folder counts
+    // follow. Mutation: drop the badge and a standing rule is invisible until
+    // someone goes looking for it.
+    renderPage(agent())
+    const tab = screen.getByRole('tab', { name: /permissions/i })
+    expect(tab.textContent).toBe('Permissions2')
   })
 
   it('counts validation findings on the Folder tab, where a ready folder now keeps them', () => {

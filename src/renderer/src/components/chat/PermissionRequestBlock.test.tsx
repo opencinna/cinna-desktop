@@ -14,10 +14,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PermissionRequestBlock } from './PermissionRequestBlock'
-import {
-  ALWAYS_GRANTS_ENABLED,
-  type LocalPermissionRequest
-} from '../../../../shared/localAgentRequests'
+import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 
 const request = (over: Partial<LocalPermissionRequest> = {}): LocalPermissionRequest => ({
   action: 'bash',
@@ -41,31 +38,151 @@ describe('PermissionRequestBlock', () => {
     expect(screen.getByText('rm -rf build')).toBeTruthy()
   })
 
-  it('withholds Always, because the cross-agent grant leak is proven', () => {
-    // Observed against the real binary: replying `always` in folder A wrote
-    // `{projectID: "global", action: "edit", resource: "*"}` — no directory, no
-    // agent — into `~/.local/share/opencode/opencode.db`, a user-global store
-    // shared with the user's own OpenCode. Folder B, never granted anything,
-    // then wrote a file with no permission prompt at all. The engine's only
-    // savable pattern is `["*"]`, so a user allowing "edit notes.txt" is
-    // allowing "edit anything". Allow once and Deny both still work.
+  it('offers Always allow even for an ask the engine calls unsavable', () => {
+    // `savable` is OpenCode's `save[]` — what *its* store would keep, only ever
+    // `["*"]`, for every agent on the machine. This button does not write
+    // there: the runner records the grant in this agent's folder and replies
+    // `once`. So an empty `savable` is not a reason to withhold the button, and
+    // gating on it (as this component used to) would hide the one answer that
+    // stops the same question being asked every turn.
     //
-    // This is a **gate, not a preference**, and it is not waiting on evidence:
-    // the observation has been done and its result is that shipping Always
-    // this way is wrong. The fix is to make the desktop authoritative and
-    // reply `once` only (`once` persists nothing — verified). Delete this test
-    // in the change that builds *that*, never to enable the current path.
-    expect(ALWAYS_GRANTS_ENABLED).toBe(false)
-
+    // Mutation: restore `request.savable.length > 0 &&` on the button fails
+    // this.
     render(
       <PermissionRequestBlock
-        request={request({ savable: ['bash:rm *'] })}
+        request={request({ savable: [] })}
         requestId="per_1"
         interactive
         onAnswer={async () => {}}
       />
     )
-    expect(screen.queryByText('Always for this agent')).toBeNull()
+    expect(screen.getByText('Always allow')).toBeTruthy()
+  })
+
+  it('names the scope Always allow would remember, below the buttons', () => {
+    // The button has to say what it grants, because a grant is wider than the
+    // ask exactly once: a URL becomes its origin. The line sits *below* the
+    // buttons — a line above them would move the control the user is reaching
+    // for as it renders (ux_rules §1).
+    //
+    // Mutation: pass `request.resources` instead of `permissionGrantPatterns`
+    // fails this — the text would promise the exact URL while the main process
+    // stored the origin.
+    render(
+      <PermissionRequestBlock
+        request={request({ action: 'webfetch', resources: ['https://docs.example.com/a?v=2'] })}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => {}}
+      />
+    )
+    expect(
+      screen.getByText(/remembers https:\/\/docs\.example\.com\/\* for this agent only/)
+    ).toBeTruthy()
+  })
+
+  it('does not claim a rule was remembered when the store refused it', async () => {
+    // Main writes the grant while the user waits and reports whether it landed.
+    // A folder that has gone read-only still gets the action it was allowed —
+    // the user said yes — but the block must not tell them a rule exists.
+    //
+    // Mutation: render "Allowed, and remembered for this agent" whenever the
+    // reply was `always` fails this.
+    render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => ({ remembered: false })}
+      />
+    )
+    fireEvent.click(screen.getByText('Always allow'))
+    expect(await screen.findByText('Allowed once — the rule could not be saved.')).toBeTruthy()
+  })
+
+  it('says the rule was remembered when main says it was stored', async () => {
+    render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => ({ remembered: true })}
+      />
+    )
+    fireEvent.click(screen.getByText('Always allow'))
+    expect(await screen.findByText('Allowed, and remembered for this agent.')).toBeTruthy()
+  })
+
+  it('names a blanket grant in words when the ask names no resource', () => {
+    // `external_directory` with no resources is the one ask whose *Always
+    // allow* stores a `*` grant. It has to read as broad, and not in the
+    // engine's vocabulary. Mutation: interpolate the raw action fails this.
+    render(
+      <PermissionRequestBlock
+        request={request({ action: 'external_directory', resources: [] })}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => {}}
+      />
+    )
+    expect(
+      screen.getByText(/remembers any request to use a folder outside its own for this agent only/)
+    ).toBeTruthy()
+  })
+
+  it('does not restate the resource it is sitting under', () => {
+    // For a path or a command the grant pattern *is* the resource listed above,
+    // so the line was a prose copy of the mono line two rows up, unquoted and
+    // with no way to see where the pattern ended (ux_rules §7). Mutation:
+    // render the line unconditionally fails this.
+    render(
+      <PermissionRequestBlock
+        request={request({ action: 'bash', resources: ['git push --force origin main'] })}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => {}}
+      />
+    )
+    expect(screen.queryByText(/Always allow remembers/)).toBeNull()
+  })
+
+  it('names which answer is in flight, in the button that was pressed', async () => {
+    // Three buttons dropping to 50% opacity together says an answer is going
+    // out and nothing about *which* — on the one widget in the app where that
+    // is a permission decision (ux_rules §1). Mutation: a single `busy` boolean
+    // fails this.
+    let release = (): void => {}
+    render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive
+        onAnswer={() => new Promise<void>((resolve) => (release = resolve))}
+      />
+    )
+    fireEvent.click(screen.getByText('Always allow'))
+    expect(await screen.findByText('Remembering…')).toBeTruthy()
+    expect(screen.getByText('Allow once')).toBeTruthy()
+    expect(screen.getByText('Deny')).toBeTruthy()
+    release()
+  })
+
+  it('sends always as the reply, and leaves the conversion to main', () => {
+    // The renderer does not know about the grant store and must not: it sends
+    // OpenCode's own enum value, and the runner is where `always` becomes a
+    // stored rule plus a `once` reply. Mutation: send `'once'` from this button
+    // fails this, and *Always allow* would silently mean *Allow once*.
+    const answers: string[] = []
+    render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive
+        onAnswer={async (_id, reply) => void answers.push(reply)}
+      />
+    )
+    fireEvent.click(screen.getByText('Always allow'))
+    return waitFor(() => expect(answers).toEqual(['always']))
   })
 
   it('shows the recorded decision when replayed from history', () => {
@@ -89,7 +206,7 @@ describe('PermissionRequestBlock', () => {
     expect(screen.queryByText('Allow once')).toBeNull()
   })
 
-  it('sends the engine\'s own reply value, not a desktop synonym', async () => {
+  it("sends the engine's own reply value, not a desktop synonym", async () => {
     const onAnswer = vi.fn(async () => {})
     render(
       <PermissionRequestBlock
@@ -153,24 +270,20 @@ describe('PermissionRequestBlock', () => {
     // moved outside the try (or before the await) fails this — "Allowed once"
     // appears next to an error saying it did not happen, and the buttons
     // disappear so the user cannot retry.
-    expect(screen.queryByText('Allowed once')).toBeNull()
+    expect(screen.queryByText('Allowed once.')).toBeNull()
     expect(screen.getByText('Allow once')).toBeTruthy()
   })
 
   it('renders read-only with no buttons once the request is no longer pending', () => {
     render(
-      <PermissionRequestBlock
-        request={request()}
-        interactive={false}
-        onAnswer={async () => {}}
-      />
+      <PermissionRequestBlock request={request()} interactive={false} onAnswer={async () => {}} />
     )
     // A persisted block re-rendered from history has no live request id. Offering
     // buttons there would post an answer to a request the engine has long since
     // resolved. Mutation: `const live = interactive && !!requestId && !answered`
     // → `const live = true` fails this.
     expect(screen.queryByText('Allow once')).toBeNull()
-    expect(screen.getByText('Permission for bash')).toBeTruthy()
+    expect(screen.getByText('Permission to run a command')).toBeTruthy()
   })
 })
 
@@ -179,7 +292,9 @@ describe('PermissionRequestBlock', () => {
  *
  * | Mutation | Fails |
  * |---|---|
- * | `ALWAYS_GRANTS_ENABLED` flipped to `true` | withholds Always until the shared-grant question is settled |
+ * | `savable.length > 0 &&` restored on the Always button | offers Always allow even for an ask the engine calls unsavable |
+ * | Always button sends `'once'` | sends always as the reply, and leaves the conversion to main |
+ * | scope line built from `resources` rather than the grant patterns | names the scope Always allow would remember… |
  * | Allow button sends `'allow'` | sends the engine's own reply value… |
  * | drop the `decision` prop | shows the recorded decision when replayed from history |
  * | Deny closes the block without calling `onAnswer` | maps Deny to reject rather than to a missing answer |

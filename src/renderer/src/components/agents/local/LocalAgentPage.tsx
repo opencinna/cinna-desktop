@@ -4,6 +4,7 @@ import { useUIStore } from '../../../stores/ui.store'
 import {
   useDraftLocalAgent,
   useLocalAgent,
+  useLocalAgentGrants,
   useOpenAgentPath,
   useRescanLocalAgents,
   useStampAgentIdentity
@@ -18,14 +19,22 @@ import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { PromptDocCard } from './PromptDocCard'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
+import { PermissionsCard } from './PermissionsCard'
 import { FolderTab } from './FolderTab'
 
-export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'folder'
+export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'permissions' | 'folder'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'prompts', label: 'Prompts' },
   { id: 'commands', label: 'Commands' },
+  // Permissions is a tab and not a card on Overview: in the common case it is a
+  // fixed paragraph identical for every folder agent plus "nothing remembered
+  // yet" — knowledge, not a control (rule 2) — and the count badge is what
+  // makes a standing grant discoverable without opening it. A tab body also
+  // mounts on selection, so its query cannot render an empty state for an agent
+  // that has grants.
+  { id: 'permissions', label: 'Permissions' },
   { id: 'folder', label: 'Folder' }
 ]
 
@@ -68,6 +77,7 @@ export function LocalAgentPage(): React.JSX.Element {
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
+  const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
   const draft = useDraftLocalAgent()
   const rescan = useRescanLocalAgents()
   const openPath = useOpenAgentPath()
@@ -171,6 +181,9 @@ export function LocalAgentPage(): React.JSX.Element {
   const description = describedAs(agent)
   const hasDescription = description !== ''
   const findings = agent.validation.errors.length + agent.validation.warnings.length
+  // Only for the badge. The card runs the same query when the tab is open —
+  // react-query serves both from one cache entry, so this costs no extra IPC.
+  const grantCount = grants?.length ?? 0
 
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
@@ -284,6 +297,14 @@ export function LocalAgentPage(): React.JSX.Element {
                 }`}
               >
                 {entry.label}
+                {entry.id === 'permissions' && grantCount > 0 && (
+                  <span
+                    className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]"
+                    title={`${grantCount} standing permission${grantCount === 1 ? '' : 's'}`}
+                  >
+                    {grantCount}
+                  </span>
+                )}
                 {entry.id === 'commands' && agent.commands.length > 0 && (
                   <span className="ml-1.5 rounded bg-[var(--color-bg-tertiary)] px-1 text-[10px] text-[var(--color-text-muted)]">
                     {agent.commands.length}
@@ -341,6 +362,7 @@ export function LocalAgentPage(): React.JSX.Element {
             </>
           )}
           {tab === 'commands' && <CommandsCard agent={agent} />}
+          {tab === 'permissions' && <PermissionsCard agent={agent} />}
           {tab === 'folder' && <FolderTab agent={agent} />}
         </div>
       </div>
