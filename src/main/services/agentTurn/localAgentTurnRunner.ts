@@ -55,6 +55,7 @@ import type { EngineEventBus, SessionEventListener } from './engineEventBus'
 import { parseEngineEvent, type EngineEvent } from './engineEvents'
 import { SseParser } from './sseParser'
 import { TurnStream, type PendingRequest } from './turnStream'
+import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { pendingRequests, type RequestResolution } from './pendingRequests'
 import type { EngineModelRef } from '../../engine/configGenerator'
 import { unsupportedModelApi, type EngineModelApi } from '../../engine/modelTransports'
@@ -95,6 +96,15 @@ export const ENGINE_READY_MS = 60 * 1000
 /** Gap between readiness probes. */
 const ENGINE_READY_POLL_MS = 1_000
 
+/**
+ * How long an automatic allow waits before its one retry.
+ *
+ * Short, because the turn is parked while it waits and the engine is a local
+ * process — this is a stutter, not an outage. An outage ends the turn through
+ * `onClosed`.
+ */
+const AUTO_REPLY_RETRY_MS = 500
+
 /** The bits of the world this runner touches, injected so it can be driven in a test. */
 export interface LocalTurnDeps {
   /** `engineManager.ensureRunning` — the config choke point. */
@@ -112,16 +122,25 @@ export interface LocalTurnDeps {
   getAgent(
     userId: string,
     agentId: string
-  ): { name: string; path: string; enabled: boolean; readiness: string; readinessReason: string | null } | null
+  ): {
+    name: string
+    path: string
+    enabled: boolean
+    readiness: string
+    readinessReason: string | null
+  } | null
   /** The engine session id remembered for this (chat, agent), if any. */
   readSession(chatId: string, agentId: string): string | null
   /** Remember it, in both `desktop.json` and `a2a_sessions.context_id`. */
-  saveSession(input: {
-    chatId: string
-    agentId: string
-    agentDir: string
-    sessionId: string
-  }): void
+  saveSession(input: { chatId: string; agentId: string; agentDir: string; sessionId: string }): void
+  /**
+   * True when this agent folder already holds a grant covering an ask.
+   *
+   * Consulted before a permission block is written, so a decision the user has
+   * already made never reaches the transcript a second time. Must not throw:
+   * an unreadable store means "ask the user", which is the safe direction.
+   */
+  isGranted(agentDir: string, request: LocalPermissionRequest): boolean
   /** Take the per-agent lock for the streaming part of the turn. */
   withLock<T>(agentId: string, owner: string, fn: () => Promise<T>): Promise<T>
   /** The settings-scope user id that owns folder agents. */
@@ -130,6 +149,8 @@ export interface LocalTurnDeps {
   turnCeilingMs?: number
   /** Override the readiness window. Tests only; production takes {@link ENGINE_READY_MS}. */
   engineReadyMs?: number
+  /** Override the automatic-reply retry gap. Tests only; see {@link AUTO_REPLY_RETRY_MS}. */
+  autoReplyRetryMs?: number
 }
 
 interface Outcome {
@@ -263,7 +284,13 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       return fail('Could not start a session with the local engine.', String(err))
     }
 
-    const turn = new TurnStream()
+    // The grant check is handed to the stream rather than run here, because
+    // the transcript is written there: an ask the user has already answered
+    // for this agent must produce no block at all, not a block this method
+    // answers a moment later.
+    const turn = new TurnStream({
+      isGranted: (request) => this.deps.isGranted(agent.path, request)
+    })
     const accumulator = new StreamPartsAccumulator({
       onToolCall: ({ name, input }) => logger.info(`tool call → ${name}`, { input })
     })
@@ -347,7 +374,8 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         parked.delete(update.settled)
         pendingRequests.drop(update.settled)
       }
-      if (update.asked) this.park(update.asked, ctx, sessionId, parked)
+      if (update.asked?.auto) this.autoAllow(update.asked, ctx, sessionId)
+      else if (update.asked) this.park(update.asked, ctx, sessionId, parked, turn)
       if (update.error) settle({ error: update.error })
       if (update.idle) settle({ idle: true })
     }
@@ -413,7 +441,13 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         // Parts already streamed are kept: an error after a partial answer
         // should not blank the answer, and the A2A path behaves the same way
         // through `result.parts` on the error branch.
-        return { text: answer, parts, notices: accumulator.snapshotNotices(), error: { message: outcome.error, raw: outcome.error }, contextId: sessionId }
+        return {
+          text: answer,
+          parts,
+          notices: accumulator.snapshotNotices(),
+          error: { message: outcome.error, raw: outcome.error },
+          contextId: sessionId
+        }
       }
       return {
         text: answer || parts.map((p) => p.text).join(''),
@@ -448,17 +482,30 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     asked: PendingRequest,
     ctx: { chatId: string; agentId: string },
     sessionId: string,
-    parked: Map<string, () => void>
+    parked: Map<string, () => void>,
+    turn: TurnStream
   ): void {
     const handle = pendingRequests.register({
       requestId: asked.requestId,
       chatId: ctx.chatId,
       agentId: ctx.agentId,
-      kind: asked.kind
+      kind: asked.kind,
+      // The ask travels with the registration so the answer path can scope a
+      // grant to what the *engine* named, without a second parse and without
+      // taking the resources back off the renderer.
+      request: asked.request
     })
     parked.set(asked.requestId, handle.cancel)
     void handle.answered
-      .then((resolution) => this.reply(sessionId, asked, resolution))
+      .then((resolution) => {
+        // Said before it is posted, and only when the store actually took it:
+        // `remembered` is set by whoever wrote the grant, so the transcript
+        // cannot claim a rule that is not on disk.
+        if (resolution.kind === 'permission' && resolution.remembered) {
+          turn.noteRemembered(asked.requestId)
+        }
+        return this.reply(sessionId, asked, resolution)
+      })
       .catch((err) =>
         logger.warn('could not deliver an answer to the engine', {
           requestId: asked.requestId,
@@ -468,6 +515,79 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       .finally(() => parked.delete(asked.requestId))
   }
 
+  /**
+   * Answer an ask a standing grant already covers, without the user.
+   *
+   * Nothing was registered with `pendingRequests` and nothing was written to
+   * the transcript, so this is the whole of the interaction: the engine is
+   * unparked with `once` — the reply that persists nothing on its side — and
+   * the tool call it authorises appears in the transcript on its own, as it
+   * would for anything the static profile allows outright.
+   *
+   * Fire-and-forget for the same reason `park` is: awaiting here would stall
+   * the event loop that is still delivering this turn's other events.
+   */
+  private autoAllow(
+    asked: PendingRequest,
+    ctx: { chatId: string; agentId: string },
+    sessionId: string
+  ): void {
+    logger.info('a standing grant answered a permission ask', {
+      agentId: ctx.agentId,
+      action: asked.request?.action
+    })
+    void this.deliverAutomatic(sessionId, asked)
+  }
+
+  /**
+   * Get an automatic answer to the engine, or unpark the session without one.
+   *
+   * **Nothing else will do it.** An auto-allowed ask is registered with no
+   * `pendingRequests` entry — that is the point, there is no dialog and no
+   * park timeout — so a reply that never lands leaves the agent loop waiting
+   * on a human who was never asked, and the turn runs to
+   * {@link TURN_CEILING_MS}: twenty minutes of nothing on screen. The user's
+   * own answers are bounded by the ten-minute park timer; this path has no such
+   * floor, which is why it is the one that retries.
+   *
+   * One retry, because the engine is a local process and the realistic failure
+   * is transient (a socket closed between events, a moment of backpressure); an
+   * engine that has actually stopped ends the turn through `onClosed` instead.
+   * If the retry fails too, `reject` is posted: the agent is told denied, the
+   * session goes idle by the same path a deliberate Deny takes, and the user
+   * gets an answer in the transcript rather than a turn that hangs.
+   */
+  private async deliverAutomatic(sessionId: string, asked: PendingRequest): Promise<void> {
+    const once: RequestResolution = { kind: 'permission', reply: 'once' }
+    try {
+      await this.reply(sessionId, asked, once)
+      return
+    } catch (err) {
+      logger.warn('an automatic allow did not reach the engine; retrying', {
+        requestId: asked.requestId,
+        error: String(err)
+      })
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, this.deps.autoReplyRetryMs ?? AUTO_REPLY_RETRY_MS)
+    )
+    try {
+      await this.reply(sessionId, asked, once)
+      return
+    } catch (err) {
+      logger.error('an automatic allow could not be delivered; rejecting to unpark the session', {
+        requestId: asked.requestId,
+        error: String(err)
+      })
+    }
+    await this.reply(sessionId, asked, { kind: 'rejected' }).catch((err) =>
+      logger.warn('the session could not be unparked either', {
+        requestId: asked.requestId,
+        error: String(err)
+      })
+    )
+  }
+
   private async reply(
     sessionId: string,
     asked: PendingRequest,
@@ -475,7 +595,21 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
   ): Promise<void> {
     const base = `/api/session/${sessionId}/${asked.kind === 'permission' ? 'permission' : 'question'}/${asked.requestId}`
     if (resolution.kind === 'permission') {
-      await this.post(`${base}/reply`, { reply: resolution.reply })
+      // **`always` never leaves this process, and this is the door it would
+      // leave through.** The answer path converts it to a stored grant plus
+      // `once` (`agent_a2a.ipc.ts`); this is the second lock on the same rule,
+      // because a caller that settled a request with `always` would otherwise
+      // write a user-global row authorising *every* folder agent — the leak
+      // recorded in `opencode_contract.md` §4 — and nothing in a test would
+      // notice. Loud, because reaching it means the conversion was skipped.
+      if (resolution.reply === 'always') {
+        logger.error('an always reply reached the engine door and was downgraded to once', {
+          requestId: asked.requestId
+        })
+      }
+      await this.post(`${base}/reply`, {
+        reply: resolution.reply === 'always' ? 'once' : resolution.reply
+      })
       return
     }
     if (resolution.kind === 'question') {
@@ -604,9 +738,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         if (!model) return null
         const models = await this.readList(`/api/model${at}`)
         if (models === null) return null
-        const found = models.find(
-          (m) => m.providerID === model.providerID && m.id === model.id
-        )
+        const found = models.find((m) => m.providerID === model.providerID && m.id === model.id)
         if (found) {
           // **Present, and still unrunnable.** The engine catalogues models it
           // cannot build a transport for — `@ai-sdk/google` is the one that bit

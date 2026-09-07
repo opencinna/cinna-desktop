@@ -14,6 +14,7 @@ import { a2aSessionRepo } from '../../db/agents'
 import { getSettingsScopeUserId } from '../../auth/scope'
 import { localAgentService } from '../localAgents/localAgentService'
 import { desktopStateService } from '../localAgents/desktopStateService'
+import { permissionGrantService } from '../localAgents/permissionGrantService'
 import { turnLock } from '../localAgents/turnLock'
 import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '../a2aStreamingService'
 import { createLogger } from '../../logger/logger'
@@ -22,6 +23,7 @@ import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner
 import { isFolderAgent, type AgentTurnRunner } from './runner'
 import type { AgentRow } from '../../db/agents'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
+import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 
 const logger = createLogger('agent-turn')
 
@@ -146,11 +148,50 @@ const localDeps: LocalTurnDeps = {
       })
     }
   },
+  // **The reading half of *Always allow*.** The writing half is on the answer
+  // path (`agent_a2a.ipc.ts`), where the user is still waiting and can be told
+  // whether the rule was actually saved. Both halves stay out of the engine:
+  // OpenCode's own saved grants are user-global — one row authorising every
+  // folder agent, shared with the user's personal OpenCode install — so the
+  // desktop keeps the rule beside the folder it was granted in and answers
+  // `once` from it. See `permissionGrantService`.
+  isGranted: (agentDir, request) => permissionGrantService.covers(agentDir, request),
   withLock: (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn),
   userId: () => getSettingsScopeUserId()
 }
 
 export const localAgentTurnRunner = new LocalAgentTurnRunner(localDeps)
+
+/**
+ * Write a user's *Always allow* against the folder the ask came from.
+ *
+ * Lives here rather than in the IPC handler that calls it for two reasons.
+ * This module is already the one place `localAgentService` and the folder's own
+ * state are named together, so "which directory is this agent" is answered
+ * once; and the alternative — reaching into the local-agent services from
+ * `agent_a2a.ipc.ts` — pulls the whole folder stack (Electron `shell`, the
+ * scaffolder, the watcher) into the chat IPC module's import graph.
+ *
+ * Returns whether the rule is on disk. False is a real answer, not an error:
+ * the action the user approved still goes ahead, they are asked again next
+ * time, and the block says so instead of claiming a rule that is not there.
+ */
+export function rememberPermissionGrant(
+  agentId: string,
+  request: LocalPermissionRequest
+): boolean {
+  try {
+    const agentDir = localAgentService.get(getSettingsScopeUserId(), agentId).path
+    permissionGrantService.remember(agentDir, request)
+    return true
+  } catch (err) {
+    logger.warn('could not remember a permission grant', {
+      agentId,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return false
+  }
+}
 
 /**
  * Which runner an agent's turn goes through.

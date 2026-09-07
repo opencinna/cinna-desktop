@@ -20,6 +20,7 @@ import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, un
 import { dirname, join } from 'node:path'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
 import type { LocalAgentDesktopSummary } from '../../../shared/localAgents'
+import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 
@@ -32,55 +33,37 @@ export interface DesktopSessionState {
   updatedAt: number
 }
 
-/**
- * A permission the user granted this agent, keyed by permission id.
- *
- * **Still not written by the runner — but the reason recorded here before was
- * wrong, and the correction matters because it changes what is possible.**
- *
- * The original note said OpenCode is authoritative because "replying `always`
- * writes into OpenCode's own store and the desktop cannot opt out of that", so
- * a copy here could only be a mirror that drifts. The premise is false. The
- * desktop *can* opt out, completely: **`once` persists nothing.** That was
- * verified against the real binary — `GET /api/permission/saved` stayed empty
- * through repeated `once` replies and gained a row only at the moment `always`
- * was sent. Nothing reaches OpenCode's store unless the desktop puts it there.
- *
- * Which is fortunate, because OpenCode's store turned out to be unusable for
- * this feature's purpose. An `always` grant writes
- * `{projectID: "global", action, resource: "*"}` — no directory, no session, no
- * agent — into `~/.local/share/opencode/opencode.db`, a **user-global** file
- * shared with the user's own OpenCode installation. One grant made in one agent
- * folder was observed silently authorising a *different* folder agent, and it
- * outlives engine restarts. The canonical record of that observation is
- * `docs/agents/local_agents/opencode_contract.md`, which supersedes this
- * comment if the two ever disagree; `ALWAYS_GRANTS_ENABLED` in
- * `src/shared/localAgentRequests.ts` carries the short version.
- *
- * So the eventual design is the opposite of what this comment used to say:
- * **the desktop should be authoritative**, remembering grants per agent folder
- * in this file and auto-answering `once` from them, so nothing is ever written
- * to the shared store. That is a Phase 7+ decision and is deliberately not
- * built yet — which is why this field is still unwritten today, and why it is
- * kept rather than removed.
- *
- * If you are looking for where "always" is remembered: nowhere. The Always
- * answer is not offered at all.
- */
-export interface DesktopPermissionGrant {
-  granted: boolean
-  /** `'once'` grants are not persisted; only `'always'` reaches this file. */
-  scope: 'always'
-  decidedAt: number
-}
-
 export interface DesktopState {
   /** Loopback base URL the engine last served this agent's API on. */
   localApiBaseUrl: string | null
   /** Token the agent authenticates its own callbacks with. Never leaves main. */
   agentToken: string | null
   sessions: Record<string, DesktopSessionState>
-  permissionGrants: Record<string, DesktopPermissionGrant>
+  /**
+   * The permissions the user has told this agent it may take without asking
+   * again, keyed by {@link permissionGrantKey} (`<action>::<pattern>`).
+   *
+   * **This file is the authoritative store, and that is the whole design.**
+   * OpenCode's own `always` writes `{projectID: "global", action, resource: "*"}`
+   * into `~/.local/share/opencode/opencode.db` — no directory, no session, no
+   * agent, shared with the user's own OpenCode install, surviving restarts. One
+   * grant made in one agent folder was observed silently authorising a
+   * *different* folder agent. So the desktop never sends `always`; it records the
+   * decision here, beside the folder it was made in, and answers a matching ask
+   * with `once` — which was verified to persist nothing engine-side.
+   *
+   * The canonical record of that observation is
+   * `docs/agents/local_agents/opencode_contract.md` §4, which supersedes this
+   * comment if the two disagree; `src/shared/localAgentRequests.ts` carries the
+   * short version and the matching rules.
+   *
+   * Living in the agent folder rather than in app data is what makes a grant
+   * *the agent's*: deleting the folder takes its grants with it, and a folder
+   * that moves keeps them. `app-data/` is in the contract's
+   * `cloud_import_excludes`, so a grant cannot travel in a published bundle and
+   * arrive pre-approved on somebody else's machine.
+   */
+  permissionGrants: Record<string, LocalPermissionGrant>
   lastStatus: { at: number; summary: string | null; state: string | null } | null
 }
 
@@ -121,13 +104,28 @@ function coerce(raw: unknown): DesktopState {
     }
   }
 
-  const permissionGrants: Record<string, DesktopPermissionGrant> = {}
+  const permissionGrants: Record<string, LocalPermissionGrant> = {}
   if (isRecord(raw.permissionGrants)) {
     for (const [key, value] of Object.entries(raw.permissionGrants)) {
-      if (!isRecord(value) || typeof value.granted !== 'boolean') continue
+      if (!isRecord(value)) continue
+      const action = asString(value.action)
+      const pattern = asString(value.pattern)
+      // A row that names no action or no pattern cannot be matched against an
+      // ask, and a grant that cannot be matched must not be *displayed* either
+      // — the agent page would be offering the user a rule that never fires.
+      // This is also what drops the shape an earlier build declared and never
+      // wrote (`{granted, scope}`) rather than carrying it forward as a grant
+      // of nothing in particular.
+      if (!action || !pattern) continue
       permissionGrants[key] = {
-        granted: value.granted,
-        scope: 'always',
+        action,
+        pattern,
+        // **A missing scope reads as `exact`, never as a wildcard.** A row
+        // written by another build, or edited by hand, must not be able to
+        // widen itself by omission: the narrowest reading is the only safe
+        // default for a rule that answers a permission ask without asking.
+        scope:
+          value.scope === 'action' || value.scope === 'origin' ? value.scope : 'exact',
         decidedAt: typeof value.decidedAt === 'number' ? value.decidedAt : 0
       }
     }

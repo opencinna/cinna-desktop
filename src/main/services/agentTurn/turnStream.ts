@@ -46,6 +46,7 @@ import {
   type PartLike
 } from '../../agents/streamPartsAccumulator'
 import {
+  describePermissionAction,
   PERMISSION_TOOL_NAME,
   QUESTION_TOOL_NAME,
   type LocalPermissionRequest
@@ -57,6 +58,24 @@ export interface PendingRequest {
   kind: 'permission' | 'question'
   /** `per_*` or `que_*` — the address a reply is posted to. */
   requestId: string
+  /**
+   * The ask itself, for a permission.
+   *
+   * Carried so the runner can record a grant from *Always allow* without
+   * re-parsing the event — the grant is derived from `action` and `resources`,
+   * which only this class ever sees.
+   */
+  request?: LocalPermissionRequest
+  /**
+   * True when a standing per-agent grant already covers this ask.
+   *
+   * Nothing was written to the transcript for it and no block will render: the
+   * runner replies `once` and the turn carries on. A block that appeared and
+   * answered itself milliseconds later would be a widget the user cannot act
+   * on, in the middle of streaming text — and the tool call it authorises is
+   * already in the transcript on its own.
+   */
+  auto?: boolean
 }
 
 /** What one applied event changed, for the runner to act on. */
@@ -146,8 +165,39 @@ interface MessageState {
   index: Map<string, number>
 }
 
+/** What the stream needs from outside itself. */
+export interface TurnStreamOptions {
+  /**
+   * True when the desktop already holds a standing grant for this ask.
+   *
+   * The one non-pure input this class takes, and it is a **predicate**, not a
+   * store: the decision of what a folder has granted belongs to
+   * `permissionGrantService`, and the decision of what to do about it belongs
+   * here, where the block would otherwise be written. Auto-answering anywhere
+   * later would mean the block had already reached the renderer.
+   */
+  isGranted?: (request: LocalPermissionRequest) => boolean
+}
+
 export class TurnStream {
   private readonly messages = new Map<string, MessageState>()
+  /**
+   * Requests the user answered with *Always allow*.
+   *
+   * The engine is told `once` — it never sees `always`, see
+   * `shared/localAgentRequests.ts` — so its `permission.v2.replied` event would
+   * have the transcript record "Allowed once." for a decision the user made
+   * permanently. The runner notes the request here before it posts, and the
+   * decision line says what was actually decided.
+   */
+  private readonly remembered = new Set<string>()
+
+  constructor(private readonly options: TurnStreamOptions = {}) {}
+
+  /** Tell the transcript this request was answered with *Always allow*. */
+  noteRemembered(requestId: string): void {
+    this.remembered.add(requestId)
+  }
   /**
    * Which message each request's part lives in.
    *
@@ -237,7 +287,10 @@ export class TurnStream {
       case ENGINE_EVENT.questionAsked:
         return this.questionAsked(data)
       case ENGINE_EVENT.permissionReplied:
-        return this.settleRequest(data, permissionDecisionText(str(data.reply)))
+        return this.settleRequest(
+          data,
+          permissionDecisionText(str(data.reply), this.remembered.has(str(data.requestID) ?? ''))
+        )
       case ENGINE_EVENT.questionReplied:
         return this.settleRequest(data, questionDecisionText(data.answers))
       case ENGINE_EVENT.questionRejected:
@@ -436,22 +489,44 @@ export class TurnStream {
     // First owner wins. `requestMessage` is already the first-owner map for
     // requests (it is what lets `settleRequest` file a decision beside its
     // ask), so it is reused here rather than adding a second one.
-    const messageId = this.requestMessage.get(requestId) ?? str(source?.messageID) ?? 'anon:requests'
-    const state = this.messageState(messageId)
     const request: LocalPermissionRequest = {
       action,
       resources: Array.isArray(data.resources)
         ? data.resources.filter((r): r is string => typeof r === 'string')
         : [],
-      // `save[]` is what an "always" answer would persist. When the engine
-      // offers none, "always" is not on the table and the renderer must not
-      // show the button — an answer the engine will not save reads to the user
-      // as a grant that silently did not stick.
+      // `save[]` is what an "always" answer would persist **in OpenCode's own
+      // store**, and nothing renders off it any more. It used to gate the
+      // Always button, which was right while the engine was the store and wrong
+      // now that the desktop is: the grant is derived from `resources` and
+      // written to the agent folder, so an ask the engine calls unsavable is
+      // still one this app can remember — more narrowly than the engine would
+      // have. Carried because it says what the engine would have done.
       savable: Array.isArray(data.save)
         ? data.save.filter((r): r is string => typeof r === 'string')
         : [],
       callId: str(source?.callID)
     }
+    // **Answered before anything is written.** A grant the user already made
+    // for this agent settles the ask here: no part is added, no
+    // `requestMessage` entry is made, and the runner posts `once`. The engine's
+    // own `permission.v2.replied` then finds no message for the id and settles
+    // silently, which is the same path a request answered in another window
+    // takes.
+    if (this.options.isGranted?.(request)) {
+      return { asked: { kind: 'permission', requestId, request, auto: true } }
+    }
+
+    // Everything below writes to the transcript, so the message is not looked
+    // up until we know there is something to file under it — `messageState`
+    // creates the entry as a side effect, and an ask that renders nothing must
+    // not leave an empty message behind for the accumulator to carry.
+    //
+    // First owner wins. `requestMessage` is already the first-owner map for
+    // requests (it is what lets `settleRequest` file a decision beside its
+    // ask), so it is reused here rather than adding a second one.
+    const messageId = this.requestMessage.get(requestId) ?? str(source?.messageID) ?? 'anon:requests'
+    const state = this.messageState(messageId)
+
     const idx = this.slot(state, `perm:${requestId}`, () => ({
       kind: 'text',
       text: '',
@@ -468,7 +543,7 @@ export class TurnStream {
     state.parts[idx] = { ...state.parts[idx], text: narration }
     return {
       message: { messageId, parts: state.parts },
-      asked: { kind: 'permission', requestId }
+      asked: { kind: 'permission', requestId, request }
     }
   }
 
@@ -561,21 +636,26 @@ function describeToolCall(tool: string, input?: Record<string, unknown>): string
   return hint ? `${tool}: ${hint}` : tool
 }
 
-/** What a permission decision reads as in the transcript. */
-export function permissionDecisionText(reply: string | undefined): string {
-  // **Not "for this agent", and that is now settled rather than cautious.** An
-  // `always` grant was observed writing `{projectID: "global", action,
-  // resource: "*"}` into a user-global store, after which a *different* folder
-  // agent wrote a file with no prompt at all. "For this agent" would be a false
-  // statement in the transcript, which is the one place a permission decision
-  // has to be trustworthy.
-  //
-  // Unreachable today — the Always answer is not offered (see
-  // `ALWAYS_GRANTS_ENABLED`) — and kept because the engine can still report an
-  // `always` reply made by another client on the same `opencode serve`, and
-  // because a decision arriving from outside this window must still be
-  // recorded accurately.
-  if (reply === 'always') return 'Allowed, and remembered.'
+/**
+ * What a permission decision reads as in the transcript.
+ *
+ * `remembered` is the desktop's own knowledge, not the engine's. A user's
+ * *Always allow* is recorded here and posted to the engine as `once`, so the
+ * reply this text is derived from understates what was decided unless the
+ * caller says otherwise.
+ */
+export function permissionDecisionText(reply: string | undefined, remembered = false): string {
+  // "for this agent" is a claim only the desktop's own store can make, and it
+  // makes it exactly: the grant is written to that agent folder's
+  // `desktop.json` and matched against nothing else.
+  if (remembered) return 'Allowed, and remembered for this agent.'
+  // **An engine-side `always` is deliberately *not* described as "for this
+  // agent".** This app never sends one: the reply reaching here can only have
+  // come from another client on the same `opencode serve`, and OpenCode's own
+  // grant is user-global — `{projectID: "global", action, resource: "*"}`,
+  // naming no directory, no session and no agent. A grant that will authorise
+  // every folder agent must not be recorded as if it were scoped to one.
+  if (reply === 'always') return 'Allowed, and remembered by the engine.'
   if (reply === 'reject') return 'Denied.'
   if (reply === 'once') return 'Allowed once.'
   // An engine that grows a fourth reply must still leave a legible record
@@ -595,7 +675,7 @@ export function questionDecisionText(answers: unknown): string {
 /** A one-line narration for a permission ask. */
 function describePermission(request: LocalPermissionRequest): string {
   const what = request.resources.length > 0 ? request.resources.join(', ') : request.action
-  return `Permission needed for ${request.action}: ${what}`
+  return `Permission needed to ${describePermissionAction(request.action)}: ${what}`
 }
 
 /**

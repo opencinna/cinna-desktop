@@ -6,11 +6,11 @@ import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { messageRoutingService } from '../services/messageRoutingService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
-import { resolveTurnRunner } from '../services/agentTurn'
+import { rememberPermissionGrant, resolveTurnRunner } from '../services/agentTurn'
 import { isFolderAgent } from '../services/agentTurn/runner'
-import { pendingRequests } from '../services/agentTurn/pendingRequests'
+import { pendingRequests, type RequestResolution } from '../services/agentTurn/pendingRequests'
 import { resolveCommandRunner } from '../services/localAgents/commandService'
-import type { PermissionReply } from '../../shared/localAgentRequests'
+import type { LocalPermissionRequest, PermissionReply } from '../../shared/localAgentRequests'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
@@ -20,16 +20,45 @@ import { ipcHandle } from './_wrap'
 import { postAgentError } from './_streamPort'
 import type { CliCommand } from '../../shared/cliCommands'
 import type { AgentSendPayload } from '../../shared/ipcPayloads'
-import {
-  CINNA_REAUTH_REQUIRED_CODE,
-  CINNA_SESSION_EXPIRED_MESSAGE
-} from '../../shared/cinnaErrors'
+import { CINNA_REAUTH_REQUIRED_CODE, CINNA_SESSION_EXPIRED_MESSAGE } from '../../shared/cinnaErrors'
 
 const logger = createLogger('A2A')
 
 /** OpenCode's `PermissionV2Reply`, checked at the boundary rather than cast. */
 function isPermissionReply(value: unknown): value is PermissionReply {
   return value === 'once' || value === 'always' || value === 'reject'
+}
+
+/**
+ * Turn a user's *Always allow* into a rule stored beside the agent, and into
+ * the `once` the engine is actually told.
+ *
+ * Returns the resolution to settle with. `remembered` says whether the rule is
+ * on disk, and it is deliberately allowed to be false: the user allowed this
+ * action, so a store that refused the write must not cancel the action they
+ * approved. They are asked again next time, and the block and the transcript
+ * both say "allowed once" rather than claiming a rule that does not exist.
+ *
+ * Everything the grant is built from comes from the **engine's** ask, held in
+ * the pending registry — never from the payload the renderer sent with the
+ * answer.
+ */
+function rememberIfAlways(
+  parsed: RequestResolution,
+  owner: { agentId: string; request?: LocalPermissionRequest }
+): RequestResolution {
+  if (parsed.kind !== 'permission' || parsed.reply !== 'always') return parsed
+  if (!owner.request) {
+    logger.warn('an always answer arrived for a request with no recorded ask', {
+      agentId: owner.agentId
+    })
+    return { kind: 'permission', reply: 'once', remembered: false }
+  }
+  return {
+    kind: 'permission',
+    reply: 'once',
+    remembered: rememberPermissionGrant(owner.agentId, owner.request)
+  }
 }
 
 /** `QuestionV2Reply.answers` — one array of selected labels **per question**. */
@@ -144,153 +173,156 @@ export function registerA2AHandlers(): void {
   // Stream a message to an A2A agent via MessagePort. Thin controller: extract
   // params, auth/ownership/endpoint resolution, then hand off to the routing
   // service (persistence + cursor advance) and the streaming service (A2A pump).
-  ipcMain.on(
-    'agent:send-message',
-    async (event, payload: AgentSendPayload) => {
-      const { agentId, chatId, content: userContent, attachments } = payload
-      const fileIds = attachments?.map((a) => a.id)
-      const port = event.ports?.[0]
-      if (!port) return
+  ipcMain.on('agent:send-message', async (event, payload: AgentSendPayload) => {
+    const { agentId, chatId, content: userContent, attachments } = payload
+    const fileIds = attachments?.map((a) => a.id)
+    const port = event.ports?.[0]
+    if (!port) return
 
-      if (!userActivation.isActivated()) {
-        logger.error('send-message rejected: session not activated', { agentId, chatId })
-        port.start()
-        postAgentError(port, 'Session not activated — user must authenticate first')
-        port.close()
-        return
-      }
-
+    if (!userActivation.isActivated()) {
+      logger.error('send-message rejected: session not activated', { agentId, chatId })
       port.start()
-
-      const profileUserId = getProfileScopeUserId()
-
-      if (!chatRepo.getOwned(profileUserId, chatId)) {
-        const err = 'Chat not found'
-        logger.error(err, { agentId, chatId })
-        postAgentError(port, err)
-        port.close()
-        return
-      }
-
-      const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
-      const agent = located?.row
-      if (!located || !agent) {
-        const err = 'Agent not found or not configured'
-        logger.error(err, { agentId, chatId })
-        postAgentError(port, err)
-        messageRepo.saveError({ chatId, short: err })
-        port.close()
-        return
-      }
-
-      // **The card-URL check comes after the source check, and the order is
-      // load-bearing.** Folder agents are inserted with `cardUrl: null`
-      // (`src/main/db/agents.ts`), so a combined `!agent || !agent.cardUrl`
-      // guard — which is what stood here — matched every folder agent and
-      // returned "Agent not found or not configured" before any local branch
-      // could be reached. The friendlier branch further down was unreachable
-      // code for the whole of Phase 5. Dispatch on `source`, which is the
-      // discriminator that actually says what kind of agent this is; a missing
-      // card is a symptom several unrelated states share.
-      const runner = resolveTurnRunner(agent)
-      const isFolder = isFolderAgent(agent)
-      if (!isFolder && !agent.cardUrl) {
-        const err = 'Agent not found or not configured'
-        logger.error(err, { agentId, chatId, cardUrl: agent.cardUrl })
-        postAgentError(port, err)
-        messageRepo.saveError({ chatId, short: err })
-        port.close()
-        return
-      }
-      const agentOwnerId = located.userId
-
-      let endpointUrl: string | null = null
-      try {
-        // A folder agent has no endpoint at all — it is run by the local
-        // engine — and `resolveEndpointIfNeeded` short-circuits to null for
-        // it. Skipping the call entirely keeps the local path free of a
-        // resolution step that can only ever answer "there isn't one".
-        if (!isFolder) endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
-      } catch (err) {
-        const isReauth = err instanceof CinnaReauthRequired
-        const errMsg = isReauth
-          ? CINNA_SESSION_EXPIRED_MESSAGE
-          : err instanceof AgentError
-            ? err.message
-            : `Failed to resolve agent endpoint: ${err instanceof Error ? err.message : String(err)}`
-        const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
-        logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
-        postAgentError(port, errMsg, code)
-        messageRepo.saveError({ chatId, short: errMsg, code })
-        port.close()
-        return
-      }
-      if (!isFolder && endpointUrl === null) {
-        // A non-folder agent with no endpoint is a misconfiguration, not a
-        // kind of agent — say so rather than fail obscurely at the SDK call.
-        const errMsg = 'This agent has no endpoint configured.'
-        logger.error(errMsg, { agentId, source: agent.source })
-        postAgentError(port, errMsg)
-        messageRepo.saveError({ chatId, short: errMsg })
-        port.close()
-        return
-      }
-
-      // Persist the user message + fire title generation in one place. Service
-      // throws ChatError on ownership mismatch (already re-checked above; this
-      // is defense-in-depth).
-      const { wireContent } = messageRoutingService.prepareAgentSend({
-        userId: profileUserId,
-        chatId,
-        agentId,
-        userContent,
-        attachments
-      })
-
-      // `/run:<name>` for a folder agent is intercepted **here**, before the
-      // runner is ever reached — OpenCode has no such convention, so the
-      // desktop itself has to recognise the message. Deliberately not inside
-      // `resolveTurnRunner`/`LocalAgentTurnRunner`: those are the seam Phase
-      // 6's mutation audit hardened, and a command is not a model turn. See
-      // `resolveCommandRunner`'s own docstring for why the decision lives
-      // there, tested, rather than inline here.
-      const effectiveRunner = resolveCommandRunner(isFolder, wireContent, agentOwnerId, agentId, runner)
-
-      let accessToken: string | undefined
-      try {
-        if (!isFolder) accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
-      } catch (err) {
-        const isReauth = err instanceof CinnaReauthRequired
-        const errMsg = isReauth
-          ? CINNA_SESSION_EXPIRED_MESSAGE
-          : `Failed to resolve agent access token: ${err instanceof Error ? err.message : String(err)}`
-        const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
-        logger.error(errMsg, { agentId, reauth: isReauth })
-        postAgentError(port, errMsg, code)
-        messageRepo.saveError({ chatId, short: errMsg, code })
-        port.close()
-        return
-      }
-
-      await a2aStreamingService.streamToAgent({
-        runner: effectiveRunner,
-        chatId,
-        agentId,
-        agentName: agent.name,
-        endpointUrl,
-        cardUrl: agent.cardUrl,
-        accessToken,
-        wireContent,
-        fileIds,
-        port,
-        // Remote agents authenticate with a Cinna-issued JWT — a stream-level
-        // 401/403 means the server revoked the session and the user needs to
-        // re-auth. Local A2A agents use a user-supplied static token so a
-        // 401 there is just a wrong-token error, not a reauth signal.
-        isCinnaTokenAuth: agent.source === 'remote'
-      })
+      postAgentError(port, 'Session not activated — user must authenticate first')
+      port.close()
+      return
     }
-  )
+
+    port.start()
+
+    const profileUserId = getProfileScopeUserId()
+
+    if (!chatRepo.getOwned(profileUserId, chatId)) {
+      const err = 'Chat not found'
+      logger.error(err, { agentId, chatId })
+      postAgentError(port, err)
+      port.close()
+      return
+    }
+
+    const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
+    const agent = located?.row
+    if (!located || !agent) {
+      const err = 'Agent not found or not configured'
+      logger.error(err, { agentId, chatId })
+      postAgentError(port, err)
+      messageRepo.saveError({ chatId, short: err })
+      port.close()
+      return
+    }
+
+    // **The card-URL check comes after the source check, and the order is
+    // load-bearing.** Folder agents are inserted with `cardUrl: null`
+    // (`src/main/db/agents.ts`), so a combined `!agent || !agent.cardUrl`
+    // guard — which is what stood here — matched every folder agent and
+    // returned "Agent not found or not configured" before any local branch
+    // could be reached. The friendlier branch further down was unreachable
+    // code for the whole of Phase 5. Dispatch on `source`, which is the
+    // discriminator that actually says what kind of agent this is; a missing
+    // card is a symptom several unrelated states share.
+    const runner = resolveTurnRunner(agent)
+    const isFolder = isFolderAgent(agent)
+    if (!isFolder && !agent.cardUrl) {
+      const err = 'Agent not found or not configured'
+      logger.error(err, { agentId, chatId, cardUrl: agent.cardUrl })
+      postAgentError(port, err)
+      messageRepo.saveError({ chatId, short: err })
+      port.close()
+      return
+    }
+    const agentOwnerId = located.userId
+
+    let endpointUrl: string | null = null
+    try {
+      // A folder agent has no endpoint at all — it is run by the local
+      // engine — and `resolveEndpointIfNeeded` short-circuits to null for
+      // it. Skipping the call entirely keeps the local path free of a
+      // resolution step that can only ever answer "there isn't one".
+      if (!isFolder) endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
+    } catch (err) {
+      const isReauth = err instanceof CinnaReauthRequired
+      const errMsg = isReauth
+        ? CINNA_SESSION_EXPIRED_MESSAGE
+        : err instanceof AgentError
+          ? err.message
+          : `Failed to resolve agent endpoint: ${err instanceof Error ? err.message : String(err)}`
+      const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
+      logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
+      postAgentError(port, errMsg, code)
+      messageRepo.saveError({ chatId, short: errMsg, code })
+      port.close()
+      return
+    }
+    if (!isFolder && endpointUrl === null) {
+      // A non-folder agent with no endpoint is a misconfiguration, not a
+      // kind of agent — say so rather than fail obscurely at the SDK call.
+      const errMsg = 'This agent has no endpoint configured.'
+      logger.error(errMsg, { agentId, source: agent.source })
+      postAgentError(port, errMsg)
+      messageRepo.saveError({ chatId, short: errMsg })
+      port.close()
+      return
+    }
+
+    // Persist the user message + fire title generation in one place. Service
+    // throws ChatError on ownership mismatch (already re-checked above; this
+    // is defense-in-depth).
+    const { wireContent } = messageRoutingService.prepareAgentSend({
+      userId: profileUserId,
+      chatId,
+      agentId,
+      userContent,
+      attachments
+    })
+
+    // `/run:<name>` for a folder agent is intercepted **here**, before the
+    // runner is ever reached — OpenCode has no such convention, so the
+    // desktop itself has to recognise the message. Deliberately not inside
+    // `resolveTurnRunner`/`LocalAgentTurnRunner`: those are the seam Phase
+    // 6's mutation audit hardened, and a command is not a model turn. See
+    // `resolveCommandRunner`'s own docstring for why the decision lives
+    // there, tested, rather than inline here.
+    const effectiveRunner = resolveCommandRunner(
+      isFolder,
+      wireContent,
+      agentOwnerId,
+      agentId,
+      runner
+    )
+
+    let accessToken: string | undefined
+    try {
+      if (!isFolder) accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
+    } catch (err) {
+      const isReauth = err instanceof CinnaReauthRequired
+      const errMsg = isReauth
+        ? CINNA_SESSION_EXPIRED_MESSAGE
+        : `Failed to resolve agent access token: ${err instanceof Error ? err.message : String(err)}`
+      const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
+      logger.error(errMsg, { agentId, reauth: isReauth })
+      postAgentError(port, errMsg, code)
+      messageRepo.saveError({ chatId, short: errMsg, code })
+      port.close()
+      return
+    }
+
+    await a2aStreamingService.streamToAgent({
+      runner: effectiveRunner,
+      chatId,
+      agentId,
+      agentName: agent.name,
+      endpointUrl,
+      cardUrl: agent.cardUrl,
+      accessToken,
+      wireContent,
+      fileIds,
+      port,
+      // Remote agents authenticate with a Cinna-issued JWT — a stream-level
+      // 401/403 means the server revoked the session and the user needs to
+      // re-auth. Local A2A agents use a user-supplied static token so a
+      // 401 there is just a wrong-token error, not a reauth signal.
+      isCinnaTokenAuth: agent.source === 'remote'
+    })
+  })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {
     a2aStreamingService.cancel(requestId)
@@ -316,7 +348,7 @@ export function registerA2AHandlers(): void {
     async (
       _event,
       data: { requestId: string; reply?: PermissionReply; answers?: string[][] }
-    ): Promise<{ ok: boolean; reason?: string }> => {
+    ): Promise<{ ok: boolean; reason?: string; remembered?: boolean }> => {
       userActivation.requireActivated()
       const owner = pendingRequests.owner(data.requestId)
       // An unknown request is the ordinary outcome of answering a dialog whose
@@ -336,22 +368,52 @@ export function registerA2AHandlers(): void {
       // and the first anyone would know is a 400 the runner logs at warn while
       // the dialog has already told the user their answer landed — the same
       // shape of lie the permission block's own tests exist to prevent.
-      const resolution = isPermissionReply(data.reply)
+      const parsed = isPermissionReply(data.reply)
         ? ({ kind: 'permission', reply: data.reply } as const)
         : isAnswerMatrix(data.answers)
           ? ({ kind: 'question', answers: data.answers } as const)
           : null
-      if (!resolution || resolution.kind !== owner.kind) {
+      if (!parsed || parsed.kind !== owner.kind) {
         logger.warn('an answer was rejected as malformed or mismatched', {
           requestId: data.requestId,
           expected: owner.kind,
-          got: resolution?.kind ?? 'none'
+          got: parsed?.kind ?? 'none'
         })
         return { ok: false, reason: 'Malformed answer' }
       }
 
+      // **Always is answered here, and never forwarded to the engine.**
+      // OpenCode's own `always` writes `{projectID: "global", resource: "*"}`
+      // into a store shared with the user's personal OpenCode install — no
+      // directory, no session, no agent — so one click would authorise every
+      // folder agent, permanently (`opencode_contract.md` §4). Replying `once`
+      // persists nothing there, so the rule is kept beside the agent instead
+      // and matching asks are auto-answered from it.
+      //
+      // It happens *here*, on the path the user is still waiting on, rather
+      // than in the runner: a store that refuses the write has to change what
+      // the user is told, and by the time the runner posts the reply the
+      // renderer has already been answered.
+      // **The rule is written before the answer is delivered, and that order
+      // is only safe because everything from `owner()` to `resolve()` below is
+      // synchronous.** `resolve` can still answer null — the turn was cancelled
+      // between the two — and a grant would then have been written for an
+      // answer the user is told did not land. Nothing can interleave today; an
+      // `await` inserted anywhere between here and `resolve` makes it real, and
+      // the write cannot simply move after `resolve` because the resolution has
+      // to carry `remembered` into the transcript.
+      const resolution = rememberIfAlways(parsed, owner)
+
       return pendingRequests.resolve(data.requestId, resolution)
-        ? { ok: true }
+        ? {
+            ok: true,
+            // Present only for a permission answered *always*: the block reads
+            // it to decide between "remembered for this agent" and "allowed
+            // once — the rule could not be saved".
+            ...(resolution.kind === 'permission' && data.reply === 'always'
+              ? { remembered: resolution.remembered === true }
+              : {})
+          }
         : { ok: false, reason: 'This request is no longer waiting for an answer.' }
     }
   )

@@ -84,15 +84,13 @@ export function isEngineRequestId(toolId?: string): boolean {
 export const REQUEST_PARK_TIMEOUT_MS = 10 * 60 * 1000
 
 /**
- * **The "Always" answer is withheld. The leak it would cause is proven, not
- * suspected.**
+ * **"Always" is answered by the desktop, and never sent to the engine.**
  *
- * Canonical record: `docs/agents/local_agents/opencode_contract.md`. If that
+ * Canonical record: `docs/agents/local_agents/opencode_contract.md` §4. If that
  * document and this comment ever disagree, the document is right.
  *
- * This gate was originally a precaution against a scoping question nobody had
- * settled. The observation has since been done against the real binary with a
- * live credential, and it came back worse than the precaution assumed:
+ * OpenCode's own `always` reply is unusable, and the observation that settled
+ * it was made against the real binary with a live credential:
  *
  * 1. Folder A raised `permission.v2.asked` for `action: "edit"` on
  *    `resources: ["notes.txt"]`, offering `save: ["*"]`. Answering `always`
@@ -100,46 +98,247 @@ export const REQUEST_PARK_TIMEOUT_MS = 10 * 60 * 1000
  *    resource: "*"}`.
  * 2. **That row names no directory, no session and no agent.**
  * 3. Folder B — a different agent folder, never granted anything — then wrote a
- *    file with **no permission event at all**.
+ *    file with **no permission event at all**. The row survives an engine
+ *    restart, because it lives in `~/.local/share/opencode/opencode.db`, a
+ *    user-global store shared with the user's own OpenCode installation.
  *
- * So one Always click grants every folder agent edit access to everything,
- * permanently. Three details make it worse than a scoping mistake:
+ * The way out is the one that same observation opened: **replying `once`
+ * persists nothing** — `GET /api/permission/saved` stayed empty through
+ * repeated `once` replies and gained a row only at the moment `always` was
+ * sent. So the desktop makes itself authoritative instead:
  *
- * - **`save` is `["*"]`.** The only savable pattern the engine offers is
- *   *everything*, so a user who believes they are allowing "edit notes.txt" is
- *   allowing "edit anything". No wording on a button can make that honest.
- * - **`action` is coarser than the tool.** The `write` tool asks under
- *   `action: "edit"`, so a grant covers more tools than the one that prompted.
- * - **The store is user-global.** Grants live in
- *   `~/.local/share/opencode/opencode.db`, survive engine restarts, and are
- *   shared with the user's own OpenCode installation — so a grant can leak
- *   *into* Cinna from the user's personal OpenCode use as readily as out of it.
+ * - the user's *Always allow* is recorded in that agent folder's
+ *   `app-data/desktop.json`, keyed by the agent and scoped to the action and
+ *   the resource the user actually saw ({@link permissionGrantPatterns});
+ * - a later ask that a grant covers is answered `once`, automatically, before
+ *   any block reaches the transcript;
+ * - `always` is never posted to the engine, so its global store stays empty and
+ *   `projectID: "global"` never gets a chance to matter.
  *
- * ## The way forward, which is deliberately not built here
+ * This is **finer** granularity than OpenCode offers, not merely equivalent:
+ * the engine's own `save` only ever offers `["*"]`, while a desktop-held rule
+ * names one command, one path or one origin, for one agent.
  *
- * The desktop is **not** stuck with this, and the earlier claim that it was
- * (see `desktopStateService`) was wrong. Replying `once` persists nothing —
- * verified: `/api/permission/saved` stayed empty until the moment `always` was
- * sent. So a correct per-agent Always is available by making the **desktop**
- * the authoritative store and never sending `always` to the engine at all:
- * remember the grant per agent folder, and auto-answer `once` from it.
- *
- * That is a Phase 7+ design decision and is deliberately not implemented here.
- * Until it is, Allow once and Deny are the honest answers, and both work.
- *
- * **Do not flip this to `true` as a way of shipping Always.** The observation
- * that would have justified flipping it has been done, and its result is that
- * flipping it is wrong. What replaces it is the desktop-authoritative model
- * above, at which point this constant should be deleted rather than set.
+ * `ALWAYS_GRANTS_ENABLED` used to sit here as the gate that withheld the
+ * button. It is deleted rather than flipped, exactly as its own comment
+ * required: what replaced it is this model, not a `true`.
  */
-export const ALWAYS_GRANTS_ENABLED = false
+
+/**
+ * How widely a stored grant reaches.
+ *
+ * **This field exists instead of a wildcard character, and the reason is a
+ * bug that shipped in the first cut of this feature.** Matching compiled the
+ * pattern to a regular expression with `*` left as `.*` — and a resource is
+ * very often a command line the *model* wrote. So `rm -rf build/*`, remembered
+ * by a user who read exactly that string on the button, silently also covered
+ * `rm -rf build/../../Documents`: auto-answered `once`, with no block in the
+ * transcript and nothing to see afterwards. Compiling agent-authored text to a
+ * regex was a second problem on the same line — `*a*a*a*a*a*` against a long
+ * resource is catastrophic backtracking on the main thread.
+ *
+ * The fix is to stop guessing which asterisks are wildcards. The scope records
+ * what the desktop *meant* when it stored the rule, and matching is then string
+ * work with no regular expression anywhere:
+ *
+ * - `exact` — the resource, character for character, `*` included. Everything
+ *   the engine named is stored this way.
+ * - `origin` — a URL prefix the desktop synthesised (`https://host/*`), which
+ *   covers anything under that origin.
+ * - `action` — the whole action, from an ask that named no resource at all.
+ */
+export type PermissionGrantScope = 'exact' | 'origin' | 'action'
+
+/** One remembered decision: this agent may do this action to this resource. */
+export interface LocalPermissionGrant {
+  /** OpenCode's coarse operation — `bash`, `edit`, `webfetch`, … */
+  action: string
+  /** The resource it covers, read according to {@link scope}. */
+  pattern: string
+  /** How widely {@link pattern} reaches. Never inferred from its characters. */
+  scope: PermissionGrantScope
+  /** Epoch millis, so the agent page can say when it was granted. */
+  decidedAt: number
+}
+
+/**
+ * A grant with the key that addresses it — what the agent page lists and what
+ * the revoke button sends back.
+ *
+ * Shared rather than declared in main because it crosses the bridge: the
+ * preload's type surface may not reach into `src/main`, and a second
+ * declaration on the renderer side is how a wire contract starts to drift.
+ */
+export interface StoredPermissionGrant extends LocalPermissionGrant {
+  key: string
+}
+
+/**
+ * The key a grant is stored under in `desktop.json`.
+ *
+ * `::` rather than `:` because a pattern is very often a URL, which carries a
+ * single colon of its own — a key that split ambiguously would make "forget
+ * this grant" delete a different one.
+ */
+export function permissionGrantKey(action: string, pattern: string): string {
+  return `${action}::${pattern}`
+}
+
+/**
+ * What *Always allow* would remember for one ask — one rule per resource.
+ *
+ * Deliberately not `*`. The whole reason the desktop keeps its own store is
+ * that OpenCode's only savable pattern is "everything", so a rule derived here
+ * has to stay as narrow as the thing the user was looking at when they clicked:
+ *
+ * - **A URL** becomes its origin, scope `origin`. A webfetch ask names one URL
+ *   with its query string attached, which would never match again; the origin
+ *   is the unit the user actually reasons about ("let it read the docs site").
+ * - **Anything else** — a path, a command line, a directory — is remembered
+ *   verbatim, scope `exact`, *including any `*` it contains*. A command line is
+ *   not widened to its first word (`git *` reads as harmless and covers `git
+ *   config --global …`), and an asterisk the model wrote is not a wildcard: see
+ *   {@link PermissionGrantScope} for the `rm -rf build/*` case that settled it.
+ * - **An ask with no resources at all** can only be remembered as the whole
+ *   action, scope `action`, and the button says so.
+ */
+export function permissionGrantPatterns(
+  request: LocalPermissionRequest
+): { pattern: string; scope: PermissionGrantScope }[] {
+  if (request.resources.length === 0) return [{ pattern: '*', scope: 'action' }]
+  const byPattern = new Map<string, { pattern: string; scope: PermissionGrantScope }>()
+  for (const resource of request.resources) {
+    const origin = originPattern(resource)
+    const entry: { pattern: string; scope: PermissionGrantScope } = origin
+      ? { pattern: origin, scope: 'origin' }
+      : { pattern: resource, scope: 'exact' }
+    byPattern.set(entry.pattern, entry)
+  }
+  return [...byPattern.values()]
+}
+
+/** `https://example.com/a?b=c` → `https://example.com/*`, or null when not a URL. */
+function originPattern(resource: string): string | null {
+  if (!/^https?:\/\//i.test(resource)) return null
+  try {
+    return `${new URL(resource).origin}/*`
+  } catch {
+    return null
+  }
+}
+
+/**
+ * True when `grant` covers `resource`.
+ *
+ * String work only, and that is the point — see {@link PermissionGrantScope}.
+ * No regular expression, and no character with a special meaning, so a resource
+ * the model wrote cannot widen the rule the user agreed to and nothing here can
+ * backtrack on a hostile pattern.
+ */
+export function permissionGrantMatches(
+  grant: Pick<LocalPermissionGrant, 'pattern' | 'scope'>,
+  resource: string
+): boolean {
+  switch (grant.scope) {
+    case 'action':
+      return true
+    case 'origin': {
+      // `https://host/*` covers everything under the origin, the origin with a
+      // bare trailing slash, and the origin with no path at all — which is how
+      // a URL typed without one arrives.
+      const withSlash = grant.pattern.slice(0, -1)
+      return resource.startsWith(withSlash) || resource === withSlash.slice(0, -1)
+    }
+    default:
+      return grant.pattern === resource
+  }
+}
+
+/**
+ * True when the desktop has already been told to allow this exact ask.
+ *
+ * **Every** resource has to be covered, not any: an ask naming two paths is one
+ * decision about both, and allowing it because one of them was granted earlier
+ * would let a second resource ride in on the first one's grant.
+ */
+export function isPermissionGranted(
+  request: LocalPermissionRequest,
+  grants: readonly LocalPermissionGrant[]
+): boolean {
+  const forAction = grants.filter((grant) => grant.action === request.action)
+  if (forAction.length === 0) return false
+  if (request.resources.length === 0) {
+    return forAction.some((grant) => grant.scope === 'action')
+  }
+  return request.resources.every((resource) =>
+    forAction.some((grant) => permissionGrantMatches(grant, resource))
+  )
+}
+
+/**
+ * The engine's coarse action name as a phrase a person can read.
+ *
+ * `action` is OpenCode's vocabulary — `bash`, `webfetch`, `external_directory`
+ * — and it leaks into two surfaces a non-developer reads: the permission block
+ * in the transcript and the permissions card on the agent page. "The agent is
+ * asking to run external_directory" is not a question anyone can answer.
+ *
+ * An unknown action falls back to itself rather than to something vague: a
+ * newer engine asking about a tool this table has never heard of must still
+ * name it, because the resource list underneath is the only other clue the user
+ * gets.
+ */
+export function describePermissionAction(action: string): string {
+  switch (action) {
+    case 'bash':
+      return 'run a command'
+    case 'edit':
+      return 'edit a file'
+    case 'write':
+      return 'write a file'
+    case 'read':
+      return 'read a file'
+    case 'webfetch':
+      return 'fetch from the web'
+    case 'external_directory':
+      return 'use a folder outside its own'
+    default:
+      return action
+  }
+}
+
+/**
+ * What the *Always allow* button promises, in the user's words.
+ *
+ * The button has to name its own scope. A grant is wider than the ask that
+ * produced it exactly once — a URL becomes its origin — and that is the case a
+ * user would otherwise not see coming.
+ */
+export function describeGrantScope(
+  action: string,
+  patterns: { pattern: string; scope: PermissionGrantScope }[]
+): string {
+  // The blanket case, and the only one where the grant is not tied to a
+  // resource: an ask that names nothing can only be remembered as the whole
+  // action. It says so in words — "any request to fetch from the web" — rather
+  // than in the engine's own vocabulary, which is what `describePermissionAction`
+  // exists to keep off the screen, and it is the one scope a user has to read
+  // as broad before clicking.
+  if (patterns.length === 1 && patterns[0].scope === 'action') {
+    return `any request to ${describePermissionAction(action)}`
+  }
+  return patterns.map((entry) => entry.pattern).join(', ')
+}
 
 /**
  * The three answers a permission ask accepts.
  *
  * These are OpenCode's own enum values (`PermissionV2Reply`), not a desktop
- * invention, and they map one-to-one onto the design's Allow once / Always for
- * this agent / Deny — so nothing is translated at the boundary.
+ * invention, so nothing is translated at the boundary — with one deliberate
+ * exception. **`always` is answered by the desktop and never posted to the
+ * engine:** the runner records the grant against the agent folder and replies
+ * `once` in its place, for the reasons above. So the value travels from the
+ * renderer to the main process and stops there.
  */
 export type PermissionReply = 'once' | 'always' | 'reject'
 
@@ -151,10 +350,15 @@ export type PermissionReply = 'once' | 'always' | 'reject'
  * is **coarser than the tool**: the `write` tool was observed asking under
  * `action: "edit"`.
  *
- * `savable` is OpenCode's `save[]`: the patterns an "always" answer would
- * persist. It is empty for an ask that cannot be saved. In practice the only
- * value observed is `["*"]` — *everything* — which is a large part of why
- * {@link ALWAYS_GRANTS_ENABLED} is off; see there for the full observation.
+ * `savable` is OpenCode's `save[]`: the patterns *its own* "always" answer
+ * would persist, and in practice the only value observed is `["*"]` —
+ * everything. **Nothing renders off it.** The Always allow button used to be
+ * gated on it being non-empty, which was right while the engine was the store
+ * and wrong now that the desktop is: a grant is derived from `resources` by
+ * {@link permissionGrantPatterns} and saved here, so an ask the engine
+ * considers unsavable is still one this app can remember — more precisely than
+ * the engine would have. Kept because it is on the wire and says what the
+ * engine would have done.
  */
 export interface LocalPermissionRequest {
   action: string

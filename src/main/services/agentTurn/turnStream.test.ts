@@ -355,7 +355,7 @@ describe('TurnStream → StreamPartsAccumulator', () => {
     ])
   })
 
-  it('routes a failed tool to stderr with the engine\'s own reason', () => {
+  it("routes a failed tool to stderr with the engine's own reason", () => {
     const { parts } = run([
       ev('session.next.tool.called', {
         sessionID: 'ses_a',
@@ -400,7 +400,21 @@ describe('TurnStream → StreamPartsAccumulator', () => {
       })
     )
 
-    expect(update.asked).toEqual({ kind: 'permission', requestId: 'per_9' })
+    expect(update.asked).toEqual({
+      kind: 'permission',
+      requestId: 'per_9',
+      // The ask rides along so the runner can build a grant from it when the
+      // user answers *Always allow* — it is the only place `action` and
+      // `resources` are parsed. Mutation: drop `request` from the returned
+      // `asked` and every Always click stores nothing while still reporting
+      // that it was remembered.
+      request: {
+        action: 'bash',
+        resources: ['rm -rf build'],
+        savable: ['bash:rm *'],
+        callId: 'c1'
+      }
+    })
     const accumulator = new StreamPartsAccumulator()
     accumulator.ingestMessage(update.message!, { postMessage: () => {} })
     const [part] = accumulator.snapshotParts()
@@ -416,6 +430,38 @@ describe('TurnStream → StreamPartsAccumulator', () => {
       savable: ['bash:rm *'],
       callId: 'c1'
     })
+  })
+
+  it('writes no block for an ask a standing grant already covers', () => {
+    // The user answered this once, for this agent, and the answer was kept in
+    // its folder. Rendering the block anyway and answering it a moment later
+    // would put a widget in the middle of streaming text that the user cannot
+    // act on — and the tool call it authorises is already in the transcript on
+    // its own.
+    //
+    // Mutation: return the `asked` *and* the message from the granted branch
+    // fails this on `update.message`.
+    const seen: string[] = []
+    const stream = new TurnStream({
+      isGranted: (request) => {
+        seen.push(request.action)
+        return true
+      }
+    })
+    const update = stream.apply(
+      ev('permission.v2.asked', {
+        id: 'per_12',
+        sessionID: 'ses_a',
+        action: 'webfetch',
+        resources: ['https://example.com/doc'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+
+    expect(seen).toEqual(['webfetch'])
+    expect(update.message).toBeUndefined()
+    expect(update.asked?.auto).toBe(true)
+    expect(update.asked?.request?.resources).toEqual(['https://example.com/doc'])
   })
 
   it('carries an empty savable through when the engine offers no save patterns', () => {
@@ -527,7 +573,7 @@ describe('TurnStream → StreamPartsAccumulator', () => {
     expect(accumulator.snapshotParts()).toEqual([
       {
         kind: 'tool',
-        text: 'Permission needed for bash: rm -rf build',
+        text: 'Permission needed to run a command: rm -rf build',
         toolName: PERMISSION_TOOL_NAME,
         toolId: 'per_9',
         toolInput: { action: 'bash', resources: ['rm -rf build'], savable: [], callId: 'c1' }
@@ -604,11 +650,17 @@ describe('TurnStream → StreamPartsAccumulator', () => {
 
   it('tracks the highest durable seq as the gap-fill cursor', () => {
     const stream = new TurnStream()
-    stream.apply(ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'a' }, 5))
-    stream.apply(ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'b' }, 9))
+    stream.apply(
+      ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'a' }, 5)
+    )
+    stream.apply(
+      ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'b' }, 9)
+    )
     // Out of order: the cursor must not go backwards, or a reconnect would
     // replay events already rendered.
-    stream.apply(ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'c' }, 7))
+    stream.apply(
+      ev('session.next.text.delta', { assistantMessageID: 'm', textID: 't', delta: 'c' }, 7)
+    )
 
     // Mutation: `event.durable.seq > this.highestSeq` → unconditional
     // assignment fails this with 7.
@@ -690,9 +742,9 @@ describe('TurnStream → StreamPartsAccumulator', () => {
 describe('engineErrorMessage', () => {
   it('reads both error shapes the engine uses', () => {
     expect(engineErrorMessage({ type: 'unknown', message: 'boom' })).toBe('boom')
-    expect(engineErrorMessage({ name: 'APIError', data: { message: '429', isRetryable: true } })).toBe(
-      '429'
-    )
+    expect(
+      engineErrorMessage({ name: 'APIError', data: { message: '429', isRetryable: true } })
+    ).toBe('429')
   })
 
   it('falls back to the error name rather than to nothing', () => {
@@ -732,19 +784,26 @@ describe('renderToolOutput', () => {
 })
 
 describe('permissionDecisionText', () => {
-  it('never claims a grant was remembered for this agent', () => {
-    // §4 of `opencode_contract.md`, proven end to end: an `always` grant is
-    // written to a **user-global** store as `{projectID:'global', resource:'*'}`,
-    // after which a *different* folder agent wrote a file with no prompt at all.
-    // So "remembered" is the strongest true statement available; "for this
-    // agent" would be false in the one place a permission decision has to be
-    // trustworthy.
+  it('says who remembered a decision, and never mixes the two stores up', () => {
+    // Two stores, two sentences, and the difference is the whole of §4 of
+    // `opencode_contract.md`.
     //
-    // Unreachable through the UI today (`ALWAYS_GRANTS_ENABLED` is false) but
-    // reachable from the engine, which reports an `always` replied by another
-    // client on the same `opencode serve`. Mutation: change this string — to
-    // 'Allowed once.', or to anything naming the agent — fails this.
-    expect(permissionDecisionText('always')).toBe('Allowed, and remembered.')
+    // An `always` reaching here came from **another client** on the same
+    // `opencode serve` — this app never sends one — and OpenCode writes it as
+    // `{projectID:'global', resource:'*'}`, naming no directory, no session and
+    // no agent. A *different* folder agent was then observed acting with no
+    // prompt at all. So that decision may not be described as scoped to one
+    // agent.
+    //
+    // The desktop's own Always is the opposite: it is written to that agent
+    // folder's `desktop.json` and matched against nothing else, so it says so —
+    // and it is reported as `once` by the engine, which is why the caller has
+    // to pass the second argument rather than read the reply.
+    //
+    // Mutation: swap the two strings, or drop the `remembered` branch, fails
+    // this.
+    expect(permissionDecisionText('always')).toBe('Allowed, and remembered by the engine.')
+    expect(permissionDecisionText('once', true)).toBe('Allowed, and remembered for this agent.')
     expect(permissionDecisionText('once')).toBe('Allowed once.')
     expect(permissionDecisionText('reject')).toBe('Denied.')
     // A fourth reply must still leave a legible record rather than an empty
@@ -762,7 +821,12 @@ describe('mapQuestions', () => {
       { question: 'ok', options: [{ label: 'a' }, { notALabel: 1 }] }
     ])
     expect(out).toEqual([
-      { question: 'ok', header: undefined, multiSelect: false, options: [{ label: 'a', description: undefined }] }
+      {
+        question: 'ok',
+        header: undefined,
+        multiSelect: false,
+        options: [{ label: 'a', description: undefined }]
+      }
     ])
   })
 })
@@ -793,7 +857,7 @@ describe('mapQuestions', () => {
  * | `isTurnOver` → `finish === 'stop'` only | treats an unrecognised finish reason as the end of the turn |
  * | delete `if (questions.length === 0) return {}` in `questionAsked` | does not park a question that has no answerable content |
  * | drop `Object.keys(structured).length > 0` in `renderToolOutput` | renders a tool that produced nothing as nothing… |
- * | `permissionDecisionText`'s `'always'` string | never claims a grant was remembered for this agent |
+ * | `permissionDecisionText`'s `'always'` string | says who remembered a decision, and never mixes the two stores up |
  * | drop the `streamOwner` lookup in `toolCalled` / `toolResult` | files a replayed tool event in the block its call was announced in; keeps a replayed tool event with a changed message id… |
  *
  * ### The `streamOwner` extension to tools — what it is and is not

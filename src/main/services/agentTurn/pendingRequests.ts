@@ -33,6 +33,7 @@
 import { createLogger } from '../../logger/logger'
 import {
   REQUEST_PARK_TIMEOUT_MS,
+  type LocalPermissionRequest,
   type PermissionReply
 } from '../../../shared/localAgentRequests'
 
@@ -40,7 +41,19 @@ const logger = createLogger('local-agent-requests')
 
 /** How a pending request was settled. */
 export type RequestResolution =
-  | { kind: 'permission'; reply: PermissionReply }
+  | {
+      kind: 'permission'
+      reply: PermissionReply
+      /**
+       * True when the user's *Always allow* was stored against this agent.
+       *
+       * Set by whoever wrote the grant, so the transcript can say "remembered
+       * for this agent" only where a rule actually exists. A failed write still
+       * settles as `once` — the user allowed the action and it goes ahead — and
+       * this stays false, which is what keeps the record honest.
+       */
+      remembered?: boolean
+    }
   | { kind: 'question'; answers: string[][] }
   | { kind: 'rejected' }
 
@@ -48,6 +61,16 @@ interface Entry {
   chatId: string
   agentId: string
   kind: 'permission' | 'question'
+  /**
+   * The ask, for a permission.
+   *
+   * Held here so the IPC layer can build a grant from what the **engine**
+   * said, rather than from what a renderer sends back with the answer. The
+   * renderer is the user's own window, so this is not a trust boundary — it is
+   * that a request answered from a stale block would otherwise be able to
+   * store a rule for resources the engine never asked about.
+   */
+  request?: LocalPermissionRequest
   settle: (resolution: RequestResolution) => void
 }
 
@@ -70,6 +93,8 @@ export const pendingRequests = {
     chatId: string
     agentId: string
     kind: 'permission' | 'question'
+    /** The permission ask itself, so an answer can be scoped to what it named. */
+    request?: LocalPermissionRequest
     /**
      * Override the park timeout. Tests only — production takes
      * {@link REQUEST_PARK_TIMEOUT_MS}, and a per-call value would make the
@@ -195,9 +220,16 @@ export const pendingRequests = {
    * ownership from its return value would have already delivered the answer by
    * the time the check failed.
    */
-  owner(requestId: string): { chatId: string; agentId: string; kind: 'permission' | 'question' } | null {
+  owner(requestId: string): {
+    chatId: string
+    agentId: string
+    kind: 'permission' | 'question'
+    request?: LocalPermissionRequest
+  } | null {
     const entry = entries.get(requestId)
-    return entry ? { chatId: entry.chatId, agentId: entry.agentId, kind: entry.kind } : null
+    return entry
+      ? { chatId: entry.chatId, agentId: entry.agentId, kind: entry.kind, request: entry.request }
+      : null
   },
 
   /** What a chat is currently blocked on. Used to re-open the UI after a reload. */

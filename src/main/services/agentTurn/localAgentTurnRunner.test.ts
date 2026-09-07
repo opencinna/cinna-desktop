@@ -48,6 +48,7 @@ import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner
 import { pendingRequests } from './pendingRequests'
 import { turnLock } from '../localAgents/turnLock'
 import type { RunAgentTurnInput } from '../a2aStreamingService'
+import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 
 interface Call {
@@ -181,29 +182,39 @@ interface Harness {
   events: AgentStreamEvent[]
 }
 
-function harness(opts: {
-  agent?: Partial<{
-    name: string
-    path: string
-    enabled: boolean
-    readiness: string
-    readinessReason: string | null
-  }> | null
-  agentKey?: string | null
-  agentModel?: { providerID: string; id: string } | null
-  engineStatus?: string
-  remembered?: string | null
-  engine?: ReturnType<typeof fakeEngine>
-  /** Use the real `turnLock` instead of the pass-through, so refusal is real. */
-  realLock?: boolean
-  turnCeilingMs?: number
-  engineReadyMs?: number
-} = {}): Harness {
+function harness(
+  opts: {
+    agent?: Partial<{
+      name: string
+      path: string
+      enabled: boolean
+      readiness: string
+      readinessReason: string | null
+    }> | null
+    agentKey?: string | null
+    agentModel?: { providerID: string; id: string } | null
+    engineStatus?: string
+    remembered?: string | null
+    engine?: ReturnType<typeof fakeEngine>
+    /** Use the real `turnLock` instead of the pass-through, so refusal is real. */
+    realLock?: boolean
+    turnCeilingMs?: number
+    engineReadyMs?: number
+    autoReplyRetryMs?: number
+    /** Stand in for a grant the folder already holds. */
+    isGranted?: (request: LocalPermissionRequest) => boolean
+    /** Make the grant store refuse the write. */
+    grantWriteFails?: boolean
+  } = {}
+): Harness {
   const engine = opts.engine ?? fakeEngine()
   const order: string[] = []
   const saved: { sessionId: string }[] = []
   const events: AgentStreamEvent[] = []
-  const bus = new EngineEventBus((signal) => engine.request('/api/event', { signal }).then((r) => r.body), () => Promise.resolve())
+  const bus = new EngineEventBus(
+    (signal) => engine.request('/api/event', { signal }).then((r) => r.body),
+    () => Promise.resolve()
+  )
 
   const deps: LocalTurnDeps = {
     ensureEngineRunning: async () => {
@@ -212,7 +223,9 @@ function harness(opts: {
     },
     agentKey: () => (opts.agentKey === undefined ? 'assistant_ab12' : opts.agentKey),
     agentModel: () =>
-      opts.agentModel === undefined ? { providerID: 'anthropic', id: 'claude-sonnet-4-6' } : opts.agentModel,
+      opts.agentModel === undefined
+        ? { providerID: 'anthropic', id: 'claude-sonnet-4-6' }
+        : opts.agentModel,
     skipReason: () => null,
     request: engine.request,
     bus,
@@ -228,6 +241,7 @@ function harness(opts: {
             ...opts.agent
           },
     readSession: () => opts.remembered ?? null,
+    isGranted: (_agentDir, request) => opts.isGranted?.(request) ?? false,
     saveSession: (i) => void saved.push({ sessionId: i.sessionId }),
     withLock: opts.realLock
       ? (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn)
@@ -241,7 +255,8 @@ function harness(opts: {
         },
     userId: () => 'settings-user',
     turnCeilingMs: opts.turnCeilingMs,
-    engineReadyMs: opts.engineReadyMs
+    engineReadyMs: opts.engineReadyMs,
+    autoReplyRetryMs: opts.autoReplyRetryMs ?? 0
   }
 
   return {
@@ -311,9 +326,7 @@ describe('LocalAgentTurnRunner', () => {
     })
     const second = await tooNew.runner.runTurn(tooNew.input())
     // And with no reason recorded it still refuses rather than falling through.
-    expect(second.error?.message).toBe(
-      'This agent’s folder is not in a state it can be run from.'
-    )
+    expect(second.error?.message).toBe('This agent’s folder is not in a state it can be run from.')
     expect(tooNew.engine.calls).toEqual([])
   })
 
@@ -405,7 +418,10 @@ describe('LocalAgentTurnRunner', () => {
     const engine = fakeEngine()
     const h = harness({ engine })
     // Re-wire the bus behind a transport that does not resolve until told.
-    const gatedBus = new EngineEventBus(() => gate, () => Promise.resolve())
+    const gatedBus = new EngineEventBus(
+      () => gate,
+      () => Promise.resolve()
+    )
     const runner = new LocalAgentTurnRunner({
       ...(h.runner as unknown as { deps: LocalTurnDeps }).deps,
       bus: gatedBus
@@ -421,11 +437,7 @@ describe('LocalAgentTurnRunner', () => {
 
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
-        c.enqueue(
-          new TextEncoder().encode(
-            endTurn()
-          )
-        )
+        c.enqueue(new TextEncoder().encode(endTurn()))
       }
     })
     openSocket(stream)
@@ -455,10 +467,9 @@ describe('LocalAgentTurnRunner', () => {
     // renderer stops recognising the chat as an agent chat after a reload.
     expect(result.contextId).toBe('ses_new')
     expect(h.saved).toEqual([{ sessionId: 'ses_new' }])
-    expect(h.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text)).toEqual([
-      'Hel',
-      'lo'
-    ])
+    expect(
+      h.events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text)
+    ).toEqual(['Hel', 'lo'])
   })
 
   it('keeps the partial answer when the turn errors after streaming', async () => {
@@ -500,7 +511,9 @@ describe('LocalAgentTurnRunner', () => {
     h.engine.push(
       frame('question.v2.asked', {
         id: 'que_7',
-        questions: [{ question: 'Which?', header: 'Pick', options: [{ label: 'A', description: 'a' }] }],
+        questions: [
+          { question: 'Which?', header: 'Pick', options: [{ label: 'A', description: 'a' }] }
+        ],
         tool: { messageID: 'msg_1', callID: 'c1' }
       })
     )
@@ -525,7 +538,7 @@ describe('LocalAgentTurnRunner', () => {
     await run
   })
 
-  it('posts a permission decision as OpenCode\'s own reply enum', async () => {
+  it("posts a permission decision as OpenCode's own reply enum", async () => {
     const h = harness()
     const run = h.runner.runTurn(h.input())
     await settle()
@@ -539,14 +552,155 @@ describe('LocalAgentTurnRunner', () => {
       })
     )
     await settle()
-    pendingRequests.resolve('per_2', { kind: 'permission', reply: 'always' })
+    pendingRequests.resolve('per_2', { kind: 'permission', reply: 'once' })
     await settle()
 
     const reply = h.engine.calls.find((c) => c.path.includes('/permission/per_2/reply'))
-    // Mutation: send `{reply: 'allow'}` fails this. `once | always | reject` is
-    // OpenCode's enum, and it already maps one-to-one onto the design's Allow
-    // once / Always / Deny — inventing a fourth spelling is a 400.
-    expect(reply?.body).toEqual({ reply: 'always' })
+    // Mutation: send `{reply: 'allow'}` fails this. `once | reject` is
+    // OpenCode's own enum and reaches the engine untranslated; the third
+    // answer, `always`, deliberately never gets here — see the two tests below.
+    expect(reply?.body).toEqual({ reply: 'once' })
+
+    h.engine.push(endTurn())
+    await run
+  })
+
+  it('never posts always to the engine, whatever it is settled with', async () => {
+    // **The last lock on the leak.** `always` is converted on the answer path
+    // (`agent_a2a.ipc.ts`) into a stored grant plus `once`; this asserts the
+    // door itself, so a caller that settles a request with `always` — a future
+    // code path, a test harness, a bug — still cannot write OpenCode's
+    // user-global `{projectID:'global', resource:'*'}` row, which was observed
+    // authorising every other folder agent.
+    //
+    // Mutation: post `resolution.reply` unconverted fails this.
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    h.engine.push(
+      frame('permission.v2.asked', {
+        id: 'per_9',
+        action: 'webfetch',
+        resources: ['https://docs.example.com/guide?v=2'],
+        save: ['*'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+    pendingRequests.resolve('per_9', { kind: 'permission', reply: 'always' })
+    await settle()
+
+    expect(h.engine.calls.find((c) => c.path.includes('/permission/per_9/reply'))?.body).toEqual({
+      reply: 'once'
+    })
+
+    h.engine.push(endTurn())
+    await run
+  })
+
+  it('carries the ask into the registry, so an answer can be scoped to it', async () => {
+    // The grant a user's *Always allow* writes is built from the **engine's**
+    // ask, which only the turn sees. Without this the answer path would have to
+    // take the resources back off the renderer, and a stale block could store a
+    // rule for something the engine never asked about.
+    //
+    // Mutation: drop `request` from `pendingRequests.register` fails this.
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    h.engine.push(
+      frame('permission.v2.asked', {
+        id: 'per_10',
+        action: 'edit',
+        resources: ['docs/WORKFLOW_PROMPT.md'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+
+    expect(pendingRequests.owner('per_10')?.request).toEqual({
+      action: 'edit',
+      resources: ['docs/WORKFLOW_PROMPT.md'],
+      savable: [],
+      callId: 'c1'
+    })
+
+    pendingRequests.resolve('per_10', { kind: 'permission', reply: 'reject' })
+    await settle()
+    h.engine.push(endTurn())
+    await run
+  })
+
+  it('retries an automatic allow, then rejects rather than leaving the turn parked', async () => {
+    // **The failure mode this path has and the user-answered one does not.** An
+    // auto-allowed ask registers no pending entry — there is no dialog and so
+    // no park timeout — so a reply that never lands leaves the agent loop
+    // waiting on a human nobody asked, until the twenty-minute turn ceiling,
+    // with nothing on screen. One retry covers the realistic stutter; a reject
+    // is the clean exit when it does not.
+    //
+    // Mutation: fire-and-forget with a `.catch(warn)` — the original shape —
+    // fails this: one POST, no retry, no reject, session parked.
+    let attempts = 0
+    const engine = fakeEngine({
+      'POST /api/session/ses_new/permission/per_13/reply': () => {
+        attempts += 1
+        return new Response('nope', { status: 500 })
+      }
+    })
+    const h = harness({ engine, isGranted: () => true })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    h.engine.push(
+      frame('permission.v2.asked', {
+        id: 'per_13',
+        action: 'webfetch',
+        resources: ['https://docs.example.com/a'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+    // The retry waits on a timer, so a macrotask has to turn for it: `settle`
+    // only drains microtasks.
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await settle()
+
+    // Two allow attempts and then a reject — all three at the same address.
+    expect(attempts).toBe(3)
+    const bodies = h.engine.calls
+      .filter((c) => c.path.includes('/permission/per_13/reply'))
+      .map((c) => c.body)
+    expect(bodies).toEqual([{ reply: 'once' }, { reply: 'once' }, { reply: 'reject' }])
+
+    h.engine.push(endTurn())
+    await run
+  })
+
+  it('answers an ask a standing grant covers without parking or rendering it', async () => {
+    // The point of the grant store: the second identical ask costs the user
+    // nothing. Nothing is registered — so no block is answerable and none is
+    // written into the transcript — and the engine is unparked with `once`.
+    //
+    // Mutation: drop the `isGranted` branch in `TurnStream.permissionAsked`
+    // fails this on all three counts.
+    const h = harness({ isGranted: (request) => request.action === 'webfetch' })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    h.engine.push(
+      frame('permission.v2.asked', {
+        id: 'per_11',
+        action: 'webfetch',
+        resources: ['https://docs.example.com/other'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+
+    expect(h.engine.calls.find((c) => c.path.includes('/permission/per_11/reply'))?.body).toEqual({
+      reply: 'once'
+    })
+    expect(pendingRequests.owner('per_11')).toBeNull()
+    expect(JSON.stringify(h.events)).not.toContain('per_11')
 
     h.engine.push(endTurn())
     await run
@@ -577,7 +731,9 @@ describe('LocalAgentTurnRunner', () => {
   })
 
   it('resumes a remembered session when the engine still has it', async () => {
-    const engine = fakeEngine({ 'GET /api/session/ses_old': () => new Response('{}', { status: 200 }) })
+    const engine = fakeEngine({
+      'GET /api/session/ses_old': () => new Response('{}', { status: 200 })
+    })
     const h = harness({ remembered: 'ses_old', engine })
     const run = h.runner.runTurn(h.input())
     await settle()
@@ -809,7 +965,8 @@ describe('LocalAgentTurnRunner', () => {
     //
     // Mutation: check only the model and not the agent → this fails.
     const engine = fakeEngine({
-      'GET /api/agent': () => new Response(JSON.stringify({ data: [{ id: 'someone-else' }] }), { status: 200 })
+      'GET /api/agent': () =>
+        new Response(JSON.stringify({ data: [{ id: 'someone-else' }] }), { status: 200 })
     })
     const h = harness({ engine, engineReadyMs: 30, turnCeilingMs: 5_000 })
     const result = await h.runner.runTurn(h.input())
@@ -1255,9 +1412,7 @@ describe('LocalAgentTurnRunner', () => {
     await settle()
     expect(pendingRequests.owner('per_5')).not.toBeNull()
 
-    h.engine.push(
-      frame('permission.v2.replied', { requestID: 'per_5', reply: 'once' })
-    )
+    h.engine.push(frame('permission.v2.replied', { requestID: 'per_5', reply: 'once' }))
     await settle()
     expect(pendingRequests.owner('per_5')).toBeNull()
 
