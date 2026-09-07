@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildEngineConfig,
+  CONVERSATION_PERMISSIONS,
   credentialEnvName,
   engineAgentKey,
   writeEngineConfig,
@@ -326,9 +327,148 @@ describe('buildEngineConfig', () => {
     // every permission, so a profile that only lists read/edit/write/bash
     // leaves every other tool wide open.
     expect(permission['*']).toBe('ask')
-    expect(permission.bash).toMatchObject({ '*': 'ask', 'uv run *': 'allow' })
-    expect(permission.edit).toMatchObject({ '*': 'ask', 'app-data/**': 'allow' })
+    // **Free inside the folder.** A session's directory *is* the agent folder,
+    // so these are the permissions that make ordinary work — writing the script
+    // it was just asked to write, running it — happen without a dialog per
+    // step. The profile that gated them behind `app-data/**` and three command
+    // shapes asked about nearly everything, and a prompt that fires constantly
+    // is not a control.
+    expect(permission.bash).toMatchObject({ '*': 'allow' })
+    expect(permission.edit).toMatchObject({ '*': 'allow' })
+    expect(permission.write).toMatchObject({ '*': 'allow' })
+    // And the four things the folder boundary does not cover. Each is a
+    // separate mutation: flip any one to `allow` and the folder stops being a
+    // boundary.
+    expect(permission.external_directory).toBe('ask')
+    expect(permission.webfetch).toBe('ask')
+    expect((permission.edit as Record<string, string>)['docs/WORKFLOW_PROMPT.md']).toBe('ask')
+    expect((permission.bash as Record<string, string>)['sudo *']).toBe('ask')
+    // Secrets are denied to *writes* as well as reads now that the folder is
+    // writable: `'*': 'allow'` without these would have made `credentials/.env`
+    // editable by the agent, which is a regression the widening could easily
+    // have shipped silently.
     expect((permission.read as Record<string, string>)['credentials/.env']).toBe('deny')
+    // **`*.env`, never `**​/.env`.** The engine's matcher is not a glob: it
+    // escapes the pattern, turns `*` into `.*` and anchors it, so `**​/.env`
+    // compiles to something that *requires a slash* and never matches a `.env`
+    // at the agent-folder root — where the resource is the literal string
+    // `.env`. A missed pattern here fails open, silently, which is exactly how
+    // the previous spelling let an agent write a root-level `.env` under the
+    // widened profile.
+    for (const name of ['read', 'edit', 'write']) {
+      const entry = permission[name] as Record<string, string>
+      expect(Object.keys(entry).some((pattern) => pattern.includes('**'))).toBe(false)
+      expect(entry['*.env']).toBe('deny')
+      expect(entry['*.pem']).toBe('deny')
+      expect(entry['*.key']).toBe('deny')
+    }
+    expect((permission.write as Record<string, string>)['credentials/.env']).toBe('deny')
+    expect((permission.edit as Record<string, string>)['*.env']).toBe('deny')
+  })
+
+  it('resolves the way the engine does, for the resources that matter', () => {
+    // **A simulation of the engine's own algorithm, not of a glob.** Both halves
+    // were read out of the pinned 1.18.27 binary and are recorded in
+    // `opencode_contract.md`:
+    //
+    // - `Wildcard.match` regex-escapes the pattern, then `*` → `.*` and `?` →
+    //   `.`, anchors it, and rewrites a trailing `" .*"` as `"( .*)?"`. So `*`
+    //   crosses `/` and **there is no `**`** — `**​/.env` requires a slash and
+    //   misses a `.env` at the folder root.
+    // - `evaluate` is `findLast`: the **last** matching rule wins, not the most
+    //   specific one.
+    //
+    // Every rule in the profile depends on both, and a pattern that stops
+    // matching fails **open** — the `'*'` above it decides and nothing is
+    // logged. That is exactly how `**​/.env` let an agent write a root-level
+    // `.env` under the widened profile while 1437 tests stayed green, so the
+    // algorithm is pinned here rather than left as a comment.
+    // `\\` → `/` normalisation is the one step of the binary's not modelled here:
+    // it runs *before* the escape, so a backslash can never reach the escape
+    // class there while it would be escaped here. Nothing in this profile
+    // contains one, and adding the step would only make the divergence harder
+    // to see than a sentence does.
+    const compile = (pattern: string): RegExp =>
+      new RegExp(
+        `^${pattern
+          .replace(/[.+^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*/g, '.*')
+          // `?` is not in the escape class, so without this step a future
+          // pattern like `key?.pem` would reach `RegExp` with a bare `?` and
+          // silently become a quantifier — or throw, if one ever began with it.
+          .replace(/\?/g, '.')
+          // The trailing-space rule, and it takes the space with it: `rm -rf *`
+          // compiles to `^rm -rf( .*)?$`, which is why the bare `rm -rf` and
+          // `rm -rf build` both match — and why `rm -r *` does *not* match
+          // `rm -rf build`, so both spellings have to be listed. A pattern
+          // ending in a literal `foo.*` is not rewritten, because there is no
+          // space, and the binary behaves the same way.
+          .replace(/ \.\*$/, '( .*)?')}$`,
+        // **The `s` flag is load-bearing, not tidiness.** A heredoc is a single
+        // `redirected_statement` whose text spans lines, so the matcher is
+        // handed a multi-line string; without `s`, `.*` would not cross the
+        // newline and `cat > credentials/.env <<'EOF' …` — the most natural way
+        // for a model to write a key file — would slip through every rule below.
+        's'
+      )
+    // Models **one entry** of our profile, not the merged `[...base, ...ours]`
+    // list the engine evaluates. Every row below was checked both ways and is
+    // identical — but the interaction this cannot see is the subtle one: our
+    // `read: {'*': 'allow'}` lands after OpenCode's own base `read:
+    // {'*.env': 'ask'}` and switches it off, which is why `SECRET_FILES` is the
+    // only defence left and why it is asserted so heavily.
+    const winner = (name: string, resource: string): [string, string] | undefined => {
+      const entry = CONVERSATION_PERMISSIONS[name]
+      if (typeof entry === 'string') return ['*', entry]
+      const rules = Object.entries(entry as Record<string, string>)
+      return [...rules].reverse().find(([pattern]) => compile(pattern).test(resource))
+    }
+    // The engine's fallback when nothing matches is `ask`, so `resolve` alone
+    // cannot tell "a rule asked" from "no rule matched at all" — which is how
+    // the heredoc row below passed even with the `s` flag removed. Where that
+    // distinction is the point, assert the pattern that won.
+    const resolve = (name: string, resource: string): string => winner(name, resource)?.[1] ?? 'ask'
+    const matched = (name: string, resource: string): string | null =>
+      winner(name, resource)?.[0] ?? null
+
+    // Secrets, at the root as well as nested — the case `**​/.env` missed.
+    expect(resolve('read', '.env')).toBe('deny')
+    expect(resolve('edit', '.env')).toBe('deny')
+    expect(resolve('write', 'deep/nested/.env')).toBe('deny')
+    expect(resolve('read', 'credentials/.env')).toBe('deny')
+    expect(resolve('read', 'key.pem')).toBe('deny')
+    // Ordinary work inside the folder, which is the whole point of the change.
+    expect(resolve('edit', 'scripts/report.py')).toBe('allow')
+    expect(resolve('read', 'docs/CLI_COMMANDS.yaml')).toBe('allow')
+    // The agent's own identity.
+    expect(resolve('edit', 'cinna-agent.json')).toBe('ask')
+    expect(resolve('edit', 'docs/WORKFLOW_PROMPT.md')).toBe('ask')
+
+    // The shell, where the matched string is the **command text** of each
+    // command node, redirection included. The narrow shapes only fire because
+    // they sit *after* `'*': 'allow'` in the object — `findLast`, not
+    // most-specific. Mutation: move `'*'` to the end of the `bash` entry and
+    // every one of these becomes `allow`.
+    expect(resolve('bash', 'uv run scripts/report.py')).toBe('allow')
+    expect(resolve('bash', 'make test')).toBe('allow')
+    expect(resolve('bash', 'cat credentials/.env')).toBe('ask')
+    expect(resolve('bash', "printf 'K=v' >> credentials/.env")).toBe('ask')
+    expect(resolve('bash', 'cat .env.local')).toBe('ask')
+    // A heredoc, which is one command node whose text spans lines — the most
+    // natural way for a model to write a key file. Asserted by *which rule
+    // won*, not by the outcome: `ask` is also what an unmatched resource falls
+    // back to, so dropping the `s` flag would leave an outcome assertion green
+    // while the guard had stopped matching entirely.
+    const heredoc = "cat > credentials/.env <<'EOF'\nKEY=1\nEOF"
+    expect(matched('bash', heredoc)).toBe('*credentials/.env*')
+    expect(resolve('bash', heredoc)).toBe('ask')
+    expect(resolve('bash', 'sudo rm -rf /')).toBe('ask')
+    expect(resolve('bash', 'rm -rf build')).toBe('ask')
+    // And the two false positives the narrow spelling exists to avoid: the kit
+    // ships `credentials/README.md` and expects the agent to read it, and a
+    // prompt on that would teach the user to click through these.
+    expect(resolve('bash', 'cat credentials/README.md')).toBe('allow')
+    expect(resolve('bash', 'python scripts/setup_credentials.py')).toBe('allow')
   })
 
   it('lets a manifest override one permission name without merging into it', () => {
@@ -351,7 +491,7 @@ describe('buildEngineConfig', () => {
     // Replaced wholesale, not deep-merged: a deep merge would let a manifest
     // add `"*": "allow"` *under* our bash rules and quietly widen them.
     expect(permission.bash).toEqual({ '*': 'allow' })
-    expect(permission.edit).toMatchObject({ 'app-data/**': 'allow' })
+    expect(permission.edit).toMatchObject({ 'credentials/.env': 'deny' })
   })
 
   it('skips a credential the engine cannot use, and says which and why', () => {

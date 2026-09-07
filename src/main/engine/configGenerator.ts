@@ -50,11 +50,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createLogger } from '../logger/logger'
-import {
-  CUSTOM_MODEL_LIMITS,
-  isEngineProviderType,
-  type EngineProviderType
-} from './modelLimits'
+import { CUSTOM_MODEL_LIMITS, isEngineProviderType, type EngineProviderType } from './modelLimits'
 import { GEMINI_OPENAI_BASE_URL } from './modelTransports'
 import type { EngineSkipCode } from '../../shared/runtimeMessages'
 
@@ -122,55 +118,164 @@ const PROVIDER_BASE_URL: Partial<Record<EngineProviderType, string>> = {
  * built-in `build` agent is written the same way — `read: *` allow, then
  * `read: *.env` ask).
  *
- * What it encodes, from the design: reads are free, writes and edits are free
- * **only under `app-data/`**, and bash is free only for the three command
- * shapes the kit teaches. Everything else asks. Two entries are not about
- * convenience at all:
+ * **An agent works freely inside its own folder.** A session's
+ * `location.directory` *is* the agent folder, so the resources it names are
+ * relative to it and a shell command starts there: reading, writing, editing
+ * and running commands are therefore allowed outright. This is a deliberate
+ * widening of the original profile, which allowed writes only under
+ * `app-data/` and only three shapes of command. That profile asked about
+ * nearly every step of ordinary work — the agent could not write a script it
+ * had just been asked to write without a dialog — and a permission prompt that
+ * fires constantly is not a control, it is a thing users learn to click
+ * through. What is left asking is what the folder boundary does not cover.
  *
- * - `credentials/.env` is `deny`, not `ask`. The desktop never reads credential
- *   values and neither should the agent it runs: the kit's own rule is that a
- *   value is read from inside a script through `cinna_credentials.py` and never
- *   printed. An `ask` here would put a one-click path to pasting the user's
- *   secrets into a transcript behind a dialog nobody reads carefully.
- * - `external_directory` is `ask`, so a session bound to one agent folder
- *   cannot quietly wander into another agent's folder — or into the rest of the
- *   user's disk — without the user seeing it.
+ * What still asks, and why each one is not convenience:
  *
- * Phase 6 owns answering these prompts and persisting "always" grants; this
- * phase only has to put the right profile in the config.
+ * - **`'*': 'ask'` has to be there explicitly.** OpenCode's own base rule is
+ *   `{permission: '*', pattern: '*', action: 'allow'}` — verified by reading
+ *   `GET /agent` back off a running engine — so a profile that only enumerates
+ *   the tools it knows leaves *every other tool* on allow. Later entries
+ *   override earlier ones, so this line lands after their base rule and before
+ *   ours.
+ * - **`external_directory` is `ask`**, which is what makes "inside its own
+ *   folder" a boundary rather than a description: a session cannot wander into
+ *   another agent's folder, or the rest of the disk, without the user seeing
+ *   it.
+ * - **`credentials/.env` and every other secret file are `deny`, for writes as
+ *   well as reads — for the *file tools*, which is a narrower claim than it
+ *   looks.** The shell tool asks under `bash` with the **command text**, and
+ *   nothing else in this profile is consulted for it: `cat credentials/.env`
+ *   is allowed by the `bash` rule, prints a key into the transcript, and never
+ *   touches the `read` entry. The same goes for `curl` and the `webfetch` ask.
+ *   Read out of the 1.18.27 binary, not inferred. So this entry stops the
+ *   *edit tool* — the thing a model reaches for when asked to "add my key" —
+ *   and the honest statement of the whole is the one the agent page makes: a
+ *   command can reach anything the user can.** The desktop never reads credential values and neither
+ *   should the agent it runs; the kit's rule is that a value is read from
+ *   inside a script through `cinna_credentials.py` and never printed. An `ask`
+ *   would put a one-click path to pasting the user's secrets into a transcript
+ *   behind a dialog nobody reads carefully. The desktop's own `.env` editor is
+ *   how a key gets written.
+ * - **The agent's own identity files are `ask`.** `cinna-agent.json` and
+ *   `docs/WORKFLOW_PROMPT.md` are what the agent *is*: the system prompt this
+ *   very conversation is running on, and the manifest that binds it to a
+ *   credential. The assembled prompt ends by telling the agent not to switch to
+ *   the builder role for exactly this reason, and an instruction is not a
+ *   control. Rewriting them is the one edit inside the folder that is worth one
+ *   dialog — and now it is worth exactly one, because *Always allow* remembers
+ *   it.
+ * - **`sudo`, `rm -r` and `rm -rf` still ask.** Not a security boundary — a
+ *   pattern over a command line can be walked around with a `&&`, and anything
+ *   that runs a shell can do anything the user can. It is an *accident*
+ *   boundary, and the accident it exists for is a confused model tidying up.
+ *
+ * **What `bash: '*': 'allow'` really means, stated once so nobody has to infer
+ * it.** The engine gates a command by its text and asks `external_directory`
+ * only for the path arguments of a fixed list of commands (`cd`, `rm`, `cp`,
+ * `cat`, …) — so `python -c "open('~/.ssh/id_rsa')"` raises nothing, and the
+ * folder is a boundary for the *file tools*, not for the shell. This is the
+ * deliberate trade: an agent the user built, running in the user's own folder,
+ * gets a shell without a dialog per command, and the agent page says plainly
+ * that a command can reach anything the user can. Anyone tempted to describe
+ * this profile as a sandbox should read this paragraph again.
+ * - **`webfetch` is `ask`**, because reaching the network is the one ordinary
+ *   step that is not contained by the folder at all.
+ *
+ * Answering these prompts is the runner's, and a user's *Always allow* is
+ * recorded per agent in that folder's `app-data/desktop.json` and answered
+ * `once` on their behalf — never sent to the engine, whose own saved grants are
+ * user-global. See `permissionGrantService.ts` and the contract's §4.
  */
+
+/**
+ * **The matcher is not a glob, and every pattern in this file depends on that.**
+ *
+ * Read out of the 1.18.27 binary (`Wildcard.match`): a pattern is escaped, then
+ * `*` → `.*` and `?` → `.`, then anchored `^…$`. So `*` crosses `/` freely and
+ * there is no `**`. The consequence that matters:
+ *
+ * - `**​/.env` compiles to `^.*.*\/\.env$` — it **requires a slash**, so it does
+ *   not match a `.env` at the agent-folder root. Every resource is
+ *   `path.relative(worktree, file)` and the worktree is the agent folder, so a
+ *   root-level `.env` is the literal string `.env` and the pattern misses it.
+ * - `*.env` compiles to `^.*\.env$`, which matches `.env`, `credentials/.env`
+ *   and `deep/nested/.env` alike. That is the spelling to use.
+ *
+ * A pattern that misses here fails **open**: the entry it belongs to simply
+ * does not apply and the `'*'` rule above it decides. That is why these are
+ * written as `*.x` and as exact relative paths, and why nothing in this file
+ * spells `**`.
+ */
+
+/**
+ * Files that can hold a credential value. Denied to every tool that could put
+ * one in front of a model, read or write.
+ *
+ * `credentials/.env` is covered by `*.env` and listed anyway: it is the file
+ * the kit actually defines, and a reader should not have to run the matcher in
+ * their head to see that it is denied.
+ */
+const SECRET_FILES: Record<string, string> = {
+  'credentials/.env': 'deny',
+  '*.env': 'deny',
+  '*.pem': 'deny',
+  '*.key': 'deny'
+}
+
+/**
+ * The two files that define the agent. Editing them is editing the agent.
+ *
+ * Exact relative paths, because that is what the tools name: the kit puts one
+ * manifest at the folder root and one workflow prompt at `docs/`.
+ */
+/**
+ * A note on `write`: the built-in write and apply-patch tools ask under
+ * `permission: "edit"` (the engine folds `edit|write|apply_patch` into one
+ * visible tool), so the `write` block below is never consulted today. It is
+ * kept as the defensive twin of `edit` — a tool that did ask under `write`
+ * would otherwise land on the bare `'*': 'allow'` — and the `edit` entry is the
+ * load-bearing one for every assertion about writing a file.
+ */
+const IDENTITY_FILES: Record<string, string> = {
+  'cinna-agent.json': 'ask',
+  'docs/WORKFLOW_PROMPT.md': 'ask'
+}
+
 export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {
-  /**
-   * The catch-all, and it has to be here explicitly.
-   *
-   * OpenCode's own base rule is `{permission: '*', pattern: '*', action:
-   * 'allow'}` — verified by reading `GET /agent` back off a running engine —
-   * so a profile that only enumerates `read`/`edit`/`write`/`bash` leaves
-   * *every other tool* on allow, which is the opposite of the design's
-   * "everything else asks". Later entries override earlier ones, so this line
-   * lands after their base rule and before ours.
-   */
   '*': 'ask',
-  read: {
-    '*': 'allow',
-    'credentials/.env': 'deny',
-    '**/.env': 'deny',
-    '**/*.pem': 'deny',
-    '**/*.key': 'deny'
-  },
-  edit: {
-    '*': 'ask',
-    'app-data/**': 'allow'
-  },
-  write: {
-    '*': 'ask',
-    'app-data/**': 'allow'
-  },
+  read: { '*': 'allow', ...SECRET_FILES },
+  edit: { '*': 'allow', ...IDENTITY_FILES, ...SECRET_FILES },
+  write: { '*': 'allow', ...IDENTITY_FILES, ...SECRET_FILES },
+  // **Order is the mechanism here.** The engine resolves a permission with
+  // `findLast` over the concatenated rule list — the last match wins, not the
+  // most specific — and `fromConfig` preserves object key order. So `'*':
+  // 'allow'` first and the narrow shapes after is what makes them fire; swap
+  // them and every entry below becomes dead.
+  //
+  // The two `.env` shapes are an **accident guard, not a boundary**, and the
+  // difference matters to whoever reads this next. What is matched is the full
+  // command text of each command node, redirection included — verified in the
+  // 1.18.27 binary (`ShellTool.collect`), which is why `printf 'K=v' >>
+  // credentials/.env` asks. So they catch the obvious spelling of the mistake
+  // this exists for: a model that decides to `cat` a key file while debugging.
+  // They do not catch a path built from a shell variable, a `base64 -d`, or a
+  // script file that reads the key itself, and nothing over a command line
+  // could. `*credentials/.env*` rather than `*credentials/*` deliberately: the
+  // kit ships `credentials/README.md` and expects the agent to read it, and a
+  // prompt on that would teach the user to click through these.
+  //
+  // `rm -r *`, `rm -rf *` and `rm -fr *` are three entries because each is a
+  // literal prefix: `rm -r *` compiles to `^rm -r( .*)?$` and does not match
+  // `rm -rf /tmp/x`. None of them catches `rm --recursive`, `find . -delete`,
+  // or anything after a `&&` — the same accident boundary, with the same limit.
   bash: {
-    '*': 'ask',
-    'uv run *': 'allow',
-    'make *': 'allow',
-    'python scripts/*': 'allow'
+    '*': 'allow',
+    '*.env*': 'ask',
+    '*credentials/.env*': 'ask',
+    'sudo *': 'ask',
+    'rm -r *': 'ask',
+    'rm -rf *': 'ask',
+    'rm -fr *': 'ask'
   },
   webfetch: 'ask',
   external_directory: 'ask'
@@ -270,12 +375,18 @@ export interface BuiltEngineConfig {
 
 /** Uppercase, `_`-separated, safe as an environment variable name fragment. */
 function sanitizeForEnv(value: string): string {
-  return value.replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').toUpperCase()
+  return value
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase()
 }
 
 /** Lowercase, `-`-separated, safe as a JSON config key. */
 function sanitizeForKey(value: string): string {
-  return value.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
+  return value
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .toLowerCase()
 }
 
 function shortHash(value: string): string {
