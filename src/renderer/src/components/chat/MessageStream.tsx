@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, CheckCircle, ChevronRight, RefreshCw } from 'lucide-react'
+import { AlertTriangle, ArrowDown, CheckCircle, ChevronRight, RefreshCw } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
 import { useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
@@ -26,6 +26,7 @@ import {
 } from '../../../../shared/localAgentRequests'
 import { PermissionRequestBlock } from './PermissionRequestBlock'
 import { useAgentRequests } from '../../hooks/useAgentRequests'
+import { useStickToBottom } from '../../hooks/useStickToBottom'
 import { MessageMetaFooter } from './MessageMetaFooter'
 import {
   type RenderNode,
@@ -283,7 +284,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   const { data: agents } = useAgents()
   const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
-  const bottomRef = useRef<HTMLDivElement>(null)
+  const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId)
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of agents ?? []) map.set(a.id, a.name)
@@ -295,9 +296,12 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     messageIds: []
   })
 
+  // Sending re-engages following: the user just acted, and the thing they
+  // acted on is at the bottom. Nothing else re-pins on the transcript's
+  // behalf — an arriving chunk never does.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [chatData?.messages, streamingBlocks])
+    if (pendingUserMessage) scrollToBottom()
+  }, [pendingUserMessage, scrollToBottom])
 
   const messages = chatData?.messages ?? []
   const hasStreamingContent = streamingBlocks.length > 0
@@ -396,11 +400,17 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   }, [chatId, messages])
 
   return (
+    // A fragment, not a wrapper: the button is absolutely positioned against
+    // MainArea's `relative` chat container (the same one the composer overlay
+    // anchors to), so it needs no layout box of its own and the scroll element
+    // stays the direct flex child it has always been.
+    <>
     <div
+      ref={containerRef}
       className="flex-1 overflow-y-auto px-4 pb-4 pt-[calc(var(--topbar-h)+12px)]"
       style={bottomPadding ? { paddingBottom: bottomPadding + 16 } : undefined}
     >
-      <div className="max-w-3xl mx-auto space-y-3">
+      <div ref={contentRef} className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
           <div className="text-center text-[var(--color-text-muted)] py-16">
             <p className="text-sm">Start a conversation</p>
@@ -1058,9 +1068,27 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
             <span className="w-1 h-1 rounded-full bg-[var(--color-text-muted)] animate-bounce" style={{ animationDelay: '300ms' }} />
           </div>
         )}
-
-        <div ref={bottomRef} />
       </div>
     </div>
+      {/* Sits low enough to straddle the composer's fade band rather than clear
+          of it: centred over undimmed prose it hid about twenty characters
+          mid-sentence. The text node is the button's accessible name, so it
+          carries no `aria-label` or `title` restating it. */}
+      {!pinned && (
+        <button
+          type="button"
+          onClick={scrollToBottom}
+          className="absolute left-1/2 -translate-x-1/2 z-10 inline-flex items-center gap-1.5
+            px-3 py-1 rounded-full text-xs
+            text-[var(--color-text-secondary)] hover:text-[var(--color-text)]
+            bg-[var(--color-bg-secondary)]/80 hover:bg-[var(--color-bg-secondary)]
+            border border-[var(--color-border)] shadow-sm backdrop-blur transition-colors"
+          style={{ bottom: Math.max(0, (bottomPadding ?? 0) - 8) }}
+        >
+          <ArrowDown size={12} className="shrink-0" />
+          Jump to latest
+        </button>
+      )}
+    </>
   )
 }
