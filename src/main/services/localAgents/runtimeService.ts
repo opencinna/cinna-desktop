@@ -43,7 +43,13 @@ import { SECRET_LOOKALIKE } from '../../kit/validator'
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { LocalAgentRuntimeInput, ResolvedRuntime } from '../../../shared/engine'
-import { inheritedModelId } from '../../../shared/runtimeDefaults'
+import {
+  defaultRuntimeModelId,
+  resolveRuntimeModel,
+  type ResolvedModelChoice
+} from '../../../shared/runtimeDefaults'
+import { isWorkComplexity, type CatalogueModel, type WorkComplexity } from '../../../shared/modelFamilies'
+import { describeRuntime, type RuntimeFacts } from '../../../shared/runtimeMessages'
 
 /** Longest a credential reference may be. The schema's own ceiling. */
 const MAX_CREDENTIAL_REF = 200
@@ -58,7 +64,26 @@ const UNRESOLVED: ResolvedRuntime = {
   credentialName: null,
   credentialType: null,
   modelId: null,
+  modelSource: 'none',
+  replacedModelId: null,
   reason: null
+}
+
+/** The catalogue of one credential, out of the aggregate registry. */
+function catalogueFor(
+  models: readonly CatalogueModel[] | readonly { id: string; providerId: string }[],
+  providerId: string | null
+): CatalogueModel[] {
+  if (!providerId) return []
+  return (models as readonly { id: string; providerId?: string }[])
+    .filter((model) => model.providerId === providerId)
+    .map((model) => ({ id: model.id }))
+}
+
+/** `runtime.complexity`, if it is one of the three the contract allows. */
+function declaredComplexity(runtime: AgentRuntimeRef | null | undefined): WorkComplexity | null {
+  const value = runtime?.complexity
+  return isWorkComplexity(value) ? value : null
 }
 
 /** A credential that can actually drive an API call. */
@@ -113,6 +138,7 @@ export const runtimeService = {
       return {
         ...UNRESOLVED,
         modelId: mode.modelId,
+        modelSource: mode.modelId ? 'declared' : 'none',
         reason: `Your default chat mode points at a credential this machine no longer has.`
       }
     }
@@ -124,15 +150,18 @@ export const runtimeService = {
       credentialType: provider.type,
       // Through the shared chain, not `mode.modelId` raw: a default mode left on
       // "First available" carries no model, and the credential's own default is
-      // the answer — on *this* path too. `resolve` returns this object verbatim
-      // for a manifest with no runtime block, which is every freshly scaffolded
-      // agent, so a short-circuit here is a divergence the Runs with panel
-      // cannot see and the engine turns into "its runtime names no model".
-      modelId: inheritedModelId(provider, {
-        credentialId: provider.id,
-        credentialType: provider.type,
-        modelId: mode.modelId
-      }),
+      // the answer — on *this* path too. The Runs with panel calls the same
+      // function on the same inputs, which is what stops the label and the
+      // engine's config naming different models.
+      //
+      // The Medium floor is deliberately *not* applied here. This method
+      // describes the user's default chat mode; the floor is a property of
+      // resolving one agent, and applying it twice — once to the fallback and
+      // again in `resolve` — would floor against the *default* credential's
+      // catalogue and then lend that model to an agent on a different key.
+      modelId: defaultRuntimeModelId(provider, mode.modelId),
+      modelSource: 'inherited',
+      replacedModelId: null,
       reason: isUsable(provider)
         ? null
         : `Your default chat mode uses “${provider.name}”, which has no API key this app can use.`
@@ -155,44 +184,100 @@ export const runtimeService = {
    */
   resolve(
     runtime: AgentRuntimeRef | null | undefined,
-    providers: ProviderDto[] = providerService.listMerged()
+    providers: ProviderDto[] = providerService.listMerged(),
+    models: readonly { id: string; providerId: string }[] = []
   ): ResolvedRuntime {
     const fallback = this.resolveDefault(providers)
     const ref = typeof runtime?.credential === 'string' ? runtime.credential.trim() : ''
     const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
-    if (ref === '' && model === '') return fallback
+    const complexity = declaredComplexity(runtime)
 
     const provider = ref === '' ? null : findCredential(providers, ref)
-    if (ref !== '' && !provider) {
+    const missingCredential = ref !== '' && !provider
+
+    const chosen = provider ?? null
+    const credentialId = chosen?.id ?? fallback.credentialId
+    const effectiveType = chosen?.type ?? fallback.credentialType
+
+    // Every model decision — a declared id, a tier, the Default runtime, the
+    // Medium floor — goes through the one shared function the Runs with panel
+    // also calls. That sharing is the point of the module: the bug this area was
+    // rebuilt around was a panel predicting a runtime the engine did not build.
+    const choice: ResolvedModelChoice = resolveRuntimeModel({
+      chosen: chosen
+        ? { id: chosen.id, type: chosen.type, defaultModelId: chosen.defaultModelId }
+        : null,
+      fallback: {
+        credentialId: fallback.credentialId,
+        credentialType: fallback.credentialType,
+        modelId: fallback.modelId
+      },
+      declaredModel: model === '' ? null : model,
+      declaredComplexity: complexity,
+      catalogue: catalogueFor(models, credentialId)
+    })
+
+    // A manifest that declares nothing is the Default runtime — but the floor
+    // may still have found it a model, so the result is `fallback` with that
+    // model rather than `fallback` verbatim.
+    const source = ref === '' && model === '' && complexity === null ? 'default' : 'manifest'
+
+    /**
+     * The sentence comes from `shared/runtimeMessages`, which the "Runs with"
+     * panel also calls. This method used to build its own — a ladder that
+     * decided the same precedence and worded it slightly differently, and that
+     * **nothing read**: `collectEngineAgents` takes `credentialId` and `modelId`
+     * and nothing else. Two ladders that agree are one edit away from two
+     * ladders that do not, and only one of them was visible enough for anybody
+     * to notice.
+     */
+    const facts = (over: Partial<RuntimeFacts> = {}): RuntimeFacts => ({
+      credentialRef: ref === '' ? null : ref,
+      credentialResolved: provider !== null,
+      credentialName: chosen?.name ?? fallback.credentialName,
+      credentialUsable: chosen ? isUsable(chosen) : fallback.credentialId !== null,
+      complexity,
+      modelId: choice.modelId,
+      modelSource: choice.origin,
+      replacedModelId: choice.replaced,
+      catalogueKnown: catalogueFor(models, credentialId).length > 0,
+      ...over
+    })
+
+    // A credential this machine does not have falls back to the default's, and
+    // the tier resolves against *that* credential's catalogue — the same one
+    // the panel resolves against, because the panel falls back to the same
+    // credential. Handling this branch separately is what let the two disagree:
+    // the panel would label the select `Simple (Claude Haiku 4.5)` while the
+    // engine built the default mode's Sonnet, so a user reading the panel was
+    // billed for a tier they had not chosen.
+    if (missingCredential) {
       return {
         ...fallback,
         source: fallback.credentialId ? 'default' : 'none',
         credentialRef: ref,
-        modelId: model || fallback.modelId,
-        reason: `This agent asks for the credential “${ref}”, which is not configured here${
-          fallback.credentialName ? `; using ${fallback.credentialName} instead` : ''
-        }.`
+        modelId: choice.modelId,
+        modelSource: choice.origin,
+        replacedModelId: choice.replaced,
+        reason: describeRuntime(facts())?.text ?? null
       }
     }
 
-    const chosen = provider ?? null
-    const credentialId = chosen?.id ?? fallback.credentialId
-    const modelId = model || inheritedModelId(chosen, fallback)
     return {
-      source: 'manifest',
+      source: source === 'default' && !fallback.credentialId ? 'none' : source,
       credentialRef: ref === '' ? null : ref,
       credentialId,
       credentialName: chosen?.name ?? fallback.credentialName,
-      credentialType: chosen?.type ?? fallback.credentialType,
-      modelId,
+      credentialType: effectiveType,
+      modelId: choice.modelId,
+      modelSource: choice.origin,
+      replacedModelId: choice.replaced,
+      // An agent on the Default runtime inherits that runtime's own complaint;
+      // otherwise the shared ladder answers from this agent's own facts.
       reason:
-        credentialId === null
-          ? 'This agent has no credential to run on. Choose one in the Runs with panel.'
-          : modelId === null
-            ? 'This agent has no model to run on. Choose one in the Runs with panel.'
-            : chosen && !isUsable(chosen)
-              ? `“${chosen.name}” has no API key this app can use.`
-              : null
+        source === 'default' && !chosen && fallback.reason
+          ? fallback.reason
+          : (describeRuntime(facts())?.text ?? null)
     }
   },
 
@@ -217,6 +302,7 @@ export const runtimeService = {
   applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
     const credential = normaliseRef(input?.credential, 'The credential', MAX_CREDENTIAL_REF)
     const modelId = normaliseRef(input?.modelId, 'The model', MAX_MODEL_ID)
+    const complexity = input?.complexity ?? null
 
     if (credential !== null && SECRET_LOOKALIKE.test(credential)) {
       throw new LocalAgentError(
@@ -224,13 +310,38 @@ export const runtimeService = {
         'That looks like an API key. The manifest stores which credential to use, never the key itself.'
       )
     }
+    if (complexity !== null && !isWorkComplexity(complexity)) {
+      throw new LocalAgentError(
+        'invalid_input',
+        'Work complexity must be simple, medium or complex.'
+      )
+    }
+    // Refused rather than resolved by precedence, and note the asymmetry with
+    // the validator, which only *warns* about a manifest carrying both: reading
+    // is tolerant so a folder written by a newer tool still runs, while writing
+    // is strict so this desktop never authors the ambiguity it tolerates in
+    // others. Same shape as the key-shaped credential check above — the check is
+    // on the way in, at the last point before the value reaches a file the user
+    // commits.
+    if (complexity !== null && modelId !== null) {
+      throw new LocalAgentError(
+        'invalid_input',
+        'A runtime names a model or a work complexity, not both.'
+      )
+    }
 
     const existing =
       manifest.runtime && typeof manifest.runtime === 'object' ? { ...manifest.runtime } : {}
     delete existing.credential
     delete existing.model
+    delete existing.complexity
 
-    if (credential === null && modelId === null && Object.keys(existing).length === 0) {
+    if (
+      credential === null &&
+      modelId === null &&
+      complexity === null &&
+      Object.keys(existing).length === 0
+    ) {
       delete manifest.runtime
       return
     }
@@ -238,6 +349,7 @@ export const runtimeService = {
     const next: AgentRuntimeRef = { ...existing }
     if (credential !== null) next.credential = credential
     if (modelId !== null) next.model = modelId
+    if (complexity !== null) next.complexity = complexity
     manifest.runtime = next
   }
 }

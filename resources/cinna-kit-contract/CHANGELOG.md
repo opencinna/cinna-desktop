@@ -8,6 +8,32 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.1.0 — work complexity
+
+Additive. A 1.0.0 folder is read and written unchanged by a 1.1.0 tool, and a
+1.0.0 tool ignores the new key and reads `runtime.model` as it always did.
+
+### Added
+
+- Optional `runtime.complexity` — `simple` | `medium` | `complex`. Says how hard
+  the agent's work is instead of naming a model, and the host resolves it against
+  the models the chosen credential actually offers. **Mutually exclusive with
+  `runtime.model`**: a tool writes one or the other, never both. A manifest that
+  carries both is a *warning*, not an error, and the **model wins** — a host must
+  keep running a folder a newer tool wrote, so an unrecognised `complexity` value
+  likewise reads as "no complexity declared" rather than as a broken folder.
+
+  It exists because a model id is the least portable thing this file can carry.
+  The manifest is committed to a repository, read by a coding assistant and
+  uploaded to a Cinna instance on publish, and a model id means something only to
+  the catalogue that lists it — it is wrong on a machine with a different
+  credential, and stale the week the provider retires it. `medium` means the same
+  thing everywhere and does not go out of date.
+
+  A host that offers a choice should resolve a tier against its *live* catalogue
+  by model family, not against a table of ids, so a newly released model joins its
+  tier without a tool update.
+
 ## 1.0.0 — first contract release
 
 Extracted from the start-kit as its own versioned tree, so the desktop can

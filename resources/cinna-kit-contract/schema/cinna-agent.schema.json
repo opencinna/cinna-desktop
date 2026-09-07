@@ -143,6 +143,19 @@
             "null"
           ]
         },
+        "complexity": {
+          "description": "How hard this agent's work is, as a portable alternative to a concrete model id: the host resolves it against the models the chosen credential actually offers. Mutually exclusive with `model`. Added in contract 1.1.0; a host that does not understand it falls back to `model`.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "simple",
+            "medium",
+            "complex",
+            null
+          ]
+        },
         "credential": {
           "description": "Reference to the AI credential to run on: a credential type, or the name of a credential configured in the host. NEVER a key, token or secret value.",
           "type": [

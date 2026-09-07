@@ -65,9 +65,21 @@ export interface AgentFeatures {
  * How the agent should be run, when the host offers a choice. `credential` is a
  * *reference* — a credential type, or the name of a credential configured in the
  * host — never a key. Absent means "the host's default runtime".
+ *
+ * `model` and `complexity` are two ways to say the same thing and are mutually
+ * exclusive; `runtimeService.applyToManifest` refuses a manifest carrying both.
+ * A tier is the portable half of the pair: this file is committed, read by an
+ * assistant and uploaded to a Cinna instance, and a model id means something only
+ * to the catalogue that lists it, while `medium` means the same thing everywhere.
  */
 export interface AgentRuntimeRef {
   model?: string | null
+  /**
+   * Work Complexity: `simple` | `medium` | `complex`. The host resolves it
+   * against whatever the chosen credential lists — see `shared/modelFamilies.ts`.
+   * Added in contract 1.1.0; an older host ignores it and falls back to `model`.
+   */
+  complexity?: string | null
   credential?: string | null
   permissions?: Record<string, unknown>
   [key: string]: unknown

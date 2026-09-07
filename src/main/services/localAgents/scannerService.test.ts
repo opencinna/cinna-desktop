@@ -17,6 +17,15 @@ import { createTestDatabase, type TestDatabase } from '../../db/testSupport/node
  */
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
+/**
+ * The contract version this build bundles, read rather than pinned: what these
+ * tests assert is that the scaffolder records *the contract it built against*,
+ * which is a property of the code, not of any particular version number.
+ */
+const BUNDLED_CONTRACT = readFileSync(
+  join(repoRoot, 'resources/cinna-kit-contract/VERSION'),
+  'utf8'
+).trim()
 
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 
@@ -97,7 +106,7 @@ describe('scaffolding', () => {
     expect(manifest.slug).toBe('invoice-reader')
     expect(manifest.name).toBe('Invoice Reader')
     expect(manifest.description).toBe('Reads invoices and files them.')
-    expect(manifest.contract_version).toBe('1.0.0')
+    expect(manifest.contract_version).toBe(BUNDLED_CONTRACT)
     // A fresh UUID, written once, that identity survives a rename by.
     expect(manifest.id).toMatch(
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/

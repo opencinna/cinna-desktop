@@ -103,6 +103,8 @@ Entry points:
 
 Manifest checks: `checkIdentity()`, `checkString()`, `checkPrompts()`, `checkExamplePrompts()`, `checkRuntime()`, `checkCredentials()`, `checkSchedules()`, `checkHandovers()`, `checkPublications()`.
 
+`checkRuntime()` grades `runtime.complexity` as a **warning** in both of its cases — an unrecognised tier, and `model` plus `complexity` together — never an error, because an error here removes the folder from the engine rather than annotating it. See [Reading is tolerant, writing is strict](kit_contract.md#reading-is-tolerant-writing-is-strict).
+
 Folder checks (`checkFiles()`), in order: prompt files exist and are non-empty → catalogued commands have Makefile targets and readable definitions → `status_refresh_command`'s `/run:<name>` resolves → every `scripts/*.py` is mentioned in `scripts/README.md` → `app-data/storage/STATUS.md` parses as frontmatter with a `status` field → `checkSecrets()` → an info when the folder predates the active contract.
 
 Notable constants: `KNOWN_CREDENTIAL_TYPES` (unknown → warning, never rejection), `SCHEDULE_TYPES`, `CRON_PATTERN`, `UUID_PATTERN`, `COMMAND_NAME_PATTERN`, `SECRET_LOOKALIKE` (`runtime.credential` must be a reference, so an `sk-`/`ghp_`/`AKIA`-shaped value is an error telling the user to rotate it), `UNWALKED_DIRS`.
@@ -177,7 +179,7 @@ cinna-core must be able to compute the identical value — see the handover's "S
 
 ## Configuration
 
-- **Contract version**: pinned at `1.0.0` in `resources/cinna-kit-contract/kit.json` and `VERSION`, and mirrored in `layout.json`'s `contract_version`
+- **Contract version**: pinned at `1.1.0` in `resources/cinna-kit-contract/kit.json` and `VERSION`, and mirrored in `layout.json`'s `contract_version`. All three move together with the CHANGELOG entry and any schema change the bump describes; a scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. `1.1.0` added the optional `runtime.complexity` enum (`simple` | `medium` | `complex`), additively: a 1.0.0 folder is read and written unchanged, and a 1.0.0 tool ignores the key and reads `runtime.model` as before
 - **Contract refresh endpoints**: declared but unused in Phase 1 — `kit.json`'s `refresh` block names `base_url`, `/contract/version`, `/contract.tar.gz` and `install_dir: .cinna-kit`. A later phase implements the fetch and the atomic swap
 - **`STALE_TEMP_MS`**: 60 000 ms, in `src/main/kit/manifestIo.ts`
 - No environment variables, no app settings, no user-facing configuration

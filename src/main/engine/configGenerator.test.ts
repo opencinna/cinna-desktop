@@ -410,8 +410,8 @@ describe('buildEngineConfig', () => {
     )
     expect(built.config.agent).toEqual({})
     expect(built.skippedAgents).toHaveLength(2)
-    expect(built.skippedAgents[0].reason).toMatch(/credential/)
-    expect(built.skippedAgents[1].reason).toMatch(/model/)
+    expect(built.skippedAgents[0].code).toBe('credential_unavailable')
+    expect(built.skippedAgents[1].code).toBe('no_model')
   })
 
   it('produces byte-identical output for the same input in a different order', () => {

@@ -21,6 +21,7 @@ import { EngineEventBus } from './engineEventBus'
 import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner'
 import { isFolderAgent, type AgentTurnRunner } from './runner'
 import type { AgentRow } from '../../db/agents'
+import { describeEngineSkip } from '../../../shared/runtimeMessages'
 
 const logger = createLogger('agent-turn')
 
@@ -84,8 +85,13 @@ const localDeps: LocalTurnDeps = {
   },
   agentKey: (agentId) => engineManager.agentKey(agentId),
   agentModel: (agentId) => engineManager.agentModel(agentId),
-  skipReason: (agentId) =>
-    engineManager.lastSkips().agents.find((a) => a.agentId === agentId)?.reason ?? null,
+  // Through the shared describer: this is shown to the user as a whole turn
+  // error, and the code used to arrive as a sentence fragment ("its runtime
+  // names no model") that read as a non-sentence on its own.
+  skipReason: (agentId) => {
+    const code = engineManager.lastSkips().agents.find((a) => a.agentId === agentId)?.code
+    return code ? describeEngineSkip(code) : null
+  },
   request: (path, init) => engineManager.request(path, init),
   bus: engineEventBus,
   getAgent: (userId, agentId) => {

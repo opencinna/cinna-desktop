@@ -2,7 +2,7 @@
   "name": "cinna-agent-contract",
   "title": "Cinna agent folder contract",
   "description": "The machine-readable half of the cinna-core start-kit: the manifest schema, the folder model and the agent/root templates. Everything a tool needs to create, read, validate and export an agent folder without reading a guide.",
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "schema": "schema/cinna-agent.schema.json",
   "layout": "layout.json",
   "templates": {

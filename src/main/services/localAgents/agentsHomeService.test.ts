@@ -17,6 +17,15 @@ import { createTestDatabase, type TestDatabase } from '../../db/testSupport/node
  */
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
+/**
+ * The contract version this build bundles, read rather than pinned: what these
+ * tests assert is that the scaffolder records *the contract it built against*,
+ * which is a property of the code, not of any particular version number.
+ */
+const BUNDLED_CONTRACT = readFileSync(
+  join(repoRoot, 'resources/cinna-kit-contract/VERSION'),
+  'utf8'
+).trim()
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 
 vi.mock('electron', () => ({
@@ -239,6 +248,6 @@ describe('the workshop contract copy', () => {
     clearContractCache()
     agentsHomeService.ensureHome(USER)
 
-    expect(JSON.parse(readFileSync(kitJson, 'utf8')).contract_version).toBe('1.0.0')
+    expect(JSON.parse(readFileSync(kitJson, 'utf8')).contract_version).toBe(BUNDLED_CONTRACT)
   })
 })

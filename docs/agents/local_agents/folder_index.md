@@ -8,7 +8,7 @@ Phase 2 of Local Agents. No UI of its own — the Agents tab and the agent page 
 
 ## A note on paths
 
-Three trees are discussed here and their paths look alike, so they are written differently throughout — the same convention the [cinna-core handover](cinna_core_handover.md) uses:
+Three trees are discussed here and their paths look alike, so they are written differently throughout:
 
 | Written as | Means |
 |---|---|
@@ -257,7 +257,6 @@ Files on disk  ── truth ──►  agents rows + agent_roots rows  ── de
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest reader, validator, layout rules and templates every scan and scaffold runs on; also the stamp used by every write
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the registered roots are exactly the allowed area of its path guard, registered by this slice at IPC registration. Until that runs, open-in refuses everything
 - [Agents](../agents/agents.md) — folder agents join the same merged agents list, the same id-prefix scope resolution, and the same `enabled` toggle; A2A endpoint and token resolution short-circuit for them
-- [cinna-core handover](cinna_core_handover.md) — the folder shape this layer reads, and the changes asked of the kit and the server
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — folder agents are machine-local and live in the default (settings) scope
 - [Database Migrations](../../development/migrations/migrations_llm.md) — `agent_roots`, the `agents` columns, and why the chain moved into its own module
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session

@@ -15,6 +15,10 @@
  * the engine directly and route around the runner.
  */
 
+import type { ModelOrigin } from './runtimeDefaults'
+import type { EngineSkipCode } from './runtimeMessages'
+import type { WorkComplexity } from './modelFamilies'
+
 /**
  * Where the running `opencode` binary came from.
  *
@@ -72,11 +76,16 @@ export interface EngineState {
  * chatted with, which is indistinguishable from a bug in this app.
  *
  * Empty until a config has been generated, which is to say until the engine has
- * been started at least once. `reason` is a phrase, not a sentence: the card
- * puts it after "Cinna's engine skipped this agent because…".
+ * been started at least once.
+ *
+ * A **code**, not a phrase. It used to travel as the second half of a sentence
+ * the agent page completed, which meant `configGenerator` — a module about
+ * OpenCode's config shape — silently owned a line of user-facing copy on a
+ * screen at its narrowest supported width, with no test asserting the result.
+ * `describeEngineSkip` in `shared/runtimeMessages` now owns the words.
  */
 export interface EngineSkips {
-  agents: { agentId: string; reason: string }[]
+  agents: { agentId: string; code: EngineSkipCode }[]
 }
 
 /** Main → renderer push whenever {@link EngineState} changes. */
@@ -111,6 +120,21 @@ export interface ResolvedRuntime {
   credentialName: string | null
   credentialType: string | null
   modelId: string | null
+  /**
+   * How {@link modelId} was arrived at — a manifest model, a Work Complexity
+   * tier resolved against the credential's catalogue, the Default runtime, or the
+   * Medium floor. Separate from {@link reason} on purpose: a substitution is not
+   * a failure, and folding it into the failure sentence would make every caller
+   * that tests `reason !== null` treat a working agent as a broken one.
+   */
+  modelSource: ModelOrigin
+  /**
+   * For `modelSource === 'substituted'`: the model the manifest still names,
+   * which the credential no longer lists. The manifest is never rewritten from
+   * this — the substitution is reported, so the file keeps saying what the user
+   * wrote.
+   */
+  replacedModelId: string | null
   /** One sentence when this runtime cannot run. Null when it can. */
   reason: string | null
 }
@@ -126,5 +150,12 @@ export interface ResolvedRuntime {
 export interface LocalAgentRuntimeInput {
   /** A credential **name** — what the manifest carries, so it travels. */
   credential: string | null
+  /** A concrete model id — the Advanced picker's answer. */
   modelId: string | null
+  /**
+   * A Work Complexity tier — the plain picker's answer, and the portable one.
+   * Mutually exclusive with {@link modelId}: `runtimeService` refuses both at
+   * once rather than inventing a precedence nobody would remember.
+   */
+  complexity: WorkComplexity | null
 }

@@ -27,6 +27,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsDefaultTool: '',
   // Only meaningful with a default tool set: skip the "build it with…" step.
   localAgentsAutoOpen: false,
+  // Work Complexity is the default view; the raw model list is opt-in.
+  localAgentsModelAdvanced: false,
   // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
   localDevConsent: ''
 }

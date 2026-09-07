@@ -72,6 +72,17 @@ export interface AppSettingsSchema {
    */
   localAgentsAutoOpen: boolean
   /**
+   * When true, the agent page's "Runs with" panel offers the raw model list
+   * instead of the Simple / Medium / Complex tier.
+   *
+   * A remembered preference, not a mode: it decides the view only for an agent
+   * whose manifest expresses neither choice. An agent that names a model is
+   * always shown the model picker and one that names a tier is always shown the
+   * tier, because a panel that hid what the file says would misreport what the
+   * agent runs on — the one thing this panel exists to get right.
+   */
+  localAgentsModelAdvanced: boolean
+  /**
    * Which Cinna hosts the user has agreed to set up local development for, as
    * a JSON object of `{ "<host>": true | false }`.
    *

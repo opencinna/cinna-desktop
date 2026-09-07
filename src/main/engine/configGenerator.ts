@@ -56,6 +56,7 @@ import {
   type EngineProviderType
 } from './modelLimits'
 import { GEMINI_OPENAI_BASE_URL } from './modelTransports'
+import type { EngineSkipCode } from '../../shared/runtimeMessages'
 
 const logger = createLogger('engine-config')
 
@@ -216,10 +217,17 @@ export interface SkippedProvider {
   reason: string
 }
 
-/** An agent that could not become an agent entry, and why. */
+/**
+ * An agent that could not become an agent entry, and why — as a **code**.
+ *
+ * This module knows about OpenCode's config shape, not about copy. The reason
+ * used to travel from here as the tail of a sentence the agent page completed,
+ * so an edit in this file rewrote a line on that screen with nothing asserting
+ * the result. `describeEngineSkip` owns the words now.
+ */
 export interface SkippedAgent {
   agentId: string
-  reason: string
+  code: EngineSkipCode
 }
 
 /**
@@ -401,12 +409,12 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     if (!providerKey) {
       skippedAgents.push({
         agentId: agent.agentId,
-        reason: 'its runtime credential is not available to the local engine'
+        code: 'credential_unavailable' as const
       })
       continue
     }
     if (!agent.modelId) {
-      skippedAgents.push({ agentId: agent.agentId, reason: 'its runtime names no model' })
+      skippedAgents.push({ agentId: agent.agentId, code: 'no_model' as const })
       continue
     }
     const key = engineAgentKey(agent.agentId, agent.slug)

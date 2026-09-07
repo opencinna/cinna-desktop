@@ -14,7 +14,7 @@ Three parties write these folders and never talk to each other — this desktop,
 
 ## Core Concepts
 
-- **Kit Contract** — The bundled tree at `resources/cinna-kit-contract/`: `kit.json` (identity + version), `VERSION`, `CHANGELOG.md`, `schema/cinna-agent.schema.json`, `layout.json`, and the two template trees. Pinned at contract version `1.0.0`
+- **Kit Contract** — The bundled tree at `resources/cinna-kit-contract/`: `kit.json` (identity + version), `VERSION`, `CHANGELOG.md`, `schema/cinna-agent.schema.json`, `layout.json`, and the two template trees. Pinned at contract version `1.1.0`
 - **Agent Manifest** — `cinna-agent.json` at an agent folder's root. The one file every tool that touches the folder agrees on: identity, prompts paths, credential slots, schedules, handovers, publications
 - **Agents Root** (a.k.a. workshop) — The folder agent folders live under. May carry its own `.cinna-kit/` copy of the contract, pulled by a later contract refresh
 - **Contract Version** — Semver on the folder and on the tool. The compatibility gate — see [Three versions, three questions](#three-versions-three-questions)
@@ -138,6 +138,14 @@ So the three shapes that do this are detected, not guessed at:
 
 The validator **never throws**. Its callers are a scanner and a page, and neither may crash on a file someone is mid-edit.
 
+#### Reading is tolerant, writing is strict
+
+The two grades are not interchangeable, and an `error` is not a stronger message — it is a decision about whether the agent exists. The scanner turns any error into readiness `invalid`, and an `invalid` folder is dropped from the engine config entirely, so an error is "this folder does not run".
+
+That is why everything a **newer minor** of the contract might add is reported as a warning. The two `runtime.complexity` cases are the worked example: a value outside the three the contract defines, and a manifest carrying `model` *and* `complexity` at once. Erroring on either would brick a folder written by a future 1.x tool, which is precisely what "minor bumps are additive and safe to ignore" promises against and what the compatibility gate — same major, run as-is — says will not happen. Both have defined behaviour instead of a refusal: an unrecognised tier reads as no tier, and where both keys are present the **model wins**.
+
+Writing is the other half, and it is strict: this desktop refuses to write either shape. Tolerating what another tool wrote and being careless about what we write are different jobs, and a tool that emitted a manifest its own validator then flagged would be teaching the user to ignore its own findings.
+
 ### Scaffold ignore files
 
 Ignore rules ship **dotless** in the template trees and the scaffolder restores the dot in the created folder — shipping them dotted would make them live ignore rules wherever the contract is stored, hiding scaffold files from that repository. The pairs are declared in `layout.json`'s `scaffold_ignore_files`, per template tree, and a scaffolder must read that list rather than hard-code it: the set has already grown once (`app-data/cache/gitignore`), and a scaffolder that missed the addition left a cache folder tracked by git.
@@ -165,7 +173,7 @@ No mtime, no inode, no size, no directory order, nothing machine-specific. Two m
 ## Architecture Overview
 
 ```
-resources/cinna-kit-contract/          (bundled, pinned at 1.0.0)
+resources/cinna-kit-contract/          (bundled, pinned at 1.1.0)
   kit.json  VERSION  CHANGELOG.md
   schema/cinna-agent.schema.json       <- the manifest rules
   layout.json                          <- the folder model as data
@@ -190,7 +198,6 @@ No IPC, no renderer, no SQLite in this layer.
 ## Integration Points
 
 - [Open in… (Local Agent Tools)](open_in_tools.md) — Phase 4 of the same feature; hands a validated agent folder to the user's own assistant or editor. Shares the Agents Root concept
-- [cinna-core handover](cinna_core_handover.md) — the document written for the cinna-core team explaining what the start-kit and server must change to adopt this contract as canonical. Read it for the rationale behind the contract/guides split, the legacy exemption, and the byte-identical-scaffold and same-`content_hash` conformance checks. **Maintained by the cinna-core side; do not edit it from here**
 - [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — `KitError` follows the standard `DomainError` code convention
 - [Database Migrations](../../development/migrations/migrations_llm.md) — relevant only to note that this layer adds *none*
 

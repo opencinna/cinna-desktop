@@ -136,7 +136,13 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
     // A folder that does not validate has no business being handed to a model:
     // its prompt files may be half-written and its manifest may say anything.
     if (agent.readiness === 'invalid' || agent.readiness === 'contract_too_new') continue
-    const runtime = runtimeService.resolve(agent.runtime, providers)
+    // The cached catalogue, not a fresh fetch: a Work Complexity tier is
+    // resolved against what the credential actually lists, and `refreshModelCache`
+    // has already run for this build (or deliberately not, on a reconcile —
+    // see `collectEngineConfigInput`). Handing `resolve` the same snapshot the
+    // rest of the config is built from is what keeps a reconcile from deciding
+    // the config changed because a gateway was briefly unreachable.
+    const runtime = runtimeService.resolve(agent.runtime, providers, cachedModels)
     out.push({
       agentId: agent.id,
       slug: agent.slug,

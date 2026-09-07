@@ -183,7 +183,7 @@ describe('runtimeService.resolve', () => {
     const resolved = runtimeService.resolve({ credential: 'OpenAI' }, mixed)
     expect(resolved.credentialId).toBe('p3')
     expect(resolved.modelId).toBeNull()
-    expect(resolved.reason).toMatch(/no model to run on/i)
+    expect(resolved.reason).toMatch(/No models listed for this credential/)
   })
 
   it('keeps the default’s model on a second credential of the same type', () => {
@@ -242,7 +242,7 @@ describe('runtimeService.resolve', () => {
     const resolved = runtimeService.resolve({ credential: 'Somebody else’s' }, providers)
     expect(resolved.credentialId).toBe('p1')
     expect(resolved.credentialRef).toBe('Somebody else’s')
-    expect(resolved.reason).toMatch(/not configured here/)
+    expect(resolved.reason).toMatch(/not configured on this machine/)
   })
 
   it('has no runtime at all when neither the manifest nor a default resolves', () => {
@@ -256,7 +256,7 @@ describe('runtimeService.resolve', () => {
 describe('runtimeService.applyToManifest', () => {
   it('writes a credential name and a model', () => {
     const manifest: CinnaAgentManifest = {}
-    runtimeService.applyToManifest(manifest, { credential: 'Work', modelId: 'gpt-5' })
+    runtimeService.applyToManifest(manifest, { credential: 'Work', modelId: 'gpt-5', complexity: null })
     expect(manifest.runtime).toEqual({ credential: 'Work', model: 'gpt-5' })
   })
 
@@ -264,7 +264,7 @@ describe('runtimeService.applyToManifest', () => {
     const manifest: CinnaAgentManifest = {}
     for (const value of ['sk-ant-api03-abc', 'ghp_abcdef', 'AIzaSyABCDEF', 'AKIAIOSFODNN7']) {
       expect(() =>
-        runtimeService.applyToManifest(manifest, { credential: value, modelId: null })
+        runtimeService.applyToManifest(manifest, { credential: value, modelId: null, complexity: null })
       ).toThrow(/looks like an API key/i)
     }
     // Nothing was written on the way through.
@@ -273,7 +273,7 @@ describe('runtimeService.applyToManifest', () => {
 
   it('removes the block entirely when both fields are cleared', () => {
     const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
-    runtimeService.applyToManifest(manifest, { credential: null, modelId: null })
+    runtimeService.applyToManifest(manifest, { credential: null, modelId: null, complexity: null })
     // `{}` rather than absence would show up as a change in the user's manifest
     // diff that they did not make.
     expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
@@ -283,7 +283,7 @@ describe('runtimeService.applyToManifest', () => {
     const manifest: CinnaAgentManifest = {
       runtime: { credential: 'Work', model: 'gpt-5', permissions: { bash: 'deny' } }
     }
-    runtimeService.applyToManifest(manifest, { credential: null, modelId: null })
+    runtimeService.applyToManifest(manifest, { credential: null, modelId: null, complexity: null })
     expect(manifest.runtime).toEqual({ permissions: { bash: 'deny' } })
   })
 
@@ -291,7 +291,7 @@ describe('runtimeService.applyToManifest', () => {
     const manifest: CinnaAgentManifest = {
       runtime: { credential: 'Work', model: 'gpt-5', somethingNewer: 42 }
     }
-    runtimeService.applyToManifest(manifest, { credential: 'Personal', modelId: 'claude' })
+    runtimeService.applyToManifest(manifest, { credential: 'Personal', modelId: 'claude', complexity: null })
     expect(manifest.runtime).toEqual({
       somethingNewer: 42,
       credential: 'Personal',
@@ -301,19 +301,269 @@ describe('runtimeService.applyToManifest', () => {
 
   it('treats whitespace as clearing, and refuses a non-string', () => {
     const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
-    runtimeService.applyToManifest(manifest, { credential: '  ', modelId: '  ' })
+    runtimeService.applyToManifest(manifest, { credential: '  ', modelId: '  ', complexity: null })
     expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
     expect(() =>
       runtimeService.applyToManifest(manifest, {
         credential: 42 as unknown as string,
-        modelId: null
+        modelId: null,
+        complexity: null
       })
     ).toThrow(/must be text/i)
   })
 
   it('refuses a value long enough to be a pasted key', () => {
     expect(() =>
-      runtimeService.applyToManifest({}, { credential: 'x'.repeat(500), modelId: null })
+      runtimeService.applyToManifest({}, { credential: 'x'.repeat(500), modelId: null, complexity: null })
     ).toThrow(/too long/i)
+  })
+})
+
+/**
+ * Work Complexity, on the resolution side.
+ *
+ * These are the assertions that stop the engine and the "Runs with" panel
+ * drifting apart: both call `resolveRuntimeModel`, so what is tested here is
+ * that `resolve` feeds it the right catalogue (the *chosen* credential's, not
+ * the aggregate registry) and reports what came back honestly enough for the
+ * panel and the skip list to explain themselves.
+ */
+describe('resolve — work complexity', () => {
+  const anthropic = provider({ id: 'p1', name: 'Anthropic', type: 'anthropic' })
+  const openai = provider({ id: 'p2', name: 'OpenAI', type: 'openai' })
+  const providers = [anthropic, openai]
+  const catalogue = [
+    { id: 'claude-haiku-4-5', providerId: 'p1' },
+    { id: 'claude-sonnet-4-5', providerId: 'p1' },
+    { id: 'claude-opus-4-1-20250805', providerId: 'p1' },
+    { id: 'gpt-5-mini', providerId: 'p2' },
+    { id: 'gpt-5', providerId: 'p2' }
+  ]
+
+  it('resolves a tier against the chosen credential, not the whole registry', () => {
+    const result = runtimeService.resolve(
+      { credential: 'OpenAI', complexity: 'simple' },
+      providers,
+      catalogue
+    )
+    expect(result.modelId).toBe('gpt-5-mini')
+    expect(result.modelSource).toBe('tier')
+    expect(result.reason).toBeNull()
+  })
+
+  it('does not lend one credential’s catalogue to another of the same type', () => {
+    // Two OpenAI keys — a personal one and an account-provisioned one — is a
+    // shape this app supports, and they do not list the same models. Filtering
+    // by provider *type* instead of by row would resolve a tier to a model the
+    // chosen key cannot call, which fails on the agent's first turn.
+    const second = provider({ id: 'p3', name: 'Work OpenAI', type: 'openai' })
+    const split = [
+      { id: 'gpt-5-mini', providerId: 'p2' },
+      { id: 'gpt-4o-mini', providerId: 'p3' }
+    ]
+    const result = runtimeService.resolve(
+      { credential: 'Work OpenAI', complexity: 'simple' },
+      [...providers, second],
+      split
+    )
+    expect(result.modelId).toBe('gpt-4o-mini')
+  })
+
+  it('does not call a model current because a sibling credential lists it', () => {
+    const second = provider({ id: 'p3', name: 'Work OpenAI', type: 'openai' })
+    const split = [
+      { id: 'gpt-5.4-mini', providerId: 'p2' },
+      { id: 'gpt-5.5-mini', providerId: 'p3' }
+    ]
+    const result = runtimeService.resolve(
+      { credential: 'Work OpenAI', model: 'gpt-5.4-mini' },
+      [...providers, second],
+      split
+    )
+    expect(result.modelId).toBe('gpt-5.5-mini')
+    expect(result.modelSource).toBe('substituted')
+  })
+
+  it('says so, and runs nothing, when the credential lists no model in the tier', () => {
+    const result = runtimeService.resolve(
+      { credential: 'OpenAI', complexity: 'complex' },
+      providers,
+      catalogue
+    )
+    expect(result.modelId).toBeNull()
+    // Action first: this line truncates at the 800px minimum window, so the
+    // half that survives has to be the half the user can act on.
+    expect(result.reason).toMatch(/^Pick another complexity or another credential/)
+    expect(result.reason).toMatch(/OpenAI lists no model for Complex work/)
+  })
+
+  it('does not claim a catalogue lists nothing when none was read', () => {
+    const result = runtimeService.resolve({ credential: 'OpenAI', complexity: 'simple' }, providers)
+    expect(result.reason).toMatch(/model list has not loaded/i)
+  })
+
+  it('borrows nothing from the default runtime when a tier comes up empty', () => {
+    defaultMode.current = { providerId: 'p1', modelId: 'claude-opus-4-1-20250805' }
+    const result = runtimeService.resolve(
+      { credential: 'OpenAI', complexity: 'complex' },
+      providers,
+      catalogue
+    )
+    // The user asked for Complex on OpenAI. Quietly running Anthropic's Opus
+    // would be a different tier *and* a different bill.
+    expect(result.modelId).toBeNull()
+  })
+
+  it('resolves a tier against the fallback credential when the named one is missing', () => {
+    // A cloned folder naming a colleague's credential. The panel falls back to
+    // the default runtime's credential and resolves the tier against *its*
+    // catalogue, so this must too — labelling the select `Simple (Haiku)` while
+    // the engine built the default mode's Sonnet is the panel-predicts-a-
+    // different-runtime defect, and a bill for work declared simple.
+    defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4-5' }
+    const result = runtimeService.resolve(
+      { credential: 'Anthropic Work', complexity: 'simple' },
+      providers,
+      catalogue
+    )
+    expect(result.modelId).toBe('claude-haiku-4-5')
+    expect(result.modelSource).toBe('tier')
+    expect(result.reason).toMatch(/not configured on this machine/)
+  })
+
+  it('substitutes against the fallback credential’s catalogue too', () => {
+    defaultMode.current = { providerId: 'p2', modelId: null }
+    const retired = [
+      { id: 'gpt-5.5-mini', providerId: 'p2' },
+      { id: 'gpt-5', providerId: 'p2' }
+    ]
+    const result = runtimeService.resolve(
+      { credential: 'Nope', model: 'gpt-5.4-mini' },
+      providers,
+      retired
+    )
+    expect(result.modelId).toBe('gpt-5.5-mini')
+    expect(result.modelSource).toBe('substituted')
+  })
+
+  it('substitutes the nearest sibling for a model the catalogue dropped, and says which', () => {
+    const retired = [
+      { id: 'gpt-5.5-mini', providerId: 'p2' },
+      { id: 'gpt-5', providerId: 'p2' }
+    ]
+    const result = runtimeService.resolve(
+      { credential: 'OpenAI', model: 'gpt-5.4-mini' },
+      providers,
+      retired
+    )
+    expect(result.modelId).toBe('gpt-5.5-mini')
+    expect(result.modelSource).toBe('substituted')
+    expect(result.replacedModelId).toBe('gpt-5.4-mini')
+  })
+
+  it('leaves a declared model alone when the credential lists nothing to check it against', () => {
+    // A gateway that does not implement `/models`. "Nothing lists it" must not
+    // read as "it is stale".
+    const result = runtimeService.resolve(
+      { credential: 'OpenAI', model: 'some-gateway-model' },
+      providers,
+      []
+    )
+    expect(result.modelId).toBe('some-gateway-model')
+    expect(result.modelSource).toBe('declared')
+  })
+
+  it('floors an otherwise model-less agent at Medium on the credential it was given', () => {
+    // The dead end this replaces: a default chat mode on "First available",
+    // a credential with no default model, and an agent that could not run.
+    defaultMode.current = { providerId: 'p1', modelId: null }
+    const result = runtimeService.resolve(null, providers, catalogue)
+    expect(result.modelId).toBe('claude-sonnet-4-5')
+    expect(result.modelSource).toBe('floor')
+    expect(result.reason).toBeNull()
+  })
+
+  it('never floors onto a credential the user did not choose', () => {
+    defaultMode.current = null
+    const result = runtimeService.resolve(null, providers, catalogue)
+    expect(result.credentialId).toBeNull()
+    expect(result.modelId).toBeNull()
+    expect(result.reason).toMatch(/default chat mode/i)
+  })
+
+  it('still prefers the default runtime’s own model over the floor', () => {
+    defaultMode.current = { providerId: 'p1', modelId: 'claude-opus-4-1-20250805' }
+    const result = runtimeService.resolve(null, providers, catalogue)
+    expect(result.modelId).toBe('claude-opus-4-1-20250805')
+    expect(result.modelSource).toBe('inherited')
+  })
+
+  it('reports the default runtime’s own complaint for an agent that declares nothing', () => {
+    defaultMode.current = { providerId: 'p3', modelId: null }
+    const result = runtimeService.resolve(null, providers, catalogue)
+    expect(result.reason).toMatch(/no longer has/i)
+  })
+})
+
+describe('applyToManifest — work complexity', () => {
+  it('writes a tier and clears the model it replaces', () => {
+    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
+    runtimeService.applyToManifest(manifest, {
+      credential: 'Work',
+      modelId: null,
+      complexity: 'medium'
+    })
+    expect(manifest.runtime).toEqual({ credential: 'Work', complexity: 'medium' })
+  })
+
+  it('writes a model and clears the tier it replaces', () => {
+    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', complexity: 'medium' } }
+    runtimeService.applyToManifest(manifest, {
+      credential: 'Work',
+      modelId: 'gpt-5',
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ credential: 'Work', model: 'gpt-5' })
+  })
+
+  it('refuses both at once rather than inventing a precedence', () => {
+    expect(() =>
+      runtimeService.applyToManifest(
+        {},
+        { credential: null, modelId: 'gpt-5', complexity: 'simple' }
+      )
+    ).toThrow(/not both/i)
+  })
+
+  it('refuses a tier the contract does not define', () => {
+    expect(() =>
+      runtimeService.applyToManifest({}, {
+        credential: null,
+        modelId: null,
+        complexity: 'extreme' as never
+      })
+    ).toThrow(/simple, medium or complex/i)
+  })
+
+  it('removes the runtime block when the tier is cleared too', () => {
+    const manifest: CinnaAgentManifest = { runtime: { complexity: 'complex' } }
+    runtimeService.applyToManifest(manifest, {
+      credential: null,
+      modelId: null,
+      complexity: null
+    })
+    expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
+  })
+
+  it('preserves unknown runtime keys across a tier write', () => {
+    const manifest: CinnaAgentManifest = {
+      runtime: { model: 'gpt-5', permissions: { bash: 'ask' }, future: 1 }
+    }
+    runtimeService.applyToManifest(manifest, {
+      credential: null,
+      modelId: null,
+      complexity: 'simple'
+    })
+    expect(manifest.runtime).toEqual({ permissions: { bash: 'ask' }, future: 1, complexity: 'simple' })
   })
 })

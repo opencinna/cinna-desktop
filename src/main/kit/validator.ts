@@ -46,6 +46,7 @@ import {
   type CinnaAgentManifest
 } from '../../shared/kit/manifest'
 import { checkContractCompatibility, compareVersionStrings } from '../../shared/kit/contractVersion'
+import { isWorkComplexity } from '../../shared/modelFamilies'
 import { KitError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { matchesPattern, type LayoutView } from './layout'
@@ -314,6 +315,38 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
     const value = runtime[key]
     if (value !== undefined && value !== null && typeof value !== 'string') {
       report.error('manifest.runtime.type', `\`runtime.${key}\` must be a string or null.`, MANIFEST_FILE)
+    }
+  }
+  // Contract 1.1.0, and warnings rather than errors on purpose.
+  //
+  // An error here is not a message: `scannerService` turns one into readiness
+  // `invalid`, and `collectEngineAgents` drops an invalid folder from the engine
+  // entirely. So erroring on a `complexity` this build does not recognise would
+  // brick a folder written by a *newer 1.x tool* — precisely what the contract's
+  // "minor bumps are additive and safe to ignore" promises against, and what
+  // `checkContractCompatibility` returning `ok` for every same-major folder
+  // says will not happen.
+  //
+  // Both cases have defined behaviour instead of a refusal to run: an
+  // unrecognised tier reads as no tier (`isWorkComplexity` in `runtimeService`),
+  // and a manifest carrying both falls to the model (`resolveRuntimeModel`
+  // checks it first). Writing either is still refused — `applyToManifest` throws
+  // — because tolerating what others wrote and being strict about what we write
+  // are different jobs.
+  const complexity = runtime.complexity
+  if (complexity !== undefined && complexity !== null) {
+    if (!isWorkComplexity(complexity)) {
+      report.warn(
+        'manifest.runtime.complexity',
+        '`runtime.complexity` should be `simple`, `medium` or `complex`. This one is not recognised, so the agent runs on the host default instead.',
+        MANIFEST_FILE
+      )
+    } else if (typeof runtime.model === 'string' && runtime.model.trim() !== '') {
+      report.warn(
+        'manifest.runtime.complexity',
+        '`runtime.complexity` and `runtime.model` are both set — one names a model, the other asks the host to choose one. The model wins; remove whichever you did not mean.',
+        MANIFEST_FILE
+      )
     }
   }
   const credential = runtime.credential
