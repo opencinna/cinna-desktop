@@ -24,7 +24,7 @@ import type { ProviderDto } from '../providerService'
  */
 
 const defaultMode = vi.hoisted(
-  () => ({ current: null as { providerId: string; modelId: string } | null })
+  () => ({ current: null as { providerId: string; modelId: string | null } | null })
 )
 
 vi.mock('../chatModeService', () => ({
@@ -96,6 +96,17 @@ describe('runtimeService.resolveDefault', () => {
     expect(resolved.reason).toMatch(/default chat mode/i)
   })
 
+  it('falls through to the credential’s own default when the mode names no model', () => {
+    // A default mode on "First available". `resolve` returns this object
+    // verbatim for an agent with no runtime block, so a null here is an agent
+    // the engine drops for naming no model.
+    defaultMode.current = { providerId: 'p1', modelId: null }
+    const resolved = runtimeService.resolveDefault([
+      provider({ id: 'p1', name: 'Personal', defaultModelId: 'claude-opus-4-1' })
+    ])
+    expect(resolved.modelId).toBe('claude-opus-4-1')
+  })
+
   it('resolves the default chat mode’s credential and model', () => {
     defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4-5' }
     const resolved = runtimeService.resolveDefault([provider({ id: 'p1', name: 'Personal' })])
@@ -134,6 +145,12 @@ describe('runtimeService.resolve', () => {
     })
   })
 
+  it('gives an agent with no runtime block the same model the panel shows it', () => {
+    defaultMode.current = { providerId: 'p1', modelId: null }
+    const own = [provider({ id: 'p1', name: 'Personal', defaultModelId: 'claude-opus-4-1' })]
+    expect(runtimeService.resolve(null, own).modelId).toBe('claude-opus-4-1')
+  })
+
   it('prefers the manifest over the default', () => {
     expect(
       runtimeService.resolve({ credential: 'Work', model: 'other-model' }, providers)
@@ -152,6 +169,72 @@ describe('runtimeService.resolve', () => {
     expect(runtimeService.resolve({ model: 'opus-only' }, providers)).toMatchObject({
       credentialId: 'p1',
       modelId: 'opus-only'
+    })
+  })
+
+  it('does not lend the default’s model to a credential that is not the default’s', () => {
+    // The engine builds `<credential>/<model>` verbatim, so an OpenAI
+    // credential carrying the default mode's `claude-…` is a config that saves
+    // and then fails on the agent's first turn.
+    const mixed = [
+      provider({ id: 'p1', name: 'Personal' }),
+      provider({ id: 'p3', name: 'OpenAI', type: 'openai' })
+    ]
+    const resolved = runtimeService.resolve({ credential: 'OpenAI' }, mixed)
+    expect(resolved.credentialId).toBe('p3')
+    expect(resolved.modelId).toBeNull()
+    expect(resolved.reason).toMatch(/no model to run on/i)
+  })
+
+  it('keeps the default’s model on a second credential of the same type', () => {
+    // A personal Anthropic key beside the account-provisioned one. The model id
+    // is the provider's, not the row's, so this pairing runs — dropping it would
+    // silently take a working agent off the air.
+    const two = [provider({ id: 'p1', name: 'Personal' }), provider({ id: 'p2', name: 'Mine' })]
+    expect(runtimeService.resolve({ credential: 'Mine' }, two)).toMatchObject({
+      credentialId: 'p2',
+      modelId: 'default-model',
+      reason: null
+    })
+  })
+
+  it('falls through to the credential’s own default when the mode names no model', () => {
+    // The chat mode's "First available": `modelId` is null, and the credential's
+    // own default is what the user set in Settings → AI Credentials.
+    defaultMode.current = { providerId: 'p1', modelId: null }
+    const own = [provider({ id: 'p1', name: 'Personal', defaultModelId: 'claude-opus-4-1' })]
+    expect(runtimeService.resolve({ credential: 'Personal' }, own)).toMatchObject({
+      credentialId: 'p1',
+      modelId: 'claude-opus-4-1'
+    })
+  })
+
+  it('uses the chosen credential’s own default model when it has one', () => {
+    const mixed = [
+      provider({ id: 'p1', name: 'Personal' }),
+      provider({ id: 'p3', name: 'OpenAI', type: 'openai', defaultModelId: 'gpt-5' })
+    ]
+    expect(runtimeService.resolve({ credential: 'OpenAI' }, mixed)).toMatchObject({
+      credentialId: 'p3',
+      modelId: 'gpt-5',
+      reason: null
+    })
+  })
+
+  it('does not lend a model between two openai_compatible gateways', () => {
+    // Same type, two different catalogues that merely share a wire format.
+    defaultMode.current = { providerId: 'g1', modelId: 'llama-3.1-70b' }
+    const gateways = [
+      provider({ id: 'g1', name: 'Gateway A', type: 'openai_compatible' }),
+      provider({ id: 'g2', name: 'Gateway B', type: 'openai_compatible' })
+    ]
+    expect(runtimeService.resolve({ credential: 'Gateway B' }, gateways).modelId).toBeNull()
+  })
+
+  it('still borrows the default’s model when the manifest names the default’s credential', () => {
+    expect(runtimeService.resolve({ credential: 'Personal' }, providers)).toMatchObject({
+      credentialId: 'p1',
+      modelId: 'default-model'
     })
   })
 

@@ -43,6 +43,7 @@ import { SECRET_LOOKALIKE } from '../../kit/validator'
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { LocalAgentRuntimeInput, ResolvedRuntime } from '../../../shared/engine'
+import { inheritedModelId } from '../../../shared/runtimeDefaults'
 
 /** Longest a credential reference may be. The schema's own ceiling. */
 const MAX_CREDENTIAL_REF = 200
@@ -121,7 +122,17 @@ export const runtimeService = {
       credentialId: provider.id,
       credentialName: provider.name,
       credentialType: provider.type,
-      modelId: mode.modelId,
+      // Through the shared chain, not `mode.modelId` raw: a default mode left on
+      // "First available" carries no model, and the credential's own default is
+      // the answer — on *this* path too. `resolve` returns this object verbatim
+      // for a manifest with no runtime block, which is every freshly scaffolded
+      // agent, so a short-circuit here is a divergence the Runs with panel
+      // cannot see and the engine turns into "its runtime names no model".
+      modelId: inheritedModelId(provider, {
+        credentialId: provider.id,
+        credentialType: provider.type,
+        modelId: mode.modelId
+      }),
       reason: isUsable(provider)
         ? null
         : `Your default chat mode uses “${provider.name}”, which has no API key this app can use.`
@@ -136,6 +147,11 @@ export const runtimeService = {
    * it declares one — an agent that asked for a particular model asked for it
    * regardless of which key pays for it. A manifest that names only a model
    * likewise borrows the default's credential.
+   *
+   * The default's *model*, though, is borrowed only where it can actually run:
+   * `inheritedModelId` in `shared/runtimeDefaults` owns that chain, and the
+   * Runs with panel calls the same function so its `Default (…)` label and this
+   * resolution cannot drift apart.
    */
   resolve(
     runtime: AgentRuntimeRef | null | undefined,
@@ -161,7 +177,7 @@ export const runtimeService = {
 
     const chosen = provider ?? null
     const credentialId = chosen?.id ?? fallback.credentialId
-    const modelId = model || fallback.modelId
+    const modelId = model || inheritedModelId(chosen, fallback)
     return {
       source: 'manifest',
       credentialRef: ref === '' ? null : ref,
@@ -171,9 +187,9 @@ export const runtimeService = {
       modelId,
       reason:
         credentialId === null
-          ? 'This agent has no credential to run on. Choose one in the Runtime card.'
+          ? 'This agent has no credential to run on. Choose one in the Runs with panel.'
           : modelId === null
-            ? 'This agent has no model to run on. Choose one in the Runtime card.'
+            ? 'This agent has no model to run on. Choose one in the Runs with panel.'
             : chosen && !isUsable(chosen)
               ? `“${chosen.name}” has no API key this app can use.`
               : null

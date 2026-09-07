@@ -8,6 +8,7 @@ import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/u
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
+import { inheritedModelId, modelBelongsElsewhere } from '../../../../../shared/runtimeDefaults'
 
 /**
  * "Runs with": the one thing on this page a user actually configures.
@@ -23,10 +24,17 @@ import { isStaleWriteError } from '../../../../../shared/localAgents'
  * open cannot be clobbered.
  *
  * Both pickers read from the hooks the rest of the app already uses —
- * `useProviders` and `useModels` — rather than fetching a parallel list. The
- * consequence to keep in mind: `useModels` is the *aggregate registry*, so a
- * credential whose models it has nothing for shows an empty model list, which
- * is why the model select stays enabled with a free-text fallback below it.
+ * `useProviders` and `useModels` — rather than fetching a parallel list, and
+ * what "Default" resolves to comes from `shared/runtimeDefaults`, the same
+ * function the engine's own resolution calls. That sharing is the point: the
+ * bug this panel was rebuilt around was a label that predicted a different
+ * runtime than the one the engine would build.
+ *
+ * The consequence to keep in mind: `useModels` is the *aggregate registry* and
+ * one network round trip per credential, so it lands after the provider list.
+ * Until it does, the pickers cannot answer honestly — a model the registry has
+ * not listed yet is indistinguishable from one that belongs to another
+ * credential — so they wait, and the reserved line below them says so.
  */
 
 const FIELD =
@@ -36,22 +44,7 @@ const FIELD =
 const LABEL = 'mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]'
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
-
-/**
- * Why the engine left this agent out of its config, if it did.
- *
- * The panel's own warnings are derived from the manifest and the credential
- * list, so they cover the cases a user can see for themselves. This covers the
- * ones they cannot: a credential that exists and has a key but that the engine
- * refuses — an unsupported provider type, a gateway with no base URL — leaves
- * an agent that looks entirely fine here and does nothing when chatted with.
- */
-function EngineSkipLine({ agentId }: { agentId: string }): React.JSX.Element | null {
-  const { data: skips } = useEngineSkips()
-  const skip = skips?.agents.find((entry) => entry.agentId === agentId)
-  if (!skip) return null
-  return <div className={`mt-2 ${WARN}`}>The engine skipped this agent because {skip.reason}.</div>
-}
+const DANGER = 'text-[10px] text-[var(--color-danger)]'
 
 /** The engine's state as a dot and a word, and the button that changes it. */
 function EngineStatus(): React.JSX.Element {
@@ -159,10 +152,22 @@ function SecretsLine({ agent }: { agent: LocalAgentDto }): React.JSX.Element | n
 
 export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const { data: providers } = useProviders()
-  const { data: models } = useModels()
+  const { data: models, isError: modelsFailed } = useModels()
   const { data: defaultMode } = useDefaultChatMode()
+  const { data: skips } = useEngineSkips()
   const save = useSetLocalAgentRuntime()
   const [error, setError] = useState<string | null>(null)
+  /**
+   * What the last credential change did to the model, kept until the next one.
+   *
+   * Clearing a model the new credential cannot serve is right, but it rewrites
+   * a file the user commits, so it cannot happen wordlessly (ux_rules rule 6).
+   * Tagged with the agent it happened to: this panel is remounted with a new
+   * `agent` when the page switches, and a notice about somebody else's model
+   * would be worse than none.
+   */
+  const [dropped, setDropped] = useState<{ agentId: string; text: string } | null>(null)
+  const skip = skips?.agents.find((entry) => entry.agentId === agent.id) ?? null
 
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
@@ -190,30 +195,131 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     )
   }, [declaredCredential, usable])
 
+  /**
+   * The Default runtime's credential, looked up across *all* providers rather
+   * than the usable ones — `runtimeService.resolveDefault` does the same, and a
+   * default mode pointing at a keyless credential must read the same here as it
+   * does to the engine. It is not offered as an option; it only names what
+   * "Default" means.
+   */
   const fallbackProvider = useMemo(
-    () => usable.find((provider) => provider.id === defaultMode?.providerId) ?? null,
-    [usable, defaultMode?.providerId]
+    () => (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ?? null,
+    [providers, defaultMode?.providerId]
   )
   const effectiveProvider = selected ?? fallbackProvider
-
-  /** The default mode's model by *name* — an id like `claude-sonnet-4-5-20250929` does not fit a select. */
-  const defaultModelName = useMemo(() => {
-    const id = defaultMode?.modelId
-    if (!id) return null
-    return (models ?? []).find((model) => model.id === id)?.name ?? id
-  }, [models, defaultMode?.modelId])
 
   const modelChoices = useMemo(
     () => (models ?? []).filter((model) => model.providerId === effectiveProvider?.id),
     [models, effectiveProvider?.id]
   )
 
+  /**
+   * The model this agent runs on when its manifest names none — for *this*
+   * credential, not for the app. The rule is `shared/runtimeDefaults`, called
+   * by the engine's own resolution too, so this label states what would
+   * actually run rather than a second guess at it.
+   */
+  const inherited = useMemo(
+    () =>
+      inheritedModelId(effectiveProvider, {
+        credentialId: defaultMode?.providerId ?? null,
+        credentialType: fallbackProvider?.type ?? null,
+        modelId: defaultMode?.modelId ?? null
+      }),
+    [effectiveProvider, fallbackProvider?.type, defaultMode?.providerId, defaultMode?.modelId]
+  )
+
+  /** That model by *name* — an id like `claude-sonnet-4-5-20250929` does not fit a select. */
+  const inheritedName = useMemo(() => {
+    if (!inherited) return null
+    return (models ?? []).find((model) => model.id === inherited)?.name ?? inherited
+  }, [models, inherited])
+
   const stamp = agent.stamps[MANIFEST_FILE] ?? null
+  /**
+   * The model registry is one network round trip *per credential*, so it lands
+   * seconds after the provider list on a cold page. Editing before it arrives
+   * cannot be done honestly: the Model select would offer a list it has not
+   * loaded, and a credential change could not tell a model that belongs to
+   * another catalogue from one the registry has simply not listed yet.
+   */
+  const modelsLoaded = models !== undefined
   const canEdit = stamp !== null && agent.readiness !== 'contract_too_new'
+  const disabled = !canEdit || (!modelsLoaded && !modelsFailed) || save.isPending
+
+  /**
+   * One line, one message, in the reserved slot below the selects.
+   *
+   * Prioritised rather than stacked, because the slot has a fixed height: a
+   * panel that grows on a credential change pushes the page's tab strip down
+   * mid-interaction (ux_rules rule 1), which is why the save spinner a few
+   * lines below is out of the flow. Everything that used to be its own
+   * conditional row goes through here — the refused save and the engine's skip
+   * reason included — so no message anywhere in this panel can move the page.
+   *
+   * Order is "what blocks the agent first, and what the user can act on": a
+   * failed write, then what this panel just did, then a credential that does
+   * not exist, then a pair that cannot run, then a missing model. The engine's
+   * own skip sits below all of them, so the one skip reason that restates a
+   * message above it — "its runtime names no model" — never gets the slot.
+   */
+  const status = ((): { text: string; tone: string } | null => {
+    if (error) return { text: error, tone: DANGER }
+    if (dropped && dropped.agentId === agent.id) return { text: dropped.text, tone: NOTE }
+    // Before the provider list lands, every credential looks missing. Saying so
+    // would put a false warning in the slot and then take it away again.
+    if (!providers) {
+      return modelsLoaded ? null : { text: 'Loading the model list…', tone: NOTE }
+    }
+    if (declaredCredential && !selected) {
+      return {
+        text: `This agent asks for “${declaredCredential}”, which is not configured on this machine.`,
+        tone: WARN
+      }
+    }
+    if (!effectiveProvider) {
+      return { text: 'No AI credential to run on. Add one in Settings → AI Credentials.', tone: WARN }
+    }
+    // The Default runtime is named even when it cannot run — `resolveDefault`
+    // does the same — so the panel has to say which of the two it is.
+    if (!effectiveProvider.hasApiKey || effectiveProvider.unsupported) {
+      return { text: `“${effectiveProvider.name}” has no API key this app can use.`, tone: WARN }
+    }
+    if (!modelsLoaded) {
+      return modelsFailed
+        ? { text: 'Could not load the model list. Models can still be typed into the manifest.', tone: WARN }
+        : { text: 'Loading the model list…', tone: NOTE }
+    }
+    if (modelBelongsElsewhere(declaredModel, effectiveProvider, models ?? [], providers)) {
+      const owner = (models ?? []).find((model) => model.id === declaredModel)
+      const ownerName =
+        providers.find((provider) => provider.id === owner?.providerId)?.name ?? 'another credential'
+      // Action first: at the 800px minimum window this line is truncated, and
+      // the half that survives has to be the half the user can act on.
+      return {
+        text: `Pick a model ${effectiveProvider.name} lists — “${declaredModel}” is ${ownerName}’s.`,
+        tone: WARN
+      }
+    }
+    // "Pick one" is only an instruction the user can follow while the select
+    // has something in it; with an empty list the note below is the remedy.
+    if (!declaredModel && inherited === null && modelChoices.length > 0) {
+      return { text: 'No model set. Pick one, or this agent has nothing to run on.', tone: WARN }
+    }
+    if (skip) return { text: `The engine skipped this agent because ${skip.reason}.`, tone: WARN }
+    if (modelChoices.length === 0) {
+      return {
+        text: 'No models listed for this credential yet. Open Settings → AI Credentials to load them.',
+        tone: NOTE
+      }
+    }
+    return null
+  })()
 
   const commit = (credential: string | null, modelId: string | null): void => {
     if (!stamp) return
     setError(null)
+    setDropped(null)
     save.mutate(
       { agentId: agent.id, expectedStamp: stamp, runtime: { credential, modelId } },
       {
@@ -227,6 +333,31 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
           )
       }
     )
+  }
+
+  /**
+   * Changing the credential drops a model that belonged to the old one.
+   *
+   * A model id is only meaningful to the catalogue that lists it: keeping
+   * `claude-sonnet-4-5` while moving to OpenAI writes a manifest the engine
+   * turns into `openai/claude-sonnet-4-5`, which fails on the agent's first
+   * turn rather than here. Same clear as the chat-mode form does.
+   *
+   * Two things are deliberately *not* cleared. A model the registry has never
+   * listed is a hand-written id for a catalogue we cannot see, so calling it
+   * wrong would be a guess. And when the target credential is unknown —
+   * "Default" with no default runtime behind it — there is nothing to compare
+   * against, and wiping the user's model on a credential change they may be
+   * about to undo would take a choice out of a file they committed.
+   */
+  const changeCredential = (value: string): void => {
+    const next = value ? (usable.find((provider) => provider.name === value) ?? null) : fallbackProvider
+    const stale = modelBelongsElsewhere(declaredModel, next, models ?? [], providers ?? [])
+    commit(value || null, stale ? null : declaredModel)
+    if (stale && next) {
+      const name = (models ?? []).find((model) => model.id === declaredModel)?.name ?? declaredModel
+      setDropped({ agentId: agent.id, text: `Dropped “${name}” — ${next.name} does not list it.` })
+    }
   }
 
   return (
@@ -258,9 +389,16 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
           <select
             id="runtime-credential"
             className={FIELD}
-            disabled={!canEdit || save.isPending}
+            title={
+              selected
+                ? selected.name
+                : fallbackProvider
+                  ? `Default: ${fallbackProvider.name}`
+                  : undefined
+            }
+            disabled={disabled}
             value={selected?.name ?? ''}
-            onChange={(event) => commit(event.target.value || null, declaredModel)}
+            onChange={(event) => changeCredential(event.target.value)}
           >
             <option value="">
               {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
@@ -280,12 +418,13 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
           <select
             id="runtime-model"
             className={FIELD}
-            disabled={!canEdit || save.isPending}
+            title={inheritedName ? `Default: ${inheritedName}` : undefined}
+            disabled={disabled}
             value={declaredModel ?? ''}
             onChange={(event) => commit(declaredCredential, event.target.value || null)}
           >
             <option value="">
-              {defaultModelName ? `Default (${defaultModelName})` : 'Default (none set)'}
+              {!modelsLoaded ? 'Default' : inheritedName ? `Default (${inheritedName})` : 'Default (none set)'}
             </option>
             {/*
               A model the manifest names but the registry has never listed
@@ -309,23 +448,25 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         </div>
       </div>
 
-      {(agent.credentials.length > 0 ||
-        error ||
-        !canEdit ||
-        (declaredCredential && !selected) ||
-        (effectiveProvider && modelChoices.length === 0)) && (
-        <div className="mt-3 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">
+      {/*
+        A reserved line, not a conditional one. What it says changes with every
+        credential switch, and a row that comes and goes would move the page's
+        tab strip out from under the pointer that just used the select — the
+        same reason the save spinner above is out of the flow. Truncated with
+        the full sentence in `title`, so a long credential or model name cannot
+        wrap into a second row and reintroduce the shift.
+      */}
+      <div className="mt-2 h-4">
+        {status && (
+          <div className={`truncate ${status.tone}`} title={status.text}>
+            {status.text}
+          </div>
+        )}
+      </div>
+
+      {(agent.credentials.length > 0 || !canEdit) && (
+        <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">
           <SecretsLine agent={agent} />
-          {declaredCredential && !selected && (
-            <div className={WARN}>
-              This agent asks for “{declaredCredential}”, which is not configured on this machine.
-            </div>
-          )}
-          {effectiveProvider && modelChoices.length === 0 && (
-            <div className={NOTE}>
-              No models listed for this credential yet. Open Settings → AI Credentials to load them.
-            </div>
-          )}
           {!canEdit && (
             <div className={NOTE}>
               {stamp === null
@@ -333,10 +474,8 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
                 : 'This folder was built against a newer kit than this app understands, so it is read-only.'}
             </div>
           )}
-          {error && <div className="text-[10px] text-[var(--color-danger)]">{error}</div>}
         </div>
       )}
-      <EngineSkipLine agentId={agent.id} />
     </section>
   )
 }

@@ -15,6 +15,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 
 ### Shared
 - `src/shared/engine.ts` — the whole wire contract. `EngineBinarySource`, `EngineStatus`, `EngineState`, `EngineSkips`, `ENGINE_STATE_CHANNEL`, `PINNED_ENGINE_VERSION` (`'1.18.27'`), `RuntimeSource`, `ResolvedRuntime`, `LocalAgentRuntimeInput`. Type-only or plain constants; **nothing key-shaped, and no `baseUrl`**
+- `src/shared/runtimeDefaults.ts` — `inheritedModelId(chosen, fallback)` and `modelBelongsElsewhere(modelId, chosen, models, providers)`, plus the `RuntimeCredential` / `RuntimeFallback` shapes they take and the `openai_compatible` exclusion both apply. Imported by `runtimeService` (main) **and** `RuntimePanel` (renderer): the file exists so the `Default (…)` label and the generated config cannot state different models
 - `src/shared/appSettings.ts` — `localAgentsEnginePath: string` on `AppSettingsSchema`
 - `src/shared/kit/manifest.ts` — `AgentRuntimeRef` (`model`, `credential`, `permissions`, plus an index signature for the round-trip rule)
 
@@ -30,7 +31,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 - `src/main/ipc/engine.ipc.ts` — `registerEngineHandlers()`; four channels plus the state push. Calls `registerEngineShutdown()`
 - `src/main/ipc/index.ts` — `registerEngineHandlers()` in `registerAllIpcHandlers()` (required by the registration guard, seam 15)
 - `src/main/ipc/local_agent.ipc.ts` — the two per-site reconciles, both `void engineManager.applyConfigChange(...)` fire-and-forget: after a successful `update-field` (`:125-129`) and after a successful `delete` (`:147`)
-- `src/main/services/localAgents/runtimeService.ts` — `runtimeService.{resolveDefault, resolve, applyToManifest}`, exported `findCredential()`, module-private `normaliseRef`, `isUsable`
+- `src/main/services/localAgents/runtimeService.ts` — `runtimeService.{resolveDefault, resolve, applyToManifest}`, exported `findCredential()`, module-private `normaliseRef`, `isUsable`. Both resolution paths take their model from `inheritedModelId` (`src/shared/runtimeDefaults.ts`)
 - `src/main/services/localAgents/promptAssembly.ts` — `assembleAgentPrompt()`, `resolveDesktopPromptContext()`, `stripHtmlComments()`, `listKnowledgeTopics()`, module-private `readTextFile`, `handoverSection`, `desktopContextSection`
 - `src/main/services/localAgents/turnLock.ts` — `turnLock.anyHeld()` (added for the engine; the rest is Phase 2)
 - `src/main/services/appSettingsService.ts:95` — the `localAgentsEnginePath` value check (absolute or empty; existence deliberately unchecked)
@@ -41,7 +42,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 
 ### Renderer
 - `src/renderer/src/hooks/useEngine.ts` — `ENGINE_STATE_KEY`, `ENGINE_SKIPS_KEY`, `useEngineState`, `useEngineWatch`, `useEngineSkips`, `useStartEngine`, `useStopEngine`
-- `src/renderer/src/components/agents/local/RuntimePanel.tsx` — the "Runs with" panel: the credential and model pickers, the module-private `EngineStatus`, `SecretsLine` and `EngineSkipLine`. Replaced `RuntimeCard.tsx` when the agent page was reorganised around its controls (see [Agents Tab & Agent Page](agents_tab.md))
+- `src/renderer/src/components/agents/local/RuntimePanel.tsx` — the "Runs with" panel: the credential and model pickers, the one reserved status line, and the module-private `EngineStatus` and `SecretsLine`. Calls `inheritedModelId` and `modelBelongsElsewhere` from `src/shared/runtimeDefaults.ts`. Replaced `RuntimeCard.tsx` when the agent page was reorganised around its controls (see [Agents Tab & Agent Page](agents_tab.md))
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the readiness "Local engine" line, Start/Stop, and the engine-path field
 - `src/renderer/src/App.tsx:103` — `useEngineWatch()` mounted once in `Shell`, beside `useLocalAgentWatch()`
 
@@ -49,6 +50,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 - `src/main/engine/engineManager.test.ts` — **spawns real subprocesses**, binds real loopback ports, speaks real HTTP. The stand-in engine is a small node script implementing the two things the manager depends on (`--version`, and `GET /api/health` behind Basic auth). Each spawn dumps `{env, argv, pid}` beside the config it was pointed at, because the port, the hostname and the subcommand are only visible on the command line. See [Testing notes](#testing-notes)
 - `src/main/engine/configGenerator.test.ts`, `binaryResolver.test.ts`, `engineConfigSource.test.ts`
 - `src/main/services/localAgents/runtimeService.test.ts`, `promptAssembly.test.ts` + `__snapshots__/promptAssembly.test.ts.snap`
+- `src/renderer/src/components/agents/local/RuntimePanel.test.tsx` — the panel rendered in the jsdom project with its five hook modules mocked (`useLocalAgents`, `useChatModes`, `useModels`, `useProviders`, `useEngine`). Pins the pairing rules from the user's side: a credential change drops a foreign model and keeps a hand-written one, `Default (…)` names what would run for *this* credential, a foreign model already in the file is called out on open, and the pickers are disabled while the registry loads. The two sides of `runtimeDefaults` are covered here and in `runtimeService.test.ts` rather than by a test of their own — the point of the module is that the two callers agree, which a direct unit test cannot observe
 - `src/main/services/appSettingsService.test.ts` — the engine-path check
 
 ## Database Schema
@@ -163,11 +165,12 @@ Sits between `engineManager` (processes) and `configGenerator` (OpenCode's confi
 
 ### `src/main/services/localAgents/runtimeService.ts`
 
-- `resolveDefault(providers?)` — via `chatModeService.resolveEffectiveDefault()`, so it honours the local/account precedence toggle and a managed mode's per-profile model override. Returns `source: 'none'` with a sentence when there is no default mode, or when the mode points at a credential this machine no longer has
-- `resolve(runtime, providers?)` — manifest first, then the default. Per-field fallback: a manifest model survives a credential fallback; an unknown credential reference produces `credentialRef` + a reason naming what it asked for and what it got. `source` is `'manifest' | 'default' | 'none'`
+- `resolveDefault(providers?)` — via `chatModeService.resolveEffectiveDefault()`, so it honours the local/account precedence toggle and a managed mode's per-profile model override. Returns `source: 'none'` with a sentence when there is no default mode, or when the mode points at a credential this machine no longer has. Its `modelId` goes through `inheritedModelId` as well, **not** `mode.modelId` raw: a mode on *First available* names no model, and this object is what `resolve` returns verbatim for a manifest with no `runtime` block
+- `resolve(runtime, providers?)` — manifest first, then the default. Per-field fallback: a manifest model survives a credential fallback; an unknown credential reference produces `credentialRef` + a reason naming what it asked for and what it got. The model a runtime does *not* declare comes from `inheritedModelId(chosen, fallback)`, so the default's model is lent only to its own row, to a credential of the same type (never `openai_compatible`), or not at all — see [A model is lent only where it can actually run](engine.md#a-model-is-lent-only-where-it-can-actually-run). `source` is `'manifest' | 'default' | 'none'`
+- The two "nothing to run on" reason lines name the **“Runs with” panel** as the place to fix it, matching the panel's own `aria-label`. A reason that names a surface the app does not have sends the user looking for it
 - `findCredential(providers, reference)` — id, then name, then provider type; name and type case-insensitive and **preferring a usable row**, because a managed `Anthropic` and the user's own can share a name
 - `applyToManifest(manifest, input)` — validates and mutates in place. Refuses a key-shaped credential using the validator's own `SECRET_LOOKALIKE` (`src/main/kit/validator.ts`); caps at 200 chars each; deletes `manifest.runtime` entirely when both fields clear **and** no unknown keys remain; preserves `permissions` and anything else a newer contract adds. Throws `LocalAgentError('invalid_input')` — the same `DomainError` family the rest of the local-agents surface uses
-- **No filesystem access.** The write goes through `localAgentService.updateField` → `manifestIo.writeIfUnchanged`, the same stamped path as every other card
+- **No filesystem access.** The write goes through `localAgentService.updateField` → `manifestIo.writeIfUnchanged`, the same stamped path as every other editable file
 
 ### `src/main/services/localAgents/promptAssembly.ts`
 
@@ -203,15 +206,17 @@ Bundling binaries as `extraResources` is deferred with a `TODO(packaging)` in th
 | `useEngineWatch` | One `engine:state` subscription for the app's lifetime; writes the pushed state straight into the cache and invalidates `['engine-skips']`. Mounted in `Shell` |
 | `useEngineSkips` | `['engine-skips']` from `engine:skips`. Only ever recomputed by a config generation, and every generation moves the state — so the push *is* the staleness signal |
 | `useStartEngine` / `useStopEngine` | Mutations that write the returned state into the cache. `isPending` covers the download. **A failed start resolves**, so callers render `data.error`, not a mutation error |
-| `RuntimePanel` | Credential `<select>` (usable providers, by **name**), model `<select>` (registry models for the effective provider), `EngineStatus`, `SecretsLine`, `EngineSkipLine`, the not-editable notes. Writes via `useSetLocalAgentRuntime` → `local-agent:update-field` with the manifest stamp |
+| `RuntimePanel` | Credential `<select>` (usable providers, by **name**), model `<select>` (registry models for the effective provider; `Default (…)` from `inheritedModelId`), `EngineStatus`, `SecretsLine`, the not-editable note, and **one fixed-height status line** that carries every message the panel has — including the engine's skip reason, which has no component of its own. Reads `useEngineSkips` directly. Writes via `useSetLocalAgentRuntime` → `local-agent:update-field` with the manifest stamp |
 | `EngineStatus` (private) | The engine's state as a dot and a word, plus a Start button shown whenever it is not running |
-| `EngineSkipLine` (private) | "The engine skipped this agent because …" for this agent id |
 | `LocalAgentsSettingsSection` | The "Local engine" readiness line (status, version, which source), Start/Stop, and the engine-path field |
 
 Renderer rules that are decisions, not styling:
 
-- **A model the manifest names but the registry has never listed is still rendered as an option.** Without it, opening the card would silently reset the agent's model to the default the moment the user touched the credential picker
-- **The model select stays enabled with an empty list plus a hint.** `useModels` is the aggregate registry, and a credential it has nothing for is not a credential that cannot run
+- **A model the manifest names but the registry has never listed is still rendered as an option**, and a credential change keeps it. Without that, opening the panel would silently reset the agent's model to the default the moment the user touched the credential picker, and a hand-written id for a gateway catalogue this app cannot see would be treated as a mistake
+- **A credential change *does* clear a model the registry attributes to another catalogue**, and says so in the status line. The pair would otherwise be written into a manifest the generator turns into `openai/claude-sonnet-4-5` — a config that saves and fails at the agent's first turn. `modelBelongsElsewhere` decides, and it declines in exactly the cases `inheritedModelId` declines to guess in, so the panel can never lend a model in the select while calling it foreign in the warning
+- **The pickers are disabled until `useModels` resolves** (or fails). It is a network round trip per credential, so on a cold page it lands after the provider list — and before it does, a model that belongs elsewhere is indistinguishable from one the registry has not listed yet. The status line says which of the two states it is in
+- **The model select stays enabled with an empty list plus a note once the registry has loaded.** `useModels` is the aggregate registry, and a credential it has nothing for is not a credential that cannot run
+- **The two `Default (…)` labels are lookups, not guesses.** The credential picker's names the resolved Default runtime's credential, looked up across *all* providers rather than the usable ones — `resolveDefault` does the same, and a default mode pointing at a keyless credential has to read here as it does to the engine. The model picker's names `inheritedModelId`'s answer for the *chosen* credential, by registry name where there is one and by id otherwise
 - **The engine-path field follows the saved value until the user types in it.** The settings query has not resolved on first render, so without the effect a user with a path already set sees a blank box and reasonably concludes nothing is configured
 - **A saved engine path takes effect on the *next* start** — the resolved binary is cached and the running process is the old one either way — and the section says so rather than leaving the user to wonder why the version line did not move
 - `canEdit = stamp !== null && readiness !== 'contract_too_new'`; a stale-write refusal renders the reload sentence via `isStaleWriteError`
@@ -263,7 +268,7 @@ Generated files, none of which is ever inside an agent folder:
 - The download **sequence** (`downloadToFile` → `extractArchive` → `chmod` → `rename`, including the lost-race branch). Every piece is hand-verified against the real binary; the sequence has only run against fakes
 - `writeIfDifferent`'s atomicity under interruption — a writer killed between write and rename must leave the previous config intact. Needs a crash, not a mock. The visible consequence (no surviving `.tmp`) *is* tested
 - The `knowledge/` topic sort (pre-existing: `readdirSync` already returns name order on APFS)
-- **Every renderer change in this phase.** `RuntimePanel` (formerly `RuntimeCard`), the engine-path field, the Start/Stop button and the skip line are typechecked and bundled but **never rendered** by a test. The repo does have a jsdom project and testing-library now (this bullet used to say it did not — see the closed gap in [Agents Tab & Agent Page](agents_tab.md#known-gaps)), but `LocalAgentPage.test.tsx` mocks `RuntimePanel` to a marker, so its pickers are still unexercised
+- **The engine controls in Settings.** The engine-path field and the Start/Stop button are typechecked and bundled but **never rendered** by a test. `RuntimePanel` is not among them: `RuntimePanel.test.tsx` renders it directly, which the page test cannot — it mocks the panel to a marker. What that suite does not reach is `EngineStatus`, since it pins the engine to `running` and the Start button only exists when it is not
 - The reconcile's cost. Per turn it does a keychain decrypt per credential and a full prompt re-assembly per agent — file reads plus the `knowledge/` walk, since `scannerService.scanRootCached` caches only the folder *scan*. Reasoned to be a few milliseconds, never measured. **If Phase 6 sees unexplained turn latency, look here first**
 
 **Test conventions specific to this slice:**
