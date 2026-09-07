@@ -291,6 +291,11 @@
 
   ::-webkit-scrollbar {
     width: 6px;
+    /* `height` is the horizontal bar's thickness. Styling this pseudo-element
+       at all opts out of overlay scrollbars, so an unstyled horizontal bar
+       claims Chrome's default 15px of layout — visible as a jolt wherever one
+       comes and goes. */
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
     background: transparent;
@@ -375,6 +380,17 @@
     border: none;
     border-top: 1px solid var(--color-border);
   }
+  /* A table is the one markdown block whose width is set by its content and
+     not by its container, so a wide one used to push the whole transcript
+     sideways: the message list gained a horizontal scrollbar, and while a
+     table streamed in — column widths resettling on every chunk — that bar
+     appeared and disappeared, taking its height off the viewport each time.
+     That is the "shaking" a streamed table produced. `display: block` gives
+     the table its own box, `max-content` keeps a narrow one narrow (a block
+     would otherwise stretch to full width), and `overflow: auto` scrolls
+     whatever still does not fit while clipping to the rounded corners. A
+     table whose cells can wrap squashes to the bubble width and wraps, and
+     never reaches the scrollbar at all; only unbreakable content does. */
   .markdown-body table {
     border-collapse: separate;
     border-spacing: 0;
@@ -382,7 +398,10 @@
     font-size: 0.9em;
     border: 1px solid var(--color-border);
     border-radius: 8px;
-    overflow: hidden;
+    display: block;
+    width: max-content;
+    max-width: 100%;
+    overflow: auto;
   }
   .markdown-body th, .markdown-body td {
     border-bottom: 1px solid var(--color-border);
