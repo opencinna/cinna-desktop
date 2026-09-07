@@ -21,14 +21,19 @@
 
 import {
   closeSync,
+  copyFileSync,
+  existsSync,
   fsyncSync,
+  mkdirSync,
   openSync,
   readFileSync,
   renameSync,
   statSync,
   unlinkSync,
+  writeFileSync,
   writeSync
 } from 'node:fs'
+import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join } from 'node:path'
 import { shell } from 'electron'
@@ -37,7 +42,7 @@ import { jobAgentRepo, jobsRepo } from '../../db/jobs'
 import { rebuildJobManifest } from '../../sync/manifest'
 import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
-import { getLayoutView, resolveContract } from '../../kit/contractStore'
+import { getLayoutView, getTemplateRoot, resolveContract } from '../../kit/contractStore'
 import {
   manifestPath,
   readStamp,
@@ -46,7 +51,7 @@ import {
   writeIfUnchanged
 } from '../../kit/manifestIo'
 import { sha256Hex } from '../../kit/hash'
-import { validateAgentFolder } from '../../kit/validator'
+import { isIgnoredPath, validateAgentFolder } from '../../kit/validator'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
@@ -65,6 +70,7 @@ import {
   type LocalAgentDto,
   type LocalAgentPromptKind,
   type LocalAgentValidation,
+  type OpenLocalAgentCredentialsResult,
   type OpenLocalAgentPathInput,
   type RescanResult,
   type UpdateLocalAgentFieldInput
@@ -72,7 +78,7 @@ import {
 import { setAllowedRootsProvider } from './openInService'
 import { agentsHomeService } from './agentsHomeService'
 import { scaffoldService } from './scaffoldService'
-import { scannerService } from './scannerService'
+import { ENV_FILE, scannerService } from './scannerService'
 import { turnLock } from './turnLock'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
@@ -253,6 +259,121 @@ function rebuildManifestsForRekeyedAgent(oldAgentId: string, newAgentId: string)
       jobs: refs.length
     })
   }
+}
+
+/**
+ * The `credentials/.env` a click has to be able to open when the file is not
+ * there yet.
+ *
+ * The declared variable names are written **commented out**. An uncommented
+ * `KEY=` is what the scanner counts as defined (`readEnvKeys` matches the name
+ * and never the value), so seeding bare assignments would report every
+ * credential as satisfied the moment the user opened the file — the opposite of
+ * what the readiness strip is for.
+ */
+function credentialsSeed(agent: LocalAgentDto): string {
+  const keys = agent.credentials.flatMap((slot) => slot.expectedKeys)
+  // The name is manifest text and may legally hold a newline. Left in, a name
+  // ending `\nVENDOR_PORTAL_TOKEN=` would define a variable in this file, and
+  // `readEnvKeys` would report the slot satisfied over an empty value — the
+  // exact failure the commented placeholders below are written to avoid.
+  const name = agent.name.replace(/[\r\n]+/g, ' ')
+  const lines = [
+    `# Credentials for ${name}.`,
+    '#',
+    '# This file stays on this machine. Cinna reads which variable names are set',
+    '# here and never their values.',
+    '#',
+    '# Fill a value in and remove the leading "#" from its line.',
+    ''
+  ]
+  if (keys.length === 0) {
+    lines.push('# This agent declares no credentials yet.')
+  } else {
+    for (const key of keys) lines.push(`# ${key}=`)
+  }
+  return lines.join('\n') + '\n'
+}
+
+/**
+ * Create `credentials/.env`, or explain why it must not be created.
+ *
+ * Order matters and each step is load-bearing: the folder is made first so
+ * `resolveWithinRoot` has something to `realpath` (a path that does not exist
+ * has no real path, and the check would refuse the agent's own folder wherever
+ * that folder is reached through a symlink), the containment check then refuses
+ * a `credentials` symlinked out of the agent, and `wx` refuses to follow a
+ * dangling `.env` symlink to whatever it points at.
+ *
+ * The ignore guard is the reason this is not three lines. `checkSecrets` raises
+ * `secrets.not_ignored` as a validator **error** for a `credentials/.env` no
+ * `.gitignore` rule covers, an error makes `readiness()` `invalid`, and an
+ * invalid agent is dropped from the engine config and refuses a turn. Creating
+ * the file blindly would therefore let the click that exists to *fix* a missing
+ * credential be the click that stops the agent running. A kit-scaffolded folder
+ * ships the rule; where it is missing, the contract's own `credentials/.gitignore`
+ * is installed rather than a fifth copy of the rule invented here, and a folder
+ * whose ignore file deliberately un-ignores `.env` gets a refusal instead of a
+ * committable secrets file.
+ *
+ * @returns whether this call created the file
+ * @throws LocalAgentError `invalid_path`, `write_failed`
+ */
+function seedCredentialsFile(agentDir: string, rootPath: string, agent: LocalAgentDto): boolean {
+  try {
+    mkdirSync(join(agentDir, dirname(ENV_FILE)), { recursive: true })
+  } catch (err) {
+    throw new LocalAgentError(
+      'write_failed',
+      'The credentials folder could not be created.',
+      err instanceof Error ? err.message : String(err)
+    )
+  }
+  const target = join(resolveWithinRoot(agentDir, dirname(ENV_FILE)), basename(ENV_FILE))
+
+  if (!isIgnoredPath(agentDir, ENV_FILE)) {
+    const ignore = join(dirname(target), '.gitignore')
+    if (!existsSync(ignore)) {
+      try {
+        copyFileSync(join(getTemplateRoot('agent', rootPath), 'credentials', '.gitignore'), ignore)
+      } catch (err) {
+        logger.warn('could not install the credentials .gitignore', {
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+    if (!isIgnoredPath(agentDir, ENV_FILE)) {
+      throw new LocalAgentError(
+        'write_failed',
+        'No .gitignore rule covers credentials/.env, so creating it would leave a secrets file committable. Add “.env” to credentials/.gitignore first.'
+      )
+    }
+  }
+
+  try {
+    // `wx` so a file that appeared between the check and the write — the user's
+    // own editor, the agent's scripts — is never overwritten, and so a dangling
+    // symlink is refused rather than followed.
+    writeFileSync(target, credentialsSeed(agent), { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+    return true
+  } catch (err) {
+    if (existsSync(target)) return false
+    throw new LocalAgentError(
+      'write_failed',
+      'credentials/.env could not be created.',
+      err instanceof Error ? err.message : String(err)
+    )
+  }
+}
+
+/** `open -t <file>` — macOS's "open this in the default text editor". */
+function openInTextEditor(target: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile('open', ['-t', target], { timeout: 15_000 }, (err) => {
+      if (err) reject(err)
+      else resolve()
+    })
+  })
 }
 
 export const localAgentService = {
@@ -650,6 +771,70 @@ export const localAgentService = {
       agentId: input.agentId,
       relPath: input?.relPath ?? MANIFEST_FILE
     })
+  },
+
+  /**
+   * Open `credentials/.env` itself, creating it first when it is missing.
+   *
+   * The affordance says "Add them in credentials/.env", so the click has to end
+   * with that file open in an editor. Revealing the folder was the previous
+   * behaviour and it stopped one step short — and two things stop a plain
+   * `shell.openPath` from covering the gap:
+   *
+   * * **The file need not exist.** The scaffold writes `credentials/.env.example`
+   *   and deliberately not the real file, so on a fresh agent — exactly the
+   *   agent whose credentials are missing — there is nothing to open. It is
+   *   seeded here, 0600, with the declared names commented out.
+   * * **`.env` has no default application.** Where nothing is registered for the
+   *   extension, `openPath` resolves to an error string rather than throwing.
+   *   macOS then gets `open -t` (its default *text* editor), and anything still
+   *   unhandled falls back to revealing the file, so a click never dead-ends.
+   *
+   * Values are never read: the seed is written, never parsed back. Creating the
+   * file takes the per-agent turn lock; opening an existing one does not.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_path`, `write_failed`,
+   *   `turn_in_progress`
+   */
+  async openCredentials(userId: string, agentId: string): Promise<OpenLocalAgentCredentialsResult> {
+    const agent = this.get(userId, agentId)
+    const { root, agentDir } = this.locate(userId, agentId)
+
+    let created = false
+    if (!existsSync(join(agentDir, ENV_FILE))) {
+      // Invariant 3: this is a write into the folder, so it takes the same lock
+      // every other write here takes and refuses mid-turn rather than seeding a
+      // file under a running agent. Only the *creation* is held — opening a file
+      // that is already there reads nothing and blocks nobody.
+      const handle = turnLock.acquire(agentId, 'credentials')
+      try {
+        created = seedCredentialsFile(agentDir, root.path, agent)
+      } finally {
+        handle.release()
+      }
+    }
+    // Now that the file exists, containment is checked on the file itself: a
+    // `.env` symlinked out of the agent folder is refused rather than handed to
+    // the OS.
+    const target = resolveWithinRoot(agentDir, ENV_FILE)
+
+    let revealed = false
+    const failure = await shell.openPath(target)
+    if (failure) {
+      if (process.platform === 'darwin') {
+        try {
+          await openInTextEditor(target)
+        } catch {
+          shell.showItemInFolder(target)
+          revealed = true
+        }
+      } else {
+        shell.showItemInFolder(target)
+        revealed = true
+      }
+    }
+    logger.info('opened agent credentials', { agentId, created, revealed })
+    return { created, revealed }
   },
 
   /**

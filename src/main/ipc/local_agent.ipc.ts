@@ -16,6 +16,7 @@ import type {
   LocalAgentDto,
   ReadLocalAgentDocInput,
   LocalAgentValidation,
+  OpenLocalAgentCredentialsResult,
   OpenLocalAgentPathInput,
   RescanResult,
   UpdateLocalAgentFieldInput
@@ -177,6 +178,19 @@ export function registerLocalAgentHandlers(): void {
     localAgentService.openPath(getSettingsScopeUserId(), data)
     return { success: true as const }
   })
+
+  /**
+   * Open the agent's `credentials/.env` for editing, creating it when it is not
+   * there yet. Separate from `open-path` because it writes: the path is fixed
+   * in main, never sent by the renderer.
+   */
+  ipcHandle(
+    'local-agent:open-credentials',
+    (_event, agentId: string): Promise<OpenLocalAgentCredentialsResult> => {
+      userActivation.requireActivated()
+      return localAgentService.openCredentials(getSettingsScopeUserId(), agentId)
+    }
+  )
 
   ipcHandle('local-agent:roots-list', (): AgentRootDto[] => {
     userActivation.requireActivated()

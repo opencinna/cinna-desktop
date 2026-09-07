@@ -867,7 +867,7 @@ function ignorePatternMatches(pattern: string, path: string): boolean {
  * at all, and a validator must not depend on one). Last match wins, deepest
  * ignore file last, negations honoured.
  */
-function isIgnoredPath(agentDir: string, rel: string): boolean {
+export function isIgnoredPath(agentDir: string, rel: string): boolean {
   let ignored = false
   for (const source of IGNORE_SOURCES) {
     const path = source.pathFrom(rel, agentDir)

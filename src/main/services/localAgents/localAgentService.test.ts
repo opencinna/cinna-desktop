@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -26,6 +27,10 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..')
 const holder = vi.hoisted(() => ({ current: null as TestDatabase | null }))
 /** `shell.trashItem`, replaced per test — the default fake is set in `delete`. */
 const trash = vi.hoisted(() => vi.fn<(path: string) => Promise<void>>())
+/** `shell.openPath` — '' is Electron's "it opened"; a message is a failure. */
+const openPath = vi.hoisted(() => vi.fn<(path: string) => Promise<string>>(async () => ''))
+/** `shell.showItemInFolder` — the fallback the credentials click must not need. */
+const reveal = vi.hoisted(() => vi.fn<(path: string) => void>())
 
 vi.mock('electron', () => ({
   app: {
@@ -34,7 +39,7 @@ vi.mock('electron', () => ({
     getVersion: () => '0.0.0-test',
     on: () => undefined
   },
-  shell: { showItemInFolder: () => undefined, trashItem: trash },
+  shell: { showItemInFolder: reveal, trashItem: trash, openPath },
   dialog: { showOpenDialog: async () => ({ canceled: true, filePaths: [] }) }
 }))
 vi.mock('../../logger/logger', () => ({
@@ -740,6 +745,143 @@ describe('openPath', () => {
 
   it('accepts an agent-relative path', () => {
     expect(() => localAgentService.openPath(USER, { agentId, relPath: WORKFLOW })).not.toThrow()
+  })
+})
+
+/**
+ * The "Add them in credentials/.env" click.
+ *
+ * The label names a file, so the click has to end on that file — and on a
+ * scaffolded agent the file does not exist yet, which is exactly the agent
+ * whose credentials are missing. Seeding it is therefore part of opening it,
+ * and the seed has to leave the credential *unsatisfied*: the scanner counts a
+ * bare `KEY=` as defined, so an uncommented placeholder would report every
+ * credential as filled the moment the user looked at the file.
+ */
+describe('openCredentials', () => {
+  const ENV = 'credentials/.env'
+
+  /** Declare one credential slot in the scaffolded manifest. */
+  function declareCredential(): void {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.credentials = [
+      { name: 'Vendor Portal', type: 'api_key', env_prefix: 'VENDOR_PORTAL_', fields: ['token'] }
+    ]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+  }
+
+  beforeEach(() => {
+    openPath.mockClear()
+    openPath.mockImplementation(async () => '')
+    reveal.mockClear()
+  })
+
+  it('creates the file from the declared names and opens it, not its folder', async () => {
+    declareCredential()
+
+    const result = await localAgentService.openCredentials(USER, agentId)
+
+    expect(result).toEqual({ created: true, revealed: false })
+    expect(openPath).toHaveBeenCalledWith(join(agentDir, ENV))
+    expect(reveal).not.toHaveBeenCalled()
+    const text = readFileSync(join(agentDir, ENV), 'utf8')
+    expect(text).toContain('# VENDOR_PORTAL_TOKEN=')
+  })
+
+  it('leaves the credential unsatisfied — the seed defines no variable', async () => {
+    declareCredential()
+    await localAgentService.openCredentials(USER, agentId)
+
+    const [slot] = currentAgent().credentials
+    expect(slot.presentKeys).toEqual([])
+    expect(slot.satisfied).toBe(false)
+  })
+
+  it('opens an existing file without touching a byte of it', async () => {
+    writeFileSync(join(agentDir, ENV), 'VENDOR_PORTAL_TOKEN=already-here\n')
+
+    const result = await localAgentService.openCredentials(USER, agentId)
+
+    expect(result).toEqual({ created: false, revealed: false })
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toBe('VENDOR_PORTAL_TOKEN=already-here\n')
+  })
+
+  it('refuses to seed a secrets file no .gitignore rule would cover', async () => {
+    // The agent's own ignore file, the workshop's, and the one the contract puts
+    // in credentials/ — all gone, which is a hand-made folder or one dropped
+    // into somebody else's repo.
+    rmSync(join(agentDir, '.gitignore'), { force: true })
+    rmSync(join(agentDir, 'credentials/.gitignore'), { force: true })
+    rmSync(join(workshop, '.gitignore'), { force: true })
+    // The contract's template is what gets installed in its place…
+    await expect(localAgentService.openCredentials(USER, agentId)).resolves.toEqual({
+      created: true,
+      revealed: false
+    })
+    expect(readFileSync(join(agentDir, 'credentials/.gitignore'), 'utf8')).toContain('.env')
+    expect(currentAgent().readiness).not.toBe('invalid')
+
+    // …and where the folder un-ignores the file on purpose, the click is
+    // refused rather than making the agent invalid on the spot.
+    rmSync(join(agentDir, ENV), { force: true })
+    writeFileSync(join(agentDir, 'credentials/.gitignore'), '!.env\n')
+    await expect(localAgentService.openCredentials(USER, agentId)).rejects.toThrow(/gitignore/i)
+    expect(existsSync(join(agentDir, ENV))).toBe(false)
+  })
+
+  it('refuses to seed while a turn holds the agent, and opens an existing file anyway', async () => {
+    const handle = turnLock.acquire(agentId, 'turn')
+    try {
+      await expect(localAgentService.openCredentials(USER, agentId)).rejects.toThrow(/busy/i)
+      expect(existsSync(join(agentDir, ENV))).toBe(false)
+
+      // A file that is already there is only opened — no write, so no lock.
+      writeFileSync(join(agentDir, ENV), '# mine\n')
+      await expect(localAgentService.openCredentials(USER, agentId)).resolves.toEqual({
+        created: false,
+        revealed: false
+      })
+    } finally {
+      handle.release()
+    }
+  })
+
+  it('never lets a name with a newline in it define a variable', async () => {
+    const path = manifestPath(agentDir)
+    const manifest = JSON.parse(readFileSync(path, 'utf8'))
+    manifest.name = 'Portal\nVENDOR_PORTAL_TOKEN='
+    manifest.credentials = [
+      { name: 'Vendor Portal', type: 'api_key', env_prefix: 'VENDOR_PORTAL_', fields: ['token'] }
+    ]
+    writeFileSync(path, JSON.stringify(manifest, null, 2))
+
+    await localAgentService.openCredentials(USER, agentId)
+
+    const [slot] = currentAgent().credentials
+    expect(slot.satisfied).toBe(false)
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toContain(
+      '# Credentials for Portal VENDOR_PORTAL_TOKEN=.'
+    )
+  })
+
+  it('reveals the file when nothing on this machine will open it', async () => {
+    openPath.mockImplementation(async () => 'no application knows how to open this file')
+    // Pinned to a platform without macOS's `open -t` in between — the point is
+    // the last resort, and a real `open` would launch an editor from the suite.
+    const platform = process.platform
+    Object.defineProperty(process, 'platform', { value: 'linux', configurable: true })
+    try {
+      const result = await localAgentService.openCredentials(USER, agentId)
+
+      expect(result).toEqual({ created: true, revealed: true })
+      expect(reveal).toHaveBeenCalledWith(join(agentDir, ENV))
+    } finally {
+      Object.defineProperty(process, 'platform', { value: platform, configurable: true })
+    }
+    expect(readFileSync(join(agentDir, ENV), 'utf8')).toContain(
+      '# This agent declares no credentials yet.'
+    )
   })
 })
 

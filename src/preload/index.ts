@@ -11,6 +11,7 @@ import type {
   LocalAgentDto,
   LocalAgentOutcome,
   LocalAgentValidation,
+  OpenLocalAgentCredentialsResult,
   OpenLocalAgentPathInput,
   ReadLocalAgentDocInput,
   RescanResult,
@@ -1157,6 +1158,14 @@ const api = {
     /** Reveal a file inside the agent folder in Finder / Explorer. */
     openPath: (input: OpenLocalAgentPathInput): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-agent:open-path', input),
+    /**
+     * Open the agent's `credentials/.env` for editing, creating it from the
+     * declared variable names when it does not exist yet. Says whether it had
+     * to create the file, and whether nothing could open it and it was
+     * revealed in the file manager instead.
+     */
+    openCredentials: (agentId: string): Promise<OpenLocalAgentCredentialsResult> =>
+      ipcRenderer.invoke('local-agent:open-credentials', agentId),
     rootsList: (): Promise<AgentRootDto[]> => ipcRenderer.invoke('local-agent:roots-list'),
     /** Opens the OS directory picker; the renderer never supplies the path. */
     rootAdd: (): Promise<{ cancelled: true } | { cancelled: false; root: AgentRootDto }> =>

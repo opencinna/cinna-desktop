@@ -111,7 +111,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 3. `credentials_needed` — valid, but a required `credentials/.env` variable is missing
 4. `ok`
 
-Only variable **names** are ever read from `credentials/.env`. No value is read, returned or logged. A slot that declares no keys cannot be checked and counts as satisfied rather than blocking the agent on something unverifiable.
+Only variable **names** are ever read from `credentials/.env`. No value is read, returned or logged. The desktop writes that file in one place only — the agent page seeds it, with the declared names commented out, when the user clicks through to fill it in ([Agents Tab & Agent Page](agents_tab.md)) — and a seed carries no value either. A slot that declares no keys cannot be checked and counts as satisfied rather than blocking the agent on something unverifiable.
 
 ### An unreadable manifest never changes an agent's identity
 

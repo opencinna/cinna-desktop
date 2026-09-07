@@ -60,7 +60,7 @@ import { desktopStateService } from './desktopStateService'
 const logger = createLogger('local-agent-scan')
 
 /** Local `.env` holding the credential values. Names are read; values never. */
-const ENV_FILE = 'credentials/.env'
+export const ENV_FILE = 'credentials/.env'
 
 /** The three document-backed prompts, in the order the page shows them. */
 const PROMPT_PATHS: Record<'workflow' | 'entrypoint' | 'refiner', string> = {

@@ -316,6 +316,18 @@ export function useOpenAgentPath() {
   })
 }
 
+/**
+ * Open the agent's `credentials/.env` for editing, created on the spot when it
+ * is not there yet. The "Add them in credentials/.env" affordance leads here
+ * rather than to {@link useOpenAgentPath}: the label promises a file, and a
+ * reveal of the folder leaves the user to find (or create) it themselves.
+ */
+export function useOpenAgentCredentials() {
+  return useMutation({
+    mutationFn: (agentId: string) => window.api.localAgents.openCredentials(agentId)
+  })
+}
+
 /** Run the kit validator over one folder on demand. */
 export function useValidateLocalAgent() {
   return useMutation({

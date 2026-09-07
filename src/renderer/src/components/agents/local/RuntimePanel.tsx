@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Check, Circle, Loader2, Minus } from 'lucide-react'
-import { useOpenAgentPath, useSetLocalAgentRuntime } from '../../../hooks/useLocalAgents'
+import { useOpenAgentCredentials, useSetLocalAgentRuntime } from '../../../hooks/useLocalAgents'
+import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
@@ -145,8 +146,15 @@ function EngineStatus(): React.JSX.Element {
  * `credentials/.env` defines their variables. Names only: no value in that file
  * is ever read by the desktop, so this can say a key is present and no more.
  */
-function SecretsLine({ agent }: { agent: LocalAgentDto }): React.JSX.Element | null {
-  const openPath = useOpenAgentPath()
+function SecretsLine({
+  agent,
+  onOutcome
+}: {
+  agent: LocalAgentDto
+  /** Say what the click did in the panel's one reserved line — never a new row. */
+  onOutcome: (outcome: { text: string; tone: string } | null) => void
+}): React.JSX.Element | null {
+  const openCredentials = useOpenAgentCredentials()
   if (agent.credentials.length === 0) return null
   const missing = agent.credentials.filter((slot) => !slot.satisfied && !slot.optional)
   return (
@@ -180,9 +188,37 @@ function SecretsLine({ agent }: { agent: LocalAgentDto }): React.JSX.Element | n
       ))}
       <button
         type="button"
-        onClick={() => openPath.mutate({ agentId: agent.id, relPath: 'credentials' })}
-        className="text-[var(--color-text-muted)] underline-offset-2 transition-colors hover:text-[var(--color-text)] hover:underline"
-        title="Reveal credentials/.env — values stay on this machine"
+        onClick={() => {
+          onOutcome(null)
+          openCredentials.mutate(agent.id, {
+            /**
+             * Two outcomes the user cannot see for themselves. A refusal — a
+             * read-only `credentials/`, a `.env` symlinked out of the folder —
+             * otherwise left the click completely inert, and a reveal means the
+             * editor step did not happen, which is the *normal* outcome
+             * wherever nothing is registered for `.env` (ux_rules rule 6).
+             * `created` needs no line: the file opens in front of the user.
+             */
+            onSuccess: (result) =>
+              onOutcome(
+                result.revealed
+                  ? {
+                      text: 'Nothing here opens .env, so credentials/.env was shown in the file manager.',
+                      tone: NOTE
+                    }
+                  : null
+              ),
+            onError: (err) =>
+              onOutcome({
+                text: unwrapIpcError(err, 'credentials/.env could not be opened.'),
+                tone: DANGER
+              })
+          })
+        }}
+        disabled={openCredentials.isPending}
+        className="text-[var(--color-text-muted)] underline-offset-2 transition-colors hover:text-[var(--color-text)]
+          hover:underline disabled:cursor-not-allowed disabled:opacity-50"
+        title="Opens it in your text editor, creating it if it isn’t there yet — values stay on this machine"
       >
         {missing.length > 0 ? 'Add them in credentials/.env' : 'Edit credentials/.env'}
       </button>
@@ -199,6 +235,15 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   const setSetting = useSetAppSetting()
   const save = useSetLocalAgentRuntime()
   const [error, setError] = useState<string | null>(null)
+  /**
+   * What the last click on the secrets line did, where the user clicked it.
+   *
+   * Its own state rather than `error`, because one of the two things it says is
+   * a note and not a failure, and because it is cleared by a *different* event:
+   * a save clears it (below), since a message about `credentials/.env` must not
+   * outlive the action the user has since taken in the pickers above it.
+   */
+  const [secrets, setSecrets] = useState<{ text: string; tone: string } | null>(null)
   /**
    * What the last credential change did to the model, kept until the next one.
    *
@@ -519,6 +564,8 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
 
   const status = ((): { text: string; tone: string } | null => {
     if (error) return { text: error, tone: DANGER }
+    // What the user just clicked outranks a note about a write before it.
+    if (secrets) return secrets
     if (dropped && dropped.agentId === agent.id && noteStillTrue(dropped)) {
       return { text: dropped.text, tone: NOTE }
     }
@@ -624,6 +671,9 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   ): void => {
     if (!stamp) return
     setError(null)
+    // A message about credentials/.env must not survive the next thing the user
+    // does in the pickers above it.
+    setSecrets(null)
     if (options.note) note(options.note, { model: modelId, complexity })
     else setDropped(null)
     save.mutate(
@@ -1041,7 +1091,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
 
       {(agent.credentials.length > 0 || !canEdit) && (
         <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">
-          <SecretsLine agent={agent} />
+          <SecretsLine agent={agent} onOutcome={setSecrets} />
           {!canEdit && (
             <div className={NOTE}>
               {stamp === null

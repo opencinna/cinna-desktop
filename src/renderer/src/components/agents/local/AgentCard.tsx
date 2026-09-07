@@ -10,6 +10,11 @@ interface AgentCardProps {
   file: string
   /** Reveal that file in the OS file manager. */
   onReveal?: () => void
+  /**
+   * What the reveal button promises, where `Reveal <file>` would be a lie —
+   * a card whose action lands on the folder rather than on the file it names.
+   */
+  revealTitle?: string
   /** Right-aligned controls: a save indicator, an "add", a disabled action. */
   actions?: React.ReactNode
   children: React.ReactNode
@@ -20,6 +25,7 @@ export function AgentCard({
   title,
   file,
   onReveal,
+  revealTitle,
   actions,
   children
 }: AgentCardProps): React.JSX.Element {
@@ -31,7 +37,7 @@ export function AgentCard({
           <button
             type="button"
             onClick={onReveal}
-            title={`Reveal ${file}`}
+            title={revealTitle ?? `Reveal ${file}`}
             className="flex items-center gap-1 text-[10px] font-mono text-[var(--color-text-muted)]
               hover:text-[var(--color-text-secondary)] transition-colors min-w-0"
           >

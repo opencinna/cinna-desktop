@@ -37,6 +37,13 @@ export function CredentialsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
     <AgentCard
       title="Credentials"
       file="credentials/.env"
+      // The folder, not the file: a `.env` that does not exist yet cannot be
+      // revealed (`showItemInFolder` on a missing path is a silent no-op), and
+      // this tab's cards have nowhere to report a failure. Creating and opening
+      // the file is the *runtime panel's* affordance — "Add them in
+      // credentials/.env" — which has the reserved line to say what it did. So
+      // the title promises the folder rather than naming a file it never opens.
+      revealTitle="Reveal the credentials folder"
       onReveal={() => openPath.mutate({ agentId: agent.id, relPath: 'credentials' })}
     >
       {agent.credentials.length === 0 ? (

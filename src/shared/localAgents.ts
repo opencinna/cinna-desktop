@@ -366,6 +366,18 @@ export interface DeleteLocalAgentResult {
   trashed: true
 }
 
+/** What `local-agent:open-credentials` reports back about the click. */
+export interface OpenLocalAgentCredentialsResult {
+  /** The file was not there and was seeded with the declared variable names. */
+  created: boolean
+  /**
+   * Nothing on this machine would open the file, so it was revealed in the
+   * file manager instead. The renderer says so rather than claiming an editor
+   * opened somewhere the user cannot see.
+   */
+  revealed: boolean
+}
+
 export interface OpenLocalAgentPathInput {
   agentId: string
   /**

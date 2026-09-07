@@ -63,6 +63,8 @@ const save = vi.fn(
       : options?.onSuccess?.())
 )
 const setSetting = vi.fn()
+/** The secrets line's "Add them in credentials/.env" — opens the file itself. */
+const openCredentials = vi.fn()
 let advanced = false
 let settingsLoaded = true
 let providers = PROVIDERS
@@ -74,7 +76,7 @@ let defaultMode: { providerId: string | null; modelId: string | null } | null = 
 }
 
 vi.mock('../../../hooks/useLocalAgents', () => ({
-  useOpenAgentPath: () => ({ mutate: vi.fn() }),
+  useOpenAgentCredentials: () => ({ mutate: openCredentials }),
   useSetLocalAgentRuntime: () => ({ mutate: save, isPending: false })
 }))
 vi.mock('../../../hooks/useChatModes', () => ({ useDefaultChatMode: () => ({ data: defaultMode }) }))
@@ -110,6 +112,7 @@ function agent(runtime: Record<string, string> | null): LocalAgentDto {
 beforeEach(() => {
   save.mockClear()
   setSetting.mockClear()
+  openCredentials.mockReset()
   advanced = false
   settingsLoaded = true
   writeFails = false
@@ -655,6 +658,65 @@ describe('RuntimePanel', () => {
       // One vocabulary for the tiers: this sentence and "Still Complex in the
       // file" can occupy the same slot seconds apart.
       expect(screen.getByText(/Anthropic lists no model for Simple work/)).toBeTruthy()
+    })
+
+    /** An agent whose manifest declares one credential and has not got it. */
+    function withSecret(): LocalAgentDto {
+      return {
+        ...agent({ credential: 'Anthropic' }),
+        credentials: [
+          {
+            name: 'Vendor Portal',
+            type: 'api_key',
+            optional: false,
+            envPrefix: 'VENDOR_PORTAL_',
+            expectedKeys: ['VENDOR_PORTAL_TOKEN'],
+            presentKeys: [],
+            satisfied: false
+          }
+        ]
+      } as unknown as LocalAgentDto
+    }
+
+    it('opens credentials/.env itself, not the folder it sits in', () => {
+      render(<RuntimePanel agent={withSecret()} />)
+      fireEvent.click(screen.getByText('Add them in credentials/.env'))
+      expect(openCredentials.mock.calls[0][0]).toBe('folder:a')
+    })
+
+    it('says so when the click only revealed the file — the editor step did not happen', () => {
+      openCredentials.mockImplementation(
+        (_id: string, options?: { onSuccess?: (r: { created: boolean; revealed: boolean }) => void }) =>
+          options?.onSuccess?.({ created: true, revealed: true })
+      )
+      render(<RuntimePanel agent={withSecret()} />)
+      fireEvent.click(screen.getByText('Add them in credentials/.env'))
+      expect(screen.getByText(/shown in the file manager/)).toBeTruthy()
+    })
+
+    it('stays silent when the file actually opened', () => {
+      openCredentials.mockImplementation(
+        (_id: string, options?: { onSuccess?: (r: { created: boolean; revealed: boolean }) => void }) =>
+          options?.onSuccess?.({ created: true, revealed: false })
+      )
+      render(<RuntimePanel agent={withSecret()} />)
+      fireEvent.click(screen.getByText('Add them in credentials/.env'))
+      expect(screen.queryByText(/file manager/)).toBeNull()
+    })
+
+    it('reports a refused open rather than leaving the click inert', () => {
+      openCredentials.mockImplementation(
+        (_id: string, options?: { onError?: (e: Error) => void }) =>
+          options?.onError?.(
+            new Error(
+              "Error invoking remote method 'local-agent:open-credentials': LocalAgentError: credentials/.env could not be created."
+            )
+          )
+      )
+      render(<RuntimePanel agent={withSecret()} />)
+      fireEvent.click(screen.getByText('Add them in credentials/.env'))
+      // Unwrapped: the IPC plumbing never reaches the user (ux_rules rule 6).
+      expect(screen.getByText('credentials/.env could not be created.')).toBeTruthy()
     })
 
     it('reports a substituted model rather than rewriting the file', () => {
