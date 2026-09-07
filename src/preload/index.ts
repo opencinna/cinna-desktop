@@ -1155,6 +1155,13 @@ const api = {
     /** Run the kit validator over one folder on demand. */
     validate: (agentId: string): Promise<LocalAgentValidation> =>
       ipcRenderer.invoke('local-agent:validate', agentId),
+    /**
+     * The briefing for a coding assistant Cinna cannot launch: where the folder
+     * is and which file to read first. Main names the entry document it can
+     * actually see in the folder.
+     */
+    initPrompt: (agentId: string): Promise<string> =>
+      ipcRenderer.invoke('local-agent:init-prompt', agentId),
     /** Reveal a file inside the agent folder in Finder / Explorer. */
     openPath: (input: OpenLocalAgentPathInput): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-agent:open-path', input),

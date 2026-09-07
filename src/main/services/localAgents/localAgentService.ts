@@ -55,6 +55,7 @@ import { isIgnoredPath, validateAgentFolder } from '../../kit/validator'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { MANIFEST_FILE } from '../../../shared/kit/manifest'
+import { AGENT_INIT_ENTRY_FILES, buildAgentInitPrompt } from '../../../shared/agentInitPrompt'
 import {
   describedAs,
   FOLDER_AGENT_ID_PREFIX,
@@ -736,6 +737,44 @@ export const localAgentService = {
     } catch {
       return { relPath, text: '', stamp: null }
     }
+  },
+
+  /**
+   * The briefing a user pastes into a coding assistant Cinna cannot launch.
+   *
+   * Built in main, not in the renderer, for the same reason every other path
+   * here is: the folder comes from the index row via {@link locate}, never from
+   * a string the renderer sent. Main is also the only side that can see *which*
+   * entry document the folder has — pointing an assistant at an `AGENTS.md`
+   * that a hand-made folder never had would send it looking for the wrong file.
+   * Nothing is written and nothing is launched; this only reads directory
+   * entries.
+   *
+   * The name comes from the **index row**, not from `get()`. `get()` would
+   * re-walk and re-validate the whole folder — the cost `list()` grew
+   * `scanRootCached` to avoid — for one string the row already holds, and the
+   * row's copy is the better one: a folder whose manifest has gone briefly
+   * unparseable scans as `unreadableAgent`, whose `name` is the directory
+   * basename, while the row still carries the last good display name.
+   */
+  initPrompt(userId: string, agentId: string): string {
+    const { agentDir } = this.locate(userId, agentId)
+    // `locate` proves the row exists, not the directory. Every launching
+    // sibling re-validates the path before acting; this one would instead
+    // manufacture a confident briefing for a folder that is not there — an
+    // unmounted volume reads exactly like a hand-made folder with no entry
+    // document, and the user would paste a dead path into an assistant.
+    if (!existsSync(agentDir)) {
+      throw new LocalAgentError('not_found', 'That agent folder is no longer there.')
+    }
+    const row = agentRepo.getOwned(userId, agentId)
+    const entryFile =
+      AGENT_INIT_ENTRY_FILES.find((file) => existsSync(join(agentDir, file))) ?? null
+    return buildAgentInitPrompt({
+      folder: agentDir,
+      name: row?.name ?? basename(agentDir),
+      entryFile
+    })
   },
 
   /** Validate a folder on demand — the agent page's "check this agent" action. */

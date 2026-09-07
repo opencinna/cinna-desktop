@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { DetectedTool } from '../../../../../shared/localTools'
@@ -36,6 +36,16 @@ vi.mock('../../../hooks/useLocalTools', () => ({
   useDefaultTool: () => ({ tool: defaultTool, launchable: [CLAUDE, CODE], autoOpen: false }),
   useOpenIn: () => ({ mutate: openIn, isPending: false }),
   useSetDefaultTool: () => setDefaultTool
+}))
+
+/**
+ * The init-prompt copy is mocked at the same boundary: what this component owns
+ * is the confirmation and the error routing, not the clipboard write, which has
+ * its own home in `useCopyAgentInitPrompt`.
+ */
+const copyInitPrompt = vi.fn()
+vi.mock('../../../hooks/useLocalAgents', () => ({
+  useCopyAgentInitPrompt: () => ({ mutate: copyInitPrompt, isPending: false })
 }))
 
 const { OpenInMenu } = await import('./OpenInMenu')
@@ -97,5 +107,74 @@ describe('OpenInMenu', () => {
       expect.anything()
     )
     expect(setDefaultTool).not.toHaveBeenCalled()
+  })
+
+  it('copies the prompt and confirms in place, without closing the menu', () => {
+    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
+
+    // Built in main from the agent id — the renderer never assembles the path.
+    expect(copyInitPrompt).toHaveBeenCalledWith('folder:alpha', expect.anything())
+    const [, options] = copyInitPrompt.mock.calls[0] as [unknown, { onSuccess: () => void }]
+    act(() => options.onSuccess())
+
+    // The menu is still open, and the item itself is the confirmation: nothing
+    // else on screen changes when a clipboard is written.
+    expect(screen.getByRole('menuitem', { name: /copied/i })).toBeTruthy()
+    expect(setDefaultTool).not.toHaveBeenCalled()
+    expect(openIn).not.toHaveBeenCalled()
+  })
+
+  it('shows a failed copy inside the menu, which stays open', () => {
+    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
+
+    const [, options] = copyInitPrompt.mock.calls[0] as [unknown, { onError: (e: Error) => void }]
+    act(() =>
+      options.onError(
+        new Error("Error invoking remote method 'local-agent:init-prompt': That agent folder is no longer there.")
+      )
+    )
+
+    // Not the page's slot: an open `below-right` menu covers it. The reason is
+    // in the menu, and the menu is still there to retry from.
+    expect(screen.getByRole('alert').textContent).toBe('That agent folder is no longer there.')
+    expect(onError).not.toHaveBeenCalledWith('That agent folder is no longer there.')
+    expect(screen.getByRole('menuitem', { name: /copy prompt for another tool/i })).toBeTruthy()
+  })
+
+  it('sends a failure that lands after the menu closed to the page slot instead', () => {
+    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /reveal folder/i }))
+
+    const [, options] = copyInitPrompt.mock.calls[0] as [unknown, { onError: (e: Error) => void }]
+    act(() => options.onError(new Error('That agent folder is no longer there.')))
+
+    // A confirmation may be dropped once the user has moved on; a failure may
+    // not — the clipboard still holds what it held before. The page slot is
+    // not covered now the menu is gone, so that is where it goes.
+    expect(onError).toHaveBeenLastCalledWith('That agent folder is no longer there.')
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
+  it('does not re-arm "Copied" when the copy lands after the user has moved on', () => {
+    render(createElement(OpenInMenu, { agent: AGENT, onError }))
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    fireEvent.click(screen.getByRole('menuitem', { name: /copy prompt for another tool/i }))
+
+    // The copy is in flight and the item is the only disabled one, so the user
+    // can still click Reveal folder — which closes the menu.
+    fireEvent.click(screen.getByRole('menuitem', { name: /reveal folder/i }))
+    const [, options] = copyInitPrompt.mock.calls[0] as [unknown, { onSuccess: () => void }]
+    act(() => options.onSuccess())
+
+    fireEvent.click(screen.getByRole('button', { name: /more ways to open/i }))
+    expect(screen.getByRole('menuitem', { name: /copy prompt for another tool/i })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: /copied/i })).toBeNull()
   })
 })

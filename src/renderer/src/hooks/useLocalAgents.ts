@@ -328,6 +328,34 @@ export function useOpenAgentCredentials() {
   })
 }
 
+/**
+ * Copy the agent's init prompt to the clipboard.
+ *
+ * The prompt is built in main — it is the only side that knows which entry
+ * document the folder has — and written to the clipboard here, in the renderer,
+ * where every other copy in the app happens. Both halves are inside the
+ * mutation so a clipboard the browser refuses is a failed mutation the caller
+ * reports, not a silent no-op: the menu item would otherwise say "Copied" over
+ * an empty clipboard.
+ */
+export function useCopyAgentInitPrompt() {
+  return useMutation({
+    mutationFn: async (agentId: string): Promise<string> => {
+      const prompt = await window.api.localAgents.initPrompt(agentId)
+      try {
+        await navigator.clipboard.writeText(prompt)
+      } catch {
+        // A `DOMException` *is* an `Error`, so `unwrapIpcError` would take its
+        // message verbatim and show the user Chromium's own words — "Document
+        // is not focused." is what a notification stealing focus mid-copy
+        // produces. Say it in ours instead.
+        throw new Error('Could not copy the prompt to the clipboard.')
+      }
+      return prompt
+    }
+  })
+}
+
 /** Run the kit validator over one folder on demand. */
 export function useValidateLocalAgent() {
   return useMutation({

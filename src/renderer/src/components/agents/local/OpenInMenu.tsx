@@ -1,7 +1,17 @@
+import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Check, ChevronDown, Code2, FolderOpen, TerminalSquare } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ClipboardCheck,
+  ClipboardCopy,
+  Code2,
+  FolderOpen,
+  TerminalSquare
+} from 'lucide-react'
 import { usePopover } from '../../ui/usePopover'
 import { useDefaultTool, useOpenIn, useSetDefaultTool } from '../../../hooks/useLocalTools'
+import { useCopyAgentInitPrompt } from '../../../hooks/useLocalAgents'
 import { actionForTool, type DetectedTool } from '../../../../../shared/localTools'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { unwrapIpcError } from '../../../utils/ipcError'
@@ -22,6 +32,13 @@ const SPLIT_RIGHT =
   'flex items-center rounded-r-md border border-l-0 border-[var(--color-border)] px-1.5 py-1.5 ' +
   'text-[var(--color-text-secondary)] transition-colors hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)]'
 
+/**
+ * How long "Copied" stands before the label reverts. The same number as the
+ * app's other two copy buttons (`CloudSyncSettingsSection`, `SyncSetupModal`) —
+ * one dwell time, not three.
+ */
+const COPIED_REVERT_MS = 1500
+
 function ToolIcon({ tool }: { tool: DetectedTool }): React.JSX.Element {
   return tool.kind === 'editor' ? <Code2 size={12} /> : <TerminalSquare size={12} />
 }
@@ -38,7 +55,9 @@ function ToolIcon({ tool }: { tool: DetectedTool }): React.JSX.Element {
  *
  * With no default (never picked, or the tool was uninstalled) the primary is
  * the menu itself, labelled "Open in…". A machine with no assistant or editor
- * at all still gets Terminal and Reveal.
+ * at all still gets Terminal, Reveal, and the prompt to paste into whatever it
+ * does have — the menu can only *launch* the tools the desktop detects, so the
+ * copy is how every other assistant reaches the same folder.
  *
  * Main re-validates the folder against the registered agents roots, so a
  * refusal here is expected and shown rather than swallowed.
@@ -49,6 +68,10 @@ interface OpenInMenuProps {
    * Where a refusal is shown. The page owns one error slot for every header
    * action, so two failures cannot draw on top of each other and the next
    * action clears the last message — see `LocalAgentPage`.
+   *
+   * Every item that closes the menu reports here. The copy does not close it,
+   * so it reports here only in the one case where this slot is not covered by
+   * the popover: a failure landing after the user has closed the menu.
    */
   onError: (message: string | null) => void
 }
@@ -57,7 +80,29 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
   const { tool: defaultTool, launchable } = useDefaultTool()
   const setDefaultTool = useSetDefaultTool()
   const openIn = useOpenIn()
+  const copyInitPrompt = useCopyAgentInitPrompt()
   const menu = usePopover<HTMLButtonElement>('below-right')
+  const [copied, setCopied] = useState(false)
+  const [copyError, setCopyError] = useState<string | null>(null)
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Read by the mutation's callbacks, which resolve after the click that
+  // started them and cannot see the `menu.open` their closure captured.
+  // Assigned in an effect rather than during render: a render that React
+  // discards (a transition, a Suspense boundary above this page) still runs
+  // its body, and the ref would then describe a render that never committed.
+  const menuOpen = useRef(menu.open)
+
+  // Both the confirmation and the reason belong to one opening of the menu:
+  // either one still showing the next time it opens would describe an
+  // interaction the user has already left.
+  useEffect(() => {
+    menuOpen.current = menu.open
+    if (!menu.open) {
+      setCopied(false)
+      setCopyError(null)
+    }
+  }, [menu.open])
+  useEffect(() => () => clearTimeout(copiedTimer.current ?? undefined), [])
 
   const launch = (request: Parameters<typeof openIn.mutate>[0]): void => {
     onError(null)
@@ -70,6 +115,43 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
   const launchTool = (tool: DetectedTool): void => {
     if (tool.id !== defaultTool?.id) setDefaultTool(tool.id)
     launch({ folder: agent.path, toolId: tool.id, action: actionForTool(tool) })
+  }
+
+  /**
+   * Copy the init prompt — the one item here that does not close the menu, in
+   * either direction.
+   *
+   * Nothing else on screen changes when a clipboard is written, so closing
+   * would make the action silent; the label is the confirmation. And a failure
+   * cannot use the page's error slot the way the launchers do: that slot sits
+   * under the header, which this `below-right` popover covers — so the reason
+   * is rendered *inside* the menu, below every control, where it can be read
+   * without moving anything the user is about to click (UX rules 1 and 6).
+   *
+   * Both callbacks resolve after the click that started them, so both ask
+   * where the user now is. A confirmation that arrives once the menu has
+   * closed is dropped — it would re-arm on the next opening, describing a
+   * click made in a session the user has left. A *failure* is never dropped:
+   * it goes to the page slot instead, which is not covered once the menu is
+   * gone, because the clipboard still holds whatever it held before and the
+   * user believes otherwise.
+   */
+  const copyPrompt = (): void => {
+    onError(null)
+    setCopyError(null)
+    copyInitPrompt.mutate(agent.id, {
+      onSuccess: () => {
+        if (!menuOpen.current) return
+        setCopied(true)
+        clearTimeout(copiedTimer.current ?? undefined)
+        copiedTimer.current = setTimeout(() => setCopied(false), COPIED_REVERT_MS)
+      },
+      onError: (err) => {
+        const message = unwrapIpcError(err, 'Could not copy the prompt.')
+        if (menuOpen.current) setCopyError(message)
+        else onError(message)
+      }
+    })
   }
 
   const items = (
@@ -108,10 +190,68 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
         <FolderOpen size={12} />
         Reveal folder
       </button>
-      {launchable.length === 0 && (
-        <div className="px-2 pb-1 pt-1.5 text-[10px] text-[var(--color-text-muted)]">
-          No coding assistant or editor found. Install one, then Refresh in Settings → Local
-          Agents.
+      <button
+        type="button"
+        role="menuitem"
+        className={MENU_ITEM}
+        disabled={copyInitPrompt.isPending}
+        title="Copy a briefing that points any coding assistant at this folder"
+        onClick={copyPrompt}
+      >
+        {/*
+          Three states, all inside the row the item already occupies, so none of
+          them grows the menu (rule 1): dimmed-and-unchanged would read as
+          *unavailable* rather than working.
+
+          `ClipboardCheck` and not a bare `Check`, because inside *this* menu an
+          accent check already means "this is your default tool" (rule 8), and
+          the two would otherwise appear together either side of the list.
+
+          And not "Copy init prompt": this page's Prompts tab holds the agent's
+          own prompt documents, so "prompt" here already means
+          `WORKFLOW_PROMPT.md`. The label names the audience instead (rule 7),
+          and fits the menu's 191px of item width where "…another assistant"
+          would truncate.
+        */}
+        {copied ? (
+          <ClipboardCheck size={12} className="text-[var(--color-accent)]" />
+        ) : (
+          <ClipboardCopy size={12} />
+        )}
+        {copied ? 'Copied' : copyInitPrompt.isPending ? 'Copying…' : 'Copy prompt for another tool'}
+      </button>
+      {/*
+        The label swap is the confirmation, and a changed accessible name is
+        not reliably announced — so the one audience for whom the label *is*
+        the message would be the one that never hears it. The failure has
+        `role="alert"` below; this is its counterpart for the success.
+      */}
+      <span role="status" aria-live="polite" className="sr-only">
+        {copied ? 'Copied' : ''}
+      </span>
+      {/*
+        The prose tail, after every control: appearing pushes nothing the user
+        is about to click, and the popover grows downward away from its trigger.
+        Ruled off, because otherwise the two paragraphs abut the last menu row
+        and the no-tools state reads as five lines of glued prose.
+      */}
+      {(copyError || launchable.length === 0) && (
+        <div className="mt-1 border-t border-[var(--color-border)] pt-1.5">
+          {/*
+            The reason first: the note below is advice about something else, and
+            it must not sit between the user and why their click failed.
+          */}
+          {copyError && (
+            <div role="alert" className="px-2 pb-1 text-[10px] text-[var(--color-danger)]">
+              {copyError}
+            </div>
+          )}
+          {launchable.length === 0 && (
+            <div className="px-2 pb-1 text-[10px] text-[var(--color-text-muted)]">
+              No coding assistant or editor found. Install one, then Refresh in Settings →
+              Local Agents.
+            </div>
+          )}
         </div>
       )}
     </>

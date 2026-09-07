@@ -1009,3 +1009,59 @@ describe('stamp_identity with a job already depending on the folder', () => {
     expect(folderDeps(jobId)[0].manifestId).toBe(newId.replace('folder:', ''))
   })
 })
+
+/**
+ * The init prompt — the briefing for an assistant Cinna cannot launch.
+ *
+ * The one thing worth testing is the entry document: the prompt's whole job is
+ * to say "read this file", and naming a file the folder does not have would
+ * send the assistant looking for the wrong thing. So the candidates are checked
+ * against a real folder, in order, with each one removed in turn.
+ */
+describe('initPrompt', () => {
+  it('names the folder, the agent and the entry document', () => {
+    const prompt = localAgentService.initPrompt(USER, agentId)
+    expect(prompt).toContain(`\`${agentDir}\``)
+    expect(prompt).toContain('"Alpha"')
+    expect(prompt).toContain('`AGENTS.md`')
+    // The folder's own AGENTS.md routes on two roles; this prompt is always
+    // the Builder one, and says so.
+    expect(prompt).toContain('working *on* this agent, not running it')
+  })
+
+  it('falls back to CLAUDE.md when the folder has no AGENTS.md', () => {
+    rmSync(join(agentDir, 'AGENTS.md'))
+    const prompt = localAgentService.initPrompt(USER, agentId)
+    expect(prompt).toContain('`CLAUDE.md`')
+    expect(prompt).not.toContain('`AGENTS.md`')
+  })
+
+  it('points at the manifest and the workflow prompt when there is no entry document', () => {
+    for (const file of ['AGENTS.md', 'CLAUDE.md', 'README.md']) {
+      rmSync(join(agentDir, file), { force: true })
+    }
+    const prompt = localAgentService.initPrompt(USER, agentId)
+    expect(prompt).toContain('`cinna-agent.json`')
+    expect(prompt).toContain('`docs/WORKFLOW_PROMPT.md`')
+  })
+
+  it('keeps the last good name when the manifest is momentarily unparseable', () => {
+    // The name comes from the index row, not from a fresh scan: a scan of this
+    // folder is an `unreadableAgent` whose name is the directory basename
+    // ('alpha'), which is not what the user calls this agent.
+    writeFileSync(manifestPath(agentDir), '{ not json')
+    expect(localAgentService.initPrompt(USER, agentId)).toContain('"Alpha"')
+  })
+
+  it('refuses a folder that is no longer on disk rather than briefing a dead path', () => {
+    // The row outlives the directory (an unmounted volume, a folder moved
+    // between rescans). Without the guard this reads as "a folder with no
+    // entry document" and copies a confident prompt for a path that is gone.
+    rmSync(agentDir, { recursive: true, force: true })
+    expect(() => localAgentService.initPrompt(USER, agentId)).toThrow(/no longer there/)
+  })
+
+  it('refuses an agent that is not in the index', () => {
+    expect(() => localAgentService.initPrompt(USER, 'folder:nope')).toThrow()
+  })
+})

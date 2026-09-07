@@ -168,6 +168,16 @@ export function registerLocalAgentHandlers(): void {
     }
   )
 
+  /**
+   * The init prompt for one agent folder — what the user pastes into an
+   * assistant the desktop cannot launch. Read-only: it resolves the folder from
+   * the index row and looks for an entry document, and writes nothing.
+   */
+  ipcHandle('local-agent:init-prompt', (_event, agentId: string): string => {
+    userActivation.requireActivated()
+    return localAgentService.initPrompt(getSettingsScopeUserId(), agentId)
+  })
+
   ipcHandle('local-agent:validate', (_event, agentId: string): LocalAgentValidation => {
     userActivation.requireActivated()
     return localAgentService.validate(getSettingsScopeUserId(), agentId)
