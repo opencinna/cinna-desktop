@@ -1,6 +1,6 @@
 # The Local Engine, Runtimes & Prompt Assembly
 
-> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. **Read §9.5 before changing anything about the generated config:** the engine has two config readers, `OPENCODE_CONFIG` reaches only the older one, and the newer one — which decides what a session can run on and what system prompt it gets — substitutes neither `{env:…}` nor `{file:…}`. Three further things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why *Always* is gated off.
+> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. **Read §9.5 before changing anything about the generated config:** the engine has two config readers, `OPENCODE_CONFIG` reaches only the older one, and the newer one — which decides what a session can run on and what system prompt it gets — substitutes neither `{env:…}` nor `{file:…}`. Three further things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why the desktop holds its own — see [Local Agent Permissions](permissions.md). §2 also records how a pattern in the generated `permission` block is actually matched, and which rule wins when two match; **read it before editing that block**, because a pattern that misses fails open.
 
 
 ## Purpose
@@ -353,15 +353,16 @@ The last line is load-bearing: **do not switch to the Builder role.** The same f
 
 ### The permission profile
 
-Reads are free, writes and edits are free **only under `app-data/`**, and bash is free only for the three command shapes the kit teaches (`uv run *`, `make *`, `python scripts/*`). Everything else asks. Three entries are not about convenience:
+**An agent works freely inside its own folder.** A session's `location.directory` *is* the agent folder, so `read`, `edit`, `write` and `bash` are `allow`; what still asks is what the folder boundary does not cover — `external_directory`, `webfetch`, the agent's own manifest and workflow prompt, secret files, and `sudo` / `rm -r`. This replaced a profile that allowed writes only under `app-data/` and only three shapes of command, which asked about nearly every step of ordinary work: **a permission prompt that fires constantly is not a control, it is a thing users learn to click through.**
+
+The whole profile, each entry with the failure it exists for, plus the matcher rules every pattern in it depends on, is [Local Agent Permissions](permissions.md#business-rules). Two things belong here because they are about generating the config rather than about the policy:
 
 - **`'*': 'ask'` has to be there explicitly.** OpenCode's own base rule is allow-everything — verified by reading `GET /agent` back off a running engine — so a profile that only enumerates `read`/`edit`/`write`/`bash` leaves *every other tool* on allow, which is the opposite of the intent
-- **`credentials/.env` is `deny`, not `ask`.** The desktop never reads credential values and neither should the agent it runs; the kit's own rule is that a value is read from inside a script and never printed. An `ask` here would put a one-click path to pasting the user's secrets into a transcript behind a dialog nobody reads carefully. `**/.env`, `**/*.pem` and `**/*.key` are denied the same way
-- **`external_directory` is `ask`**, so a session bound to one agent folder cannot quietly wander into another agent's folder, or the rest of the disk, without the user seeing it
+- **Order inside an entry is the mechanism, not a style choice.** The engine resolves a permission with a `findLast` over the concatenated rules, so `'*': 'allow'` is written first and the narrow shapes after it. Write them the other way round and every narrow entry is dead — and dead in the direction of allow
 
-Answering these prompts and persisting "always" grants is Phase 6's; this phase only puts the right profile in the config.
+Answering these prompts is the [runner's](agent_turn.md); a user's *Always allow* is recorded per agent in that folder's `app-data/desktop.json` and never sent to the engine.
 
-**A manifest's `runtime.permissions` is merged shallowly, one permission name at a time** — replacing a whole entry rather than deep-merging its pattern map, so an override reads as an override instead of quietly widening `bash` from underneath. Its justification is that the folder is the user's own, so this is a legibility boundary rather than a trust one.
+**A manifest's `runtime.permissions` is merged shallowly, one permission name at a time** — replacing a whole entry rather than deep-merging its pattern map, so an override reads as an override instead of quietly widening `bash` from underneath. Its justification is that the folder is the user's own, so this is a legibility boundary rather than a trust one. Where a manifest does override something, the agent page's Permissions tab names which permissions were replaced, because the fixed description it shows above the list is no longer the whole truth.
 
 > **Flagged for Phase 9.** That justification stops being true the moment a folder is installed from the cloud into a shell-capable engine. A manifest can replace `bash` and the `'*': 'ask'` catch-all outright. Revisit before cloud install lands.
 
@@ -444,6 +445,7 @@ engine:status | :start | :stop | :skips          local-agent:update-field
 ## Integration Points
 
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents the config is generated from, the readiness that decides which are offered at all, and the `turnLock` whose `anyHeld()` gates every restart
+- [Local Agent Permissions](permissions.md) — the profile this generator writes, entry by entry, and the desktop-held grants that answer an ask it produces
 - [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel (its layout, its one reserved status line and the jump rule behind it), the Settings → Local Agents engine controls, and the stamped `update-field` path a runtime write reuses
 - [Kit Contract & Manifest Layer](kit_contract.md) — the `runtime` block in `cinna-agent.json`, the validator's secret pattern reused on the credential reference, and the templates whose HTML comments the prompt assembly strips
 - [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) — managed credentials are usable runtimes, and the background sync is the config input with nowhere to put a hook

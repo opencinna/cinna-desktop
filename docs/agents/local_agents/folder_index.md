@@ -201,9 +201,9 @@ So a rescan can be triggered by a watcher's own recovery, with no user action an
 
 The **only** file in an agent folder the desktop owns. Everything else belongs to the kit, the assistant, or the agent.
 
-- Holds per-machine runtime state nobody else needs: where the agent's local API answered, the token it was linked with, engine session ids per chat, persisted permission decisions, and the last status snapshot
+- Holds per-machine runtime state nobody else needs: where the agent's local API answered, the token it was linked with, engine session ids per chat, the standing permission grants the user has given this agent ([Local Agent Permissions](permissions.md)), and the last status snapshot
 - Created **lazily** — a freshly scaffolded folder does not have one, and a folder that never ran should not gain one — and written atomically, because a scan may read it while a turn writes it
-- Reading it is **total**: a file another build wrote degrades to defaults rather than throwing, since the scanner reads it for every agent on every pass
+- Reading it is **total**: a file another build wrote degrades to defaults rather than throwing, since the scanner reads it for every agent on every pass. A permission grant is the sharpest case of that rule: a row naming no action or no pattern is **dropped** rather than shown, and a row with no `scope` reads as the narrowest one — a rule that answers a permission ask without asking must not be able to widen itself by omission
 - `agentToken` is a secret and never leaves the main process. The renderer gets a summary reporting *presence* only
 
 ### Paths that arrive from outside

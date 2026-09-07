@@ -166,6 +166,35 @@ on disk. (This was twice reported as broken during probing; both reports were wr
 - Replying **`once` persists nothing**: `GET /api/permission/saved` stayed empty until the moment
   `always` was sent. **This is the hook that makes a correct per-agent policy possible — see §4.**
 
+#### How a configured permission is resolved — read out of the binary, not watched
+
+These four facts govern every pattern the desktop writes into `CONVERSATION_PERMISSIONS`. They were
+read from the 1.18.27 binary rather than exercised over HTTP, which is stated plainly because
+nothing in this repository's tests can fail if a later version changes them. **Each one fails in the
+direction of `allow`.**
+
+- **The matcher is not a glob.** `Wildcard.match` regex-escapes the pattern, then rewrites `*` → `.*`
+  and `?` → `.`, anchors it `^…$`, and rewrites a trailing `" .*"` to `"( .*)?"` (which is what makes
+  `sudo *` also match a bare `sudo`). So `*` crosses `/` freely and **there is no `**`**: `**/.env`
+  compiles to something requiring a slash and never matches a `.env` at the worktree root. `*.env` is
+  the spelling that covers `.env`, `credentials/.env` and `deep/nested/.env` alike
+- **Resources are `path.relative(worktree, file)`, and the worktree is the session's
+  `location.directory`** — the agent folder. So a root-level `.env` arrives as the literal string
+  `.env`, with no leading segment for a `**` to bind to
+- **`evaluate` is a `findLast` over the concatenated rule list.** The **last** matching rule wins,
+  not the most specific one, and the desktop's block merges *after* OpenCode's own base profile.
+  Two consequences: `'*': 'ask'` takes effect because it lands after their allow-everything; and
+  `read: {'*': 'allow'}` switches the engine's built-in `.env` protection **off**, leaving the
+  desktop's own secret-file entries as the only defence. Within one permission name, `fromConfig`
+  preserves object key order, so `'*'` must be written first and the narrow shapes after it
+- **The shell tool asks under `bash` with the full command text** of each command node, redirection
+  included (`ShellTool.collect`), and **`external_directory` fires only for the path arguments of a
+  fixed command list** (`cd`, `rm`, `cp`, `mv`, `mkdir`, `touch`, `chmod`, `chown`, `cat`, …). So the
+  folder is a boundary for the *file tools* only: `cat credentials/.env`, `curl -d @credentials/.env`
+  and `python3 -c "open('~/.ssh/id_rsa')"` all run with no prompt under a `bash: allow` profile. The
+  desktop states this on the Permissions card rather than pretending otherwise — see
+  [Local Agent Permissions](permissions.md#the-folder-is-a-boundary-for-the-file-tools-not-for-the-shell)
+
 ### Questions
 
 `question.v2.asked` carries `{id:"que_*", sessionID, questions:[{question, header,
@@ -250,10 +279,6 @@ Three separate failures compound here:
 
 **Consequences for the desktop, and the way out.**
 
-`ALWAYS_GRANTS_ENABLED` in `src/shared/localAgentRequests.ts` is `false`, the Always button is not
-rendered, and two tests fail if the constant is flipped. That gate is correct and must stay until a
-per-agent policy exists.
-
 The way out is **not** to adopt OpenCode's store. It is the opposite, and it follows directly from
 "replying `once` persists nothing":
 
@@ -262,23 +287,37 @@ The way out is **not** to adopt OpenCode's store. It is the opposite, and it fol
 > stays empty forever, and "Always, for this agent" means what it says.
 
 This **reverses** the earlier decision recorded as "OpenCode is authoritative because the desktop
-cannot opt out of its store". The desktop can opt out; the premise was wrong. Implementing it is not
-Phase 6 work — it is recorded here so the decision is not re-derived from the false premise.
+cannot opt out of its store". The desktop can opt out; the premise was wrong.
 
-Until it exists, any user-facing string claiming a decision was remembered *"for this agent"* is
-false. `permissionDecisionText` says "Allowed, and remembered." for that reason.
+**That design is now built** — see [Local Agent Permissions](permissions.md). The grant is written to
+the agent folder's `app-data/desktop.json` on the answer path, the engine is told `once`, and a later
+ask a grant covers is answered `once` automatically with no block written to the transcript at all.
+`ALWAYS_GRANTS_ENABLED`, the constant that used to withhold the button, is **deleted rather than
+flipped**, exactly as its own comment required: what replaced it is a model, not a `true`.
 
-### 4.1 Per-folder, per-session permissions *are* achievable — the mechanism
+Two things follow for anyone editing that path:
+
+- **`always` must never leave the process**, and there are two locks on it: the answer handler
+  converts it, and the runner's engine door downgrades a stray one to `once` and logs at `error`.
+  Neither is redundant — a caller that settled a request with `always` some other way would write the
+  user-global row above, and no test at the HTTP fake would see it
+- **"for this agent" is a claim only the desktop's own store can make**, so `permissionDecisionText`
+  says "Allowed, and remembered for this agent." only where the write landed, and says "Allowed, and
+  remembered **by the engine**." for an `always` reply that reached the stream from another client on
+  the same `opencode serve`. A grant that will authorise every folder agent must not be recorded as
+  if it were scoped to one.
+
+### 4.1 Per-folder, per-session permissions *are* achievable — the mechanism, and it is what shipped
 
 The defect is narrower than it first reads. **Only the saved-grant store is global. The permission
 *question* is per-session**, and that is where the decision is made.
 
-Two layers, and the first already works:
+Two layers, and both now work:
 
 | Layer | Scope | Status |
 |---|---|---|
 | **Static policy** — the `permission` block on each agent entry in the generated engine config (`CONVERSATION_PERMISSIONS`, `configGenerator.ts`) | **per agent entry** | **Verified working**: setting `write: ask` on the agent entry produced an ask; setting it to `allow` did not. *Caveat: differentiation between two agents with different profiles in one config was not A/B tested — only that a per-agent block takes effect.* |
-| **Dynamic grants** — "Always" | user-global in OpenCode | Broken (§4). Achievable **desktop-side** |
+| **Dynamic grants** — "Always allow" | user-global in OpenCode | Broken there (§4). **Built desktop-side**: `permissionGrantService`, stored per agent folder. See [Local Agent Permissions](permissions.md) |
 
 The desktop-side mechanism, resting only on verified facts:
 
@@ -288,18 +327,25 @@ The desktop-side mechanism, resting only on verified facts:
 3. Therefore **every permission question is attributable to exactly one folder agent at the moment it
    is asked**, with no reliance on `projectID`.
 4. Replying **`once` persists nothing** *(verified)*. So:
-   - grant matches a desktop-held per-agent rule → auto-reply `once`;
-   - no match → render the block; **Once** → `once`, **Deny** → `reject`, **Always** → record the
-     rule in `desktop.json` *keyed by agent*, then reply `once`.
+   - grant matches a desktop-held per-agent rule → auto-reply `once`, **and write no block**;
+   - no match → render the block; **Once** → `once`, **Deny** → `reject`, **Always allow** → record
+     the rule in `desktop.json` *keyed by agent*, then reply `once`.
 5. OpenCode's saved store stays empty, and `projectID: "global"` never gets a chance to matter.
 
 This is **better** granularity than OpenCode offers, not merely equivalent: the engine's `save` only
-ever offers `["*"]`, whereas a desktop-held rule can be scoped to the action *and* the resource
-pattern the user actually saw.
+ever offers `["*"]`, whereas a desktop-held rule is scoped to the action *and* the resource the user
+actually saw.
 
-### 4.2 The hole in that plan — pre-existing grants
+One thing the implementation had to add that this sketch did not anticipate: **a desktop-held rule is
+matched by string work, never by compiling the pattern to a regular expression.** A resource is very
+often a command line the *model* wrote, so `rm -rf build/*` stored as a wildcard also covered
+`rm -rf build/../../Documents` — auto-answered, with no block and nothing to see afterwards. The
+stored grant therefore carries an explicit scope (`exact` / `origin` / `action`) instead of relying on
+which asterisks look like wildcards.
 
-The desktop can only gate what it is **asked** about. If `~/.local/share/opencode/opencode.db`
+### 4.2 The hole in that plan — pre-existing grants. Still open
+
+**Nothing in the shipped design closes this.** The desktop can only gate what it is **asked** about. If `~/.local/share/opencode/opencode.db`
 already carries a matching grant — from the user's own OpenCode usage, or from another client
 attached to the same `opencode serve` (which **Phase 8 deliberately enables**) — the engine
 **allows without asking**, and no desktop-side policy is consulted. Step 4 above never runs.
@@ -382,6 +428,15 @@ Not weaker evidence — **no evidence**. Each is a place to look first when some
    the sequence has only run against fakes.
 7. **The packaged contract path** — `contractStore.ts`'s `process.resourcesPath` branch has never
    executed. One `npm run build:mac:unsigned` settles it.
+8. **The config-resolution rules in §2 were *read* out of the binary, not exercised over HTTP.**
+   `Wildcard.match`'s compilation, `evaluate`'s `findLast`, `ShellTool.collect`'s full-command-text
+   ask and `external_directory`'s fixed command list are transcriptions of code, and every pattern in
+   `CONVERSATION_PERMISSIONS` depends on all four. `configGenerator.test.ts` pins our profile against
+   a **simulation** of that algorithm, so a version that changes it leaves the suite green and the
+   profile silently wrong — a missed pattern fails open. **Re-read all four on a version bump**, or
+   settle them the other way with a probe: point a warm engine at a folder holding `.env`,
+   `credentials/.env` and `credentials/README.md`, prompt for a `cat` of each, and record which
+   raised `permission.v2.asked`.
 8. **Every platform except `darwin-arm64`.** The other five assets' digests are recorded and
    unverified.
 9. ~~**Which config-file provider entries the v2 runner treats as *available*, and what makes one

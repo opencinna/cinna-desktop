@@ -13,12 +13,12 @@ Six things here produce a silent, green-suite failure if changed carelessly. Eac
 3. **Termination is the default; continuation is the enumerated exception.** `turnStream.ts:135-141`. `finish` is an unconstrained string in the OpenAPI document, so a `=== 'stop'` test hangs the turn on any other terminal value. A hang holds the per-agent lock for the life of the app and blocks engine reconciles for *every* folder agent
 4. **`onClosed` is not `onDisconnect`.** `engineEventBus.ts:79-91`. A close means the session id died with the process; treating it as a disconnect waits for a reconnect that cannot come
 5. **The `enabled` gate exists only at `localAgentTurnRunner.ts:125`.** `collectEngineAgents` (`src/main/engine/engineConfigSource.ts:130`) does not consult it — by design, so a disabled agent still gets a config entry and a prompt file on disk. Delete the check and a disabled agent is chattable. It is an obligation Phase 5 explicitly handed to Phase 6, and it is pinned by the named mutation "remove the `enabled` check" → `localAgentTurnRunner.test.ts:244` (mutation table, `:734`)
-6. **No engine response body is ever logged.** `localAgentTurnRunner.ts:521-546`. `GET /config` returns the *resolved* config with `{env:…}` substituted, and it is not the only endpoint behind that door that can carry a key
+6. **No engine response body is ever logged.** `localAgentTurnRunner.ts` — `readList` (`:763`) and `post` (`:852`). `GET /config` returns the *resolved* config with `{env:…}` substituted, and it is not the only endpoint behind that door that can carry a key
 
 ## File Locations
 
 ### Shared
-- `src/shared/localAgentRequests.ts` — the whole request wire contract. `PERMISSION_ID_PREFIX`/`QUESTION_ID_PREFIX` (`:42-43`), `isEngineRequestId()` (`:64`), `REQUEST_PARK_TIMEOUT_MS` (`:84`), `ALWAYS_GRANTS_ENABLED` (`:135`, `false`), `PermissionReply` (`:144`), `LocalPermissionRequest` (`:159`), `parsePermissionRequest()` (`:168`). **Type-only plus constants** — imported from main and renderer alike, so it must pull in no runtime dependency
+- `src/shared/localAgentRequests.ts` — the whole request wire contract. `PERMISSION_ID_PREFIX`/`QUESTION_ID_PREFIX` (`:42-43`), `isEngineRequestId()` (`:64`), `REQUEST_PARK_TIMEOUT_MS` (`:84`), `PermissionReply` (`:343`), `LocalPermissionRequest` (`:363`), `parsePermissionRequest()` (`:372`). **Type-only plus pure functions** — imported from main and renderer alike, so it must pull in no runtime dependency. The grant types and matching rules also live here and belong to [Local Agent Permissions](permissions_tech.md), not to this slice
 - `src/shared/messageParts.ts`, `src/shared/agentStreamEvents.ts` — **unchanged by this phase, deliberately.** No `permission` or `question` part kind was added; see [the convention](agent_turn.md#permissions-and-questions-are-tool-parts-there-is-no-permission-part-kind)
 
 #### The no-new-part-kind rule, and the five symbols that are its only enforcement
@@ -33,7 +33,7 @@ If you are about to add a `permission` or `question` part kind, these are the sy
 | `isAskUserQuestionTool(toolName)` | `src/renderer/src/utils/askUserQuestion.ts:39` | `toLowerCase().replace(/[^a-z]/g,'') === 'askuserquestion'` — the existing normalising match, unchanged by this phase. Used at `MessageStream.tsx:357` |
 | `isEngineRequestId(toolId)` | `src/shared/localAgentRequests.ts:64` | Separates a **live engine address** (`per_*` / `que_*`) from a cloud agent's question id, which is what makes a persisted local request block render read-only. `MessageStream.tsx:342` |
 
-Emission side: `turnStream.ts:437` writes `PERMISSION_TOOL_NAME` into `cinna.tool_name` on the ask's `tool` part, and `turnStream.ts:465` writes `QUESTION_TOOL_NAME`. Both put the engine's request id in `cinna.tool_id`, which is *also* the address a reply is posted to. Asserted at `turnStream.test.ts:304` ("emits a permission ask as a tool part whose toolId is the reply address") and `:326`.
+Emission side: `turnStream.ts:535` writes `PERMISSION_TOOL_NAME` into `cinna.tool_name` on the ask's `tool` part, and `turnStream.ts:564` writes `QUESTION_TOOL_NAME`. Both put the engine's request id in `cinna.tool_id`, which is *also* the address a reply is posted to. Asserted at `turnStream.test.ts:304` ("emits a permission ask as a tool part whose toolId is the reply address") and `:326`.
 
 ### Main process — `src/main/services/agentTurn/`
 - `runner.ts` — the seam. `AgentTurnRunner` (`:33`), `isFolderAgent()` (`:45`). No IO, no imports beyond two types
@@ -41,13 +41,13 @@ Emission side: `turnStream.ts:437` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `localAgentTurnRunner.ts` — the turn lifecycle. `TURN_CEILING_MS` (20 min), `ENGINE_READY_MS` (60 s), `LocalTurnDeps`, `LocalAgentTurnRunner`
 - `engineEventBus.ts` — the one global SSE subscription. `RECONNECT_DELAYS_MS` (`:53`), `EngineStreamTransport` (`:62`), `SessionEventListener` (`:66`), `EngineEventBus` (`:99`)
 - `engineEvents.ts` — the event vocabulary. `EngineEventDurable` (`:59`), `EngineEvent` (`:73`, open `type: string`), `ENGINE_EVENT` (`:82`), `eventSessionId()` (`:108`), `parseEngineEvent()` (`:114`)
-- `turnStream.ts` — per-turn demultiplexing and the A2A-shaped fold. `PendingRequest` (`:56`), `TurnStreamUpdate` (`:63`), `engineErrorMessage()` (`:90`), `isTurnOver()` (`:138`), `TurnStream` (`:149`), `mapQuestions()` (`:497`), `permissionDecisionText()` (`:541`), `questionDecisionText()` (`:563`), `renderToolOutput()` (`:586`), `PART_METADATA_KEYS` (`:614`)
+- `turnStream.ts` — per-turn demultiplexing and the A2A-shaped fold. `PendingRequest` (`:57`, carrying the ask itself and the `auto` flag), `TurnStreamUpdate` (`:82`), `engineErrorMessage()` (`:109`), `isTurnOver()` (`:157`), `TurnStreamOptions` (`:169`, the `isGranted` predicate), `TurnStream` (`:182`), `noteRemembered()` (`:198`), `permissionAsked()` (`:484`), `questionAsked()` (`:550`), `mapQuestions()` (`:596`), `permissionDecisionText()` (`:647`), `questionDecisionText()` (`:667`), `renderToolOutput()` (`:690`), `PART_METADATA_KEYS` (`:718`)
 - `sseParser.ts` — line framing. `SseMessage` (`:26`), `SseParser` (`:30`) with `feed()` (`:42`), private `flush()` (`:99`), `reset()` (`:110`)
-- `pendingRequests.ts` — the module-level ask/permission registry. `RequestResolution` (`:42`), `pendingRequests.{register:68, resolve:142, drop:179, owner:198, listForChat:204, clear:213}`
+- `pendingRequests.ts` — the module-level ask/permission registry. `RequestResolution` (`:43`, whose permission variant carries `remembered?`), `pendingRequests.{register:91, resolve:167, drop:204, owner:223, listForChat:236, clear:245}`. An `Entry` now also holds the engine's own ask, so an answer can be scoped to what the **engine** named rather than to what a renderer sends back with it
 
 ### Main process — elsewhere
-- `src/main/ipc/agent_a2a.ipc.ts:146` — `ipcMain.on('agent:send-message')`, the dispatch seam (seam 4). `resolveTurnRunner(agent)` at `:194`, `isFolderAgent(agent)` at `:195`; `:196-203` is the card check that now runs **after** the source check; `:212` and `:251` short-circuit endpoint and token resolution for a folder agent; `:265` hands the runner to `streamToAgent`
-- `src/main/ipc/agent_a2a.ipc.ts:304` — `agent:answer-request`; `:350` — `agent:pending-requests`
+- `src/main/ipc/agent_a2a.ipc.ts:176` — `ipcMain.on('agent:send-message')`, the dispatch seam (seam 4). `resolveTurnRunner(agent)` at `:222`, `isFolderAgent(agent)` at `:223`; `:224-231` is the card check that now runs **after** the source check; `:240` and `:294` short-circuit endpoint and token resolution for a folder agent; `:308` hands the runner to `streamToAgent`
+- `src/main/ipc/agent_a2a.ipc.ts:347` — `agent:answer-request`; `:46` — `rememberIfAlways`, its `always` conversion; `:422` — `agent:pending-requests`
 - `src/main/services/a2aStreamingService.ts` — **body unchanged.** `StreamToAgentInput.runner` (`:64`), `RunAgentTurnInput` (`:98`, with `endpointUrl`/`cardUrl` widened to optional at `:113-114`), `RunAgentTurnResult` (`:142`), `A2ARunAgentTurnInput` (`:174`, the re-narrowing), `runAgentTurn()` (`:190`), `streamToAgent()` (`:415`) calling `runner.runTurn` at `:437`, and the `catch` at `:500` that no longer trusts a runner to keep its own contract
 - `src/main/services/a2aAsMcpProvider.ts:134` — the second call site of `resolveTurnRunner`; `:171` — `runner.runTurn`. A folder agent works as an orchestrated tool with no change of its own
 - `src/main/engine/engineManager.ts` — `ensureRunning`, `agentKey`, `agentModel`, `lastSkips`, `request`, `onStateChange`. See [engine_tech.md](engine_tech.md)
@@ -61,9 +61,9 @@ Emission side: `turnStream.ts:437` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `src/preload/index.ts:559` — `window.api.agents.answerRequest({requestId, reply?, answers?})`; `:565` — `window.api.agents.pendingRequests(chatId)`. Typed by inference (seam 16)
 
 ### Renderer
-- `src/renderer/src/hooks/useAgentRequests.ts:35` — `useAgentRequests(chatId, isStreaming)` → `{pending, isPending, answerPermission, answerQuestion}`. **Polls** (`POLL_MS = 700`) while streaming, with one final read after the stream ends; a failed lookup keeps the last known list rather than blanking a prompt mid-answer
+- `src/renderer/src/hooks/useAgentRequests.ts` — `useAgentRequests(chatId, isStreaming)` → `{pending, isPending, answerPermission, answerQuestion}`, both answer functions resolving with an `AnswerOutcome` (`{remembered?}`). **Polls** (`POLL_MS = 700`) while streaming, with one final read after the stream ends; a failed lookup keeps the last known list rather than blanking a prompt mid-answer. **The optimistic removal happens after the refusal check, not before it** — it used to run first, so an answer main refused took the buttons with it: the block greyed out, the error line said the request had expired, and there was no way to answer it any other way
 - `src/renderer/src/components/chat/MessageStream.tsx:313` — the hook mounted; `:342` — `isEngineRequestId(part.toolId)` decides liveness from the registry rather than from `activeQuestionMsgId`; `:343` — the permission branch; `:357` — the question branch. `:53`, `:580`, `:667`, `:877` are the sites that treat a request part like a command/tool block
-- `src/renderer/src/components/chat/PermissionRequestBlock.tsx:39` — the permission widget. Renders *Always* only when `ALWAYS_GRANTS_ENABLED` (`:136`), which is `false`
+- `src/renderer/src/components/chat/PermissionRequestBlock.tsx` — the permission widget. All three answers are offered; `request.savable` is deliberately **not** consulted, because it describes what OpenCode's own store would keep and this button does not write there. Detailed in [permissions_tech.md](permissions_tech.md)
 - `src/renderer/src/components/chat/AskUserQuestionBlock.tsx` — the existing question widget, given `liveRequestId` + `onAnswerLocal` for the local path
 - `src/renderer/src/utils/askUserQuestion.ts:39` — `isAskUserQuestionTool()`, the normalising match (`toLowerCase().replace(/[^a-z]/g,'') === 'askuserquestion'`) that the reserved question tool name is chosen to satisfy
 
@@ -88,13 +88,13 @@ The second, durable copy is `sessions[chatId] = {sessionId, updatedAt}` in the a
 |---|---|---|
 | `agent:send-message` | `(AgentSendPayload)` + a MessagePort on `event.ports[0]` | Unchanged shape. The only new work is `resolveTurnRunner(agent)` and skipping endpoint/token resolution for a folder agent |
 | `agent:cancel-message` | `(requestId) → {success}` | Unchanged. Reaches the runner through the turn's `AbortSignal` |
-| `agent:answer-request` | `({requestId, reply?, answers?}) → {ok, reason?}` | New. Activation-gated, chat-ownership checked **before** the request is consumed, and the answer shape validated against the engine's own enum |
+| `agent:answer-request` | `({requestId, reply?, answers?}) → {ok, reason?, remembered?}` | Activation-gated, chat-ownership checked **before** the request is consumed, and the answer shape validated against the engine's own enum. `remembered` is present only for a permission answered `always`, and says whether the grant reached disk — see [permissions_tech.md](permissions_tech.md#ordering-constraint-on-the-answer-path) for the synchronous-window constraint that makes writing it before `resolve()` safe |
 | `agent:pending-requests` | `(chatId) → {requestId, kind}[]` | New. Synchronous map read; returns `[]` for a chat the caller does not own |
 
 Three properties of `agent:answer-request` are deliberate and each closes a specific lie to the user:
 
 - **It returns an outcome as data, never a rejection.** `ipcMain.handle` serialises a rejection to message + stack and `contextBridge` re-clones it, so a renderer branch on `err.code` silently never fires (`src/main/ipc/_wrap.ts`)
-- **Ownership is read with `pendingRequests.owner()`, not `resolve()`.** `resolve` settles as a side effect, so checking ownership from its return value would have already delivered the answer by the time the check failed (`pendingRequests.ts:190-201`)
+- **Ownership is read with `pendingRequests.owner()`, not `resolve()`.** `resolve` settles as a side effect, so checking ownership from its return value would have already delivered the answer by the time the check failed (`pendingRequests.ts:223-234`)
 - **The answer is validated against the engine's enum, not against TypeScript's belief about it.** A renderer bug or a stale preload could otherwise send `'allow'`, or a flat `string[]`, and the first anyone would know is a 400 the runner logs at warn *after* the dialog told the user their answer landed
 
 ## Services & Key Methods
@@ -112,7 +112,8 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 | `engineEventBus` (`:35`) | The one bus, constructed over `engineManager.request('/api/event', {Accept: 'text/event-stream'})`. Costs nothing at module load — it connects on the first subscriber |
 | `engineManager.onStateChange` (`:52`) | Any non-`running` status calls `engineEventBus.shutdown()`. This is what turns "the engine stopped" into turn errors instead of hangs |
 | `a2aTurnRunner` (`:63`) | `runAgentTurn` behind the shared shape. **The single place that narrows** `endpointUrl`/`cardUrl` back to required; a missing one is returned as a turn error, not thrown |
-| `localDeps` (`:80`) | Every injection point: `ensureEngineRunning`, `agentKey`, `agentModel`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:100-108`), `readSession`, `saveSession` (both stores, `:112-141`), `withLock`, `userId` |
+| `localDeps` (`:80`) | Every injection point: `ensureEngineRunning`, `agentKey`, `agentModel`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:100-108`), `readSession`, `saveSession` (both stores, `:112-141`), `isGranted` (`:158`, the reading half of *Always allow*), `withLock`, `userId` |
+| `rememberPermissionGrant()` (`:179`) | The writing half, called from `agent_a2a.ipc.ts`. Lives here because this module already names `localAgentService` and the folder's own state together, and because reaching into the local-agent services from the chat IPC module would pull the whole folder stack (Electron `shell`, the scaffolder, the watcher) into its import graph. Returns `false` rather than throwing: the user's action still goes ahead |
 | `resolveTurnRunner(agent)` (`:156`) | The one dispatch point, used by the IPC handler and `A2AAsMcpProvider` |
 
 ### `src/main/services/agentTurn/localAgentTurnRunner.ts`
@@ -143,7 +144,9 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 | Settle | `:322-347` | Logs `{sessionId, agentId, admittedSeq, durationMs, outcome, lastSeq, parts, eventTypeCounts}`; saves the session in both stores; returns `parts` **even on the error branch** |
 | `finally` | `:351-360` | Clear the ceiling, remove the abort listener, unsubscribe, and `cancel()` every still-parked request |
 
-Other methods: `park` (`:371`, fire-and-forget so awaiting cannot stall the event loop still delivering this turn's other events), `reply` (`:395`, `…/permission/{id}/reply {reply}`, `…/question/{id}/reply {answers}`, and the two rejection shapes), `heal` (`:434`), `replayDurable` (`:447`, `GET /api/session/{id}/event?after=<lastSeq>` read to the end through an `SseParser`), `prompt` (`:517`), `post` (`:528`, JSON POST that tolerates 204 and empty bodies and **never logs a response body**).
+Other methods: `park` (`:481`, fire-and-forget so awaiting cannot stall the event loop still delivering this turn's other events; it also calls `turn.noteRemembered` before posting, so the transcript's decision line cannot claim a rule the store refused), `autoAllow` (`:530`) and `deliverAutomatic` (`:560`) for an ask a standing grant covers, `reply` (`:591`, `…/permission/{id}/reply {reply}`, `…/question/{id}/reply {answers}`, the two rejection shapes, and the `always` → `once` downgrade), `heal`, `replayDurable` (`GET /api/session/{id}/event?after=<lastSeq>` read to the end through an `SseParser`), `prompt`, `post` (JSON POST that tolerates 204 and empty bodies and **never logs a response body**).
+
+`ingest` branches on `update.asked?.auto` (`:377`) to `autoAllow` instead of `park`. See [permissions_tech.md](permissions_tech.md#the-auto-answer-path-end-to-end) for that path end to end.
 
 ### `src/main/services/agentTurn/engineEventBus.ts`
 
@@ -166,23 +169,27 @@ State: `listeners: Map<sessionId, Set<listener>>`, `controller`, `pumping`, `pum
 
 ### `src/main/services/agentTurn/turnStream.ts`
 
-State per turn: `messages: Map<messageId, {parts, index}>`, `requestMessage: Map<requestId, messageId>` (`:159`), `streamOwner: Map<'kind:streamId', messageId>` (`:176`), `highestSeq` (`:178`).
+State per turn: `messages: Map<messageId, {parts, index}>`, `requestMessage: Map<requestId, messageId>` (`:209`), `streamOwner: Map<'kind:streamId', messageId>` (`:240`), `highestSeq` (`:242`), and `remembered: Set<requestId>` — the requests the user answered with *Always allow*, so the decision line can say what was actually decided rather than the `once` the engine was sent.
 
-`apply(event)` (`:192`) → `TurnStreamUpdate {message?, asked?, settled?, idle?, error?}`. Tracks `durable.seq` into `highestSeq` first, then switches on `event.type`; **an unknown type returns `{}` rather than throwing** — 88 variants today and more in a later OpenCode.
+Constructed with `TurnStreamOptions` (`:169`), whose single member is an `isGranted` **predicate**. It is a predicate and not a store on purpose: what a folder has granted is `permissionGrantService`'s decision, and what to do about it is this class's, because this class is where the block would otherwise be written. Auto-answering anywhere later would mean the block had already reached the renderer.
+
+`apply(event)` (`:256`) → `TurnStreamUpdate {message?, asked?, settled?, idle?, error?}`. Tracks `durable.seq` into `highestSeq` first, then switches on `event.type`; **an unknown type returns `{}` rather than throwing** — 88 variants today and more in a later OpenCode.
 
 | Event | Handler | Line |
 |---|---|---|
-| `session.next.text.delta` | `appendText(…, 'text')` | `:270` |
-| `session.next.text.ended` | `setText(…, 'text')` — **cumulative, idempotent, never shrinks** | `:293` |
-| `session.next.reasoning.delta` | `appendText(…, 'thinking')` | `:270` |
-| `session.next.tool.called` | `toolCalled` | `:323` |
-| `session.next.tool.success` / `.failed` | `toolResult` with `stdout` / `stderr` | `:352` |
-| `session.next.step.ended` | `isTurnOver(finish)` → `{idle:true}` | `:138` |
-| `session.next.step.failed` | `{error: engineErrorMessage(...)}` | `:220` |
-| `permission.v2.asked` / `question.v2.asked` | `permissionAsked` / `questionAsked` | `:411`, `:452` |
-| `permission.v2.replied`, `question.v2.replied`, `question.v2.rejected` | `settleRequest` | `:391` |
-| `session.idle` | `{idle:true}` — **never emitted by 1.18.27**, kept as belt and braces | `:231` |
-| `session.error` | `{error: …}` | `:236` |
+| `session.next.text.delta` | `appendText(…, 'text')` | `:337` |
+| `session.next.text.ended` | `setText(…, 'text')` — **cumulative, idempotent, never shrinks** | `:360` |
+| `session.next.reasoning.delta` | `appendText(…, 'thinking')` | `:337` |
+| `session.next.tool.called` | `toolCalled` | `:390` |
+| `session.next.tool.success` / `.failed` | `toolResult` with `stdout` / `stderr` | `:422` |
+| `session.next.step.ended` | `isTurnOver(finish)` → `{idle:true}` | `:157` |
+| `session.next.step.failed` | `{error: engineErrorMessage(...)}` | `:283` |
+| `permission.v2.asked` / `question.v2.asked` | `permissionAsked` / `questionAsked` | `:484`, `:550` |
+| `permission.v2.replied`, `question.v2.replied`, `question.v2.rejected` | `settleRequest` | `:464` |
+| `session.idle` | `{idle:true}` — **never emitted by 1.18.27**, kept as belt and braces | `:298` |
+| `session.error` | `{error: …}` | `:303` |
+
+`permissionAsked` (`:484`) builds the `LocalPermissionRequest` and consults `isGranted` **before it touches `messageState`**. `messageState` creates a message entry as a side effect, so an ask that renders nothing must return above it or leave an empty message behind for the accumulator to carry. On a hit it returns `{asked: {…, auto: true}}` and nothing else.
 
 Part identity: `slot()` (`:261`) assigns an index on first sight of a stream id and never reassigns; parts are appended, never spliced. Keys are `text:<textID>`, `thinking:<reasoningID>`, `tool:<callID>`, `result:<callID>:<stream>`, `perm:<requestID>`, `question:<requestID>`, `decision:<requestID>`.
 
@@ -194,9 +201,9 @@ A missing identifier cannot degrade the key, because there is no path to one: al
 
 Metadata written on parts (all from `streamPartsAccumulator`, re-exported at `:614`): `cinna.kind` (`text` | `thinking` | `tool` | `tool_result`), `cinna.tool_name`, `cinna.tool_id`, `cinna.tool_input`, `cinna.tool_stream`.
 
-Helpers: `engineErrorMessage` (`:90`) reads **both** engine error shapes — `{name, data:{message}}` and `SessionErrorUnknown`'s `{type:'unknown', message}` — and prefixes a provider id when one is named, because a rotated key is the failure a user is most likely to hit. `mapQuestions` (`:497`) normalises OpenCode's `multiple` → the desktop's `multiSelect` and drops `custom`. `renderToolOutput` (`:586`) prefers `content[]` over `structured` and names files rather than inlining them. `permissionDecisionText` (`:541`) / `questionDecisionText` (`:563`) produce the transcript's decision record.
+Helpers: `engineErrorMessage` (`:109`) reads **both** engine error shapes — `{name, data:{message}}` and `SessionErrorUnknown`'s `{type:'unknown', message}` — and prefixes a provider id when one is named, because a rotated key is the failure a user is most likely to hit. `mapQuestions` (`:596`) normalises OpenCode's `multiple` → the desktop's `multiSelect` and drops `custom`. `renderToolOutput` (`:690`) prefers `content[]` over `structured` and names files rather than inlining them. `permissionDecisionText` (`:647`) / `questionDecisionText` (`:667`) produce the transcript's decision record — the first takes a `remembered` flag, because the engine's reply says `once` for a decision the user made permanently.
 
-Every text-bearing writer carries a `length >=` guard (`:318`, `:347`, `:370`, `:406`), which is what makes a durable replay tolerant of re-delivered events whether `?after=` turns out to be inclusive or exclusive.
+Every text-bearing writer carries a `length >=` guard, which is what makes a durable replay tolerant of re-delivered events whether `?after=` turns out to be inclusive or exclusive.
 
 ### `src/main/services/agentTurn/sseParser.ts`
 
@@ -208,16 +215,16 @@ The comment-line skip at `:73` carries an *honest note*: it is behaviourally red
 
 ### `src/main/services/agentTurn/pendingRequests.ts`
 
-Module-level `entries: Map<requestId, Entry>` and `timers: Map<requestId, Timeout>`. `Entry` is `{chatId, agentId, kind, settle}`.
+Module-level `entries: Map<requestId, Entry>` and `timers: Map<requestId, Timeout>`. `Entry` is `{chatId, agentId, kind, request?, settle}` — `request` is the **engine's** ask, held so the IPC layer can scope a grant to what the engine named rather than to what a renderer sends back with the answer. The renderer is the user's own window, so this is not a trust boundary; it is that an answer sent from a stale block would otherwise store a rule for resources the engine never asked about.
 
 | Method | Line | Contract |
 |---|---|---|
-| `register(…)` | `:68` | Returns `{answered: Promise<RequestResolution>, cancel}`. A second registration under the same id **settles the first as rejected** so a replayed ask cannot leave an orphan promise. Arms an `unref`'d `REQUEST_PARK_TIMEOUT_MS` timer whose expiry sends a real rejection rather than abandoning the request. `settle` checks `entries.get(id)?.settle === settle` (`:95`) so a stale handle cannot delete the entry that replaced it |
-| `resolve(id, resolution)` | `:142` | The renderer's path. Returns `{chatId, agentId}` or `null`; refuses a mismatched kind (`:148`) rather than posting a permission answer to a question endpoint |
-| `drop(id)` | `:179` | The **engine's** path — used when `permission.v2.replied` / `question.v2.*` says the engine already settled it. Deliberately not `resolve()`, which would make the runner POST a redundant reject |
-| `owner(id)` | `:198` | Ownership without consuming |
-| `listForChat(chatId)` | `:204` | What `agent:pending-requests` returns |
-| `clear()` | `:213` | Tests and shutdown only |
+| `register(…)` | `:91` | Returns `{answered: Promise<RequestResolution>, cancel}`. A second registration under the same id **settles the first as rejected** so a replayed ask cannot leave an orphan promise. Arms an `unref`'d `REQUEST_PARK_TIMEOUT_MS` timer whose expiry sends a real rejection rather than abandoning the request. `settle` checks `entries.get(id)?.settle === settle` so a stale handle cannot delete the entry that replaced it |
+| `resolve(id, resolution)` | `:167` | The renderer's path. Returns `{chatId, agentId}` or `null`; refuses a mismatched kind rather than posting a permission answer to a question endpoint. A permission resolution may carry `remembered`, set by whoever wrote the grant |
+| `drop(id)` | `:204` | The **engine's** path — used when `permission.v2.replied` / `question.v2.*` says the engine already settled it. Deliberately not `resolve()`, which would make the runner POST a redundant reject |
+| `owner(id)` | `:223` | Ownership without consuming — and it returns the recorded ask, which is what `rememberIfAlways` builds a grant from |
+| `listForChat(chatId)` | `:236` | What `agent:pending-requests` returns |
+| `clear()` | `:245` | Tests and shutdown only |
 
 Nothing in this module speaks HTTP. It holds *resolvers*; the runner owns the request that posts a reply, because the runner is what knows the session id and holds `engineManager.request` — the same "one door to the engine" rule Phase 5 set.
 
@@ -288,15 +295,15 @@ runTurn(input)
 | `REQUEST_PARK_TIMEOUT_MS` | `src/shared/localAgentRequests.ts:84` | 10 min | Bounds an abandoned dialog. The turn holds its lock while parked and a config change defers while *any* lock is held, so unbounded this turns one open modal into an app-wide stall |
 | `RECONNECT_DELAYS_MS` | `engineEventBus.ts:53` | 250/500/1000/2000/5000 ms | Capped backoff; the counter resets on every successful connection |
 | `POLL_MS` | `useAgentRequests.ts` | 700 ms | Renderer poll while streaming. One synchronous main-process map lookup per tick |
-| `ALWAYS_GRANTS_ENABLED` | `src/shared/localAgentRequests.ts:135` | `false` | The *Always* button is withheld. **Do not flip this to ship Always** — the observation that would have justified it was done and its result is that flipping it is wrong. See [opencode_contract.md §4](opencode_contract.md#4-the-permission-scoping-defect--proven-end-to-end) |
+| `AUTO_REPLY_RETRY_MS` | `localAgentTurnRunner.ts:106` | 500 ms | Gap before the one retry of an **automatic** allow. That path has no `pendingRequests` entry and therefore no park timer, so a lost reply would hold the turn to `TURN_CEILING_MS`. After the retry it posts `reject` rather than hang. Overridable via `LocalTurnDeps.autoReplyRetryMs` **in tests only** |
 
 ## Security
 
 - **Invariant 4 — no secret crosses to the renderer.** The engine's base URL and per-start Basic-auth password stay inside `engineManager`; this slice reaches the engine only through `engineManager.request`, and no IPC channel exposes that seam. What the renderer receives is stream events and message parts, exactly as for a remote agent
-- **No engine response body is ever logged** (`localAgentTurnRunner.ts:521-546`). `GET /config` returns the resolved config with `{env:…}` substituted, so its body contains live API keys — and it is not the only endpoint that can carry one
-- **Chat ownership is checked on both new channels** (`agent_a2a.ipc.ts:316`, `:352`) with `chatRepo.getOwned(getProfileScopeUserId(), chatId)`, and on `answer-request` it is checked **before** the request is consumed
+- **No engine response body is ever logged** (`localAgentTurnRunner.ts:763`, `:852`). `GET /config` returns the resolved config with `{env:…}` substituted, so its body contains live API keys — and it is not the only endpoint that can carry one
+- **Chat ownership is checked on both new channels** (`agent_a2a.ipc.ts:358`, `:424`) with `chatRepo.getOwned(getProfileScopeUserId(), chatId)`, and on `answer-request` it is checked **before** the request is consumed
 - **Both new channels are activation-gated** (`userActivation.requireActivated()`)
-- **Answer shapes are validated against the engine's own enum**, not against the renderer's word for it — a wrong shape is refused rather than delivered to the wrong endpoint (`agent_a2a.ipc.ts:329-341`, plus the kind check in `pendingRequests.resolve`)
+- **Answer shapes are validated against the engine's own enum**, not against the renderer's word for it — a wrong shape is refused rather than delivered to the wrong endpoint (`agent_a2a.ipc.ts:371-383`, plus the kind check in `pendingRequests.resolve`)
 - **A persisted request block is read-only.** `isEngineRequestId` (`src/shared/localAgentRequests.ts:64`) separates a live engine address from a cloud agent's question id, and the main-process registry is the only authority on whether it is still answerable — so a reopened chat cannot re-answer a dead request
 - **The permission tool name is reserved and un-model-emittable** (`cinna_permission_request`), so an agent's own call to `bash` or `edit` can never be mistaken for a request to run one
 

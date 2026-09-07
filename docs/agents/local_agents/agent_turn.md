@@ -1,6 +1,6 @@
 # The Agent Turn Runner — chatting with a folder agent
 
-> **The engine contract this slice sits on is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. This document does not restate it. Four of its findings shape every rule below: `POST …/prompt` returns an **admission ack**, not the answer; `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only completion signal is `step.ended`; `GET /api/event` takes **no parameters at all** and therefore cannot be resumed; and saved permission grants are **user-global**, which is why *Always* is gated off.
+> **The engine contract this slice sits on is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. This document does not restate it. Four of its findings shape every rule below: `POST …/prompt` returns an **admission ack**, not the answer; `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only completion signal is `step.ended`; `GET /api/event` takes **no parameters at all** and therefore cannot be resumed; and saved permission grants are **user-global**, which is why the desktop answers *Always allow* itself and never sends `always` to the engine — see [Local Agent Permissions](permissions.md).
 
 ## Purpose
 
@@ -57,11 +57,13 @@ The corollary is the shape of the work: this slice is a **lift**, not a rewrite.
 4. If it is gone, a new session is opened and the user simply carries on — no error, no explanation owed
 
 ### The agent asks for permission
-1. Mid-turn, the agent wants to run a command, edit a file, or fetch a URL, and the engine parks it
+1. Mid-turn, the agent wants to reach outside its folder, fetch a URL, edit its own manifest or prompt, or run something the profile flags, and the engine parks it
 2. A permission block appears in the transcript *inside the streaming answer*, with the action and the things it wants to touch
-3. The user answers **Allow once** or **Deny**. The answer goes to the engine by request id, out of band — the turn is still streaming
+3. The user answers **Allow once**, **Always allow** or **Deny**. The answer goes to the engine by request id, out of band — the turn is still streaming
 4. The engine reports what it acted on, and the decision is recorded in the transcript beside the ask
 5. The agent loop resumes, or takes the denial and continues
+
+If a standing grant already covers the ask, **none of that happens**: the engine is answered `once` automatically and nothing is written to the transcript at all. What the grants are, where they live and why the engine's own *Always* is never used is [Local Agent Permissions](permissions.md); this document owns only the mechanics of parking, answering and settling.
 
 ### The agent asks a question
 1. Same shape: the engine parks, a question block renders, and the answer is delivered by request id while the turn streams on
@@ -221,11 +223,17 @@ It is generous on purpose. A real agent run doing real work can take minutes, an
 
 Parts already streamed are kept and returned alongside the error. The A2A path behaves the same way, so the transcript reads the same for both kinds of agent.
 
-### *Always* is not offered
+### *Always* is answered by the desktop, and never reaches the engine
 
-The third permission answer is withheld, and the reason is proven rather than suspected: one *Always* click writes a grant naming no directory, no session and no agent into a **user-global** store shared with the user's own OpenCode install. The full observation, including why a per-agent *Always* is still achievable and what it would take, is in [the contract](opencode_contract.md) §4. Allow once and Deny are the honest answers, and both work.
+The third permission answer is offered, and it stops in the main process. One `always` posted to the engine writes a grant naming no directory, no session and no agent into a **user-global** store shared with the user's own OpenCode install — proven, not suspected ([the contract](opencode_contract.md) §4). Replying `once` persists nothing there, so the desktop keeps the rule beside the agent it was granted for and answers a matching ask with `once`.
 
-The transcript's wording for a remembered grant is nevertheless kept accurate — "Allowed, and remembered", never "for this agent" — because the engine can still report an `always` reply made by another client on the same `opencode serve`, and a decision arriving from outside this window must be recorded truthfully.
+Three obligations fall on this slice, and each is a lie to the user if dropped:
+
+- **The runner's engine door downgrades any stray `always` to `once`, loudly.** The conversion happens on the answer path; this is the second lock on the same rule, because a caller that settled a request with `always` some other way would write that user-global row and nothing in a test against the HTTP fake would notice
+- **The transcript says what was actually decided.** The engine's `permission.v2.replied` reports `once`, so `permissionDecisionText` takes a `remembered` flag from the desktop's own knowledge: "Allowed, and remembered for this agent." only where the rule reached disk, "Allowed once." otherwise. An `always` arriving from another client on the same `opencode serve` reads "Allowed, and remembered **by the engine**." — that grant will authorise every folder agent and must not be recorded as if it were scoped to one
+- **An auto-answered ask writes nothing.** `TurnStream` consults the grant predicate *before* it creates a message state, so no part, no first-owner entry and no registry entry exist for it. A block that appeared and answered itself milliseconds later would be a widget the user cannot act on, mid-stream
+
+Because an auto-answered ask has no registry entry, it also has no park timer — so the runner retries the automatic reply once and then posts `reject` rather than letting a lost reply hold the turn to the ceiling. The rest of the model is [Local Agent Permissions](permissions.md).
 
 ## Architecture Overview
 
@@ -255,6 +263,7 @@ Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin co
   │      │    TurnStream.apply(event) per event  │
   │      │      ├─ cumulative message ──▶ StreamPartsAccumulator ──▶ onEvent sink
   │      │      ├─ asked   ──▶ pendingRequests.register
+  │      │      │              (asked.auto ──▶ autoAllow, nothing rendered)
   │      │      ├─ settled ──▶ pendingRequests.drop
   │      │      └─ idle / error ──▶ settle
   │      │    heal on reconnect ─────────────────│──▶ GET /api/session/{id}/event?after=
@@ -274,6 +283,7 @@ Renderer ── agent:answer-request   ────────▶ pendingReques
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — supplies everything this slice consumes: `ensureRunning` as the config choke point, `agentKey()` and the skip reasons, the single request door, and the global lock predicate that keeps the engine from restarting mid-turn
 - [The OpenCode Engine Contract](opencode_contract.md) — what is actually known about the endpoints and events this slice speaks, and what is not
+- [Local Agent Permissions](permissions.md) — what an ask can be about in the first place, and where a standing grant lives. This slice owns the parking and the reply; that one owns the decision and the store
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this runner gates on, the readiness values it refuses, and the per-agent turn lock
 - [Agents Tab & Agent Page](agents_tab.md) — the chat controls that were rendered disabled until this phase landed
 - [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the existing tool-part convention that permission and question blocks follow
