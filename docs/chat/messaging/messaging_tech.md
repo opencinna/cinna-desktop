@@ -34,7 +34,7 @@
 - `src/renderer/src/components/chat/ChatInput.tsx` — Textarea with controls row; auto-focuses the textarea on mount and whenever `chatId` changes, so navigating to a chat (including after the first-message send from the default screen) lands the caret in the input
 - `src/renderer/src/components/chat/ChatControls.tsx` — Model dropdown + MCP toggle pills; active MCP IDs re-fetched when provider list changes (prevents stale FK references after provider deletion)
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — `[+]` button consolidating attach-files, chat-mode, and add-agents/MCP (replaced the retired `ChatConfigMenu`)
-- `src/renderer/src/components/chat/MessageStream.tsx` — Scrollable message list with auto-scroll
+- `src/renderer/src/components/chat/MessageStream.tsx` — Scrollable message list. Follows the bottom of a streaming reply only while the user has not scrolled away from it (`useStickToBottom`); an arriving chunk never pulls the view back. See [Transcript Scrolling](../conversation_ui/scroll_following.md)
 - `src/renderer/src/components/chat/MessageBubble.tsx` — User/assistant message with markdown, avatar, metadata popup
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible tool call display: provider-first badge layout, shimmer progress bar during pending, CSS grid expand/collapse animation, structured JSON input/result rendering with MCP content block unwrapping
 - `src/renderer/src/components/chat/ChatList.tsx` — Sidebar chat list
@@ -103,7 +103,7 @@ The persisted user content equals the optimistic `content` verbatim (both `prepa
 
 ## Renderer Components
 
-- `src/renderer/src/components/chat/MessageStream.tsx` — Renders message list, manages auto-scroll to bottom
+- `src/renderer/src/components/chat/MessageStream.tsx` — Renders the message list and owns the scroll container; bottom-following is delegated to `useStickToBottom` (see [Transcript Scrolling tech](../conversation_ui/scroll_following_tech.md)), which also renders the "Jump to latest" pill state
 - `src/renderer/src/components/chat/MessageBubble.tsx` — Renders a single message with react-markdown + remark-gfm + rehype-highlight; info icon shows metadata popup on hover
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible block: provider badge shown first (accent-colored with Plug icon) followed by muted tool name; chevron rotates on expand; CSS grid `gridTemplateRows` animation (150ms); shimmer progress bar on top during pending state; structured JSON input/result view with MCP content block unwrapping
 - `src/renderer/src/components/chat/ChatInput.tsx` — Input textarea; controls row below: [+] config on left, model/MCP center, send on right

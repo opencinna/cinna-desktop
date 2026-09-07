@@ -19,6 +19,8 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - **Agent sub-thread block** — In orchestrated mode an agent-backed tool call renders as an expandable nested sub-thread (the agent's own thinking/tool/result parts) instead of an opaque result string, headed by the agent's name in its hash color. Same badge-line-above / card-below structure. See [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md).
 - **System message** — A centered, danger-tinted box used for streaming errors. Contains a short message, an alert icon, and an expandable details section.
 - **Loading indicator** — Three bouncing dots shown inline (no avatar, no bubble) while waiting for the first streaming chunk.
+- **Following the bottom** — While a reply streams the transcript is held at the bottom, instantly and without animation, but only while the user has not scrolled away from it; scrolling up during a stream holds the position for the rest of the turn. See [Transcript Scrolling](scroll_following.md).
+- **"Jump to latest"** — A small pill centred above the composer, shown only while the transcript is not following the bottom. Clicking it resumes following. It is the affordance that makes scrolling away during a stream safe.
 - **Entry animation (user)** — A newly sent user message appears first as a small rounded shape on the right and expands left and down into the full bubble while the text fades in.
 - **Streaming assistant text** — While streaming, assistant text renders through the **same Markdown path as the persisted message** (the `MessageBubble` assistant render), so bold / lists / tables format **live** as tokens arrive — no raw `**…**` that only formats once the stream ends, and no reflow on the streaming→saved swap. Syntax highlighting of fenced code is deferred until the turn finalizes (highlighting an incomplete code block isn't useful and re-highlighting every token is the main jank source). A pulsing accent cursor trails the last token. There is no per-delta fade animation — Markdown re-parses the whole string each delta, so individual deltas can't be wrapped in animated spans. Streaming `thinking` / `tool` / `tool_result` blocks still use the block-level entry behaviour.
 - **Entry animation (assistant, full block)** — When a saved assistant message appears without having streamed (e.g., one-shot non-streaming response or A2A message parts), the entire block softly fades in (opacity + blur) over ~1s using the assistant-reveal mask. When the saved message replaces streaming blocks for the same chat, the block-level animation is suppressed so the swap is silent (the chunks already animated individually).
@@ -45,6 +47,8 @@ Defines the visual treatment of messages in the chat conversation area. The desi
 - All colours use CSS variables (`var(--color-*)`) — never hardcoded values
 - Entry animations run only on first appearance: the user-bubble pop fires when the messages array grows by exactly one (i.e. the user just sent something), so initial loads, chat switches, and bulk re-fetches do not animate. For assistant messages, streaming text renders as live Markdown (no per-delta animation), and the block-level reveal on the DB-saved message is suppressed when that chat just streamed (tracked per-chat via `streamedIncrementallyChatId`) — so the streaming → saved swap is seamless without a second animation
 - Animations are theme-agnostic: only opacity / `filter: blur` / `transform` are animated, never colours
+- Nothing in the transcript scrolls smoothly. Following the bottom is an instant, pre-paint position assignment; a smooth scroll restarted per chunk is what made a streaming table read as the window shaking
+- Markdown tables are their own scroll box (sized to their content, never wider than the bubble). A table is the one markdown block sized by its content rather than its container, and one wide enough made the whole transcript scroll sideways — the horizontal scrollbar then took layout height off the viewport as the streaming table resettled
 
 ## Architecture Overview
 
@@ -69,6 +73,7 @@ For an A2A assistant message with structured `parts[]`, MessageStream renders ea
 ## Integration Points
 
 - [Apply-Patch Diff](../apply_patch_diff/apply_patch_diff.md) — The `apply_patch` tool's git-style diff block; one of the disclosure blocks rendered here
+- [Transcript Scrolling](scroll_following.md) — When the conversation follows the bottom, when it stops, and the "Jump to latest" pill
 - [Messaging](../messaging/messaging.md) — Data flow and streaming protocol that feeds this UI
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — How `thinking`, `tool`, and `tool_result` parts arrive from A2A agents and end up in the rendering layer
 - Theming — All colours reference CSS variables from `src/renderer/src/assets/main.css`
