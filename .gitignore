@@ -9,4 +9,6 @@ out
 .env.*
 !.env.example
 e2e/test-results
+# Playwright writes here when a spec passes a repo-relative screenshot path.
+test-results
 e2e/playwright-report

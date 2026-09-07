@@ -66,7 +66,15 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     // Two tabs wear count badges: the scaffold ships one command, and a fresh
     // folder has two validation warnings (no example prompts, no router
     // trigger) that the Folder tab counts now that a ready folder shows no banner.
-    await expect(tabs.getByRole('tab')).toHaveText(['Overview', 'Prompts', 'Commands1', 'Folder2'])
+    // Permissions wears none — a new agent has granted nothing, and the badge is
+    // absent rather than a zero (`agent-permissions.spec.ts` has the counted case).
+    await expect(tabs.getByRole('tab')).toHaveText([
+      'Overview',
+      'Prompts',
+      'Commands1',
+      'Permissions',
+      'Folder2'
+    ])
     await expect(page.getByRole('button', { name: 'Open in…' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'Start chat' })).toBeVisible()
     await expect(page.getByRole('button', { name: 'More actions' })).toBeVisible()
