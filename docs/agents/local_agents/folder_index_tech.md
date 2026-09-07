@@ -95,6 +95,7 @@ Nothing about boot behaviour changed: `client.ts` still owns the connection, `jo
 | `local-agent:update-field` | invoke | `(UpdateLocalAgentFieldInput) → LocalAgentDto` |
 | `local-agent:rescan` | invoke | `(rootId?) → RescanResult[]` |
 | `local-agent:validate` | invoke | `(agentId) → LocalAgentValidation` |
+| `local-agent:init-prompt` | invoke | `(agentId) → string` — the briefing a user pastes into a coding assistant the desktop cannot launch. Read-only: the folder comes from the index row and only directory entries are read. The Open-in menu's, not this slice's; listed here because it is the second channel (with `:open-credentials`) that takes an **id** where a path would have been the obvious parameter — see [Open in Tools](open_in_tools.md) |
 | `local-agent:open-path` | invoke | `(OpenLocalAgentPathInput) → { success: true }` |
 | `local-agent:roots-list` | invoke | `() → AgentRootDto[]` |
 | `local-agent:root-add` | invoke | `() → { cancelled: true } \| { cancelled: false; root: AgentRootDto }` — **takes no path** |
