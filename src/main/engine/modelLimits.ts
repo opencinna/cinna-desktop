@@ -73,7 +73,12 @@ export interface EngineModelLimit {
  * which is the guarantee that a new provider type cannot quietly arrive with no
  * limit and reintroduce `max_tokens: 0`.
  */
-export type EngineProviderType = 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
+export type EngineProviderType =
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'openai_compatible'
+  | 'ollama'
 
 /**
  * The ceilings a custom entry's models are declared with, by credential type.
@@ -91,7 +96,23 @@ export const CUSTOM_MODEL_LIMITS: Readonly<Record<EngineProviderType, EngineMode
     /** Gemini 2.5's 1M context and 64k output. */
     gemini: Object.freeze({ context: 1_048_576, output: 65_536 }),
     /** A gateway is whatever the user pointed it at, so this is the cautious pair. */
-    openai_compatible: Object.freeze({ context: 128_000, output: 8_192 })
+    openai_compatible: Object.freeze({ context: 128_000, output: 8_192 }),
+    /**
+     * A local model, whose true window is a property of the weights and the
+     * `num_ctx` Ollama was built with — commonly 4k, sometimes 128k, and not
+     * knowable from the tag. This is the one row where the cautious direction is
+     * genuinely ambiguous: claiming 128k on a model serving 4k does not fail
+     * loudly the way an oversized `max_tokens` does — Ollama silently truncates
+     * the context instead. So the figure is small enough to be true almost
+     * everywhere rather than large enough to be useful somewhere.
+     *
+     * Unlike every other row here, the truth **is** available: `/api/show`
+     * returns `model_info["<arch>.context_length"]` per model. Threading it
+     * through `ModelInfo` to `EngineProviderInput.models` is the fix this
+     * file's header already argues for, and Ollama is the provider where it
+     * would pay off first.
+     */
+    ollama: Object.freeze({ context: 32_768, output: 4_096 })
   })
 
 /**

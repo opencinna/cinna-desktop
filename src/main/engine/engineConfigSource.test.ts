@@ -42,6 +42,9 @@ const state = vi.hoisted(() => ({
   models: [] as { id: string; name: string; providerId: string }[],
   modelsThrows: false,
   modelFetches: 0,
+  /** Provider ids whose adapter was asked directly — a `local` refresh. */
+  adapterFetches: [] as string[],
+  localThrows: false,
   agents: [] as Record<string, unknown>[],
   runtimes: {} as Record<string, { credentialId: string | null; modelId: string | null }>,
   decryptFails: new Set<string>(),
@@ -82,7 +85,14 @@ vi.mock('../llm/registry', () => ({
     state.modelFetches += 1
     if (state.modelsThrows) throw new Error('the gateway is unreachable')
     return state.models
-  }
+  },
+  getAdapter: (providerId: string) => ({
+    listModels: async () => {
+      state.adapterFetches.push(providerId)
+      if (state.localThrows) throw new Error('nothing is listening')
+      return state.models.filter((model) => model.providerId === providerId)
+    }
+  })
 }))
 vi.mock('../services/providerService', () => ({
   providerService: { listMerged: () => state.dtos }
@@ -164,6 +174,8 @@ beforeEach(() => {
   state.models = []
   state.modelsThrows = false
   state.modelFetches = 0
+  state.adapterFetches = []
+  state.localThrows = false
   state.agents = []
   state.runtimes = { _default: { credentialId: 'p1', modelId: 'claude-sonnet-4-5' } }
   state.decryptFails = new Set()
@@ -395,11 +407,12 @@ describe('collectEngineConfigInput', () => {
 })
 
 describe('collectEngineConfigInput — the model refresh', () => {
-  it('skips the refresh when the caller asks it to', async () => {
-    // Every adapter's `listModels()` is a network request, so this flag is what
-    // keeps a per-turn reconcile off the network. The count is the assertion:
-    // "the models are still right" would hold either way, because the cache is
-    // warm — which is exactly how a flag that is quietly ignored survives.
+  it('skips the cloud refresh when the caller asks it to', async () => {
+    // Every *cloud* adapter's `listModels()` is a network request, so this flag
+    // is what keeps a per-turn reconcile off the network. The count is the
+    // assertion: "the models are still right" would hold either way, because the
+    // cache is warm — which is exactly how a flag that is quietly ignored
+    // survives.
     state.models = [{ id: 'gpt-4o', name: 'GPT-4o', providerId: 'gw' }]
     await refreshModelCache()
     const before = state.modelFetches
@@ -409,6 +422,60 @@ describe('collectEngineConfigInput — the model refresh', () => {
 
     await collectEngineConfigInput('user-1')
     expect(state.modelFetches).toBe(before + 1)
+  })
+
+  /**
+   * …but it is not "skip the refresh", it is "skip the **cloud** refresh".
+   *
+   * A keyless credential's catalogue is the set of models on this machine, which
+   * the user changes with `ollama pull` between one turn and the next and which
+   * is empty whenever the local server was not running when the engine started.
+   * A reconcile that asked nothing meant every folder agent on it hung on its
+   * first turn — `ModelUnavailableError` reaches no engine event, so the desktop
+   * waits out its own twenty-minute ceiling with nothing on screen.
+   *
+   * The call is loopback and costs about a millisecond, which is why it is
+   * affordable on a path that a manifest field edit reaches.
+   */
+  it('still asks the local credentials, and only those', async () => {
+    state.dtos = [
+      dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' }),
+      dto({ id: 'ollama', type: 'ollama', name: 'Ollama', hasApiKey: false })
+    ]
+    state.rows = [row({ id: 'gw' }), row({ id: 'ollama', apiKeyEncrypted: null })]
+    state.models = [{ id: 'gemma4:latest', name: 'gemma4:latest', providerId: 'ollama' }]
+
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+
+    expect(state.modelFetches).toBe(0)
+    expect(state.adapterFetches).toEqual(['ollama'])
+  })
+
+  it('asks no adapter directly when there is no local credential', async () => {
+    state.dtos = [dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
+    state.rows = [row({ id: 'gw' })]
+
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+
+    expect(state.modelFetches).toBe(0)
+    expect(state.adapterFetches).toEqual([])
+  })
+
+  /**
+   * A local server that is not running right now must not empty the entry it
+   * last filled — that is `mergeModelCache`'s keep-rule, reached through the
+   * real collector rather than asserted on the pure function alone.
+   */
+  it('keeps a local credential’s models when the server has stopped', async () => {
+    state.dtos = [dto({ id: 'ollama', type: 'ollama', name: 'Ollama', hasApiKey: false })]
+    state.rows = [row({ id: 'ollama', apiKeyEncrypted: null })]
+    state.models = [{ id: 'gemma4:latest', name: 'gemma4:latest', providerId: 'ollama' }]
+    await refreshModelCache()
+
+    state.localThrows = true
+    const input = await collectEngineConfigInput('user-1', { refreshModels: false })
+
+    expect(input.providers[0].models).toEqual([{ id: 'gemma4:latest', name: 'gemma4:latest' }])
   })
 })
 

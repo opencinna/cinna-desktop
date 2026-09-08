@@ -17,9 +17,9 @@
  *    provider type.** A model id belongs to a provider's *catalogue*, not to a
  *    row: `claude-sonnet-4-5` is as valid on a second Anthropic key as on the
  *    first, so a user with a personal key alongside an account-provisioned one
- *    keeps a working agent. `openai_compatible` is excluded — two gateways
- *    behind that type are two different catalogues that happen to share a
- *    wire format.
+ *    keeps a working agent. `openai_compatible` and `ollama` are excluded —
+ *    see {@link PER_ROW_CATALOGUE}: two gateways, or two Ollama hosts, are two
+ *    different catalogues that happen to share a wire format.
  * 4. **The Medium tier on that credential** — {@link resolveRuntimeModel}'s last
  *    step, added with Work Complexity. See below.
  * 5. **Nothing.** Better than a model the credential cannot serve: the engine
@@ -48,7 +48,7 @@ import { bestInTier, sameFamilyFallback, type CatalogueModel, type WorkComplexit
 /** A credential, as much of one as this rule needs. */
 export interface RuntimeCredential {
   id: string
-  /** `anthropic` | `openai` | `gemini` | `openai_compatible`. */
+  /** `anthropic` | `openai` | `gemini` | `openai_compatible` | `ollama`. */
   type: string
   defaultModelId: string | null
 }
@@ -60,8 +60,16 @@ export interface RuntimeFallback {
   modelId: string | null
 }
 
-/** The one type whose rows are separate catalogues rather than one namespace. */
-const PER_ROW_CATALOGUE = 'openai_compatible'
+/**
+ * The types whose rows are separate catalogues rather than one namespace.
+ *
+ * `openai_compatible` because two gateways behind that type are two different
+ * catalogues that happen to share a wire format. `ollama` for the sharper
+ * version of the same thing: a catalogue there is literally the set of models
+ * pulled onto one machine, so a second Ollama credential — a colleague's box on
+ * the LAN, a second port — shares nothing with the first beyond the protocol.
+ */
+const PER_ROW_CATALOGUE: ReadonlySet<string> = new Set(['openai_compatible', 'ollama'])
 
 export function inheritedModelId(
   chosen: RuntimeCredential | null,
@@ -70,7 +78,7 @@ export function inheritedModelId(
   if (!chosen) return fallback.modelId
   if (chosen.id === fallback.credentialId) return fallback.modelId ?? chosen.defaultModelId
   if (chosen.defaultModelId) return chosen.defaultModelId
-  if (chosen.type === fallback.credentialType && chosen.type !== PER_ROW_CATALOGUE) {
+  if (chosen.type === fallback.credentialType && !PER_ROW_CATALOGUE.has(chosen.type)) {
     return fallback.modelId
   }
   return null
@@ -89,8 +97,8 @@ export function inheritedModelId(
  *   catalogue we cannot see;
  * - a credential of the same provider type shares the catalogue, so a model
  *   listed only under a sibling row (a second Anthropic key, or one whose
- *   `listModels` call just failed) is not foreign — `openai_compatible` again
- *   excepted, where two gateways are two catalogues.
+ *   `listModels` call just failed) is not foreign — {@link PER_ROW_CATALOGUE}
+ *   again excepted, where two rows are two catalogues.
  */
 export function modelBelongsElsewhere(
   modelId: string | null,
@@ -101,7 +109,7 @@ export function modelBelongsElsewhere(
   if (!modelId || !chosen) return false
   const owners = models.filter((model) => model.id === modelId).map((model) => model.providerId)
   if (owners.length === 0 || owners.includes(chosen.id)) return false
-  if (chosen.type === PER_ROW_CATALOGUE) return true
+  if (PER_ROW_CATALOGUE.has(chosen.type)) return true
   return !owners.some(
     (owner) => providers.find((provider) => provider.id === owner)?.type === chosen.type
   )

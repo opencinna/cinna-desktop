@@ -15,9 +15,11 @@
  */
 
 import { decryptApiKey } from '../security/keystore'
+import { isCredentialUsable, requiresApiKey } from '../../shared/credentials'
 import { llmProviderRepo } from '../db/llmProviders'
 import { getManagedResourceScopes } from '../auth/scope'
-import { getAllModels } from '../llm/registry'
+import { getAdapter, getAllModels } from '../llm/registry'
+import { mergeModelCache, type CachedModel, type ModelRefreshScope } from './modelCache'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { runtimeService } from '../services/localAgents/runtimeService'
 import { providerService } from '../services/providerService'
@@ -40,6 +42,11 @@ const logger = createLogger('engine-config-source')
  * exclusions are credentials that cannot make an API call in the first place —
  * no stored key, or a managed row this app already marks `unsupported` (an
  * Anthropic OAuth token, which is not an API key).
+ *
+ * "No stored key" is a disqualification only for the types that *have* keys.
+ * A keyless credential (Ollama) is collected with an empty `apiKey`, and
+ * `buildEngineConfig` puts the placeholder in the env map — which is why the
+ * decryption below is conditional rather than a precondition.
  */
 export function collectEngineProviders(): EngineProviderInput[] {
   const dtos = providerService.listMerged()
@@ -50,22 +57,26 @@ export function collectEngineProviders(): EngineProviderInput[] {
   const out: EngineProviderInput[] = []
 
   for (const dto of dtos) {
-    if (!dto.hasApiKey || dto.unsupported) continue
+    if (!isCredentialUsable(dto)) continue
     const row = rows.get(dto.id)
-    if (!row?.apiKeyEncrypted) continue
-    let apiKey: string
-    try {
-      apiKey = decryptApiKey(row.apiKeyEncrypted)
-    } catch (err) {
-      // A key that will not decrypt is a keychain problem, not a reason to fail
-      // the whole engine start — the other credentials still work.
-      logger.warn('skipping a credential the keystore would not decrypt', {
-        providerId: dto.id,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      continue
+    if (!row) continue
+    const needsKey = requiresApiKey(dto.type)
+    if (needsKey && !row.apiKeyEncrypted) continue
+    let apiKey = ''
+    if (row.apiKeyEncrypted) {
+      try {
+        apiKey = decryptApiKey(row.apiKeyEncrypted)
+      } catch (err) {
+        // A key that will not decrypt is a keychain problem, not a reason to fail
+        // the whole engine start — the other credentials still work.
+        logger.warn('skipping a credential the keystore would not decrypt', {
+          providerId: dto.id,
+          error: err instanceof Error ? err.message : String(err)
+        })
+        continue
+      }
     }
-    if (apiKey === '') continue
+    if (apiKey === '' && needsKey) continue
     out.push({
       id: dto.id,
       type: dto.type,
@@ -105,20 +116,58 @@ function modelsByProvider(): Map<string, { id: string; name: string }[]> {
  * rather than awaited from inside the synchronous collector — a start that
  * blocks on an unreachable gateway would be a start that never happens.
  */
-let cachedModels: { id: string; name: string; providerId: string }[] = []
+let cachedModels: CachedModel[] = []
 
-export async function refreshModelCache(): Promise<void> {
+/** Adapters belonging to a keyless credential, which is to say a local server. */
+function localProviderIds(): string[] {
+  return providerService
+    .listMerged()
+    .filter((provider) => !requiresApiKey(provider.type))
+    .map((provider) => provider.id)
+}
+
+export async function refreshModelCache(scope: ModelRefreshScope = 'all'): Promise<void> {
   try {
-    cachedModels = (await getAllModels()).map((model) => ({
-      id: model.id,
-      name: model.name,
-      providerId: model.providerId
-    }))
+    const fresh =
+      scope === 'all'
+        ? (await getAllModels()).map((model) => ({
+            id: model.id,
+            name: model.name,
+            providerId: model.providerId
+          }))
+        : await listLocalModels()
+    cachedModels = mergeModelCache(
+      cachedModels,
+      fresh,
+      providerService.listMerged().map((provider) => provider.id)
+    )
   } catch (err) {
     logger.warn('could not refresh the model list for the engine config', {
       error: err instanceof Error ? err.message : String(err)
     })
   }
+}
+
+/** Ask each local credential's adapter directly, so no cloud call is made. */
+async function listLocalModels(): Promise<CachedModel[]> {
+  const out: CachedModel[] = []
+  for (const providerId of localProviderIds()) {
+    const adapter = getAdapter(providerId)
+    if (!adapter) continue
+    try {
+      for (const model of await adapter.listModels()) {
+        out.push({ id: model.id, name: model.name, providerId })
+      }
+    } catch (err) {
+      // A local server that is not running right now. Deliberately not an
+      // error: the merge below keeps whatever it last reported.
+      logger.debug('a local credential listed no models', {
+        providerId,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
+  return out
 }
 
 /**
@@ -188,6 +237,16 @@ export async function collectEngineConfigInput(
   userId: string,
   options: { refreshModels?: boolean } = {}
 ): Promise<EngineConfigInput> {
-  if (options.refreshModels !== false) await refreshModelCache()
+  // A reconcile still does not re-ask the cloud providers — that is what the
+  // paragraph above is about, and it stands. It *does* re-ask the local ones,
+  // because their catalogue is not a vendor's stable line-up but the set of
+  // models on this machine, which the user changes with `ollama pull` between
+  // one turn and the next, and which is empty whenever the local server happened
+  // not to be running at the moment the engine started. Without this, starting
+  // Cinna before Ollama meant every folder agent on it hung on its first turn
+  // until the desktop's own ceiling expired. The call is loopback and costs
+  // roughly a millisecond; a failure keeps the last good list rather than
+  // emptying the entry (see {@link mergeModelCache}).
+  await refreshModelCache(options.refreshModels === false ? 'local' : 'all')
   return { providers: collectEngineProviders(), agents: collectEngineAgents(userId) }
 }

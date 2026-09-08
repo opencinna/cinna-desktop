@@ -97,15 +97,30 @@ interface FamilyRule {
   types: readonly string[]
   match: RegExp
   preference: number
+  /**
+   * Matches anything, and therefore applies **only** to the types that declare
+   * it. The "match a gateway against every rule" fallback exists because an id
+   * is the only evidence there is about a proxied model — and a rule that
+   * matches everything is not evidence. Without this exemption, adding Ollama's
+   * catch-all would have silently given every unrecognised gateway model a tier
+   * it never had.
+   */
+  catchAll?: boolean
 }
 
 /**
  * Provider types whose catalogue is one known namespace. Anything else — an
  * `openai_compatible` gateway, or a type added after this file — is matched
- * against every rule, because a gateway proxies other people's families and the
- * id is the only evidence there is.
+ * against every rule *except* the catch-alls ({@link FamilyRule.catchAll}),
+ * because a gateway proxies other people's families and the id is the only
+ * evidence there is — which a rule matching everything does not supply.
+ *
+ * `ollama` is in here despite being a proxy of sorts, because its catalogue is
+ * the opposite case: every id in it is a local tag, and reading a cloud family
+ * name out of one (`mistral-small3.2:24b` as a Mistral product tier rather than
+ * a 24B) would be exactly wrong.
  */
-const KNOWN_TYPES = new Set(['anthropic', 'openai', 'gemini'])
+const KNOWN_TYPES = new Set(['anthropic', 'openai', 'gemini', 'ollama'])
 
 /**
  * Boundary-anchored so a family name cannot be found inside an unrelated word.
@@ -117,7 +132,54 @@ function token(word: string): RegExp {
 }
 
 /**
- * The mapping, in **match order** — first hit wins. `preference` is separate on
+ * Parameter count, which is what a *local* model's tier is actually made of.
+ *
+ * The cloud rules above classify by product name because a vendor's line-up is a
+ * product decision: Haiku is the cheap one because Anthropic says so. Ollama has
+ * no line-up. It has whatever the user pulled, from every vendor at once, tagged
+ * `name:size` — and the only thing that reliably predicts how a local model will
+ * behave on the user's machine is how big it is. `qwen2.5-coder:1.5b` and
+ * `qwen2.5-coder:32b` are the same product and belong in different tiers, which
+ * no name-based rule could express.
+ *
+ * The boundaries: under 5B runs on a laptop at conversational speed; 5–19B is
+ * the range that needs a decent GPU and is where most defaults sit; 20B and up
+ * is a workstation model that will be slow or swap on anything less. They are
+ * about *time*, not money — which is the same axis Work Complexity means by
+ * "fastest" and "slowest", just paid for in seconds rather than tokens.
+ *
+ * The lookbehind is the whole trick, and it was a bug before it was a rule: the
+ * size has to start a number, not continue one. Without it `deepseek-r1:1.5b`
+ * matched the Medium rule on its `.5b` tail and a 1.5B model was classified as a
+ * mid-size one — the decimal point read as a separator. `(?<![\d.])` says the
+ * digits may not follow a digit or a dot, which leaves `:`, `-` and the `x` of an
+ * MoE tag (`mixtral:8x7b`) as the things a size can begin after.
+ *
+ * A size in **millions** (`smollm2:135m`) is Simple whatever the figure: the
+ * largest of them is an order of magnitude below the smallest `b`.
+ */
+const PARAMS_SMALL = /(?<![\d.])(?:(?:0\.\d+|[1-4](?:\.\d+)?)b|\d+(?:\.\d+)?m)(?:[-_.:]|$)/i
+const PARAMS_MID = /(?<![\d.])(?:[5-9](?:\.\d+)?|1\d(?:\.\d+)?)b(?:[-_.:]|$)/i
+const PARAMS_LARGE = /(?<![\d.])(?:[2-9]\d(?:\.\d+)?|\d{3,})b(?:[-_.:]|$)/i
+
+/**
+ * The mapping, in **match order** — first hit wins.
+ *
+ * The three size rules and the unsized catch-all sit **last** for the sake of
+ * the one type that is matched against every rule: an `openai_compatible`
+ * gateway proxying `claude-3-5-sonnet` should read as a Sonnet, not fall to a
+ * size rule — while the same gateway proxying `llama-3.1-8b-instruct` still gets
+ * sized, because nothing above it matches. For an `ollama` credential the list
+ * is filtered to its own four rules first, so the order among them is all that
+ * applies, and they are mutually exclusive but for the catch-all.
+ *
+ * **The catch-all resolves to Medium, not to nothing.** An unsized tag
+ * (`deepseek-r1:latest`, `llama3:latest`) is the common case for a user who
+ * pulled the default, and Ollama's default tag is almost always the 7–8B build.
+ * Classifying it as null instead would be worse than a guess: a Work Complexity
+ * tier resolves against the credential's catalogue, so a machine holding only
+ * `:latest` tags would have every tier resolve empty and every agent on it left
+ * with no model at all. `preference` is separate on
  * purpose: `nano` has to be tested before `mini` (so `-mini-nano` could not be
  * read as a mini) while `mini` is the one you would rather run at equal version.
  *
@@ -139,7 +201,13 @@ const RULES: readonly FamilyRule[] = [
   { family: 'mini', tier: 'simple', types: ['openai'], match: token('mini'), preference: 0 },
   { family: 'pro', tier: 'complex', types: ['openai', 'gemini'], match: token('pro'), preference: 0 },
   { family: 'o-series', tier: 'complex', types: ['openai'], match: /(?:^|[-_/])o\d+(?:[-_./]|$)/i, preference: 1 },
-  { family: 'gpt', tier: 'medium', types: ['openai'], match: /(?:^|[-_/])(?:gpt|chatgpt)-/i, preference: 0 }
+  { family: 'gpt', tier: 'medium', types: ['openai'], match: /(?:^|[-_/])(?:gpt|chatgpt)-/i, preference: 0 },
+  // Local models, sized rather than named. See the note below on why parameter
+  // count is the classification here, and why these rules come last.
+  { family: 'local-large', tier: 'complex', types: ['ollama'], match: PARAMS_LARGE, preference: 0 },
+  { family: 'local-mid', tier: 'medium', types: ['ollama'], match: PARAMS_MID, preference: 0 },
+  { family: 'local-small', tier: 'simple', types: ['ollama'], match: PARAMS_SMALL, preference: 0 },
+  { family: 'local', tier: 'medium', types: ['ollama'], match: /./, preference: 1, catchAll: true }
 ]
 
 /** A pinned build date at the end of an id: `-20251001` or `-2025-08-07`. */
@@ -188,7 +256,9 @@ export function classifyModel(modelId: string, providerType: string): Classified
   const id = modelId.trim()
   if (id === '') return null
   const type = providerType.trim().toLowerCase()
-  const rules = KNOWN_TYPES.has(type) ? RULES.filter((rule) => rule.types.includes(type)) : RULES
+  const rules = KNOWN_TYPES.has(type)
+    ? RULES.filter((rule) => rule.types.includes(type))
+    : RULES.filter((rule) => !rule.catchAll)
   const rule = rules.find((candidate) => candidate.match.test(id))
   if (!rule) return null
   return {

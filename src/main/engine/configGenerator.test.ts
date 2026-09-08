@@ -540,6 +540,113 @@ describe('buildEngineConfig', () => {
     expect(built.env).toEqual({})
   })
 
+  /**
+   * Ollama: the credential with no credential.
+   *
+   * The generator used to drop any provider whose `apiKey` was empty, which is
+   * every Ollama credential there will ever be — and the symptom was not an
+   * error anywhere. The provider was absent, so every agent on it was skipped
+   * with `credential_unavailable`, so the agent simply did nothing when chatted
+   * with. These assertions are what stop that returning.
+   */
+  describe('a keyless credential', () => {
+    const ollama = {
+      id: 'prov-ollama',
+      type: 'ollama',
+      name: 'Ollama',
+      apiKey: '',
+      baseUrl: 'http://127.0.0.1:11434',
+      models: [{ id: 'qwen3:8b', name: 'qwen3:8b' }]
+    }
+
+    function ollamaEntry(baseUrl: string | null = 'http://127.0.0.1:11434') {
+      const built = buildEngineConfig(
+        input({
+          providers: [{ ...ollama, baseUrl }],
+          agents: [
+            {
+              agentId: 'folder:22222222-2222-2222-2222-222222222222',
+              slug: 'local',
+              description: 'Runs locally.',
+              prompt: 'You are local.',
+              providerId: 'prov-ollama',
+              modelId: 'qwen3:8b',
+              permissions: null
+            }
+          ]
+        })
+      )
+      const key = built.providerKeys.get('prov-ollama')
+      const providers = built.config.provider as Record<string, Record<string, unknown>>
+      return { built, key, entry: key ? providers[key] : undefined }
+    }
+
+    it('is emitted rather than skipped, despite having no API key', () => {
+      const { built, key, entry } = ollamaEntry()
+      expect(built.skippedProviders).toEqual([])
+      expect(key).toBeDefined()
+      expect(entry).toBeDefined()
+      expect(entry).toMatchObject({ npm: '@ai-sdk/openai-compatible', name: 'Ollama' })
+    })
+
+    it('points the entry at the OpenAI-compatible path, with exactly one /v1', () => {
+      const { entry } = ollamaEntry()
+      expect((entry as { options: { baseURL: string } }).options.baseURL).toBe(
+        'http://127.0.0.1:11434/v1'
+      )
+    })
+
+    it('falls back to the default host when the credential names none', () => {
+      const { entry } = ollamaEntry(null)
+      expect((entry as { options: { baseURL: string } }).options.baseURL).toBe(
+        'http://127.0.0.1:11434/v1'
+      )
+    })
+
+    it('names an env var carrying a placeholder, not an empty string', () => {
+      const { built } = ollamaEntry()
+      const envName = credentialEnvName('prov-ollama')
+      expect(built.env[envName]).toBe('keyless')
+      const { entry } = ollamaEntry()
+      expect((entry as { env: string[] }).env).toEqual([envName])
+    })
+
+    it('declares its models with a limit, so max_tokens is never zero', () => {
+      const { entry } = ollamaEntry()
+      const models = (entry as { models: Record<string, { limit: { output: number } }> }).models
+      expect(Object.keys(models)).toEqual(['qwen3:8b'])
+      expect(models['qwen3:8b'].limit.output).toBeGreaterThan(0)
+    })
+
+    it('lets an agent on it resolve to a real model reference', () => {
+      const { built, key } = ollamaEntry()
+      const agentId = 'folder:22222222-2222-2222-2222-222222222222'
+      expect(built.skippedAgents).toEqual([])
+      expect(built.agentModels.get(agentId)).toEqual({ providerID: key, id: 'qwen3:8b' })
+    })
+
+    it('still skips a keyed provider whose key is empty', () => {
+      const built = buildEngineConfig(
+        input({
+          providers: [
+            { ...ollama, baseUrl: 'http://127.0.0.1:11434' },
+            {
+              id: 'no-key',
+              type: 'anthropic',
+              name: 'Empty',
+              apiKey: '',
+              baseUrl: null,
+              models: []
+            }
+          ],
+          agents: []
+        })
+      )
+      expect(built.skippedProviders.map((skip) => skip.providerId)).toEqual(['no-key'])
+      expect(built.providerKeys.has('prov-ollama')).toBe(true)
+    })
+  })
+
   it('skips an agent whose runtime does not resolve rather than emitting a broken entry', () => {
     const built = buildEngineConfig(
       input({

@@ -56,8 +56,49 @@ const cases: [id: string, type: string, tier: WorkComplexity | null, family: str
   ['gpt-4o-mini', 'openai_compatible', 'simple', 'mini'],
   // …and files nothing it does not recognise, rather than guessing.
   ['deepseek-chat', 'openai_compatible', null, null],
-  ['meta-llama/Llama-3.3-70B-Instruct', 'openai_compatible', null, null],
-  ['mistral-large-latest', 'anthropic', null, null]
+  ['mistral-large-latest', 'anthropic', null, null],
+  // A parameter count *is* recognition, and this case changed when the local
+  // size rules landed: it used to be unclassified. The gateway path matches
+  // every non-catch-all rule precisely because the id is the only evidence
+  // there is, and `70B` is that evidence stated outright — leaving it null
+  // meant a gateway user asking for Complex work got no model at all.
+  ['meta-llama/Llama-3.3-70B-Instruct', 'openai_compatible', 'complex', 'local-large'],
+  // The catch-all is the exception: it belongs to `ollama` and must not reach a
+  // gateway, or every unrecognised proxied id silently becomes Medium.
+  ['some-unknown-gateway-model', 'openai_compatible', null, null],
+
+  // Ollama — sized, not named. See PARAMS_* in modelFamilies.ts.
+  ['llama3.2:1b', 'ollama', 'simple', 'local-small'],
+  ['llama3.2:3b', 'ollama', 'simple', 'local-small'],
+  ['qwen2.5:0.5b', 'ollama', 'simple', 'local-small'],
+  // The regression the lookbehind exists for: the `.5b` tail of `1.5b` used to
+  // match the Medium rule, filing a 1.5B model as mid-size.
+  ['deepseek-r1:1.5b', 'ollama', 'simple', 'local-small'],
+  ['moondream:1.8b', 'ollama', 'simple', 'local-small'],
+  // Sizes in millions are Simple whatever the figure.
+  ['smollm2:135m', 'ollama', 'simple', 'local-small'],
+  ['mistral:7b', 'ollama', 'medium', 'local-mid'],
+  ['qwen3:8b', 'ollama', 'medium', 'local-mid'],
+  ['phi4:14b', 'ollama', 'medium', 'local-mid'],
+  ['llama3.2-vision:11b', 'ollama', 'medium', 'local-mid'],
+  // An MoE tag names two numbers; the `x` is a separator so the second is read.
+  ['mixtral:8x7b', 'ollama', 'medium', 'local-mid'],
+  ['gpt-oss:20b', 'ollama', 'complex', 'local-large'],
+  ['gemma3:27b', 'ollama', 'complex', 'local-large'],
+  ['qwen2.5-coder:32b', 'ollama', 'complex', 'local-large'],
+  ['llama3.1:70b', 'ollama', 'complex', 'local-large'],
+  ['llama3.1:405b', 'ollama', 'complex', 'local-large'],
+  // A version is not a size: `3.2` must not be read as 3.2B, and the tag is
+  // classified on its `:3b` alone.
+  ['llama3.2:3b', 'ollama', 'simple', 'local-small'],
+  // An unsized tag still gets a tier — Medium, because Ollama's default tag is
+  // almost always the 7–8B build, and null would leave every tier empty on a
+  // machine that pulled only defaults.
+  ['deepseek-r1:latest', 'ollama', 'medium', 'local'],
+  ['llama3:latest', 'ollama', 'medium', 'local'],
+  // A cloud family name inside a local tag is still sized, not read as a
+  // product tier — `ollama` is in KNOWN_TYPES so the cloud rules never apply.
+  ['mistral-small3.2:24b', 'ollama', 'complex', 'local-large']
 ]
 
 describe('classifyModel', () => {

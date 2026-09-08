@@ -652,10 +652,23 @@ describe('engineManager', () => {
   })
 
   it('does not reach the network for a model list on every turn', async () => {
-    // Every adapter's `listModels()` is a real request — Anthropic's SDK,
-    // OpenAI's SDK, a `fetch` for Gemini — so one per credential, per turn,
-    // in front of the user's message. The running engine's cache came from the
-    // start that launched it; a reconcile compares against that.
+    // Every *cloud* adapter's `listModels()` is a real request — Anthropic's
+    // SDK, OpenAI's SDK, a `fetch` for Gemini — so one per credential, per turn,
+    // in front of the user's message. A reconcile asks none of them; it compares
+    // against the cache the start that launched the engine populated.
+    //
+    // "None of them" is now specifically the cloud ones. `collectEngineConfigInput`
+    // maps `refreshModels: false` to a **`local`** refresh rather than to no
+    // refresh at all: a keyless credential's catalogue is the set of models on
+    // this machine, which the user changes between turns and which is empty
+    // whenever the local server was not running at the moment the engine
+    // started. That call is loopback and costs about a millisecond.
+    //
+    // This test's fake replaces `collectEngineConfigInput` outright, so what it
+    // guards is the contract at the boundary — a reconcile passes
+    // `refreshModels: false` — and not the scope mapping inside it. The rule
+    // that makes a failed local refresh harmless is `mergeModelCache`, covered
+    // in `modelCache.test.ts`.
     configInput.current = agentConfig('the prompt')
     await engineManager.ensureRunning('user-1')
     const afterStart = configInput.modelRefreshes

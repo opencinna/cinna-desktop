@@ -52,6 +52,12 @@ import { join } from 'node:path'
 import { createLogger } from '../logger/logger'
 import { CUSTOM_MODEL_LIMITS, isEngineProviderType, type EngineProviderType } from './modelLimits'
 import { GEMINI_OPENAI_BASE_URL } from './modelTransports'
+import {
+  KEYLESS_PLACEHOLDER_KEY,
+  OLLAMA_DEFAULT_HOST,
+  ollamaOpenAIBaseUrl,
+  requiresApiKey
+} from '../../shared/credentials'
 import type { EngineSkipCode } from '../../shared/runtimeMessages'
 
 const logger = createLogger('engine-config')
@@ -97,7 +103,14 @@ const PROVIDER_NPM: Readonly<Record<EngineProviderType, string>> = {
   anthropic: '@ai-sdk/anthropic',
   openai: '@ai-sdk/openai',
   gemini: '@ai-sdk/openai-compatible',
-  openai_compatible: '@ai-sdk/openai-compatible'
+  openai_compatible: '@ai-sdk/openai-compatible',
+  // Ollama serves an OpenAI-shaped `/v1`, which is one of the three transports
+  // the engine can actually build a model from. models.dev *does* publish an
+  // `ollama` key, but its model list is a fixed catalogue of what Ollama offers
+  // for download — not what this machine has pulled — so a canonical entry would
+  // list dozens of models that 404 on first use. The custom path declares
+  // exactly the tags `ollama list` reports.
+  ollama: '@ai-sdk/openai-compatible'
 }
 
 /**
@@ -107,7 +120,27 @@ const PROVIDER_NPM: Readonly<Record<EngineProviderType, string>> = {
  * user typed, and the canonical types get their endpoint from models.dev.
  */
 const PROVIDER_BASE_URL: Partial<Record<EngineProviderType, string>> = {
-  gemini: GEMINI_OPENAI_BASE_URL
+  gemini: GEMINI_OPENAI_BASE_URL,
+  // Only reached by an Ollama credential saved with no host at all; a normal one
+  // carries its own, and {@link engineBaseUrl} appends the `/v1` either way.
+  ollama: ollamaOpenAIBaseUrl(OLLAMA_DEFAULT_HOST)
+}
+
+/**
+ * The URL an entry's `options.baseURL` gets, from the credential and its type.
+ *
+ * Ollama is the one type whose stored `baseUrl` is **not** the URL the engine
+ * should call: the credential holds an origin (`http://127.0.0.1:11434`),
+ * because that is what the native `/api/tags` listing and the detection probe
+ * need, while the engine talks the OpenAI-compatible dialect at `/v1`. Doing
+ * that conversion here rather than storing the `/v1` form keeps one spelling of
+ * the host in the database and one place that knows about the suffix.
+ */
+function engineBaseUrl(type: EngineProviderType, credentialBaseUrl: string | null): string | null {
+  if (type === 'ollama') {
+    return ollamaOpenAIBaseUrl(credentialBaseUrl || OLLAMA_DEFAULT_HOST)
+  }
+  return credentialBaseUrl || PROVIDER_BASE_URL[type] || null
 }
 
 /**
@@ -476,7 +509,12 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
   const sortedProviders = [...input.providers].sort((a, b) => a.id.localeCompare(b.id))
 
   for (const provider of sortedProviders) {
-    if (provider.apiKey === '') {
+    // The empty-key skip is conditional on the type needing one at all. An
+    // Ollama credential has no key by construction, and skipping it here — the
+    // behaviour before this branch existed — is precisely how a local agent
+    // pointed at a local model would have been dropped from the config with no
+    // symptom other than an agent that does nothing when chatted with.
+    if (provider.apiKey === '' && requiresApiKey(provider.type)) {
       skippedProviders.push({ providerId: provider.id, reason: 'no API key is stored for it' })
       continue
     }
@@ -494,8 +532,8 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     }
     const npm = PROVIDER_NPM[type]
     // The credential's own URL wins; a type with a fixed endpoint we know
-    // (Gemini's OpenAI-compatible one) falls back to that.
-    const baseUrl = provider.baseUrl || PROVIDER_BASE_URL[type] || null
+    // (Gemini's OpenAI-compatible one, Ollama's `/v1`) falls back to that.
+    const baseUrl = engineBaseUrl(type, provider.baseUrl)
     if (type === 'openai_compatible' && !baseUrl) {
       skippedProviders.push({
         providerId: provider.id,
@@ -512,7 +550,27 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
     if (useCanonical) claimed.add(canonical)
 
     const envName = credentialEnvName(provider.id)
-    env[envName] = provider.apiKey
+    // A keyless credential still names an environment variable, carrying a
+    // placeholder rather than a key — it is not simply omitted, and the reason
+    // is the engine's availability filter rather than tidiness.
+    //
+    // `provider.<key>.env = ["NAME"]` is what the `config-provider` plugin turns
+    // into an integration with an `{type:"env"}` method, and `providerAvailable`
+    // (de-minified in `opencode_contract.md` §9.5.4, and the filter behind
+    // `model.available()`) answers **true** on the branch
+    // `if integration?.connections.length`. That is the branch every working
+    // entry in this config takes today, canonical and custom alike. An entry
+    // with no `env` would have to fall through to the last branch instead —
+    // `integrationID === undefined && !integration` — which is the one the
+    // contract also records as transiently true for ~160ms before the
+    // integration list populates. Emitting no `env` is therefore an unverified
+    // path where emitting one is a verified path, for a value that is public by
+    // construction.
+    //
+    // The credential travels as `Authorization: Bearer <value>` (§9.5.4), so
+    // Ollama receives `Bearer keyless` and ignores it, exactly as it ignores
+    // every other token. See KEYLESS_PLACEHOLDER_KEY.
+    env[envName] = requiresApiKey(provider.type) ? provider.apiKey : KEYLESS_PLACEHOLDER_KEY
 
     // **`env`, not `options.apiKey`.** The engine's v2 config reader performs no
     // `{env:…}` substitution, so an `options.apiKey` of `"{env:NAME}"` is sent
@@ -532,6 +590,21 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
       // {@link CUSTOM_MODEL_LIMITS}: a custom entry gets no models.dev catalog,
       // the engine defaults the model to `{context: 0, output: 0}`, and the
       // Anthropic transport sends that zero as `max_tokens`.
+      //
+      // **No `tool_call` flag, and that is measured rather than assumed.** A
+      // custom entry's models report `capabilities.tools: false` in
+      // `GET /api/model` — ours is the only entry in a 32-model catalog that
+      // does — and the obvious conclusion is that a folder agent on one gets no
+      // tools. It is wrong. Verified 8 Sep 2026 against opencode 1.18.27 and a
+      // real Ollama by putting a logging proxy between the two: with the flag
+      // absent, the session runner still sent the agent's full set of **12
+      // tools** in the request body. `capabilities.tools` is catalog metadata
+      // here, not a gate on what a turn is given.
+      //
+      // So the flag is deliberately not emitted. Adding it would change nothing
+      // for tool use, while asserting tool-calling about every model of every
+      // custom entry — including small local models that genuinely cannot do it,
+      // where the claim would turn a graceful degradation into a 400.
       const limit = CUSTOM_MODEL_LIMITS[type]
       entry.models = Object.fromEntries(
         [...provider.models]
