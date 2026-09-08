@@ -64,10 +64,13 @@ export function makeSandbox(): Sandbox {
   return { root, home, userData }
 }
 
-function launchEnv(sandbox: Sandbox): Record<string, string> {
+function launchEnv(sandbox: Sandbox, extra: Readonly<Record<string, string>>): Record<string, string> {
   const realHome = process.env.HOME ?? ''
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(process.env)) if (value !== undefined) env[key] = value
+  // A spec's own variables go in *before* the sandbox ones, so no spec can
+  // point the app at the developer's real `HOME` or profile by accident.
+  for (const [key, value] of Object.entries(extra)) env[key] = value
   env.HOME = sandbox.home
   env.CINNA_USER_DATA = sandbox.userData
   // The suite launches a real app per test, and on macOS a real app that shows
@@ -90,7 +93,8 @@ function launchEnv(sandbox: Sandbox): Record<string, string> {
 }
 
 /**
- * Launch the built app in `sandbox`, with `extraArgs` appended to argv.
+ * Launch the built app in `sandbox`, with `extraArgs` appended to argv and
+ * `extraEnv` merged into its environment.
  *
  * `extraArgs` is how a spec drives something the app only learns from its
  * command line — today that is `--cinna-connect-intent=cinna://connect?server=…`,
@@ -98,10 +102,19 @@ function launchEnv(sandbox: Sandbox): Record<string, string> {
  * a real `open-url` cannot be raised from Playwright, and the app never
  * registers the scheme when `CINNA_USER_DATA` is set, so this is the only way
  * into that funnel. Anything else the app reads from argv goes here too.
+ *
+ * `extraEnv` is the same idea for what the app reads from its *environment* —
+ * today `OLLAMA_HOST`, which decides the first host the Ollama probe tries. It
+ * is per-launch rather than a `process.env` assignment in a `beforeAll` on
+ * purpose: the fixture copies `process.env` wholesale, so a variable set there
+ * is inherited by every app every other spec in the same worker launches, and
+ * one forgotten `afterAll` would point them all at a server that has since
+ * stopped listening.
  */
 export async function launch(
   sandbox: Sandbox,
-  extraArgs: readonly string[] = []
+  extraArgs: readonly string[] = [],
+  extraEnv: Readonly<Record<string, string>> = {}
 ): Promise<{ electronApp: ElectronApplication; page: Page }> {
   const electronApp = await electron.launch({
     executablePath: electronPath as unknown as string,
@@ -113,7 +126,7 @@ export async function launch(
     // the real safeStorage code path and never touches the user's keychain.
     args: [repoRoot, '--use-mock-keychain', ...extraArgs],
     cwd: repoRoot,
-    env: launchEnv(sandbox),
+    env: launchEnv(sandbox, extraEnv),
     timeout: 60_000
   })
   const isMain = (page: Page): boolean => page.url().endsWith('index.html')
@@ -137,15 +150,30 @@ export interface CinnaOptions {
    * `relaunch()` starts without them unless it is given its own.
    */
   launchArgs: readonly string[]
+  /**
+   * Extra environment for every launch of this test's app, including
+   * `relaunch()` — a restart inherits the machine it is restarting on.
+   *
+   * `test.use({ env: { OLLAMA_HOST: 'http://127.0.0.1:1234' } })`. The
+   * sandbox's own variables (`HOME`, `CINNA_USER_DATA`) are applied after
+   * these and cannot be overridden from here. Nothing is written to the test
+   * process's `process.env`, so it cannot reach any other spec.
+   *
+   * The object is read at launch, which is after `beforeAll` — so a spec whose
+   * value is only known then (a port its own server just bound) can pass a
+   * module-level object here and fill it in.
+   */
+  env: Readonly<Record<string, string>>
 }
 
 export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
   engine: [false, { option: true }],
   launchArgs: [[], { option: true }],
-  cinna: async ({ engine, launchArgs }, use, testInfo) => {
+  env: [{}, { option: true }],
+  cinna: async ({ engine, launchArgs, env }, use, testInfo) => {
     const sandbox = makeSandbox()
     if (engine) installCachedEngine(sandbox.userData)
-    let current = await launch(sandbox, launchArgs)
+    let current = await launch(sandbox, launchArgs, env)
 
     const cinna: CinnaApp = {
       sandbox,
@@ -157,7 +185,7 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
       },
       async relaunch(extraArgs: readonly string[] = []) {
         await current.electronApp.close()
-        current = await launch(sandbox, extraArgs)
+        current = await launch(sandbox, extraArgs, env)
       },
       async stubDirectoryPicker(dir: string) {
         await current.electronApp.evaluate(({ dialog }, picked) => {
