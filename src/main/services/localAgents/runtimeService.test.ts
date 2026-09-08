@@ -51,6 +51,7 @@ function provider(overrides: Partial<ProviderDto> = {}): ProviderDto {
     enabled: true,
     defaultModelId: null,
     hasApiKey: true,
+    baseUrl: null,
     managed: false,
     adminManaged: false,
     unsupported: false,

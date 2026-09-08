@@ -1,4 +1,5 @@
 import { llmProviderRepo } from '../db/llmProviders'
+import { requiresApiKey } from '../../shared/credentials'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { clearAllAdapters, registerAdapter } from '../llm/registry'
 import { createAdapter } from '../llm/factory'
@@ -23,9 +24,12 @@ export async function reloadUserProviders(): Promise<void> {
   const userId = getSettingsScopeUserId()
 
   for (const provider of llmProviderRepo.list(userId)) {
-    if (provider.enabled && provider.apiKeyEncrypted) {
+    // A keyless credential (Ollama) has nothing to decrypt and registers on
+    // `enabled` alone — without this it would be absent from the model picker
+    // on every launch until the user re-saved it.
+    if (provider.enabled && (provider.apiKeyEncrypted || !requiresApiKey(provider.type))) {
       try {
-        const apiKey = decryptApiKey(provider.apiKeyEncrypted)
+        const apiKey = provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : ''
         const adapter = createAdapter(provider.type, apiKey, provider.id, {
           baseUrl: provider.baseUrl,
           fallbackModels: provider.defaultModelId ? [provider.defaultModelId] : []

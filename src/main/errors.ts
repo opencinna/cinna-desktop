@@ -11,6 +11,17 @@ export type ProviderErrorCode =
   | 'not_activated'
   | 'read_only'
   | 'list_models_failed'
+  /** A keyless credential's host is not something that can be fetched. */
+  | 'invalid_host'
+  /**
+   * A write tried to change an existing credential's provider type.
+   *
+   * Distinct from `read_only`, which is routine — it fires whenever the UI and
+   * account-config sync race over a managed row. This one has no legitimate
+   * caller at all, so filing both under one code would make a security guard's
+   * log line indistinguishable from noise that occurs normally.
+   */
+  | 'type_immutable'
 
 export type McpErrorCode =
   | 'not_found'

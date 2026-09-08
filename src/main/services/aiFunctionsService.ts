@@ -2,6 +2,7 @@ import { chatRepo } from '../db/chats'
 import { chatModeService } from './chatModeService'
 import { llmProviderRepo, type LlmProviderRow } from '../db/llmProviders'
 import { decryptApiKey } from '../security/keystore'
+import { requiresApiKey } from '../../shared/credentials'
 import { createAdapter, isProviderType } from '../llm/factory'
 import { DomainError } from '../errors'
 import { createLogger } from '../logger/logger'
@@ -57,7 +58,12 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
     logger.debug('candidate skipped: provider not found', { providerId: pair.providerId })
     return null
   }
-  if (!provider.apiKeyEncrypted) {
+  // A keyless credential (Ollama) has no key to be missing, and skipping it here
+  // would silently exclude a local model from every AI function — chat titles,
+  // drafted prompts — while it worked perfectly well for chat. The symptom would
+  // be a feature that quietly does nothing for exactly the users who chose to run
+  // everything locally.
+  if (!provider.apiKeyEncrypted && requiresApiKey(provider.type)) {
     logger.debug('candidate skipped: provider has no api key', {
       providerId: pair.providerId
     })
@@ -80,7 +86,7 @@ function tryResolve(pair: ProviderModelPair): ResolvedAdapter | null {
   }
   const adapter = createAdapter(
     provider.type,
-    decryptApiKey(provider.apiKeyEncrypted),
+    provider.apiKeyEncrypted ? decryptApiKey(provider.apiKeyEncrypted) : '',
     provider.id,
     {
       baseUrl: provider.baseUrl,

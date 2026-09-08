@@ -41,6 +41,7 @@ import { chatModeService } from '../chatModeService'
 import { appSettingsService } from '../appSettingsService'
 import { providerService, type ProviderDto } from '../providerService'
 import { SECRET_LOOKALIKE } from '../../kit/validator'
+import { isCredentialUsable } from '../../../shared/credentials'
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { LocalAgentRuntimeInput, ResolvedRuntime } from '../../../shared/engine'
@@ -87,9 +88,16 @@ function declaredComplexity(runtime: AgentRuntimeRef | null | undefined): WorkCo
   return isWorkComplexity(value) ? value : null
 }
 
-/** A credential that can actually drive an API call. */
+/**
+ * A credential that can actually drive an API call.
+ *
+ * Delegates to the shared predicate rather than restating it: a keyless
+ * credential (Ollama) has no key and is still perfectly able to run an agent,
+ * and this module and the "Runs with" panel must not be able to disagree about
+ * that — the panel would offer a credential the engine then skipped.
+ */
 function isUsable(provider: ProviderDto): boolean {
-  return provider.hasApiKey && !provider.unsupported
+  return isCredentialUsable(provider)
 }
 
 /**

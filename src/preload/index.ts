@@ -135,6 +135,11 @@ export interface ProviderData {
   enabled: boolean
   defaultModelId: string | null
   hasApiKey: boolean
+  /**
+   * Gateway URL of an `openai_compatible` credential, or the Ollama host.
+   * Null for the first-party providers, which have a fixed endpoint.
+   */
+  baseUrl: string | null
   /** True for account-provisioned (Cinna-managed) providers — read-only in the UI. */
   managed: boolean
   /** For managed rows: provisioned by an admin vs the user's own Cinna credential. */
@@ -149,6 +154,16 @@ export interface ModelData {
   name: string
   providerId: string
   providerType: string
+}
+
+/** What a probe for a local Ollama found — see `main/services/ollamaService`. */
+export interface OllamaDetectionData {
+  running: boolean
+  host: string
+  version: string | null
+  models: { id: string; parameterSize: string | null }[]
+  /** A credential row for this host already exists. */
+  alreadyConfigured: boolean
 }
 
 export interface ChatModeData {
@@ -412,6 +427,8 @@ const api = {
       apiKey?: string
       enabled?: boolean
       defaultModelId?: string | null
+      /** Gateway / Ollama host. Omitted leaves the stored value alone. */
+      baseUrl?: string | null
     }): Promise<{ id: string; success: boolean }> => ipcRenderer.invoke('provider:upsert', data),
     delete: (providerId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('provider:delete', providerId),
@@ -419,11 +436,24 @@ const api = {
       providerId: string
     ): Promise<{ success: boolean; models?: ModelData[]; error?: string }> =>
       ipcRenderer.invoke('provider:test', providerId),
+    /**
+     * Probe a credential the user is still entering. `apiKey` for the types
+     * that have one; `baseUrl` alone for a keyless type (Ollama), whose host
+     * *is* the credential.
+     */
     testKey: (data: {
       type: string
-      apiKey: string
+      apiKey?: string
+      baseUrl?: string | null
     }): Promise<{ success: boolean; models?: ModelData[]; error?: string }> =>
       ipcRenderer.invoke('provider:test-key', data),
+    /**
+     * Look for an Ollama server on this machine. Resolves either way — a host
+     * that answers nothing comes back as `running: false`, not a rejection.
+     * Pass a host to probe only that one (the Host field's own Test).
+     */
+    detectOllama: (host?: string | null): Promise<OllamaDetectionData> =>
+      ipcRenderer.invoke('provider:detect-ollama', host ?? null),
     listModels: (): Promise<ModelData[]> => ipcRenderer.invoke('provider:list-models'),
     /** On-demand live model fetch for one provider (scope-aware → managed too). */
     fetchModels: (providerId: string): Promise<ModelData[]> =>

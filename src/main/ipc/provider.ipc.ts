@@ -1,6 +1,7 @@
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId, getProfileScopeUserId } from '../auth/scope'
 import { providerService } from '../services/providerService'
+import { ollamaService } from '../services/ollamaService'
 import { runAccountConfigSyncOnce } from '../services/account-config-sync'
 import { ipcErrorShape } from '../errors'
 import { ipcHandle } from './_wrap'
@@ -30,6 +31,8 @@ export function registerProviderHandlers(): void {
         apiKey?: string
         enabled?: boolean
         defaultModelId?: string | null
+        /** Gateway / Ollama host. Omitted leaves the stored value alone. */
+        baseUrl?: string | null
       }
     ) => {
       userActivation.requireActivated()
@@ -58,12 +61,14 @@ export function registerProviderHandlers(): void {
     }
   })
 
+  // Also the probe for a credential that has no key at all: an Ollama row is
+  // identified by its host, so `{type, baseUrl}` is a complete request here.
   ipcHandle(
     'provider:test-key',
-    async (_event, data: { type: string; apiKey: string }) => {
+    async (_event, data: { type: string; apiKey?: string; baseUrl?: string | null }) => {
       userActivation.requireActivated()
       try {
-        const models = await providerService.testKey(data.type, data.apiKey)
+        const models = await providerService.testKey(data)
         return { success: true as const, models }
       } catch (err) {
         const e = ipcErrorShape(err)
@@ -71,6 +76,18 @@ export function registerProviderHandlers(): void {
       }
     }
   )
+
+  /**
+   * Is an Ollama running on this machine, and what has it pulled?
+   *
+   * Returns a shape rather than throwing when nothing answers — "not running"
+   * is the ordinary answer here, and a React Query error state would render a
+   * failure on a screen where nothing has failed.
+   */
+  ipcHandle('provider:detect-ollama', async (_event, host?: string | null) => {
+    userActivation.requireActivated()
+    return ollamaService.detect(host)
+  })
 
   ipcHandle('provider:list-models', async () => {
     userActivation.requireActivated()
