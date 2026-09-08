@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Reference for how three different LLM SDKs (Anthropic, OpenAI, Gemini) are made to behave like one to the rest of the app. Documents the unified surface, what each adapter must translate, and known per-provider quirks.
+Reference for how several different LLM APIs (Anthropic, OpenAI, Gemini, and a local Ollama) are made to behave like one to the rest of the app. Documents the unified surface, what each adapter must translate, and known per-provider quirks.
 
 For the higher-level abstraction and configuration story see [Adapters](./adapters.md); for file paths and IPC channels see [Adapters Tech](./adapters_tech.md).
 
@@ -32,16 +32,18 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 
 ## Per-Provider Translation Matrix
 
-| Axis | Anthropic | OpenAI | Gemini |
-|------|-----------|--------|--------|
-| **SDK call** | `client.messages.stream()` | `client.chat.completions.create({ stream: true })` | `chat.sendMessageStream()` (built from `getGenerativeModel().startChat({ history })`) |
-| **System prompt** | Top-level `system` field | First message with `role: 'system'` | `systemInstruction` on `getGenerativeModel()` |
-| **Tool definition** | `input_schema` accepts JSON Schema verbatim | `parameters` accepts JSON Schema verbatim | `parameters` is a proto `Schema` (OpenAPI-3 subset) — JSON Schema must be translated, see [Tool Schema Translation](./tool_schema_translation.md) |
-| **Tool-call extraction** | `contentBlock` event of type `tool_use` | Accumulate streamed `delta.tool_calls[i].function.arguments` JSON across chunks | `chunk.candidates[0].content.parts` of type `functionCall` |
-| **Tool-call ID** | Provider-supplied `block.id` | Provider-supplied `tool_call.id` | Provider does **not** emit IDs — adapter generates `gemini-<nanoid>` |
-| **Tool result back to model** | `role: 'user'` with `tool_result` content block referencing `tool_use_id` | `role: 'tool'` with `tool_call_id` | `role: 'function'` Content with `functionResponse` part (SDK validates role; `'user'` is rejected) |
-| **Result content shape** | String | String | Plain object — adapter wraps MCP `[{type:'text', text:...}]` arrays as `{ result: '<joined text>' }` |
-| **Error parsing** | `status` property on SDK `APIError` | `status` property on SDK `APIError` | Status parsed from `[<code> <statusText>]` substring in message; safety reasons (`SAFETY`/`RECITATION`/`BLOCKED`) detected from response error string |
+| Axis | Anthropic | OpenAI | Gemini | Ollama |
+|------|-----------|--------|--------|--------|
+| **SDK call** | `client.messages.stream()` | `client.chat.completions.create({ stream: true })` | `chat.sendMessageStream()` (built from `getGenerativeModel().startChat({ history })`) | `OpenAIAdapter.stream()` verbatim, against `<host>/v1` |
+| **System prompt** | Top-level `system` field | First message with `role: 'system'` | `systemInstruction` on `getGenerativeModel()` | OpenAI's |
+| **Tool definition** | `input_schema` accepts JSON Schema verbatim | `parameters` accepts JSON Schema verbatim | `parameters` is a proto `Schema` (OpenAPI-3 subset) — JSON Schema must be translated, see [Tool Schema Translation](./tool_schema_translation.md) | OpenAI's |
+| **Tool-call extraction** | `contentBlock` event of type `tool_use` | Accumulate streamed `delta.tool_calls[i].function.arguments` JSON across chunks | `chunk.candidates[0].content.parts` of type `functionCall` | OpenAI's |
+| **Tool-call ID** | Provider-supplied `block.id` | Provider-supplied `tool_call.id` | Provider does **not** emit IDs — adapter generates `gemini-<nanoid>` | OpenAI's |
+| **Tool result back to model** | `role: 'user'` with `tool_result` content block referencing `tool_use_id` | `role: 'tool'` with `tool_call_id` | `role: 'function'` Content with `functionResponse` part (SDK validates role; `'user'` is rejected) | OpenAI's |
+| **Result content shape** | String | String | Plain object — adapter wraps MCP `[{type:'text', text:...}]` arrays as `{ result: '<joined text>' }` | String |
+| **Error parsing** | `status` property on SDK `APIError` | `status` property on SDK `APIError` | Status parsed from `[<code> <statusText>]` substring in message; safety reasons (`SAFETY`/`RECITATION`/`BLOCKED`) detected from response error string | Connection `code` (`ECONNREFUSED`/`ENOTFOUND`/…) and `TimeoutError` first — the failure is usually a process that isn't running, not an account |
+| **Credential** | Encrypted API key | Encrypted API key | Encrypted API key | **None** — a host in `base_url`; the SDK is handed `KEYLESS_PLACEHOLDER_KEY`, which Ollama ignores |
+| **Model listing** | `client.beta.models.list()` | `client.models.list()`, filtered | REST `v1beta/models` | Native `GET /api/tags`, **not** `/v1/models` — only the native listing returns `parameter_size`, and that is what a local model's Work Complexity tier is made of |
 
 ## Known Quirks
 
@@ -78,6 +80,22 @@ MCP servers return content as `[{ type: 'text', text: '...' }, ...]` arrays. Gem
 
 `client.models.list()` returns embeddings, audio, image, moderation, and instruct models alongside chat models. The adapter filters to `gpt-*`, `o<digit>-*`, `chatgpt-*` and excludes embeddings/audio/realtime/image/whisper/tts/dall-e/moderation/instruct/fine-tunes, sorted newest first.
 
+### Ollama: two protocols, and why the listing is the native one
+
+`/v1` is complete enough for generation — streaming and tool calls arrive in the OpenAI wire format — so `stream()` is `OpenAIAdapter`'s, delegated to rather than reimplemented. `/v1/models`, though, returns bare ids. `/api/tags` returns the family, the parameter size and the quantisation, and the parameter size is the whole basis of a local model's Work Complexity tier: `deepseek-r1:latest` is a 7B and says so nowhere in its name.
+
+### Ollama: embedding models the shared filter misses
+
+The shared `isChatCapableModelId` looks for `embedding`, and the Ollama registry almost never spells it that way — `nomic-embed-text`, `mxbai-embed-large`, `snowflake-arctic-embed2`, `all-minilm`, `bge-m3`. The adapter adds a pattern matching `embed` as its own token plus the families that name themselves after the architecture. Without it every one of them appeared in the model picker as something to chat with and answered the first turn with a 400.
+
+### Ollama: a tag is user-controlled, so capability matching is loose
+
+The same weights can be `llava:13b`, `llava:latest`, or whatever a `Modelfile` called them, so vision support is matched against a list of **families** with open version ranges. Wrong in the permissive direction costs an attach button that produces a confused answer; wrong in the strict direction hides the button on a model that would have worked, which is harder to diagnose because nothing appears at all.
+
+### Ollama: two timeouts, because the two calls sit on different paths
+
+Listing gets 1.5 s because `getAllModels()` walks the adapters sequentially with no cache, before every engine start and on every `provider:list-models` — a loopback server that is down refuses instantly, but a powered-off box on the LAN hangs. Probing gets 5 s because it is a foreground action the user asked for and its whole job is to wait long enough to be believed: a false "nothing answered" about a slow LAN host sends the user to fix something that is not broken.
+
 ## Tool-Call Loop Contract
 
 The adapter is a **single-turn streamer**. `chatStreamingService` owns iteration:
@@ -102,18 +120,21 @@ An adapter must not call MCP, must not loop, must not persist. It receives histo
 - **Per-provider quirks (above) are real** — any abstraction still has to translate JSON Schema → Gemini's OpenAPI subset, and assign `role: 'function'` for Gemini tool responses. Owning the translation directly keeps these visible and fixable.
 - **Narrow scope** — only chat + tool calling. Agent orchestration, planning, retrieval pipelines are out of scope, so a framework's surface area is mostly dead weight.
 
-## Adding a Fourth Provider
+## Adding Another Provider
 
 1. Create `src/main/llm/<provider>.ts` implementing `LLMAdapter`. <!-- nocheck -->
 2. Fill in the five translations in `stream()` using the matrix above as a checklist.
 3. Check the provider's tool-schema acceptance before passing `inputSchema` through. If it's stricter than JSON Schema (like Gemini), add a sanitizer function in the adapter file — keep it local, not shared, until a second provider needs the same fix.
 4. Implement `parseError()` covering rate limit (429), auth (401/403), not found (404), 5xx, and any provider-specific safety/content blocks.
 5. Add the type to `createAdapter()` in `src/main/llm/factory.ts` and the `ProviderType` union + `isProviderType` predicate.
-6. Update [Adapters](./adapters.md) "Current Adapters" and this matrix.
+6. If it needs no credential, add it to `KEYLESS_PROVIDER_TYPES` in `src/shared/credentials.ts` rather than teaching any call site about it — see [Local Models & Keyless Credentials](../local_models/local_models.md).
+7. If a folder agent should be able to run on it, it also needs an `EngineProviderType`, a `PROVIDER_NPM` package and a `CUSTOM_MODEL_LIMITS` row — see [The Local Engine](../../agents/local_agents/engine.md).
+8. Update [Adapters](./adapters.md) "Current Adapters" and this matrix.
 
 ## Integration Points
 
 - [Adapters](./adapters.md) — High-level abstraction, configuration UX, registry lifecycle
+- [Local Models & Keyless Credentials](../local_models/local_models.md) — the Ollama adapter's host, detection probe and tiering rules
 - [Adapters Tech](./adapters_tech.md) — File paths, IPC channels, DB schema
 - [Tool Schema Translation](./tool_schema_translation.md) — MCP JSON Schema → each provider's tool-definition shape, and what Gemini's subset costs
 - [Chat Messaging](../../chat/messaging/messaging.md) — The tool-call loop in `chatStreamingService` that drives every adapter

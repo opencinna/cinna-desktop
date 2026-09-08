@@ -75,7 +75,7 @@
   - `modelCapability = useModelCapability(chatData?.providerId, chatData?.modelId)`
   - `attachScope` = `'cinna'` on new-chat or active remote-agent target; `'local'` on active LLM target
   - `canShowAttachButton` (active): `(isCinnaUser && targetIsRemote) || (chatId && !attachmentTargetAgent && modelSupportsMedia)`
-  - `canShowAttachButton` (new-chat): `hasAnyDestination = isCinnaUser || providers.some(p => p.enabled && p.hasApiKey)`
+  - `canShowAttachButton` (new-chat): `hasAnyDestination = isCinnaUser || providers.some(p => p.enabled && isCredentialUsable(p))` (`useHasAttachDestination`) — the shared predicate rather than `hasApiKey`, so a keyless credential (Ollama) counts as a destination and a managed OAuth row that cannot call does not
   - Drop handlers: `dragenter / dragover / dragleave / drop` with depth counter, `dataTransfer.types.includes('Files')` filter, `pointer-events-none` overlay
   - Active-chat narrow: `attachmentsToSend.filter((a): a is MessageAttachment => a.source !== 'pending')` before `composer.submit` (pending impossible by gating but the narrow keeps types honest)
 - `src/renderer/src/components/chat/MessageBubble.tsx` — Renders `AttachmentList` with `onClick={(a) => void download(a)}`; surfaces `useFileDownload.error` only when `errorFileId` matches a badge
