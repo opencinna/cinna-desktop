@@ -29,6 +29,7 @@ Unified abstraction layer over multiple LLM provider SDKs (Anthropic, OpenAI, Ge
 - Each provider type has its own SDK, streaming protocol, tool-calling format, and error handling
 - API keys are encrypted via `safeStorage` and never leave the main process
 - **A key is not what makes a credential usable — `isCredentialUsable` is.** A keyless credential registers an adapter on `enabled` alone; requiring a key would leave a saved Ollama invisible to the model picker forever. Any layer that tests `hasApiKey` by hand is a layer that can disagree with the one beside it
+- **`enabled` means off everywhere, including for the local engine.** Disabling a credential unregisters its adapter, so a chat on it fails with "Provider adapter not available" rather than falling back to another key — and `collectEngineProviders` leaves it out of the generated engine config, so folder agents running on it stop too. Every surface that named it says what stopped: see [Switching an AI Credential Off](credential_enablement.md). The predicate for "enabled *and* usable" is `isCredentialActive`
 - **A renderer-supplied `baseUrl` is honoured only for keyless types.** Pointing a row that holds a real key at an arbitrary URL would send that key wherever the renderer said; a gateway's endpoint is written by account-config sync instead. A credential's `type` is likewise fixed at creation, since re-typing a row would keep its stored key and spend it under another transport
 - Only one provider can be marked as default at a time (setting one clears others)
 - Each provider can have a default model; used when creating new chats
@@ -80,4 +81,5 @@ No adapter hardcodes versioned model IDs anywhere — listing is always live aga
 - [Chat Messaging](../../chat/messaging/messaging.md) — Adapters are called by the streaming IPC handler
 - [MCP Connections](../../mcp/connections/connections.md) — MCP tools are converted to each provider's tool schema format
 - [Local Models & Keyless Credentials](../local_models/local_models.md) — the Ollama adapter, host detection, and the shared usability predicate
+- [Switching an AI Credential Off](credential_enablement.md) — what `enabled` stops, the confirm that names it, and the shared credential-reference resolver
 - Database — Provider configs stored in `llm_providers`: an encrypted API key, or a host in `base_url` for a keyless credential

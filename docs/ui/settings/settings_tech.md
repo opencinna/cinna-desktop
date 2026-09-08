@@ -5,10 +5,11 @@
 ### Renderer — Components
 
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Shell component: reads `settingsTab`, renders section title (`sectionTitles`) and active section
-- `src/renderer/src/components/settings/SettingsLayout.tsx` — The section/card/row/status primitives a tab is built from (`SettingsSection`, `SettingsCard`, `SettingsRows`/`SettingsRow`, `SettingsLabel`/`SettingsHint`, `SettingsStatusRow`, `SettingsButton`/`SettingsAddButton`/`SettingsIconButton`/`SettingsBadge`, `settingsInputClass`). Local Agents is the first caller; see [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) for the pattern and the settings type scale
+- `src/renderer/src/components/settings/SettingsLayout.tsx` — The section/card/row/status primitives a tab is built from (`SettingsSection`, `SettingsCard`, `SettingsRows`/`SettingsRow`, `SettingsLabel`/`SettingsHint`, `SettingsStatusRow`, `SettingsButton`/`SettingsAddButton`/`SettingsIconButton`/`SettingsBadge`, `settingsInputClass`), plus `useDialogChrome` — the shared modal behaviour (initial focus, Escape and outside-click dismissal, both suppressed while a write is pending). Local Agents is the first caller; see [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) for the pattern and the settings type scale
 - `src/renderer/src/components/settings/LLMSettingsSection.tsx` — LLM providers list + add-provider form toggle (Default scope: user-created providers only)
 - `src/renderer/src/components/settings/MCPSettingsSection.tsx` — MCP providers list + add-remote form + add-local button; contains private `AddRemoteMcpForm`
-- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, default toggle, API key management, model selection
+- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, default toggle, API key management, model selection. Switching **off** raises `DisableCredentialDialog` when a chat mode or folder agent depends on the credential; a standing line under the controls counts what is inactive for as long as it is off
+- `src/renderer/src/components/settings/DisableCredentialDialog.tsx` — that confirm, built on `useDialogChrome` (focus on Cancel, dismissal ignored while the write runs) plus `describeDependents()`, the counted form the card's line uses
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — New provider wizard: type selection → API key → model picker
 - `src/renderer/src/components/settings/MCPProviderCard.tsx` — Expandable card: transport config, env vars, connect/disconnect, tools list
 - `src/renderer/src/components/settings/AgentsSettingsSection.tsx` — Agents list + add-agent form toggle

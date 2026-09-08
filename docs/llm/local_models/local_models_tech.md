@@ -5,7 +5,7 @@ Business rules and the reasoning behind them: [Local Models & Keyless Credential
 ## File Locations
 
 ### Shared (imported by both processes)
-- `src/shared/credentials.ts` — `KEYLESS_PROVIDER_TYPES`, `requiresApiKey(type)`, `isCredentialUsable(provider)`, `OLLAMA_DEFAULT_HOST`, `normaliseOllamaHost(value)`, `storableOllamaHost(value)`, `KEYLESS_PLACEHOLDER_KEY`, `ollamaOpenAIBaseUrl(host)`. Pure, no Electron, unit-tested in `src/shared/credentials.test.ts`
+- `src/shared/credentials.ts` — `KEYLESS_PROVIDER_TYPES`, `requiresApiKey(type)`, `isCredentialUsable(provider)`, `isCredentialActive(provider)` (`enabled && usable`), `findCredentialByReference(providers, reference)` (id → name → type, tie-broken toward a credential that can run; shared with `runtimeService`), `OLLAMA_DEFAULT_HOST`, `normaliseOllamaHost(value)`, `storableOllamaHost(value)`, `KEYLESS_PLACEHOLDER_KEY`, `ollamaOpenAIBaseUrl(host)`. Pure, no Electron, unit-tested in `src/shared/credentials.test.ts`
 - `src/shared/modelFamilies.ts` — the `local-large` / `local-mid` / `local-small` / `local` rules and the `PARAMS_*` patterns; `FamilyRule.catchAll` and the `KNOWN_TYPES` entry for `ollama`
 - `src/shared/runtimeDefaults.ts` — `PER_ROW_CATALOGUE` is now a `Set` holding `openai_compatible` and `ollama`; read by `inheritedModelId` and `modelBelongsElsewhere`
 
@@ -19,10 +19,10 @@ Business rules and the reasoning behind them: [Local Models & Keyless Credential
 - `src/main/auth/reload.ts` — `reloadUserProviders()` registers a keyless credential on `enabled` alone
 - `src/main/services/aiFunctionsService.ts` — `tryResolve()` no longer skips a credential for having no key when its type needs none
 - `src/main/engine/modelCache.ts` — `mergeModelCache(previous, fresh, known)`, `CachedModel`, `ModelRefreshScope` (`'all' | 'local'`). Pure, tested in `modelCache.test.ts`
-- `src/main/engine/engineConfigSource.ts` — `collectEngineProviders()` on `isCredentialUsable`, `refreshModelCache(scope)`, the private `listLocalModels()` / `localProviderIds()`, and `collectEngineConfigInput`'s `'local'` refresh on the reconcile path
+- `src/main/engine/engineConfigSource.ts` — `collectEngineProviders()` on `dto.enabled` then `isCredentialUsable`, `refreshModelCache(scope)`, the private `listLocalModels()` / `localProviderIds()`, and `collectEngineConfigInput`'s `'local'` refresh on the reconcile path
 - `src/main/engine/configGenerator.ts` — `PROVIDER_NPM.ollama` (`@ai-sdk/openai-compatible`), `PROVIDER_BASE_URL.ollama`, the private `engineBaseUrl(type, credentialBaseUrl)`, the keyless branches of the empty-key skip and of the `env` map
 - `src/main/engine/modelLimits.ts` — `EngineProviderType` gains `ollama`; `CUSTOM_MODEL_LIMITS.ollama = {context: 32768, output: 4096}`
-- `src/main/services/localAgents/runtimeService.ts` — `isUsable()` delegates to `isCredentialUsable`
+- `src/main/services/localAgents/runtimeService.ts` — `isUsable()` delegates to `isCredentialUsable`; `findCredential()` delegates to `findCredentialByReference`
 
 ### Preload
 - `src/preload/index.ts` — `ProviderData.baseUrl`, `OllamaDetectionData`, `providers.detectOllama(host?)`, `baseUrl` on `providers.upsert` and `providers.testKey` (whose `apiKey` is now optional)
@@ -32,7 +32,7 @@ Business rules and the reasoning behind them: [Local Models & Keyless Credential
 - `src/renderer/src/components/settings/LLMSettingsSection.tsx` — the detection offer row and its one-click add
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — the Ollama type entry, the Host field, the fixed-height status slot, the persistent Default Model row
 - `src/renderer/src/components/settings/LLMProviderCard.tsx` — the keyless card branch (Host field, no key controls, usability-based status dot, full-width error lines)
-- `src/renderer/src/components/settings/ChatModeCard.tsx`, `ChatModeForm.tsx`, `LocalAgentsSettingsSection.tsx`, `agents/local/RuntimePanel.tsx`, `hooks/useAttachDestination.ts` — all now call `isCredentialUsable` instead of restating it
+- `src/renderer/src/components/settings/ChatModeCard.tsx`, `ChatModeForm.tsx`, `LocalAgentsSettingsSection.tsx`, `agents/local/RuntimePanel.tsx`, `hooks/useAttachDestination.ts` — all now call the shared predicates instead of restating them. The four that mean "can this run right now" call `isCredentialActive`; `RuntimePanel` still calls `isCredentialUsable`, because its picker must list a switched-off credential for an agent pointing at one to say so
 
 ## Database Schema
 

@@ -7,7 +7,7 @@ Run models that live on the user's own machine — Ollama today — as an ordina
 ## Core Concepts
 
 - **Keyless credential** — A credential type that authenticates with nothing. An Ollama row stores a host and no key; `KEYLESS_PROVIDER_TYPES` in `src/shared/credentials.ts` is the list, a set of one today because the next local runtime (LM Studio, llama.cpp's server, vLLM) is the same shape
-- **`isCredentialUsable`** — The one predicate for "can this credential drive a model call". Imported by both processes; every layer calls it and none restates it
+- **`isCredentialUsable`** — The one predicate for "can this credential drive a model call". Imported by both processes; every layer calls it and none restates it. Its sibling **`isCredentialActive`** adds the user's own on/off switch (`enabled && usable`) for the callers that mean both
 - **Host** — Where a keyless credential's requests go. Stored in the existing `llm_providers.base_url` column, the same one an `openai_compatible` gateway uses, so the feature added no column and needed no migration. Normalised to a bare origin (`http://127.0.0.1:11434`)
 - **Detection probe** — `provider:detect-ollama`: does something answer on a host, what version is it, and what has it pulled. Answers `{running, host, version, models, alreadyConfigured}` and nothing else
 - **Keyless placeholder** — The literal `keyless` handed to anything that structurally insists on a key string: the OpenAI SDK, which throws on an absent `apiKey`, and the engine config, whose every provider entry names an environment variable. Not a secret and never a stand-in for one — Ollama accepts any bearer token and validates none
@@ -47,7 +47,7 @@ One of those states has been reasoned about rather than seen: **"Ollama is runni
 
 `isCredentialUsable(provider)` is `!unsupported && (hasApiKey || the type needs no key)`. It replaced a `hasApiKey && !unsupported` written out by hand at every call site that asked the question — a dozen-odd of them, in main and renderer alike. The rule about which credentials can run must not be able to differ between the screen that offers one and the service that spends it: the copies had already drifted once, and the keyless case is precisely where a stale copy is invisible — the chat-mode picker, the "Runs with" panel and the engine generator would each have silently ignored a perfectly working Ollama.
 
-It is deliberately **not** a test of `enabled`. Some callers legitimately ignore enablement — the "Runs with" panel lists a disabled credential so an agent pinned to one can say so. Callers that care write `provider.enabled && isCredentialUsable(provider)` visibly.
+It is deliberately **not** a test of `enabled`. Some callers legitimately ignore enablement — the "Runs with" panel lists a disabled credential so an agent pinned to one can say so, and a picker that hid it would leave the user unable to see what their agent is set to. Callers that care say **`isCredentialActive`**, which is `enabled && isCredentialUsable` under a name: visibly a different question, not a quietly stricter answer to this one. Two functions rather than one term folded into the first, because merging them is what let two copies of the rule drift apart before. See [Switching an AI Credential Off](../adapters/credential_enablement.md).
 
 It also says nothing about **reachability**. Usable means "the app may offer this and hand it to the engine"; whether an Ollama is answering right now has a different answer every minute and belongs to the detection probe.
 
@@ -161,7 +161,7 @@ Chat / AI functions
       → stream()      delegated to OpenAIAdapter on <host>/v1
 
 Folder agent
-  → collectEngineProviders()  isCredentialUsable, apiKey ''
+  → collectEngineProviders()  enabled, isCredentialUsable, apiKey ''
   → buildEngineConfig()       custom entry, baseURL <host>/v1,
                               env CINNA_ENGINE_KEY_… = 'keyless', model limits
   → opencode → <host>/v1/chat/completions
@@ -175,4 +175,5 @@ Folder agent
 - [The Local Engine](../../agents/local_agents/engine.md) — custom provider entries, model limits, runtime resolution and the model-cache refresh rules
 - [Account-Provisioned Providers & Chat Modes](../account_provisioning/account_provisioning.md) — the other user of `base_url`, and the sync path the keyless-only rule deliberately does not touch
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — where a keyless credential is picked for chat
+- [Switching an AI Credential Off](../adapters/credential_enablement.md) — the `enabled` half this predicate deliberately leaves out, and what consults it instead
 - [Settings](../../ui/settings/settings.md) — the AI Credentials tab the card, form and offer row live in

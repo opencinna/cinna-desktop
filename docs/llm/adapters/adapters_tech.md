@@ -11,7 +11,7 @@
 - `src/main/llm/gemini.ts` — `GeminiAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/ollama.ts` — `OllamaAdapter` (keyless; `stream()` delegates to `OpenAIAdapter` on `<host>/v1`, `listModels()` uses the native `/api/tags`) plus `fetchOllamaTags()` / `probeOllama()` — see [Local Models Tech](../local_models/local_models_tech.md)
 - `src/main/services/ollamaService.ts` — `detect(host?)` / `isConfigured(host)`, behind `provider:detect-ollama`
-- `src/shared/credentials.ts` — `isCredentialUsable`, `requiresApiKey`, host normalisation, `KEYLESS_PLACEHOLDER_KEY`. Imported by main **and** renderer, so the two cannot disagree about which credentials are usable
+- `src/shared/credentials.ts` — `isCredentialUsable`, `isCredentialActive`, `findCredentialByReference`, `requiresApiKey`, host normalisation, `KEYLESS_PLACEHOLDER_KEY`. Imported by main **and** renderer, so the two cannot disagree about which credentials are usable, which are active, or which row a stored credential *reference* resolves to
 - `src/main/llm/geminiSchema.ts` — MCP JSON Schema → Gemini's v1beta `Schema` subset. `toGeminiParameters(schema, report)` is the call-site entry point (returns `undefined` for a no-argument tool); `sanitizeForGemini()` does the walk; `createReport()` collects `{ translated, dropped }` for the debug log. Pure/Electron-free, unit-tested in `src/main/llm/geminiSchema.test.ts` — see [Tool Schema Translation](./tool_schema_translation.md)
 - `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`. Providers no longer carry a `is_default` flag; the "default" concept moved to chat modes (see [Chat Modes](../../chat/chat_modes/chat_modes.md)).
 - `src/main/services/providerService.ts` — `providerService` — DTO mapping (`hasApiKey: boolean`, plus `baseUrl` for gateway/keyless rows), encryption via `encryptApiKey()`, registry sync on upsert/delete, `test()` and `testKey()` helpers, `listModels()` aggregator, and the two write-path guards (`type_immutable`, keyless-only `baseUrl`)
@@ -31,7 +31,7 @@
 - `src/renderer/src/hooks/useProviders.ts` — useProviders, useUpsertProvider, useDeleteProvider, useTestProvider, useTestProviderKey, useOllamaDetection
 - `src/renderer/src/hooks/useModels.ts` — useModels (aggregates from all providers)
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Settings page with LLM Providers tab
-- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, edit key, test, select model, delete (no per-provider default flag — defaults live on chat modes)
+- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, edit key, test, select model, delete (no per-provider default flag — defaults live on chat modes). Switching **off** goes through `DisableCredentialDialog` when a chat mode or a folder agent depends on the credential; while it is off the card keeps a line counting what is inactive. See [Switching an AI Credential Off](credential_enablement.md)
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — Add new provider form: type selector, key **or host** input, test, save
 - `src/renderer/src/components/settings/LLMSettingsSection.tsx` — The credential list, the add-form toggle, and the detected-Ollama offer row
 
@@ -65,7 +65,8 @@
 
 ## Renderer Components
 
-- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable provider card with: enable/disable toggle, API key field (masked) — or, for a keyless credential, a plain **Host** field seeded from the stored value — test connection button, model selector dropdown (fetches models on demand via `provider:test`), delete button. No per-provider default flag — the "default" concept now lives on chat modes.
+- `src/renderer/src/components/settings/DisableCredentialDialog.tsx` — the confirm in front of that toggle, plus `describeDependents()`, which the card's standing line shares so the dialog's names and the card's count cannot disagree about what a dependent is
+- `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable provider card with: enable/disable toggle (`aria-label` **Switch on / Switch off**, the words the dialog uses), API key field (masked) — or, for a keyless credential, a plain **Host** field seeded from the stored value — test connection button, model selector dropdown (fetches models on demand via `provider:test`), delete button. No per-provider default flag — the "default" concept now lives on chat modes.
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — New provider form: type selector with search filter, API key **or** host input, test before save. The Ollama branch and its layout rules are documented in [Local Models](../local_models/local_models.md#what-the-ui-must-not-do)
 
 ## Security

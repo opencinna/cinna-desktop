@@ -87,6 +87,7 @@ Every section is rendered with a `key` equal to its tab id, which is what makes 
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — defines which menu items belong to the Default vs Profile group
 - [App Shell](../app_shell/app_shell.md) — Hosts the profile dropdown (settings entry) and the sidebar's settings-menu mode
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Chat modes section manages named presets
+- [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md) — the AI Credentials tab's off switch: the confirm that names what stops, and the line the card keeps while it is off
 - [Auto Chat Titles](../../chat/auto_titles/auto_titles.md) — The Features tab hosts the "AI Functions" subsection where this opt-in toggle lives
 - [Hints](../hints/hints.md) — The Features tab's "Interface" group hosts the `showHints` toggle and the "Reset hints" button that clears the localStorage retirement counters
 - [Agents](../../agents/agents/agents.md) — Agents section (Default group) manages local A2A agent registrations
