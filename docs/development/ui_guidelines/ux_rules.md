@@ -101,6 +101,18 @@ An action is discoverable before it is hovered or it is not discoverable. Colour
 
 **Origin:** a "Show more" toggle on the bare agent's Readme card, `text-[10px] text-[var(--color-text-muted)]`, sat one line above the card's footer note in the same size and the same colour. Nothing distinguished the control from the sentence below it. The control itself was then removed — the card renders the whole file — but the styling mistake is the general one.
 
+## 12. A settings tab is a stack of titled sections, at the scale of the tab beside it
+
+Settings is the one place where every screen is a sibling of every other: the user reaches them from the same list, one click apart. A tab that is structured differently or set smaller than its neighbours does not read as a variation — it reads as a screen someone forgot to finish.
+
+- **Titled sections, not a stack of cards.** The section title is what the user scans for; a card is one setting inside the answer. Name the sections after what the user came to change (Agent Folders, Engine Settings, Developer Tools), not after the data model. Two or three per tab; a tab needing seven is really two tabs.
+- **One type scale per surface.** Settings runs at 14/13/12 (see [UI Guidelines](ui_guidelines_llm.md) — Typography). `text-xs`, `text-[10px]` and `text-[9px]` are the app-chrome scale, and a settings tab written in them renders two steps smaller than the one beside it. A component shared with a denser surface takes the scale of the surface it renders *into*, and any reserved height it computes is written as a multiple of that scale's leading rather than a measured pixel count, so the two cannot drift apart.
+- **A fact lives in the section holding the control that changes it.** A "readiness" card that reports the engine is not running, three rows above the field that decides which binary starts, has separated the diagnosis from the fix. Give the status row the button that resolves it.
+- **A section-wide verb belongs beside the section title** (Rescan, Refresh), labelled and bordered — it acts on everything in the section, not on the first card, and a bare muted icon there is invisible until hovered (rule 11).
+- **The hint goes above the control, messages below it, in a slot that is always there.** This is rule 1 applied to a settings field: the sentence explaining a setting never moves, and the save error that arrives after a blur must not push the next section down.
+
+**Origin:** Settings → Local Agents was four unlabelled cards and a loose button, at `text-xs`/`text-[10px]`/`text-[9px]` while Features, Local Development and AI Credentials next to it were titled sections at 14/13/12. Nothing in it was wrong on its own; it was reported as "wrong design" purely because it did not look like the screen one click away. The type scale had moved and the one screen that did not follow was the one nobody had compared side by side.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -114,3 +126,4 @@ An action is discoverable before it is hovered or it is not discoverable. Colour
 9. Every file path on the surface: does that file exist for **every** kind of object this surface renders?
 10. Every `aria-label`: does it match the visible text, including on the branch you did not open?
 11. Every clickable thing that is not a filled button: read its colour and weight against the static text nearest it. The same? Finding.
+12. Open the settings tab **above and below** the changed one and screenshot all three. Different structure (titled sections vs. bare cards) or a different type scale is a finding, even when the changed tab is internally consistent.

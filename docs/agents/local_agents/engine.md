@@ -49,15 +49,16 @@ Both halves are load-bearing, and both were bugs before they were properties.
 ## User Stories / Flows
 
 ### Starting the engine for the first time
-1. The user opens Settings → Local Agents (or the “Runs with” panel on an agent page) and presses **Start**
+1. The user opens Settings → Local Agents (or the “Runs with” panel on an agent page) and presses **Start engine** — the button on the **Local engine** row that leads the Engine Settings section, directly above the engine-path field it may need next
 2. If Settings names an engine path, that file is used — and an unusable one is an error, not a silent fallback. Otherwise `opencode` is looked for on the login-shell PATH
-3. With neither, the pinned build for this platform is downloaded into `<userData>/engine/`, verified against a recorded SHA-256, unpacked and published. The status line says "Downloading the engine — this happens once and takes a minute"
+3. With neither, the pinned build for this platform is downloaded into `<userData>/engine/`, verified against a recorded SHA-256, unpacked and published. The Local engine row says "Downloading the engine. This happens once and takes about a minute."
 4. The config is generated fresh (model lists refreshed), written, and a process is spawned on a freshly-picked loopback port
 5. The engine answers `GET /api/health`; the status becomes `running` and the version line names the binary and where it came from
 
 ### Nothing starts it for you
 1. A user who never opens the Agents tab never pays for a 50 MB download: **nothing starts the engine at app boot**
-2. Starting is an explicit act — the Settings button, the panel's button, or (Phase 6) the first turn
+2. Starting is an explicit act — the Settings button, the panel's button, or the first local turn, which calls `ensureEngineRunning` itself
+3. So a stopped engine is **not a warning**. The Local engine row reports it with a muted dot and a line opening “Not running — chatting with a folder agent starts it”, and the amber triangle is kept for `failed`. An alarm over a state that resolves itself on the next turn is the healthy state wearing an alarm, and it teaches the user to skip the triangle for the case that does need them ([UX Rules](../../development/ui_guidelines/ux_rules.md), rules 2 and 12)
 
 ### Adding a credential while the engine is running
 1. The user adds an AI credential in Settings, or the background account-config sync materialises a managed provider on its timer

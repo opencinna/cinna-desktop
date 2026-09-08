@@ -30,7 +30,7 @@
 - `src/renderer/src/components/agents/local/OpenInMenu.tsx` — the split button and its menu; `OpenInMenu.test.tsx`
 - `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — Reveal and Terminal again, from the ⋯ menu
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the "Build it with…" step
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Open agents with** select and the auto-open checkbox in the Developer tools card
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Open agents with** select and the auto-open checkbox, on their own card in the **Developer Tools** section; the detected-tools chips and **Refresh** are the card above, with Refresh beside the section title rather than inside the card, since it re-detects everything the section reports
 
 ### Packaging
 - `build/entitlements.mac.plist` — `com.apple.security.automation.apple-events`

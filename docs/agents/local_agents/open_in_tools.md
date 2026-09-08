@@ -53,7 +53,7 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 
 ### Refreshing detection after installing a tool
 1. User installs, say, Claude Code while the app is running
-2. Settings → Local Agents → **Refresh** drops the cached `PATH` lookups and re-detects
+2. Settings → Local Agents → Developer Tools → **Refresh** (beside the section title) drops the cached `PATH` lookups and re-detects
 3. Caveat: adding a *new* `PATH` entry to a shell profile still needs an app restart — see [Shell Environment Resolution](../../development/shell_environment/shell_environment.md)
 
 ## Business Rules

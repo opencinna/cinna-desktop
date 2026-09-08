@@ -25,14 +25,62 @@ All colors use CSS variables `var(--color-*)` defined in `src/renderer/src/asset
 
 Custom CSS must go inside `@layer base` in `main.css` (otherwise it overrides Tailwind v4 utilities).
 
-## Typography Scale
+## Typography — two scales, chosen by surface
+
+Cinna has **two** type scales, and picking the wrong one is the most visible way a screen goes wrong: it renders a step or two smaller than the screen beside it and reads as a different application. The scale is decided by *where the surface lives*, never by how much content it has.
+
+### Settings scale — every tab under Settings
+
+Settings is a reading surface: the user arrives to decide something, reads a sentence, and acts once. It is set at a comfortable reading size.
 
 | Class | Usage |
 |-------|-------|
-| `text-base font-semibold` | Page/section titles |
-| `text-xs font-medium` | Card titles, button labels |
+| `text-base font-semibold` | The page title (`SettingsPage`'s `h1`) |
+| `text-[14px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]` | Section title (`SettingsSection`) |
+| `text-[14px] font-medium` | Card title, setting label, the name of a listed item |
+| `text-[13px]` | Descriptions, hints, sub-lines, status detail, button labels |
+| `text-[12px]` | Monospace paths and values, chips, secondary metadata |
+| `text-[11px]` | Badges (Home, Added folder, Guest, Active) |
+
+**`text-xs`, `text-[10px]` and `text-[9px]` do not belong on a Settings surface.** They are the app-chrome scale below; a settings section written in them is the defect this table exists to prevent.
+
+### App-chrome scale — sidebar, agent pages, chat, jobs, tray
+
+These are density-first: many rows on screen at once, scanned rather than read.
+
+| Class | Usage |
+|-------|-------|
+| `text-xs` / `text-[11px]` | Row titles, button labels |
 | `text-[10px]` | Labels, status text, metadata, descriptions |
-| `text-[9px]` | Badges (Guest, Active) |
+| `text-[9px]` | Badges |
+
+### Which one am I writing?
+
+If the file is under `src/renderer/src/components/settings/`, or renders inside `SettingsPage`, it is the Settings scale. A component shared by both — `AgentsRootGit` is one, rendered inside a settings row — takes the scale of the surface it renders *into*, and any reserved height it computes (`h-[2rem]` for two clamped lines) is written as a multiple of that scale's leading rather than as a measured pixel count, so the two cannot drift apart.
+
+## Settings Section Pattern
+
+**A settings tab is a stack of titled sections, not a stack of cards.** The section title is what a user scans for ("where do I set the engine path?"); a card is one setting, or one list, inside the answer. A tab of five unlabelled cards has no scannable structure and forces the user to read all of it to find one thing — that is the defect that produced this pattern.
+
+Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, and move an existing one over when you next touch it (Local Agents is the first caller; Features, Local Development and AI Credentials match the scale and the shapes with their own markup):
+
+| Export | What it is |
+|--------|-----------|
+| `SettingsSection` | `<section>` + uppercase muted title + optional section-wide `action`, wrapping `space-y-3` |
+| `SettingsCard` | One setting: `rounded-lg border bg-[var(--color-bg)] p-4` |
+| `SettingsRows` / `SettingsRow` | A card holding a list of like things, `divide-y` rather than gapped |
+| `SettingsLabel` / `SettingsHint` | A control's label, and the sentence above it saying what it does |
+| `SettingsStatusRow` | A prerequisite as a dot + line + the one button that fixes it |
+| `SettingsButton` / `SettingsAddButton` / `SettingsIconButton` / `SettingsBadge` | Bordered secondary action, dashed Add, icon-only row action, tag |
+| `settingsInputClass` | The shared input/select shell |
+
+Rules the primitives exist to enforce:
+
+- **Name the sections after what the user came to change**, not after the data model: Agent Folders, Engine Settings, Developer Tools. Two or three per tab is normal; a tab needing seven is really two tabs.
+- **A fact lives in the section that holds the control which changes it.** The engine's status sits above the engine path, not in a separate Readiness card three rows up — the user reading "not running" is one keystroke from the field that decides *which* binary starts.
+- **A section-wide verb (Rescan, Refresh) goes beside the section title**, as a labelled bordered button. It acts on everything in the section, so it belongs to the section, not to the first card; and a bare muted icon there is invisible until hovered (ux_rules rule 11).
+- **The hint goes above the control, messages below it.** A save error or an "applies on next start" note rendered under a field must sit in a slot that is always there (`min-h-[1.125rem]`), or it moves everything below as the user types (ux_rules rule 1).
+- **`SettingsSection` and the Expandable Card Pattern compose.** A section whose content is a list of configurable items (AI Credentials, MCP Providers) puts expandable cards inside the section; the two are not alternatives.
 
 ## Expandable Card Pattern
 
@@ -94,13 +142,15 @@ rounded-lg border transition-colors duration-200
 
 ## Form Input Pattern
 
-Standard input class used across all settings forms:
+Standard input/select class across settings forms — `settingsInputClass` in `SettingsLayout.tsx`:
 ```
-w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-xs
-border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none
+w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2.5 py-1.5
+text-[13px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none
 ```
 
-Labels: `block text-[10px] text-[var(--color-text-muted)] mb-0.5`
+The input's background is one step *up* from its card: on a `--color-bg` card use `bg-[var(--color-bg-secondary)]`; inside a `--color-bg-secondary` card (the expandable cards) use `bg-[var(--color-bg)]`. An input that matches its card has only its border to say it is an input.
+
+Labels: `text-[14px] font-medium text-[var(--color-text)]` (`SettingsLabel`), with the explanatory sentence under it at `text-[13px] text-[var(--color-text-muted)]` (`SettingsHint`). Inside a dense expandable card, a compact label — `block text-[12px] text-[var(--color-text-muted)] mb-0.5` — is the variant.
 
 ## Button Layout Rules
 
@@ -122,7 +172,7 @@ Labels: `block text-[10px] text-[var(--color-text-muted)] mb-0.5`
 | Destructive | `bg-red-500 hover:bg-red-600 text-white` |
 | Link-style | `text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium` |
 
-All buttons: `px-3 py-1.5 rounded-md text-xs font-medium transition-colors`
+All buttons: `px-3 py-1.5 rounded-md font-medium transition-colors`, at `text-[13px]` on a Settings surface and `text-xs` on the app-chrome scale.
 
 Primary and destructive buttons use `text-white`, never `text-[var(--color-on-accent)]`: that token is **dark** in the light theme (`#1a1a1a`), so an accent-filled button styled with it comes out blue with dark text while every settings button is blue with white text. `--color-on-accent` is for the accent-tinted chips and popup highlights that use it today, not for filled buttons.
 
@@ -157,18 +207,21 @@ relative w-9 h-5 rounded-full transition-colors shrink-0
 Settings page at `src/renderer/src/components/settings/SettingsPage.tsx`.
 
 ### Tabs (sidebar menu items)
-`chats` | `agents` | `llm` | `mcp` | `accounts` | `trash`
+Default group: `chats` | `llm` | `agents` | `local-agents` | `local-dev` | `mcp` | `accounts` | `features` | `development` | `trash`.
+Profile group: `profile-chats` | `profile-llm` | `profile-agents` | `profile-catalog` | `profile-sync`.
+The authoritative list is `sectionTitles` in `SettingsPage.tsx`; each tab renders one `*SettingsSection` component.
 
-### Section Pattern
-Each section component:
-1. Lists existing items as expandable cards
-2. Has an "Add" button (dashed border) that toggles an inline form
-3. Section components: `LLMSettingsSection`, `MCPSettingsSection`, `AgentsSettingsSection`, `ChatModesSection`, `UserAccountsSection`, `TrashSection`
+### Two shapes of tab
+1. **A list of configurable items** — AI Credentials, MCP Providers, Chat Modes, User Accounts. Expandable cards plus a dashed Add button that toggles an inline form.
+2. **A set of unrelated settings** — Features, Local Agents, Local Development. Titled `SettingsSection`s, each holding cards, toggles or a list.
+
+Most tabs are one or the other; a tab that is both (Local Agents: a folder list, an engine, a tool default) is the second shape with a list inside one of its sections.
 
 ### Add Button Style
+`SettingsAddButton` in `SettingsLayout.tsx`:
 ```
-flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg
-border border-dashed border-[var(--color-border)] text-xs
+flex w-full items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg
+border border-dashed border-[var(--color-border)] text-[13px] font-medium
 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]
 hover:border-[var(--color-text-muted)] transition-colors
 ```
@@ -178,4 +231,5 @@ hover:border-[var(--color-text-muted)] transition-colors
 - `src/renderer/src/assets/main.css` — CSS variables, theme definitions, custom styles
 - `src/renderer/src/components/ui/AnimatedCollapse.tsx` — Animated expand/collapse wrapper
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Settings shell, tab routing
+- `src/renderer/src/components/settings/SettingsLayout.tsx` — the settings section/card/row/status primitives
 - `src/renderer/src/stores/ui.store.ts` — `activeView`, `settingsTab`, `theme`
