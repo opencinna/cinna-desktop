@@ -345,6 +345,18 @@ Four rules shape it:
 - **An empty workflow prompt never produces a promptless agent.** A stand-in section says plainly that `Local/<slug>/docs/WORKFLOW_PROMPT.md` is empty and suggests opening the agent in an assistant. Without it the model gets only the appendices and answers as a generic assistant, which looks like the agent "not working" rather than like an empty file
 - **The result is deterministic given a folder and a context**, which is what makes the snapshot test worth having: the interesting failures here are *omissions* — a section that silently disappears when a file is missing — and a snapshot catches those where an "it contains the workflow prompt" assertion does not
 
+### A bare agent's prompt is one file, and deliberately not the folder
+
+A [bare agent](bare_agents.md) has no manifest, so `collectEngineAgents` branches to `assembleBareAgentPrompt`: `AGENT.md`, comments stripped, plus a desktop context block, and **nothing else the folder contains**.
+
+The asymmetry with the assembler above is the whole design. A kit folder has a known shape, so reaching into `scripts/`, `credentials/` and `knowledge/` is safe. A bare folder is somebody's repository, and concatenating whatever `.md` files happen to be in it would put a changelog, a licence or another agent's notes into the system prompt as instructions.
+
+- **`README.md` is excluded on purpose.** It is written for whoever develops the agent — how to install it, how to run it, what it needs — and a model reads "run `uv sync` first" as a step it should take. It is the *builder's* document, and where it is used is the init prompt
+- **Three of the context block's rules are dropped rather than reworded** — `uv run`, "write only under `app-data/`", and the `credentials/.env` rule — because each describes a folder convention this folder never agreed to, and stating a rule about a file that does not exist is how a model ends up refusing ordinary work. One line replaces them: follow whatever the instructions above say about running this folder's own tools, because the desktop imposes no convention here
+- **The Builder line survives verbatim**, for exactly the reason below: a bare folder's `AGENT.md` and `README.md` are precisely what a builder opens the folder to rewrite
+- **An empty `AGENT.md` gets the same stand-in** the kit path gives an empty workflow prompt, and for the same reason
+- **`runtime` is `null`**, so `runtimeService.resolve` falls straight through to the Default runtime. There is no manifest to name a credential or a tier, and the rule against a third credential fallback is untouched
+
 ### The desktop context block, and the line that matters most
 
 The appended block is the part only the desktop knows: that this is a conversation rather than a scheduled run, and what this machine's rules are — run scripts with `uv run`, write only under `app-data/`, never print or read a credential value, the user's locale and time zone, long output to a file with a summary in the reply.

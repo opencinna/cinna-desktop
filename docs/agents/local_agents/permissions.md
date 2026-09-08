@@ -11,9 +11,9 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 - **Permission Profile** — the `permission` block written onto every agent entry in the generated engine config (`CONVERSATION_PERMISSIONS`). Identical for every folder agent unless that agent's `cinna-agent.json` overrides it. It is not per-conversation and not editable from the UI
 - **Permission Ask** — the engine parking mid-turn on a `permission.v2.asked` event, rendered as a [Parked Request](agent_turn.md#permissions-and-questions-are-tool-parts-there-is-no-permission-part-kind) in the transcript with **Allow once / Always allow / Deny**
 - **Action** — the engine's coarse name for the operation (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`). Coarser than the tool: the `write` tool asks under `edit`
-- **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in the agent folder's `app-data/desktop.json`
+- **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in that agent's desktop state — `app-data/desktop.json` for a kit folder, a file under `<userData>/external-agents/` for a [bare](bare_agents.md) one, since the desktop writes nothing into an adopted folder
 - **Grant Scope** — how widely a grant's pattern reaches: `exact` (the resource character for character), `origin` (a URL prefix the desktop synthesised), `action` (the whole action, from an ask that named no resource). **Recorded, never inferred from the pattern's characters**
-- **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke
+- **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
 
 ## User Stories / Flows
 
@@ -81,7 +81,17 @@ A pattern is regex-escaped, then `*` becomes `.*` and `?` becomes `.`, anchored 
 
 ### The agent's own identity files ask
 
-`cinna-agent.json` and `docs/WORKFLOW_PROMPT.md` are what the agent *is* — the system prompt the conversation is running on, and the manifest binding it to a credential. The assembled prompt already ends by telling the agent not to switch to the builder role for this reason, and **an instruction is not a control.** Rewriting them is the one edit inside the folder worth a dialog, and now it is worth exactly one, because *Always allow* remembers it. <!-- nocheck -->
+`cinna-agent.json`, `docs/WORKFLOW_PROMPT.md` and `AGENT.md` are what the agent *is* — the system prompt the conversation is running on, and the manifest binding it to a credential. The assembled prompt already ends by telling the agent not to switch to the builder role for this reason, and **an instruction is not a control.** Rewriting them is the one edit inside the folder worth a dialog, and now it is worth exactly one, because *Always allow* remembers it. <!-- nocheck -->
+
+`AGENT.md` is the [bare agent](bare_agents.md) entry, and the list covers both folder shapes at once rather than being built per agent. A kit folder rarely has an `AGENT.md`; where it does, asking before it is rewritten is right for the same reason. One dialog on a file that is not this agent's identity costs far less than the profile's own stated rule quietly not holding for the one kind of agent whose whole identity is a single file.
+
+**`README.md` is deliberately not on the list, so half of one sentence is enforced and half is only instruction.** A bare agent's closing prompt line names `AGENT.md` *and* `README.md` as the builder's, because for that shape the README is what an assistant opening the folder is briefed from. Only the first is a control, and that is a considered position:
+
+- The list is **global**, so adding `README.md` would ask on every kit agent's plain documentation — which the template ships. That is the fires-constantly failure the profile was widened to undo
+- "Update the README" is ordinary work to ask an agent pointed at a repository for, in a way "rewrite your own instructions" never is
+- The blast radii differ in kind. `AGENT.md` changes what the agent *is* on the next turn, silently and durably, with no human in the path. `README.md` changes text a **person** then reads and pastes, and in the git working tree this shape targets it is visible in `git status` and revertible
+
+What would reverse it: an init prompt consumed automatically rather than pasted by a person. The human is then no longer the control, and `README.md` belongs here — as a bare-only profile, since the first reason still stands.
 
 ### `sudo` and `rm -r` are an accident boundary, not a security one
 

@@ -209,7 +209,7 @@ What the renderer receives is what it has always received for an agent turn: str
 
 A folder agent's engine session id is stored in the A2A session table's `context_id` column (seam 9), and the column names stay A2A-flavoured deliberately. That column is what the existing session lookup reads to decide a chat is an agent chat, so putting the engine session there means every existing reader keeps working — rather than adding a parallel table each of them would have to learn about.
 
-There are **two stores**, and they answer different questions. The SQLite row carries continuity on this machine; the copy in the agent folder's `app-data/desktop.json` is the durable one that travels with the folder. Invariant 1 says the row is a cache that can be dropped and rebuilt, so the folder copy failing to write must not fail the turn.
+There are **two stores**, and they answer different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one. For a kit agent that is `app-data/desktop.json`, which travels with the folder; for a [bare](bare_agents.md) agent it is a file under `<userData>` keyed on the folder's path, which does not — the folder is the user's own and nothing is written into it, so a bare agent moved to another machine arrives without its sessions. The runner passes the agent's kind with the path, rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache that can be dropped and rebuilt, so the folder copy failing to write must not fail the turn.
 
 ### A turn always settles
 

@@ -22,24 +22,24 @@ Three of these produce a silent, green-suite failure — and each fails in the d
 - `src/main/engine/configGenerator.ts` — the static profile. `SECRET_FILES` (`:218`), `IDENTITY_FILES` (`:239`), `CONVERSATION_PERMISSIONS` (`:244`), `mergePermissions()` (`:667`), applied per agent entry at `:543`
 - `src/main/services/localAgents/permissionGrantService.ts` — the desktop's own store. `list()` (`:56`), `covers()` (`:70`), `remember()` (`:90`), `forget()` (`:110`), `forgetAll()` (`:120`). Reads disk on every call, deliberately uncached
 - `src/main/services/localAgents/desktopStateService.ts:66` — `DesktopState.permissionGrants`; `:107-124` — the coercion, which drops a row naming no action or pattern and reads a missing `scope` as `exact`
-- `src/main/services/localAgents/localAgentService.ts:788` — `listPermissionGrants`; `:800` — `forgetPermissionGrant`; `:807` — `forgetAllPermissionGrants`. All three go through `locate()`, which is what proves the agent belongs to this user **before** a folder path is derived
-- `src/main/services/agentTurn/index.ts:158` — `localDeps.isGranted`, the reading half; `:179` — `rememberPermissionGrant()`, the writing half, placed here so `agent_a2a.ipc.ts` does not pull the folder stack into its import graph
+- `src/main/services/localAgents/localAgentService.ts:860` — `listPermissionGrants`; `:872` — `forgetPermissionGrant`; `:879` — `forgetAllPermissionGrants`. All three go through `locate()`, which is what proves the agent belongs to this user **before** a folder path is derived — and they pass `kindOf(root)` alongside the path, because where an agent's grants are stored is a property of its root, not of its folder ([Bare Agents](bare_agents.md))
+- `src/main/services/agentTurn/index.ts:159` — `localDeps.isGranted`, the reading half; `:181` — `rememberPermissionGrant()`, which resolves the agent's **DTO** rather than just its path, for the kind, the writing half, placed here so `agent_a2a.ipc.ts` does not pull the folder stack into its import graph
 - `src/main/services/agentTurn/turnStream.ts` — where an ask is either written or auto-answered. `PendingRequest` (`:57`, with `request?` and `auto?`), `TurnStreamOptions` (`:169`), `noteRemembered()` (`:198`), `permissionAsked()` (`:484`), `permissionDecisionText()` (`:647`)
-- `src/main/services/agentTurn/localAgentTurnRunner.ts` — `AUTO_REPLY_RETRY_MS` (`:106`), `LocalTurnDeps.isGranted` (`:143`), the `TurnStream` construction that injects it (`:292`), `park()` (`:481`), `autoAllow()` (`:530`), `deliverAutomatic()` (`:560`), `reply()` (`:591`)
+- `src/main/services/agentTurn/localAgentTurnRunner.ts` — `AUTO_REPLY_RETRY_MS` (`:107`), `LocalTurnDeps.isGranted` (`:153`, now `(agentDir, agentKind, request)`), the `TurnStream` construction that injects it (`:302`), `park()` (`:491`), `autoAllow()` (`:540`), `deliverAutomatic()` (`:570`), `reply()` (`:601`)
 - `src/main/services/agentTurn/pendingRequests.ts` — `Entry.request` carries the engine's ask; `RequestResolution` gains `remembered?` on the permission variant; `owner()` returns the ask alongside the ids
 - `src/main/ipc/agent_a2a.ipc.ts:46` — `rememberIfAlways()`; `:347` — `agent:answer-request`; `:405` — where the conversion happens, between `owner()` and `resolve()`
-- `src/main/ipc/local_agent.ipc.ts:219` — `local-agent:grants-list`; `:225` — `local-agent:grant-forget`; `:239` — `local-agent:grants-clear`
+- `src/main/ipc/local_agent.ipc.ts:228` — `local-agent:grants-list`; `:234` — `local-agent:grant-forget`; `:248` — `local-agent:grants-clear`
 
 ### Preload
 - `src/preload/index.ts:564` — `window.api.agents.answerRequest(...)`, whose result widened to `{ok, reason?, remembered?}`
-- `src/preload/index.ts:1186` — `grantsList`; `:1189` — `grantForget`; `:1192` — `grantsClear`
+- `src/preload/index.ts:1190` — `grantsList`; `:1193` — `grantForget`; `:1196` — `grantsClear`
 
 ### Renderer
 - `src/renderer/src/components/chat/PermissionRequestBlock.tsx` — the transcript widget. Three buttons, per-button in-flight state, the wider-than-the-ask scope line, and the decision record
 - `src/renderer/src/components/chat/MessageStream.tsx:347` — where it is mounted; `:353` — `onAnswer={answerPermission}`
 - `src/renderer/src/components/agents/local/PermissionsCard.tsx` — the agent page's Permissions tab body
 - `src/renderer/src/components/agents/local/LocalAgentPage.tsx` — `AgentPageTab` now has five members; the Permissions entry carries a count badge
-- `src/renderer/src/hooks/useLocalAgents.ts:69` — `localAgentGrantsKey`; `:196` — `useLocalAgentGrants`; `:215` — `useForgetAgentGrants`
+- `src/renderer/src/hooks/useLocalAgents.ts:73` — `localAgentGrantsKey`; `:200` — `useLocalAgentGrants`; `:219` — `useForgetAgentGrants`
 - `src/renderer/src/hooks/useAgentRequests.ts` — `AnswerOutcome`; `answerPermission` / `answerQuestion` now resolve with it, and the optimistic removal happens **after** the refusal check
 
 ### Tests
@@ -53,7 +53,7 @@ Three of these produce a silent, green-suite failure — and each fails in the d
 
 ## Storage
 
-**No table and no column.** Grants live in the agent folder's `app-data/desktop.json` under `permissionGrants`, keyed `<action>::<pattern>`.
+**No table and no column.** Grants live in that agent's desktop-state record under `permissionGrants`, keyed `<action>::<pattern>` — `app-data/desktop.json` inside a kit folder, and a file under `<userData>/external-agents/` for a bare one, whose folder the desktop writes nothing into. Every `permissionGrantService` method therefore takes a `LocalAgentKind` beside the path; see [Bare Agents & External Roots](bare_agents.md#the-state-lives-outside-the-folder-and-the-root-decides-that).
 
 `::` and not `:` because a pattern is very often a URL, which carries a colon of its own — a key that split ambiguously would make "forget this grant" delete a different one.
 
@@ -91,7 +91,7 @@ All three `local-agent:*` channels are activation-gated and derive the folder pa
 |---|---|---|---|
 | `CONVERSATION_PERMISSIONS` | `configGenerator.ts:244` | see [permissions.md](permissions.md#business-rules) | The static profile. Same for every folder agent unless its manifest overrides it |
 | `SECRET_FILES` | `configGenerator.ts:218` | `credentials/.env`, `*.env`, `*.pem`, `*.key` → `deny` | Spread into `read`, `edit` **and** `write`. `credentials/.env` is redundant against `*.env` and listed anyway, so a reader need not run the matcher in their head |
-| `IDENTITY_FILES` | `configGenerator.ts:239` | `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md` → `ask` | Exact relative paths, because that is what the tools name | <!-- nocheck -->
+| `IDENTITY_FILES` | `configGenerator.ts:247` | `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md`, `AGENT.md` → `ask` | Exact relative paths, because that is what the tools name. One list for both folder shapes, kit and bare | <!-- nocheck -->
 | `AUTO_REPLY_RETRY_MS` | `localAgentTurnRunner.ts:106` | 500 ms | A stutter, not an outage. An outage ends the turn through `onClosed` |
 | `REQUEST_PARK_TIMEOUT_MS` | `src/shared/localAgentRequests.ts:84` | 10 min | Bounds an abandoned dialog. **Does not apply to an auto-answered ask**, which is why that path retries instead |
 

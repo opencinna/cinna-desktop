@@ -22,19 +22,24 @@ The third is the one that catches people: an agent folder has its own `docs/`, `
 
 **Files are the truth; the database is an index.** The `agents` row for a folder agent is a cache. Dropping every folder row and rescanning must reproduce exactly what was there before, with one deliberate exception: `enabled`, which no file states (see [What `enabled` means](#what-enabled-means)).
 
+**A bare agent adds a second and a third exception, and they are worth naming here rather than only in their own doc.** A folder adopted for its `AGENT.md` ([Bare Agents & External Roots](bare_agents.md)) states no name and no membership anywhere the desktop may write, so two more values are held outside the folder: `displayName` (what the user called it) and `hidden` (removed from the list without the folder being deleted). Neither is a SQLite column — both live in that agent's state file under `<userData>` — but both are exactly the same *kind* of thing as `enabled`: a user's choice about a folder, which the folder cannot be asked to record. A rescan reproduces everything else about a bare agent and would silently undo those two if they were not kept.
+
+The reason the exception list is short and enumerated is that each entry costs something: it is a value a rebuild cannot recover, so it has to be stored somewhere that survives, and every such place is a second source of truth to keep honest. Three is the whole list.
+
 Its corollary is the rule the pruning code is written around: **a scan can only speak for the folder it walked.** A scan has evidence about the agents under a root's *current* path at *this* moment, and about nothing else — not about a folder it could not parse, and not about a location the root used to have.
 
 ## Core Concepts
 
 - **Folder Agent** — An agent that *is* a folder on disk (`agents.source = 'folder'`, row id `folder:<manifest uuid>`). Contrast with `'local'` (a hand-added A2A URL) and `'remote'` (Cinna-synced)
-- **Agents Root** (a.k.a. workshop) — A registered folder holding `Local/` (one directory per agent), `Cloud/`, the root markdown files and a `.cinna-kit/` copy of the contract
-- **Agents Home** — The one root marked default: `~/Documents/CinnaAgents` unless the `localAgentsHome` app setting says otherwise. Where the New Agent button writes. Cannot be removed, only moved
+- **Agents Root** — A registered folder agents are scanned from. Two kinds, in the `agent_roots.kind` column: **workshop** (the kit shape — `Local/` with one directory per agent, `Cloud/`, the root markdown files and a `.cinna-kit/` copy of the contract) and **external** (a folder the user pointed at, walked for `AGENT.md`, with nothing installed into it). Unqualified, "root" and "workshop" in this document mean the first
+- **Agents Home** — The one root marked default: `~/Documents/CinnaAgents` unless the `localAgentsHome` app setting says otherwise. Where the New Agent button writes. Cannot be removed, only moved. Always a workshop
+- **Bare Agent** — An agent found in an external root: a folder holding an `AGENT.md` and no manifest. Same DTO, same rows, same prune, same watcher — see [Bare Agents & External Roots](bare_agents.md)
 - **Folder Index** — The `agents` rows derived from a scan, plus the `agent_roots` rows saying where to look
 - **Readiness** — How ready a folder is to run: `ok`, `credentials_needed`, `invalid`, `contract_too_new`. A *state*, never an exception
 - **Scan** — One walk of `Local/*/` in a root: parse each manifest, validate, derive readiness, fold in `app-data/storage/STATUS.md` and `app-data/desktop.json`, rebuild that root's slice of the index in one transaction
 - **Turn Lock** — A per-agent, in-process lock. The runner holds it for the length of a turn; editors refuse to save while it is held; the watcher defers its rescan until it is released
 - **Stamp** — `{mtimeMs, size, hash}` for a file the page can edit, round-tripped through a save so a write over a file that changed underneath is refused
-- **Desktop State** — `app-data/desktop.json`, the one file in an agent folder the desktop owns
+- **Desktop State** — The per-machine state of one agent: `app-data/desktop.json`, the one file in a *kit* agent folder the desktop owns, and a file under `<userData>/external-agents/` for a bare one, whose folder gains nothing the user did not type there themselves
 - **Counterparty** — An agent the user can pick and then expect an answer from. A folder agent is one, on the same terms as every other source: the pickers filter on `enabled` and nothing else. See [Folder Agents as Counterparties](counterparty.md)
 
 ## User Stories / Flows
@@ -70,6 +75,11 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 3. If the folder is non-empty and does not already look like a workshop, a native confirmation explains that template files will be added and nothing existing will be changed
 4. The templates and `.cinna-kit/` are installed, the root is registered, scanned and watched
 
+### Adopting a folder that is already full of agents
+1. The user picks a folder the same way, in a native dialog in main
+2. It is **walked** for `AGENT.md` rather than converted, and what was found is previewed before anything is registered
+3. The whole picked folder is registered as an **external** root, scanned and watched. Step 4 above — the one that writes — does not happen at all. See [Bare Agents & External Roots](bare_agents.md)
+
 ### Moving the agents home
 1. The setting is validated at the boundary and rejected if it is not a usable root
 2. The default root row is repointed at the new path and the new location is scanned
@@ -96,6 +106,19 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 
 - Every registered root is handed to the "Open in…" path guard as an allowed area. Adopting `~/Documents` — the parent of the default home — would widen that guard to the whole subtree, so anything that can reach the open-in channel could open any folder beneath it. The guard is careful, but it is only ever as good as the roots it is given, and nothing else validates those. See [Open in Tools](open_in_tools.md)
 - Overlap also sets the per-root prune scoping against itself: two roots would claim the same folders, and each scan would see the other's agents as absent
+
+The rule is kept identically by `addExternalRoot`, and it matters *more* there: an external root is by definition somewhere outside the agents home, so it is the one a user is most likely to point at a parent of. It is also checked **first** in the adopt preview, before anything about what the folder contains.
+
+### Two kinds of root, one index
+
+`agent_roots.kind` is `'workshop'` or `'external'`, and `scanRoot` dispatches on it in its first line. Everything downstream is shared on purpose — the same `LocalAgentDto`, the same `replaceFolderIndex` transaction, the same prune, the same turn lock, the same watcher plumbing — so the list, the page, the pickers and the engine need no branch of their own.
+
+What the external branch changes, and why, is [Bare Agents & External Roots](bare_agents.md). The four facts that belong here, because they are facts about the index:
+
+- **Nothing is installed into an external root.** No templates, no `.cinna-kit/`, no `Local/`, no `app-data/`; its agents' state lives under `<userData>` instead. The one file that is ever written there is an agent's own `AGENT.md`, and only when the user edits it on the agent page
+- **Identity is positional** (`folder:external:<rootId>:<relPath>`) and there is no `unresolved` case to protect from the prune: the id is a pure function of where the folder sits, so as long as the folder is there the scan reproduces the same id and the row survives on ordinary ground. Membership is defined by the walk, so a folder that has lost its `AGENT.md` is simply not an agent any more and is pruned like any other absent folder
+- **Hidden agents are dropped before the index is built**, which is what makes "remove from the list" outlive a rescan. The scan counts them as it goes: `ScanRootResult` carries `hiddenCount` and `truncated`, and the settings row reads both off the cached scan (`scannerService.cachedScan`) rather than walking the tree a second time for a count the scan already has
+- **An unavailable root leaves its index untouched**, exactly as a workshop does, and is not cached — an unmounted volume should be retried, not remembered
 
 ### Scanning never throws for a bad folder
 
@@ -141,7 +164,9 @@ Two more properties:
 - Pruning is **scoped to one root**, so an agent folder moved between roots keeps its row (the upsert repoints `local_root_id`) and keeps its chats
 - Removing a root is the explicit, unscoped prune — the only path that drops rows the scan did not disprove
 
-**Deleting an agent from its page is not a fourth path.** The page's Delete moves the folder to the OS Trash (under the agent's turn lock, so a turn in flight refuses it) and then rescans the root; the row goes because the scan walked the root and the folder was not there — ground 1 failing, honestly. Nothing deletes an `agents` row by id. A second removal path with its own idea of what to drop is how the cascade reasoning above would stop being the whole story. See [Agents Tab & Agent Page](agents_tab.md#delete-goes-to-the-trash-and-through-the-prune).
+**Deleting an agent from its page is not a fourth path.** The page's Delete moves the folder to the OS Trash (under the agent's turn lock, so a turn in flight refuses it) and then rescans the root; the row goes because the scan walked the root and the folder was not there — ground 1 failing, honestly. Nothing deletes an `agents` row by id.
+
+**Removing a bare agent from the list is not a fourth path either.** The folder stays exactly where it is; what changes is a `hidden` flag in that agent's own state, and the scan then declines to offer the folder at all. The row goes through the same prune, on the same ground — the scan walked the root and did not produce that id. This is the one removal whose *cause* is a user's choice rather than a fact about the disk, which is why it is recoverable and why Settings says how many are held that way. A second removal path with its own idea of what to drop is how the cascade reasoning above would stop being the whole story. See [Agents Tab & Agent Page](agents_tab.md#delete-goes-to-the-trash-and-through-the-prune).
 
 ### What `enabled` means
 
@@ -169,6 +194,8 @@ Every event is classified into exactly **three** outcomes — `ignore`, `root`, 
 | `ignore` | A dot-entry, or anything under `app-data/` | Nothing at all |
 | `root` | No filename from the platform, or a bare agent-folder name (membership changed) | Rescan the whole root |
 | `agent` | A path inside one agent folder | Rescan that agent only |
+
+An **external** root is classified by a different function (`classifyExternalEvent`) with the filter inverted: it is watched recursively at its own path — the user's ordinary working directory, churning constantly — so only an `AGENT.md` / `README.md` basename or a **directory** appearing or disappearing within the scan depth is acted on, everything else is ignored, and the answer is always `root`. Directory-ness is stat'd rather than assumed, because assuming it turned every ordinary file an agent wrote into a whole-root rescan. There is no `agent` outcome, because a bare agent's id comes from the walk and an event cannot be attributed to one without redoing it. See [Bare Agents & External Roots](bare_agents.md#the-watchers-filter-is-inverted-for-an-external-root).
 
 The three-way result is load-bearing, not a stylistic choice. Collapsing "ignore this", "cannot attribute this" and "root membership changed" into one nullable value **inverts the ignore rule**: `app-data/` — the one directory deliberately not watched, and the one the agent writes constantly while a turn runs — then triggers the most expensive response available on every `STATUS.md` write. A single-value assertion also cannot tell the three apart in a test.
 
@@ -199,7 +226,9 @@ So a rescan can be triggered by a watcher's own recovery, with no user action an
 
 ### `app-data/desktop.json`
 
-The **only** file in an agent folder the desktop owns. Everything else belongs to the kit, the assistant, or the agent.
+The **only** file in a kit agent folder the desktop owns. Everything else belongs to the kit, the assistant, or the agent.
+
+**A bare agent's state is the same record kept somewhere else** — `<userData>/external-agents/<basename>-<hash of realpath>.json` — because its folder is the user's own and Cinna installs nothing into it. Which location applies is decided by the **root**, through `kindOf(root)`, and passed to `desktopStateService` explicitly; it is deliberately not probed from the folder, because a folder can gain or lose a `cinna-agent.json` under a running app and an agent's sessions, token and standing grants must not move when it does. Deleting such a record is `forgetAt(path)` rather than `forget(dir)`, because the path has to be resolved *before* the folder moves to the Trash — `realpathSync` throws on a folder that is gone, and the fallback key misses the file under any symlinked component. The two extra fields such a record carries (`displayName`, `hidden`) are described in [Bare Agents & External Roots](bare_agents.md#the-state-lives-outside-the-folder-and-the-root-decides-that).
 
 - Holds per-machine runtime state nobody else needs: where the agent's local API answered, the token it was linked with, engine session ids per chat, the standing permission grants the user has given this agent ([Local Agent Permissions](permissions.md)), and the last status snapshot
 - Created **lazily** — a freshly scaffolded folder does not have one, and a folder that never ran should not gain one — and written atomically, because a scan may read it while a turn writes it
@@ -219,7 +248,8 @@ Two different questions, answered by two different mechanisms that must not be m
 
 Both are real and both stay. Further rules:
 
-- `local-agent:root-add` **never accepts a renderer-supplied path.** It opens a native directory dialog in main and uses what the user picked — the pattern any future path-taking channel should follow
+- `local-agent:root-add` **never accepts a renderer-supplied path.** It opens a native directory dialog in main and uses what the user picked — the pattern any future path-taking channel should follow. Adopting a folder needs two calls (preview, then confirm), so the path does travel out and back; the rule is kept by main recording what the picker returned and refusing anything else. See [Bare Agents & External Roots](bare_agents.md#adopting-is-two-calls-and-the-pick-is-what-authorises-the-second)
+- The git update check takes a **root id** and runs `git` in that row's path, never in a path the renderer named — see [Agents Folder Updates](folder_updates.md)
 - A root may live in the user's home directory, on a mounted volume (`/Volumes`, `/media`, `/mnt`, `/run/media`) or in the temp dir, and nowhere else. Not the home directory itself, not `/`. Existing paths are re-checked after `realpath`, so a symlink at an allowed location pointing at `/etc` is refused
 - An agent-relative path from the renderer (the "reveal in Finder" affordance) must be relative, must not climb, and must still be inside the agent folder **after** symlink resolution
 - A refused path is never logged — only its length. A hostile renderer must not be able to use the log as a filesystem-layout oracle
@@ -255,6 +285,8 @@ Files on disk  ── truth ──►  agents rows + agent_roots rows  ── de
 ## Integration Points
 
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest reader, validator, layout rules and templates every scan and scaffold runs on; also the stamp used by every write
+- [Bare Agents & External Roots](bare_agents.md) — the second kind of root: what the walk finds, where a manifest-less agent's identity and state come from, and everything a folder gives up by keeping none of the contract
+- [Agents Folder Updates](folder_updates.md) — fast-forwarding a registered root that is a git working tree, and the rescan that follows
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the registered roots are exactly the allowed area of its path guard, registered by this slice at IPC registration. Until that runs, open-in refuses everything
 - [Agents](../agents/agents.md) — folder agents join the same merged agents list, the same id-prefix scope resolution, and the same `enabled` toggle; A2A endpoint and token resolution short-circuit for them
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — folder agents are machine-local and live in the default (settings) scope

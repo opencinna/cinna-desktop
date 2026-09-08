@@ -69,6 +69,28 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 - Menus are portaled via `usePopover` and marked `role="menu"` / `role="menuitem"` with an `aria-label`; every test and every E2E spec finds them by that name.
 - The current default is marked with a check inside the menu; the menu never explains itself in prose unless it is empty.
 
+## 9. A surface that names a file is asserting that file exists
+
+Every card, tooltip and empty state that names a path is a claim about the thing on disk. When one kind of object has that file and another does not, the claim has to branch with it — and the answer is usually to say something true about the second kind, not to soften the sentence.
+
+- **An absence is not a configuration.** "This agent declares no credentials", over a `credentials/.env` the app never creates for that kind of folder, reads as a step the user has not taken yet rather than a concept that does not apply. Drop the card.
+- **Do not fall through to the nearest wrong answer.** A folder with no manifest reported `Kit: legacy manifest` — a value that means something specific and repairable, applied to a folder where neither is true.
+- **A guarantee has to survive contact with the feature.** "Cinna writes nothing into this folder" was false the moment the page grew an editor over a file inside it. State the guarantee you actually keep ("Cinna installs nothing here") and name the exception.
+- **Fictional examples discredit real ones.** A permissions card listing three things the agent will ask about, two of which named files that do not exist, invites the reader to discount the third — and the third was the one that mattered.
+- **`AgentCard.file` is optional.** Where a value genuinely does not come from a file in the folder, pass no file rather than the closest path.
+
+**Origin:** adopting a plain `AGENT.md` folder reused the kit agent page wholesale. Ten separate surfaces each asserted a file that folder shape has never had — the Status card, the Name card, the Runs-with panel's note, the Readme card's "run the agent's scaffold again", the Files list, Identity, Credentials, Published, Runs, and the Settings badge and sub-line. The first two were found before the review started, which is what made it a pattern rather than bad luck.
+
+## 10. A control's accessible name is its visible name
+
+Where the visible name branches, the accessible name branches with it. A hardcoded `aria-label` beside a conditional heading is a control that says one thing to one user and another to the next.
+
+- **The most alarming wording is the one that must not be wrong.** A confirm dialog labelled "Delete agent" while its heading, its menu item and its button all said Remove — for the branch whose default deletes nothing — announced the harsher of the two words to precisely the users who cannot see the heading that would correct it.
+- **A test that passes on the wrong name is not coverage.** Two E2E specs found that dialog by "Delete agent" and passed *because* it was hardcoded. Fixing the name should break them; assert the name each kind actually announces.
+- **A control must not share a name with a choice inside what it opens.** The sidebar `+` was "New agent" and the dialog's first card was "New agent", so the name identified two different actions one click apart and every locator matched both. A trigger sharing a name with the *surface* it opens is fine — the `+` and the "Add an agent" dialog — because they are one intent at two moments, and only one of them is on screen at a time.
+
+**Origin:** the same feature. Both the sidebar trigger and the delete dialog carried names written when only one kind of agent existed.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -79,3 +101,5 @@ Where a user makes the same choice repeatedly (which tool opens a folder), the l
 6. Read every confirm dialog against the schema and the code it describes.
 7. Check every select option and placeholder at the narrowest width the layout allows.
 8. Sub-lines: any that repeat the title?
+9. Every file path on the surface: does that file exist for **every** kind of object this surface renders?
+10. Every `aria-label`: does it match the visible text, including on the branch you did not open?
