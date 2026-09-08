@@ -1,13 +1,24 @@
 import { useMemo, useState } from 'react'
 import { Circle, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
-import { useLocalAgents } from '../../../hooks/useLocalAgents'
+import { useAgentCredentialBindings, useLocalAgents } from '../../../hooks/useLocalAgents'
+import { useProviders } from '../../../hooks/useProviders'
 import { agentSubline, groupAgentsByRoot } from '../../../utils/localAgents'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import { isCredentialActive } from '../../../../../shared/credentials'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 
-/** Dot colour for a folder's readiness. Severity tokens, never a raw colour. */
-function readinessColor(agent: LocalAgentDto): string {
+/**
+ * Dot colour for a folder's readiness. Severity tokens, never a raw colour.
+ *
+ * `credentialInactive` outranks every readiness state and is red, not amber:
+ * amber here means "the folder is missing something optional and still runs",
+ * and an agent whose AI credential is switched off does not run at all — the
+ * engine is not given that credential (`collectEngineProviders`), so the first
+ * turn fails rather than degrading.
+ */
+function readinessColor(agent: LocalAgentDto, credentialInactive: boolean): string {
+  if (credentialInactive) return 'text-[var(--color-danger)]'
   switch (agent.readiness) {
     case 'ok':
       return 'text-[var(--color-success)]'
@@ -18,13 +29,19 @@ function readinessColor(agent: LocalAgentDto): string {
   }
 }
 
-function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+function AgentRow({
+  agent,
+  credentialInactive
+}: {
+  agent: LocalAgentDto
+  credentialInactive: boolean
+}): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const activeView = useUIStore((s) => s.activeView)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const isActive = activeLocalAgentId === agent.id && activeView === 'local-agent'
-  const subline = agentSubline(agent)
+  const subline = agentSubline(agent, credentialInactive)
 
   return (
     <button
@@ -39,7 +56,10 @@ function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
       }`}
     >
-      <Circle size={6} className={`mt-1.5 shrink-0 fill-current ${readinessColor(agent)}`} />
+      <Circle
+        size={6}
+        className={`mt-1.5 shrink-0 fill-current ${readinessColor(agent, credentialInactive)}`}
+      />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-xs">{agent.name}</span>
         {subline && (
@@ -63,12 +83,38 @@ function AgentRow({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
  */
 export function LocalAgentsList(): React.JSX.Element {
   const { data, isLoading, error } = useLocalAgents()
+  const { data: bindings } = useAgentCredentialBindings()
+  const { data: providers } = useProviders()
   const [creating, setCreating] = useState(false)
   const groups = useMemo(
     () => groupAgentsByRoot(data?.roots ?? [], data?.agents ?? []),
     [data]
   )
   const total = data?.agents.length ?? 0
+
+  /**
+   * Agents whose resolved credential cannot run.
+   *
+   * The join is here rather than in main so the dot follows the provider cache:
+   * flipping a credential's switch in Settings invalidates `['providers']` and
+   * the bindings together, and both surfaces re-render off the same answer.
+   *
+   * An agent missing from the map is *not* marked — either the query has not
+   * landed yet or main resolved no credential for it, and neither is a fact
+   * about a credential being off. Saying nothing is right for both: an agent
+   * with no runtime at all already reports that through its readiness.
+   */
+  const inactiveAgentIds = useMemo(() => {
+    if (!bindings || !providers) return new Set<string>()
+    const off = new Set(
+      providers.filter((provider) => !isCredentialActive(provider)).map((p) => p.id)
+    )
+    return new Set(
+      bindings
+        .filter((binding) => binding.credentialId !== null && off.has(binding.credentialId))
+        .map((binding) => binding.agentId)
+    )
+  }, [bindings, providers])
 
   return (
     <div className="flex flex-col h-full">
@@ -124,7 +170,11 @@ export function LocalAgentsList(): React.JSX.Element {
                 ) : (
                   <div className="space-y-px">
                     {agents.map((agent) => (
-                      <AgentRow key={agent.id} agent={agent} />
+                      <AgentRow
+                        key={agent.id}
+                        agent={agent}
+                        credentialInactive={inactiveAgentIds.has(agent.id)}
+                      />
                     ))}
                   </div>
                 )}

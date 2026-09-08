@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen, FolderPlus, GitBranch, ListChecks, RefreshCw, X } from 'lucide-react'
-import { isCredentialUsable } from '../../../../shared/credentials'
+import { isCredentialActive, isCredentialUsable } from '../../../../shared/credentials'
+import { credentialOptionLabel } from '../../utils/credentialLabel'
 import {
   useAddAgentRoot,
   useLocalAgents,
@@ -161,11 +162,17 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
    * well, so a hand-written `hasApiKey` left Ollama out of this picker while the
    * engine was quite willing to run on it.
    *
-   * A provider that is not usable is left out of the picker rather than offered
-   * and then warned about; the warning below is for a pin that has *become*
-   * unusable, which is a different situation from choosing one that never was.
+   * A provider that cannot run is left out of the picker rather than offered and
+   * then warned about; the warnings below are for a pin that has *become*
+   * unrunnable, which is a different situation from choosing one that never was.
+   *
+   * "Cannot run" now includes **switched off**, and that is not cosmetic: since
+   * `collectEngineProviders` stopped handing the engine a disabled credential,
+   * pinning one here stops every folder agent that does not name its own — so
+   * offering it would be offering the user a setting whose only effect is to
+   * break their agents at the next turn.
    */
-  const usableProviders = (providers ?? []).filter(isCredentialUsable)
+  const activeProviders = (providers ?? []).filter(isCredentialActive)
   const pinnedId = appSettings?.localAgentsDefaultCredentialId ?? ''
   const pinnedCredential = pinnedId
     ? ((providers ?? []).find((provider) => provider.id === pinnedId) ?? null)
@@ -507,10 +514,12 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               option, or the select matches nothing, renders blank, and says
               "nothing is pinned" over a pin that is in force.
             */}
-            {pinnedCredential && !usableProviders.some((p) => p.id === pinnedCredential.id) && (
-              <option value={pinnedCredential.id}>{pinnedCredential.name}</option>
+            {pinnedCredential && !activeProviders.some((p) => p.id === pinnedCredential.id) && (
+              <option value={pinnedCredential.id}>
+                {credentialOptionLabel(pinnedCredential)}
+              </option>
             )}
-            {usableProviders.map((provider) => (
+            {activeProviders.map((provider) => (
               <option key={provider.id} value={provider.id}>
                 {provider.name}
               </option>
@@ -540,6 +549,18 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               <p className="text-[13px] text-[var(--color-warning)]">
                 {pinnedCredential.name} has no API key this app can use. Agents pinned to it will
                 not run until it does — pick another credential here, or add a key to it.
+              </p>
+            ) : pinnedCredential && !pinnedCredential.enabled ? (
+              /*
+                Same shape as the sentence above it, and the same reason it is
+                not "agents fall back to your default chat mode": `resolveDefault`
+                returns the pinned credential *as* the runtime and explains it.
+                The engine is simply not given a switched-off credential, so the
+                agents pinned here have nothing to run on until it is back.
+              */
+              <p className="text-[13px] text-[var(--color-warning)]">
+                {pinnedCredential.name} is switched off. Agents pinned to it will not run until you
+                turn it back on in AI Credentials, or pick another credential here.
               </p>
             ) : pinnedMissing ? (
               <p className="text-[13px] text-[var(--color-warning)]">

@@ -1,6 +1,6 @@
 import { useProviders } from './useProviders'
 import { useAuthStore } from '../stores/auth.store'
-import { isCredentialUsable } from '../../../shared/credentials'
+import { isCredentialActive } from '../../../shared/credentials'
 
 /**
  * Can files this user attaches go anywhere at all?
@@ -17,5 +17,5 @@ import { isCredentialUsable } from '../../../shared/credentials'
 export function useHasAttachDestination(): boolean {
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const { data: providers } = useProviders()
-  return isCinnaUser || (providers ?? []).some((p) => p.enabled && isCredentialUsable(p))
+  return isCinnaUser || (providers ?? []).some(isCredentialActive)
 }

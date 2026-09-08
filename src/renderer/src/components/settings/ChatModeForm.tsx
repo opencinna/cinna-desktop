@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Check, X } from 'lucide-react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpsertChatMode } from '../../hooks/useChatModes'
 import { COLOR_PRESETS } from '../../constants/chatModeColors'
-import { isCredentialUsable } from '../../../../shared/credentials'
+import { isCredentialActive } from '../../../../shared/credentials'
 
 interface ChatModeFormProps {
   onClose: () => void
@@ -17,15 +17,20 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
   const [modelId, setModelId] = useState('')
   const [mcpIds, setMcpIds] = useState<Set<string>>(new Set())
   const [colorPreset, setColorPreset] = useState('indigo')
+  /**
+   * Ids for `htmlFor`. Only one of these forms is ever on screen, so literal
+   * ids would work — but `ChatModeCard` next door renders one per chat mode and
+   * genuinely needs `useId`, and two components whose markup is otherwise the
+   * same should not differ here.
+   */
+  const fieldId = useId()
 
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
   const { data: mcpProviders } = useMcpProviders()
   const upsert = useUpsertChatMode()
 
-  const enabledProviders = (providers ?? []).filter(
-    (p) => p.enabled && isCredentialUsable(p)
-  )
+  const enabledProviders = (providers ?? []).filter(isCredentialActive)
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === providerId)
 
   const toggleMcp = (id: string): void => {
@@ -101,10 +106,14 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
 
         {/* AI Credentials (a.k.a. LLM provider) */}
         <div>
-          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+          <label
+            htmlFor={`${fieldId}-credential`}
+            className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
+          >
             AI Credentials
           </label>
           <select
+            id={`${fieldId}-credential`}
             value={providerId}
             onChange={(e) => {
               setProviderId(e.target.value)
@@ -124,10 +133,14 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
         {/* Model */}
         {providerId && (
           <div>
-            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+            <label
+              htmlFor={`${fieldId}-model`}
+              className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
+            >
               Model
             </label>
             <select
+              id={`${fieldId}-model`}
               value={modelId}
               onChange={(e) => setModelId(e.target.value)}
               className={`${inputClass} cursor-pointer`}

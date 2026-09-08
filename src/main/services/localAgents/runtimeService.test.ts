@@ -71,6 +71,26 @@ describe('findCredential', () => {
     provider({ id: 'p2', name: 'Work', type: 'anthropic' })
   ]
 
+  it('prefers the credential that can run when two answer the same name', () => {
+    // Two rows named `Anthropic` is the ordinary state on an account-provisioned
+    // machine — a managed one beside the user's own. Resolving a manifest's
+    // `credential: "Anthropic"` onto the switched-off row would strand an agent
+    // that has a perfectly good credential sitting next to it, and the *reason*
+    // it gave would be about the wrong row.
+    const mixed = [
+      provider({ id: 'off', name: 'Anthropic', enabled: false }),
+      provider({ id: 'on', name: 'Anthropic' })
+    ]
+    expect(findCredential(mixed, 'Anthropic')?.id).toBe('on')
+    expect(findCredential(mixed, 'anthropic')?.id).toBe('on')
+    // An id names one row exactly, so it is never a preference question.
+    expect(findCredential(mixed, 'off')?.id).toBe('off')
+    // And with nothing runnable it still resolves, so the agent page can say
+    // *why* rather than reporting the credential as absent.
+    const allOff = [provider({ id: 'off', name: 'Anthropic', enabled: false })]
+    expect(findCredential(allOff, 'Anthropic')?.id).toBe('off')
+  })
+
   it('matches an id, a name and a type, in that order', () => {
     expect(findCredential(providers, 'p2')?.id).toBe('p2')
     expect(findCredential(providers, 'work')?.id).toBe('p2')
@@ -204,6 +224,55 @@ describe('runtimeService.resolve', () => {
       credentialId: 'p1',
       modelId: 'default-model'
     })
+  })
+
+  it('says so when the Default runtime itself is switched off', () => {
+    // The path every agent that declares no credential takes. It said nothing
+    // at all: `resolveDefault` tested only for a key, so a user who turned their
+    // default credential off got a panel claiming the agent was fine and a first
+    // turn that failed. The engine no longer receives the credential either
+    // (`collectEngineProviders`), so "fine" was never true.
+    defaultMode.current = { providerId: 'p1', modelId: 'm' }
+    const off = [provider({ id: 'p1', name: 'Personal', enabled: false })]
+    expect(runtimeService.resolveDefault(off).reason).toMatch(
+      /Your default chat mode uses “Personal”, which is switched off/
+    )
+    expect(runtimeService.resolve(null, off).reason).toMatch(/switched off/)
+    // A manifest naming only a model takes a different branch inside `resolve`,
+    // which builds its own sentence from the fallback row rather than reusing
+    // `fallback.reason` — so it is asserted separately.
+    expect(runtimeService.resolve({ model: 'm' }, off).reason).toMatch(/switched off/)
+  })
+
+  it('says so when this machine’s pinned credential is switched off', () => {
+    defaultMode.current = { providerId: 'p1', modelId: 'm' }
+    pinnedCredential.current = 'p2'
+    const resolved = runtimeService.resolveDefault([
+      provider({ id: 'p1', name: 'Personal' }),
+      provider({ id: 'p2', name: 'Team', enabled: false })
+    ])
+    // It does not fall through to the chat mode, for the reason the sibling
+    // no-key test gives: silently re-pointing at another key is the billing
+    // surprise this module refuses.
+    expect(resolved.credentialId).toBe('p2')
+    expect(resolved.reason).toMatch(
+      /Agents on this machine are set to use “Team”, which is switched off/
+    )
+  })
+
+  it('reports a switched-off credential as switched off, not as short of a key', () => {
+    // The two want different remedies, and the engine now refuses both: a
+    // disabled credential is left out of the config (`collectEngineProviders`),
+    // so an agent on one does not run at all.
+    const off = [provider({ id: 'p1', name: 'Personal' }), provider({ id: 'p2', name: 'Work', enabled: false })]
+    const resolved = runtimeService.resolve({ credential: 'Work' }, off)
+    expect(resolved.credentialId).toBe('p2')
+    // The sentence deliberately does not name the credential — see
+    // `describeCredential`: it is the longest line in the ladder and the panel
+    // truncates, so the name (which the select above it already shows) was cut
+    // in favour of keeping the remedy.
+    expect(resolved.reason).toMatch(/This credential is switched off/)
+    expect(resolved.reason).not.toMatch(/no API key/i)
   })
 
   it('gives an agent with no runtime block the same model the panel shows it', () => {

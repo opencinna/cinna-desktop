@@ -41,7 +41,7 @@ import { chatModeService } from '../chatModeService'
 import { appSettingsService } from '../appSettingsService'
 import { providerService, type ProviderDto } from '../providerService'
 import { SECRET_LOOKALIKE } from '../../kit/validator'
-import { isCredentialUsable } from '../../../shared/credentials'
+import { findCredentialByReference, isCredentialUsable } from '../../../shared/credentials'
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
 import type { LocalAgentRuntimeInput, ResolvedRuntime } from '../../../shared/engine'
@@ -101,28 +101,44 @@ function isUsable(provider: ProviderDto): boolean {
 }
 
 /**
+ * Why the **Default runtime's** credential cannot run, or null when it can.
+ *
+ * The sentence names whichever setting chose it — `lead` is that half — because
+ * a user reading "…is switched off" on an agent page needs to know they are
+ * being told about a machine-wide pin or about their default chat mode, not
+ * about this agent's manifest. The ranking is `shared/runtimeMessages`': a
+ * credential with no key is not made runnable by switching it on.
+ *
+ * These two branches used to test `isUsable` alone, so the whole Default
+ * runtime — the path every agent that declares no credential takes — said
+ * *nothing* when its credential was switched off. The agent then failed on its
+ * first turn with the panel claiming it was fine.
+ */
+function defaultCredentialProblem(provider: ProviderDto, lead: string): string | null {
+  if (!isUsable(provider)) return `${lead}, which has no API key this app can use.`
+  if (!provider.enabled) return `${lead}, which is switched off.`
+  return null
+}
+
+/**
  * Find the credential a manifest reference names.
  *
- * Three shapes, most specific first. Name matching is case-insensitive and
- * prefers a usable credential, because two rows can share a name — a managed
- * `Anthropic` from the account config alongside the user's own — and picking the
- * one with no key would strand an agent that is in fact runnable.
+ * A delegate, not an implementation. The resolution — and in particular the
+ * tie-break between two rows answering one name — lives in
+ * {@link findCredentialByReference}, because the "Runs with" panel resolves the
+ * same reference on the other side of the bridge. It *was* written twice, and
+ * the two copies drifted the moment one of them learned about `enabled`: the
+ * panel named a credential, a catalogue and a model the engine was not using,
+ * on the one screen a user reads to find out which key they are billed for.
+ *
+ * The name stays here because this is where every caller and every test looks
+ * for it, and because a `ProviderDto`-shaped signature is what they pass.
  */
 export function findCredential(
   providers: ProviderDto[],
   reference: string
 ): ProviderDto | null {
-  const byId = providers.find((provider) => provider.id === reference)
-  if (byId) return byId
-
-  const needle = reference.trim().toLowerCase()
-  const byName = providers.filter((provider) => provider.name.trim().toLowerCase() === needle)
-  if (byName.length > 0) return byName.find(isUsable) ?? byName[0]
-
-  const byType = providers.filter((provider) => provider.type.toLowerCase() === needle)
-  if (byType.length > 0) return byType.find(isUsable) ?? byType[0]
-
-  return null
+  return findCredentialByReference(providers, reference)
 }
 
 /**
@@ -180,9 +196,10 @@ export const runtimeService = {
         modelId: defaultRuntimeModelId(override, null),
         modelSource: 'inherited',
         replacedModelId: null,
-        reason: isUsable(override)
-          ? null
-          : `Agents on this machine are set to use “${override.name}”, which has no API key this app can use.`
+        reason: defaultCredentialProblem(
+          override,
+          `Agents on this machine are set to use “${override.name}”`
+        )
       }
     }
 
@@ -222,9 +239,10 @@ export const runtimeService = {
       modelId: defaultRuntimeModelId(provider, mode.modelId),
       modelSource: 'inherited',
       replacedModelId: null,
-      reason: isUsable(provider)
-        ? null
-        : `Your default chat mode uses “${provider.name}”, which has no API key this app can use.`
+      reason: defaultCredentialProblem(
+        provider,
+        `Your default chat mode uses “${provider.name}”`
+      )
     }
   },
 
@@ -257,6 +275,21 @@ export const runtimeService = {
 
     const chosen = provider ?? null
     const credentialId = chosen?.id ?? fallback.credentialId
+    /**
+     * The row the Default runtime resolved to, not just its id.
+     *
+     * `fallback` is a `ResolvedRuntime` and carries no `enabled`/`hasApiKey`, so
+     * the facts below used to answer both questions with "did the default
+     * resolve to anything at all" — which is true of a credential with no key
+     * and of one that is switched off. On the path where `fallback.reason` is
+     * used verbatim that did no harm; on the path where it is not (a manifest
+     * declaring a model or a tier but no credential) it meant the panel reported
+     * a runtime that could not run as healthy.
+     */
+    const fallbackProvider =
+      fallback.credentialId === null
+        ? null
+        : (providers.find((candidate) => candidate.id === fallback.credentialId) ?? null)
     const effectiveType = chosen?.type ?? fallback.credentialType
 
     // Every model decision — a declared id, a tier, the Default runtime, the
@@ -295,7 +328,16 @@ export const runtimeService = {
       credentialRef: ref === '' ? null : ref,
       credentialResolved: provider !== null,
       credentialName: chosen?.name ?? fallback.credentialName,
-      credentialUsable: chosen ? isUsable(chosen) : fallback.credentialId !== null,
+      credentialUsable: chosen
+        ? isUsable(chosen)
+        : fallbackProvider
+          ? isUsable(fallbackProvider)
+          : fallback.credentialId !== null,
+      credentialEnabled: chosen
+        ? chosen.enabled
+        : fallbackProvider
+          ? fallbackProvider.enabled
+          : fallback.credentialId !== null,
       complexity,
       modelId: choice.modelId,
       modelSource: choice.origin,

@@ -64,6 +64,17 @@ export interface RuntimeFacts {
   credentialName: string | null
   /** False when it has no API key this app can call with. */
   credentialUsable: boolean
+  /**
+   * The user's own on/off switch on that credential.
+   *
+   * Separate from {@link credentialUsable} on purpose, and the separation is
+   * `shared/credentials.ts`'s: usability is a structural fact about the row (is
+   * there a key, or does this type need one), enablement is a decision the user
+   * made in Settings and can undo with one click. They want different sentences
+   * because they want different remedies — one is "add a key", the other is
+   * "turn it back on".
+   */
+  credentialEnabled: boolean
   /** The manifest's Work Complexity, when it declares one. */
   complexity: WorkComplexity | null
   modelId: string | null
@@ -105,6 +116,28 @@ export function describeCredential(facts: RuntimeFacts): RuntimeMessage | null {
   // which of the two it is rather than leaving a credential that looks fine.
   if (!facts.credentialUsable) {
     return { text: `“${facts.credentialName}” has no API key this app can use.`, tone: 'warn' }
+  }
+  // Ranked below the key, because a credential with no key is not made runnable
+  // by switching it on — but above everything about a model, because a disabled
+  // credential is not handed to the engine at all (`collectEngineProviders`),
+  // so no model choice under it can run.
+  if (!facts.credentialEnabled) {
+    /**
+     * The one sentence in this ladder that does **not** name the credential.
+     *
+     * Not an oversight and not inconsistency for its own sake: this is the
+     * longest message here, and the "Runs with" panel renders the ladder into a
+     * single truncating line. Measured at the 800px minimum with a 29-character
+     * credential name it overran by 48px, and what fell off the end was the
+     * remedy — the half the user can act on, which rule 7 says is the half that
+     * has to survive. The panel names the credential in the select two rows
+     * above, so the name was the redundant part; the sibling messages keep it
+     * because they are short enough to fit.
+     */
+    return {
+      text: 'This credential is switched off. Turn it back on in Settings → AI Credentials.',
+      tone: 'warn'
+    }
   }
   return null
 }

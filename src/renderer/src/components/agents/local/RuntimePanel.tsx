@@ -11,7 +11,8 @@ import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
 import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
-import { isCredentialUsable } from '../../../../../shared/credentials'
+import { credentialOptionLabel } from '../../../utils/credentialLabel'
+import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
@@ -373,28 +374,28 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * The credential the manifest's reference resolves to — id, name, then type,
    * searched across **all** providers and preferring a usable one.
    *
-   * Mirrors `runtimeService.findCredential` deliberately. Searching only the
-   * usable ones made a configured-but-keyless credential resolve to nothing, so
-   * the panel said "which is not configured on this machine" — untrue, and it
-   * hid the message written for exactly that case ("… has no API key this app
-   * can use"). It also meant the panel fell through to the *default* credential
-   * and resolved the catalogue against it. That was survivable while both sides
-   * produced the same emptiness; with tiers it labels the picker from a
-   * catalogue belonging to a credential the agent does not name.
+   * The **same function** the engine resolves with, not a mirror of it. It used
+   * to be a hand-copied one, and the copy is what this comment used to explain:
+   * searching only the usable ones made a configured-but-keyless credential
+   * resolve to nothing, so the panel said "which is not configured on this
+   * machine" — untrue, and it hid the message written for exactly that case. It
+   * also fell through to the *default* credential and resolved the catalogue
+   * against it, which with tiers labels the picker from a catalogue belonging to
+   * a credential the agent does not name.
+   *
+   * That was fixed once on each side, and then the two drifted again the moment
+   * main's tie-break learned to prefer a credential that is switched **on**: two
+   * rows named `Anthropic`, one of them off, and the panel resolved the off one
+   * while the engine ran the other. So the resolution moved to
+   * `shared/credentials`, and neither side has a copy any more.
    */
-  const selected = useMemo(() => {
-    if (!declaredCredential) return null
-    const all = providers ?? []
-    const needle = declaredCredential.trim().toLowerCase()
-    const prefer = (matches: typeof all): (typeof all)[number] | null =>
-      matches.find(isCredentialUsable) ?? matches[0] ?? null
-    return (
-      all.find((provider) => provider.id === declaredCredential) ??
-      prefer(all.filter((provider) => provider.name.trim().toLowerCase() === needle)) ??
-      prefer(all.filter((provider) => provider.type.toLowerCase() === needle)) ??
-      null
-    )
-  }, [declaredCredential, providers])
+  const selected = useMemo(
+    () =>
+      declaredCredential
+        ? findCredentialByReference(providers ?? [], declaredCredential)
+        : null,
+    [declaredCredential, providers]
+  )
 
   /**
    * The Default runtime's credential, looked up across *all* providers rather
@@ -576,6 +577,11 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       credentialName: effectiveProvider?.name ?? null,
       credentialUsable:
         effectiveProvider !== null && isCredentialUsable(effectiveProvider),
+      // The user's off switch, kept apart from usability for the reason
+      // `RuntimeFacts` gives: a credential with no key wants "add a key", a
+      // credential switched off wants "turn it back on", and the engine now
+      // refuses to run on either (`collectEngineProviders`).
+      credentialEnabled: effectiveProvider?.enabled ?? false,
       complexity: declaredComplexity,
       modelId: choice.modelId,
       modelSource: choice.origin,
@@ -1025,11 +1031,19 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               select carries an entry for an id the registry never listed.
             */}
             {selected && !usable.some((provider) => provider.id === selected.id) && (
-              <option value={selected.name}>{selected.name}</option>
+              <option value={selected.name}>{credentialOptionLabel(selected)}</option>
             )}
+            {/*
+              The label is marked, the value is not: `changeCredential` writes
+              this string into the manifest as the credential *reference*, so
+              the option's `value` stays the bare name. This list deliberately
+              includes credentials that cannot run — that is what lets an agent
+              pointing at one say so rather than appearing unconfigured — which
+              makes it the picker that most needs to say which those are.
+            */}
             {usable.map((provider) => (
               <option key={provider.id} value={provider.name}>
-                {provider.name}
+                {credentialOptionLabel(provider)}
               </option>
             ))}
           </select>

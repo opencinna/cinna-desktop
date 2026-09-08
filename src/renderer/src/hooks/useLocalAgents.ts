@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   AddAgentFolderInput,
   AddAgentFolderResult,
+  AgentCredentialBinding,
   AgentRootDto,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
@@ -49,6 +50,16 @@ import {
 
 export const LOCAL_AGENTS_KEY = ['local-agents'] as const
 export const LOCAL_AGENT_ROOTS_KEY = ['local-agent-roots'] as const
+/**
+ * Which credential each agent's runtime resolves to.
+ *
+ * Its own key rather than a field on {@link LOCAL_AGENTS_KEY}, because it goes
+ * stale on a different event: the agent list moves when a *folder* changes, this
+ * moves when the *credential* list does. `useUpsertProvider` and
+ * `useDeleteProvider` drop it, and so does a folder change — a new agent has a
+ * binding and a deleted one must lose it.
+ */
+export const AGENT_CREDENTIAL_BINDINGS_KEY = ['agent-credential-bindings'] as const
 /**
  * `useAgents`' key — the list behind the composer `@` popup, the `[+]` picker
  * and the Jobs agent picker. A folder agent is a row in that list too, so a
@@ -102,6 +113,22 @@ export function useLocalAgents() {
   })
 }
 
+/**
+ * Which AI credential each folder agent would run on.
+ *
+ * Read whenever a surface has to answer a question about an agent's credential
+ * without opening the agent — the sidebar's status dot, and the confirm dialog
+ * behind a credential's off switch. The judgement stays here: main returns the
+ * binding, the caller joins it against the provider list it already has, so
+ * "disabled" is decided in one place against one copy of `enabled`.
+ */
+export function useAgentCredentialBindings() {
+  return useQuery<AgentCredentialBinding[]>({
+    queryKey: AGENT_CREDENTIAL_BINDINGS_KEY,
+    queryFn: () => window.api.localAgents.credentialBindings()
+  })
+}
+
 /** One agent, re-read from its folder. Seeded from the list where possible. */
 export function useLocalAgent(agentId: string | null) {
   return useQuery<LocalAgentDto>({
@@ -145,6 +172,7 @@ export function useLocalAgentWatch(): void {
     return window.api.localAgents.onChanged((payload) => {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
       // The prompt documents live in their own cache entries — the DTO carries
       // their stamps but not their text — so a folder edit has to drop those
       // too, or an assistant's rewrite would never appear.

@@ -72,8 +72,12 @@ export function readinessLabel(readiness: LocalAgentReadiness): string | null {
  * about its folder, which outranks the static description. An agent that is
  * reporting on its own work should not have that replaced by "credentials
  * needed" the moment an optional slot goes unfilled.
+ *
+ * `credentialInactive` is the caller's, because it is not a property of the
+ * folder: it is the join of this agent's resolved runtime against the *provider*
+ * list, which only the sidebar has (`useAgentCredentialBindings`).
  */
-export function agentSubline(agent: LocalAgentDto): string {
+export function agentSubline(agent: LocalAgentDto, credentialInactive = false): string {
   const summary = agent.status?.summary?.trim()
   if (summary) return summary
   // For an `invalid` folder the *reason* is the whole content: "manifest
@@ -88,6 +92,20 @@ export function agentSubline(agent: LocalAgentDto): string {
     const reason = agent.readinessReason?.replace(/`/g, '').trim()
     if (reason) return reason
   }
+  /*
+    Above `readinessLabel`, and the ordering is the whole point.
+
+    `credentials_needed` is about the *folder's* own `credentials/.env`; this is
+    about the app's AI credential in Settings. Ranked the other way, an agent
+    that is both showed a red dot — which this state owns — over the sub-line
+    "credentials needed", pointing the user at a `.env` file for a problem two
+    screens away. Two different meanings of one word is exactly the collision to
+    resolve in favour of the one that made the dot red.
+
+    Still below the `invalid` reason above: a folder that does not validate is
+    never handed to the engine at all, so its credential is not yet the problem.
+  */
+  if (credentialInactive) return 'AI credential switched off'
   const issue = readinessLabel(agent.readiness)
   if (issue) return issue
   return describedAs(agent)

@@ -5,6 +5,7 @@ import type { GitDetail, GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
   AddAgentFolderInput,
   AddAgentFolderResult,
+  AgentCredentialBinding,
   AgentRootDto,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
@@ -1141,6 +1142,9 @@ const api = {
     /** Every registered root and every agent scanned from them. */
     list: (): Promise<{ roots: AgentRootDto[]; agents: LocalAgentDto[] }> =>
       ipcRenderer.invoke('local-agent:list'),
+    /** Which AI credential each agent's runtime resolves to — see the type. */
+    credentialBindings: (): Promise<AgentCredentialBinding[]> =>
+      ipcRenderer.invoke('local-agent:credential-bindings'),
     /** One agent, re-read from its folder. */
     /**
      * One agent, re-read from its folder — as an outcome, not a rejection.

@@ -2,6 +2,8 @@ import { dialog } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { localAgentService } from '../services/localAgents/localAgentService'
+import { runtimeService } from '../services/localAgents/runtimeService'
+import { providerService } from '../services/providerService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { gitService } from '../services/localAgents/gitService'
@@ -13,6 +15,7 @@ import { LocalAgentError } from '../errors'
 import { ipcHandle } from './_wrap'
 import type {
   AddAgentFolderInput,
+  AgentCredentialBinding,
   AddAgentFolderResult,
   AgentRootDto,
   CreateLocalAgentInput,
@@ -92,6 +95,32 @@ export function registerLocalAgentHandlers(): void {
       return localAgentService.list(getSettingsScopeUserId())
     }
   )
+
+  /**
+   * Which credential each folder agent would run on, resolved.
+   *
+   * Its own handler rather than a field on `local-agent:list`, because the two
+   * change on different clocks: the agent list is the scanner's cache and moves
+   * when a folder does, while a binding moves when the *credential* list moves —
+   * a toggle in Settings, a new default chat mode — and neither event rescans
+   * the other. Folded into the DTO, a credential switched off would leave every
+   * sidebar row still claiming the runtime it had before the switch.
+   *
+   * Synchronous and local: `resolve` reads the manifest reference already parsed
+   * into the DTO, the app settings and the default chat mode. The empty model
+   * list is deliberate — no catalogue is needed to answer *which credential*,
+   * and passing one would mean a network round trip per credential on a call the
+   * sidebar makes.
+   */
+  ipcHandle('local-agent:credential-bindings', (): AgentCredentialBinding[] => {
+    userActivation.requireActivated()
+    const providers = providerService.listMerged()
+    return localAgentService.list(getSettingsScopeUserId()).agents.map((agent) => ({
+      agentId: agent.id,
+      agentName: agent.name,
+      credentialId: runtimeService.resolve(agent.runtime, providers).credentialId
+    }))
+  })
 
   ipcHandle('local-agent:get', (_event, agentId: string): LocalAgentOutcome<LocalAgentDto> => {
     userActivation.requireActivated()

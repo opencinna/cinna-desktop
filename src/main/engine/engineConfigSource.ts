@@ -38,10 +38,10 @@ const logger = createLogger('engine-config-source')
  *
  * Own **and** server-managed credentials, per the design: a managed credential
  * is a real key the user is entitled to use, and excluding it would make an
- * account-provisioned machine unable to run a local agent at all. The two
- * exclusions are credentials that cannot make an API call in the first place —
- * no stored key, or a managed row this app already marks `unsupported` (an
- * Anthropic OAuth token, which is not an API key).
+ * account-provisioned machine unable to run a local agent at all. What is left
+ * out is a credential the user has switched **off**, and one that cannot make an
+ * API call in the first place — no stored key, or a managed row this app already
+ * marks `unsupported` (an Anthropic OAuth token, which is not an API key).
  *
  * "No stored key" is a disqualification only for the types that *have* keys.
  * A keyless credential (Ollama) is collected with an empty `apiKey`, and
@@ -57,6 +57,29 @@ export function collectEngineProviders(): EngineProviderInput[] {
   const out: EngineProviderInput[] = []
 
   for (const dto of dtos) {
+    /**
+     * The off switch means off, here too.
+     *
+     * This check was missing for as long as the collector existed, and the
+     * effect was worst for the credentials it mattered most for: a *canonical*
+     * type (`anthropic`, `openai`) carries a working key into the config, so a
+     * folder agent pinned to a credential the user had switched off in Settings
+     * kept running — and kept billing — after they turned it off. A custom entry
+     * (a gateway, gemini, ollama) was already inert by accident, because
+     * `providerService.upsert` unregisters the adapter on disable and the models
+     * map is built from the registry, so the entry existed and could address
+     * nothing.
+     *
+     * The alternative position — that the config is a catalogue of what *can* be
+     * addressed and the runner owns the gate — is coherent, and is what
+     * `docs/agents/local_agents/engine.md` records for an agent's own `enabled`.
+     * It is rejected for credentials: a user who turns a credential off has said
+     * something about spending, not about cataloguing, and there is no runner
+     * gate that would honour it. An agent left without a credential is reported
+     * as skipped by `configGenerator`, which is how the Runtime card gets to say
+     * *why* rather than the agent silently disappearing.
+     */
+    if (!dto.enabled) continue
     if (!isCredentialUsable(dto)) continue
     const row = rows.get(dto.id)
     if (!row) continue

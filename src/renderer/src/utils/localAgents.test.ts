@@ -96,6 +96,35 @@ describe('agentSubline', () => {
     ).toBe('id is required.')
   })
 
+  it('says the AI credential is off, outranking the folder’s own credential slots', () => {
+    // Two different meanings of "credentials" one screen apart. The dot is red
+    // because of the AI credential, so the line under it has to be about the AI
+    // credential — ranked the other way, the user was sent to the folder's
+    // `credentials/.env` for a switch in Settings → AI Credentials.
+    expect(agentSubline(agent({ readiness: 'credentials_needed' }), true)).toBe(
+      'AI credential switched off'
+    )
+    // Without the flag, nothing changes for anyone.
+    expect(agentSubline(agent({ readiness: 'credentials_needed' }), false)).toBe(
+      'credentials needed'
+    )
+  })
+
+  it('still leads with what the agent said about itself, and with an invalid folder’s reason', () => {
+    // A folder that does not validate is never handed to the engine, so its
+    // credential is not yet the problem; and an agent reporting on its own work
+    // does not lose that line to a state the dot is already carrying.
+    expect(
+      agentSubline(agent({ readiness: 'invalid', readinessReason: '`id` is required.' }), true)
+    ).toBe('id is required.')
+    expect(
+      agentSubline(
+        agent({ status: { summary: '12 invoices flagged', state: 'healthy', updatedAt: null, body: '' } }),
+        true
+      )
+    ).toBe('12 invoices flagged')
+  })
+
   it('leaves the line empty when the description is only the name repeated', () => {
     expect(agentSubline(agent({ name: 'Alpha', description: 'Alpha' }))).toBe('')
     expect(agentSubline(agent({ name: 'Alpha', description: ' Alpha ' }))).toBe('')

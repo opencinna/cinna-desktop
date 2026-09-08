@@ -23,6 +23,7 @@ const PROVIDERS = [
     type: 'anthropic',
     name: 'Anthropic',
     hasApiKey: true,
+    enabled: true,
     unsupported: false,
     defaultModelId: null as string | null
   },
@@ -31,6 +32,7 @@ const PROVIDERS = [
     type: 'anthropic',
     name: 'My Anthropic',
     hasApiKey: true,
+    enabled: true,
     unsupported: false,
     defaultModelId: null as string | null
   },
@@ -39,6 +41,7 @@ const PROVIDERS = [
     type: 'openai',
     name: 'OpenAI',
     hasApiKey: true,
+    enabled: true,
     unsupported: false,
     defaultModelId: null as string | null
   }
@@ -257,6 +260,7 @@ describe('RuntimePanel', () => {
         type: 'anthropic',
         name: 'Managed Anthropic',
         hasApiKey: false,
+        enabled: true,
         unsupported: true,
         defaultModelId: null
       }
@@ -658,6 +662,61 @@ describe('RuntimePanel', () => {
       ).toBeTruthy()
     })
 
+    it('resolves a shared name to the same row the engine will, not the switched-off one', () => {
+      // Two rows answering one reference is the ordinary state on an
+      // account-provisioned machine. While the panel kept its own copy of the
+      // tie-break, main learning to prefer an enabled row silently split the
+      // two: the engine ran `On Anthropic` and this panel described `Off
+      // Anthropic` — the wrong key, the wrong catalogue and a "switched off"
+      // warning, on the one screen a user reads to find out what they are
+      // billed for. Both sides call `findCredentialByReference` now.
+      providers = [
+        {
+          id: 'p-off',
+          type: 'anthropic',
+          name: 'Shared',
+          hasApiKey: true,
+          enabled: false,
+          unsupported: false,
+          defaultModelId: null as string | null
+        },
+        {
+          id: 'p-on',
+          type: 'anthropic',
+          name: 'Shared',
+          hasApiKey: true,
+          enabled: true,
+          unsupported: false,
+          defaultModelId: null as string | null
+        }
+      ]
+      render(<RuntimePanel agent={agent({ credential: 'Shared' })} />)
+      // The enabled row won, so there is nothing to warn about.
+      expect(screen.queryByText(/is switched off/)).toBeNull()
+    })
+
+    it('says a switched-off credential is switched off, not short of a key', () => {
+      // Two different remedies, and the wrong one sends the user looking for a
+      // key they already have. The credential is fully usable — it is simply
+      // off, which the engine now honours by leaving it out of the config
+      // entirely (`collectEngineProviders`).
+      providers = [...PROVIDERS, {
+        id: 'p-off',
+        type: 'anthropic',
+        name: 'Paused Anthropic',
+        hasApiKey: true,
+        enabled: false,
+        unsupported: false,
+        defaultModelId: null as string | null
+      }]
+      render(<RuntimePanel agent={agent({ credential: 'Paused Anthropic' })} />)
+      expect(
+        screen.getByText(/This credential is switched off\. Turn it back on in Settings/)
+      ).toBeTruthy()
+      expect(screen.queryByText(/has no API key this app can use/)).toBeNull()
+      expect(screen.queryByText(/not configured on this machine/)).toBeNull()
+    })
+
     it('names a keyless credential rather than calling it unconfigured', () => {
       // It is configured; it just has no key this app can use. Resolving it to
       // nothing hid the message written for that case and pointed the tier
@@ -667,6 +726,7 @@ describe('RuntimePanel', () => {
         type: 'anthropic',
         name: 'Dry Anthropic',
         hasApiKey: false,
+        enabled: true,
         unsupported: false,
         defaultModelId: null as string | null
       }]

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import type { OllamaDetectionData } from '../../../preload'
+import { AGENT_CREDENTIAL_BINDINGS_KEY } from './useLocalAgents'
 
 function getApi() {
   if (!window.api) {
@@ -19,6 +20,11 @@ export function useProviders() {
     return getApi().providers.onAccountConfigSynced(() => {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       queryClient.invalidateQueries({ queryKey: ['models'] })
+      // A sync materialises and retires managed credentials on a background
+      // timer with no IPC call to hook, so it can change which credential an
+      // agent resolves to with nothing on screen having been clicked. Without
+      // this the sidebar keeps the dot it drew before the sync.
+      queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
     })
   }, [queryClient])
 
@@ -61,6 +67,11 @@ export function useUpsertProvider() {
       // been added, and leave the section's offer row on screen after its own
       // button had done its job.
       queryClient.invalidateQueries({ queryKey: ['ollama-detection'] })
+      // A credential's on/off switch and its default model both change which
+      // credential a folder agent resolves to, so the sidebar's status dot and
+      // the "would this stop anything" question behind the switch are stale the
+      // moment this returns.
+      queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
     }
   })
 }
@@ -74,6 +85,7 @@ export function useDeleteProvider() {
       queryClient.invalidateQueries({ queryKey: ['models'] })
       // Deleting the Ollama credential makes the offer worth showing again.
       queryClient.invalidateQueries({ queryKey: ['ollama-detection'] })
+      queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
     }
   })
 }

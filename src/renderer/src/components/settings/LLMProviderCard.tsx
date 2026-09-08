@@ -15,7 +15,10 @@ import {
   useTestProvider,
   useTestProviderKey
 } from '../../hooks/useProviders'
+import { useAgentCredentialBindings } from '../../hooks/useLocalAgents'
+import { useChatModes } from '../../hooks/useChatModes'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { describeDependents, DisableCredentialDialog } from './DisableCredentialDialog'
 import { unwrapIpcError } from '../../utils/ipcError'
 import {
   isCredentialUsable,
@@ -63,6 +66,18 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
   const [host, setHost] = useState(provider.baseUrl ?? OLLAMA_DEFAULT_HOST)
   const [showKey, setShowKey] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [confirmingDisable, setConfirmingDisable] = useState(false)
+  /**
+   * A refused enable/disable.
+   *
+   * Rendered in **two** places, because the switch is reachable two ways: the
+   * dialog shows it when the confirm is open, and the card's own message row
+   * shows it otherwise. Writing it to state that only the dialog can render
+   * meant a failed switch-on — the path with no dialog — left the toggle where
+   * it was and said nothing at all, which is the silent failure rule 6 calls
+   * the worst outcome.
+   */
+  const [toggleError, setToggleError] = useState<string | null>(null)
   const [showModelSelector, setShowModelSelector] = useState(false)
 
   const upsert = useUpsertProvider()
@@ -96,13 +111,101 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
    */
   const hostInvalid = keyless && host.trim() !== '' && normaliseOllamaHost(host) === null
 
+  /**
+   * What stops if this credential is switched off.
+   *
+   * Both are shared cache entries, so the N cards on this page cost one fetch
+   * each between them. Chat modes bind by a plain `providerId` and are joined
+   * here; an agent's binding is three chains deep and is resolved in main
+   * (`local-agent:credential-bindings`) — the renderer must not work that one
+   * out for itself, and the shared type says why.
+   *
+   * The chat-mode filter is over *every* mode rather than the user's own, which
+   * costs nothing and is the honest predicate — though in practice only the
+   * user's own can match, because `LLMSettingsSection` never renders this card
+   * for a managed credential and a managed mode's `providerId` names a managed
+   * one. (An earlier version of this comment claimed managed credentials have
+   * their own local off switch. They do not: `accountConfigService` writes them
+   * `enabled: true` and the only local override of that kind is on a managed
+   * *mode*.)
+   */
+  const { data: chatModes, isPending: modesPending } = useChatModes()
+  const { data: bindings, isPending: bindingsPending } = useAgentCredentialBindings()
+  const dependentModes = (chatModes ?? [])
+    .filter((mode) => mode.providerId === provider.id)
+    .map((mode) => mode.name)
+  const dependentAgents = (bindings ?? [])
+    .filter((binding) => binding.credentialId === provider.id)
+    .map((binding) => binding.agentName)
+  const dependentCount = dependentModes.length + dependentAgents.length
+  /**
+   * Whether "what would this stop" is answerable yet.
+   *
+   * It has to gate the switch, because an unanswered question is not the same
+   * as the answer "nothing" — and treating it as "nothing" skipped the confirm
+   * entirely. This is not theoretical: `useChatModes` is warm by the time
+   * Settings opens (the chat shell mounts it), but `useAgentCredentialBindings`
+   * is fetched only by the Agents sidebar and by this card, so a user who opens
+   * AI Credentials and presses a switch straight away could switch off a
+   * credential a folder agent runs on with no confirm and no warning — exactly
+   * the case the dialog exists for.
+   *
+   * `isPending`, not `data === undefined`: a query that *failed* settles with
+   * no data, and gating on the data alone would leave the switch dead for the
+   * rest of the session.
+   */
+  const dependentsUnknown = modesPending || bindingsPending
+
+  const applyEnabled = (enabled: boolean): void => {
+    setToggleError(null)
+    upsert.mutate(
+      {
+        id: provider.id,
+        type: provider.type,
+        name: provider.name,
+        enabled
+      },
+      {
+        onSuccess: () => setConfirmingDisable(false),
+        onError: (err) => {
+          setToggleError(
+            unwrapIpcError(
+              err,
+              enabled
+                ? 'The credential could not be switched on.'
+                : 'The credential could not be switched off.'
+            )
+          )
+          // The card's message row lives in the collapsed body, and the switch
+          // is in the header — so on a card the user has not opened, the
+          // message would land somewhere they cannot see. Opening the card is
+          // the app moving in answer to the click that just failed, which is
+          // where rule 6 says the reason belongs; it does not move anything the
+          // user is about to press, because the switch stays put above it.
+          setExpanded(true)
+        }
+      }
+    )
+  }
+
+  /**
+   * Switching **on** is one click, always. Switching **off** asks first, but
+   * only when something would stop — a credential nothing points at is an
+   * ordinary toggle, and a confirm in front of it would be the dialog users
+   * learn to dismiss without reading.
+   *
+   * While the two queries are still in flight the switch is **disabled** rather
+   * than treated as "nothing depends on it" — see {@link dependentsUnknown}.
+   * Only in the off direction: switching one *on* stops nothing, so it never
+   * has to wait for an answer.
+   */
   const handleToggle = (): void => {
-    upsert.mutate({
-      id: provider.id,
-      type: provider.type,
-      name: provider.name,
-      enabled: !provider.enabled
-    })
+    if (provider.enabled && dependentCount > 0) {
+      setToggleError(null)
+      setConfirmingDisable(true)
+      return
+    }
+    applyEnabled(!provider.enabled)
   }
 
   const handleSave = (): void => {
@@ -207,15 +310,39 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
           {subLabel && (
             <span className="text-[12px] text-[var(--color-text-muted)] ml-1.5">{subLabel}</span>
           )}
+          {/*
+            What this credential is holding down, for as long as it is off.
+
+            The confirm dialog names it once, at the moment of the click, and is
+            then gone — so a user coming back to a switched-off credential has
+            nothing telling them what it stopped. Rule 12: the fact belongs in
+            the section holding the control that changes it.
+
+            In the **header**, not the expanded body, because the cards in this
+            list are collapsed until someone opens one, and a fact nobody can
+            see without a click is barely a fact. Inline on the existing
+            sub-line, so a card that goes inactive does not change height and
+            shove its neighbours (rule 1).
+          */}
+          {!provider.enabled && dependentCount > 0 && (
+            <span className="text-[12px] text-[var(--color-warning)] ml-1.5">
+              {describeDependents(dependentModes, dependentAgents).subject} inactive
+            </span>
+          )}
         </div>
 
         <button
           type="button"
           role="switch"
           aria-checked={provider.enabled}
-          aria-label={`${provider.enabled ? 'Disable' : 'Enable'} ${provider.name}`}
+          // The words the dialog behind it uses, not a synonym. A screen-reader
+          // user pressing "Disable" landed on a surface headed "Switch off"
+          // whose button also read "Switch off" — the trigger named an action
+          // that nothing it opened ever mentioned (ux_rules rule 10).
+          aria-label={`${provider.enabled ? 'Switch off' : 'Switch on'} ${provider.name}`}
           onClick={(e) => { e.stopPropagation(); handleToggle() }}
-          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 ${
+          disabled={provider.enabled && dependentsUnknown}
+          className={`relative w-9 h-5 rounded-full transition-colors shrink-0 disabled:opacity-50 ${
             provider.enabled ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
           }`}
         >
@@ -453,14 +580,27 @@ export function LLMProviderCard({ provider }: LLMProviderCardProps): React.JSX.E
             12's "messages below the control, in a slot that does not push the
             next section down").
           */}
-          {saveError && (
+          {(saveError || (toggleError && !confirmingDisable)) && (
             <div className="flex items-start gap-1.5 text-[12px] text-[var(--color-danger)]">
               <XCircle size={10} className="mt-[3px] shrink-0" />
-              <span>{saveError}</span>
+              <span>{saveError ?? toggleError}</span>
             </div>
           )}
+
         </div>
       </AnimatedCollapse>
+
+      {confirmingDisable && (
+        <DisableCredentialDialog
+          credentialName={provider.name}
+          chatModes={dependentModes}
+          agents={dependentAgents}
+          pending={upsert.isPending}
+          errorMessage={toggleError}
+          onConfirm={() => applyEnabled(false)}
+          onCancel={() => setConfirmingDisable(false)}
+        />
+      )}
     </div>
   )
 }

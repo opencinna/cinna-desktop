@@ -1,5 +1,4 @@
-import { useCallback } from 'react'
-import { useState } from 'react'
+import { useCallback, useId, useState } from 'react'
 import { Trash2, ChevronDown, Check, Star } from 'lucide-react'
 import { useProviders } from '../../hooks/useProviders'
 import { useModels } from '../../hooks/useModels'
@@ -8,7 +7,13 @@ import { useUpsertChatMode, useDeleteChatMode } from '../../hooks/useChatModes'
 import { COLOR_PRESETS, getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
-import { isCredentialUsable } from '../../../../shared/credentials'
+import { isCredentialActive } from '../../../../shared/credentials'
+import { credentialOptionLabel } from '../../utils/credentialLabel'
+import {
+  chatModeInactiveReason,
+  INACTIVE_BADGE_CLASS,
+  INACTIVE_CAUSE_CLASS
+} from '../../utils/chatModeStatus'
 
 interface ChatModeCardProps {
   mode: ChatModeData
@@ -17,6 +22,12 @@ interface ChatModeCardProps {
 export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const [expanded, setExpanded] = useState(false)
   const [nameDraft, setNameDraft] = useState(mode.name)
+  /**
+   * Ids for `htmlFor`, and `useId` rather than literals for the reason
+   * `LLMProviderCard` gives: the page renders one of these per chat mode, so a
+   * literal id would make every card's label point at the first card's field.
+   */
+  const fieldId = useId()
 
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
@@ -24,10 +35,26 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const upsert = useUpsertChatMode()
   const deleteMutation = useDeleteChatMode()
 
-  const enabledProviders = (providers ?? []).filter(
-    (p) => p.enabled && isCredentialUsable(p)
-  )
+  const enabledProviders = (providers ?? []).filter(isCredentialActive)
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === mode.providerId)
+
+  /**
+   * The credential this mode names, whatever state it is in.
+   *
+   * Separate from `enabledProviders` on purpose: that list is what the user may
+   * *pick*, and a switched-off credential is not on it. Looking the bound one up
+   * across the whole list is what lets the card keep saying which credential the
+   * mode names — see the synthetic option below.
+   *
+   * `undefined` while the provider list is loading, so an empty first render
+   * cannot flash "Inactive" on a mode that is fine (rule 1).
+   */
+  const bound = mode.providerId
+    ? providers?.find((p) => p.id === mode.providerId) ?? null
+    : null
+
+  /** Why this mode cannot start a chat, or null when it can. Shared wording. */
+  const inactive = chatModeInactiveReason(mode.providerId, providers)
   const preset = getPreset(mode.colorPreset)
   const mcpIds = new Set(mode.mcpProviderIds ?? [])
 
@@ -68,6 +95,18 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
         />
         <div className="flex-1 min-w-0">
           <span className="font-medium text-[14px]">{mode.name}</span>
+          {inactive && (
+            <>
+              <span className={`ml-1.5 ${INACTIVE_BADGE_CLASS}`}>Inactive</span>
+              {/*
+                The cause, on the same line so the card does not change height,
+                and visible rather than in the badge's `title`: this list is
+                scanned collapsed, and one word for three different situations
+                is only unambiguous to someone who thought to hover.
+              */}
+              <span className={`ml-1.5 ${INACTIVE_CAUSE_CLASS}`}>{inactive.short}</span>
+            </>
+          )}
         </div>
 
         <button
@@ -132,30 +171,74 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
 
           {/* AI Credentials (a.k.a. LLM provider) */}
           <div>
-            <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+            <label
+              htmlFor={`${fieldId}-credential`}
+              className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
+            >
               AI Credentials
             </label>
             <select
+              id={`${fieldId}-credential`}
               value={mode.providerId ?? ''}
               onChange={(e) => save({ providerId: e.target.value || null, modelId: null })}
               className={`${inputClass} cursor-pointer`}
             >
               <option value="">None (use default)</option>
+              {/*
+                The bound credential, when it is not one the user may pick.
+                Without it the select's value matches no option and the browser
+                falls back to showing the first — so a mode bound to a
+                switched-off credential read as "None (use default)", which is
+                both wrong and unrecoverable: changing it back was impossible
+                because the card never admitted what it was set to.
+              */}
+              {bound && !isCredentialActive(bound) && (
+                <option value={bound.id}>{credentialOptionLabel(bound)}</option>
+              )}
+              {/*
+                And the same for a credential this machine no longer has, which
+                lands in exactly the same place: `bound` is null, no option
+                matches, and the select falls back to "None (use default)" while
+                the line beside it says the mode names a credential. Naming it
+                is not possible — the row is gone and only its id survives — so
+                the option says what is true of it.
+              */}
+              {mode.providerId && !bound && providers !== undefined && (
+                <option value={mode.providerId}>Missing credential</option>
+              )}
               {enabledProviders.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
               ))}
             </select>
+            {/*
+              Two lines of the 13px leading, and 13px rather than 12px: this is
+              status detail, which the settings scale sets at 13 (12 is for
+              paths and chips). Both reservations are the ones
+              `LocalAgentsSettingsSection`'s identical slot already carries, and
+              for the reason its comment records — every one of these sentences
+              wraps to two lines at the 800px minimum, so a one-line slot pulled
+              the Model select and everything under it up by ~17px the moment
+              the user fixed the mode by picking a working credential
+              (ux_rules rule 1).
+            */}
+            <p className="mt-1.5 min-h-[2.5rem] text-[13px] text-[var(--color-warning)]">
+              {inactive?.detail ?? ''}
+            </p>
           </div>
 
           {/* Model */}
           {mode.providerId && (
             <div>
-              <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+              <label
+                htmlFor={`${fieldId}-model`}
+                className="block text-[12px] text-[var(--color-text-muted)] mb-0.5"
+              >
                 Model
               </label>
               <select
+                id={`${fieldId}-model`}
                 value={mode.modelId ?? ''}
                 onChange={(e) => save({ modelId: e.target.value || null })}
                 className={`${inputClass} cursor-pointer`}

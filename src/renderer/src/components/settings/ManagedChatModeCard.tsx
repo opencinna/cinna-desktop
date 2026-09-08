@@ -5,6 +5,8 @@ import {
   useSetManagedChatModeModel
 } from '../../hooks/useChatModes'
 import { useModels, useProviderModels } from '../../hooks/useModels'
+import { useProviders } from '../../hooks/useProviders'
+import { chatModeInactiveReason, INACTIVE_BADGE_CLASS } from '../../utils/chatModeStatus'
 import { isChatCapableModelId } from '../../../../shared/modelDefaults'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
@@ -29,7 +31,15 @@ export function ManagedChatModeCard({ mode }: ManagedChatModeCardProps): React.J
   const setEnabled = useSetManagedChatModeEnabled()
   const setModel = useSetManagedChatModeModel()
   const { data: allModels } = useModels()
+  const { data: providers } = useProviders()
   const preset = getPreset(mode.colorPreset)
+  /**
+   * The same sentence the user's own chat modes get, for the same reason: a
+   * managed mode's credential is a managed *provider*, and that has its own
+   * local enable/disable switch. Two lists of chat modes one settings group
+   * apart must not report the same state differently (ux_rules rule 12).
+   */
+  const inactive = chatModeInactiveReason(mode.providerId, providers)
 
   const SourceIcon = mode.adminManaged ? ShieldCheck : Cloud
   const sourceLabel = mode.adminManaged
@@ -65,12 +75,22 @@ export function ManagedChatModeCard({ mode }: ManagedChatModeCardProps): React.J
             {mode.isDefault && (
               <Star size={11} className="fill-current text-[var(--color-warning)]" />
             )}
+            {inactive && <span className={INACTIVE_BADGE_CLASS}>Inactive</span>}
           </div>
           <div className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] mt-0.5">
             <SourceIcon size={9} />
             <span>{sourceLabel}</span>
             {mode.modelId && (
               <span className="text-[var(--color-text-secondary)]">· {mode.modelId}</span>
+            )}
+            {/*
+              The cause joins the row that already carries this mode's metadata,
+              rather than the header line — which on this card holds the mode's
+              *own* on/off switch, where an unqualified "Inactive" would be a
+              second, different meaning of "off" one control away.
+            */}
+            {inactive && (
+              <span className="text-[var(--color-warning)]">· {inactive.short}</span>
             )}
           </div>
         </div>

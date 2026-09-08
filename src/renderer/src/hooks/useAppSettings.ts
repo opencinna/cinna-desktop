@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppSettingsSchema } from '../../../shared/appSettings'
 import { createLogger } from '../stores/logger.store'
+import { AGENT_CREDENTIAL_BINDINGS_KEY } from './useLocalAgents'
 
 const logger = createLogger('app-settings')
 
@@ -65,6 +66,12 @@ export function useSetAppSetting() {
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: APP_SETTINGS_KEY })
+      // `localAgentsDefaultCredentialId` lives here and outranks the default
+      // chat mode in an agent's runtime chain, so pinning or clearing it moves
+      // which credential the sidebar is judging. Invalidated unconditionally
+      // rather than on that one key: this mutation writes one setting at a
+      // time, and the query is a synchronous main-side map.
+      queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
     }
   })
 }

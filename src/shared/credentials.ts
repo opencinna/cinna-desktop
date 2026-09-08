@@ -58,11 +58,90 @@ export interface UsableCredential {
  * disabled credential so an agent pointing at one can say so); mixing the two
  * into one predicate is what let the renderer's copy and `runtimeService`'s
  * drift apart in the first place. Callers that care about enablement say
- * `provider.enabled && isCredentialUsable(provider)`, visibly.
+ * {@link isCredentialActive}, which is that conjunction under a name — visibly
+ * a different question, not a quietly stricter answer to this one.
  */
 export function isCredentialUsable(provider: UsableCredential): boolean {
   if (provider.unsupported) return false
   return provider.hasApiKey || !requiresApiKey(provider.type)
+}
+
+/**
+ * Whether this credential can run **right now**: the user's switch, and the key.
+ *
+ * The `provider.enabled && isCredentialUsable(provider)` above, given a name,
+ * for the callers that mean *both*. It is a second function rather than a term
+ * folded into {@link isCredentialUsable} because the callers that legitimately
+ * ignore enablement are still there — the Runs with panel lists a disabled
+ * credential so an agent pointing at one can say so — and merging the two is
+ * what let the renderer's copy and `runtimeService`'s drift apart originally.
+ *
+ * Say `isCredentialActive` when an off credential must be treated as absent —
+ * a sidebar status dot, a chat mode's badge, the pickers that offer a
+ * credential to choose — and `isCredentialUsable` when the question really is
+ * about the key alone. `collectEngineProviders` is the one place that spells
+ * the two terms out separately rather than calling this, because each of its
+ * `continue`s carries its own paragraph of reasoning and merging them would
+ * bury the one that matters.
+ */
+export function isCredentialActive(provider: UsableCredential & { enabled: boolean }): boolean {
+  return provider.enabled && isCredentialUsable(provider)
+}
+
+/** As much of a credential as {@link findCredentialByReference} needs. */
+export interface ReferenceableCredential extends UsableCredential {
+  id: string
+  name: string
+  enabled: boolean
+}
+
+/**
+ * Resolve a credential **reference** — the thing a folder agent's runtime block
+ * stores — against the credentials this machine has.
+ *
+ * Three shapes, most specific first: an id (what an older desktop might have
+ * written), a name (what this one writes, because a name is the only form that
+ * means anything in a file that travels), and a provider type (`anthropic`,
+ * `openai` — what someone writing the manifest by hand would naturally put).
+ * Name and type matching are case-insensitive.
+ *
+ * **The tie-break is the interesting part.** Two rows can answer one name — a
+ * managed `Anthropic` from the account config beside the user's own — so the
+ * ranking is: one that can run, then one that merely has a key, then whatever
+ * matched. Picking a row with no key, or one the user switched off, would
+ * strand an agent that has a working credential sitting next to it. The last
+ * rung matters just as much: a reference that matches *only* unusable rows
+ * still resolves, so the agent page can say why it cannot run instead of
+ * claiming the credential is not configured on this machine.
+ *
+ * **It lives here because two processes resolve the same reference.**
+ * `runtimeService.resolve` builds the engine's config from it and the "Runs
+ * with" panel labels its pickers from it, and those two answering differently
+ * is not a cosmetic bug: the panel then names a credential, a catalogue and a
+ * model that the engine is not using, on the screen a user reads to find out
+ * which key they are being billed for. That is the exact failure
+ * `shared/runtimeDefaults.ts` and `shared/runtimeMessages.ts` were carved out
+ * to end, and this function was the last piece of the resolution still written
+ * twice.
+ */
+export function findCredentialByReference<T extends ReferenceableCredential>(
+  providers: readonly T[],
+  reference: string
+): T | null {
+  const byId = providers.find((provider) => provider.id === reference)
+  if (byId) return byId
+
+  const runnable = (matches: readonly T[]): T | null =>
+    matches.find(isCredentialActive) ?? matches.find(isCredentialUsable) ?? matches[0] ?? null
+
+  const needle = reference.trim().toLowerCase()
+  const byName = providers.filter((provider) => provider.name.trim().toLowerCase() === needle)
+  if (byName.length > 0) return runnable(byName)
+
+  const byType = providers.filter((provider) => provider.type.toLowerCase() === needle)
+  if (byType.length > 0) return runnable(byType)
+
+  return null
 }
 
 /**

@@ -218,6 +218,27 @@ describe('collectEngineProviders', () => {
     expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
   })
 
+  it('excludes a credential the user switched off, however good its key is', () => {
+    // The one exclusion that has nothing to do with whether the credential
+    // *works*. A canonical type carries a real, decryptable key into the config,
+    // so without this check a folder agent pinned to a credential the user had
+    // turned off in Settings kept running — and kept billing — after they turned
+    // it off. `enabled: false` on a keyless row is asserted too, because that is
+    // the path the Ollama work added and the one where the old behaviour looked
+    // harmless (the entry existed but could address nothing).
+    state.dtos = [
+      dto({ id: 'off', enabled: false }),
+      dto({ id: 'off-keyless', type: 'ollama', hasApiKey: false, enabled: false }),
+      dto({ id: 'fine' })
+    ]
+    state.rows = [
+      row({ id: 'off' }),
+      row({ id: 'off-keyless', apiKeyEncrypted: null, baseUrl: 'http://127.0.0.1:11434' }),
+      row({ id: 'fine' })
+    ]
+    expect(collectEngineProviders().map((provider) => provider.id)).toEqual(['fine'])
+  })
+
   it('excludes a credential whose row holds no ciphertext, and one that decrypts to nothing', () => {
     state.dtos = [dto({ id: 'no-cipher' }), dto({ id: 'empty' }), dto({ id: 'fine' })]
     state.rows = [

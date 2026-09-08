@@ -943,3 +943,29 @@ export interface DraftLocalAgentResult {
   reason: string | null
   agent: LocalAgentDto
 }
+
+/**
+ * Which AI credential a folder agent's runtime actually resolves to.
+ *
+ * The renderer cannot work this out for itself, and the point of this shape is
+ * that it must not try. Resolution is three chains deep — the manifest's own
+ * `runtime.credential` (an id, a name or a provider type), this machine's
+ * pinned default, and the user's default chat mode — and it lives in
+ * `runtimeService.resolve`, which is also what the engine config is built from.
+ * A second implementation on the other side of the bridge is exactly the drift
+ * `shared/runtimeDefaults.ts` and `shared/runtimeMessages.ts` were carved out to
+ * end: a screen that predicts a runtime the engine did not build.
+ *
+ * Two surfaces read it, from opposite directions. The agents sidebar asks "is
+ * this agent's credential switched off?" and marks the row; the credential
+ * card's off switch asks "which agents would this stop?" and names them in a
+ * confirm dialog. Both are a join against the provider list the renderer already
+ * has, which is why only the binding crosses and not a judgement about it.
+ */
+export interface AgentCredentialBinding {
+  agentId: string
+  /** The agent's display name, for a dialog that has to name what it will stop. */
+  agentName: string
+  /** Null when the runtime resolves to no credential at all. */
+  credentialId: string | null
+}
