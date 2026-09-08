@@ -75,9 +75,17 @@ let defaultMode: { providerId: string | null; modelId: string | null } | null = 
   modelId: 'claude-sonnet-4-5'
 }
 
+/** The bare agent's writer: same choice, no stamp, its own channel. */
+const saveBare = vi.fn(
+  (_vars: unknown, options?: { onSuccess?: () => void; onError?: (e: Error) => void }) =>
+    void (writeFails
+      ? options?.onError?.(new Error('Could not save this agent’s local state.'))
+      : options?.onSuccess?.())
+)
 vi.mock('../../../hooks/useLocalAgents', () => ({
   useOpenAgentCredentials: () => ({ mutate: openCredentials }),
-  useSetLocalAgentRuntime: () => ({ mutate: save, isPending: false })
+  useSetLocalAgentRuntime: () => ({ mutate: save, isPending: false }),
+  useSetBareAgentRuntime: () => ({ mutate: saveBare, isPending: false })
 }))
 vi.mock('../../../hooks/useChatModes', () => ({ useDefaultChatMode: () => ({ data: defaultMode }) }))
 vi.mock('../../../hooks/useModels', () => ({
@@ -102,6 +110,7 @@ const { RuntimePanel } = await import('./RuntimePanel')
 function agent(runtime: Record<string, string> | null): LocalAgentDto {
   return {
     id: 'folder:a',
+    kind: 'kit',
     readiness: 'ok',
     credentials: [],
     stamps: { 'cinna-agent.json': { size: 1, mtimeMs: 1 } },
@@ -109,8 +118,24 @@ function agent(runtime: Record<string, string> | null): LocalAgentDto {
   } as unknown as LocalAgentDto
 }
 
+/**
+ * A bare agent: no manifest, so no stamp — the panel must still be editable,
+ * which is the whole point of it having controls at all.
+ */
+function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
+  return {
+    id: 'folder:external:r1:support',
+    kind: 'bare',
+    readiness: 'ok',
+    credentials: [],
+    stamps: {},
+    runtime
+  } as unknown as LocalAgentDto
+}
+
 beforeEach(() => {
   save.mockClear()
+  saveBare.mockClear()
   setSetting.mockClear()
   openCredentials.mockReset()
   advanced = false
@@ -728,6 +753,47 @@ describe('RuntimePanel', () => {
       expect(screen.getByText(/“gpt-5.4-mini” is no longer listed. Running on “GPT-5.5 Mini”./))
         .toBeTruthy()
       expect(save).not.toHaveBeenCalled()
+    })
+  })
+
+  /**
+   * A bare agent picks its runtime like any other; only the destination differs.
+   * The panel used to be a second, control-less component for this kind, so the
+   * assertions here are that the controls exist at all, that they write through
+   * the channel with no stamp in it, and that the manifest one is left alone.
+   */
+  describe('a bare agent', () => {
+    it('edits its runtime with no stamp to guard the write', () => {
+      render(<RuntimePanel agent={bareAgent(null)} />)
+      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      expect(save).not.toHaveBeenCalled()
+      const [vars] = saveBare.mock.calls[0] as [{ agentId: string; runtime: unknown }]
+      expect(vars).toEqual({
+        agentId: 'folder:external:r1:support',
+        runtime: { credential: 'OpenAI', modelId: null, complexity: null }
+      })
+    })
+
+    it('opens on the runtime it was given, exactly as a manifest one does', () => {
+      render(<RuntimePanel agent={bareAgent({ credential: 'OpenAI', model: 'gpt-5' })} />)
+      expect((screen.getByLabelText('Credential') as HTMLSelectElement).value).toBe('OpenAI')
+      expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('gpt-5')
+    })
+
+    it('says where the choice is kept, and claims no more than that', () => {
+      render(<RuntimePanel agent={bareAgent(null)} />)
+      expect(screen.getByText(/This choice is kept in Cinna, not in the folder/)).toBeTruthy()
+      // Not "nothing is written to the folder": the Prompts tab is a live
+      // editor over AGENT.md, one tab away (ux_rules rule 9).
+      expect(screen.queryByText(/nothing is written to the folder/i)).toBeNull()
+    })
+
+    it('never claims the manifest went stale — there is no manifest', () => {
+      writeFails = true
+      render(<RuntimePanel agent={bareAgent(null)} />)
+      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      expect(screen.getByText('Could not save this agent’s local state.')).toBeTruthy()
+      expect(screen.queryByText(/cinna-agent.json changed on disk/)).toBeNull()
     })
   })
 })

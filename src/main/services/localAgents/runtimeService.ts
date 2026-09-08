@@ -282,24 +282,29 @@ export const runtimeService = {
   },
 
   /**
-   * Apply a Runtime-card choice to a manifest object, in place.
+   * Check one Runtime-card choice and hand back its three normalised values.
    *
-   * Validation lives here rather than at the IPC boundary because this is the
-   * last point before the value is serialised into a file the user commits.
-   * Two of the checks are not about type safety:
+   * Shared by both writers — the manifest one below and the bare agent's, whose
+   * choice lands in its desktop state instead — so a rule stated here is a rule
+   * for every folder agent. Splitting it out is what stops the second writer
+   * being the place the checks quietly do not apply:
    *
    * - a key-shaped `credential` is refused, using the **validator's own**
-   *   pattern, so the desktop can never write a manifest its own validator then
-   *   flags as a leaked secret;
-   * - clearing both fields removes the `runtime` key entirely rather than
-   *   leaving `{}` behind, so "no choice made" reads the same in the file as it
-   *   does in the UI, and a diff of the manifest shows the choice going away.
-   *
-   * Unknown keys inside an existing `runtime` block — `permissions`, or
-   * something a newer contract adds — are preserved, per the manifest's
-   * round-trip rule.
+   *   pattern, so the desktop can never write a value its own validator would
+   *   then flag as a leaked secret. The manifest is the file that travels, but a
+   *   pasted key is a pasted key: it does not become safe by landing in
+   *   `userData` instead;
+   * - a model **and** a tier together are refused rather than resolved by
+   *   precedence — note the asymmetry with the validator, which only *warns*
+   *   about a manifest carrying both: reading is tolerant so a folder written by
+   *   a newer tool still runs, while writing is strict so this desktop never
+   *   authors the ambiguity it tolerates in others.
    */
-  applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
+  validate(input: LocalAgentRuntimeInput): {
+    credential: string | null
+    modelId: string | null
+    complexity: WorkComplexity | null
+  } {
     const credential = normaliseRef(input?.credential, 'The credential', MAX_CREDENTIAL_REF)
     const modelId = normaliseRef(input?.modelId, 'The model', MAX_MODEL_ID)
     const complexity = input?.complexity ?? null
@@ -307,7 +312,7 @@ export const runtimeService = {
     if (credential !== null && SECRET_LOOKALIKE.test(credential)) {
       throw new LocalAgentError(
         'invalid_input',
-        'That looks like an API key. The manifest stores which credential to use, never the key itself.'
+        'That looks like an API key. An agent stores which credential to use, never the key itself.'
       )
     }
     if (complexity !== null && !isWorkComplexity(complexity)) {
@@ -316,19 +321,50 @@ export const runtimeService = {
         'Work complexity must be simple, medium or complex.'
       )
     }
-    // Refused rather than resolved by precedence, and note the asymmetry with
-    // the validator, which only *warns* about a manifest carrying both: reading
-    // is tolerant so a folder written by a newer tool still runs, while writing
-    // is strict so this desktop never authors the ambiguity it tolerates in
-    // others. Same shape as the key-shaped credential check above — the check is
-    // on the way in, at the last point before the value reaches a file the user
-    // commits.
     if (complexity !== null && modelId !== null) {
       throw new LocalAgentError(
         'invalid_input',
         'A runtime names a model or a work complexity, not both.'
       )
     }
+    return { credential, modelId, complexity }
+  },
+
+  /**
+   * The same choice as a standalone `AgentRuntimeRef`, for a **bare** agent.
+   *
+   * A bare folder has no manifest to merge into, so there is nothing to preserve
+   * and no unknown keys to round-trip: the value is built from the three fields
+   * and nothing else. Declaring none of them is `null` rather than `{}`, so
+   * "no choice made" reads the same in the state file as it does in the UI —
+   * and `resolve` takes the Default runtime branch for it without a special
+   * case of its own.
+   */
+  toRuntimeRef(input: LocalAgentRuntimeInput): AgentRuntimeRef | null {
+    const { credential, modelId, complexity } = this.validate(input)
+    if (credential === null && modelId === null && complexity === null) return null
+    const runtime: AgentRuntimeRef = {}
+    if (credential !== null) runtime.credential = credential
+    if (modelId !== null) runtime.model = modelId
+    if (complexity !== null) runtime.complexity = complexity
+    return runtime
+  },
+
+  /**
+   * Apply a Runtime-card choice to a manifest object, in place.
+   *
+   * The checks are {@link validate}'s, shared with the bare agent's writer.
+   * What is specific to a manifest is what happens either side of them:
+   * clearing every field removes the `runtime` key entirely rather than leaving
+   * `{}` behind, so "no choice made" reads the same in the file as it does in
+   * the UI and a diff of the manifest shows the choice going away.
+   *
+   * Unknown keys inside an existing `runtime` block — `permissions`, or
+   * something a newer contract adds — are preserved, per the manifest's
+   * round-trip rule.
+   */
+  applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
+    const { credential, modelId, complexity } = this.validate(input)
 
     const existing =
       manifest.runtime && typeof manifest.runtime === 'object' ? { ...manifest.runtime } : {}

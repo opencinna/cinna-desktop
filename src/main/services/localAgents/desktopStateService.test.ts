@@ -122,6 +122,37 @@ describe('bare agent state', () => {
     expect(() => desktopStateService.forgetAt(join(dir, 'nowhere.json'))).not.toThrow()
   })
 
+  it('keeps only the three runtime keys a picker can set', () => {
+    // This file has one writer, so unlike a manifest there is nothing to
+    // round-trip: anything else in the block is a leftover from a build whose
+    // surface is gone, and handing it to the engine long afterwards is how a
+    // stale permission map outlives the code that wrote it.
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: {
+        credential: 'Anthropic',
+        complexity: 'medium',
+        permissions: { bash: 'allow' }
+      }
+    })
+
+    expect(desktopStateService.read(dir, 'bare').runtime).toEqual({
+      credential: 'Anthropic',
+      complexity: 'medium'
+    })
+  })
+
+  it('reads a runtime that names nothing as no choice at all', () => {
+    // `{}` and a missing key have to mean the same thing, or an agent whose
+    // choice was cleared would take the manifest branch of `resolve` over a
+    // block that says nothing.
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: {}
+    })
+    expect(desktopStateService.read(dir, 'bare').runtime).toBeNull()
+  })
+
   it('a folder that gains a manifest keeps the state it had', () => {
     // The second half of the same bug. A bare folder is one `git pull` from
     // gaining a `cinna-agent.json` — the update check ships beside this — and a

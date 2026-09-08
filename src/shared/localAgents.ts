@@ -546,12 +546,28 @@ export interface DiscoveredBareAgent {
   relPath: string
   /** Absolute path — shown, never sent back as the thing to adopt. */
   path: string
-  /** Default display name: the `AGENT.md` heading, else the folder name. */
+  /**
+   * What to call it: the user's own name for the agent where they have given
+   * one, else the `AGENT.md` heading, else the folder name.
+   *
+   * The stored name comes first because this list is answering "which of these
+   * do you want" — an agent the user renamed, listed under the heading in its
+   * file, is a row they cannot recognise.
+   */
   name: string
   /** Whether the folder also has a `README.md` to brief a builder with. */
   hasReadme: boolean
   /** True when this exact folder is already an agent in some registered root. */
   alreadyAdded: boolean
+  /**
+   * Already an agent under a **different** root than the one being picked.
+   *
+   * The dialog keeps such a row ticked and disabled even while re-selecting:
+   * this pick speaks for one folder's contents, and that agent belongs to
+   * another. Registered roots may not overlap, so it takes a symlink to reach —
+   * which is exactly why it is a field rather than an assumption.
+   */
+  addedElsewhere: boolean
 }
 
 /** What `local-agent:folder-pick` reports about the folder the user chose. */
@@ -573,6 +589,26 @@ export type PickAgentFolderResult =
        */
       truncated: boolean
       /**
+       * Set when the picked folder is **already registered** as an external
+       * root: the user is re-selecting which of its agents are in the app, not
+       * adopting it for the first time.
+       *
+       * Re-picking used to be refused outright ("This folder is already
+       * registered as …"), which left no way at all to add the agents that were
+       * not ticked the first time — the ⋯ menu can only take one *out* of the
+       * list, and Settings' "Add them" puts *all* of them back. The folder
+       * picker is the only surface that lists them one by one, so it is where
+       * re-selecting belongs.
+       *
+       * What it changes for the dialog: rows already in the app are ticked and
+       * **editable** rather than ticked and disabled, because unticking one is
+       * how it leaves the list. Rows added under a *different* root stay locked
+       * — this pick cannot speak for another root's contents — and that is why
+       * this field exists rather than the dialog inferring it from
+       * {@link DiscoveredBareAgent.alreadyAdded}.
+       */
+      reselecting: { rootId: string; label: string } | null
+      /**
        * Why nothing can be added, or null when something can. A *state*, not an
        * error: the dialog stays open and says this rather than closing.
        */
@@ -589,7 +625,20 @@ export type PickAgentFolderResult =
  */
 export interface AddAgentFolderResult {
   root: AgentRootDto
-  /** Every agent adopted, in the order the walk found them. Never empty. */
+  /**
+   * The agents the user ticked and that are now in the list, **newly added
+   * first** and each group in the order the walk found them.
+   *
+   * Empty only for a re-selection that took every agent out of the list, which
+   * is a real answer rather than a failure — the caller lands the user nowhere
+   * instead of on an agent they did not ask for.
+   *
+   * The ordering is what the dialog lands on, and it only matters when the
+   * folder was already registered: re-selecting a repository to add its
+   * sixteenth agent must land on that agent, not on whichever of the fifteen
+   * sorts first. On a first adopt every entry is new and the order is the
+   * walk's.
+   */
   agentIds: string[]
 }
 
@@ -601,7 +650,17 @@ export interface AddAgentFolderInput {
    * renderer may not name a folder the user did not just choose.
    */
   path: string
-  /** Root-relative paths to adopt, from {@link DiscoveredBareAgent.relPath}. */
+  /**
+   * Root-relative paths to adopt, from {@link DiscoveredBareAgent.relPath}.
+   *
+   * On a re-pick of a folder that is already registered
+   * ({@link PickAgentFolderResult.reselecting}) this is the **whole** list the
+   * user wants in the app, not an addition to it: a path left out of it is
+   * removed from the list, exactly as ⋯ → Remove from the list would, and an
+   * empty list takes all of them out. The folder itself is never touched either
+   * way. On a first adopt an empty list is refused — there would be nothing to
+   * adopt.
+   */
   relPaths: string[]
   /**
    * Display name for the single agent being added. Ignored when more than one

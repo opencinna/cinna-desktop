@@ -24,7 +24,7 @@ import type {
 } from '../shared/localAgents'
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { StoredPermissionGrant } from '../shared/localAgentRequests'
-import type { EngineSkips, EngineState } from '../shared/engine'
+import type { EngineSkips, EngineState, LocalAgentRuntimeInput } from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
@@ -1219,6 +1219,17 @@ const api = {
     /** Rename a bare agent. Kit agents rename through `updateField`. */
     rename: (agentId: string, name: string | null): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:rename', { agentId, name }),
+    /**
+     * Save which credential and model a bare agent runs on. Kit agents save
+     * their runtime through `updateField`, into the manifest and under its
+     * stamp; a bare folder has no manifest, so the choice is kept beside the
+     * rest of that agent's local state and needs no stamp.
+     */
+    setRuntime: (
+      agentId: string,
+      runtime: LocalAgentRuntimeInput
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-runtime', { agentId, runtime }),
     /** Put back every agent removed from one external root's list. */
     rootRestoreHidden: (rootId: string): Promise<{ restored: number }> =>
       ipcRenderer.invoke('local-agent:root-restore-hidden', rootId),

@@ -281,13 +281,15 @@ describe('NewLocalAgentModal — add a folder', () => {
     folderName: 'alpha',
     refusal: null,
     truncated: false,
+    reselecting: null,
     found: [
       {
         relPath: '.',
         path: '/repo/alpha',
         name: 'Invoice watcher',
         hasReadme: true,
-        alreadyAdded: false
+        alreadyAdded: false,
+        addedElsewhere: false
       }
     ]
   }
@@ -297,27 +299,31 @@ describe('NewLocalAgentModal — add a folder', () => {
     folderName: 'repo',
     refusal: null,
     truncated: false,
+    reselecting: null,
     found: [
       {
         relPath: 'local_agents/alpha',
         path: '/repo/local_agents/alpha',
         name: 'Alpha',
         hasReadme: true,
-        alreadyAdded: false
+        alreadyAdded: false,
+        addedElsewhere: false
       },
       {
         relPath: 'local_agents/beta',
         path: '/repo/local_agents/beta',
         name: 'Beta',
         hasReadme: false,
-        alreadyAdded: false
+        alreadyAdded: false,
+        addedElsewhere: false
       },
       {
         relPath: 'local_agents/gamma',
         path: '/repo/local_agents/gamma',
         name: 'Gamma',
         hasReadme: false,
-        alreadyAdded: true
+        alreadyAdded: true,
+        addedElsewhere: true
       }
     ]
   }
@@ -421,6 +427,151 @@ describe('NewLocalAgentModal — add a folder', () => {
     resolvePick(FOUND_MANY)
 
     expect(screen.queryByText(/folders found/)).toBeNull()
+  })
+
+  it('re-picking a registered folder opens on what is in the app, and can change it', () => {
+    // The refusal this replaced ("already registered as …") left a user who
+    // ticked one agent out of three with no way to add the others: the ⋯ menu
+    // removes one at a time and Settings restores all of them at once.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_MANY,
+      reselecting: { rootId: 'r1', label: 'repo' },
+      found: FOUND_MANY.found.map((entry) => ({
+        ...entry,
+        alreadyAdded: entry.relPath === 'local_agents/alpha',
+        addedElsewhere: false
+      }))
+    })
+
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    // Opens on the state the app is actually in: alpha in, the others out. So
+    // confirming without touching anything changes nothing, and an agent the
+    // user removed earlier is not silently put back.
+    expect(boxes.map((box) => box.checked)).toEqual([true, false, false])
+    // And the one already in the list is editable — unticking it is how it
+    // leaves — where a row added under another root stays disabled.
+    expect(boxes.map((box) => box.disabled)).toEqual([false, false, false])
+
+    fireEvent.click(boxes[1])
+    fireEvent.click(boxes[0])
+    expect(screen.getByText('1 to add, 1 to remove from the list.')).toBeTruthy()
+
+    // Removing confirms first, naming the agent and saying what does not come
+    // back with it (ux_rules rule 5) — the same act as ⋯ → Remove from the list.
+    fireEvent.click(screen.getByRole('button', { name: 'Save selection' }))
+    expect(addFolder).not.toHaveBeenCalled()
+    const confirm = screen.getByText(/any job that uses one will refuse to run/)
+    // The agent is named in the confirmation, not merely counted (rule 5).
+    expect(confirm.textContent).toContain('Alpha')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and save' }))
+    const [payload] = addFolder.mock.calls[0] as [Record<string, unknown>]
+    expect(payload).toEqual({ path: '/repo', relPaths: ['local_agents/beta'] })
+  })
+
+  it('adds without a confirmation when nothing is being removed', () => {
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_MANY,
+      reselecting: { rootId: 'r1', label: 'repo' },
+      found: FOUND_MANY.found.map((entry) => ({
+        ...entry,
+        alreadyAdded: entry.relPath === 'local_agents/alpha',
+        addedElsewhere: false
+      }))
+    })
+
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    fireEvent.click(boxes[1])
+    fireEvent.click(screen.getByRole('button', { name: 'Save selection' }))
+
+    const [payload] = addFolder.mock.calls[0] as [Record<string, unknown>]
+    expect(payload).toEqual({
+      path: '/repo',
+      // No `name`: the field is prefilled from the folder, and sending it back
+      // would rename an agent the user named themselves.
+      relPaths: ['local_agents/alpha', 'local_agents/beta']
+    })
+  })
+
+  it('lets a re-selection empty the list, rather than disabling the button in silence', () => {
+    // This dialog performs removals now, so "take all of these out" is a
+    // legitimate answer — refusing it with a greyed-out button and no sentence
+    // is the silent failure ux_rules rule 6 is about.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_MANY,
+      reselecting: { rootId: 'r1', label: 'repo' },
+      found: FOUND_MANY.found.map((entry) => ({
+        ...entry,
+        alreadyAdded: true,
+        addedElsewhere: false
+      }))
+    })
+
+    for (const box of screen.getAllByRole('checkbox')) fireEvent.click(box)
+    const save = screen.getByRole('button', { name: 'Save selection' }) as HTMLButtonElement
+    expect(save.disabled).toBe(false)
+    fireEvent.click(save)
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and save' }))
+
+    const [payload] = addFolder.mock.calls[0] as [Record<string, unknown>]
+    expect(payload).toEqual({ path: '/repo', relPaths: [] })
+  })
+
+  it('does not navigate away when a save only removed agents', () => {
+    // A user who came to take one agent out must not be dropped onto another
+    // agent's page (ux_rules rule 3 cuts the other way here).
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_MANY,
+      reselecting: { rootId: 'r1', label: 'repo' },
+      found: FOUND_MANY.found.map((entry) => ({
+        ...entry,
+        alreadyAdded: true,
+        addedElsewhere: false
+      }))
+    })
+
+    fireEvent.click(screen.getAllByRole('checkbox')[0])
+    fireEvent.click(screen.getByRole('button', { name: 'Save selection' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Remove and save' }))
+    const [, options] = addFolder.mock.calls[0] as [
+      unknown,
+      { onSuccess: (r: { root: unknown; agentIds: string[] }) => void }
+    ]
+    act(() => options.onSuccess({ root: {}, agentIds: ['folder:external:r1:b'] }))
+
+    expect(setActiveLocalAgentId).not.toHaveBeenCalled()
+  })
+
+  it('keeps a row added under another agents folder locked, even when re-selecting', () => {
+    // This pick speaks for one folder's contents, and gamma belongs to another
+    // root. Ticked and disabled, never filtered out — a list that loses a row
+    // reads as a bad scan. Asserted *while re-selecting*, which is the only
+    // state where the other rows are unlocked and this one still must not be.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_MANY,
+      reselecting: { rootId: 'r1', label: 'repo' },
+      found: FOUND_MANY.found.map((entry) => ({
+        ...entry,
+        alreadyAdded: entry.relPath === 'local_agents/gamma',
+        addedElsewhere: entry.relPath === 'local_agents/gamma'
+      }))
+    })
+
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[]
+    expect(boxes.map((box) => box.disabled)).toEqual([false, false, true])
+    // And it is never counted as something this save could remove.
+    for (const box of boxes) if (!box.disabled) fireEvent.click(box)
+    expect(screen.queryByText(/to remove from the list/)).toBeNull()
   })
 
   it('keeps the dialog open and says why when the folder is refused', () => {

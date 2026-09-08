@@ -45,7 +45,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/ipc/agent_a2a.ipc.ts` and `src/main/services/a2aAsMcpProvider.ts` — handle the `null` endpoint a folder agent resolves to
 
 ### Preload
-- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, `delete` and `openCredentials`, which belong to the Agents tab slice, and `folderPick`, `folderAdd`, `rename`, `rootRestoreHidden`, `gitStatus`, `gitUpdate`, which belong to [Bare Agents](bare_agents_tech.md#ipc-channels) and [Folder Updates](folder_updates.md#ipc-channels)). Typed by inference; there is no hand-written interface
+- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, `delete` and `openCredentials`, which belong to the Agents tab slice, and `folderPick`, `folderAdd`, `rename`, `setRuntime`, `rootRestoreHidden`, `gitStatus`, `gitUpdate`, which belong to [Bare Agents](bare_agents_tech.md#ipc-channels) and [Folder Updates](folder_updates.md#ipc-channels)). Typed by inference; there is no hand-written interface
 
 ### Renderer
 - `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useDeleteLocalAgent`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useOpenAgentCredentials`, `useValidateLocalAgent`
@@ -108,7 +108,7 @@ Nothing about boot behaviour changed: `client.ts` still owns the connection, `jo
 | `local-agent:open-credentials` | invoke | `(agentId) → OpenLocalAgentCredentialsResult` — opens `credentials/.env`, creating it from the declared variable names when it is absent. The Agents tab slice's; listed here because it is the **only** channel in the feature that writes to that file, and the secrets rule below is what it has to keep. It takes an id and no path, unlike `:open-path`, precisely because it writes |
 | `local-agent:changed` | main → renderer | `LocalAgentChangedPayload` — `{ rootId, agentId \| null, reason: 'watch' \| 'rescan' \| 'create' }` |
 
-Seven more channels share the family and are documented with the features that own them: `local-agent:folder-pick`, `:folder-add`, `:rename`, `:root-restore-hidden` ([Bare Agents](bare_agents_tech.md#ipc-channels)), `:git-status`, `:git-update` ([Folder Updates](folder_updates.md#ipc-channels)), and the grant channels ([Permissions](permissions_tech.md)).
+The rest of the family is documented with the features that own it: `local-agent:folder-pick`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden` ([Bare Agents](bare_agents_tech.md#ipc-channels)), `:git-status`, `:git-update` ([Folder Updates](folder_updates.md#ipc-channels)), and the grant channels ([Permissions](permissions_tech.md)).
 
 Every handler calls `userActivation.requireActivated()`, resolves its user with `getSettingsScopeUserId()`, and is wrapped by `ipcHandle()`. They hold no logic beyond that. `registerLocalAgentHandlers()` calls `localAgentService.configure(getSettingsScopeUserId)` first — the composition root — so the open-in roots provider and the watcher callbacks are wired before any handler can run.
 

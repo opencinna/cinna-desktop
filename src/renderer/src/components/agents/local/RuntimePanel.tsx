@@ -1,6 +1,10 @@
 import { useMemo, useState } from 'react'
 import { Check, Circle, Loader2, Minus } from 'lucide-react'
-import { useOpenAgentCredentials, useSetLocalAgentRuntime } from '../../../hooks/useLocalAgents'
+import {
+  useOpenAgentCredentials,
+  useSetBareAgentRuntime,
+  useSetLocalAgentRuntime
+} from '../../../hooks/useLocalAgents'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
@@ -38,13 +42,31 @@ import {
  *
  * Which credential and model the agent runs on, whether the engine that would
  * run it is up, and whether the secrets the folder declares are in place — on
- * one panel, as controls, with a warning only where something is wrong. It is
- * a viewer over `cinna-agent.json` like everything else here, so what it
+ * one panel, as controls, with a warning only where something is wrong. What it
  * writes is a credential **name** and a model id — never a key, and never our
  * internal provider id, which means nothing once the folder is on somebody
- * else's machine. The write goes through the same stamped `update-field` path
- * as the prompt editors, so an assistant editing the manifest while this is
- * open cannot be clobbered.
+ * else's machine.
+ *
+ * ## One panel, two places to keep the answer
+ *
+ * For a **kit** agent it is a viewer over `cinna-agent.json` like everything
+ * else here: the write goes through the same stamped `update-field` path as the
+ * prompt editors, so an assistant editing the manifest while this is open
+ * cannot be clobbered.
+ *
+ * A **bare** agent has no manifest, and its folder is one Cinna promised to
+ * write nothing into — so its choice lands in that agent's state under
+ * `userData` instead, through `setRuntime`, with no stamp because there is no
+ * file in the folder for anyone else to have changed. That is the entire
+ * difference, and it is confined to `commit` and one note at the foot of the
+ * panel. The scanner puts both on `agent.runtime`, so every picker, every tier
+ * resolution and every message below reads one field and asks no questions
+ * about where it came from.
+ *
+ * This was two components, and the bare one had no controls at all: it could
+ * only report that the agent ran on the Default runtime. An agent the user
+ * adopted from their own repository is not a lesser agent, and "which credential
+ * pays for this" is the one question they most need an answer to.
  *
  * Both pickers read from the hooks the rest of the app already uses —
  * `useProviders` and `useModels` — rather than fetching a parallel list, and
@@ -69,13 +91,14 @@ import {
  * it replaced.
  *
  * **Advanced** swaps it for the raw model list. It is a remembered preference
- * (`localAgentsModelAdvanced`) but not a mode — the manifest wins. An agent that
- * names a model always opens on the model picker and one that names a tier always
- * opens on the tier, or the panel would show a choice the file does not make.
+ * (`localAgentsModelAdvanced`) but not a mode — the agent's own runtime wins. An
+ * agent that names a model always opens on the model picker and one that names a
+ * tier always opens on the tier, or the panel would show a choice it has not made.
  * Ticking the box therefore *converts*: a model becomes the tier it belongs to,
  * a tier becomes the model it currently resolves to. Both directions keep the
  * agent on the same runtime, and both say what they did in the status line —
- * they rewrite a file the user commits, so they cannot happen wordlessly.
+ * they rewrite the agent's runtime behind a control that only claims to change
+ * the view, so they cannot happen wordlessly.
  */
 
 const FIELD =
@@ -233,7 +256,25 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   const { data: skips } = useEngineSkips()
   const { data: settings } = useAppSettings()
   const setSetting = useSetAppSetting()
-  const save = useSetLocalAgentRuntime()
+  /**
+   * Where this agent's choice is kept — the one thing that differs by kind.
+   *
+   * A kit agent's runtime is a block in `cinna-agent.json`: a stamped write,
+   * refusable because an assistant may have edited the file since this panel
+   * read it. A bare folder has no manifest and is never written into, so the
+   * same three values go to that agent's state under `userData` — no stamp, no
+   * stale-write refusal, and nothing appearing in the user's `git status`.
+   *
+   * Everything below this line is deliberately common: the pickers, the tier
+   * resolution, the Advanced conversion and every message they produce read
+   * `agent.runtime`, which the scanner fills from the manifest for one kind and
+   * from the desktop state for the other. Two panels is what this used to be,
+   * and the bare one could only say what the runtime *was*.
+   */
+  const bare = agent.kind === 'bare'
+  const saveManifest = useSetLocalAgentRuntime()
+  const saveBare = useSetBareAgentRuntime()
+  const saving = bare ? saveBare.isPending : saveManifest.isPending
   const [error, setError] = useState<string | null>(null)
   /**
    * What the last click on the secrets line did, where the user clicked it.
@@ -379,8 +420,8 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   )
   const providerType = effectiveProvider?.type ?? ''
 
-  /** What the manifest itself says the view is, or null when it declares neither. */
-  const manifestView = declaredModel !== null ? true : declaredComplexity !== null ? false : null
+  /** What the agent's own runtime says the view is, or null when it names neither. */
+  const declaredView = declaredModel !== null ? true : declaredComplexity !== null ? false : null
 
   /**
    * A pinned model that belongs to no family — a gateway's `my-private-llm-7b`,
@@ -407,7 +448,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     ? true
     : view?.agentId === agent.id
       ? view.advanced
-      : (manifestView ?? settings?.localAgentsModelAdvanced === true)
+      : (declaredView ?? settings?.localAgentsModelAdvanced === true)
   /**
    * True while nothing can answer "which picker" yet: the manifest declares
    * neither and the preference has not arrived.
@@ -418,7 +459,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * is Advanced — the swap happening behind a disabled control rather than not
    * happening (rule 1). So neither picker is claimed until one is known.
    */
-  const pickerUnknown = manifestView === null && view?.agentId !== agent.id && !settingsLoaded
+  const pickerUnknown = declaredView === null && view?.agentId !== agent.id && !settingsLoaded
 
   /**
    * The Default runtime, flattened the way `runtimeService.resolveDefault`
@@ -513,6 +554,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     [declaredCredential, selected, effectiveProvider, declaredComplexity, choice, modelChoices.length]
   )
 
+  /** Null for a bare agent, which has no manifest to stamp — and needs none. */
   const stamp = agent.stamps[MANIFEST_FILE] ?? null
   /**
    * The model registry is one network round trip *per credential*, so it lands
@@ -522,9 +564,9 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * another catalogue from one the registry has simply not listed yet.
    */
   const modelsLoaded = models !== undefined
-  const canEdit = stamp !== null && agent.readiness !== 'contract_too_new'
+  const canEdit = bare || (stamp !== null && agent.readiness !== 'contract_too_new')
   const disabled =
-    !canEdit || (!modelsLoaded && !modelsFailed) || !settingsLoaded || save.isPending
+    !canEdit || (!modelsLoaded && !modelsFailed) || !settingsLoaded || saving
 
   /**
    * One line, one message, in the reserved slot below the selects.
@@ -581,7 +623,15 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     if (credential) return toned(credential)
     if (!modelsLoaded) {
       return modelsFailed
-        ? { text: 'Could not load the model list. Models can still be typed into the manifest.', tone: WARN }
+        ? {
+            // The remedy names a file, so it is only offered to an agent that
+            // has one: a bare folder has no manifest to type a model into, and
+            // advice that cannot be taken is worse than none (ux_rules rule 9).
+            text: bare
+              ? 'Could not load the model list.'
+              : `Could not load the model list. Models can still be typed into ${MANIFEST_FILE}.`,
+            tone: WARN
+          }
         : { text: 'Loading the model list…', tone: NOTE }
     }
     // What became of the model — substitution, an empty tier, nothing set — from
@@ -669,55 +719,58 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     complexity: WorkComplexity | null,
     options: { note?: string; view?: boolean; persist?: boolean; keep?: string | null } = {}
   ): void => {
-    if (!stamp) return
+    if (!bare && !stamp) return
     setError(null)
     // A message about credentials/.env must not survive the next thing the user
     // does in the pickers above it.
     setSecrets(null)
     if (options.note) note(options.note, { model: modelId, complexity })
     else setDropped(null)
-    save.mutate(
-      { agentId: agent.id, expectedStamp: stamp, runtime: { credential, modelId, complexity } },
-      {
-        /**
-         * The view moves only once the file has. A refused write (a read-only
-         * folder, a stale stamp) that had already flipped the picker would leave
-         * the panel showing a control the manifest does not back — the Model
-         * select reading `Default` over a manifest that still says
-         * `complexity: medium`. Same for the remembered preference: the
-         * checkbox, the visible picker and the stored default now cannot
-         * disagree, because one success sets all three.
-         *
-         * **The `agentId` tag is the guarantee here, not the callback being
-         * dropped.** Switching agents *re-renders* this panel rather than
-         * unmounting it — `LocalAgentPage` gives it no `key` — so a callback
-         * issued for agent A does run after the page has moved to agent B, and
-         * what keeps it honest is that every piece of state it sets is stamped
-         * with the agent the write was *about* and every read gates on that
-         * stamp. A drop only happens on the narrower path of leaving the agent
-         * page entirely, where its one effect is that `setSetting` does not
-         * persist while the manifest write still lands — self-healing, since
-         * `manifestView` decides the view on return.
-         */
-        onSuccess: () => {
-          setView({ agentId: agent.id, advanced: options.view ?? advanced })
-          if (options.keep !== undefined) {
-            setPinned(options.keep === null ? null : { agentId: agent.id, modelId: options.keep })
-          }
-          if (options.persist) {
-            setSetting.mutate({ key: 'localAgentsModelAdvanced', value: options.view ?? advanced })
-          }
-        },
-        onError: (err) =>
-          setError(
-            isStaleWriteError(err)
-              ? 'cinna-agent.json changed on disk since this page loaded. Reload the agent and try again.'
-              : err instanceof Error
-                ? err.message
-                : 'Could not save that.'
-          )
-      }
-    )
+    const runtime = { credential, modelId, complexity }
+    const handlers = {
+      /**
+       * The view moves only once the file has. A refused write (a read-only
+       * folder, a stale stamp) that had already flipped the picker would leave
+       * the panel showing a control the manifest does not back — the Model
+       * select reading `Default` over a manifest that still says
+       * `complexity: medium`. Same for the remembered preference: the
+       * checkbox, the visible picker and the stored default now cannot
+       * disagree, because one success sets all three.
+       *
+       * **The `agentId` tag is the guarantee here, not the callback being
+       * dropped.** Switching agents *re-renders* this panel rather than
+       * unmounting it — `LocalAgentPage` gives it no `key` — so a callback
+       * issued for agent A does run after the page has moved to agent B, and
+       * what keeps it honest is that every piece of state it sets is stamped
+       * with the agent the write was *about* and every read gates on that
+       * stamp. A drop only happens on the narrower path of leaving the agent
+       * page entirely, where its one effect is that `setSetting` does not
+       * persist while the manifest write still lands — self-healing, since
+       * `declaredView` decides the view on return.
+       */
+      onSuccess: () => {
+        setView({ agentId: agent.id, advanced: options.view ?? advanced })
+        if (options.keep !== undefined) {
+          setPinned(options.keep === null ? null : { agentId: agent.id, modelId: options.keep })
+        }
+        if (options.persist) {
+          setSetting.mutate({ key: 'localAgentsModelAdvanced', value: options.view ?? advanced })
+        }
+      },
+      onError: (err: Error) =>
+        setError(
+          // Only reachable on the manifest path: a bare agent's write guards no
+          // file the user can edit, so there is nothing to have gone stale.
+          isStaleWriteError(err)
+            ? `${MANIFEST_FILE} changed on disk since this page loaded. Reload the agent and try again.`
+            : err instanceof Error
+              ? err.message
+              : 'Could not save that.'
+        )
+    }
+    if (bare) saveBare.mutate({ agentId: agent.id, runtime }, handlers)
+    else if (stamp)
+      saveManifest.mutate({ agentId: agent.id, expectedStamp: stamp, runtime }, handlers)
   }
 
   /**
@@ -897,7 +950,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       className="@container relative rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3"
     >
       {/* Out of the flow: a save indicator that adds a row would move the tabs below. */}
-      {save.isPending && (
+      {saving && (
         <Loader2
           size={12}
           aria-label="Saving"
@@ -1089,117 +1142,36 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         )}
       </div>
 
-      {(agent.credentials.length > 0 || !canEdit) && (
+      {(agent.credentials.length > 0 || !canEdit || bare) && (
         <div className="mt-2 space-y-1.5 border-t border-[var(--color-border)] pt-2.5">
           <SecretsLine agent={agent} onOutcome={setSecrets} />
+          {/*
+            Where the choice went, for the one kind of agent whose folder does
+            not hold it. Static and always present, so it cannot move the tab
+            strip below (ux_rules rule 1) — and it is not a hint restating its
+            label (rule 7): every other card on this page is a viewer over a
+            file in the folder, and this one is the exception.
+
+            Scoped to **this choice**, deliberately. "Nothing is written to the
+            folder" is one tab away from being false — the Prompts tab is a live
+            editor over `AGENT.md` — and a page that overstates the promise by a
+            single file is the exact failure ux_rules rule 9 records.
+          */}
+          {bare && (
+            <div className={NOTE}>
+              This choice is kept in Cinna, not in the folder — so a folder that moves starts over
+              on the default.
+            </div>
+          )}
           {!canEdit && (
             <div className={NOTE}>
               {stamp === null
-                ? 'cinna-agent.json could not be read, so the runtime cannot be changed here.'
+                ? `${MANIFEST_FILE} could not be read, so the runtime cannot be changed here.`
                 : 'This folder was built against a newer kit than this app understands, so it is read-only.'}
             </div>
           )}
         </div>
       )}
-    </section>
-  )
-}
-
-/**
- * "Runs with", for a **bare** agent.
- *
- * The full panel is three controls over `cinna-agent.json`: which credential,
- * how hard the work is, and what the declared secrets are. A bare folder has no
- * manifest, so all three would be pickers with nowhere to save — and the third
- * would report "no credentials declared" about a file the folder was never
- * asked to have.
- *
- * So this says the one true thing instead: a bare agent runs on the Default
- * runtime, which is the same resolution the engine performs, named the same
- * way. It keeps the panel's shell, its label and the engine line, because the
- * page's shape should not change with the kind of agent — only what it can
- * honestly claim.
- *
- * The reserved status line is the same rule as the full panel's: one line,
- * always there, so a skip reason arriving after a credential change cannot move
- * the tab strip out from under the pointer that just used it (ux_rules rule 1).
- */
-export function BareRuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
-  const { data: providers } = useProviders()
-  const { data: models } = useModels()
-  const { data: defaultMode } = useDefaultChatMode()
-  const { data: skips } = useEngineSkips()
-
-  const fallbackProvider = useMemo(
-    () => (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ?? null,
-    [providers, defaultMode?.providerId]
-  )
-  const catalogue = useMemo(
-    () =>
-      (models ?? [])
-        .filter((model) => model.providerId === fallbackProvider?.id)
-        .map((model) => ({ id: model.id })),
-    [models, fallbackProvider?.id]
-  )
-  const modelId = useMemo(
-    () =>
-      resolveRuntimeModel({
-        chosen: fallbackProvider,
-        fallback: {
-          credentialId: fallbackProvider?.id ?? null,
-          credentialType: fallbackProvider?.type ?? null,
-          modelId: defaultRuntimeModelId(fallbackProvider, defaultMode?.modelId ?? null)
-        },
-        declaredModel: null,
-        declaredComplexity: null,
-        catalogue
-      }).modelId,
-    [fallbackProvider, defaultMode?.modelId, catalogue]
-  )
-
-  const skip = skips?.[agent.id] ?? null
-  const status = !fallbackProvider
-    ? { text: 'No default AI credential is set, so this agent cannot run. Add one in Settings.', tone: DANGER }
-    : skip
-      ? { text: skip, tone: WARN }
-      : modelId
-        ? { text: `Runs on ${fallbackProvider.name} · ${modelId}.`, tone: NOTE }
-        : { text: `Runs on ${fallbackProvider.name}.`, tone: NOTE }
-
-  return (
-    <section
-      aria-label="Runs with"
-      className="@container relative rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3"
-    >
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <span className={LABEL}>Credential</span>
-          <div className="flex h-[26px] items-center text-xs text-[var(--color-text)]">
-            <span className="min-w-0 truncate" title={fallbackProvider?.name ?? undefined}>
-              {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
-            </span>
-          </div>
-        </div>
-        <EngineStatus />
-      </div>
-      {/* One reserved line, exactly like the full panel's. */}
-      <div className={`mt-2 flex h-4 items-center ${status.tone}`}>
-        <span className="min-w-0 truncate" title={status.text}>
-          {status.text}
-        </span>
-      </div>
-      {/*
-        The consequence, once. The label above already says "Default (…)" and
-        the status line says what it resolved to, so a third sentence repeating
-        it was a hint restating its own label (ux_rules rule 7) — and it did so
-        by naming `cinna-agent.json`, a kit concept a user who reached this page
-        by pointing at a folder has never seen and will not see anywhere else on
-        it. That fact belongs with the other things true of the folder's
-        contents, and is now an info on the Folder tab.
-      */}
-      <div className={`mt-1 ${NOTE}`}>
-        Runs on your default credential — this folder states none of its own.
-      </div>
     </section>
   )
 }

@@ -16,13 +16,13 @@ Three parties write these folders and never talk to each other — this desktop,
 
 Everything in this document describes a **kit** folder: one that has a `cinna-agent.json`, and with it an identity, a contract version, prompt documents at known paths, credential slots, a command catalog, a runtime it names and an export tree that can be published.
 
-A folder can also be an agent by keeping **none** of that. A directory holding an `AGENT.md` is a [bare agent](bare_agents.md): no manifest, no layout, no version, no validation against this contract. The desktop reads that one file as the system prompt, runs the folder on the default runtime, and keeps its own state outside it.
+A folder can also be an agent by keeping **none** of that. A directory holding an `AGENT.md` is a [bare agent](bare_agents.md): no manifest, no layout, no version, no validation against this contract. The desktop reads that one file as the system prompt and keeps its own state — including the runtime the user picks for it — outside the folder.
 
 The two are not a spectrum, and nothing here is relaxed to accommodate the other:
 
 - **Nothing in this layer runs on a bare folder.** The reader, the validator, the contract gate, the exporter and the scaffolder are all kit-only. `local-agent:validate` short-circuits before reaching them, because this validator run on a bare folder reports a wall of errors about a contract the folder never agreed to keep
 - **The contract is not loosened to make bare folders legal.** `AGENT.md` is not a manifest with fewer fields; it is not read by the schema, not versioned, and not part of `layout.json`. A folder either makes the manifest's promises or makes none of them
-- **The kit is what a folder gains by being scaffolded**, and this is the clearest statement of what that is worth: commands, credential slots, example prompts, publications, a content hash, a durable UUID identity, and a runtime the folder itself chooses. A bare folder has none of them, and the trade is deliberate — it is somebody's existing repository, and asking it to be converted first is asking for a change nobody wanted
+- **The kit is what a folder gains by being scaffolded**, and this is the clearest statement of what that is worth: commands, credential slots, example prompts, publications, a content hash, a durable UUID identity, and a runtime **the folder itself carries** — one that travels with it to another machine or a Cinna instance. A bare folder has none of them; it still gets a runtime, but the desktop keeps that answer beside its own state rather than in the folder, so it does not travel. The trade is deliberate — the folder is somebody's existing repository, and asking it to be converted first is asking for a change nobody wanted
 
 ## Core Concepts
 

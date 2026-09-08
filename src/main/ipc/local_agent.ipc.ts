@@ -30,6 +30,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../../shared/localAgents'
 import type { LocalAgentOutcome } from '../../shared/localAgents'
+import type { LocalAgentRuntimeInput } from '../../shared/engine'
 import { localAgentFailure } from '../../shared/localAgents'
 import { DomainError } from '../errors'
 
@@ -370,6 +371,35 @@ export function registerLocalAgentHandlers(): void {
       )
       // The name is the OpenCode agent key's readable half, so the engine's
       // config genuinely changed.
+      if (outcome.ok) void engineManager.applyConfigChange(userId)
+      return outcome
+    }
+  )
+
+  /**
+   * Save which credential and model a bare agent runs on.
+   *
+   * Kit agents save their runtime through `:update-field`, which is a stamped
+   * write into `cinna-agent.json`. A bare folder has no manifest and is never
+   * written into, so its choice lands in that agent's state under `userData`
+   * and needs a channel of its own — the stamp the other channel requires would
+   * name a file this write does not touch.
+   */
+  ipcHandle(
+    'local-agent:set-runtime',
+    (
+      _event,
+      input: { agentId: string; runtime: LocalAgentRuntimeInput }
+    ): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      const userId = getSettingsScopeUserId()
+      // Coded, like the manifest path: `turn_in_progress` is a state the panel
+      // explains and retries, not a failure.
+      const outcome = withCode(() =>
+        localAgentService.setBareRuntime(userId, input?.agentId ?? '', input?.runtime)
+      )
+      // The engine's config names each agent's provider and model, so this is
+      // exactly the change `applyConfigChange` exists for.
       if (outcome.ok) void engineManager.applyConfigChange(userId)
       return outcome
     }

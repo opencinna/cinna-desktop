@@ -62,6 +62,7 @@ import {
   BARE_AGENT_README_FILE,
   FOLDER_AGENT_ID_PREFIX,
   FOLDER_AGENT_SOURCE,
+  externalFolderAgentId,
   folderAgentId,
   isFolderAgentId,
   LOCAL_AGENT_DOC_PATHS,
@@ -85,6 +86,7 @@ import {
   type RescanResult,
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
+import type { LocalAgentRuntimeInput } from '../../../shared/engine'
 import { desktopStatePath, desktopStateService } from './desktopStateService'
 import { discoverBareAgents } from './externalScan'
 import { isWithin } from './pathRules'
@@ -437,6 +439,20 @@ function kindOf(root: AgentRootRow): LocalAgentKind {
  * it. `job_agents` has no such durable copy, which is why a job binding
  * genuinely cannot be restored and why the delete dialog says so.
  */
+/**
+ * What to call a bare agent folder: the user's own name for it, else what the
+ * file or the folder says.
+ *
+ * The scanner's rule, in the one other place that has to answer the same
+ * question — the folder picker, which lists agents the user may already have
+ * renamed. Kept here rather than exported from the scanner because it is two
+ * lines and the alternative was the picker quietly using a different order.
+ */
+function bareName(agentDir: string, fallback: string): string {
+  const stored = desktopStateService.read(agentDir, 'bare').displayName
+  return stored && stored.trim() !== '' ? stored.trim() : fallback
+}
+
 function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: string): void {
   const sessions = desktopStateService.read(agentDir, 'bare').sessions
   const entries = Object.entries(sessions)
@@ -1153,23 +1169,15 @@ export const localAgentService = {
     const roots = agentsHomeService.listRootRows(userId)
     const { found, truncated } = discoverBareAgents(path)
 
-    // Which of these are already agents somewhere. Reported per folder rather
-    // than refused wholesale: re-picking a repository after new agents landed
-    // in it is the ordinary way to adopt those, and the ones already there
-    // simply come back ticked-and-disabled instead of failing the whole pick.
-    const known = new Set(
-      agentRepo
-        .listFolder(userId)
-        .map((row) => row.localPath)
-        .filter((value): value is string => value !== null)
-    )
-    const discovered: DiscoveredBareAgent[] = found.map((folder) => ({
-      relPath: folder.relPath,
-      path: folder.path,
-      name: folder.name,
-      hasReadme: folder.hasReadme,
-      alreadyAdded: known.has(folder.path)
-    }))
+    // Which of these are already agents somewhere, and **whose**. Reported per
+    // folder rather than refused wholesale: re-picking a repository after new
+    // agents landed in it is the ordinary way to adopt those, and the root a
+    // row belongs to is what decides whether this pick may speak for it — see
+    // `addedElsewhere`.
+    const known = new Map<string, string | null>()
+    for (const row of agentRepo.listFolder(userId)) {
+      if (row.localPath !== null) known.set(row.localPath, row.localRootId ?? null)
+    }
 
     // **Overlap is checked first**, before anything about what was found.
     //
@@ -1183,8 +1191,28 @@ export const localAgentService = {
     // re-picking a folder already registered answered "everything here has
     // already been added", which is true but not why it is refused.
     let refusal: string | null = null
+    /**
+     * Picking the *same* external root again is a **re-selection**, not a
+     * clash.
+     *
+     * It used to be the first refusal on the list, and it closed the only door
+     * there was: a user who ticked one agent out of fifteen had no way to add a
+     * sixteenth later. The ⋯ menu removes one at a time and Settings' "Add
+     * them" restores all of them at once; this dialog is the only surface that
+     * lists a repository's agents individually, so it is where the set is
+     * chosen — the first time and every time after.
+     *
+     * Only an `external` root. A workshop root holds kit folders, which this
+     * walk does not look for at all, so re-picking one still falls through to
+     * "nothing in this folder has an AGENT.md" — the true thing about it.
+     */
+    let reselecting: { rootId: string; label: string } | null = null
     for (const root of roots) {
       if (isWithin(root.path, path) || isWithin(path, root.path)) {
+        if (root.path === path && root.kind === 'external') {
+          reselecting = { rootId: root.id, label: root.label }
+          break
+        }
         refusal =
           root.path === path
             ? `This folder is already registered as "${root.label}".`
@@ -1192,9 +1220,36 @@ export const localAgentService = {
         break
       }
     }
+    const discovered: DiscoveredBareAgent[] = found.map((folder) => ({
+      relPath: folder.relPath,
+      path: folder.path,
+      // The name the user sees in the app, not the one the file states: an agent
+      // they renamed, listed under its `AGENT.md` heading, is a row they cannot
+      // recognise in a dialog whose whole question is "which of these do you
+      // want". Falls back to the heading and then the folder name, which is the
+      // scanner's own order.
+      name: bareName(folder.path, folder.name),
+      hasReadme: folder.hasReadme,
+      alreadyAdded: known.has(folder.path),
+      // An agent of *another* root. This pick cannot add or remove it — the
+      // folder it belongs to is not the folder being picked — so the dialog
+      // keeps it ticked and disabled even while re-selecting. Reachable only
+      // through a symlink, since registered roots may not overlap, which is
+      // why it is computed rather than assumed away.
+      addedElsewhere:
+        known.has(folder.path) && known.get(folder.path) !== (reselecting?.rootId ?? null)
+    }))
+
     if (refusal === null && discovered.length === 0) {
       refusal = `Nothing in this folder has an ${BARE_AGENT_PROMPT_FILE}. Choose the agent's own folder, or a folder that holds several of them.`
-    } else if (refusal === null && discovered.every((entry) => entry.alreadyAdded)) {
+    } else if (
+      refusal === null &&
+      reselecting === null &&
+      discovered.every((entry) => entry.alreadyAdded)
+    ) {
+      // Not a refusal when re-selecting: "every agent here is already added" is
+      // the *normal* state of a folder the user came back to in order to take
+      // one out of the list again.
       refusal = 'Every agent in this folder has already been added.'
     }
 
@@ -1211,6 +1266,7 @@ export const localAgentService = {
       folderName: basename(path),
       found: discovered,
       truncated,
+      reselecting: refusal === null ? reselecting : null,
       refusal
     }
   },
@@ -1246,26 +1302,99 @@ export const localAgentService = {
       )
     }
     const chosen = new Set(Array.isArray(input?.relPaths) ? input.relPaths : [])
-    if (chosen.size === 0) {
+    // Whether this call *registers* the folder or re-selects one already
+    // registered. `addExternalRoot` returns the existing row for a path it
+    // already knows, so the two are the same call — but only one of them may
+    // undo itself below.
+    const preexisting = agentsHomeService
+      .listRootRows(userId)
+      .some((row) => row.path === path && row.kind === 'external')
+    // An empty selection is nothing to adopt on a first pick, and a real answer
+    // on a re-selection: "take all of these out of the list". The folder stays
+    // registered and Settings' "Add them" puts them back, which is what makes
+    // that recoverable rather than a way to lose a repository.
+    if (chosen.size === 0 && !preexisting) {
       throw new LocalAgentError('invalid_input', 'Pick at least one agent to add.')
     }
-
     const dto = agentsHomeService.addExternalRoot(userId, path)
     const root = agentsHomeService.requireRoot(userId, dto.id)
     const { found } = discoverBareAgents(root.path)
 
+    /**
+     * Every agent this call would take *out* of the list, checked for a turn in
+     * flight **before anything is written**.
+     *
+     * The locks used to be taken one at a time inside the loop, and
+     * `turnLock.acquire` throws: an agent earlier in the walk was already hidden
+     * on disk when a later one refused, so the dialog said the agent was busy —
+     * a refusal whose whole point is that nothing was removed (ux_rules rule 5)
+     * — over a folder where one had been. The index was never reconciled
+     * either, so that agent vanished from the sidebar at the next unrelated
+     * rescan, with no action of the user's to attribute it to.
+     */
+    const removals = found.filter(
+      (folder) =>
+        !chosen.has(folder.relPath) &&
+        !desktopStateService.read(folder.path, 'bare').hidden &&
+        agentRepo.getOwned(userId, externalFolderAgentId(root.id, folder.relPath)) !== undefined
+    )
+    const busy = removals.find((folder) =>
+      turnLock.isLocked(externalFolderAgentId(root.id, folder.relPath))
+    )
+    if (busy) {
+      throw new LocalAgentError(
+        'turn_in_progress',
+        `“${bareName(busy.path, busy.name)}” is busy right now. Nothing was changed — try again when its run finishes.`
+      )
+    }
+
+    /** Ticked and not in the list a moment ago — what this call actually added. */
+    const added: { relPath: string; path: string }[] = []
     for (const folder of found) {
       const wanted = chosen.has(folder.relPath)
-      // Written for *every* folder, not only the unwanted ones: re-adopting a
-      // repository whose agents were previously removed from the list has to
-      // clear the flag, or the second add would appear to do nothing.
+      const was = desktopStateService.read(folder.path, 'bare')
+      const indexed =
+        !was.hidden &&
+        agentRepo.getOwned(userId, externalFolderAgentId(root.id, folder.relPath)) !== undefined
+      if (wanted && !indexed) added.push({ relPath: folder.relPath, path: folder.path })
+      // Written for *every* folder whose state would change, not only the
+      // unwanted ones: re-adopting a repository whose agents were previously
+      // removed from the list has to clear the flag, or the second add would
+      // appear to do nothing — and on a re-selection, unticking one is how it
+      // leaves the list again.
       const patch: { hidden: boolean; displayName?: string | null } = { hidden: !wanted }
-      // One agent, one name field. With several, the names come from each
-      // folder's own `AGENT.md`, and renaming is a per-agent action afterwards.
-      if (wanted && chosen.size === 1 && typeof input.name === 'string' && input.name.trim() !== '') {
+      // One agent, one name field, and **only for one being added**. The field
+      // is prefilled from the folder, so writing it back over an agent already
+      // in the list renamed it — silently, from a dialog whose copy promises the
+      // folder is untouched and says nothing at all about names.
+      if (
+        wanted &&
+        !indexed &&
+        chosen.size === 1 &&
+        typeof input.name === 'string' &&
+        input.name.trim() !== ''
+      ) {
         patch.displayName = input.name.trim().slice(0, 255)
       }
-      desktopStateService.patch(folder.path, 'bare', patch)
+      // Nothing to write for a folder whose state already reads this way. The
+      // patch is a read-modify-write of the whole file, so doing it for fifteen
+      // untouched agents is fifteen chances to land on a stale snapshot — the
+      // engine session a running turn wrote a millisecond ago among them.
+      if (was.hidden === !wanted && patch.displayName === undefined) continue
+      if (!wanted && indexed) {
+        // Taking one *out* of the list is the same act as ⋯ → Remove from the
+        // list, so it takes the same lock: hiding an agent mid-turn would leave
+        // a stream writing into a chat whose agent has gone. The pre-check above
+        // means this can only be a turn that started in the last few lines.
+        const handle = turnLock.acquire(externalFolderAgentId(root.id, folder.relPath), 'delete')
+        try {
+          desktopStateService.patch(folder.path, 'bare', patch)
+        } finally {
+          handle.release()
+        }
+      } else {
+        desktopStateService.patch(folder.path, 'bare', patch)
+      }
     }
 
     scannerService.markRootDirty(root.id)
@@ -1281,14 +1410,36 @@ export const localAgentService = {
     // saying why. The root is dropped again rather than left behind, so the
     // next attempt is not refused for overlapping a root the user cannot see
     // the point of.
-    if (scan.agents.length === 0) {
-      agentsHomeService.removeRoot(userId, root.id)
-      scannerService.markRootDirty(root.id)
-      watcherService.unwatchRoot(root.id)
+    if (scan.agents.length === 0 && chosen.size === 0 && preexisting) {
+      // A re-selection that emptied the list on purpose. Not the failure below:
+      // the folder is still registered, the agents are still on disk, and
+      // Settings → "Add them" is the way back — the same state as taking them
+      // out one at a time from the ⋯ menu.
       pendingPick = null
-      logger.warn('an adopted folder indexed no agents; the root was dropped', {
+      watcherService.refreshRoot(root.id)
+      logger.info('agents folder cleared', { rootId: root.id, found: found.length })
+      return {
+        root: agentsHomeService.listRoots(userId).find((entry) => entry.id === root.id) ?? dto,
+        agentIds: []
+      }
+    }
+
+    if (scan.agents.length === 0) {
+      // Only a root this call created is taken away again. A folder that was
+      // already registered keeps its registration — with it goes the watcher,
+      // the git update check and every agent the user did *not* just touch, and
+      // none of that should fall over because the one folder they ticked has
+      // gone missing since the preview.
+      if (!preexisting) {
+        agentsHomeService.removeRoot(userId, root.id)
+        scannerService.markRootDirty(root.id)
+        watcherService.unwatchRoot(root.id)
+      }
+      pendingPick = null
+      logger.warn('an adopted folder indexed no agents', {
         rootId: root.id,
-        found: found.length
+        found: found.length,
+        rootDropped: !preexisting
       })
       throw new LocalAgentError(
         'not_found',
@@ -1300,14 +1451,55 @@ export const localAgentService = {
 
     pendingPick = null
     watcherService.watchRoot(root)
+    // `watchRoot` returns early for a root already watched at this path, so a
+    // re-selection would leave the agents it just added without a per-directory
+    // watcher on the non-recursive fallback. `delete` calls this for the same
+    // reason.
+    watcherService.refreshRoot(root.id)
+    // An agent put back through this dialog finds its engine sessions again,
+    // exactly as one restored from Settings does: `a2a_sessions` cascaded away
+    // with its row, so without this the chats re-bind and the model has
+    // forgotten the conversation the transcript still shows.
+    for (const folder of added) reseedEngineSessions(userId, root, folder.path)
     logger.info('agents folder adopted', {
       rootId: root.id,
       found: found.length,
-      added: scan.agents.length
+      kept: scan.agents.length,
+      added: added.length,
+      reselected: preexisting
     })
+    /**
+     * What the dialog lands on: the agents the user ticked, the ones this call
+     * added first.
+     *
+     * On a first adopt that is every indexed agent, in walk order, which is
+     * what this always returned. On a re-selection it is the difference between
+     * landing on the sixteenth agent — the one they came back for — and landing
+     * on whichever of the fifteen they already had sorts first.
+     */
+    const addedIds = new Set(added.map((f) => externalFolderAgentId(root.id, f.relPath)))
+    const chosenIds = new Set([...chosen].map((rel) => externalFolderAgentId(root.id, rel)))
+    const kept = scan.agents.filter((agent) => chosenIds.has(agent.id))
+    const agentIds = [
+      ...kept.filter((agent) => addedIds.has(agent.id)),
+      ...kept.filter((agent) => !addedIds.has(agent.id))
+    ].map((agent) => agent.id)
+    /**
+     * A selection that produced nothing is the same failure as an adopt that
+     * indexed nothing, and it is only reachable on a re-selection: on a first
+     * adopt the unticked folders are hidden, so `scan.agents` *is* `kept`.
+     *
+     * This used to fall back to every indexed agent, which was worse than it
+     * looks — the dialog closed reporting success and landed the user on one of
+     * the agents they had *not* ticked, while the ones they had were missing
+     * with nothing anywhere saying why.
+     */
+    if (agentIds.length === 0) {
+      throw new LocalAgentError('not_found', 'None of those agents could be read. Choose the folder again.')
+    }
     return {
       root: agentsHomeService.listRoots(userId).find((entry) => entry.id === root.id) ?? dto,
-      agentIds: scan.agents.map((agent) => agent.id)
+      agentIds
     }
   },
 
@@ -1362,6 +1554,53 @@ export const localAgentService = {
       },
       root.id
     )
+    return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  /**
+   * Set which credential and model a **bare** agent runs on.
+   *
+   * The kit path for this is `updateField({ field: 'runtime' })`: a stamped
+   * write into `cinna-agent.json`, guarded by the fingerprint the panel read so
+   * an assistant editing the manifest at the same moment cannot be clobbered.
+   * A bare folder has no such file and must not gain one, so the same three
+   * values go where the rest of that agent's machine-local state goes — and,
+   * like {@link renameAgent}, this cannot travel down the `update-field`
+   * channel, whose whole contract is a stamp for a file in the folder. A stamp
+   * for a file this write does not touch would be a guard that guards nothing.
+   *
+   * What is *not* different is the validation: `runtimeService.validate` is the
+   * same one the manifest writer runs, so a key-shaped credential and a
+   * model-and-tier pair are refused here too. A bare agent's choice never
+   * leaves this machine, but a pasted API key does not become safe by landing
+   * in `userData` rather than in a file the user commits.
+   *
+   * The turn lock is taken for the same reason the rename takes it: the runner
+   * reads this state to find the agent's session, and a mid-turn write to the
+   * file it is reading is the one race this lock exists for.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`, `turn_in_progress`
+   */
+  setBareRuntime(userId: string, agentId: string, runtime: LocalAgentRuntimeInput): LocalAgentDto {
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (root.kind !== 'external') {
+      throw new LocalAgentError(
+        'invalid_input',
+        'This agent states its runtime in its manifest. Save it there instead.'
+      )
+    }
+    const next = runtimeService.toRuntimeRef(runtime)
+    const handle = turnLock.acquire(agentId, 'editor')
+    try {
+      desktopStateService.patch(agentDir, 'bare', { runtime: next })
+    } finally {
+      handle.release()
+    }
+    // The state file is not in the folder, so nothing the watcher sees changed.
+    // The row has to be re-read here or the page would keep rendering the
+    // runtime it had before the click.
+    scannerService.markRootDirty(root.id)
+    const dto = this.scanFolder(root, agentDir)
     return this.overlayEnabled(userId, [dto])[0]
   },
 

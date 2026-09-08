@@ -12,7 +12,7 @@ import {
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
-import { BareRuntimePanel, RuntimePanel } from './RuntimePanel'
+import { RuntimePanel } from './RuntimePanel'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
 import { AgentActionsMenu } from './AgentActionsMenu'
@@ -292,11 +292,12 @@ export function LocalAgentPage(): React.JSX.Element {
           stampError={stamp.error ? stamp.error.message : null}
         />
 
-        {agent.kind === 'bare' ? (
-          <BareRuntimePanel agent={agent} />
-        ) : (
-          <RuntimePanel agent={agent} />
-        )}
+        {/*
+          One panel for both kinds. A bare agent picks its credential and model
+          like any other; what differs is only where the answer is kept — its own
+          state under `userData`, never a file in the adopted folder.
+        */}
+        <RuntimePanel agent={agent} />
 
         <nav
           role="tablist"

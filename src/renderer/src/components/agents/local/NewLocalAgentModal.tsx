@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
+  AlertTriangle,
   Bot,
   Check,
   ChevronDown,
@@ -74,6 +75,13 @@ interface PickedFolder {
   found: DiscoveredBareAgent[]
   /** The walk hit its cap, so `found` is the first N by path, not all of them. */
   truncated: boolean
+  /**
+   * The folder is already registered, so this pick **re-selects** which of its
+   * agents are in the app rather than adopting it. Rows already added are then
+   * ticked and editable — unticking one takes it out of the list — instead of
+   * ticked and disabled.
+   */
+  reselecting: { rootId: string; label: string } | null
 }
 
 /**
@@ -208,7 +216,27 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
           setError(result.refusal)
           return
         }
-        setChosen(new Set(result.found.filter((f) => !f.alreadyAdded).map((f) => f.relPath)))
+        /**
+         * What starts ticked, and the two answers are different questions.
+         *
+         * A **first** adopt ticks everything: the user pointed at the folder to
+         * get its agents, and opting one out is the rarer half.
+         *
+         * A **re-selection** opens on the state the app is actually in — the
+         * agents that are in the list, ticked; the ones that are not, not. So
+         * confirming without touching anything changes nothing, and an agent
+         * the user removed earlier is not silently put back by a dialog they
+         * opened to add a different one.
+         *
+         * There is no single-agent exception: a re-selection shows the checkbox
+         * list however many agents the folder holds, because the one thing it
+         * must be able to do is untick.
+         */
+        const reselecting = result.reselecting
+        const preticked = result.found.filter((f) =>
+          reselecting ? f.alreadyAdded : !f.alreadyAdded
+        )
+        setChosen(new Set(preticked.map((f) => f.relPath)))
         setFolderAgentName(result.found.length === 1 ? result.found[0].name : '')
         setStep({
           kind: 'folder',
@@ -216,7 +244,8 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
             path: result.path,
             folderName: result.folderName,
             found: result.found,
-            truncated: result.truncated
+            truncated: result.truncated,
+            reselecting
           }
         })
       },
@@ -226,9 +255,23 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
 
   /** Adopt what was ticked, then land on the first of them. */
   const handleAddFolder = (pick: PickedFolder): void => {
-    if (chosen.size === 0 || addFolder.isPending) return
+    // Empty is a real answer when re-selecting — "take them all out of the
+    // list" — and nothing to do on a first adopt.
+    if ((chosen.size === 0 && pick.reselecting === null) || addFolder.isPending) return
     setError(null)
-    const single = pick.found.length === 1 && chosen.size === 1
+    /**
+     * The name field belongs to a first adopt, and only there.
+     *
+     * It is prefilled from the folder, so sending it on a re-selection wrote
+     * that value over an agent already in the list — renaming it silently, from
+     * a dialog that says nothing about names. Main refuses it for an agent it is
+     * not adding; this is the same rule on the side that composes the payload.
+     */
+    const single = pick.reselecting === null && pick.found.length === 1 && chosen.size === 1
+    /** Agents this save puts into the list — what there is to land on. */
+    const adding = pick.found.filter(
+      (entry) => !entry.alreadyAdded && chosen.has(entry.relPath)
+    ).length
     addFolder.mutate(
       {
         path: pick.path,
@@ -244,8 +287,11 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
         // sitting unselected behind it. With several, the first: the sidebar
         // shows the rest under the new root either way.
         onSuccess: (result) => {
+          // Newly added first, so this is the agent they came for. A
+          // re-selection that only *removed* agents returns none, and lands the
+          // user nowhere rather than on somebody else's page.
           const first = result.agentIds[0]
-          if (first !== undefined) {
+          if (first !== undefined && adding > 0) {
             setActiveLocalAgentId(first)
             setActiveView('local-agent')
           }
@@ -642,9 +688,16 @@ interface FolderStepProps {
  *   `AGENT.md`; naming fifteen of them at adoption time is work nobody asked
  *   for, and renaming one afterwards is a single action on its page.
  *
- * An agent already added is shown, ticked and disabled, rather than filtered
- * out: a list that silently loses the row the user came to add reads as the
- * folder having been scanned wrong.
+ * An agent already added **under another root** is shown, ticked and disabled,
+ * rather than filtered out: a list that silently loses the row the user came to
+ * add reads as the folder having been scanned wrong.
+ *
+ * Picking a folder that is **already registered** is not a clash but a
+ * re-selection — the only surface that lists a repository's agents one by one,
+ * and so the only place a sixteenth can be added after fifteen were. Its own
+ * agents are then ticked and editable, and unticking one takes it out of the
+ * list exactly as ⋯ → Remove from the list would. The folder on disk is
+ * untouched in every direction.
  */
 function FolderStep({
   pick,
@@ -657,9 +710,56 @@ function FolderStep({
   onBack,
   onAdd
 }: FolderStepProps): React.JSX.Element {
-  const single = pick.found.length === 1
-  const addable = pick.found.filter((entry) => !entry.alreadyAdded)
+  /**
+   * The name step belongs to a first adopt of a one-agent folder.
+   *
+   * A re-selection always gets the checkbox list, however many agents the folder
+   * holds: the one thing it must be able to do is untick, and a step with a text
+   * field and no checkbox cannot. It also must not offer a name field at all —
+   * the field is prefilled from the folder, and sending it back renamed an agent
+   * the user had named themselves.
+   */
+  const single = pick.found.length === 1 && pick.reselecting === null
+  /**
+   * A row the user cannot touch: already an agent under a **different** root.
+   * This pick speaks for one folder's contents, and that agent belongs to
+   * another — so it stays ticked and disabled, and is shown rather than filtered
+   * out, because a list that silently loses the row the user came for reads as a
+   * bad scan.
+   *
+   * Outside a re-selection every added row is somebody else's by definition:
+   * the folder being picked is not registered, so nothing in it can be its own.
+   */
+  const locked = (entry: DiscoveredBareAgent): boolean =>
+    entry.addedElsewhere || (entry.alreadyAdded && pick.reselecting === null)
+  const addable = pick.found.filter((entry) => !locked(entry))
   const allChosen = addable.length > 0 && addable.every((entry) => chosen.has(entry.relPath))
+  /** What pressing the button will do, for a folder that is already registered. */
+  const adding = pick.found.filter((entry) => !entry.alreadyAdded && chosen.has(entry.relPath))
+  const leaving = pick.found.filter(
+    (entry) => entry.alreadyAdded && !locked(entry) && !chosen.has(entry.relPath)
+  )
+  /**
+   * Removing agents from the list is a destructive action, so it confirms —
+   * named, recoverable half first, and the half that is not recoverable stated
+   * (ux_rules rule 5). It is a step inside this dialog rather than a second
+   * dialog over it: the list the user just edited is the context for the
+   * question, and it stays on screen behind the confirmation.
+   */
+  const [confirming, setConfirming] = useState(false)
+  const named = (entries: DiscoveredBareAgent[]): string => {
+    const names = entries.map((entry) => entry.name)
+    if (names.length <= 3) return names.join(', ')
+    return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`
+  }
+  const summary =
+    adding.length > 0 && leaving.length > 0
+      ? `${adding.length} to add, ${leaving.length} to remove from the list.`
+      : adding.length > 0
+        ? `${adding.length} to add.`
+        : leaving.length > 0
+          ? `${leaving.length} to remove from the list.`
+          : ''
 
   const toggle = (relPath: string): void => {
     const next = new Set(chosen)
@@ -673,6 +773,12 @@ function FolderStep({
       className="mt-5 space-y-4"
       onSubmit={(event) => {
         event.preventDefault()
+        // The confirmation is the second press, never a dialog that appears
+        // under the pointer of the first one.
+        if (leaving.length > 0 && !confirming) {
+          setConfirming(true)
+          return
+        }
         onAdd()
       }}
     >
@@ -740,9 +846,9 @@ function FolderStep({
             {pick.found.map((entry) => (
               <label
                 key={entry.relPath}
-                title={entry.alreadyAdded ? 'Already added' : entry.path}
+                title={locked(entry) ? 'Already added in another agents folder' : entry.path}
                 className={`flex items-start gap-2 rounded px-2 py-1.5 text-xs ${
-                  entry.alreadyAdded
+                  locked(entry)
                     ? 'cursor-default opacity-50'
                     : 'cursor-pointer hover:bg-[var(--color-bg-hover)]'
                 }`}
@@ -750,8 +856,11 @@ function FolderStep({
                 <input
                   type="checkbox"
                   className="mt-0.5 accent-[var(--color-accent)]"
-                  disabled={entry.alreadyAdded || isPending}
-                  checked={entry.alreadyAdded || chosen.has(entry.relPath)}
+                  // Frozen while the confirmation is up: the question names
+                  // agents, and a list that can still change under it would ask
+                  // about one set and act on another.
+                  disabled={locked(entry) || isPending || confirming}
+                  checked={locked(entry) || chosen.has(entry.relPath)}
                   onChange={() => toggle(entry.relPath)}
                 />
                 <span className="min-w-0 flex-1">
@@ -760,12 +869,63 @@ function FolderStep({
                     {entry.relPath}
                   </span>
                 </span>
-                {entry.alreadyAdded && (
+                {locked(entry) && (
                   <Check size={12} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
                 )}
               </label>
             ))}
           </div>
+        </div>
+      )}
+
+      {/*
+        What this list *is*, for a folder that is already registered — and what
+        the button is about to do to it. One line of each, both always rendered
+        so ticking a box cannot move the buttons under the pointer (UX rule 1).
+        Removal is the half that needs saying: it is the same act as ⋯ → Remove
+        from the list, and a job that used the agent has to be pointed at it
+        again even if it comes back.
+      */}
+      {pick.reselecting !== null && !confirming && (
+        <div className="space-y-0.5">
+          <div className="text-[10px] text-[var(--color-text-muted)]">
+            Already in the app as “{pick.reselecting.label}”. This is the whole list — the folder on
+            disk is never touched either way.
+          </div>
+          {/* Reserved and single-line: what the button is about to do changes
+              with every tick, and a line that wraps would move the buttons under
+              the pointer that is ticking (UX rule 1). The consequence itself is
+              the confirmation's job, not this line's. */}
+          <div className="h-4 truncate text-[10px] text-[var(--color-warning)]" title={summary}>
+            {summary}
+          </div>
+        </div>
+      )}
+
+      {confirming && (
+        <div className="space-y-1.5 rounded-md border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/5 p-2.5">
+          <div className="flex items-center gap-1.5 text-xs font-medium text-[var(--color-danger)]">
+            <AlertTriangle size={13} />
+            Remove {leaving.length === 1 ? 'an agent' : `${leaving.length} agents`} from the list
+          </div>
+          {/*
+            The same copy the ⋯ → Remove dialog owns, for the same act. The
+            recoverable half first — the folders are not touched and this dialog
+            puts them back — then the half that is not: `job_agents` cascades
+            with the row and does not come back with it (ux_rules rule 5).
+          */}
+          {/*
+            Two whole sentences rather than eight interleaved ternaries. The
+            singular branch of the woven version read "The folder stay exactly
+            where it is" — a form of bug that only shows up on screen, in the
+            branch a reader of the code is least likely to render in their head.
+          */}
+          <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+            <strong className="font-medium text-[var(--color-text)]">{named(leaving)}</strong>{' '}
+            {leaving.length === 1
+              ? 'leaves the list. Its folder stays exactly where it is, and ticking it here again puts it back. Existing chats stay but can no longer reach this agent, and any job that uses one will refuse to run — and will need it selected again even if you add it back.'
+              : 'leave the list. Their folders stay exactly where they are, and ticking them here again puts them back. Existing chats stay but can no longer reach these agents, and any job that uses one will refuse to run — and will need it selected again even if you add it back.'}
+          </p>
         </div>
       )}
 
@@ -777,20 +937,38 @@ function FolderStep({
       <div className="flex justify-end gap-2">
         <button
           type="button"
-          onClick={onBack}
+          onClick={() => (confirming ? setConfirming(false) : onBack())}
           disabled={isPending}
           className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
             hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
         >
-          Back
+          {confirming ? 'Back to the list' : 'Back'}
         </button>
         <button
           type="submit"
-          disabled={chosen.size === 0 || isPending}
-          className="min-w-[6.5rem] px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white
-            hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+          // Nothing ticked is nothing to adopt on a first pick, and a real
+          // answer on a re-selection — "take them all out of the list" — which
+          // this dialog now performs. Disabling it there would promise a
+          // removal in one line and refuse it silently in the next.
+          disabled={(chosen.size === 0 && pick.reselecting === null) || isPending}
+          className={`min-w-[6.5rem] px-3 py-1.5 rounded-md text-xs font-medium text-white transition-colors
+            disabled:opacity-30 disabled:cursor-not-allowed ${
+              confirming
+                ? 'bg-[var(--color-danger)] hover:opacity-90'
+                : 'bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]'
+            }`}
         >
-          {isPending ? 'Adding…' : chosen.size > 1 ? `Add ${chosen.size} agents` : 'Add agent'}
+          {isPending
+            ? pick.reselecting !== null
+              ? 'Saving…'
+              : 'Adding…'
+            : confirming
+              ? `Remove and save`
+              : pick.reselecting !== null
+                ? 'Save selection'
+                : chosen.size > 1
+                  ? `Add ${chosen.size} agents`
+                  : 'Add agent'}
         </button>
       </div>
     </form>

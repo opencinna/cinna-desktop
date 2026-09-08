@@ -1,5 +1,8 @@
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { Locator } from '@playwright/test'
 import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 
 /**
@@ -351,5 +354,305 @@ test('removing a bare agent from the list leaves the folder, and Settings puts i
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
     await expect(row).toHaveText('Sales Leaderboard Agent')
     expect(treeOf(folder)).toEqual(before)
+  })
+})
+
+test('re-picking an adopted folder re-selects its agents, and confirms what leaves the list', async ({
+  cinna
+}) => {
+  await cinna.skipOnboarding()
+  const repo = homeDir(cinna, 'finance-agents')
+  for (const [slug, heading] of FOUND) writeBareAgent(join(repo, 'local_agents', slug), heading)
+  const before = treeOf(repo)
+
+  const [FIRST, SECOND, THIRD] = FOUND
+  const { page } = cinna
+  const row = (heading: string) => cinna.page.getByRole('button', { name: heading, exact: true })
+  /** One row of the picked folder's list, by the name and path the dialog shows. */
+  const box = (dialog: Locator, [slug, heading]: (typeof FOUND)[number]) =>
+    dialog.getByRole('checkbox', { name: `${heading} local_agents/${slug}` })
+
+  /** + → Add a folder, at `repo`, landing on the list of what it holds. */
+  const pickRepo = async (): Promise<Locator> => {
+    await openAddDialog(cinna)
+    await cinna.stubDirectoryPicker(repo)
+    await cinna.page
+      .getByRole('dialog', { name: 'Add an agent' })
+      .getByRole('button', { name: /^Add a folder/ })
+      .click()
+    const list = cinna.page.getByRole('dialog', { name: 'Add a folder' })
+    await expect(list).toBeVisible()
+    return list
+  }
+
+  await test.step('one of the three is adopted, and two are left behind', async () => {
+    const list = await pickRepo()
+    await expect(list.getByRole('checkbox')).toHaveCount(3)
+    // A first adopt opens with everything ticked, so taking two out is two
+    // clicks away from the state this test needs.
+    await list.getByRole('button', { name: 'Clear all', exact: true }).click()
+    await box(list, FIRST).check()
+    await list.getByRole('button', { name: 'Add agent', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+
+    await expect(row(FIRST[1])).toHaveText(FIRST[1])
+    await expect(row(SECOND[1])).toHaveCount(0)
+    await expect(row(THIRD[1])).toHaveCount(0)
+  })
+
+  await test.step('the same folder is no longer refused: it comes back as a selection', async () => {
+    const list = await pickRepo()
+    // The old behaviour was the refusal `This folder is already registered as
+    // "finance-agents".` in the choice step's alert, with the folder step never
+    // reached — which left no way at all to add the two that were not ticked.
+    await expect(list.getByText('3 agents in finance-agents')).toBeVisible()
+    await expect(list).toContainText(
+      'Already in the app as “finance-agents”. This is the whole list — the folder on disk is never touched either way.'
+    )
+    // Ticked because it is in the app, and **editable** — unticking it is how it
+    // would leave. An already-added row used to be ticked and disabled.
+    await expect(box(list, FIRST)).toBeChecked()
+    await expect(box(list, FIRST)).toBeEnabled()
+    await expect(box(list, SECOND)).not.toBeChecked()
+    await expect(box(list, THIRD)).not.toBeChecked()
+    // Not "Add 1 agent": the button saves a set, and the set can shrink.
+    await expect(list.getByRole('button', { name: 'Save selection', exact: true })).toBeVisible()
+
+    await box(list, SECOND).check()
+    await expect(list.getByTitle('1 to add.')).toBeVisible()
+    await list.getByRole('button', { name: 'Save selection', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+
+    await expect(row(FIRST[1])).toHaveText(FIRST[1])
+    await expect(row(SECOND[1])).toHaveText(SECOND[1])
+    await expect(row(THIRD[1])).toHaveCount(0)
+  })
+
+  await test.step('unticking one asks first, by name, and says what does not come back', async () => {
+    const list = await pickRepo()
+    await expect(box(list, FIRST)).toBeChecked()
+    await expect(box(list, SECOND)).toBeChecked()
+    await box(list, FIRST).uncheck()
+    await expect(list.getByTitle('1 to remove from the list.')).toBeVisible()
+
+    // The first press is the question, never the act.
+    await list.getByRole('button', { name: 'Save selection', exact: true }).click()
+    await expect(list.getByText('Remove an agent from the list')).toBeVisible()
+    await expect(list.locator('strong')).toHaveText(FIRST[1])
+    const sentence = list.locator('p').filter({ hasText: 'leaves the list' })
+    await expect(sentence).toHaveCount(1)
+    await expect(sentence).toContainText(
+      'any job that uses one will refuse to run — and will need it selected again even if you add it back'
+    )
+    // The list is frozen under the question: it names agents, and a set that
+    // could still change would ask about one and act on another.
+    await expect(box(list, SECOND)).toBeDisabled()
+    await expect(list.getByRole('button', { name: 'Back to the list', exact: true })).toBeVisible()
+
+    await list.getByRole('button', { name: 'Remove and save', exact: true }).click()
+    await expect(page.getByRole('dialog')).toHaveCount(0)
+  })
+
+  await test.step('it leaves the list, and its folder is exactly where it was', async () => {
+    await expect(row(FIRST[1])).toHaveCount(0)
+    await expect(row(SECOND[1])).toHaveText(SECOND[1])
+    await expect(row(THIRD[1])).toHaveCount(0)
+    // Removing from the list is an app-side act in both directions: neither the
+    // add nor the remove may leave a mark on a folder the user owns.
+    expect(treeOf(repo)).toEqual(before)
+    expect(readFileSync(join(repo, 'local_agents', FIRST[0], 'AGENT.md'), 'utf8')).toContain(
+      `# ${FIRST[1]}`
+    )
+  })
+})
+
+/**
+ * The "Runs with" panel on a bare agent — the one surface where a folder the
+ * desktop promised not to write into has to remember a choice.
+ *
+ * It needs a **model registry**, which is one live network round trip per
+ * credential (`provider:list-models`), so the panel's controls stay disabled
+ * for as long as it has not landed. The endpoint is replaced and nothing else,
+ * exactly as `agent-runtime.spec.ts` does it: both SDKs read their base URL
+ * from the environment, the fixture hands the app this process's environment,
+ * and the app then runs its real adapters over real HTTP against a server in
+ * this file. Scoped to a `describe` so the tests above it — which seed no
+ * credentials and make no such call — run with the environment untouched, and
+ * restored in `afterAll` so `live.spec.ts` in the same worker never sees it.
+ */
+test.describe('a bare agent chooses its own credential', () => {
+  const ANTHROPIC_CRED = 'Anthropic Personal'
+  const OPENAI_CRED = 'OpenAI Work'
+  const CLAUDE = { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' }
+  const AGENT = 'Invoice Triage Agent'
+
+  /** Both catalogues on one port, told apart by the header the SDK sends. */
+  function modelRegistry(): Server {
+    return createServer((req, res) => {
+      res.setHeader('content-type', 'application/json')
+      if (!req.url?.startsWith('/v1/models')) {
+        res.statusCode = 404
+        res.end('{}')
+        return
+      }
+      const anthropic = typeof req.headers['x-api-key'] === 'string'
+      res.end(
+        JSON.stringify(
+          anthropic
+            ? {
+                data: [
+                  {
+                    type: 'model',
+                    id: CLAUDE.id,
+                    display_name: CLAUDE.name,
+                    created_at: '2025-09-29T00:00:00Z'
+                  }
+                ],
+                has_more: false,
+                first_id: CLAUDE.id,
+                last_id: null
+              }
+            : {
+                object: 'list',
+                data: [
+                  { id: 'gpt-4o-mini', object: 'model', created: 1_720_000_000, owned_by: 'openai' }
+                ]
+              }
+        )
+      )
+    })
+  }
+
+  let server: Server
+  const savedEnv: Record<string, string | undefined> = {}
+
+  test.beforeAll(async () => {
+    server = modelRegistry()
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+    const { port } = server.address() as AddressInfo
+    savedEnv.ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL
+    savedEnv.OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
+    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`
+    // The OpenAI SDK's default base URL already carries `/v1`; Anthropic's does not.
+    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`
+  })
+
+  test.afterAll(async () => {
+    for (const [key, value] of Object.entries(savedEnv)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+  })
+
+  /** Every state file the desktop keeps for bare agents, by filename. */
+  function stateFiles(cinna: CinnaApp): string[] {
+    const dir = join(cinna.sandbox.userData, 'external-agents')
+    if (!existsSync(dir)) return []
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.json'))
+      .sort()
+  }
+
+  /** The `runtime` block of the single bare agent's state, or null if it has none. */
+  function storedRuntime(cinna: CinnaApp): unknown {
+    const files = stateFiles(cinna)
+    if (files.length !== 1) return null
+    const raw = readFileSync(join(cinna.sandbox.userData, 'external-agents', files[0]), 'utf8')
+    return (JSON.parse(raw) as { runtime?: unknown }).runtime ?? null
+  }
+
+  /** Agents tab → this agent's page, from wherever the app just is. */
+  async function openAgentPage(cinna: CinnaApp): Promise<Locator> {
+    const page = cinna.page
+    await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await page.getByRole('button', { name: AGENT, exact: true }).click()
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+    return page.getByRole('region', { name: 'Runs with' })
+  }
+
+  test('the choice is saved in Cinna, survives a restart, and never lands in the folder', async ({
+    cinna
+  }) => {
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(
+      async (names) => {
+        await window.api.providers.upsert({
+          type: 'anthropic',
+          name: names.anthropic,
+          apiKey: 'e2e-anthropic-key',
+          enabled: true
+        })
+        await window.api.providers.upsert({
+          type: 'openai',
+          name: names.openai,
+          apiKey: 'e2e-openai-key',
+          enabled: true
+        })
+      },
+      { anthropic: ANTHROPIC_CRED, openai: OPENAI_CRED }
+    )
+
+    const folder = writeBareAgent(homeDir(cinna, 'invoice-triage'), AGENT)
+    const before = treeOf(folder)
+    await adoptFolder(cinna, folder)
+    // Adopting a folder whose one agent is wanted writes nothing anywhere: the
+    // `hidden: false` patch is skipped because the state already reads that way.
+    expect(stateFiles(cinna)).toEqual([])
+
+    // Credentials seeded over IPC are invisible to the renderer's `useProviders`
+    // query, which cached an empty list before the seed and is invalidated by
+    // nothing — the same staleness the agent list has. A restart is the
+    // arrangement, not part of what is under test.
+    await cinna.relaunch()
+    await cinna.skipOnboarding()
+    await cinna.page.evaluate(() => window.api.localAgents.rescan())
+    let panel = await openAgentPage(cinna)
+
+    await test.step('the panel is a control now, not a sentence', async () => {
+      const credential = panel.getByLabel('Credential')
+      // Disabled until `provider:list-models` lands for both credentials; before
+      // that the panel cannot tell a foreign model from an unlisted one.
+      await expect(credential).toBeEnabled()
+      // The bare panel used to render the credential as static text and offer no
+      // second picker at all — it could only report the Default runtime.
+      await expect(panel.getByLabel('Work complexity')).toBeEnabled()
+      await expect(credential).toHaveValue('')
+      await expect(credential.locator('option')).toHaveCount(3)
+      await expect(credential.locator('option').first()).toHaveText('Default (none set)')
+      // The one line on the page that says where the answer goes.
+      await expect(panel).toContainText(
+        'This choice is kept in Cinna, not in the folder — so a folder that moves starts over on the default.'
+      )
+    })
+
+    await test.step('choosing a credential writes it under userData, and only there', async () => {
+      await panel.getByLabel('Credential').selectOption(OPENAI_CRED)
+      await expect(panel.getByLabel('Credential')).toHaveValue(OPENAI_CRED)
+      // The file is the assertion. A `runtime` block in the folder's own
+      // `cinna-agent.json`, or an `app-data/desktop.json` beside `AGENT.md`,
+      // would satisfy every locator above and none of the three below.
+      await expect
+        .poll(() => storedRuntime(cinna), { message: 'the choice reached userData' })
+        .toEqual({ credential: OPENAI_CRED })
+      // Keyed by the folder's real path, with its basename kept legible.
+      expect(stateFiles(cinna)).toHaveLength(1)
+      expect(stateFiles(cinna)[0]).toMatch(/^invoice-triage-[0-9a-f]{16}\.json$/)
+      expect(treeOf(folder)).toEqual(before)
+      expect(existsSync(join(folder, 'app-data'))).toBe(false)
+      expect(existsSync(join(folder, 'cinna-agent.json'))).toBe(false)
+    })
+
+    await test.step('a restart and a rescan read it back off disk', async () => {
+      await cinna.relaunch()
+      await cinna.skipOnboarding()
+      // Startup does not scan, and the panel reads `agent.runtime` off the index.
+      await cinna.page.evaluate(() => window.api.localAgents.rescan())
+      panel = await openAgentPage(cinna)
+      const credential = panel.getByLabel('Credential')
+      await expect(credential).toBeEnabled()
+      await expect(credential).toHaveValue(OPENAI_CRED)
+      expect(treeOf(folder)).toEqual(before)
+    })
   })
 })

@@ -293,6 +293,27 @@ export function useSetLocalAgentRuntime() {
 }
 
 /**
+ * Save which credential and model a **bare** agent runs on.
+ *
+ * The same choice as {@link useSetLocalAgentRuntime} and a different place to
+ * put it: a bare folder has no `cinna-agent.json`, so there is no stamp to
+ * guard the write with and nothing in the user's folder is touched — the value
+ * lands in that agent's own state under `userData`. Which means no stale-write
+ * refusal is possible here, and the panel's reload prompt has nothing to say.
+ */
+export function useSetBareAgentRuntime() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; runtime: LocalAgentRuntimeInput }>({
+    mutationFn: async ({ agentId, runtime }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setRuntime(agentId, runtime)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/**
  * Move the agent's folder to the Trash and forget it.
  *
  * Only the list is invalidated. The page's own entry is deliberately left
@@ -688,6 +709,11 @@ export function useAddAgentFolder() {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      // Every open agent page too, by key prefix. A re-selection edits agents
+      // that already exist — one of them may be the page behind this dialog —
+      // and the list keys above do not reach `localAgentKey(id)`, so that page
+      // would keep rendering the row as it was before the save.
+      void queryClient.invalidateQueries({ queryKey: ['local-agent'] })
     }
   })
 }

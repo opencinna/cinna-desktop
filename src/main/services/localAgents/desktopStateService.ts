@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { app } from 'electron'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
+import type { AgentRuntimeRef } from '../../../shared/kit/manifest'
 import type { LocalAgentDesktopSummary, LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
 import { LocalAgentError } from '../../errors'
@@ -88,6 +89,23 @@ export interface DesktopState {
    * offer to put it back.
    */
   hidden: boolean
+  /**
+   * Bare agents only: which credential and model the user picked for it.
+   *
+   * A kit agent's runtime is a `runtime` block in `cinna-agent.json` — a file
+   * that travels, which is why it holds a credential *name* and never a key. A
+   * bare folder has no such file, and the desktop must not create one inside a
+   * repository it promised to leave alone, so the same three values live here
+   * instead. The shape is deliberately identical (`AgentRuntimeRef`) so
+   * `runtimeService.resolve` and the engine's config source read one field for
+   * both kinds and neither has to know where it came from.
+   *
+   * The consequence of living beside the rest of the bare state is the one that
+   * state already has: the key is the folder's path, so moving the folder starts
+   * a different agent, which runs on the Default runtime until it is told
+   * otherwise. Null means exactly that — no choice made, use the default.
+   */
+  runtime: AgentRuntimeRef | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -97,7 +115,8 @@ const EMPTY_STATE: DesktopState = {
   permissionGrants: {},
   lastStatus: null,
   displayName: null,
-  hidden: false
+  hidden: false,
+  runtime: null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -172,8 +191,35 @@ function coerce(raw: unknown): DesktopState {
     permissionGrants,
     lastStatus,
     displayName: asString(raw.displayName),
-    hidden: raw.hidden === true
+    hidden: raw.hidden === true,
+    runtime: coerceRuntime(raw.runtime)
   }
+}
+
+/**
+ * The three keys a runtime may carry, and nothing else.
+ *
+ * Narrower than `AgentRuntimeRef` allows on purpose: a manifest's block is
+ * round-tripped whole because another tool may have written keys we do not know
+ * about, while this file has exactly one writer. Keeping only what the picker
+ * can set is what stops a stale `permissions` map — or anything else a future
+ * build once wrote here — being handed to the engine long after the surface
+ * that produced it is gone.
+ *
+ * An object with none of the three reads as no choice at all, so `{}` on disk
+ * and a missing key mean the same thing.
+ */
+function coerceRuntime(raw: unknown): AgentRuntimeRef | null {
+  if (!isRecord(raw)) return null
+  const credential = asString(raw.credential)
+  const model = asString(raw.model)
+  const complexity = asString(raw.complexity)
+  if (!credential && !model && !complexity) return null
+  const runtime: AgentRuntimeRef = {}
+  if (credential) runtime.credential = credential
+  if (model) runtime.model = model
+  if (complexity) runtime.complexity = complexity
+  return runtime
 }
 
 /**

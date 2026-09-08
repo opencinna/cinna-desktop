@@ -401,7 +401,7 @@ function bareValidation(agentDir: string, promptText: string | null): LocalAgent
   infos.push({
     code: 'bare.no_manifest',
     message:
-      'This folder has no cinna-agent.json, so it runs without commands, credential slots or a runtime it names itself.',
+      'This folder has no cinna-agent.json, so it runs without commands or credential slots, and the credential you pick for it is kept in Cinna rather than in the folder.',
     path: MANIFEST_FILE
   })
   return { errors, warnings, infos }
@@ -559,7 +559,12 @@ export const scannerService = {
       contractStatus: 'ok',
       manifest: {},
       publications: [],
-      runtime: null,
+      // The one DTO field a bare folder fills from its desktop state rather
+      // than from a file in the folder. Same shape as a manifest's `runtime`
+      // block, so `runtimeService.resolve`, the engine's config source and the
+      // Runs-with panel all read one field and none of them needs to know which
+      // kind of agent it belongs to. See `desktopStateService.runtime`.
+      runtime: desktop.runtime,
       credentials: [],
       commands: [],
       status: null,

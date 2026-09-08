@@ -19,12 +19,13 @@ The same convention as the rest of this folder:
 
 ## Core Concepts
 
-- **Bare Agent** — A folder that is an agent because it holds an `AGENT.md`, and for no other reason. It has no manifest, so no commands, no credential slots, no example prompts, no publications and no runtime it names itself. `LocalAgentDto.kind` is `'bare'`; a kit folder's is `'kit'`
+- **Bare Agent** — A folder that is an agent because it holds an `AGENT.md`, and for no other reason. It has no manifest, so no commands, no credential slots, no example prompts and no publications. It *does* choose its own **runtime** — which credential pays for it, and how hard its work is — but the answer is kept outside the folder, because there is no file in the folder to write one into. `LocalAgentDto.kind` is `'bare'`; a kit folder's is `'kit'`
 - **External Root** — A registered `agent_roots` row with `kind = 'external'`: a folder the user pointed at, walked for `AGENT.md`. The kit shape is `kind = 'workshop'`
 - **The walk** — How an external root's agents are found: up to `BARE_AGENT_MAX_DEPTH` (2) levels below the root, skipping dot-directories and a dependency-tree list, never descending into a folder that is itself an agent
 - **Positional identity** — A bare agent's row id, `folder:external:<rootId>:<relPath>`. There is no manifest to state a durable one, so where the folder sits *is* its identity
-- **Bare state** — `<userData>/external-agents/<basename>-<16 hex of sha256(realpath)>.json`: everything `app-data/desktop.json` holds for a kit agent, kept outside the user's folder
+- **Bare state** — `<userData>/external-agents/<basename>-<16 hex of sha256(realpath)>.json`: everything `app-data/desktop.json` holds for a kit agent, kept outside the user's folder, plus the three values only a bare agent keeps there because nothing in its folder can state them — the name the user gave it, whether it is in the list, and its runtime
 - **Hidden** — A bare agent that is not in the list although its folder is under a registered root. One state with **two histories** — an agent the user removed, and one they simply did not tick when adopting the folder — because "not chosen" and "removed" have to be the same thing or the next rescan re-adds the ones they declined. Recorded in that agent's state, since the scan walks the whole root every time
+- **Re-selection** — Picking a folder that is *already* a registered external root. The dialog reopens its agent list on the state the app is in, and what is ticked when the user saves is the whole set they want: unticking one takes it out of the list, ticking one that was out puts it back
 - **Agent role / builder role** — `AGENT.md` is what the agent is told; `README.md` is what an assistant *working on* the agent is briefed with. The two documents have different readers, and the split is enforced rather than assumed
 
 ## User Stories / Flows
@@ -38,19 +39,30 @@ The same convention as the rest of this folder:
 
 ### Adopting a repository of them
 
-1. Several folders found means the picked folder is a *set*. The step lists them with a checkbox each — name from the folder's own `AGENT.md`, the root-relative path underneath — with **Select all** / **Clear all**
-2. Folders already added elsewhere are shown **ticked and disabled**, never filtered out: a list that silently loses the row the user came to add reads as the folder having been scanned wrong
+1. Several folders found means the picked folder is a *set*. The step lists them with a checkbox each — the root-relative path underneath — with **Select all** / **Clear all**. The name is the one the app shows: what the user called the agent where they have named it, then the `AGENT.md` heading, then the folder name, which is the scanner's own order. Listing a renamed agent under the heading in its file is a row the user cannot recognise in a dialog whose whole question is "which of these do you want"
+2. A folder that is already an agent under *another* registered root is shown **ticked and disabled**, never filtered out: a list that silently loses the row the user came to add reads as the folder having been scanned wrong. On a first adopt every already-added row is one of those by definition, since the folder being picked is not registered and nothing under it can be its own
 3. If the walk stopped at its cap, the step says so above the list — "This is the first N folders found. Pick a folder closer to the agents to see the rest." — because every count under a silently truncated list is true of the wrong set
 4. **Add N agents** registers the *whole picked folder* as one root and marks the unticked folders hidden
 5. The sidebar groups the new agents under the picked folder's name, and the page opens on the first agent adopted
 
+### Coming back to a folder already added
+
+1. Picking a folder that is already a registered external root is a **re-selection**, not a clash. The step opens on the state the app is in: the agents that are in the list ticked, the ones that are not, unticked — so confirming without touching anything changes nothing, and an agent removed earlier is not silently put back by a dialog opened to add a different one
+2. A line above the buttons names the root it is already registered as and says the folder on disk is never touched either way; a second, reserved line says what the button is about to do — "1 to add, 2 to remove from the list."
+3. There is no single-agent Name step here, however many agents the folder holds. The one thing a re-selection must be able to do is untick, and a step with a text field and no checkbox cannot — and the name field is prefilled from the folder, so sending it back would rename an agent the user had already named themselves
+4. Ticking a row that was out puts that agent back, **with its engine sessions**, exactly as Settings' **Add them** does. Unticking one takes it out of the list, which is the same act as ⋯ → Remove from the list
+5. If anything is being taken out, the button confirms first: a step *inside* the dialog — the list the user just edited stays on screen behind it — naming the agents that are leaving, what comes back if they are ticked again, and what does not ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5). The checkboxes freeze while it is up, because a question that names agents must act on the set it named
+6. **Saving lands on the agent that was added**, not on whichever of the ones already there sorts first. A save that only removed agents lands the user nowhere rather than on somebody else's page
+
 ### A pick that cannot be used
 
-The dialog stays on the choice step and says why, in its reserved error line. It never closes on a refusal ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 6). Four reasons, in the order they are checked: the folder is already registered, it overlaps a registered root in either direction, nothing under it has an `AGENT.md`, or every agent in it has already been added. Cancelling the picker is not a refusal and says nothing at all.
+The dialog stays on the choice step and says why, in its reserved error line. It never closes on a refusal ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 6). The reasons, in the order they are checked: the folder overlaps a registered root in either direction (including a **workshop** root at exactly this path, where the walk finds nothing anyway), nothing under it has an `AGENT.md`, or — outside a re-selection — every agent in it has already been added. Cancelling the picker is not a refusal and says nothing at all.
+
+Being the *same* external root is no longer among them; that is the re-selection above.
 
 ### Working with a bare agent
 
-1. Its page is the ordinary agent page with the manifest-shaped parts removed: no **Commands** tab, a read-only **Runs with** panel, and one card on **Overview** — its **Name**
+1. Its page is the ordinary agent page with the manifest-shaped parts removed: no **Commands** tab, and one card on **Overview** — its **Name**. The **Runs with** panel is the same panel a kit agent gets, controls and all
 2. **Prompts** holds `Instructions` (`AGENT.md`, editable in place like any other prompt document) over a read-only `Readme`
 3. **Permissions** and **Folder** are unchanged: the permission profile is the same for every folder agent — with `AGENT.md` added to its identity-files list, so rewriting the file the agent *is* asks — and the Folder tab shows the bare findings
 4. **Open in <tool>**, **Start chat** and the ⋯ menu all behave as they do for a kit agent
@@ -65,7 +77,7 @@ The dialog stays on the choice step and says why, in its reserved error line. It
 
 1. **⋯ → Remove agent…** — the wording differs from a kit agent's "Delete agent…" because the outcome does
 2. The dialog offers two radio options: **Remove from the list only** (the default) and **Remove and move the folder to the Trash**. The recoverable one is first and selected
-3. Removing from the list marks the agent hidden. The folder is untouched, and Settings → Local Agents shows the count under that root with an **Add them** button — which is what the dialog names, because re-picking the folder is *refused* for overlapping a root that is still registered
+3. Removing from the list marks the agent hidden. The folder is untouched, and there are two routes back, both of which the dialog names: re-picking the folder in **+ → Add a folder** reopens its list with this agent unticked, and Settings → Local Agents shows the count under that root with an **Add them** button that puts *all* of them back at once. Naming only a route that does not work is how a choice offered as the recoverable one becomes a dead end ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) — which is what this hint did while re-picking a registered folder was still refused
 4. The copy owns the half that cannot be undone: a job that uses the agent "will need it selected again even if you put the agent back". Removing drops the `agents` row and `job_agents` cascades with it; restoring re-creates the row under the same positional id, so chats re-bind, but the job's link does not come back
 
 ## Business Rules
@@ -112,9 +124,26 @@ Why outside the folder: a bare folder is very often a git working tree shared wi
 
 Every caller already knows: the scanner and the service hold `root.kind`, the turn runner holds the agent's DTO.
 
-`DesktopState` therefore gained two fields that only a bare agent uses — `displayName` (the user's own name for it, because no file states one) and `hidden` — and `forgetAt(path)`, which deletes the state file when a bare folder is trashed. Without it the sessions, the token and the permission grants of a deleted agent would sit under `<userData>` forever and be inherited by whatever the user next creates at that path, since the path is the key. A kit agent needs no equivalent: its state was inside the folder and went to the Trash with it.
+`DesktopState` therefore gained three fields that only a bare agent uses — `displayName` (the user's own name for it, because no file states one), `hidden`, and `runtime` (the rule below) — and `forgetAt(path)`, which deletes the state file when a bare folder is trashed. Without it the sessions, the token and the permission grants of a deleted agent would sit under `<userData>` forever and be inherited by whatever the user next creates at that path, since the path is the key. A kit agent needs no equivalent: its state was inside the folder and went to the Trash with it.
 
 **`forgetAt` takes the path, not the folder, and the caller resolves it before anything moves.** The key is `realpathSync(agentDir)`; once the folder is in the Trash that call throws and the key falls back to the raw path — a *different* digest wherever any component is a symlink, which on macOS includes everything under `tmpdir()` (`/var` → `/private/var`), an explicitly permitted root location. The unlink then raised `ENOENT` on a file that was never there and left the real one behind, which is precisely the leak the function exists to prevent.
+
+### A bare agent picks its own runtime, and the answer is kept where the folder is not
+
+Which credential pays for an agent and how hard its work is are the two questions a user most needs an answer to, and a folder adopted from somebody's own repository is not a lesser agent for having no manifest. So the **Runs with** panel is the same panel for both kinds, with the same credential picker, the same Work-Complexity/Advanced pair and the same reserved status line.
+
+What differs is one thing: where the choice goes.
+
+- A **kit** agent's runtime is a `runtime` block in `cinna-agent.json`, written under the file's stamp so an assistant editing the manifest at the same moment cannot be clobbered
+- A **bare** agent's goes into that agent's state under `<userData>`, as `DesktopState.runtime`. There is **no stamp**, and there is nothing to stamp: the write touches no file in the folder, so no other tool can have changed it underneath, and nothing appears in the user's `git status`. It travels on its own channel for the same reason renaming does — `local-agent:update-field`'s whole contract is a stamped write to a file in the folder, and a stamp for a file the write does not touch guards nothing
+
+The **validation is shared**, deliberately: `runtimeService.validate` is what both writers run, so a key-shaped credential and a model-and-tier pair are refused on this path too. A bare agent's choice never leaves the machine, but a pasted API key does not become safe by landing in `userData` rather than in a file the user commits.
+
+The scanner then puts both on the same DTO field, `LocalAgentDto.runtime`. That is what keeps this to one difference: `runtimeService.resolve`, the engine's config source, the tier resolution and every message the panel can produce read one field and ask nothing about where it came from. Neither was changed to add this.
+
+**The consequence is the one the rest of the bare state already carries, and the panel says it in a line of its own**: the key is the folder's path, so moving the folder starts a different agent, which runs on the Default runtime until it is told otherwise. That note is scoped to *this choice* — "nothing is written to the folder" would be one tab away from false, since the Prompts tab is a live editor over `AGENT.md` ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 9).
+
+Only the three keys a picker can set survive a read of the state file — credential, model, complexity. The manifest's block is round-tripped whole because another tool may have written keys we do not know about; this file has exactly one writer, so keeping anything else would be a way for a stale `permissions` map to reach the engine long after the surface that wrote it was gone. A stored object naming none of the three reads as no choice at all, which is the same as the key being absent.
 
 ### The prompt is `AGENT.md` and nothing else the folder contains
 
@@ -133,7 +162,7 @@ The kit assembler reaches into `scripts/`, `credentials/` and `knowledge/` becau
 | `bare.prompt.missing` | error | `AGENT.md` is gone or unreadable. The folder is not an agent any more, and readiness is `invalid` |
 | `bare.prompt.empty` | warning | The file is there and empty. The agent still runs, on the stand-in prompt |
 | `bare.readme.missing` | info | No `README.md`, so an assistant opening the folder is briefed from `AGENT.md` instead |
-| `bare.no_manifest` | info | Always present: this folder runs without commands, credential slots or a runtime it names itself |
+| `bare.no_manifest` | info | Always present: this folder runs without commands or credential slots, and the credential picked for it is kept in Cinna rather than in the folder |
 
 **Empty is a warning and not an error**, matching the kit path exactly. An error makes the folder `invalid`, and an invalid folder is dropped from the engine's config with nothing on screen explaining it — the user would be left with an agent that silently cannot run because a file they can see is blank.
 
@@ -141,7 +170,7 @@ The kit assembler reaches into `scripts/`, `credentials/` and `knowledge/` becau
 
 **`local-agent:validate` short-circuits for an external root** and returns the scan's own findings. The kit validator run on a bare folder reports a wall of errors about a missing manifest, missing prompt documents and a missing layout — a contract the folder never agreed to keep, contradicting the findings the same page is already showing.
 
-**Infos are rendered.** They were produced and displayed nowhere, for every kind of agent; the Folder tab's Validation card now lists them under the errors and warnings, quieter. They stay **out** of the tab's count badge, which remains errors + warnings: a badge on every healthy folder is the banner-in-the-healthy-state failure, and an info is by definition not attention. For a bare folder this is where "no `cinna-agent.json`, so no commands, credential slots or runtime of its own" finally has a home — until then the only place that fact appeared was a note in the Runs-with panel restating a label two lines above it.
+**Infos are rendered.** They were produced and displayed nowhere, for every kind of agent; the Folder tab's Validation card now lists them under the errors and warnings, quieter. They stay **out** of the tab's count badge, which remains errors + warnings: a badge on every healthy folder is the banner-in-the-healthy-state failure, and an info is by definition not attention. For a bare folder this is where "no `cinna-agent.json`, so no commands or credential slots, and the credential you pick is kept in Cinna rather than in the folder" has its home — until then the only place that fact appeared was a note in the Runs-with panel restating a label two lines above it.
 
 ### Adopting is two calls, and the pick is what authorises the second
 
@@ -151,17 +180,37 @@ Splitting pick from adopt is what makes the preview possible at all — the user
 
 **An adopt that indexes nothing is a failure, and the root it just created is dropped.** Everything up to the scan can succeed against a folder that is no longer there: the preview is a separate call, and between the two the user can eject the volume, move the folder or delete it. Without the check the dialog closed on a folder that never appeared, leaving a registered root with no agents and nothing anywhere saying why — and the *next* attempt then refused for overlapping a root the user could not see the point of. `addAgentFolder` answers `AddAgentFolderResult { root, agentIds }` rather than the root alone, so the dialog can land the user on the agent they just added.
 
+**Only a root this call created is dropped again.** A folder that was already registered keeps its registration when the folders the user ticked turn out to be gone: with the root would go its watcher, its git update check and every agent the user did not just touch, and none of that should fall over because one folder went missing between the preview and the confirm.
+
+**An empty list is a failure on a first adopt and a real answer on a re-selection.** "Nothing ticked" cannot be adopted, so it is refused; the same list on a folder already registered means "take all of these out", and it is performed — the root stays, the folders stay, and both routes back (re-pick, or Settings' **Add them**) still work. Disabling the button there would promise a removal in one line of copy and refuse it silently in the next.
+
 ### The whole picked folder becomes the root, whatever was ticked
 
 The root is *where to look*, not *what was found*. Two reasons: the walk has to be able to find an agent folder that arrives later, and the update check works on the repository rather than on one folder inside it.
 
-So an unticked folder is recorded as **hidden** rather than left out. "Not chosen" and "removed from the list" have to be the same state, because the scan walks the whole root and the next rescan would otherwise add the folders the user declined. The flag is written for *every* folder found, not only the unwanted ones: re-adopting a repository whose agents were previously removed has to clear it, or the second add appears to do nothing.
+So an unticked folder is recorded as **hidden** rather than left out. "Not chosen" and "removed from the list" have to be the same state, because the scan walks the whole root and the next rescan would otherwise add the folders the user declined. The flag is written for every folder whose state would *change*, not only the unwanted ones: re-adopting a repository whose agents were previously removed has to clear it, or the second add appears to do nothing — and on a re-selection, unticking one is how it leaves the list again. A folder whose state already reads that way is skipped, because the patch is a read-modify-write of the whole file and doing it for fifteen untouched agents is fifteen chances to land on a stale snapshot, the engine session a running turn wrote a millisecond ago among them.
+
+### `relPaths` is the whole desired set, not an addition to it
+
+On a re-selection, what the user ticked *is* the list they want: a path left out is removed exactly as ⋯ → Remove from the list would remove it. Three rules follow, and each of them was a defect first:
+
+- **Every removal's turn lock is checked before anything is written.** The locks used to be taken one at a time inside the loop, and acquiring one throws — so an agent earlier in the walk was already hidden on disk when a later one refused, and the dialog said "nothing was changed" ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) over a folder where something had been. The index was never reconciled either, so that agent vanished from the sidebar at the next unrelated rescan with no action of the user's to attribute it to. The removal itself still takes the lock, for the turn that started in the intervening few lines
+- **A `name` is applied only to an agent being *added*.** The field is prefilled from the folder, so writing it back over an agent already in the list renamed it — silently, from a dialog whose copy promises the folder is untouched and says nothing at all about names. Main ignores it for an agent it is not adding, and the renderer does not send it on a re-selection at all: the same rule on both sides of the boundary
+- **An agent put back this way gets its engine sessions back**, through the same reseed a Settings restore runs: `a2a_sessions` cascaded away with the row, so without it the chats re-bind and the model has forgotten the conversation the transcript still shows
+
+The root's watcher is refreshed afterwards as well. `watchRoot` returns early for a root already watched at this path, which would leave the agents a re-selection just added without a per-directory watcher on the non-recursive fallback.
+
+The result is the ticked agents, ordered **newly added first**, and that only matters here: re-selecting a repository to add its sixteenth agent must land on that agent, not on whichever of the fifteen already there sorts first. On a first adopt every entry is new and the order is the walk's. Where the user's own selection produced no readable agent — a ticked folder that has gone since the preview — the answer falls back to everything the scan did index, rather than being empty and reading as the deliberate emptying below.
 
 ### Overlap is checked first, before anything about what was found
 
 It is the security rule — every registered root becomes an allowed area for the "open in…" path guard, so adopting a parent of one widens that guard over the whole subtree ([Open in Tools](open_in_tools.md)) — and it is the most specific true thing about the folder.
 
 Checked last it produced answers that sent the user after the wrong problem: pointing at the *parent* of the agents home answered "nothing in this folder has an `AGENT.md`", and re-picking a registered folder answered "everything here has already been added" — true, but not why it was refused.
+
+**The one case the overlap pass no longer refuses is the folder being exactly a registered *external* root**, which is a re-selection and is checked in the same loop. Being exactly a **workshop** root still refuses: that shape holds kit folders, which this walk does not look for at all, so falling through would only reach "nothing in this folder has an `AGENT.md`" — the true thing about it, but not the useful one. Every other overlap, in either direction, is refused as before.
+
+A row that is an agent under a *different* root stays ticked and disabled even while re-selecting: this pick speaks for one folder's contents and that agent belongs to another. Registered roots may not overlap, so it takes a symlink to reach — which is why `DiscoveredBareAgent.addedElsewhere` is a computed field rather than something the dialog infers from `alreadyAdded`.
 
 ### Removal asks, and only a bare agent has a choice
 
@@ -194,8 +243,8 @@ On the Linux fallback (no recursive watch) the root, each agent folder found and
 ### The engine treats it as an agent with no manifest
 
 - `collectEngineAgents` branches to `assembleBareAgentPrompt`. The only other engine change is one entry in the permission profile's identity-files list, `AGENT.md` → `ask`, so the rule "the agent's own identity files ask" also holds for the agent whose identity is one file ([Local Agent Permissions](permissions.md#the-agents-own-identity-files-ask))
-- `runtime` is `null` on the DTO, so `runtimeService.resolve` falls straight through to the **Default runtime** derived from the user's default chat mode. There is no manifest to name a credential or a tier, and no third fallback for a credential exists anywhere in this feature — see [The Local Engine](engine.md#runtime-resolution-manifest-then-the-default-runtime)
-- The **Runs with** panel is replaced by a read-only `BareRuntimePanel` that performs the same resolution the engine does and names it the same way, keeping the panel's shell, its label, its engine line and its one reserved status line. Its note says "Runs on your default credential — this folder states none of its own", rather than naming `cinna-agent.json`: a kit concept is no explanation to a user who reached this page without one
+- `LocalAgentDto.runtime` is filled from the agent's **desktop state** rather than from a file in the folder, and `runtimeService.resolve` is handed it unchanged. An agent that has been given no runtime carries `null` and falls straight through to the **Default runtime** derived from the user's default chat mode; one that has been given a credential or a tier resolves through exactly the chain a manifest's block does, floor and all. No third fallback for a *credential* exists anywhere in this feature — see [The Local Engine](engine.md#runtime-resolution-the-agents-own-runtime-then-the-default-runtime)
+- The **Runs with** panel is the same component for both kinds. What a bare agent adds is one static note saying the choice is kept in Cinna and not in the folder, and the removal of the one remedy that named a file it does not have — "models can still be typed into `cinna-agent.json`" when the registry fails to load
 
 ### Every surface says something true of *this* folder
 
@@ -204,7 +253,7 @@ The page was reused wholesale from the kit agent page, and ten separate surfaces
 | Surface | For a bare agent |
 |---|---|
 | Overview | The three manifest/STATUS cards are replaced by the **Name** card |
-| Runs-with note | Names the default credential, not `cinna-agent.json` |
+| Runs-with note | Says where the choice is kept — in Cinna, not in the folder — instead of naming `cinna-agent.json`. Scoped to that one choice, because "nothing is written to the folder" is one tab away from false |
 | Folder → Files | Lists the folder's **own two** files, `AGENT.md` and `README.md`, not the kit layout's seven |
 | Folder → Identity | No `Kit` row — a folder with no manifest was reporting an *old* one ("legacy manifest"), which is both false and the wrong story — and a line saying the agent is identified by where its folder sits, so moving it starts a new agent |
 | Folder → Runs | Names no file; says the run state is kept on this machine, outside the folder |
@@ -246,9 +295,14 @@ Agents sidebar "+" ─► NewLocalAgentModal
                              ├─ local-agent:folder-pick  ─► native dialog (main)
                              │                              discoverBareAgents  → preview
                              └─ local-agent:folder-add   ─► addExternalRoot (writes nothing
-                                                              into the folder)
+                                                              into the folder; returns the
+                                                              existing row on a re-pick)
+                                                            relPaths = the whole desired set
                                                             hidden/displayName → bare state
                                                             scanExternalRoot · watchRoot
+
+Agent page "Runs with" ─► local-agent:set-runtime ─► desktop state (no stamp)
+                                                    ─► engineManager.applyConfigChange
 
 scanExternalRoot(root)
   discoverBareAgents(root.path, depth 2)
@@ -259,7 +313,8 @@ scanExternalRoot(root)
   replaceFolderIndex(root)                     (the same prune every root goes through)
 
 Engine   collectEngineAgents ─► assembleBareAgentPrompt(AGENT.md + desktop context)
-                                runtime null ─► Default runtime
+                                runtime from bare state ─► same resolve() as a manifest's,
+                                null ─► Default runtime
 
 Files on disk ── truth ──► agents rows ── derived index
      ▲                          │
@@ -271,7 +326,7 @@ Files on disk ── truth ──► agents rows ── derived index
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the roots, the scan, the prune, the watcher and the turn lock this shape plugs into; and the two extra columns the index now owns
 - [Kit Contract & Manifest Layer](kit_contract.md) — what a bare folder is defined against: everything it does not keep
 - [Agents Tab & Agent Page](agents_tab.md) — the Add-an-agent choice, the folder step, the bare page's tabs and the remove dialog
-- [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the bare prompt assembler and the Default runtime a bare agent always resolves to
+- [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the bare prompt assembler, and the resolution chain a bare agent's runtime goes through once it has one
 - [Agents Folder Updates](folder_updates.md) — fast-forwarding a registered root that is a git working tree; the reason a repository of agents is worth adopting as a set
 - [Open in Tools](open_in_tools.md) — the registered roots are the allowed area of its path guard, which is why overlap is refused first; and the init prompt's entry-document order for a bare folder
 - [Local Agent Permissions](permissions.md) — the profile is identical for a bare agent; only where its standing grants are stored differs

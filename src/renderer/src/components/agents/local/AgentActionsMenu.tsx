@@ -135,12 +135,15 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
                 {
                   value: false,
                   label: 'Remove from the list only',
-                  // Not "add it again": the folder stays a registered agents
-                  // folder, so re-picking it is *refused* for overlapping one.
-                  // Settings is the route that works, and naming the wrong one
-                  // sends the user down a dead end for a choice offered as the
-                  // recoverable one (ux_rules rule 5).
-                  hint: 'The folder stays exactly where it is, and Settings → Local Agents can put the agent back.'
+                  // Both routes named, because both work and they are not the
+                  // same gesture: re-picking the folder in **+ → Add a folder**
+                  // reopens its agent list with this one unticked, and Settings
+                  // puts back everything that was removed from that root at
+                  // once. Naming a route that does not work would send the user
+                  // down a dead end for the choice offered as the recoverable
+                  // one (ux_rules rule 5) — which is what this hint did while
+                  // re-picking a registered folder was refused.
+                  hint: 'The folder stays exactly where it is. Add the agent back by picking the folder again in + → Add a folder, or from Settings → Local Agents.'
                 },
                 {
                   value: true,
