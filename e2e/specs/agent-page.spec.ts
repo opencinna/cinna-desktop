@@ -41,7 +41,10 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
 
   await test.step('create from the name field with Enter', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
-    await page.getByRole('button', { name: 'New agent' }).click()
+    // The + opens a choice — scaffold a new agent, or point at a folder that
+    // already is one — so the New agent form is one card in.
+    await page.getByRole('button', { name: 'Add an agent' }).click()
+    await page.getByRole('dialog', { name: 'Add an agent' }).getByRole('button', { name: /New agent/ }).click()
     const form = page.getByRole('dialog', { name: 'New agent' })
     await expect(form).toBeVisible()
     await form.getByLabel('Name').fill(NAME)
@@ -110,7 +113,7 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     await expect(confirm).toBeHidden()
     await expect(page.getByRole('button', { name: NAME, exact: true })).toBeHidden()
     await expect(
-      page.getByText('Select an agent from the sidebar, or create one with +.')
+      page.getByText('Select an agent from the sidebar, or add one with +.')
     ).toBeVisible()
     await expect.poll(() => existsSync(folder), 'the folder is gone from disk').toBe(false)
   })
@@ -163,7 +166,10 @@ test('Copy prompt for another tool confirms inside the menu and copies a briefin
 
   await test.step('an agent created from the name field', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
-    await page.getByRole('button', { name: 'New agent' }).click()
+    // The + opens a choice — scaffold a new agent, or point at a folder that
+    // already is one — so the New agent form is one card in.
+    await page.getByRole('button', { name: 'Add an agent' }).click()
+    await page.getByRole('dialog', { name: 'Add an agent' }).getByRole('button', { name: /New agent/ }).click()
     const form = page.getByRole('dialog', { name: 'New agent' })
     await expect(form).toBeVisible()
     await form.getByLabel('Name').fill(COPY_NAME)
