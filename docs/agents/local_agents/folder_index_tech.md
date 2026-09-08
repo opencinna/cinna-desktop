@@ -191,7 +191,7 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 
 ## Renderer
 
-`src/renderer/src/hooks/useLocalAgents.ts` holds no derived state: every query re-reads the folder through main, and every mutation writes the freshly scanned agent straight into the cache. `useLocalAgentWatch()` subscribes to `local-agent:changed` for the app's lifetime and invalidates the list (plus the named agent, when the payload has one). Nothing polls.
+`src/renderer/src/hooks/useLocalAgents.ts` holds no derived state: every query re-reads the folder through main, and every mutation writes the freshly scanned agent straight into the cache. `useLocalAgentWatch()` subscribes to `local-agent:changed` for the app's lifetime and invalidates the list — plus the named agent and its documents when the payload has one, and the `['local-agent']` / `['local-agent-doc']` prefixes when it does not, since a whole-root push is how a bare agent's own file edits arrive ([Bare Agents — Technical Details](bare_agents_tech.md#the-watchers-push-names-no-agent-for-a-bare-edit)). Nothing polls.
 
 `useUpdateLocalAgentField()` must pass the stamp for **the file that update writes** — `agent.stamps[fieldFilePath(update)]`. The rejection when it no longer matches (`isStaleWriteError(error)`) is the reload prompt's trigger and must be surfaced, not retried.
 

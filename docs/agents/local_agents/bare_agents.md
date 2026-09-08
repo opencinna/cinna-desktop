@@ -62,8 +62,8 @@ Being the *same* external root is no longer among them; that is the re-selection
 
 ### Working with a bare agent
 
-1. Its page is the ordinary agent page with the manifest-shaped parts removed: no **Commands** tab, and one card on **Overview** — its **Name**. The **Runs with** panel is the same panel a kit agent gets, controls and all
-2. **Prompts** holds `Instructions` (`AGENT.md`, editable in place like any other prompt document) over a read-only `Readme`
+1. Its page is the ordinary agent page with the manifest-shaped parts removed: no **Commands** tab, and two cards on **Overview** — its **Name**, then its folder's `Readme`, rendered read-only and absent altogether where the folder has no `README.md`. The **Runs with** panel is the same panel a kit agent gets, controls and all
+2. **Prompts** is `Instructions` alone (`AGENT.md`, the whole system prompt, editable in place like any other prompt document and rendered as markdown while it is being read)
 3. **Permissions** and **Folder** are unchanged: the permission profile is the same for every folder agent — with `AGENT.md` added to its identity-files list, so rewriting the file the agent *is* asks — and the Folder tab shows the bare findings
 4. **Open in <tool>**, **Start chat** and the ⋯ menu all behave as they do for a kit agent
 
@@ -151,6 +151,7 @@ The kit assembler reaches into `scripts/`, `credentials/` and `knowledge/` becau
 
 - **`README.md` is deliberately excluded.** It is written for the person developing the agent — how to install it, how to run it, what it needs — and a model reads "run `uv sync` first" as a step it should take
 - **`README.md` is instead the entry document of the init prompt**, the briefing handed to an assistant opening the folder, falling back to `AGENT.md`. That order is the agent-role / builder-role split made concrete: a README reads to a builder as a briefing, and `AGENT.md` reads to one as a job description. See [Open in Tools](open_in_tools.md#the-init-prompt)
+- **The same split decides where the page shows it: `README.md` is read on Overview, not on Prompts.** Beside `Instructions` it read as a second thing the agent is told, and it was the longer of the two, so the tab whose whole point is the system prompt opened on the document that is not it. Overview asks what this agent is, and for an adopted folder the README is usually the only prose that answers. It is rendered, read-only and whole — no clamp — and where the folder has no README — or holds an empty one — the card is not there at all, because `bare.readme.missing` already states the absence on the Folder tab with the consequence attached. The card's own footer keeps the split explicit: this is what an assistant opening the folder is briefed from, and the agent itself is told only `AGENT.md`. See [Agents Tab & Agent Page](agents_tab.md#a-file-rendered-in-a-card-is-not-a-chat-message)
 - **Three of the kit context block's rules are dropped rather than reworded** — run scripts with `uv run`, write only under `app-data/`, and the `credentials/.env` rule. Each describes a folder convention a bare folder never agreed to, and stating a rule about a file that does not exist is how a model ends up refusing ordinary work in the folder it was pointed at. What replaces them is one line saying the folder's own instructions govern how it is run, and that Cinna imposes no convention of its own
 - **The "do not switch to the Builder role" line survives verbatim.** The same folder is opened by a builder whose job is to rewrite `AGENT.md` and `README.md`, and an agent that decides mid-conversation that it is the builder starts editing its own prompt while the user is talking to it
 - **An empty `AGENT.md` never produces a promptless agent.** A stand-in section says the file is empty and suggests opening the folder in an assistant — the same rule the kit path keeps for an empty workflow prompt
@@ -161,7 +162,7 @@ The kit assembler reaches into `scripts/`, `credentials/` and `knowledge/` becau
 |---|---|---|
 | `bare.prompt.missing` | error | `AGENT.md` is gone or unreadable. The folder is not an agent any more, and readiness is `invalid` |
 | `bare.prompt.empty` | warning | The file is there and empty. The agent still runs, on the stand-in prompt |
-| `bare.readme.missing` | info | No `README.md`, so an assistant opening the folder is briefed from `AGENT.md` instead |
+| `bare.readme.missing` | info | No `README.md`, so an assistant opening the folder is briefed from `AGENT.md` instead — and Overview shows no `Readme` card, this finding being where the absence is stated |
 | `bare.no_manifest` | info | Always present: this folder runs without commands or credential slots, and the credential picked for it is kept in Cinna rather than in the folder |
 
 **Empty is a warning and not an error**, matching the kit path exactly. An error makes the folder `invalid`, and an invalid folder is dropped from the engine's config with nothing on screen explaining it — the user would be left with an agent that silently cannot run because a file they can see is blank.
@@ -252,7 +253,7 @@ The page was reused wholesale from the kit agent page, and ten separate surfaces
 
 | Surface | For a bare agent |
 |---|---|
-| Overview | The three manifest/STATUS cards are replaced by the **Name** card |
+| Overview | The three manifest/STATUS cards are replaced by the **Name** card, and — where the folder has one — the folder's own read-only `Readme` below it |
 | Runs-with note | Says where the choice is kept — in Cinna, not in the folder — instead of naming `cinna-agent.json`. Scoped to that one choice, because "nothing is written to the folder" is one tab away from false |
 | Folder → Files | Lists the folder's **own two** files, `AGENT.md` and `README.md`, not the kit layout's seven |
 | Folder → Identity | No `Kit` row — a folder with no manifest was reporting an *old* one ("legacy manifest"), which is both false and the wrong story — and a line saying the agent is identified by where its folder sits, so moving it starts a new agent |
@@ -332,6 +333,6 @@ Files on disk ── truth ──► agents rows ── derived index
 - [Local Agent Permissions](permissions.md) — the profile is identical for a bare agent; only where its standing grants are stored differs
 - [The Agent Turn Runner](agent_turn.md) — a bare agent runs a turn on the same path as a kit one; the runner passes the agent's kind so its session lands in the right state file
 - [Local Agents Are Not Synced](local_only.md) — a bare agent is a directory on one machine, and nothing here changes that
-- [UX Rules](../../development/ui_guidelines/ux_rules.md) — rules 9 and 10 were written from this feature's review: a surface that names a file asserts that file exists, and a control's accessible name is its visible name
+- [UX Rules](../../development/ui_guidelines/ux_rules.md) — rules 9, 10 and 11 were written from this feature's review: a surface that names a file asserts that file exists, a control's accessible name is its visible name, and a control must not look like the text beside it. The last came from a "Show more" toggle on this page's `Readme` card, muted grey at the size of the footer note under it; the toggle is gone with the clamp it opened, but the styling mistake is the general one
 
 Sub-doc: [Technical Details](bare_agents_tech.md)

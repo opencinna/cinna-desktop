@@ -36,16 +36,17 @@ Business logic and the reasoning behind every rule: [Bare Agents & External Root
 ### Renderer
 
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.tsx` — the `choose` / `folder` steps, the `FolderStep` component, and its in-step removal confirmation
-- `src/renderer/src/components/agents/local/BareAgentCards.tsx` — `BareNameCard`
+- `src/renderer/src/components/agents/local/BareAgentCards.tsx` — `BareNameCard` and `BareReadmeCard`, the two cards of a bare agent's Overview
 - `src/renderer/src/components/agents/local/RuntimePanel.tsx` — **one panel for both kinds**. `bare` picks the mutation and the not-editable rule; everything else — the pickers, the tier resolution, the Advanced conversion, every message — reads `agent.runtime`. There is no `BareRuntimePanel`; the read-only one it replaced could only report that the agent ran on the Default runtime
 - `src/renderer/src/components/agents/local/LocalAgentPage.tsx` — the tab filter and the per-kind card sets
-- `src/renderer/src/components/agents/local/PromptDocCard.tsx`, `InlineFileEditor.tsx` — the `readOnly` path
+- `src/renderer/src/components/agents/local/PromptDocCard.tsx`, `InlineFileEditor.tsx` — the `markdown` prop (on for a bare agent's `AGENT.md`, off for the kit's three prompts), the per-card `missingNote`, the rendered view's height carried into the textarea, and the `bare_readme` throw. The `readOnly` prop both files carried is gone with the read-only card that was its only caller
+- `src/renderer/src/utils/markdownComponents.tsx` — `documentMarkdownComponents` and `remarkStripHtml`, the map a **file** is rendered with rather than a chat message. See [Agents Tab — Technical Details](agents_tab_tech.md#renderer--hooks-store-utils)
 - `src/renderer/src/components/agents/local/AgentActionsMenu.tsx` — the two-option remove dialog, its `aria-label` branching with its heading, and the copy that owns the `job_agents` cascade
 - `src/renderer/src/components/agents/local/FolderTab.tsx` — `BARE_FILES`, the infos list, and the cards and rows that do not render for a bare agent
 - `src/renderer/src/components/agents/local/ReadOnlyCards.tsx` — `RunsCard`'s file-less branch; `PermissionsCard.tsx` — the file-less card and the branched examples
 - `src/renderer/src/components/agents/local/AgentCard.tsx` — `file` is optional, for the one card that names none
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the `Added folder` badge, the read-only count line and the hidden-agents row
-- `src/renderer/src/hooks/useLocalAgents.ts` — `usePickAgentFolder`, `useAddAgentFolder` (which also invalidates the `['local-agent']` key **prefix**: a re-selection edits agents that already exist, one of which may be the page behind the dialog, and the list keys do not reach `localAgentKey(id)`), `useRenameLocalAgent`, `useSetBareAgentRuntime`, `useRestoreHiddenAgents`
+- `src/renderer/src/hooks/useLocalAgents.ts` — `usePickAgentFolder`, `useAddAgentFolder` (which also invalidates the `['local-agent']` key **prefix**: a re-selection edits agents that already exist, one of which may be the page behind the dialog, and the list keys do not reach `localAgentKey(id)`), `useRenameLocalAgent`, `useSetBareAgentRuntime`, `useRestoreHiddenAgents`; and `useLocalAgentWatch`'s whole-root branch, which invalidates the `['local-agent']` and `['local-agent-doc']` prefixes when the push names no agent — see [The watcher's push names no agent for a bare edit](#the-watchers-push-names-no-agent-for-a-bare-edit)
 
 ## Database Schema
 
@@ -110,12 +111,19 @@ The git channels are in [Agents Folder Updates](folder_updates.md).
 | `NewLocalAgentModal` (`choose` step) | Two cards — New agent / Add a folder — and a reserved error line |
 | `NewLocalAgentModal` → `FolderStep` | One Name field for a single find on a **first** adopt, a scrolling checkbox list (max height, so the dialog cannot grow past the window) otherwise, the truncation notice, `Back` + `Add …`. On a re-selection: always the list whatever the count, no Name field, rows already in the app ticked and **editable**, rows added under another root ticked and locked, a line naming the registered root and a reserved single-line summary of what the button will do, and — when anything is leaving — an in-step confirmation naming them, with the checkboxes frozen while it is up. On success it selects the newly added agent and routes to `local-agent` before closing, and navigates nowhere when the save only removed agents |
 | `BareNameCard` | The Name card. Saves on blur and Enter, adopts an outside change unless the field is dirty, Escape reverts |
+| `BareReadmeCard` | The folder's `README.md` on **Overview**, read through `useLocalAgentDoc(id, 'bare_readme')` and rendered with `documentMarkdownComponents` + `remarkStripHtml`. Returns `null` for a doc whose `stamp` is `null` (main's "not there") or whose text is blank, so no card renders. No clamp and no expand control: the whole file, on a page that already scrolls. Its reveal calls `useOpenAgentPath` with `README.md` |
 | `RuntimePanel` | The same panel a kit agent gets — see [Agents Tab — Technical Details](agents_tab_tech.md#renderer-components). For a bare agent it saves through `useSetBareAgentRuntime`, is editable with no stamp (`canEdit` is `true` on `kind === 'bare'`), never shows the stale-manifest refusal, drops the "models can still be typed into `cinna-agent.json`" half of the registry-failure message, and adds one static note saying the choice is kept in Cinna and a folder that moves starts over on the default |
 | `AgentActionsMenu` → delete dialog | Two radios for a bare agent (recoverable one first and selected), the kit paragraph otherwise; the confirm button's label follows the choice |
 | `FolderTab` | For a bare agent: the folder's own two files, no `Kit` row, a positional-identity warning, no Credentials or Published card, and a Runs card that names no file. Infos render for **every** kind of agent |
 | `AgentsRootGit` | See [Agents Folder Updates](folder_updates.md) |
 
 `LocalAgentPage` filters `TABS` for a bare agent and falls back to Overview **for the render only** when the remembered tab is Commands — `setTab` is untouched, so returning to a kit agent returns to Commands.
+
+### The watcher's push names no agent for a bare edit
+
+`classifyExternalEvent` returns `root` for an `AGENT.md` or a `README.md` basename, and a root rescan broadcasts `agentId: null` — so the two files a bare agent's page is a viewer over are precisely the ones whose edits arrive unattributed. Keyed invalidation therefore missed the case the watcher exists for: the user rewrites one of them in their editor, comes back to the page, and the card still shows what it read on mount, with `refetchOnWindowFocus` off (`src/renderer/src/App.tsx`) and nothing else to correct it.
+
+`useLocalAgentWatch` now invalidates the `['local-agent']` and `['local-agent-doc']` **prefixes** on a push that names no agent, alongside the list keys every push already invalidated. Prefixes rather than the whole cache: what an open page holds is one agent and the one document on screen, so this refetches those and not a list it has just refetched by other means. A push that *does* name an agent keeps the narrower keyed invalidation it always had. The branch is not bare-only — any whole-root rescan takes it — but a bare agent is the only shape whose own document edits classify that way.
 
 ## Configuration
 
@@ -128,7 +136,7 @@ No settings. `BARE_AGENT_MAX_DEPTH` (2) and `MAX_DISCOVERED_AGENTS` (200) are co
 - The bare state file lives under `<userData>` with the agent token in it, exactly as a kit folder's does; `summarize()` still reports presence only
 - `:set-runtime` runs `runtimeService.validate`, the **same** check the manifest writer runs, so a key-shaped `credential` is refused here too. A bare agent's runtime never leaves the machine, but a pasted API key does not become safe by landing in `userData` rather than in a file the user commits
 - `bare_prompt` writes are refused for a non-external root, rather than silently creating a second prompt file beside `docs/WORKFLOW_PROMPT.md` — two files claiming to be the system prompt, only one of which the engine reads, is the worst outcome available <!-- nocheck -->
-- `PromptDocCard`'s `toUpdate` **throws** for `bare_readme` instead of falling through to `bare_prompt`. It is unreachable (the card is only ever rendered read-only), and the fall-through would have written the README's text over the agent's whole system prompt
+- `PromptDocCard`'s `toUpdate` **throws** for `bare_readme` instead of falling through to `bare_prompt`. It is unreachable — the README is not one of this card's documents at all any more; it is read-only on Overview, in `BareReadmeCard`, with no textarea behind it — and the fall-through would have written the README's text over the agent's whole system prompt. (Main would refuse the write on the stamp, the two files' stamps differing, but "your save was refused" is not the message that deserves.)
 
 ## Testing
 
@@ -141,6 +149,8 @@ No settings. `BARE_AGENT_MAX_DEPTH` (2) and `MAX_DISCOVERED_AGENTS` (200) are co
 - `src/main/services/localAgents/agentsHomeService.test.ts` (`requireNamedRoot`) — a missing, empty or non-string id refused rather than resolved to the home, and the home not created as a side effect of asking
 - `src/main/engine/configGenerator.test.ts` — `AGENT.md` resolving to `ask` under both `edit` and `write`
 - `src/renderer/src/components/agents/local/FolderTab.test.tsx` — the folder's own two files, a manifest-less folder never reported as having an old one, the kit-only cards dropped, where the run state lives, and infos rendering at all
+- `src/renderer/src/components/agents/local/BareReadmeCard.test.tsx` — the README rendered rather than shown as its source, its headings starting below the page's, raw HTML and comments hidden while a fenced block keeps its markup, an image as its alt text, the reveal naming the file, **nothing rendered at all** for a folder with no README, and the whole file with no expand control
+- `src/renderer/src/components/agents/local/LocalAgentPage.test.tsx` (bare layout) — the README card on Overview and Prompts left to `AGENT.md`; the mutation it exists to catch is moving the card back under the Prompts branch
 - `src/renderer/src/components/settings/AgentsRootGit.test.tsx` — the repository named when it is above the folder and not when it is the folder, nothing rendered for a non-repository, the block reserved while the answer is in flight, refusals blaming the repository, and Update and Check each hidden where they could only refuse
 - `src/renderer/src/components/agents/local/NewLocalAgentModal.test.tsx`, `AgentActionsMenu.test.tsx` — the choice step, the folder step's two shapes, and the remove dialog's two options. Re-selection: opening on what is in the app and being able to change it, adding with no confirmation when nothing is being removed, an empty selection allowed rather than the button disabled in silence, no navigation when a save only removed agents, and a row added under another agents folder staying locked
 - `src/renderer/src/components/agents/local/RuntimePanel.test.tsx` (`a bare agent`) — editing its runtime with no stamp to guard the write, opening on the runtime it was given exactly as a manifest one does, saying where the choice is kept and claiming no more than that, and never claiming the manifest went stale

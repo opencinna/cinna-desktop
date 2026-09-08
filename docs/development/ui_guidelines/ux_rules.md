@@ -91,6 +91,16 @@ Where the visible name branches, the accessible name branches with it. A hardcod
 
 **Origin:** the same feature. Both the sidebar trigger and the delete dialog carried names written when only one kind of agent existed.
 
+## 11. A control must look like a control, not like the text beside it
+
+An action is discoverable before it is hovered or it is not discoverable. Colour is what carries that here, so a control's colour is not the colour of the prose around it.
+
+- **`--color-text-muted` is the colour of hints and sub-lines, not of actions.** A text button in muted grey, at the same size as the note under it, reads as one more line of explanation; the user never learns it can be pressed. Text actions take the accent colour, or the primary text colour with a weight or an underline that the static text around them does not have.
+- **Hover is not an affordance.** A control whose only distinction appears on `:hover` does not exist for anyone who has not already guessed it is there — and does not exist at all on a touchpad user's first pass over the screen.
+- **Judge it against its neighbour, not against the palette.** The same muted button is fine in a header of muted metadata and invisible directly above a muted footer note. What the reviewer compares is the control and the nearest static text: if their colour and weight match, that is the finding.
+
+**Origin:** a "Show more" toggle on the bare agent's Readme card, `text-[10px] text-[var(--color-text-muted)]`, sat one line above the card's footer note in the same size and the same colour. Nothing distinguished the control from the sentence below it. The control itself was then removed — the card renders the whole file — but the styling mistake is the general one.
+
 ## Checklist for a review
 
 1. Type into every field on the changed surface: does anything above or beside the field move?
@@ -103,3 +113,4 @@ Where the visible name branches, the accessible name branches with it. A hardcod
 8. Sub-lines: any that repeat the title?
 9. Every file path on the surface: does that file exist for **every** kind of object this surface renders?
 10. Every `aria-label`: does it match the visible text, including on the branch you did not open?
+11. Every clickable thing that is not a filled button: read its colour and weight against the static text nearest it. The same? Finding.

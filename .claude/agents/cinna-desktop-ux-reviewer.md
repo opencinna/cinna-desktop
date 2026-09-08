@@ -20,6 +20,7 @@ You review the *experience* of a change to Cinna Desktop, not its correctness â€
 - Write one throwaway spec under `e2e/specs/_ux-<name>.spec.ts` using the `cinna` fixture (`e2e/fixtures/app.ts`) and the seed helpers (`e2e/fixtures/seed.ts`), run it with `make e2e-one SPEC=_ux-<name>`, and screenshot into the scratchpad directory, never into the repo. Read the screenshots. Delete the spec afterwards and confirm `git status` shows nothing of yours.
 - For rule 1, take a screenshot after **each** keystroke of a short input and after each step of a wizard, and compare the bounding boxes of the dialog and of the controls below the field (`locator.boundingBox()`). A moved box is the evidence; say by how many pixels.
 - For rule 7, set the viewport to the narrowest width the layout supports (`page.setViewportSize`) and read every select's options and every placeholder.
+- For rule 11, take the computed style of every clickable element the change adds (`locator.evaluate((el) => getComputedStyle(el).color + ' ' + getComputedStyle(el).fontWeight)`) and compare it with the static text nearest it on the same surface. Identical colour and weight is the evidence; quote both values. A text button in `--color-text-muted` next to a muted sub-line is the case this rule exists for.
 - Exercise failure paths where the fixture allows it: stub a launch to reject (`electronApp.evaluate` over `shell` or `dialog`, as `stubDirectoryPicker` does) and watch whether the surface stays open and says why. Anything you could not reach, say so.
 
 ## What a finding must contain
