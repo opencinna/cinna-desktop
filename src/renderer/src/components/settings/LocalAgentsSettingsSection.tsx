@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen, FolderPlus, GitBranch, ListChecks, RefreshCw, X } from 'lucide-react'
+import { isCredentialUsable } from '../../../../shared/credentials'
 import {
   useAddAgentRoot,
   useLocalAgents,
@@ -148,20 +149,23 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const contractVersion = roots.find((root) => root.isDefault)?.contractVersion ?? null
 
   /**
-   * Credentials that could actually run an agent.
+   * Credentials that could actually run an agent — the shared predicate, which
+   * `runtimeService.isUsable` and the "Runs with" panel also call.
    *
-   * `hasApiKey && !unsupported`, which is `runtimeService.isUsable` — an
-   * Anthropic OAuth token managed by an account has `hasApiKey: true` and
-   * cannot make an API call, so filtering on the key alone offered it as a
-   * normal choice and every agent pinned to it failed at the first turn.
+   * It used to be written out here as `hasApiKey && !unsupported`: an Anthropic
+   * OAuth token managed by an account has `hasApiKey: true` and cannot make an
+   * API call, so filtering on the key alone offered it as a normal choice and
+   * every agent pinned to it failed at the first turn. That reasoning still
+   * holds and now lives in `shared/credentials`, together with the case this
+   * copy got wrong — a keyless credential has no key and runs agents perfectly
+   * well, so a hand-written `hasApiKey` left Ollama out of this picker while the
+   * engine was quite willing to run on it.
    *
    * A provider that is not usable is left out of the picker rather than offered
    * and then warned about; the warning below is for a pin that has *become*
    * unusable, which is a different situation from choosing one that never was.
    */
-  const isUsableCredential = (provider: { hasApiKey: boolean; unsupported?: boolean }): boolean =>
-    provider.hasApiKey && provider.unsupported !== true
-  const usableProviders = (providers ?? []).filter(isUsableCredential)
+  const usableProviders = (providers ?? []).filter(isCredentialUsable)
   const pinnedId = appSettings?.localAgentsDefaultCredentialId ?? ''
   const pinnedCredential = pinnedId
     ? ((providers ?? []).find((provider) => provider.id === pinnedId) ?? null)
@@ -524,7 +528,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             the user cleared the warning by using the control (ux_rules rule 1).
           */}
           <div className="mt-1.5 min-h-[2.5rem]">
-            {pinnedCredential && !isUsableCredential(pinnedCredential) ? (
+            {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
               /*
                 Not "agents fall back to your default chat mode" — they do not.
                 `resolveDefault` falls through to the chat mode only when the

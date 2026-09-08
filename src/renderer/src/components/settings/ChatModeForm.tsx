@@ -5,6 +5,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpsertChatMode } from '../../hooks/useChatModes'
 import { COLOR_PRESETS } from '../../constants/chatModeColors'
+import { isCredentialUsable } from '../../../../shared/credentials'
 
 interface ChatModeFormProps {
   onClose: () => void
@@ -23,7 +24,7 @@ export function ChatModeForm({ onClose }: ChatModeFormProps): React.JSX.Element 
   const upsert = useUpsertChatMode()
 
   const enabledProviders = (providers ?? []).filter(
-    (p) => p.enabled && p.hasApiKey && !p.unsupported
+    (p) => p.enabled && isCredentialUsable(p)
   )
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === providerId)
 

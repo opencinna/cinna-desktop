@@ -11,6 +11,7 @@ import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
 import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
+import { isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
@@ -364,7 +365,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * first turn rather than at the moment of choosing.
    */
   const usable = useMemo(
-    () => (providers ?? []).filter((provider) => provider.hasApiKey && !provider.unsupported),
+    () => (providers ?? []).filter(isCredentialUsable),
     [providers]
   )
 
@@ -386,7 +387,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     const all = providers ?? []
     const needle = declaredCredential.trim().toLowerCase()
     const prefer = (matches: typeof all): (typeof all)[number] | null =>
-      matches.find((provider) => provider.hasApiKey && !provider.unsupported) ?? matches[0] ?? null
+      matches.find(isCredentialUsable) ?? matches[0] ?? null
     return (
       all.find((provider) => provider.id === declaredCredential) ??
       prefer(all.filter((provider) => provider.name.trim().toLowerCase() === needle)) ??
@@ -574,7 +575,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       credentialResolved: selected !== null,
       credentialName: effectiveProvider?.name ?? null,
       credentialUsable:
-        effectiveProvider !== null && effectiveProvider.hasApiKey && !effectiveProvider.unsupported,
+        effectiveProvider !== null && isCredentialUsable(effectiveProvider),
       complexity: declaredComplexity,
       modelId: choice.modelId,
       modelSource: choice.origin,

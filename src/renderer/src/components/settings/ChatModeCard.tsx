@@ -8,6 +8,7 @@ import { useUpsertChatMode, useDeleteChatMode } from '../../hooks/useChatModes'
 import { COLOR_PRESETS, getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
+import { isCredentialUsable } from '../../../../shared/credentials'
 
 interface ChatModeCardProps {
   mode: ChatModeData
@@ -24,7 +25,7 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
   const deleteMutation = useDeleteChatMode()
 
   const enabledProviders = (providers ?? []).filter(
-    (p) => p.enabled && p.hasApiKey && !p.unsupported
+    (p) => p.enabled && isCredentialUsable(p)
   )
   const modelsForProvider = (allModels ?? []).filter((m) => m.providerId === mode.providerId)
   const preset = getPreset(mode.colorPreset)
