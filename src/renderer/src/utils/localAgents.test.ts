@@ -4,7 +4,6 @@ import type { DetectedTool } from '../../../shared/localTools'
 import { describeAgentSlug, fieldFilePath, slugifyAgentName } from '../../../shared/localAgents'
 import {
   agentSubline,
-  canDraftWithDefaultMode,
   formatExamplePrompts,
   parseExamplePrompts,
   saveBlocked,
@@ -441,46 +440,6 @@ describe('example prompts', () => {
   })
 })
 
-describe('canDraftWithDefaultMode', () => {
-  const provider = (over: Partial<{ id: string; enabled: boolean; hasApiKey: boolean; unsupported: boolean }> = {}) => ({
-    id: 'p1',
-    enabled: true,
-    hasApiKey: true,
-    ...over
-  })
-
-  it('is true only when the default mode resolves to a keyed provider', () => {
-    expect(canDraftWithDefaultMode({ providerId: 'p1', modelId: 'm' }, [provider()])).toBe(true)
-  })
-
-  it('is false when the mode points at a different provider from the keyed one', () => {
-    // The exact miss the old `.some(p => p.enabled)` check waved through.
-    expect(
-      canDraftWithDefaultMode({ providerId: 'p2', modelId: 'm' }, [provider({ id: 'p1' })])
-    ).toBe(false)
-  })
-
-  it('is false for a provider row with no key', () => {
-    expect(
-      canDraftWithDefaultMode({ providerId: 'p1', modelId: 'm' }, [provider({ hasApiKey: false })])
-    ).toBe(false)
-  })
-
-  it('is false for a disabled or unusable provider', () => {
-    expect(
-      canDraftWithDefaultMode({ providerId: 'p1', modelId: 'm' }, [provider({ enabled: false })])
-    ).toBe(false)
-    expect(
-      canDraftWithDefaultMode({ providerId: 'p1', modelId: 'm' }, [provider({ unsupported: true })])
-    ).toBe(false)
-  })
-
-  it('is false with no default mode, or one that names no model', () => {
-    expect(canDraftWithDefaultMode(null, [provider()])).toBe(false)
-    expect(canDraftWithDefaultMode({ providerId: 'p1', modelId: null }, [provider()])).toBe(false)
-  })
-})
-
 describe('a save blocked by a running turn', () => {
   it('keeps the text and stays sendable, unlike a conflict', () => {
     let state = seedFileEditor('docs/WORKFLOW_PROMPT.md', 'saved', stamp('a'))
@@ -525,6 +484,7 @@ describe('the default tool', () => {
     id: 'claude',
     kind: 'cli-assistant',
     label: 'Claude Code',
+    version: null,
     path: '/bin/claude',
     available: true,
     source: 'path',

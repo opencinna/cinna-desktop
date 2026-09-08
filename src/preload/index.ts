@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { DetectedTool, OpenInRequest } from '../shared/localTools'
-import type { GitStatus, GitUpdateResult } from '../shared/agentGit'
+import type { GitDetail, GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
   AddAgentFolderInput,
   AddAgentFolderResult,
@@ -1230,15 +1230,26 @@ const api = {
       runtime: LocalAgentRuntimeInput
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-runtime', { agentId, runtime }),
-    /** Put back every agent removed from one external root's list. */
-    rootRestoreHidden: (rootId: string): Promise<{ restored: number }> =>
-      ipcRenderer.invoke('local-agent:root-restore-hidden', rootId),
+    /**
+     * The agent list of a root that is **already registered**, so its selection
+     * can be changed without sending the user back through the OS picker. Only
+     * a root id crosses; main resolves the path from the user's own root row.
+     */
+    rootManage: (rootId: string): Promise<PickAgentFolderResult> =>
+      ipcRenderer.invoke('local-agent:root-manage', rootId),
     /**
      * A root's git state. `fetch` reaches the network, so it is the caller's
      * explicit choice — the settings screen renders cached counts on open.
      */
     gitStatus: (rootId: string, fetch?: boolean): Promise<GitStatus> =>
       ipcRenderer.invoke('local-agent:git-status', { rootId, fetch }),
+    /**
+     * Remotes, branches and the head commit — what the Repository dialog shows.
+     * Read on the click, not per row: the settings list renders one `gitStatus`
+     * per root and none of this is needed until someone opens the detail.
+     */
+    gitDetail: (rootId: string, fetch?: boolean): Promise<GitDetail> =>
+      ipcRenderer.invoke('local-agent:git-detail', { rootId, fetch }),
     /** Fast-forward a root and rescan it. Never merges, rebases or resolves. */
     gitUpdate: (rootId: string): Promise<GitUpdateResult> =>
       ipcRenderer.invoke('local-agent:git-update', rootId),

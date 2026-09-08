@@ -18,6 +18,7 @@ const CLAUDE: DetectedTool = {
   label: 'Claude Code',
   path: '/usr/local/bin/claude',
   available: true,
+  version: null,
   source: 'path'
 }
 const CODE: DetectedTool = {
@@ -26,6 +27,7 @@ const CODE: DetectedTool = {
   label: 'VS Code',
   path: '/Applications/Visual Studio Code.app',
   available: true,
+  version: null,
   source: 'app-bundle'
 }
 

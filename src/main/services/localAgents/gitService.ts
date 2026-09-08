@@ -40,11 +40,13 @@
  */
 
 import { execFile } from 'node:child_process'
-import { statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
   GitCommit,
+  GitDetail,
   GitRefusal,
+  GitRemote,
   GitStatus,
   GitUpdateResult
 } from '../../../shared/agentGit'
@@ -305,6 +307,183 @@ export async function readGitStatus(dir: string, fetch = false): Promise<GitStat
 }
 
 /**
+ * A remote URL as something a browser can open, or null.
+ *
+ * Three shapes become links: `https://host/path`, `ssh://[user@]host/path` and
+ * the scp-style `[user@]host:path` that `git@github.com:org/repo.git` is.
+ * Everything else — a local path, a relative remote, `file://` — stays null
+ * and the panel shows the raw URL as text. **A credential in the URL is
+ * dropped**: `https://user:token@host/repo` is a real thing to find in a
+ * remote, and putting it on screen as a clickable link would leak it to
+ * anywhere the click goes and to every screenshot of this dialog.
+ */
+/**
+ * A remote URL with any embedded credential removed, for display.
+ *
+ * `https://x-access-token:ghp_ABC@github.com/org/repo.git` is a real thing to
+ * find in a working tree, and this string is shown as body text and as the
+ * link's tooltip. The **password** is what goes; the username stays, because it
+ * is not a secret and it is part of how the remote is reached. Handled for the
+ * scheme'd forms and for the scp-style one alike.
+ */
+export function redactRemoteUrl(raw: string): string {
+  const url = raw.trim()
+  if (/^[a-z][\w+.-]*:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url)
+      if (parsed.password === '') return url
+      // The **password** only. A username is not a secret — `git`,
+      // `x-access-token` — and it is part of how the remote is reached, so
+      // dropping it would make the string stop matching what the user's own
+      // `git remote -v` shows. This keeps the scheme'd and the scp-style
+      // branches consistent: both keep the user, neither keeps the secret.
+      parsed.password = ''
+      return parsed.toString()
+    } catch {
+      return url
+    }
+  }
+  // scp-style `[user[:pass]@]host:path` — drop only the password half, keeping
+  // the `git@` that identifies how it is reached.
+  return url.replace(/^([^/@]*?):[^/@]*@/, '$1@')
+}
+
+export function remoteWebUrl(raw: string): string | null {
+  const url = raw.trim()
+  if (url === '') return null
+
+  const strip = (path: string): string => path.replace(/\.git$/, '')
+
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url)
+      parsed.username = ''
+      parsed.password = ''
+      parsed.pathname = strip(parsed.pathname)
+      return parsed.toString()
+    } catch {
+      return null
+    }
+  }
+
+  if (/^ssh:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url)
+      return `https://${parsed.hostname}${strip(parsed.pathname)}`
+    } catch {
+      return null
+    }
+  }
+
+  // scp-style: [user@]host:path. The colon must not be followed by `//`, or it
+  // is a scheme this does not handle.
+  const scp = url.match(/^(?:[\w.-]+@)?([\w.-]+):(?!\/\/)(.+)$/)
+  if (scp) {
+    const [, host, path] = scp
+    // `user:ghp_TOKEN@host/repo` with no scheme parses as scp-style with
+    // `host = user`, which would build a link whose *path* is the token. Git
+    // does not read that as a working remote either, so refusing it costs
+    // nothing and avoids putting a secret in a URL.
+    if (path.includes('@')) return null
+    return `https://${host}/${strip(path.replace(/^\/+/, ''))}`
+  }
+
+  return null
+}
+
+/**
+ * Resolve a path through symlinks, or return it unchanged.
+ *
+ * Used only to compare two paths for identity. A path that cannot be resolved
+ * (it went missing between the scan and now) falls back to itself, which at
+ * worst reports a repository root the dialog then names — the same answer as
+ * before, never a wrong one about a different folder.
+ */
+function realOrSelf(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return path
+  }
+}
+
+/**
+ * Everything the repository dialog shows, in one pass.
+ *
+ * Built **on top of** `readGitStatus` rather than beside it, so the dialog and
+ * the row it opened from can never disagree about the branch or the counts.
+ * The three extra reads are local and cheap; the only network is whatever
+ * `fetch` asks `readGitStatus` for.
+ */
+export async function readGitDetail(dir: string, fetch = false): Promise<GitDetail> {
+  const status = await readGitStatus(dir, fetch)
+  const empty: GitDetail = {
+    ...status,
+    repoRootIsAbove: false,
+    remotes: [],
+    branches: [],
+    head: null
+  }
+  if (!status.isRepo || status.repoRoot === null) return empty
+
+  const gitPath = await resolveGit()
+  if (!gitPath) return empty
+  const repoRoot = status.repoRoot
+
+  const [remoteOut, branchOut, headOut] = await Promise.all([
+    run(gitPath, repoRoot, ['remote', '-v'], LOCAL_TIMEOUT_MS),
+    // Sorted by most recent commit, so a repository with forty branches puts
+    // the ones anyone is working on first.
+    run(
+      gitPath,
+      repoRoot,
+      ['for-each-ref', '--sort=-committerdate', '--format=%(refname:short)', 'refs/heads/'],
+      LOCAL_TIMEOUT_MS
+    ),
+    run(gitPath, repoRoot, ['log', '-1', LOG_FORMAT], LOCAL_TIMEOUT_MS)
+  ])
+
+  const remotes = new Map<string, GitRemote>()
+  if (remoteOut.ok) {
+    for (const line of remoteOut.stdout.split('\n')) {
+      // `origin\thttps://…\t(fetch)` — one line per direction, and the two are
+      // almost always the same URL, so the first wins and the second is
+      // ignored rather than listed twice.
+      const [name, rest] = line.split('\t')
+      if (!name || !rest) continue
+      const url = rest.replace(/\s*\((fetch|push)\)\s*$/, '').trim()
+      if (url === '' || remotes.has(name)) continue
+      remotes.set(name, { name, url: redactRemoteUrl(url), webUrl: remoteWebUrl(url) })
+    }
+  }
+
+  const branches = branchOut.ok
+    ? branchOut.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line !== '')
+    : []
+  // Current branch first — it is the one the update acts on.
+  if (status.branch) {
+    const rest = branches.filter((name) => name !== status.branch)
+    branches.length = 0
+    branches.push(status.branch, ...rest)
+  }
+
+  return {
+    ...status,
+    // Through realpath on both sides: `git rev-parse --show-toplevel` answers
+    // with the resolved path, and the registered folder's is whatever the user
+    // picked, so a symlinked location made a folder look like a repository
+    // above itself.
+    repoRootIsAbove: realOrSelf(repoRoot) !== realOrSelf(dir),
+    remotes: [...remotes.values()],
+    branches,
+    head: headOut.ok ? (parseCommits(headOut.stdout)[0] ?? null) : null
+  }
+}
+
+/**
  * Fast-forward a folder's repository to its upstream.
  *
  * Re-reads the status **with a fetch** first rather than trusting what the
@@ -346,5 +525,5 @@ export async function updateGitRepo(dir: string): Promise<GitUpdateResult> {
   return { updated: true, applied: before.incoming, refusal: null, status: after }
 }
 
-export const gitService = { readGitStatus, updateGitRepo, looksLikeGitRepo }
-export type { GitCommit, GitRefusal, GitStatus, GitUpdateResult }
+export const gitService = { readGitStatus, readGitDetail, updateGitRepo, looksLikeGitRepo }
+export type { GitCommit, GitDetail, GitRefusal, GitRemote, GitStatus, GitUpdateResult }

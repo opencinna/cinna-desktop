@@ -74,6 +74,15 @@ export interface DetectedTool {
    * `managed` means Cinna installed it into its own data directory.
    */
   source: LocalToolSource | null
+  /**
+   * What `<bin> --version` said, trimmed to the version itself, or null.
+   *
+   * Null has three meanings the UI must not conflate with each other: the tool
+   * is not installed, it was found as a macOS app bundle (there is no CLI to
+   * ask), or it is installed and the probe failed or timed out. `available`
+   * and `source` are what separate them.
+   */
+  version: string | null
 }
 
 /** What the renderer wants done with a folder. */

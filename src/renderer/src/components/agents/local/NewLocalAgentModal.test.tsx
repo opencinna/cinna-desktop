@@ -21,6 +21,7 @@ const CLAUDE: DetectedTool = {
   label: 'Claude Code',
   path: '/usr/local/bin/claude',
   available: true,
+  version: null,
   source: 'path'
 }
 const CODEX: DetectedTool = { ...CLAUDE, id: 'codex', label: 'Codex' }

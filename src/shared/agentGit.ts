@@ -64,6 +64,62 @@ export interface GitStatus {
   fetched: boolean
 }
 
+/** One configured remote of a folder's repository. */
+export interface GitRemote {
+  /** e.g. `origin`. */
+  name: string
+  /**
+   * The remote as it is safe to show — the URL git has, with any `user:pass@`
+   * removed.
+   *
+   * Never the raw value. A repository cloned with a personal access token
+   * carries it in the remote, and this string is rendered as body text and as
+   * the link's tooltip: sending the raw one would put the token on screen and
+   * in every screenshot of the dialog, which is the leak {@link webUrl} is
+   * careful to avoid and would have been undone by the field beside it.
+   */
+  url: string
+  /**
+   * The same remote as a browsable `https://` URL, or null when one cannot be
+   * derived.
+   *
+   * Derived rather than guessed at: only an `http(s)` URL, or an `scp`-style
+   * `user@host:path` / `ssh://` URL, becomes a link, and anything else — a
+   * local path, a relative remote, a protocol the browser has no business with
+   * — stays null and is shown as plain text. `system.openExternal` refuses
+   * everything but `http(s)` anyway; this is what stops the UI offering a link
+   * that would then be refused.
+   */
+  webUrl: string | null
+}
+
+/**
+ * Everything the folder's repository panel shows, read on demand.
+ *
+ * Separate from {@link GitStatus} because the settings list renders one status
+ * per registered root on every visit, and none of this is needed until someone
+ * opens the detail. `GitStatus` stays the cheap per-row read; this is the
+ * click.
+ */
+export interface GitDetail extends GitStatus {
+  /**
+   * True when the working tree's root is genuinely **above** the registered
+   * folder, so the dialog should name it.
+   *
+   * Decided in main, where both paths can be resolved through symlinks first.
+   * Comparing `repoRoot` to the folder's path as raw strings made every
+   * symlinked location — `/var` against `/private/var` on macOS is the everyday
+   * one — look like a repository above itself, and the dialog then named the
+   * same directory twice.
+   */
+  repoRootIsAbove: boolean
+  remotes: GitRemote[]
+  /** Local branch names, current first. */
+  branches: string[]
+  /** The commit `HEAD` points at, or null in an empty repository. */
+  head: GitCommit | null
+}
+
 /** What one update attempt did. */
 export interface GitUpdateResult {
   /** True when the working tree moved. */

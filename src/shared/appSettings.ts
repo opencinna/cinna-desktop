@@ -65,6 +65,23 @@ export interface AppSettingsSchema {
    */
   localAgentsDefaultTool: string
   /**
+   * Which credential folder agents run on by default — an LLM provider id, or
+   * empty to follow the default chat mode.
+   *
+   * Machine-local, and deliberately separate from the default chat mode. The
+   * chat mode is a *chat* preference and is synced with the profile; which
+   * credential this machine's engine burns tokens on is a property of the
+   * machine, and a user on a shared or metered key needs to be able to say so
+   * without changing what their chats do.
+   *
+   * Empty is the default and means "follow the default chat mode", which is
+   * the behaviour that existed before this setting. Validated only as a
+   * non-empty string here: the provider it names can be deleted afterwards,
+   * and `runtimeService.resolveDefault` falls back to the chat mode when the
+   * id no longer resolves rather than leaving agents with no runtime.
+   */
+  localAgentsDefaultCredentialId: string
+  /**
    * When true, creating a local agent opens the new folder in the default tool
    * straight away instead of asking which tool to build it with. Meaningless
    * without `localAgentsDefaultTool`; the new-agent flow asks as before when

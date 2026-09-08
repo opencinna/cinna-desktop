@@ -31,6 +31,12 @@ vi.mock('../chatModeService', () => ({
   chatModeService: { resolveEffectiveDefault: () => defaultMode.current }
 }))
 vi.mock('../providerService', () => ({ providerService: { listMerged: () => [] } }))
+const pinnedCredential = vi.hoisted(() => ({ current: '' }))
+vi.mock('../appSettingsService', () => ({
+  appSettingsService: {
+    getAll: () => ({ localAgentsDefaultCredentialId: pinnedCredential.current })
+  }
+}))
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
@@ -55,6 +61,7 @@ function provider(overrides: Partial<ProviderDto> = {}): ProviderDto {
 
 beforeEach(() => {
   defaultMode.current = null
+  pinnedCredential.current = ''
 })
 
 describe('findCredential', () => {
@@ -124,6 +131,59 @@ describe('runtimeService.resolveDefault', () => {
     const resolved = runtimeService.resolveDefault([provider({ id: 'p1', hasApiKey: false })])
     expect(resolved.credentialId).toBe('p1')
     expect(resolved.reason).toMatch(/no API key/i)
+  })
+
+  describe('this machine’s pinned credential', () => {
+    it('wins over the default chat mode, with its own default model', () => {
+      // Settings → Local Agents → Default AI credential. Which key the engine
+      // spends is a property of the machine, not of a chat preference that
+      // syncs with the profile.
+      defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4-5' }
+      pinnedCredential.current = 'p2'
+      const resolved = runtimeService.resolveDefault([
+        provider({ id: 'p1', name: 'Personal' }),
+        provider({ id: 'p2', name: 'Team', type: 'openai', defaultModelId: 'gpt-5' })
+      ])
+      expect(resolved).toMatchObject({
+        source: 'default',
+        credentialId: 'p2',
+        credentialName: 'Team',
+        // Not `claude-sonnet-4-5`: the mode's model belongs to the mode's
+        // credential, and lending it to a different key would name a model that
+        // key may not have.
+        modelId: 'gpt-5',
+        reason: null
+      })
+    })
+
+    it('falls through to the chat mode when the pin names a credential this machine lost', () => {
+      // A stale setting must not strand every agent on the machine — the
+      // runtime they had before the pin was set is a better answer than none.
+      defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4-5' }
+      pinnedCredential.current = 'deleted'
+      const resolved = runtimeService.resolveDefault([provider({ id: 'p1', name: 'Personal' })])
+      expect(resolved.credentialId).toBe('p1')
+      expect(resolved.reason).toBeNull()
+    })
+
+    it('reports a pinned credential with no usable key rather than silently switching keys', () => {
+      // It does **not** fall back here, and the settings copy says so. Silently
+      // re-pointing at another key is the billing surprise this module refuses.
+      defaultMode.current = { providerId: 'p1', modelId: 'm' }
+      pinnedCredential.current = 'p2'
+      const resolved = runtimeService.resolveDefault([
+        provider({ id: 'p1', name: 'Personal' }),
+        provider({ id: 'p2', name: 'Team', hasApiKey: false })
+      ])
+      expect(resolved.credentialId).toBe('p2')
+      expect(resolved.reason).toMatch(/no API key/i)
+    })
+
+    it('is ignored when empty, which is the default', () => {
+      defaultMode.current = { providerId: 'p1', modelId: 'm' }
+      const resolved = runtimeService.resolveDefault([provider({ id: 'p1', name: 'Personal' })])
+      expect(resolved.credentialId).toBe('p1')
+    })
   })
 })
 

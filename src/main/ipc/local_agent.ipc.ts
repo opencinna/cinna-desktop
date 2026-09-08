@@ -5,7 +5,7 @@ import { localAgentService } from '../services/localAgents/localAgentService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { gitService } from '../services/localAgents/gitService'
-import type { GitStatus, GitUpdateResult } from '../../shared/agentGit'
+import type { GitDetail, GitStatus, GitUpdateResult } from '../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 import { getMainWindow } from '../index'
 import { engineManager } from '../engine/engineManager'
@@ -341,6 +341,52 @@ export function registerLocalAgentHandlers(): void {
     return localAgentService.pickedAgentFolder(getSettingsScopeUserId(), picked)
   })
 
+  /**
+   * Re-open the agent list of a root **already registered**, without a picker.
+   *
+   * Settings' Manage agents needs exactly what the adopt dialog shows — every
+   * `AGENT.md` folder under the root, with the ones currently in the list
+   * ticked — for a folder the user chose once already. Making them re-pick it
+   * in an OS dialog to change one tick is the round trip this removes.
+   *
+   * **The renderer sends a root id, never a path.** The path comes out of the
+   * user's own root row, so the rule that a renderer may not name a folder the
+   * user did not choose is kept: this call cannot reach a directory that is not
+   * already registered to them, and the `:folder-add` that follows needs no new
+   * code path.
+   *
+   * What it *does* change is how a `pendingPick` comes to exist. `:folder-pick`
+   * can only create one with a person standing at a native dialog; this creates
+   * one from an id, with no human in the loop — so a compromised renderer can
+   * pair it with `:folder-add` and empty a registered root's agent list without
+   * the user touching anything. Bounded on purpose: the root must already be
+   * registered, nothing on disk is touched, the same dialog puts the agents
+   * back, and that renderer already has `:root-remove`, which is strictly
+   * worse. Said plainly here rather than left as "no new trust", which is what
+   * this comment claimed first and is not true.
+   */
+  ipcHandle('local-agent:root-manage', (_event, rootId: string): PickAgentFolderResult => {
+    userActivation.requireActivated()
+    const userId = getSettingsScopeUserId()
+    if (typeof rootId !== 'string' || rootId === '') {
+      throw new LocalAgentError('root_not_found', 'That agents folder is not registered.')
+    }
+    // Through the root row, never a renderer-supplied path — the same rule
+    // `:git-status` keeps for the same reason.
+    const root = agentsHomeService.requireNamedRoot(userId, rootId)
+    return localAgentService.pickedAgentFolder(userId, root.path)
+  })
+
+  /** A root's repository, in the detail the folder's Repository dialog shows. */
+  ipcHandle(
+    'local-agent:git-detail',
+    async (_event, input: { rootId: string; fetch?: boolean }): Promise<GitDetail> => {
+      userActivation.requireActivated()
+      const root = agentsHomeService.requireNamedRoot(getSettingsScopeUserId(), input?.rootId)
+      return gitService.readGitDetail(root.path, input?.fetch === true)
+    }
+  )
+
   /** Register the folder the user just previewed, with the agents they ticked. */
   ipcHandle(
     'local-agent:folder-add',
@@ -404,15 +450,6 @@ export function registerLocalAgentHandlers(): void {
       return outcome
     }
   )
-
-  /** Put back every agent removed from one external root's list. */
-  ipcHandle('local-agent:root-restore-hidden', (_event, rootId: string) => {
-    userActivation.requireActivated()
-    const userId = getSettingsScopeUserId()
-    const result = localAgentService.restoreHiddenAgents(userId, rootId)
-    if (result.restored > 0) void engineManager.applyConfigChange(userId)
-    return result
-  })
 
   /**
    * The git state of one registered root.

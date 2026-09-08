@@ -1,7 +1,8 @@
+import { execFile } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { clearToolCache, which } from '../../shell/env'
+import { clearToolCache, getShellEnv, shellEnvForChild, which } from '../../shell/env'
 import { createLogger } from '../../logger/logger'
 import { toolchain } from '../../localdev/toolchain'
 import type { DetectedTool, LocalToolId, LocalToolKind } from '../../../shared/localTools'
@@ -108,10 +109,102 @@ function managedCandidate(spec: ToolSpec): string | null {
   }
 }
 
+/**
+ * How long one `--version` probe may take before it is abandoned.
+ *
+ * Every probe runs concurrently and detection is cached for the app lifetime,
+ * so the whole pass costs one of these — but a tool that hangs (a `cinna` that
+ * blocks on a network call, an assistant waiting on a login prompt) must never
+ * hold up the Settings screen, so the wait is bounded and a timeout reports
+ * "installed, version unknown" rather than "not installed".
+ */
+const VERSION_TIMEOUT_MS = 3000
+
+/** The version argument each tool answers to. Everything here takes `--version`. */
+const VERSION_ARG = '--version'
+
+/**
+ * Ask an executable its version.
+ *
+ * Runs the binary at the **resolved path**, never a bare name, and with
+ * `execFile` rather than a shell, so nothing here is interpolated into a
+ * command line. Failure of any kind is `null`: this is a nice-to-have column
+ * in a settings table, and no probe result is worth failing detection over.
+ */
+async function probeVersion(binPath: string): Promise<string | null> {
+  // **Through `shellEnvForChild`.** `getShellEnv()` sources the user's
+  // `.zshrc`/`.bashrc`, which is where `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and
+  // `AWS_SECRET_ACCESS_KEY` live. Handing that set to nine third-party binaries
+  // to read a version string for a settings table is not a trade worth making —
+  // `gitService.run` narrows for the same reason.
+  const env = shellEnvForChild(await getShellEnv().catch(() => process.env))
+  const probe = new Promise<string | null>((resolve) => {
+    execFile(
+      binPath,
+      [VERSION_ARG],
+      {
+        timeout: VERSION_TIMEOUT_MS,
+        env,
+        windowsHide: true,
+        // SIGTERM leaves a shim that traps it alive; this column is not worth
+        // waiting on a process that has already ignored one signal.
+        killSignal: 'SIGKILL'
+      },
+      (err, stdout, stderr) => {
+        if (err) return resolve(null)
+        resolve(cleanVersion(`${stdout}`.trim() || `${stderr}`.trim()))
+      }
+    )
+  })
+  /*
+    Raced against our own timer, because `execFile`'s `timeout` is not one.
+    Its callback fires on **close**, which waits for the stdio pipes to reach
+    EOF — so a wrapper script whose grandchild inherits stdout (a `claude` shim
+    that execs node, a `cinna` that leaves a daemon) keeps the promise pending
+    after the direct child is dead. `detectAll` is one `Promise.all` behind a
+    `detection ??=` cache that only clears on *rejection*, so a single such tool
+    would hang Developer Tools — and `Open in…`, which reads the same cache —
+    for the life of the app. This decouples "we stopped waiting" from "the child
+    exited".
+  */
+  return Promise.race([
+    probe,
+    new Promise<string | null>((resolve) =>
+      setTimeout(() => resolve(null), VERSION_TIMEOUT_MS + 500).unref?.()
+    )
+  ])
+}
+
+/**
+ * The version out of a `--version` line.
+ *
+ * Tools disagree wildly — `git version 2.39.5`, `Python 3.11.6`, `uv 0.4.20
+ * (a1b2c3d 2024-09-30)`, and Claude Code's `1.0.7 (Claude Code)`. Take the
+ * first line, then the first dotted-numeric token in it; failing that, keep the
+ * line itself, capped, so an unrecognised format still tells the user
+ * something rather than reading as "not detected".
+ */
+function cleanVersion(raw: string): string | null {
+  const line = raw.split('\n')[0]?.trim()
+  if (!line) return null
+  const match = line.match(/\d+\.\d+(\.\d+)?([-+.\w]*)?/)
+  // Both branches capped: `[-+.\w]*` is unbounded, so a tool printing a dotted
+  // number followed by a very long word run would put all of it into the DTO.
+  return (match ? match[0] : line).slice(0, 40)
+}
+
 async function detect(spec: ToolSpec): Promise<DetectedTool> {
   const onPath = await which(spec.bin)
   if (onPath) {
-    return { id: spec.id, kind: spec.kind, label: spec.label, path: onPath, available: true, source: 'path' }
+    return {
+      id: spec.id,
+      kind: spec.kind,
+      label: spec.label,
+      path: onPath,
+      available: true,
+      source: 'path',
+      version: await probeVersion(onPath)
+    }
   }
 
   for (const bundle of bundleCandidates(spec)) {
@@ -122,7 +215,11 @@ async function detect(spec: ToolSpec): Promise<DetectedTool> {
         label: spec.label,
         path: bundle,
         available: true,
-        source: 'app-bundle'
+        source: 'app-bundle',
+        // An `.app` with no CLI shim — there is nothing to ask. Null here means
+        // "no way to know", which the table renders differently from "not
+        // installed".
+        version: null
       }
     }
   }
@@ -135,11 +232,20 @@ async function detect(spec: ToolSpec): Promise<DetectedTool> {
       label: spec.label,
       path: managed,
       available: true,
-      source: 'managed'
+      source: 'managed',
+      version: await probeVersion(managed)
     }
   }
 
-  return { id: spec.id, kind: spec.kind, label: spec.label, path: null, available: false, source: null }
+  return {
+    id: spec.id,
+    kind: spec.kind,
+    label: spec.label,
+    path: null,
+    available: false,
+    source: null,
+    version: null
+  }
 }
 
 /** In-flight or completed detection pass; cleared by `refresh()`. */
@@ -168,14 +274,17 @@ export const toolDetectionService = {
       // Never let a detection failure poison the cache — the next call retries.
       detection = null
       logger.warn('tool detection failed', err)
-      return TOOL_SPECS.map((spec) => ({
-        id: spec.id,
-        kind: spec.kind,
-        label: spec.label,
-        path: null,
-        available: false,
-        source: null
-      }))
+      return TOOL_SPECS.map(
+        (spec): DetectedTool => ({
+          id: spec.id,
+          kind: spec.kind,
+          label: spec.label,
+          path: null,
+          available: false,
+          source: null,
+          version: null
+        })
+      )
     })
     return detection
   },

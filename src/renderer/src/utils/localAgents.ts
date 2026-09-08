@@ -120,40 +120,6 @@ export function groupAgentsByRoot(
   }))
 }
 
-/**
- * Whether the one-shot AI draft will actually find a credential.
- *
- * The settings strip used to ask "is any provider enabled", which answers a
- * different question from the one the draft asks. `aiFunctions` resolves the
- * **default chat mode's own provider** and needs it to exist, be enabled, and
- * hold an API key — so a user with a keyless provider row, or whose default
- * mode points at a provider other than the one holding the key, was shown a
- * green tick and then told "No AI credential is configured" on their first
- * agent. A readiness strip that is wrong in exactly the case it exists to warn
- * about is worse than no strip.
- *
- * Mirrors `aiFunctionsService.tryResolve` minus its provider-type check, which
- * covers a row shape the provider form cannot produce. `unsupported` is
- * honoured because a managed credential that cannot make API calls (an
- * Anthropic OAuth token, say) fails the draft exactly like a missing key.
- */
-export interface DraftCredentialProvider {
-  id: string
-  enabled: boolean
-  hasApiKey: boolean
-  unsupported?: boolean
-}
-
-export function canDraftWithDefaultMode(
-  defaultMode: { providerId?: string | null; modelId?: string | null } | null | undefined,
-  providers: readonly DraftCredentialProvider[] | undefined
-): boolean {
-  const providerId = defaultMode?.providerId
-  if (!providerId || !defaultMode?.modelId) return false
-  const provider = (providers ?? []).find((candidate) => candidate.id === providerId)
-  if (!provider) return false
-  return provider.enabled && provider.hasApiKey && provider.unsupported !== true
-}
 
 /**
  * `example_prompts` is a list in the manifest and a textarea on the page, one

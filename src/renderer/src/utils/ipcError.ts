@@ -10,7 +10,7 @@ export function unwrapIpcError(err: unknown, fallback = 'Something went wrong'):
     err instanceof Error ? err.message : typeof err === 'string' ? err : ''
   const cleaned = (raw || fallback)
     .replace(/^Error invoking remote method '[^']+':\s*/, '')
-    .replace(/^[A-Z][A-Za-z]*Error:\s*/, '')
+    .replace(/^([A-Z][A-Za-z]*)?Error:\s*/, '')
     .trim()
   return cleaned || fallback
 }

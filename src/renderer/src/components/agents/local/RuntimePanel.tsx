@@ -402,9 +402,31 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * does to the engine. It is not offered as an option; it only names what
    * "Default" means.
    */
+  /**
+   * **This machine's pinned credential wins over the default chat mode**, the
+   * same order `runtimeService.resolveDefault` applies. Settings → Local Agents
+   * → Default AI credential writes `localAgentsDefaultCredentialId`, and a
+   * panel that kept reading the chat mode alone would label an agent
+   * `Default (OpenAI)` while the engine built it on the pinned Anthropic key —
+   * a user reading this card to find out which key they are spending would be
+   * told the wrong one, which is the exact failure this module was rebuilt
+   * around.
+   *
+   * A pin naming a credential this machine no longer has falls through to the
+   * chat mode, again matching main.
+   */
+  const pinnedProvider = useMemo(() => {
+    const pinned = settings?.localAgentsDefaultCredentialId ?? ''
+    return pinned === ''
+      ? null
+      : ((providers ?? []).find((provider) => provider.id === pinned) ?? null)
+  }, [providers, settings?.localAgentsDefaultCredentialId])
   const fallbackProvider = useMemo(
-    () => (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ?? null,
-    [providers, defaultMode?.providerId]
+    () =>
+      pinnedProvider ??
+      (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ??
+      null,
+    [pinnedProvider, providers, defaultMode?.providerId]
   )
   const effectiveProvider = selected ?? fallbackProvider
 
@@ -477,9 +499,17 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       // for the two sides to disagree over later.
       credentialId: fallbackProvider?.id ?? null,
       credentialType: fallbackProvider?.type ?? null,
-      modelId: defaultRuntimeModelId(fallbackProvider, defaultMode?.modelId ?? null)
+      // The chat mode's model applies only when the chat mode is what resolved
+      // the credential. A pin carries no model of its own, so its credential's
+      // default is the answer — `resolveDefault` passes `null` on that branch
+      // for the same reason, and lending the mode's model to a different key
+      // would name a model that key may not even have.
+      modelId: defaultRuntimeModelId(
+        fallbackProvider,
+        pinnedProvider ? null : (defaultMode?.modelId ?? null)
+      )
     }),
-    [fallbackProvider, defaultMode?.modelId]
+    [fallbackProvider, pinnedProvider, defaultMode?.modelId]
   )
 
   /**

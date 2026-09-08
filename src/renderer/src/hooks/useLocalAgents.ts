@@ -17,7 +17,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { LocalAgentRuntimeInput } from '../../../shared/engine'
-import type { GitStatus, GitUpdateResult } from '../../../shared/agentGit'
+import type { GitDetail, GitStatus, GitUpdateResult } from '../../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import {
   isBlockedWriteError,
@@ -382,13 +382,21 @@ export function useAddAgentRoot() {
 }
 
 /** Forget an extra root. The folder on disk is untouched. */
-export function useRemoveAgentRoot() {
+export function useRemoveAgentRoot(options?: {
+  /**
+   * Runs at hook level, so it survives the unmount of whatever called
+   * `mutate` — the place to close the confirm dialog the click came from,
+   * which is itself unmounted by the close.
+   */
+  onSuccess?: () => void
+}) {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (rootId: string) => window.api.localAgents.rootRemove(rootId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
+      options?.onSuccess?.()
     }
   })
 }
@@ -744,53 +752,62 @@ export function useRenameLocalAgent() {
   })
 }
 
-/** Put back every agent removed from one external root's list. */
-export function useRestoreHiddenAgents() {
-  const queryClient = useQueryClient()
-  return useMutation({
-    mutationFn: (rootId: string) => window.api.localAgents.rootRestoreHidden(rootId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
-      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
-      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
-    }
-  })
+
+/** Cache key of one root's repository detail. */
+export function gitDetailKey(rootId: string): readonly unknown[] {
+  return ['local-agent-git-detail', rootId] as const
 }
 
-/** Query key for one root's git state. */
-const gitStatusKey = (rootId: string): unknown[] => ['local-agent-git', rootId]
-
 /**
- * A root's git state, from the last fetch.
+ * Remotes, branches and the head commit — the Repository dialog's read.
  *
- * Deliberately does **not** fetch from the remote: this runs for every root the
- * settings screen renders, and a network round trip per root on open would make
- * the screen slow for a feature nobody has asked for yet. The counts are "as of
- * the last fetch", which the panel says, and {@link useCheckForUpdates} is the
- * explicit ask.
- *
- * `enabled` is the caller's, so a workshop root that is not a repository is not
- * probed at all.
+ * `enabled` is the dialog being open: this runs three extra git commands, and
+ * the settings list renders one row per root. Nothing here reaches the network
+ * — the counts it shows come from the `gitStatus` this extends, which fetches
+ * only when the user presses Check.
  */
-export function useGitStatus(rootId: string, enabled = true) {
-  return useQuery<GitStatus>({
-    queryKey: gitStatusKey(rootId),
-    queryFn: () => window.api.localAgents.gitStatus(rootId, false),
+export function useGitDetail(rootId: string, enabled: boolean) {
+  return useQuery<GitDetail>({
+    queryKey: gitDetailKey(rootId),
+    queryFn: () => window.api.localAgents.gitDetail(rootId, false),
     enabled: enabled && rootId !== '',
-    // A repository's state changes underneath the app constantly — the user
-    // pulls in a terminal, an agent commits. Refetching on focus keeps the
-    // panel from asserting something stale about a folder the user just changed.
     staleTime: 30_000
   })
 }
 
-/** Fetch from the remote and report what is now available. The explicit check. */
+/**
+ * The agent list of a root already registered, for Manage agents.
+ *
+ * A mutation rather than a query: main records the folder as the pending pick
+ * as a side effect, which is what lets the existing `folderAdd` accept the new
+ * selection. A query would re-run that side effect on every refocus.
+ */
+export function useManageRootAgents() {
+  return useMutation<PickAgentFolderResult, Error, string>({
+    mutationFn: (rootId: string) => window.api.localAgents.rootManage(rootId)
+  })
+}
+
+/**
+ * Fetch from the remote and report what is now available. The explicit check.
+ *
+ * The fetch's whole point is the *counts* it moves, and the surface showing
+ * them reads {@link gitDetailKey} — so this invalidates that, rather than
+ * writing the `GitStatus` it gets back into a key of its own. It cannot write
+ * the detail directly: what comes back is the status half, and a `setQueryData`
+ * of it would drop the remotes, branches and head commit the dialog is also
+ * rendering.
+ *
+ * Without this the button was inert on screen: main really fetched, `behind`
+ * really moved, and the dialog went on saying "Up to date as of the last check"
+ * with no Update button, because nothing it read had changed.
+ */
 export function useCheckForUpdates() {
   const queryClient = useQueryClient()
   return useMutation<GitStatus, Error, string>({
     mutationFn: (rootId: string) => window.api.localAgents.gitStatus(rootId, true),
-    onSuccess: (status, rootId) => {
-      queryClient.setQueryData(gitStatusKey(rootId), status)
+    onSuccess: (_status, rootId) => {
+      void queryClient.invalidateQueries({ queryKey: gitDetailKey(rootId) })
     }
   })
 }
@@ -807,7 +824,10 @@ export function useUpdateFromGit() {
   return useMutation<GitUpdateResult, Error, string>({
     mutationFn: (rootId: string) => window.api.localAgents.gitUpdate(rootId),
     onSuccess: (result, rootId) => {
-      queryClient.setQueryData(gitStatusKey(rootId), result.status)
+      // Same reason as the check: the dialog reads the detail, and after a pull
+      // `behind` is zero and the head commit has moved, so both halves of what
+      // it renders are stale.
+      void queryClient.invalidateQueries({ queryKey: gitDetailKey(rootId) })
       if (!result.updated) return
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })

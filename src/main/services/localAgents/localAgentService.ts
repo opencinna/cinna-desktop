@@ -1197,8 +1197,9 @@ export const localAgentService = {
      *
      * It used to be the first refusal on the list, and it closed the only door
      * there was: a user who ticked one agent out of fifteen had no way to add a
-     * sixteenth later. The ⋯ menu removes one at a time and Settings' "Add
-     * them" restores all of them at once; this dialog is the only surface that
+     * sixteenth later. The ⋯ menu removes one at a time and Settings'
+     * Manage agents dialog chooses the set for a registered folder; this dialog
+     * is the only surface that
      * lists a repository's agents individually, so it is where the set is
      * chosen — the first time and every time after.
      *
@@ -1311,8 +1312,8 @@ export const localAgentService = {
       .some((row) => row.path === path && row.kind === 'external')
     // An empty selection is nothing to adopt on a first pick, and a real answer
     // on a re-selection: "take all of these out of the list". The folder stays
-    // registered and Settings' "Add them" puts them back, which is what makes
-    // that recoverable rather than a way to lose a repository.
+    // registered and Settings → Manage agents puts them back, which is what
+    // makes that recoverable rather than a way to lose a repository.
     if (chosen.size === 0 && !preexisting) {
       throw new LocalAgentError('invalid_input', 'Pick at least one agent to add.')
     }
@@ -1413,8 +1414,8 @@ export const localAgentService = {
     if (scan.agents.length === 0 && chosen.size === 0 && preexisting) {
       // A re-selection that emptied the list on purpose. Not the failure below:
       // the folder is still registered, the agents are still on disk, and
-      // Settings → "Add them" is the way back — the same state as taking them
-      // out one at a time from the ⋯ menu.
+      // Settings → Manage agents is the way back — the same state as taking
+      // them out one at a time from the ⋯ menu.
       pendingPick = null
       watcherService.refreshRoot(root.id)
       logger.info('agents folder cleared', { rootId: root.id, found: found.length })
@@ -1610,6 +1611,15 @@ export const localAgentService = {
    * The counterpart of the "remove from the list" half of the delete dialog:
    * without it that choice is a one-way door, and the folders are still sitting
    * on disk with nothing on screen saying so.
+   */
+  /**
+   * Put every hidden agent of one root back in the list.
+   *
+   * **No IPC channel reaches this any more.** It backed Settings' "Add them"
+   * button, which Manage agents replaced — that dialog can restore all of them
+   * by ticking all of them, and can do the thing this could not: restore some.
+   * Kept as the tested primitive for "re-adopt this whole root", which is the
+   * shape a future re-adopt or repair path wants; delete it if none appears.
    */
   restoreHiddenAgents(userId: string, rootId: string): { restored: number } {
     // Named, not defaulted: this acts on one root, and a missing id resolving

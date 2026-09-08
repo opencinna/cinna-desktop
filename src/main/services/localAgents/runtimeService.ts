@@ -38,6 +38,7 @@
  */
 
 import { chatModeService } from '../chatModeService'
+import { appSettingsService } from '../appSettingsService'
 import { providerService, type ProviderDto } from '../providerService'
 import { SECRET_LOOKALIKE } from '../../kit/validator'
 import { LocalAgentError } from '../../errors'
@@ -116,16 +117,67 @@ export function findCredential(
   return null
 }
 
+/**
+ * This machine's default-credential override, or `''`.
+ *
+ * Read through a `try`: `resolveDefault` runs on paths that must not fail
+ * because a settings read did (engine config assembly, the Runs with panel),
+ * and "no override" is the correct answer when the store cannot be reached.
+ */
+function readCredentialOverride(): string {
+  try {
+    return appSettingsService.getAll().localAgentsDefaultCredentialId.trim()
+  } catch {
+    return ''
+  }
+}
+
 export const runtimeService = {
   /**
-   * The Default runtime: whatever the user's default chat mode points at.
+   * The Default runtime: this machine's credential override, else whatever the
+   * user's default chat mode points at.
    *
-   * Reads through `chatModeService.resolveEffectiveDefault`, so it honours the
-   * local/account precedence toggle and a managed mode's per-profile model
-   * override — the same resolution `aiFunctions.resolveAdapterFromDefaultMode`
-   * uses, so "what drafts my prompts" and "what runs my agent" cannot disagree.
+   * Without the override it reads through `chatModeService.resolveEffectiveDefault`,
+   * so it honours the local/account precedence toggle and a managed mode's
+   * per-profile model override — the same resolution
+   * `aiFunctions.resolveAdapterFromDefaultMode` uses, so "what drafts my
+   * prompts" and "what runs my agent" cannot disagree.
+   *
+   * **`localAgentsDefaultCredentialId` breaks that tie on purpose.** Which
+   * credential this machine's engine spends is a property of the machine, not
+   * of a chat preference that syncs with the profile — a user on a shared or
+   * metered key needs to say "agents run on this one" without changing what
+   * their chats do. Empty (the default) keeps the old behaviour exactly.
+   *
+   * An override naming a credential this machine no longer has falls **through**
+   * to the chat mode rather than resolving to nothing: a deleted provider is a
+   * stale setting, and stranding every agent on this machine is a worse answer
+   * than quietly using the runtime they had before the override was set.
    */
   resolveDefault(providers: ProviderDto[] = providerService.listMerged()): ResolvedRuntime {
+    const overrideId = readCredentialOverride()
+    const override = overrideId
+      ? (providers.find((provider) => provider.id === overrideId) ?? null)
+      : null
+    if (override) {
+      return {
+        source: 'default',
+        credentialRef: null,
+        credentialId: override.id,
+        credentialName: override.name,
+        credentialType: override.type,
+        // The credential's own default model, through the shared chain — the
+        // same call `resolveDefault` makes for a chat mode left on "First
+        // available", so an override and a mode resolve models the same way.
+        modelId: defaultRuntimeModelId(override, null),
+        modelSource: 'inherited',
+        replacedModelId: null,
+        reason: isUsable(override)
+          ? null
+          : `Agents on this machine are set to use “${override.name}”, which has no API key this app can use.`
+      }
+    }
+
     const mode = chatModeService.resolveEffectiveDefault()
     if (!mode) {
       return {

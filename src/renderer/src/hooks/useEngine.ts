@@ -61,19 +61,18 @@ export function useEngineSkips() {
  * `failed` state rather than rejecting — so the caller renders `data.error`
  * instead of a mutation error. `isPending` covers the download, which can be a
  * minute on first use.
+ *
+ * The agent page's Runs-with panel is the only caller. Settings had a
+ * Start/Stop button too, and it is gone: `ensureEngineRunning` starts the
+ * engine at the top of every local turn, so on that screen it was a control for
+ * doing by hand what chatting does anyway. There is no `useStopEngine` for the
+ * same reason — nothing in the UI stops the engine, and the next message would
+ * start it again.
  */
 export function useStartEngine() {
   const queryClient = useQueryClient()
   return useMutation<EngineState>({
     mutationFn: () => window.api.engine.start(),
-    onSuccess: (state) => queryClient.setQueryData(ENGINE_STATE_KEY, state)
-  })
-}
-
-export function useStopEngine() {
-  const queryClient = useQueryClient()
-  return useMutation<EngineState>({
-    mutationFn: () => window.api.engine.stop(),
     onSuccess: (state) => queryClient.setQueryData(ENGINE_STATE_KEY, state)
   })
 }
