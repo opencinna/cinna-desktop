@@ -366,9 +366,21 @@ test('removing a bare agent from the list leaves the folder, and Settings puts i
     // holds an agent the user simply did not tick when adopting the folder, so
     // adopting 1 of 15 reported "14 agents removed from the list" about agents
     // that were never in it.
-    const note = page.getByText('1 agent in this folder is not in the list.')
+    // Matched without its tail: the sentence now ends by naming the route
+    // ("— choose which ones with Manage agents above"), and this assertion is
+    // about the count and the wording of the *state*, not about the pointer.
+    const note = page.getByText('1 agent in this folder is not in the list')
     await expect(note).toBeVisible()
-    await page.getByRole('button', { name: 'Add it', exact: true }).click()
+
+    // The count is a statement; the set is chosen in Manage agents. The old
+    // "Add it" button beside the note could only put back all of them at once,
+    // which is why it was replaced rather than kept alongside.
+    await page.getByRole('button', { name: /^Manage agents in / }).click()
+    const manage = page.getByRole('dialog', { name: 'Manage agents' })
+    await expect(manage).toBeVisible()
+    await manage.getByRole('checkbox').first().check()
+    await manage.getByRole('button', { name: 'Save', exact: true }).click()
+    await expect(manage).toHaveCount(0)
     await expect(note).toHaveCount(0)
 
     await page.getByRole('button', { name: 'Back', exact: true }).click()
