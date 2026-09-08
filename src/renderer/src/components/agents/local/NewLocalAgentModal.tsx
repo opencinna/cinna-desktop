@@ -1,11 +1,32 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Bot, ChevronDown, ChevronRight, Code2, FolderOpen, TerminalSquare, X } from 'lucide-react'
+import {
+  Bot,
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Code2,
+  FolderInput,
+  FolderOpen,
+  Sparkles,
+  TerminalSquare,
+  X
+} from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
-import { useAgentRoots, useCreateLocalAgent } from '../../../hooks/useLocalAgents'
+import {
+  useAddAgentFolder,
+  useAgentRoots,
+  useCreateLocalAgent,
+  usePickAgentFolder
+} from '../../../hooks/useLocalAgents'
 import { useDefaultTool, useOpenIn, useSetDefaultTool } from '../../../hooks/useLocalTools'
 import { useSetAppSetting } from '../../../hooks/useAppSettings'
-import { describeAgentSlug, type LocalAgentDto } from '../../../../../shared/localAgents'
+import {
+  describeAgentSlug,
+  BARE_AGENT_PROMPT_FILE,
+  type DiscoveredBareAgent,
+  type LocalAgentDto
+} from '../../../../../shared/localAgents'
 import { actionForTool, type DetectedTool } from '../../../../../shared/localTools'
 import { unwrapIpcError } from '../../../utils/ipcError'
 
@@ -22,7 +43,38 @@ const CHOICE =
   'flex w-full items-center gap-2.5 rounded-lg border px-3 py-2.5 text-left text-xs ' +
   'transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-40'
 
-type Step = { kind: 'name' } | { kind: 'tool'; agent: LocalAgentDto }
+/** Dialog `aria-label` and heading per step. Tests and E2E find it by this. */
+const DIALOG_LABEL: Record<Step['kind'], string> = {
+  choose: 'Add an agent',
+  name: 'New agent',
+  folder: 'Add a folder',
+  tool: 'Build it with'
+}
+
+/**
+ * `choose` → (`name` | `folder`) → `tool`.
+ *
+ * The fork at the front exists because the two ways to get an agent have
+ * nothing in common: one **writes** a kit folder into the agents home and hands
+ * it to an assistant to build; the other **reads** a folder the user already
+ * owns and changes nothing in it. Putting an "or point at an existing folder"
+ * link under a name field would have made the second one look like an option on
+ * the first, which it is not.
+ */
+type Step =
+  | { kind: 'choose' }
+  | { kind: 'name' }
+  | { kind: 'folder'; pick: PickedFolder }
+  | { kind: 'tool'; agent: LocalAgentDto }
+
+/** The folder the user picked, and what is in it. Never a path they typed. */
+interface PickedFolder {
+  path: string
+  folderName: string
+  found: DiscoveredBareAgent[]
+  /** The walk hit its cap, so `found` is the first N by path, not all of them. */
+  truncated: boolean
+}
 
 /**
  * A name in, a folder out, and then the tool the user builds agents with.
@@ -54,7 +106,14 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
   const cardRef = useRef<HTMLDivElement>(null)
   const nameRef = useRef<HTMLInputElement>(null)
 
-  const [step, setStep] = useState<Step>({ kind: 'name' })
+  const pickFolder = usePickAgentFolder()
+  const addFolder = useAddAgentFolder()
+
+  const [step, setStep] = useState<Step>({ kind: 'choose' })
+  /** Root-relative paths ticked in the folder step. */
+  const [chosen, setChosen] = useState<Set<string>>(new Set())
+  /** The name for a single adopted folder. Ignored when several are ticked. */
+  const [folderAgentName, setFolderAgentName] = useState('')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [moreOpen, setMoreOpen] = useState(false)
@@ -78,8 +137,8 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
   )
 
   useEffect(() => {
-    nameRef.current?.focus()
-  }, [])
+    if (step.kind === 'name') nameRef.current?.focus()
+  }, [step.kind])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
@@ -128,6 +187,71 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
           setStep({ kind: 'tool', agent })
           setError(unwrapIpcError(err, `Could not open ${tool.label}.`))
         }
+      }
+    )
+  }
+
+  /**
+   * Open the OS picker, then show what was found.
+   *
+   * A refusal — no `AGENT.md` anywhere, everything already added, a folder that
+   * overlaps a registered root — keeps the dialog on the choice step and says
+   * why, rather than closing (UX rule 6). Cancelling the picker is not a
+   * refusal and says nothing at all.
+   */
+  const handlePickFolder = (): void => {
+    setError(null)
+    pickFolder.mutate(undefined, {
+      onSuccess: (result) => {
+        if (result.cancelled) return
+        if (result.refusal !== null) {
+          setError(result.refusal)
+          return
+        }
+        setChosen(new Set(result.found.filter((f) => !f.alreadyAdded).map((f) => f.relPath)))
+        setFolderAgentName(result.found.length === 1 ? result.found[0].name : '')
+        setStep({
+          kind: 'folder',
+          pick: {
+            path: result.path,
+            folderName: result.folderName,
+            found: result.found,
+            truncated: result.truncated
+          }
+        })
+      },
+      onError: (err) => setError(unwrapIpcError(err, 'Could not open that folder.'))
+    })
+  }
+
+  /** Adopt what was ticked, then land on the first of them. */
+  const handleAddFolder = (pick: PickedFolder): void => {
+    if (chosen.size === 0 || addFolder.isPending) return
+    setError(null)
+    const single = pick.found.length === 1 && chosen.size === 1
+    addFolder.mutate(
+      {
+        path: pick.path,
+        relPaths: [...chosen],
+        ...(single && folderAgentName.trim() !== '' ? { name: folderAgentName.trim() } : {})
+      },
+      {
+        // Nothing was scaffolded and nothing needs opening in a tool, so there
+        // is no second step here — but the user is still landed on what they
+        // just added (ux_rules rule 3), the way the New agent branch is. Closing
+        // straight to the empty pane left them reading "Select an agent from the
+        // sidebar, or create one with +" with the agent they had just added
+        // sitting unselected behind it. With several, the first: the sidebar
+        // shows the rest under the new root either way.
+        onSuccess: (result) => {
+          const first = result.agentIds[0]
+          if (first !== undefined) {
+            setActiveLocalAgentId(first)
+            setActiveView('local-agent')
+          }
+          onClose()
+        },
+        onError: (err) => setError(unwrapIpcError(err, 'Could not add that folder.'))
       }
     )
   }
@@ -185,7 +309,7 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
       <div
         ref={cardRef}
         role="dialog"
-        aria-label={step.kind === 'name' ? 'New agent' : 'Build it with'}
+        aria-label={DIALOG_LABEL[step.kind]}
         className="w-full max-w-[30rem] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
       >
         <div className="flex justify-end">
@@ -193,8 +317,8 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
             type="button"
             onClick={onClose}
             className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-            title={step.kind === 'name' ? 'Cancel' : 'Close'}
-            aria-label={step.kind === 'name' ? 'Cancel' : 'Close'}
+            title={step.kind === 'tool' ? 'Close' : 'Cancel'}
+            aria-label={step.kind === 'tool' ? 'Close' : 'Cancel'}
           >
             <X size={14} />
           </button>
@@ -205,7 +329,7 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
             <Bot size={28} className="text-[var(--color-accent)]" />
           </div>
           <div className="text-lg font-semibold text-[var(--color-text)]">
-            {step.kind === 'name' ? 'New agent' : `Build ${step.agent.name} with…`}
+            {step.kind === 'tool' ? `Build ${step.agent.name} with…` : DIALOG_LABEL[step.kind]}
           </div>
           {step.kind === 'tool' && (
             <div className="text-[11px] text-[var(--color-text-muted)]">
@@ -213,9 +337,67 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
               the default.
             </div>
           )}
+          {step.kind === 'folder' && <PickedPath path={step.pick.path} />}
         </div>
 
-        {step.kind === 'name' ? (
+        {step.kind === 'choose' ? (
+          <div className="mt-5 space-y-3">
+            <button
+              type="button"
+              autoFocus
+              onClick={() => {
+                setError(null)
+                setStep({ kind: 'name' })
+              }}
+              className={`${CHOICE} items-start border-[var(--color-border)]`}
+            >
+              <Sparkles size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+              <span className="min-w-0">
+                <span className="block font-medium text-[var(--color-text)]">New agent</span>
+                <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+                  Creates a folder in your agents folder, ready to build in Claude Code, Codex or
+                  your editor.
+                </span>
+              </span>
+            </button>
+            <button
+              type="button"
+              disabled={pickFolder.isPending}
+              onClick={handlePickFolder}
+              className={`${CHOICE} items-start border-[var(--color-border)]`}
+            >
+              <FolderInput size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+              <span className="min-w-0">
+                <span className="block font-medium text-[var(--color-text)]">
+                  {pickFolder.isPending ? 'Choosing…' : 'Add a folder'}
+                </span>
+                <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+                  Any folder with an {BARE_AGENT_PROMPT_FILE}, or a folder holding several of
+                  them. Adding it changes nothing inside it.
+                </span>
+              </span>
+            </button>
+            {/* Reserved: a refusal must not push the cards around (UX rule 1). */}
+            <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
+              {error}
+            </div>
+          </div>
+        ) : step.kind === 'folder' ? (
+          <FolderStep
+            pick={step.pick}
+            chosen={chosen}
+            setChosen={setChosen}
+            name={folderAgentName}
+            setName={setFolderAgentName}
+            error={error}
+            isPending={addFolder.isPending}
+            onBack={() => {
+              setError(null)
+              setStep({ kind: 'choose' })
+            }}
+            onAdd={() => handleAddFolder(step.pick)}
+          />
+        ) : step.kind === 'name' ? (
           <form
             className="mt-5 space-y-4"
             onSubmit={(event) => {
@@ -432,5 +614,216 @@ export function NewLocalAgentModal({ onClose }: NewLocalAgentModalProps): React.
       </div>
     </div>,
     document.body
+  )
+}
+
+interface FolderStepProps {
+  pick: PickedFolder
+  chosen: Set<string>
+  setChosen: (next: Set<string>) => void
+  name: string
+  setName: (next: string) => void
+  error: string | null
+  isPending: boolean
+  onBack: () => void
+  onAdd: () => void
+}
+
+/**
+ * What was found in the picked folder, and what to do with it.
+ *
+ * Two shapes, one component, because they are the same question asked of one
+ * folder or of fifteen:
+ *
+ * - **One agent** — the folder the user picked *is* the agent. The only thing
+ *   left to decide is its name, which is prefilled from the `AGENT.md` heading
+ *   or the folder name, so Enter is a complete answer (UX rule 3).
+ * - **Several** — a repository of agents. Names come from each folder's own
+ *   `AGENT.md`; naming fifteen of them at adoption time is work nobody asked
+ *   for, and renaming one afterwards is a single action on its page.
+ *
+ * An agent already added is shown, ticked and disabled, rather than filtered
+ * out: a list that silently loses the row the user came to add reads as the
+ * folder having been scanned wrong.
+ */
+function FolderStep({
+  pick,
+  chosen,
+  setChosen,
+  name,
+  setName,
+  error,
+  isPending,
+  onBack,
+  onAdd
+}: FolderStepProps): React.JSX.Element {
+  const single = pick.found.length === 1
+  const addable = pick.found.filter((entry) => !entry.alreadyAdded)
+  const allChosen = addable.length > 0 && addable.every((entry) => chosen.has(entry.relPath))
+
+  const toggle = (relPath: string): void => {
+    const next = new Set(chosen)
+    if (next.has(relPath)) next.delete(relPath)
+    else next.add(relPath)
+    setChosen(next)
+  }
+
+  return (
+    <form
+      className="mt-5 space-y-4"
+      onSubmit={(event) => {
+        event.preventDefault()
+        onAdd()
+      }}
+    >
+      {single ? (
+        <div className="space-y-1.5">
+          <label htmlFor="folder-agent-name" className={LABEL}>
+            Name
+          </label>
+          <input
+            id="folder-agent-name"
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={pick.found[0]?.name ?? pick.folderName}
+            className={INPUT}
+          />
+          <div className="text-[10px] text-[var(--color-text-muted)]">
+            {pick.found[0]?.hasReadme
+              ? `${BARE_AGENT_PROMPT_FILE} is its instructions. README.md briefs an assistant that opens the folder to work on it.`
+              : `${BARE_AGENT_PROMPT_FILE} is its instructions. Add a README.md to brief an assistant that opens the folder.`}
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className={LABEL}>
+              {pick.found.length} agents in {pick.folderName}
+            </span>
+            <button
+              type="button"
+              disabled={addable.length === 0}
+              onClick={() =>
+                setChosen(allChosen ? new Set() : new Set(addable.map((entry) => entry.relPath)))
+              }
+              // Sized to the wider of the two labels, so the control does not
+              // move under the pointer that just hit it — "Select all" is 48px
+              // and "Clear all" 43px, and right-aligned that is a 5.5px jump on
+              // the click (ux_rules rule 1). Same trick as the primary button's
+              // `min-w`, which is why ticking fifteen boxes barely moves Back.
+              className="min-w-[3.5rem] text-right text-[11px] text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text)] disabled:opacity-40"
+            >
+              {allChosen ? 'Clear all' : 'Select all'}
+            </button>
+          </div>
+          {/*
+            The cap, said out loud. `discoverBareAgents` stops at 200 and the
+            header above would otherwise read "200 agents in <folder>" over a
+            list that is the first 200 by path — every count in it true, and all
+            of them true of the wrong set. A user who ticks Select all and finds
+            the agents they came for missing reads that as the scanner having
+            failed to see those folders, which is the exact diagnosis the cap
+            exists to prevent.
+          */}
+          {pick.truncated && (
+            <div className="text-[10px] text-[var(--color-warning)]">
+              This is the first {pick.found.length} folders found. Pick a folder closer to the
+              agents to see the rest.
+            </div>
+          )}
+          {/* Fifteen rows is the shape this was built against, so the list
+              scrolls inside a fixed box rather than growing the dialog past
+              the window (UX rule 1). */}
+          <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] p-1">
+            {pick.found.map((entry) => (
+              <label
+                key={entry.relPath}
+                title={entry.alreadyAdded ? 'Already added' : entry.path}
+                className={`flex items-start gap-2 rounded px-2 py-1.5 text-xs ${
+                  entry.alreadyAdded
+                    ? 'cursor-default opacity-50'
+                    : 'cursor-pointer hover:bg-[var(--color-bg-hover)]'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  className="mt-0.5 accent-[var(--color-accent)]"
+                  disabled={entry.alreadyAdded || isPending}
+                  checked={entry.alreadyAdded || chosen.has(entry.relPath)}
+                  onChange={() => toggle(entry.relPath)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-[var(--color-text)]">{entry.name}</span>
+                  <span className="block truncate font-mono text-[10px] text-[var(--color-text-muted)]">
+                    {entry.relPath}
+                  </span>
+                </span>
+                {entry.alreadyAdded && (
+                  <Check size={12} className="mt-0.5 shrink-0 text-[var(--color-text-muted)]" />
+                )}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Reserved: a refusal must not push the buttons down (UX rule 1). */}
+      <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
+        {error}
+      </div>
+
+      <div className="flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onBack}
+          disabled={isPending}
+          className="px-3 py-1.5 rounded-md text-xs font-medium text-[var(--color-text-muted)]
+            hover:bg-[var(--color-bg-hover)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+        >
+          Back
+        </button>
+        <button
+          type="submit"
+          disabled={chosen.size === 0 || isPending}
+          className="min-w-[6.5rem] px-3 py-1.5 rounded-md text-xs font-medium bg-[var(--color-accent)] text-white
+            hover:bg-[var(--color-accent-hover)] transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {isPending ? 'Adding…' : chosen.size > 1 ? `Add ${chosen.size} agents` : 'Add agent'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
+/**
+ * The picked folder's path, with the **end** guaranteed to survive.
+ *
+ * An ordinary `truncate` cuts from the right, which on a path removes the only
+ * part that identifies it: `/Users/me/Documents/work/clients/acme/support-agent`
+ * becomes `/Users/me/Documents/work/clients/…`, and every folder the user might
+ * have picked looks the same. This is the confirm step for adopting a folder,
+ * so "which folder" is the one question it has to answer.
+ *
+ * Two spans rather than a bidi trick: the parent directory shrinks and
+ * ellipsises, the basename never shrinks. No `direction: rtl`, so a leading `/`
+ * cannot jump to the far end and no right-to-left locale renders it backwards.
+ * The full path stays in `title` for hover — but hover is not confirmation,
+ * which is why it is not the fix on its own.
+ */
+function PickedPath({ path }: { path: string }): React.JSX.Element {
+  const cut = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  const parent = cut > 0 ? path.slice(0, cut + 1) : ''
+  const leaf = cut > 0 ? path.slice(cut + 1) : path
+
+  return (
+    <div
+      className="flex min-w-0 justify-center font-mono text-[10px] text-[var(--color-text-muted)]"
+      title={path}
+    >
+      <span className="truncate">{parent}</span>
+      <span className="shrink-0">{leaf}</span>
+    </div>
   )
 }

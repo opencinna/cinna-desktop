@@ -49,6 +49,11 @@ interface DeleteAgentDialogProps {
 function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps): React.JSX.Element {
   const modalRef = useRef<HTMLDivElement>(null)
   const [error, setError] = useState<string | null>(null)
+  // Only a bare agent has a choice to make. A kit agent's row is a derived
+  // index over its folder, so "remove from the list" would be undone by the
+  // very next scan; there the folder *is* the removal, and main refuses the
+  // other value rather than pretending it means something.
+  const [trashFolder, setTrashFolder] = useState(agent.kind !== 'bare')
   const pendingRef = useRef(remove.isPending)
   pendingRef.current = remove.isPending
 
@@ -70,16 +75,21 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
 
   const confirm = (): void => {
     setError(null)
-    remove.mutate(agent.id, {
-      onError: (err) =>
-        setError(
-          isBlockedWriteError(err)
-            ? 'This agent is in the middle of a turn. Wait for it to finish, then try again — nothing was removed.'
-            : err instanceof Error
-              ? err.message
-              : 'The folder could not be moved to the Trash.'
-        )
-    })
+    remove.mutate(
+      { agentId: agent.id, trashFolder },
+      {
+        onError: (err) =>
+          setError(
+            isBlockedWriteError(err)
+              ? 'This agent is in the middle of a turn. Wait for it to finish, then try again — nothing was removed.'
+              : err instanceof Error
+                ? err.message
+                : trashFolder
+                  ? 'The folder could not be moved to the Trash.'
+                  : 'This agent could not be removed from the list.'
+          )
+      }
+    )
   }
 
   return createPortal(
@@ -87,18 +97,86 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
       <div
         ref={modalRef}
         role="dialog"
-        aria-label="Delete agent"
+        // The accessible name *is* the visible name. Hardcoded, it announced
+        // "Delete agent" over a dialog whose heading, menu item and primary
+        // button all said Remove — and announced the more alarming of the two
+        // words for the branch whose default deletes nothing (ux_rules rule 8).
+        aria-label={agent.kind === 'bare' ? 'Remove agent' : 'Delete agent'}
         className="app-popover-surface w-96 space-y-4 rounded-lg border border-[var(--color-border)] p-5 shadow-xl"
       >
         <div className="flex items-center gap-2 text-sm font-medium text-[var(--color-danger)]">
           <AlertTriangle size={16} />
-          Delete agent
+          {agent.kind === 'bare' ? 'Remove agent' : 'Delete agent'}
         </div>
-        <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
-          Move <strong className="text-[var(--color-text)]">{agent.name}</strong> to the Trash?
-          The folder can be put back from there. Existing chats stay, but they can no longer
-          reach this agent, and any job that uses it will refuse to run.
-        </p>
+        {agent.kind === 'bare' ? (
+          <>
+            {/*
+              The copy owns the half that cannot be undone. Removing the agent
+              drops its `agents` row — which *is* the mechanism, since that row
+              is what the pickers and `@`-mentions read — and `job_agents`
+              cascades away with it. Putting the agent back re-creates the row
+              under the same positional id, so its chats re-bind and look
+              intact, but the job's link to it does not come back. Saying "the
+              folder is untouched" and stopping there would leave a user
+              undoing a removal ten seconds later and finding a job that has
+              silently lost its agent (ux_rules rule 5: copy must match the
+              schema).
+            */}
+            <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+              Remove <strong className="text-[var(--color-text)]">{agent.name}</strong>? Existing
+              chats stay but can no longer reach this agent, and any job that uses it will refuse
+              to run — and will need it selected again even if you put the agent back.
+            </p>
+            {/* The recoverable option first, and selected — UX rule 5. This is
+                the user's own folder, very often a repository they share with
+                other people, so deleting it is the deliberate second choice. */}
+            <div className="space-y-2">
+              {[
+                {
+                  value: false,
+                  label: 'Remove from the list only',
+                  // Not "add it again": the folder stays a registered agents
+                  // folder, so re-picking it is *refused* for overlapping one.
+                  // Settings is the route that works, and naming the wrong one
+                  // sends the user down a dead end for a choice offered as the
+                  // recoverable one (ux_rules rule 5).
+                  hint: 'The folder stays exactly where it is, and Settings → Local Agents can put the agent back.'
+                },
+                {
+                  value: true,
+                  label: 'Remove and move the folder to the Trash',
+                  hint: 'The whole folder and everything in it goes to the Trash. It can be put back from there.'
+                }
+              ].map((option) => (
+                <label
+                  key={String(option.value)}
+                  className="flex cursor-pointer items-start gap-2 rounded-md border border-[var(--color-border)] p-2.5 text-xs transition-colors hover:bg-[var(--color-bg-hover)]"
+                >
+                  <input
+                    type="radio"
+                    name="delete-scope"
+                    className="mt-0.5 accent-[var(--color-accent)]"
+                    checked={trashFolder === option.value}
+                    disabled={remove.isPending}
+                    onChange={() => setTrashFolder(option.value)}
+                  />
+                  <span className="min-w-0">
+                    <span className="block text-[var(--color-text)]">{option.label}</span>
+                    <span className="block text-[10px] leading-relaxed text-[var(--color-text-muted)]">
+                      {option.hint}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="text-xs leading-relaxed text-[var(--color-text-secondary)]">
+            Move <strong className="text-[var(--color-text)]">{agent.name}</strong> to the Trash?
+            The folder can be put back from there. Existing chats stay, but they can no longer
+            reach this agent, and any job that uses it will refuse to run.
+          </p>
+        )}
         {/* Reserved, so a refusal does not push the buttons down (UX rule 1). */}
         <div role="alert" className="min-h-8 text-[10px] text-[var(--color-danger)]">
           {error}
@@ -119,7 +197,7 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
             // A fixed width, so the shorter "Deleting…" does not pull Cancel sideways.
             className="min-w-[7.5rem] rounded-md bg-[var(--color-danger)] px-3 py-1.5 text-xs font-medium text-white transition-colors hover:opacity-90 disabled:opacity-50"
           >
-            {remove.isPending ? 'Deleting…' : 'Move to Trash'}
+            {remove.isPending ? 'Removing…' : trashFolder ? 'Move to Trash' : 'Remove'}
           </button>
         </div>
       </div>
@@ -285,7 +363,7 @@ export function AgentActionsMenu({ agent, onError }: AgentActionsMenuProps): Rea
               onClick={() => run(() => setConfirming(true))}
             >
               <Trash2 size={12} />
-              Delete agent…
+              {agent.kind === 'bare' ? 'Remove agent…' : 'Delete agent…'}
             </button>
           </div>,
           document.body

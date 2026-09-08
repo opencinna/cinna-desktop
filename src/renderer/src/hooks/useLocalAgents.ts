@@ -1,18 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
+  AddAgentFolderInput,
+  AddAgentFolderResult,
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentInput,
   DeleteLocalAgentResult,
+  PickAgentFolderResult,
   DraftLocalAgentResult,
   FileStamp,
   LocalAgentDocDto,
   LocalAgentDto,
+  LocalAgentDocKind,
   LocalAgentFieldUpdate,
-  LocalAgentPromptKind,
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
 import type { LocalAgentRuntimeInput } from '../../../shared/engine'
+import type { GitStatus, GitUpdateResult } from '../../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import {
   isBlockedWriteError,
@@ -60,7 +65,7 @@ export function localAgentKey(agentId: string): readonly unknown[] {
 /** Cache key of one prompt document. Prefixed so a watcher push can drop them all. */
 export function localAgentDocKey(
   agentId: string,
-  prompt: LocalAgentPromptKind
+  prompt: LocalAgentDocKind
 ): readonly unknown[] {
   return ['local-agent-doc', agentId, prompt] as const
 }
@@ -114,7 +119,7 @@ export function useLocalAgent(agentId: string | null) {
  * One prompt document. Text and stamp arrive together, from a single read in
  * main, which is what makes the editor's save guard meaningful.
  */
-export function useLocalAgentDoc(agentId: string | null, prompt: LocalAgentPromptKind) {
+export function useLocalAgentDoc(agentId: string | null, prompt: LocalAgentDocKind) {
   return useQuery<LocalAgentDocDto>({
     queryKey: localAgentDocKey(agentId ?? '', prompt),
     queryFn: () => window.api.localAgents.readDoc({ agentId: agentId as string, prompt }),
@@ -307,9 +312,9 @@ export function useDeleteLocalAgent(options?: {
   onSuccess?: (result: DeleteLocalAgentResult) => void
 }) {
   const queryClient = useQueryClient()
-  return useMutation<DeleteLocalAgentResult, Error, string>({
-    mutationFn: async (agentId: string) =>
-      unwrapLocalAgentOutcome(await window.api.localAgents.delete(agentId)),
+  return useMutation<DeleteLocalAgentResult, Error, DeleteLocalAgentInput>({
+    mutationFn: async (input: DeleteLocalAgentInput) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.delete(input)),
     onSuccess: (result) => {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
@@ -486,7 +491,7 @@ export function useAgentFileEditor(input: {
    * kind rather than a key, so the hook's memoised callbacks depend on a
    * string instead of a freshly-built array.
    */
-  docPrompt?: LocalAgentPromptKind
+  docPrompt?: LocalAgentDocKind
   /**
    * Reject the text before it is sent, returning the message to show. Lets a
    * card say *which line* is wrong — main can only answer "one of these is too
@@ -659,4 +664,116 @@ export function useAgentFileEditor(input: {
     },
     error
   }
+}
+
+/**
+ * Ask for a folder and preview the agents in it.
+ *
+ * A mutation rather than a query: it opens a native dialog, so it must run only
+ * when the user asks, and it has no cache key that would mean anything.
+ */
+export function usePickAgentFolder() {
+  return useMutation<PickAgentFolderResult, Error, void>({
+    mutationFn: () => window.api.localAgents.folderPick()
+  })
+}
+
+/** Adopt the folder just previewed, with the agents the user ticked. */
+export function useAddAgentFolder() {
+  const queryClient = useQueryClient()
+  return useMutation<AddAgentFolderResult, Error, AddAgentFolderInput>({
+    mutationFn: async (input) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.folderAdd(input)),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+    }
+  })
+}
+
+/** Rename a bare agent. Kit agents rename through `useUpdateLocalAgentField`. */
+export function useRenameLocalAgent() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; name: string | null }>({
+    mutationFn: async ({ agentId, name }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.rename(agentId, name)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+    }
+  })
+}
+
+/** Put back every agent removed from one external root's list. */
+export function useRestoreHiddenAgents() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (rootId: string) => window.api.localAgents.rootRestoreHidden(rootId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+    }
+  })
+}
+
+/** Query key for one root's git state. */
+const gitStatusKey = (rootId: string): unknown[] => ['local-agent-git', rootId]
+
+/**
+ * A root's git state, from the last fetch.
+ *
+ * Deliberately does **not** fetch from the remote: this runs for every root the
+ * settings screen renders, and a network round trip per root on open would make
+ * the screen slow for a feature nobody has asked for yet. The counts are "as of
+ * the last fetch", which the panel says, and {@link useCheckForUpdates} is the
+ * explicit ask.
+ *
+ * `enabled` is the caller's, so a workshop root that is not a repository is not
+ * probed at all.
+ */
+export function useGitStatus(rootId: string, enabled = true) {
+  return useQuery<GitStatus>({
+    queryKey: gitStatusKey(rootId),
+    queryFn: () => window.api.localAgents.gitStatus(rootId, false),
+    enabled: enabled && rootId !== '',
+    // A repository's state changes underneath the app constantly — the user
+    // pulls in a terminal, an agent commits. Refetching on focus keeps the
+    // panel from asserting something stale about a folder the user just changed.
+    staleTime: 30_000
+  })
+}
+
+/** Fetch from the remote and report what is now available. The explicit check. */
+export function useCheckForUpdates() {
+  const queryClient = useQueryClient()
+  return useMutation<GitStatus, Error, string>({
+    mutationFn: (rootId: string) => window.api.localAgents.gitStatus(rootId, true),
+    onSuccess: (status, rootId) => {
+      queryClient.setQueryData(gitStatusKey(rootId), status)
+    }
+  })
+}
+
+/**
+ * Fast-forward a root, and refresh everything the pull can have changed.
+ *
+ * A pull can add an agent folder, remove one and rewrite an `AGENT.md`, so the
+ * agents list, the roots and the merged agents list are all invalidated — not
+ * only the git panel that triggered it.
+ */
+export function useUpdateFromGit() {
+  const queryClient = useQueryClient()
+  return useMutation<GitUpdateResult, Error, string>({
+    mutationFn: (rootId: string) => window.api.localAgents.gitUpdate(rootId),
+    onSuccess: (result, rootId) => {
+      queryClient.setQueryData(gitStatusKey(rootId), result.status)
+      if (!result.updated) return
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
+      void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+    }
+  })
 }

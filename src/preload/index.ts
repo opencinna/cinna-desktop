@@ -1,10 +1,15 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { DetectedTool, OpenInRequest } from '../shared/localTools'
+import type { GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
+  AddAgentFolderInput,
+  AddAgentFolderResult,
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentInput,
   DeleteLocalAgentResult,
+  PickAgentFolderResult,
   DraftLocalAgentResult,
   LocalAgentChangedPayload,
   LocalAgentDocDto,
@@ -1145,8 +1150,8 @@ const api = {
      * Move the folder to the Trash and forget the agent. An outcome, so
      * `turn_in_progress` survives the crossing — see `get` above.
      */
-    delete: (agentId: string): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> =>
-      ipcRenderer.invoke('local-agent:delete', agentId),
+    delete: (input: DeleteLocalAgentInput): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> =>
+      ipcRenderer.invoke('local-agent:delete', input),
     /** Re-read one root, or every root. */
     rescan: (rootId?: string): Promise<RescanResult[]> =>
       ipcRenderer.invoke('local-agent:rescan', rootId),
@@ -1198,6 +1203,34 @@ const api = {
     /** Forget a root. The folder on disk is left untouched. */
     rootRemove: (rootId: string): Promise<{ pruned: number }> =>
       ipcRenderer.invoke('local-agent:root-remove', rootId),
+    /**
+     * Ask for a folder and report the `AGENT.md` folders in it, up to two
+     * levels deep. Reads only — nothing is registered until `folderAdd`.
+     */
+    folderPick: (): Promise<PickAgentFolderResult> =>
+      ipcRenderer.invoke('local-agent:folder-pick'),
+    /**
+     * Adopt the folder just picked, with the agents the user ticked. An
+     * outcome: a stale pick and an empty selection are both recoverable in the
+     * dialog rather than reasons to close it.
+     */
+    folderAdd: (input: AddAgentFolderInput): Promise<LocalAgentOutcome<AddAgentFolderResult>> =>
+      ipcRenderer.invoke('local-agent:folder-add', input),
+    /** Rename a bare agent. Kit agents rename through `updateField`. */
+    rename: (agentId: string, name: string | null): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:rename', { agentId, name }),
+    /** Put back every agent removed from one external root's list. */
+    rootRestoreHidden: (rootId: string): Promise<{ restored: number }> =>
+      ipcRenderer.invoke('local-agent:root-restore-hidden', rootId),
+    /**
+     * A root's git state. `fetch` reaches the network, so it is the caller's
+     * explicit choice — the settings screen renders cached counts on open.
+     */
+    gitStatus: (rootId: string, fetch?: boolean): Promise<GitStatus> =>
+      ipcRenderer.invoke('local-agent:git-status', { rootId, fetch }),
+    /** Fast-forward a root and rescan it. Never merges, rebases or resolves. */
+    gitUpdate: (rootId: string): Promise<GitUpdateResult> =>
+      ipcRenderer.invoke('local-agent:git-update', rootId),
     /** Fires when a watched folder changed on disk. Returns an unsubscribe. */
     onChanged: (handler: (payload: LocalAgentChangedPayload) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, payload: LocalAgentChangedPayload): void =>

@@ -23,6 +23,7 @@ import { runtimeService } from '../services/localAgents/runtimeService'
 import { providerService } from '../services/providerService'
 import {
   assembleAgentPrompt,
+  assembleBareAgentPrompt,
   resolveDesktopPromptContext
 } from '../services/localAgents/promptAssembly'
 import { createLogger } from '../logger/logger'
@@ -147,7 +148,13 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
       agentId: agent.id,
       slug: agent.slug,
       description: agent.description,
-      prompt: assembleAgentPrompt(agent.path, agent.manifest, context),
+      // A bare folder has no manifest, so nothing in the kit assembler applies
+      // to it — see `assembleBareAgentPrompt` for why its `README.md` is
+      // deliberately left out of what the model is told.
+      prompt:
+        agent.kind === 'bare'
+          ? assembleBareAgentPrompt(agent.path, agent.name, context)
+          : assembleAgentPrompt(agent.path, agent.manifest, context),
       providerId: runtime.credentialId ?? '',
       modelId: runtime.modelId ?? '',
       permissions:

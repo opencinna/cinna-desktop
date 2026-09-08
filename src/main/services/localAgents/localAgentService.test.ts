@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   renameSync,
@@ -64,10 +65,13 @@ const { clearContractCache } = await import('../../kit/contractStore')
 const { manifestPath, readManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
+const { desktopStatePath, desktopStateService } = await import('./desktopStateService')
 const { localAgentService } = await import('./localAgentService')
 const { turnLock } = await import('./turnLock')
 const { isBlockedWriteError, isStaleWriteError } = await import('../../../shared/localAgents')
 const { jobsRepo, jobAgentRepo } = await import('../../db/jobs')
+const { a2aSessionRepo } = await import('../../db/agents')
+const { chatRepo } = await import('../../db/chats')
 const { rebuildJobManifest } = await import('../../sync/manifest')
 const { buildResolveIndex, manifestNeedsSetup } = await import('../../sync/resolvers')
 
@@ -654,7 +658,7 @@ describe('delete', () => {
   })
 
   it('moves the folder to the trash and prunes the row', async () => {
-    const result = await localAgentService.delete(USER, agentId)
+    const result = await localAgentService.delete(USER, { agentId, trashFolder: true })
 
     expect(result).toEqual({ agentId, trashed: true })
     expect(trash).toHaveBeenCalledWith(agentDir)
@@ -666,7 +670,7 @@ describe('delete', () => {
   it('refuses while a turn holds the agent, and touches nothing', async () => {
     const handle = turnLock.acquire(agentId, 'turn')
     try {
-      await expect(localAgentService.delete(USER, agentId)).rejects.toMatchObject({
+      await expect(localAgentService.delete(USER, { agentId, trashFolder: true })).rejects.toMatchObject({
         code: 'turn_in_progress'
       })
     } finally {
@@ -679,7 +683,7 @@ describe('delete', () => {
   it('releases the lock and keeps the row when the trash call fails', async () => {
     trash.mockRejectedValueOnce(new Error('EPERM'))
 
-    await expect(localAgentService.delete(USER, agentId)).rejects.toMatchObject({
+    await expect(localAgentService.delete(USER, { agentId, trashFolder: true })).rejects.toMatchObject({
       code: 'write_failed'
     })
     expect(turnLock.isLocked(agentId)).toBe(false)
@@ -688,7 +692,7 @@ describe('delete', () => {
   })
 
   it('refuses an id that is not a folder agent', async () => {
-    await expect(localAgentService.delete(USER, 'remote-1')).rejects.toMatchObject({
+    await expect(localAgentService.delete(USER, { agentId: 'remote-1', trashFolder: true })).rejects.toMatchObject({
       code: 'not_found'
     })
     expect(trash).not.toHaveBeenCalled()
@@ -1063,5 +1067,323 @@ describe('initPrompt', () => {
 
   it('refuses an agent that is not in the index', () => {
     expect(() => localAgentService.initPrompt(USER, 'folder:nope')).toThrow()
+  })
+})
+
+/**
+ * Adopting a folder, and unadopting one.
+ *
+ * The two halves that are genuinely new rather than a bare variant of something
+ * kit agents already do: a pick that has to travel out to the renderer and back
+ * without becoming a way to name any folder on disk, and a removal that means
+ * two different things depending on which one the user chose.
+ */
+describe('adopting an existing folder', () => {
+  let outside: string
+
+  function bareAgent(relPath: string, body = '# Alpha\n\nDo alpha things.\n'): string {
+    const dir = join(outside, ...relPath.split('/'))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'AGENT.md'), body)
+    return dir
+  }
+
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), 'cinna-adopt-'))
+  })
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('previews what is in a folder without registering anything', () => {
+    bareAgent('local_agents/alpha', '# Invoice watcher\n\nBody.\n')
+    bareAgent('local_agents/beta')
+
+    const pick = localAgentService.pickedAgentFolder(USER, outside)
+
+    expect(pick.cancelled).toBe(false)
+    if (pick.cancelled) return
+    expect(pick.refusal).toBeNull()
+    expect(pick.found.map((f) => f.relPath)).toEqual(['local_agents/alpha', 'local_agents/beta'])
+    expect(pick.found[0].name).toBe('Invoice watcher')
+    // Nothing registered, nothing written: the preview is a read.
+    expect(localAgentService.listRoots(USER)).toHaveLength(1)
+    expect(existsSync(join(outside, 'Local'))).toBe(false)
+  })
+
+  it('refuses a folder with nothing in it, as a state rather than a throw', () => {
+    // The dialog stays open and says this (ux_rules rule 6). A rejection would
+    // close the picker and leave the user with an error toast and no next step.
+    const pick = localAgentService.pickedAgentFolder(USER, outside)
+    expect(pick.cancelled).toBe(false)
+    if (pick.cancelled) return
+    expect(pick.refusal).toMatch(/AGENT\.md/)
+  })
+
+  it('refuses a folder that overlaps a registered root', () => {
+    // The security rule, checked while the dialog can still say so: every
+    // registered root becomes an allowed area for the "open in…" path guard.
+    const pick = localAgentService.pickedAgentFolder(USER, dirname(workshop))
+    expect(pick.cancelled).toBe(false)
+    if (pick.cancelled) return
+    expect(pick.refusal).toMatch(/overlaps|already registered/i)
+  })
+
+  it('will not adopt a path the picker did not just return', () => {
+    // The whole reason the pick is recorded. Without it, splitting the adopt
+    // into two calls would make `folder-add` a channel that registers any
+    // directory a renderer names.
+    bareAgent('alpha')
+    expect(() =>
+      localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['alpha'] })
+    ).toThrow(/picked/i)
+  })
+
+  it('adopts the ticked agents and hides the rest, without writing into the folder', () => {
+    bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+    localAgentService.pickedAgentFolder(USER, outside)
+
+    const { root, agentIds } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['local_agents/alpha']
+    })
+
+    expect(root.kind).toBe('external')
+    expect(root.agentCount).toBe(1)
+    expect(root.hiddenAgentCount).toBe(1)
+    // Returned so the dialog can land the user on what they just added.
+    expect(agentIds).toHaveLength(1)
+    const agents = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)
+    expect(agents.map((a) => a.slug)).toEqual(['alpha'])
+    // Not converted: no templates, no `.cinna-kit/`, no `Local/`, and no
+    // `app-data/` in either agent folder.
+    expect(existsSync(join(outside, '.cinna-kit'))).toBe(false)
+    expect(existsSync(join(outside, 'AGENTS.md'))).toBe(false)
+    expect(existsSync(join(outside, 'local_agents', 'alpha', 'app-data'))).toBe(false)
+  })
+
+  it('refuses when the folder has gone between the preview and the confirm', () => {
+    // The preview and the adopt are separate calls, so the user can eject the
+    // volume, move the folder or delete it in between. Without this the dialog
+    // closed on success, no agent appeared, nothing said why, and a registered
+    // root with no agents was left behind — which then refused the next attempt
+    // for overlapping itself.
+    bareAgent('alpha')
+    localAgentService.pickedAgentFolder(USER, outside)
+    rmSync(outside, { recursive: true, force: true })
+
+    expect(() =>
+      localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['alpha'] })
+    ).toThrow(/no longer there/i)
+    // And nothing is left registered, so choosing the folder again is possible.
+    expect(localAgentService.listRoots(USER).map((r) => r.path)).not.toContain(outside)
+  })
+
+  it('takes a name for a single adopted folder', () => {
+    bareAgent('.', '# From the file\n')
+    localAgentService.pickedAgentFolder(USER, outside)
+    const { root, agentIds } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['.'],
+      name: 'My agent'
+    })
+    const [agent] = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)
+    expect(agent.name).toBe('My agent')
+    expect(agentIds).toEqual([agent.id])
+  })
+
+  it('counts a root the same whether the scan is cached or cold', () => {
+    // The settings row's counts come off the cached scan, so the tree is not
+    // walked again on every `local-agent:list`. The fallback for a root never
+    // scanned in this process has to give the *same* answer — two independent
+    // counts of the same thing is how they drift, and the drift would show as a
+    // settings row disagreeing with the sidebar it sits beside.
+    bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+    bareAgent('local_agents/gamma')
+    localAgentService.pickedAgentFolder(USER, outside)
+    const { root } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['local_agents/alpha', 'local_agents/beta']
+    })
+
+    const warm = localAgentService.listRoots(USER).find((entry) => entry.id === root.id)
+    expect(warm).toMatchObject({ agentCount: 2, hiddenAgentCount: 1, truncated: false })
+
+    // Cold: no cached scan for this root, so `toDto` walks instead.
+    scannerService.markAllRootsDirty()
+    const cold = localAgentService.listRoots(USER).find((entry) => entry.id === root.id)
+    expect(cold).toMatchObject({
+      agentCount: warm?.agentCount,
+      hiddenAgentCount: warm?.hiddenAgentCount,
+      truncated: warm?.truncated
+    })
+  })
+
+  it('marks folders already added, and refuses when they all are', () => {
+    bareAgent('alpha')
+    localAgentService.pickedAgentFolder(USER, outside)
+    localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['alpha'] })
+
+    const again = localAgentService.pickedAgentFolder(USER, outside)
+    expect(again.cancelled).toBe(false)
+    if (again.cancelled) return
+    // Overlap wins: the folder is now a registered root, which is the more
+    // precise thing to say about it.
+    expect(again.refusal).toMatch(/already registered/i)
+  })
+})
+
+describe('removing a bare agent', () => {
+  let outside: string
+  let bareId: string
+  let bareDir: string
+
+  beforeEach(() => {
+    outside = mkdtempSync(join(tmpdir(), 'cinna-bare-del-'))
+    bareDir = join(outside, 'local_agents', 'alpha')
+    mkdirSync(bareDir, { recursive: true })
+    writeFileSync(join(bareDir, 'AGENT.md'), '# Alpha\n')
+    localAgentService.pickedAgentFolder(USER, outside)
+    const { root } = localAgentService.addAgentFolder(USER, {
+      path: outside,
+      relPaths: ['local_agents/alpha']
+    })
+    bareId = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)[0].id
+    trash.mockReset()
+    trash.mockResolvedValue(undefined)
+  })
+  afterEach(() => {
+    rmSync(outside, { recursive: true, force: true })
+  })
+
+  it('removes only the list entry, leaving the folder exactly as it was', async () => {
+    const result = await localAgentService.delete(USER, { agentId: bareId, trashFolder: false })
+
+    expect(result).toEqual({ agentId: bareId, trashed: false })
+    expect(trash).not.toHaveBeenCalled()
+    expect(existsSync(join(bareDir, 'AGENT.md'))).toBe(true)
+    expect(agentRepo.getOwned(USER, bareId)).toBeUndefined()
+    // And it stays gone across a rescan, which is what makes the choice mean
+    // something: the walk finds the folder every time.
+    localAgentService.rescan(USER)
+    expect(agentRepo.getOwned(USER, bareId)).toBeUndefined()
+  })
+
+  it('trashes the folder when that is what was chosen, and takes its state with it', async () => {
+    // The state file is the sharp half. It lives under `userData`, keyed on the
+    // folder's *realpath*, so it does not go to the Trash with the folder — and
+    // left behind it is adopted wholesale by whatever the user next creates at
+    // that path: its sessions, its agent token and every standing permission
+    // grant. The path therefore has to be resolved before the folder moves;
+    // resolving it afterwards silently derives a different key on any machine
+    // where a component is a symlink, which on macOS is every temp directory.
+    desktopStateService.patch(bareDir, 'bare', { agentToken: 'tok', displayName: 'Doomed' })
+    const stateFile = desktopStatePath(bareDir, 'bare')
+    expect(existsSync(stateFile)).toBe(true)
+    // The fake `shell.trashItem` does not remove anything, so the folder is
+    // taken out here — otherwise the ordering bug cannot show itself.
+    trash.mockImplementationOnce(async (path: string) => {
+      rmSync(path, { recursive: true, force: true })
+    })
+
+    const result = await localAgentService.delete(USER, { agentId: bareId, trashFolder: true })
+
+    expect(result).toEqual({ agentId: bareId, trashed: true })
+    expect(trash).toHaveBeenCalledWith(bareDir)
+    expect(existsSync(stateFile)).toBe(false)
+  })
+
+  it('refuses to remove a kit agent from the list alone', async () => {
+    // Its row is a derived index over its folder, so the next scan would put it
+    // straight back. A removal that undoes itself is worse than a refusal.
+    await expect(
+      localAgentService.delete(USER, { agentId, trashFolder: false })
+    ).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(agentRepo.getOwned(USER, agentId)).toBeDefined()
+  })
+
+  it('renames a bare agent without writing into its folder', () => {
+    const renamed = localAgentService.renameAgent(USER, bareId, 'Invoice watcher')
+
+    expect(renamed.name).toBe('Invoice watcher')
+    expect(agentRepo.getOwned(USER, bareId)?.name).toBe('Invoice watcher')
+    expect(existsSync(join(bareDir, 'app-data'))).toBe(false)
+    // Survives a rescan — the name is the user's, not the file's.
+    localAgentService.rescan(USER)
+    expect(localAgentService.get(USER, bareId).name).toBe('Invoice watcher')
+  })
+
+  it('clears the name back to the heading in AGENT.md', () => {
+    // The card offers this, and it is the only way back to a name that
+    // *follows the file*: the scan prefers a stored name over the heading, so
+    // re-typing the heading by hand pins the name to a string that happens to
+    // match and stops following the moment the heading changes again. Clearing
+    // used to silently revert the field, so the user read it as a typo of their
+    // own and the rename was permanent for the life of the folder.
+    localAgentService.renameAgent(USER, bareId, 'Support (old)')
+    expect(localAgentService.get(USER, bareId).name).toBe('Support (old)')
+
+    writeFileSync(join(bareDir, 'AGENT.md'), '# Support, properly named\n')
+    scannerService.markAllRootsDirty()
+    // Still pinned: a stored name outranks the file.
+    expect(localAgentService.get(USER, bareId).name).toBe('Support (old)')
+
+    const cleared = localAgentService.renameAgent(USER, bareId, null)
+    expect(cleared.name).toBe('Support, properly named')
+    // And it follows the file from now on, which re-typing the heading by hand
+    // would not have done.
+    writeFileSync(join(bareDir, 'AGENT.md'), '# Renamed again upstream\n')
+    scannerService.markAllRootsDirty()
+    expect(localAgentService.get(USER, bareId).name).toBe('Renamed again upstream')
+  })
+
+  it('refuses to rename a kit agent through this path', () => {
+    // A kit agent's name lives in its manifest, and that write is stamp-guarded
+    // so an assistant's edit cannot be clobbered. This channel carries no stamp.
+    expect(() => localAgentService.renameAgent(USER, agentId, 'Nope')).toThrow(/manifest/i)
+  })
+
+  it('puts an agent’s engine sessions back with it', async () => {
+    // The chats re-bind on their own — `chats.agent_id` declares no FK and the
+    // id is positional — but `a2a_sessions` cascades away with the row, so
+    // without this a restored agent's conversations silently start a fresh
+    // engine session and the model has forgotten everything, ten seconds after
+    // the user undid the removal that caused it.
+    const chatId = chatRepo.create(USER, { title: 'With the bare agent' }).id
+    a2aSessionRepo.upsert({
+      chatId,
+      agentId: bareId,
+      contextId: 'ses_engine_1',
+      taskId: null,
+      taskState: null
+    })
+    desktopStateService.patch(bareDir, 'bare', {
+      sessions: { [chatId]: { sessionId: 'ses_engine_1', updatedAt: Date.now() } }
+    })
+
+    const rootId = localAgentService.get(USER, bareId).rootId
+    await localAgentService.delete(USER, { agentId: bareId, trashFolder: false })
+    expect(a2aSessionRepo.getByChatAndAgent(chatId, bareId)).toBeUndefined()
+
+    localAgentService.restoreHiddenAgents(USER, rootId)
+    expect(a2aSessionRepo.getByChatAndAgent(chatId, bareId)?.contextId).toBe('ses_engine_1')
+  })
+
+  it('puts back everything that was removed from one root’s list', async () => {
+    // Without this, "remove from the list" is a one-way door: the folder is
+    // still on disk and every rescan keeps skipping it, with nothing anywhere
+    // that can bring it back short of re-picking the whole folder.
+    const rootId = localAgentService.get(USER, bareId).rootId
+    await localAgentService.delete(USER, { agentId: bareId, trashFolder: false })
+    expect(localAgentService.list(USER).agents.filter((a) => a.rootId === rootId)).toHaveLength(0)
+
+    expect(localAgentService.restoreHiddenAgents(USER, rootId)).toEqual({ restored: 1 })
+    const back = localAgentService.list(USER).agents.filter((a) => a.rootId === rootId)
+    expect(back).toHaveLength(1)
+    // The same agent, not a new one: the id is positional, so its chats and
+    // sessions come back with it.
+    expect(back[0].id).toBe(bareId)
   })
 })

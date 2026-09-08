@@ -2,14 +2,17 @@ import { and, eq } from 'drizzle-orm'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { agentRoots } from './schema'
+import type { AgentRootKind } from '../../shared/localAgents'
 
 export type AgentRootRow = typeof agentRoots.$inferSelect
 
 export interface CreateAgentRootInput {
-  /** Absolute path of the workshop root. Validated by the service, not here. */
+  /** Absolute path of the root. Validated by the service, not here. */
   path: string
   label: string
   isDefault?: boolean
+  /** `'workshop'` (the default) or `'external'`. See `AgentRootKind`. */
+  kind?: AgentRootKind
 }
 
 /**
@@ -62,6 +65,7 @@ export const agentRootRepo = {
         path: input.path,
         label: input.label,
         isDefault: input.isDefault ?? false,
+        kind: input.kind ?? 'workshop',
         createdAt: new Date()
       })
       .run()

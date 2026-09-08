@@ -79,8 +79,12 @@ export function LocalAgentsList(): React.JSX.Element {
         <button
           onClick={() => setCreating(true)}
           className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
-          title="New agent"
-          aria-label="New agent"
+          // Not "New agent" any more: this opens a choice between scaffolding
+          // one and pointing at a folder that already is one. It also has to
+          // differ from the "New agent" card the dialog then shows, or the two
+          // are one ambiguous name to a screen reader and to every test.
+          title="Add an agent"
+          aria-label="Add an agent"
         >
           <Plus size={14} />
         </button>
@@ -95,7 +99,7 @@ export function LocalAgentsList(): React.JSX.Element {
           </div>
         ) : total === 0 && groups.length <= 1 ? (
           <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
-            No agents yet — click + to create one
+            No agents yet — click + to add one
           </div>
         ) : (
           <div className="px-1.5 py-1 space-y-2">

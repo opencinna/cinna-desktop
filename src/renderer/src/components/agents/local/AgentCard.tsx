@@ -3,11 +3,15 @@ import { FileText } from 'lucide-react'
 interface AgentCardProps {
   title: string
   /**
-   * The agent-relative file this card renders. Every card names one — the page
-   * is a viewer over a folder, and a user who wants to know where a value came
-   * from should be able to read it off the card rather than guess.
+   * The agent-relative file this card renders. Almost every card names one —
+   * the page is a viewer over a folder, and a user who wants to know where a
+   * value came from should be able to read it off the card rather than guess.
+   *
+   * Omitted only where the card is genuinely not a view of a file: a bare
+   * agent's name is held on this machine, outside the user's folder, and
+   * naming a file that does not hold it would be worse than naming none.
    */
-  file: string
+  file?: string
   /** Reveal that file in the OS file manager. */
   onReveal?: () => void
   /**
@@ -33,7 +37,7 @@ export function AgentCard({
     <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
       <header className="flex items-center gap-2 px-4 py-2.5 border-b border-[var(--color-border)]">
         <h2 className="text-xs font-medium text-[var(--color-text)]">{title}</h2>
-        {onReveal ? (
+        {file === undefined ? null : onReveal ? (
           <button
             type="button"
             onClick={onReveal}

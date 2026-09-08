@@ -254,11 +254,17 @@ export function PublishedCard({ agent }: { agent: LocalAgentDto }): React.JSX.El
 /** Turns this agent has taken. Populated when the engine can run one. */
 export function RunsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const openPath = useOpenAgentPath()
+  // A **bare** agent's state deliberately does not live in its folder — that is
+  // the whole point of adopting one — so naming `app-data/desktop.json` here
+  // would point at a file that is not there and offer to reveal it. The card
+  // says where it is instead, in a sentence rather than a path, because the
+  // location under `userData` is not somewhere the user has business going.
+  const bare = agent.kind === 'bare'
   return (
     <AgentCard
       title="Runs"
-      file="app-data/desktop.json"
-      onReveal={() => openPath.mutate({ agentId: agent.id, relPath: 'app-data' })}
+      file={bare ? undefined : 'app-data/desktop.json'}
+      onReveal={bare ? undefined : () => openPath.mutate({ agentId: agent.id, relPath: 'app-data' })}
     >
       {agent.desktop.sessionCount === 0 ? (
         <div className={EMPTY}>
@@ -268,6 +274,12 @@ export function RunsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element
         <div className="text-xs text-[var(--color-text-secondary)]">
           {agent.desktop.sessionCount} saved session
           {agent.desktop.sessionCount === 1 ? '' : 's'}
+        </div>
+      )}
+      {bare && (
+        <div className={`mt-2 ${EMPTY}`}>
+          Kept on this machine, outside the folder — nothing about a run is written into your
+          repository.
         </div>
       )}
     </AgentCard>

@@ -3,15 +3,22 @@ import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { localAgentService } from '../services/localAgents/localAgentService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
+import { agentsHomeService } from '../services/localAgents/agentsHomeService'
+import { gitService } from '../services/localAgents/gitService'
+import type { GitStatus, GitUpdateResult } from '../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
 import { getMainWindow } from '../index'
 import { engineManager } from '../engine/engineManager'
 import { LocalAgentError } from '../errors'
 import { ipcHandle } from './_wrap'
 import type {
+  AddAgentFolderInput,
+  AddAgentFolderResult,
   AgentRootDto,
   CreateLocalAgentInput,
+  DeleteLocalAgentInput,
   DeleteLocalAgentResult,
+  PickAgentFolderResult,
   DraftLocalAgentResult,
   LocalAgentDocDto,
   LocalAgentDto,
@@ -141,10 +148,13 @@ export function registerLocalAgentHandlers(): void {
    */
   ipcHandle(
     'local-agent:delete',
-    async (_event, agentId: string): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> => {
+    async (
+      _event,
+      input: DeleteLocalAgentInput
+    ): Promise<LocalAgentOutcome<DeleteLocalAgentResult>> => {
       userActivation.requireActivated()
       const userId = getSettingsScopeUserId()
-      const outcome = await withCodeAsync(() => localAgentService.delete(userId, agentId))
+      const outcome = await withCodeAsync(() => localAgentService.delete(userId, input))
       // The engine's config lists every folder agent; one fewer is a change.
       if (outcome.ok) void engineManager.applyConfigChange(userId)
       return outcome
@@ -301,5 +311,115 @@ export function registerLocalAgentHandlers(): void {
       throw new LocalAgentError('root_not_found', 'That agents folder is not registered.')
     }
     return localAgentService.removeRoot(getSettingsScopeUserId(), rootId)
+  })
+
+  /**
+   * Ask the user for a folder and report what is in it. **Nothing is
+   * registered and nothing is written** — this is the preview half of adopting
+   * a folder, so the user sees the fifteen agents that were found before
+   * anything happens.
+   *
+   * The path is chosen in a native dialog here, the same rule `:root-add`
+   * keeps: a path the user picked in an OS dialog is trustworthy, one the
+   * renderer typed is not. The service records what was picked so the
+   * `:folder-add` that follows can be checked against it.
+   */
+  ipcHandle('local-agent:folder-pick', async (): Promise<PickAgentFolderResult> => {
+    userActivation.requireActivated()
+    const win = getMainWindow()
+    const options = {
+      title: 'Choose an agent folder',
+      properties: ['openDirectory' as const],
+      buttonLabel: 'Use this folder'
+    }
+    const result = win
+      ? await dialog.showOpenDialog(win, options)
+      : await dialog.showOpenDialog(options)
+    const picked = result.filePaths[0]
+    if (result.canceled || !picked) return { cancelled: true }
+    return localAgentService.pickedAgentFolder(getSettingsScopeUserId(), picked)
+  })
+
+  /** Register the folder the user just previewed, with the agents they ticked. */
+  ipcHandle(
+    'local-agent:folder-add',
+    (_event, input: AddAgentFolderInput): LocalAgentOutcome<AddAgentFolderResult> => {
+      userActivation.requireActivated()
+      const userId = getSettingsScopeUserId()
+      // Coded: `invalid_path` (the pick went stale) and `invalid_input` (nothing
+      // ticked) are both things the dialog explains in place and recovers from,
+      // not failures that should close it.
+      const outcome = withCode(() => localAgentService.addAgentFolder(userId, input))
+      // New agents in the engine's catalogue.
+      if (outcome.ok) void engineManager.applyConfigChange(userId)
+      return outcome
+    }
+  )
+
+  /** Rename a bare agent. Kit agents rename through `:update-field`. */
+  ipcHandle(
+    'local-agent:rename',
+    (
+      _event,
+      input: { agentId: string; name: string | null }
+    ): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      const userId = getSettingsScopeUserId()
+      const outcome = withCode(() =>
+        localAgentService.renameAgent(userId, input?.agentId ?? '', input?.name ?? null)
+      )
+      // The name is the OpenCode agent key's readable half, so the engine's
+      // config genuinely changed.
+      if (outcome.ok) void engineManager.applyConfigChange(userId)
+      return outcome
+    }
+  )
+
+  /** Put back every agent removed from one external root's list. */
+  ipcHandle('local-agent:root-restore-hidden', (_event, rootId: string) => {
+    userActivation.requireActivated()
+    const userId = getSettingsScopeUserId()
+    const result = localAgentService.restoreHiddenAgents(userId, rootId)
+    if (result.restored > 0) void engineManager.applyConfigChange(userId)
+    return result
+  })
+
+  /**
+   * The git state of one registered root.
+   *
+   * `fetch` is the caller's choice because it is a network round trip: the
+   * settings screen renders the cached counts on open and fetches only when the
+   * user asks it to check.
+   */
+  ipcHandle(
+    'local-agent:git-status',
+    async (_event, input: { rootId: string; fetch?: boolean }): Promise<GitStatus> => {
+      userActivation.requireActivated()
+      // Through the root row, never a renderer-supplied path: this spawns a
+      // subprocess with a working directory, and the only directories it may
+      // ever run in are ones the user registered.
+      const root = agentsHomeService.requireNamedRoot(getSettingsScopeUserId(), input?.rootId)
+      return gitService.readGitStatus(root.path, input?.fetch === true)
+    }
+  )
+
+  /**
+   * Fast-forward one root, then rescan it.
+   *
+   * The rescan is the point: a pull that adds an agent folder, removes one, or
+   * rewrites an `AGENT.md` has to be visible without the user knowing to press
+   * Rescan. The watcher would get there eventually, but a pull rewrites many
+   * files at once and the debounce is not a promise.
+   */
+  ipcHandle('local-agent:git-update', async (_event, rootId: string): Promise<GitUpdateResult> => {
+    userActivation.requireActivated()
+    const userId = getSettingsScopeUserId()
+    const root = agentsHomeService.requireNamedRoot(userId, rootId)
+    const result = await gitService.updateGitRepo(root.path)
+    if (result.updated) {
+      localAgentService.rescan(userId, root.id)
+      void engineManager.applyConfigChange(userId)
+    }
+    return result
   })
 }

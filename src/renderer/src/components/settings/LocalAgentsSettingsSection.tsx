@@ -5,7 +5,8 @@ import {
   useAddAgentRoot,
   useLocalAgents,
   useRemoveAgentRoot,
-  useRescanLocalAgents
+  useRescanLocalAgents,
+  useRestoreHiddenAgents
 } from '../../hooks/useLocalAgents'
 import {
   useDefaultTool,
@@ -17,6 +18,7 @@ import {
 import { isLocalToolId } from '../../../../shared/localTools'
 import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
+import { AgentsRootGit } from './AgentsRootGit'
 import { useEngineState, useStartEngine, useStopEngine } from '../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 
@@ -37,6 +39,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const addRoot = useAddAgentRoot()
   const removeRoot = useRemoveAgentRoot()
   const rescan = useRescanLocalAgents()
+  const restoreHidden = useRestoreHiddenAgents()
   const refreshTools = useRefreshLocalTools()
   const openIn = useOpenIn()
   const { data: engine } = useEngineState()
@@ -196,60 +199,135 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             <div className="px-4 py-3 text-[10px] text-[var(--color-text-muted)]">Loading…</div>
           ) : (
             roots.map((root) => (
-              <div key={root.id} className="flex items-center gap-2 px-4 py-2.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5 text-xs text-[var(--color-text)]">
-                    {root.label}
-                    {root.isDefault && (
-                      <span className="rounded bg-[var(--color-bg-tertiary)] px-1 py-px text-[9px] text-[var(--color-text-muted)]">
-                        Home
-                      </span>
-                    )}
+              <div key={root.id} className="px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5 text-xs text-[var(--color-text)]">
+                      {root.label}
+                      {root.isDefault && (
+                        <span className="rounded bg-[var(--color-bg-tertiary)] px-1 py-px text-[9px] text-[var(--color-text-muted)]">
+                          Home
+                        </span>
+                      )}
+                      {/*
+                        Not "read only", which this claimed first. Cinna
+                        installs nothing here — no templates, no `.cinna-kit/`,
+                        no `app-data/` — but the agent page's Instructions card
+                        is a live editor over `AGENT.md`, so a folder the user
+                        edits there *is* written to. Promising otherwise leaves
+                        them with a modified working tree in a repository they
+                        may share, and — since a dirty tree refuses a
+                        fast-forward — a blocked Update two rows below, with
+                        neither surface admitting the two are connected.
+                      */}
+                      {root.kind === 'external' && (
+                        <span
+                          className="rounded bg-[var(--color-bg-tertiary)] px-1 py-px text-[9px] text-[var(--color-text-muted)]"
+                          title="Cinna installs nothing here. The only file it writes is an agent's AGENT.md, and only when you edit it on the agent's page."
+                        >
+                          Added folder
+                        </span>
+                      )}
+                    </div>
+                    <div className="truncate font-mono text-[10px] text-[var(--color-text-muted)]">
+                      {root.path}
+                    </div>
+                    <div className="text-[10px] text-[var(--color-text-muted)]">
+                      {!root.exists
+                        ? 'This folder is missing from disk.'
+                        : root.kind === 'external'
+                          ? // No kit contract here, and saying which one it
+                            // "resolves" would be a version number that governs
+                            // nothing in this folder. "Not a kit folder" is a
+                            // property of the folder that is true; "read only",
+                            // which this said first, is one that is not — the
+                            // agent page edits `AGENT.md` in place.
+                            `${root.agentCount} agent${root.agentCount === 1 ? '' : 's'}${
+                              // Said here too, because the scan side is the
+                              // worse half: after adoption a capped root stays
+                              // capped, so an agent added to the repository
+                              // later never appears and no rescan fixes it.
+                              root.truncated ? ' (the first found)' : ''
+                            } · not a kit folder`
+                          : `${root.agentCount} agent${root.agentCount === 1 ? '' : 's'} · kit contract ${root.contractVersion}`}
+                    </div>
                   </div>
-                  <div className="truncate font-mono text-[10px] text-[var(--color-text-muted)]">
-                    {root.path}
-                  </div>
-                  <div className="text-[10px] text-[var(--color-text-muted)]">
-                    {root.exists
-                      ? `${root.agentCount} agent${root.agentCount === 1 ? '' : 's'} · kit contract ${root.contractVersion}`
-                      : 'This folder is missing from disk.'}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setError(null)
-                    openIn.mutate(
-                      { folder: root.path, action: 'reveal' },
-                      {
-                        onError: (err) =>
-                          setError(err instanceof Error ? err.message : 'Could not open that.')
-                      }
-                    )
-                  }}
-                  className={rowButton}
-                  title="Reveal this folder"
-                  aria-label={`Reveal ${root.label}`}
-                >
-                  <FolderOpen size={14} />
-                </button>
-                {!root.isDefault && (
                   <button
                     type="button"
                     onClick={() => {
                       setError(null)
-                      removeRoot.mutate(root.id, {
-                        onError: (err) =>
-                          setError(err instanceof Error ? err.message : 'Could not remove that.')
-                      })
+                      openIn.mutate(
+                        { folder: root.path, action: 'reveal' },
+                        {
+                          onError: (err) =>
+                            setError(err instanceof Error ? err.message : 'Could not open that.')
+                        }
+                      )
                     }}
-                    className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-danger)]/20 hover:text-[var(--color-danger)]"
-                    title="Forget this folder (the files stay on disk)"
-                    aria-label={`Forget ${root.label}`}
+                    className={rowButton}
+                    title="Reveal this folder"
+                    aria-label={`Reveal ${root.label}`}
                   >
-                    <X size={14} />
+                    <FolderOpen size={14} />
                   </button>
+                  {!root.isDefault && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setError(null)
+                        removeRoot.mutate(root.id, {
+                          onError: (err) =>
+                            setError(err instanceof Error ? err.message : 'Could not remove that.')
+                        })
+                      }}
+                      className="rounded p-1 text-[var(--color-text-muted)] transition-colors hover:bg-[var(--color-danger)]/20 hover:text-[var(--color-danger)]"
+                      title="Forget this folder (the files stay on disk)"
+                      aria-label={`Forget ${root.label}`}
+                    >
+                      <X size={14} />
+                    </button>
+                  )}
+                </div>
+                {/* Agents the user removed from the list without deleting them.
+                    They are still on disk and a rescan keeps skipping them, so
+                    without this the choice is a one-way door with nothing on
+                    screen saying it was taken. */}
+                {root.hiddenAgentCount > 0 && (
+                  <div className="mt-1 flex items-center gap-2 text-[10px] text-[var(--color-text-muted)]">
+                    {/*
+                      "not in the list", not "removed from the list". The same
+                      hidden state carries two histories — an agent the user
+                      removed, and one they simply did not tick when adopting
+                      the folder — because "not chosen" and "removed" have to be
+                      one state or the next rescan re-adds the unticked ones.
+                      Adopting 1 of 15 therefore reported "14 agents removed
+                      from the list" about agents that were never in it.
+                    */}
+                    <span className="min-w-0 flex-1 truncate">
+                      {root.hiddenAgentCount} agent{root.hiddenAgentCount === 1 ? '' : 's'} in this
+                      folder {root.hiddenAgentCount === 1 ? 'is' : 'are'} not in the list.
+                    </span>
+                    <button
+                      type="button"
+                      disabled={restoreHidden.isPending}
+                      onClick={() => {
+                        setError(null)
+                        restoreHidden.mutate(root.id, {
+                          onError: (err) =>
+                            setError(err instanceof Error ? err.message : 'Could not restore those.')
+                        })
+                      }}
+                      className="shrink-0 rounded-md bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-[10px] font-medium text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)] disabled:opacity-40"
+                    >
+                      {restoreHidden.isPending
+                        ? 'Adding…'
+                        : root.hiddenAgentCount === 1
+                          ? 'Add it'
+                          : 'Add them'}
+                    </button>
+                  </div>
                 )}
+                <AgentsRootGit root={root} />
               </div>
             ))
           )}

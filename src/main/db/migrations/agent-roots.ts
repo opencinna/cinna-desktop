@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { hasColumn } from './helpers'
 
 /**
  * `agent_roots` — the workshop folders local (folder) agents are scanned from.
@@ -37,4 +38,13 @@ export function migrateAgentRoots(sqlite: Database.Database): void {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_roots_user_path
       ON agent_roots(user_id, path);
   `)
+
+  // `kind` — 'workshop' (the kit shape this table was built for) or 'external'
+  // (a folder the user pointed at, walked for `AGENT.md`). The default is what
+  // makes this safe to add to an existing table: every root registered before
+  // external roots existed is a workshop, so no backfill is needed and none is
+  // written.
+  if (!hasColumn(sqlite, 'agent_roots', 'kind')) {
+    sqlite.exec(`ALTER TABLE agent_roots ADD COLUMN kind TEXT NOT NULL DEFAULT 'workshop'`)
+  }
 }

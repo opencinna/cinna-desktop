@@ -16,10 +16,13 @@
  * what the renderer sees, and it reports presence only.
  */
 
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { createHash } from 'node:crypto'
+import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join } from 'node:path'
+import { app } from 'electron'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
-import type { LocalAgentDesktopSummary } from '../../../shared/localAgents'
+import type { LocalAgentDesktopSummary, LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
@@ -65,6 +68,26 @@ export interface DesktopState {
    */
   permissionGrants: Record<string, LocalPermissionGrant>
   lastStatus: { at: number; summary: string | null; state: string | null } | null
+  /**
+   * Bare agents only: the name the user gave this folder.
+   *
+   * A kit agent's name is in its manifest, and the folder is the truth. A bare
+   * folder has no file that states one, and the desktop must not invent a place
+   * inside the user's own repository to write it — so the name is held here,
+   * beside the rest of that agent's machine-local state. Null means "use what
+   * `AGENT.md` or the folder name says", which is what a fresh adoption does.
+   */
+  displayName: string | null
+  /**
+   * Bare agents only: the user removed this folder from the agents list without
+   * deleting it.
+   *
+   * The folder is still on disk and still inside a registered external root, so
+   * every rescan would find it again. This is what makes "remove from the list"
+   * mean something — and it is recorded rather than forgotten so the root can
+   * offer to put it back.
+   */
+  hidden: boolean
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -72,7 +95,9 @@ const EMPTY_STATE: DesktopState = {
   agentToken: null,
   sessions: {},
   permissionGrants: {},
-  lastStatus: null
+  lastStatus: null,
+  displayName: null,
+  hidden: false
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -145,13 +170,79 @@ function coerce(raw: unknown): DesktopState {
     agentToken: asString(raw.agentToken),
     sessions,
     permissionGrants,
-    lastStatus
+    lastStatus,
+    displayName: asString(raw.displayName),
+    hidden: raw.hidden === true
   }
 }
 
-/** Absolute path of the desktop state file inside an agent folder. */
-export function desktopStatePath(agentDir: string): string {
-  return join(agentDir, DESKTOP_STATE_FILE)
+/**
+ * Where bare agents keep their state.
+ *
+ * `app.getPath` is called inside the try because this module is imported by
+ * pure unit tests that never boot Electron; in the running app it cannot fail,
+ * and a temp fallback keeps a test from having to mock Electron to read a file
+ * it does not care about.
+ */
+function externalStateRoot(): string {
+  try {
+    return join(app.getPath('userData'), 'external-agents')
+  } catch {
+    return join(tmpdir(), 'cinna-desktop-external-agents')
+  }
+}
+
+/**
+ * Absolute path of the desktop state file for an agent folder.
+ *
+ * **Two locations, and the caller says which.** A `kit` folder keeps its state
+ * at `app-data/desktop.json` inside itself — the contract says that file is the
+ * desktop's, and a folder that moves takes its sessions and its permission
+ * grants with it.
+ *
+ * A `bare` folder is not ours. It is very often a git working tree the user
+ * shares with other people, and dropping an untracked `app-data/` into fifteen
+ * agent folders of one repository is a change to their repository that nobody
+ * asked for — visible in `git status` forever, and the exact noise the update
+ * check beside this feature exists to keep clean. So a bare agent's state lives
+ * under `userData/external-agents/`, keyed by the folder's real path.
+ *
+ * ### Why `kind` is a parameter and not a probe
+ *
+ * This decided itself, from `existsSync(cinna-agent.json)`, so that every
+ * existing caller could keep its one-argument signature. That was wrong twice,
+ * and both are reachable:
+ *
+ * - `discoverBareAgents` tests for `AGENT.md` and nothing else, so a folder
+ *   carrying **both** files is adopted as a bare agent — and the probe would
+ *   then send `addAgentFolder`'s own `hidden` write *into* it, creating the
+ *   untracked `app-data/` this location exists to avoid, on the very first
+ *   action of adopting the folder.
+ * - A bare folder that later **gains** a manifest — one `git pull` away, with
+ *   the update check shipped beside this — would silently change where its
+ *   state lives: `hidden` reverts (an agent the user removed comes back),
+ *   `displayName` reverts (the rename is lost), and its sessions, token and
+ *   standing permission grants are orphaned.
+ *
+ * Every caller already knows: the scanner and the service have `root.kind`, and
+ * the turn runner has the agent's DTO. Re-deriving it from a file that another
+ * writer can add, remove or replace bought nothing and cost both of the above.
+ *
+ * Keyed by `realpath` so a symlinked folder and its target are one agent, with
+ * the basename kept in the filename because a directory of pure hashes is
+ * impossible to reason about when something goes wrong.
+ */
+export function desktopStatePath(agentDir: string, kind: LocalAgentKind): string {
+  if (kind !== 'bare') return join(agentDir, DESKTOP_STATE_FILE)
+  let real = agentDir
+  try {
+    real = realpathSync(agentDir)
+  } catch {
+    /* a folder that has gone missing still needs a stable, derivable key */
+  }
+  const digest = createHash('sha256').update(real).digest('hex').slice(0, 16)
+  const readable = basename(real).replace(/[^A-Za-z0-9._-]/g, '-').slice(0, 40) || 'agent'
+  return join(externalStateRoot(), `${readable}-${digest}.json`)
 }
 
 function writeAtomically(path: string, contents: string): void {
@@ -189,8 +280,8 @@ function writeAtomically(path: string, contents: string): void {
 
 export const desktopStateService = {
   /** Read the state, or the empty state when the file is absent or unusable. */
-  read(agentDir: string): DesktopState {
-    const path = desktopStatePath(agentDir)
+  read(agentDir: string, kind: LocalAgentKind): DesktopState {
+    const path = desktopStatePath(agentDir, kind)
     let text: string
     try {
       text = readFileSync(path, 'utf8')
@@ -209,9 +300,9 @@ export const desktopStateService = {
     }
   },
 
-  /** Replace the state wholesale. Creates `app-data/` if it does not exist. */
-  write(agentDir: string, state: DesktopState): void {
-    writeAtomically(desktopStatePath(agentDir), `${JSON.stringify(state, null, 2)}\n`)
+  /** Replace the state wholesale. Creates the containing directory if needed. */
+  write(agentDir: string, kind: LocalAgentKind, state: DesktopState): void {
+    writeAtomically(desktopStatePath(agentDir, kind), `${JSON.stringify(state, null, 2)}\n`)
     logger.debug('desktop state written', {
       sessions: Object.keys(state.sessions).length,
       hasToken: state.agentToken !== null
@@ -219,10 +310,42 @@ export const desktopStateService = {
   },
 
   /** Read-modify-write one or more fields. Returns the state as written. */
-  patch(agentDir: string, patch: Partial<DesktopState>): DesktopState {
-    const next: DesktopState = { ...this.read(agentDir), ...patch }
-    this.write(agentDir, next)
+  patch(agentDir: string, kind: LocalAgentKind, patch: Partial<DesktopState>): DesktopState {
+    const next: DesktopState = { ...this.read(agentDir, kind), ...patch }
+    this.write(agentDir, kind, next)
     return next
+  },
+
+  /**
+   * Delete a state file, by **path**.
+   *
+   * Only ever called for a **bare** agent whose folder has just gone to the
+   * Trash. Its state does not live in the folder, so without this the sessions,
+   * the token and the permission grants of a deleted agent would sit under
+   * `userData` forever — and be inherited by whatever the user next creates at
+   * the same path, since the key is that path.
+   *
+   * **It takes the path, not the folder, and that is the whole point.**
+   * {@link desktopStatePath} keys a bare agent on `realpathSync(agentDir)`; once
+   * the folder is in the Trash that call throws and the key falls back to the
+   * raw path — a *different* digest wherever any component was a symlink, which
+   * on macOS includes everything under `tmpdir()` (`/var` → `/private/var`), an
+   * explicitly permitted root base. The unlink then raised `ENOENT` on a file
+   * that was never there and the real one was left behind, which is exactly the
+   * leak this function exists to prevent. So the caller resolves the path
+   * *before* it moves the folder.
+   *
+   * A kit agent needs no equivalent: its state file was inside the folder and
+   * went to the Trash with it. Failure is logged and swallowed — the folder is
+   * already gone, and a leftover JSON file is not worth failing a delete over.
+   */
+  forgetAt(path: string): void {
+    try {
+      unlinkSync(path)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      if (code !== 'ENOENT') logger.warn('could not remove desktop state', { path, code })
+    }
   },
 
   /** What the renderer is allowed to know. The token is reported, never sent. */

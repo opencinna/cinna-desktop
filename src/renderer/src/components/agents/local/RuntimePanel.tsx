@@ -1104,3 +1104,102 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     </section>
   )
 }
+
+/**
+ * "Runs with", for a **bare** agent.
+ *
+ * The full panel is three controls over `cinna-agent.json`: which credential,
+ * how hard the work is, and what the declared secrets are. A bare folder has no
+ * manifest, so all three would be pickers with nowhere to save — and the third
+ * would report "no credentials declared" about a file the folder was never
+ * asked to have.
+ *
+ * So this says the one true thing instead: a bare agent runs on the Default
+ * runtime, which is the same resolution the engine performs, named the same
+ * way. It keeps the panel's shell, its label and the engine line, because the
+ * page's shape should not change with the kind of agent — only what it can
+ * honestly claim.
+ *
+ * The reserved status line is the same rule as the full panel's: one line,
+ * always there, so a skip reason arriving after a credential change cannot move
+ * the tab strip out from under the pointer that just used it (ux_rules rule 1).
+ */
+export function BareRuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  const { data: providers } = useProviders()
+  const { data: models } = useModels()
+  const { data: defaultMode } = useDefaultChatMode()
+  const { data: skips } = useEngineSkips()
+
+  const fallbackProvider = useMemo(
+    () => (providers ?? []).find((provider) => provider.id === defaultMode?.providerId) ?? null,
+    [providers, defaultMode?.providerId]
+  )
+  const catalogue = useMemo(
+    () =>
+      (models ?? [])
+        .filter((model) => model.providerId === fallbackProvider?.id)
+        .map((model) => ({ id: model.id })),
+    [models, fallbackProvider?.id]
+  )
+  const modelId = useMemo(
+    () =>
+      resolveRuntimeModel({
+        chosen: fallbackProvider,
+        fallback: {
+          credentialId: fallbackProvider?.id ?? null,
+          credentialType: fallbackProvider?.type ?? null,
+          modelId: defaultRuntimeModelId(fallbackProvider, defaultMode?.modelId ?? null)
+        },
+        declaredModel: null,
+        declaredComplexity: null,
+        catalogue
+      }).modelId,
+    [fallbackProvider, defaultMode?.modelId, catalogue]
+  )
+
+  const skip = skips?.[agent.id] ?? null
+  const status = !fallbackProvider
+    ? { text: 'No default AI credential is set, so this agent cannot run. Add one in Settings.', tone: DANGER }
+    : skip
+      ? { text: skip, tone: WARN }
+      : modelId
+        ? { text: `Runs on ${fallbackProvider.name} · ${modelId}.`, tone: NOTE }
+        : { text: `Runs on ${fallbackProvider.name}.`, tone: NOTE }
+
+  return (
+    <section
+      aria-label="Runs with"
+      className="@container relative rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3"
+    >
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <span className={LABEL}>Credential</span>
+          <div className="flex h-[26px] items-center text-xs text-[var(--color-text)]">
+            <span className="min-w-0 truncate" title={fallbackProvider?.name ?? undefined}>
+              {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
+            </span>
+          </div>
+        </div>
+        <EngineStatus />
+      </div>
+      {/* One reserved line, exactly like the full panel's. */}
+      <div className={`mt-2 flex h-4 items-center ${status.tone}`}>
+        <span className="min-w-0 truncate" title={status.text}>
+          {status.text}
+        </span>
+      </div>
+      {/*
+        The consequence, once. The label above already says "Default (…)" and
+        the status line says what it resolved to, so a third sentence repeating
+        it was a hint restating its own label (ux_rules rule 7) — and it did so
+        by naming `cinna-agent.json`, a kit concept a user who reached this page
+        by pointing at a folder has never seen and will not see anywhere else on
+        it. That fact belongs with the other things true of the folder's
+        contents, and is now an info on the Folder tab.
+      */}
+      <div className={`mt-1 ${NOTE}`}>
+        Runs on your default credential — this folder states none of its own.
+      </div>
+    </section>
+  )
+}

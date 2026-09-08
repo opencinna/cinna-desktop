@@ -5,19 +5,30 @@ import {
   useOpenAgentPath
 } from '../../../hooks/useLocalAgents'
 import {
-  LOCAL_AGENT_PROMPT_PATHS,
-  type LocalAgentPromptKind
+  LOCAL_AGENT_DOC_PATHS,
+  type LocalAgentDocKind,
+  type LocalAgentFieldUpdate
 } from '../../../../../shared/localAgents'
 import { AgentCard } from './AgentCard'
 import { InlineFileEditor } from './InlineFileEditor'
 
 interface PromptDocCardProps {
   agentId: string
-  prompt: LocalAgentPromptKind
+  prompt: LocalAgentDocKind
   title: string
   /** One line saying what this document is for, above the editor. */
   hint: string
   placeholder: string
+  /**
+   * Show the file but refuse edits. Used for a bare agent's `README.md`: it is
+   * the *builder's* document — what an assistant opening the folder is briefed
+   * from — so editing it from the agent's own page would be the agent editing
+   * its own briefing, which is the thing the assembled prompt tells it not to
+   * do. It is one click away in the user's editor.
+   */
+  readOnly?: boolean
+  /** What to say when the file is not in the folder. See `InlineFileEditor`. */
+  missingNote?: string
 }
 
 /**
@@ -33,18 +44,33 @@ export function PromptDocCard({
   prompt,
   title,
   hint,
-  placeholder
+  placeholder,
+  readOnly = false,
+  missingNote
 }: PromptDocCardProps): React.JSX.Element {
   const { data: doc, isLoading } = useLocalAgentDoc(agentId, prompt)
   const openPath = useOpenAgentPath()
-  const relPath = LOCAL_AGENT_PROMPT_PATHS[prompt]
+  const relPath = LOCAL_AGENT_DOC_PATHS[prompt]
 
   const snapshot = useMemo(
     () => (doc ? { text: doc.text, stamp: doc.stamp } : undefined),
     [doc]
   )
   const toUpdate = useCallback(
-    (text: string) => ({ field: 'prompt' as const, prompt, value: text }),
+    (text: string): LocalAgentFieldUpdate => {
+      if (prompt === 'bare_prompt') return { field: 'bare_prompt', value: text }
+      if (prompt === 'bare_readme') {
+        // Unreachable: this card is only ever rendered `readOnly`, so no
+        // textarea exists and nothing calls this. It throws rather than falling
+        // through to `bare_prompt`, which is what a plausible edit here would
+        // do — and that would write the README's text over `AGENT.md`, which is
+        // the agent's whole system prompt. (Main would refuse it on the stamp,
+        // since the two files' stamps differ, but "your save was refused" is
+        // not the message this deserves.)
+        throw new Error('README.md is read-only here — open the folder to edit it.')
+      }
+      return { field: 'prompt', prompt, value: text }
+    },
     [prompt]
   )
 
@@ -75,7 +101,13 @@ export function PromptDocCard({
         // model, and the scaffold template leads with an HTML comment. Rendering
         // it would either show that comment as prose or hide part of a file the
         // page claims to be a viewer over.
-        <InlineFileEditor editor={editor} markdown={false} placeholder={placeholder} />
+        <InlineFileEditor
+          editor={editor}
+          markdown={false}
+          placeholder={placeholder}
+          readOnly={readOnly}
+          missingNote={missingNote}
+        />
       )}
     </AgentCard>
   )

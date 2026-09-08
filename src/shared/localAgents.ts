@@ -43,6 +43,90 @@ export const LOCAL_AGENT_CHANGED_CHANNEL = 'local-agent:changed'
 /** Directory inside a root that holds the agents, per `layout.json`. */
 export const AGENTS_SUBDIR = 'Local'
 
+/**
+ * The one file that makes an arbitrary folder an agent.
+ *
+ * A folder holding `AGENT.md` and no `cinna-agent.json` is a **bare** agent:
+ * outside the kit contract, with no manifest, no credential slots and no
+ * command catalog, but with a system prompt and a folder the engine can run a
+ * session in. See {@link LocalAgentKind}.
+ */
+export const BARE_AGENT_PROMPT_FILE = 'AGENT.md'
+
+/**
+ * **Deliberately singular, and the likeliest support question this feature has.**
+ *
+ * `AGENTS.md` is the emerging cross-tool convention and is what the kit's own
+ * `templates/agent/` scaffolds, so a user pointing at a repository full of them
+ * is told "nothing in this folder has an AGENT.md". That is the requested
+ * contract, not an oversight.
+ *
+ * If it is widened, two things have to hold together:
+ *
+ * - `AGENTS.md` counts **only** when no `cinna-agent.json` sits beside it,
+ *   or every kit agent in an adopted tree is demoted to a bare one and loses
+ *   its commands, credential slots and declared runtime.
+ * - The walk must still stop at the **first** match in a folder and not
+ *   descend, or a folder holding both files at different levels yields two
+ *   agents for one directory. `discoverBareAgents` already keeps that rule for
+ *   `AGENT.md`; it has to survive the widening rather than be re-derived.
+ */
+
+/**
+ * The document a *builder* reads first in a bare agent folder.
+ *
+ * A bare folder's `README.md` is written for the person developing the agent,
+ * not for the agent: it explains what the folder is, how to run it and what it
+ * needs. So it is the entry document of the init prompt — the briefing handed
+ * to an assistant opening the folder — and deliberately **not** part of the
+ * agent's own system prompt, which is `AGENT.md` alone.
+ */
+export const BARE_AGENT_README_FILE = 'README.md'
+
+/**
+ * How deep {@link discoverBareAgents} looks for `AGENT.md` under a folder the
+ * user added.
+ *
+ * Depth 0 is the folder itself, so a repository laid out as
+ * `<repo>/local_agents/<agent>/AGENT.md` — the shape this was built against —
+ * is found at depth 2. Deeper than that and an ordinary source tree starts
+ * matching: a fixture, a vendored dependency, a docs example.
+ */
+export const BARE_AGENT_MAX_DEPTH = 2
+
+/**
+ * What kind of folder an agent is.
+ *
+ * - `kit` — a kit-contract folder: `cinna-agent.json` at its root, validated,
+ *   with prompts, credential slots, commands and a runtime the manifest names.
+ * - `bare` — any folder holding an `AGENT.md`. It has none of the above; the
+ *   desktop reads `AGENT.md` as the system prompt, runs it on the default
+ *   runtime, and keeps its own per-agent state outside the folder. Adopted by
+ *   path from an `external` root, never scaffolded.
+ *
+ * The distinction is not cosmetic: every surface that reads the manifest —
+ * the Runs-with pickers, Commands, Prompts, the validation findings — has
+ * nothing to render for a bare agent, and the engine must not offer it a
+ * manifest-derived runtime it does not have.
+ */
+export type LocalAgentKind = 'kit' | 'bare'
+
+/**
+ * What a registered root is.
+ *
+ * - `workshop` — the kit shape: templates and a `.cinna-kit/` copy installed
+ *   into it, agents scanned from `Local/*​/`, each with a manifest.
+ * - `external` — a folder the user pointed at. **Nothing is written into it**:
+ *   no templates, no `.cinna-kit/`, no `app-data/`. It is walked up to
+ *   {@link BARE_AGENT_MAX_DEPTH} for folders holding an `AGENT.md`, and each
+ *   one becomes a bare agent.
+ *
+ * A single adopted agent folder is an external root whose only agent is the
+ * root itself, which is why there is no third kind: "one folder" and "a folder
+ * of folders" differ only in what the walk finds.
+ */
+export type AgentRootKind = 'workshop' | 'external'
+
 /** True for an `agents` row id that names a folder agent. */
 export function isFolderAgentId(agentId: string): boolean {
   return agentId.startsWith(FOLDER_AGENT_ID_PREFIX)
@@ -71,8 +155,13 @@ export function folderAgentId(manifestId: string): string {
  * - `unresolved` — the manifest could not be read at all. There is no identity
  *   to key a row on, so the folder lists but is never indexed; the row it
  *   already had is held back rather than replaced.
+ * - `external` — a bare folder, which has no manifest to state an id and never
+ *   will. Positional like `legacy`, and deliberately a *different* value: the
+ *   fix offered for a legacy folder is "Stamp identity", which writes a UUID
+ *   into a manifest. There is no manifest here to write one into, so a surface
+ *   that keyed off `legacy` would offer a button that cannot work.
  */
-export type LocalAgentIdentity = 'manifest' | 'legacy' | 'unresolved'
+export type LocalAgentIdentity = 'manifest' | 'legacy' | 'unresolved' | 'external'
 
 /**
  * The `agents` row id of a folder whose manifest states no `id`.
@@ -105,6 +194,23 @@ export function legacyFolderAgentId(rootId: string, folderName: string): string 
  */
 export function duplicateFolderAgentId(rootId: string, folderName: string): string {
   return `${FOLDER_AGENT_ID_PREFIX}duplicate:${rootId}:${folderName}`
+}
+
+/**
+ * The `agents` row id of a bare agent — a folder adopted for its `AGENT.md`.
+ *
+ * Positional, like {@link legacyFolderAgentId}, and for the same reason: there
+ * is no manifest and therefore no durable id to key on. Keyed by **root id and
+ * the root-relative path**, not the folder name: an external root can hold
+ * `a/support` and `b/support`, and two roots can each hold the same layout.
+ *
+ * The path is POSIX-separated so the id a folder gets does not depend on which
+ * platform scanned it — a row written on Windows and read on macOS would
+ * otherwise be a different agent, and `a2a_sessions` cascades from this value.
+ */
+export function externalFolderAgentId(rootId: string, relPath: string): string {
+  const posix = relPath.split('\\').join('/').replace(/^\/+|\/+$/g, '')
+  return `${FOLDER_AGENT_ID_PREFIX}external:${rootId}:${posix === '' ? '.' : posix}`
 }
 
 /**
@@ -213,6 +319,12 @@ export interface LocalAgentDto {
   manifestId: string
   /** Where {@link id} came from — see {@link LocalAgentIdentity}. */
   identity: LocalAgentIdentity
+  /**
+   * Kit folder or bare folder — see {@link LocalAgentKind}. A `bare` agent
+   * carries an empty `manifest`, no credentials, no commands and no
+   * publications, and `runtime` is always null: it has no file that states one.
+   */
+  kind: LocalAgentKind
   rootId: string
   rootPath: string
   /** Absolute path of the agent folder. */
@@ -251,9 +363,33 @@ export interface AgentRootDto {
   path: string
   label: string
   isDefault: boolean
+  /** Workshop or external — see {@link AgentRootKind}. */
+  kind: AgentRootKind
   /** False when the directory has gone missing since it was registered. */
   exists: boolean
   agentCount: number
+  /**
+   * External roots only: the walk stopped at its cap, so this root's agents are
+   * the first N by path. Without this, an agent added to the repository later
+   * never appears and no rescan fixes it, with nothing on screen saying why.
+   */
+  truncated: boolean
+  /**
+   * External roots only: bare agents the user removed from the list without
+   * deleting their folder. They are still on disk and would come back on a
+   * re-add, so the count is shown with a way to restore them.
+   */
+  hiddenAgentCount: number
+  /**
+   * Whether this folder is inside a git working tree, from a cheap stat walk.
+   *
+   * Carried on the root rather than discovered by the update panel's own query,
+   * so the panel's *existence* is known at first paint. Discovered later it
+   * appeared after the settings rows had drawn and pushed everything below it
+   * down — a control moving under a pointer. An approximation: the panel is
+   * what asks git properly, and a false positive simply renders nothing.
+   */
+  isGitRepo: boolean
   /** Kit contract this root resolves — the workshop's copy, else the bundled one. */
   contractVersion: string
   createdAt: number
@@ -290,6 +426,15 @@ export type LocalAgentFieldUpdate =
   | { field: 'router_trigger_prompt'; value: string | null }
   | { field: 'status_refresh_command'; value: string | null }
   | { field: 'prompt'; prompt: LocalAgentPromptKind; value: string }
+  /**
+   * A **bare** agent's `AGENT.md` — its whole system prompt.
+   *
+   * A separate field rather than a fourth {@link LocalAgentPromptKind}, because
+   * the kinds are the kit's three documents and every kit surface enumerates
+   * them: adding a fourth would put an "AGENT.md" card on the Prompts tab of
+   * every kit agent, naming a file those folders do not have.
+   */
+  | { field: 'bare_prompt'; value: string }
   /**
    * Which credential and model this agent runs on.
    *
@@ -359,11 +504,111 @@ export function describedAs(agent: { name: string; description: string }): strin
   return description === agent.name.trim() ? '' : description
 }
 
+/**
+ * What the user chose in the delete dialog.
+ *
+ * A **kit** agent *is* its folder — the row is a derived index, so there is
+ * nothing to remove but the folder, and `trashFolder` is always true for one.
+ * A **bare** agent is a folder the user pointed at and still works in, so the
+ * two are genuinely separate: forgetting it must not touch a repository the
+ * desktop merely reads.
+ */
+export interface DeleteLocalAgentInput {
+  agentId: string
+  /**
+   * Move the folder to the OS Trash as well as dropping the agent. False
+   * removes only the entry — the folder is left exactly as it is.
+   *
+   * Accepted for a bare agent only; a kit agent refuses `false`, because a row
+   * the scan would immediately re-create is not a removal.
+   */
+  trashFolder: boolean
+}
+
 /** What `local-agent:delete` returns on success. */
 export interface DeleteLocalAgentResult {
   agentId: string
-  /** The folder went to the OS trash, never `rm -rf` — it can be put back. */
-  trashed: true
+  /**
+   * True when the folder went to the OS trash — never `rm -rf`, so it can be
+   * put back. False when only the list entry was removed and the folder is
+   * untouched.
+   */
+  trashed: boolean
+}
+
+/** One folder holding an `AGENT.md`, found under a folder the user picked. */
+export interface DiscoveredBareAgent {
+  /**
+   * Root-relative POSIX path, `'.'` for the picked folder itself. It is what
+   * {@link externalFolderAgentId} keys on, so the renderer sends it back
+   * verbatim rather than re-deriving it.
+   */
+  relPath: string
+  /** Absolute path — shown, never sent back as the thing to adopt. */
+  path: string
+  /** Default display name: the `AGENT.md` heading, else the folder name. */
+  name: string
+  /** Whether the folder also has a `README.md` to brief a builder with. */
+  hasReadme: boolean
+  /** True when this exact folder is already an agent in some registered root. */
+  alreadyAdded: boolean
+}
+
+/** What `local-agent:folder-pick` reports about the folder the user chose. */
+export type PickAgentFolderResult =
+  | { cancelled: true }
+  | {
+      cancelled: false
+      /** Absolute path of the picked folder. */
+      path: string
+      /** Its basename — the default name when it is itself the one agent. */
+      folderName: string
+      /** Everything found, deepest-first ordering never matters: sorted by path. */
+      found: DiscoveredBareAgent[]
+      /**
+       * The walk stopped at its cap, so `found` is the first N by path and not
+       * all of them. Surfaced rather than logged: a list that is silently
+       * partial reads as the scanner having *missed* the folders the user came
+       * for, which is the diagnosis the cap exists to prevent.
+       */
+      truncated: boolean
+      /**
+       * Why nothing can be added, or null when something can. A *state*, not an
+       * error: the dialog stays open and says this rather than closing.
+       */
+      refusal: string | null
+    }
+
+/**
+ * What adopting a folder produced.
+ *
+ * The agent ids as well as the root, so the dialog can land the user on the
+ * agent they just added. Rule 3 — creating something lands you on the thing
+ * created — and adopting is a create in every sense the user cares about: they
+ * named it, they confirmed it, it appeared.
+ */
+export interface AddAgentFolderResult {
+  root: AgentRootDto
+  /** Every agent adopted, in the order the walk found them. Never empty. */
+  agentIds: string[]
+}
+
+/** Adopt a folder the user has already picked and previewed. */
+export interface AddAgentFolderInput {
+  /**
+   * Absolute path of the folder, as returned by `local-agent:folder-pick`.
+   * Main re-checks it against the picker's own record before using it — the
+   * renderer may not name a folder the user did not just choose.
+   */
+  path: string
+  /** Root-relative paths to adopt, from {@link DiscoveredBareAgent.relPath}. */
+  relPaths: string[]
+  /**
+   * Display name for the single agent being added. Ignored when more than one
+   * `relPath` is given — there is one field in the form, and naming fifteen
+   * folders at adoption time is work the user has not asked to do.
+   */
+  name?: string
 }
 
 /** What `local-agent:open-credentials` reports back about the click. */
@@ -403,9 +648,22 @@ export const LOCAL_AGENT_PROMPT_PATHS: Record<LocalAgentPromptKind, string> = {
   refiner: 'docs/REFINER_PROMPT.md'
 }
 
+/**
+ * Agent-relative path each {@link LocalAgentDocKind} reads. Built from
+ * {@link LOCAL_AGENT_PROMPT_PATHS} rather than repeating it, so the two cannot
+ * disagree about where a kit prompt lives.
+ */
+export const LOCAL_AGENT_DOC_PATHS: Record<LocalAgentDocKind, string> = {
+  ...LOCAL_AGENT_PROMPT_PATHS,
+  bare_prompt: BARE_AGENT_PROMPT_FILE,
+  bare_readme: BARE_AGENT_README_FILE
+}
+
 /** The one file a given update writes, as a key into {@link LocalAgentDto.stamps}. */
 export function fieldFilePath(update: LocalAgentFieldUpdate): string {
-  return update.field === 'prompt' ? LOCAL_AGENT_PROMPT_PATHS[update.prompt] : MANIFEST_FILE
+  if (update.field === 'prompt') return LOCAL_AGENT_PROMPT_PATHS[update.prompt]
+  if (update.field === 'bare_prompt') return BARE_AGENT_PROMPT_FILE
+  return MANIFEST_FILE
 }
 
 /**
@@ -572,9 +830,19 @@ export function describeAgentSlug(name: string): AgentSlugCheck {
 }
 
 /** `local-agent:read-doc` — one of the three prompt documents. */
+/**
+ * A document the agent page reads on its own, rather than through the DTO.
+ *
+ * The three kit prompt kinds, plus a bare folder's two files. A union rather
+ * than two more {@link LocalAgentPromptKind} members: the prompt kinds are the
+ * kit's three documents and several kit surfaces enumerate them, so a fourth
+ * would put an "AGENT.md" card on every kit agent's Prompts tab.
+ */
+export type LocalAgentDocKind = LocalAgentPromptKind | 'bare_prompt' | 'bare_readme'
+
 export interface ReadLocalAgentDocInput {
   agentId: string
-  prompt: LocalAgentPromptKind
+  prompt: LocalAgentDocKind
 }
 
 /**

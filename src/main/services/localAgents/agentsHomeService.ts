@@ -35,8 +35,16 @@ import {
 import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { compareVersionStrings } from '../../../shared/kit/contractVersion'
-import { AGENTS_SUBDIR, type AgentRootDto } from '../../../shared/localAgents'
+import {
+  AGENTS_SUBDIR,
+  type AgentRootDto,
+  type AgentRootKind
+} from '../../../shared/localAgents'
+import { desktopStateService } from './desktopStateService'
+import { discoverBareAgents } from './externalScan'
+import { looksLikeGitRepo } from './gitService'
 import { assertUsableRoot, isWithin } from './pathRules'
+import { scannerService } from './scannerService'
 import { scaffoldService } from './scaffoldService'
 
 const logger = createLogger('local-agents-home')
@@ -108,17 +116,68 @@ function countAgents(rootPath: string): number {
   }
 }
 
+/**
+ * How many bare agents an external root holds, and how many of those the user
+ * removed from the list.
+ *
+ * This walks rather than counting directory entries, because an external root's
+ * agents are not its immediate children — they are wherever an `AGENT.md` is,
+ * up to {@link BARE_AGENT_MAX_DEPTH}. The hidden count is what lets Settings
+ * offer them back: without it, "remove from list" is a one-way door with no
+ * sign that it happened.
+ */
+function countBareAgents(rootPath: string): {
+  total: number
+  hidden: number
+  truncated: boolean
+} {
+  // Names are not needed for a count, and this runs for every registered root
+  // on every `local-agent:list` — see the `withNames` note in `externalScan`.
+  const { found, truncated } = discoverBareAgents(rootPath, undefined, { withNames: false })
+  let hidden = 0
+  for (const folder of found) {
+    if (desktopStateService.read(folder.path, 'bare').hidden) hidden += 1
+  }
+  return { total: found.length - hidden, hidden, truncated }
+}
+
 function toDto(row: AgentRootRow): AgentRootDto {
+  const kind: AgentRootKind = row.kind === 'external' ? 'external' : 'workshop'
+  // **The scan is the single source for "how many agents".**
+  //
+  // `list()` serves agents from the scan cache precisely because re-walking
+  // every folder on every call blocked the main thread, and the renderer
+  // refetches on every watcher push. Counting here independently put the walk
+  // straight back — plus one state read per agent — for the row two lines
+  // below the agents it had just avoided re-reading. It also gave the settings
+  // row its own answer to a question the scan had already answered, which is
+  // how the two could come to disagree.
+  //
+  // The fallback is for a root that has never been scanned in this process; it
+  // is the cold path, and it is the cheap version (`withNames: false`).
+  const cached =
+    kind === 'external' ? scannerService.cachedScan(row.id, row.path) : null
+  const counts = cached
+    ? { total: cached.agents.length, hidden: cached.hiddenCount, truncated: cached.truncated }
+    : kind === 'external' && isDirectory(row.path)
+      ? countBareAgents(row.path)
+      : { total: countAgents(row.path), hidden: 0, truncated: false }
   return {
     id: row.id,
     path: row.path,
     label: row.label,
     isDefault: row.isDefault,
+    kind,
     exists: isDirectory(row.path),
-    agentCount: countAgents(row.path),
+    isGitRepo: looksLikeGitRepo(row.path),
+    agentCount: counts.total,
+    hiddenAgentCount: counts.hidden,
+    truncated: counts.truncated,
     // Per root, not per app: a workshop that carries its own `.cinna-kit/`
     // runs on that copy, so Settings must report what this root resolves
-    // rather than what the app bundles.
+    // rather than what the app bundles. An external root has no `.cinna-kit/`
+    // and never gains one, so it reports the bundled version — which is the
+    // honest answer to "what contract is in play here": none of it applies.
     contractVersion: getContractVersion(row.path),
     createdAt: row.createdAt.getTime()
   }
@@ -287,6 +346,32 @@ export const agentsHomeService = {
   },
 
   /**
+   * The same lookup, for callers where "no id" is a **bug and not a default**.
+   *
+   * {@link requireRoot} treats a falsy id as "the agents home", and
+   * `ensureHome` *creates* that directory rather than reporting it missing.
+   * That is load-bearing for `create` and the other home-defaulting callers,
+   * and is deliberately left alone.
+   *
+   * It is wrong for anything that acts on a *named* root. A malformed payload —
+   * a renderer bug, a stale preload after a hot reload — would not fail; it
+   * would silently retarget the home. For the git channels that means running
+   * `fetch` and `merge --ff-only` in a working tree nobody named, and this
+   * feature is precisely the reason a user might have put their agents home
+   * under version control. Even the read path is not free: it can scaffold
+   * `~/Documents/CinnaAgents` on a machine where the user deliberately had
+   * none, as a side effect of rendering a settings screen.
+   *
+   * @throws LocalAgentError `root_not_found`
+   */
+  requireNamedRoot(userId: string, rootId: unknown): AgentRootRow {
+    if (typeof rootId !== 'string' || rootId === '') {
+      throw new LocalAgentError('root_not_found', 'No agents folder was named.')
+    }
+    return this.requireRoot(userId, rootId)
+  },
+
+  /**
    * True when a folder can be adopted without writing template files over
    * something the user already has there. A folder that is empty, or that
    * already looks like a workshop, needs no confirmation; anything else does.
@@ -313,6 +398,14 @@ export const agentsHomeService = {
    * Overlap also makes two roots claim the same agent folders, which sets the
    * per-root scoping in `pruneFolderRows` against itself: each scan would see
    * the other's agents as absent.
+   *
+   * **Known gap, pre-dating bare agents:** the comparison is textual, so a
+   * symlink pointing at a registered root is adoptable and the same folders
+   * then index twice under two roots with two id schemes. Fixing it means
+   * `realpath`ing **both sides** — the stored roots as well as the candidate,
+   * since resolving only the candidate leaves the mirror case open, where it is
+   * the *stored* root that is the symlinked path. It touches the workshop path
+   * as much as the external one, which is why it is its own change.
    *
    * @throws LocalAgentError `invalid_path`
    */
@@ -351,6 +444,41 @@ export const agentsHomeService = {
       isDefault: false
     })
     logger.info('agents root added', { rootId: row.id, agentCount: countAgents(path) })
+    return toDto(row)
+  },
+
+  /**
+   * Register a folder as an **external** root: walked for `AGENT.md`, never
+   * written into.
+   *
+   * The three things `addRoot` does that this deliberately does not: install
+   * the root templates, copy `.cinna-kit/`, and create `Local/`. That is the
+   * whole promise of this shape — the user points at a folder they already own
+   * and it is read, not converted. A repository shared with other people must
+   * not gain five files because it was opened here.
+   *
+   * Everything else is identical, and identical on purpose: the same path
+   * rules, and the same overlap refusal. Overlap matters *more* here, not less
+   * — every registered root becomes an allowed area for the "open in…" path
+   * guard, and an external root is by definition somewhere outside the agents
+   * home, so it is the one the user is most likely to point at a parent of.
+   *
+   * An already-registered path is returned as-is rather than duplicated, which
+   * makes adopting the same folder twice a no-op the user can repeat safely.
+   */
+  addExternalRoot(userId: string, rawPath: string, label?: string): AgentRootDto {
+    const path = assertUsableRoot(rawPath)
+    const existing = agentRootRepo.getByPath(userId, path)
+    if (existing) return toDto(existing)
+
+    this.assertNotOverlapping(userId, path)
+    const row = agentRootRepo.create(userId, {
+      path,
+      label: label?.trim() || basename(path),
+      isDefault: false,
+      kind: 'external'
+    })
+    logger.info('external agents folder added', { rootId: row.id })
     return toDto(row)
   },
 

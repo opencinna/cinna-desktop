@@ -56,6 +56,7 @@ import { parseEngineEvent, type EngineEvent } from './engineEvents'
 import { SseParser } from './sseParser'
 import { TurnStream, type PendingRequest } from './turnStream'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
+import type { LocalAgentKind } from '../../../shared/localAgents'
 import { pendingRequests, type RequestResolution } from './pendingRequests'
 import type { EngineModelRef } from '../../engine/configGenerator'
 import { unsupportedModelApi, type EngineModelApi } from '../../engine/modelTransports'
@@ -125,6 +126,8 @@ export interface LocalTurnDeps {
   ): {
     name: string
     path: string
+    /** Where this agent's state lives — see `desktopStatePath`. */
+    kind: LocalAgentKind
     enabled: boolean
     readiness: string
     readinessReason: string | null
@@ -132,7 +135,14 @@ export interface LocalTurnDeps {
   /** The engine session id remembered for this (chat, agent), if any. */
   readSession(chatId: string, agentId: string): string | null
   /** Remember it, in both `desktop.json` and `a2a_sessions.context_id`. */
-  saveSession(input: { chatId: string; agentId: string; agentDir: string; sessionId: string }): void
+  saveSession(input: {
+    chatId: string
+    agentId: string
+    agentDir: string
+    /** Where this agent's state lives — see `desktopStatePath`. */
+    agentKind: LocalAgentKind
+    sessionId: string
+  }): void
   /**
    * True when this agent folder already holds a grant covering an ask.
    *
@@ -140,7 +150,7 @@ export interface LocalTurnDeps {
    * already made never reaches the transcript a second time. Must not throw:
    * an unreadable store means "ask the user", which is the safe direction.
    */
-  isGranted(agentDir: string, request: LocalPermissionRequest): boolean
+  isGranted(agentDir: string, agentKind: LocalAgentKind, request: LocalPermissionRequest): boolean
   /** Take the per-agent lock for the streaming part of the turn. */
   withLock<T>(agentId: string, owner: string, fn: () => Promise<T>): Promise<T>
   /** The settings-scope user id that owns folder agents. */
@@ -250,7 +260,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
 
   private async stream(ctx: {
     input: RunAgentTurnInput
-    agent: { name: string; path: string }
+    agent: { name: string; path: string; kind: LocalAgentKind }
     agentKey: string
     model: EngineModelRef | null
     userId: string
@@ -289,7 +299,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     // for this agent must produce no block at all, not a block this method
     // answers a moment later.
     const turn = new TurnStream({
-      isGranted: (request) => this.deps.isGranted(agent.path, request)
+      isGranted: (request) => this.deps.isGranted(agent.path, agent.kind, request)
     })
     const accumulator = new StreamPartsAccumulator({
       onToolCall: ({ name, input }) => logger.info(`tool call → ${name}`, { input })
@@ -435,7 +445,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         parts: parts.length,
         eventTypeCounts
       })
-      this.deps.saveSession({ chatId, agentId, agentDir: agent.path, sessionId })
+      this.deps.saveSession({ chatId, agentId, agentDir: agent.path, agentKind: agent.kind, sessionId })
 
       if (outcome.error) {
         // Parts already streamed are kept: an error after a partial answer

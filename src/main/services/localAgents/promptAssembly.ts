@@ -28,6 +28,7 @@
 import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { join, relative, sep } from 'node:path'
 import type { CinnaAgentManifest } from '../../../shared/kit/manifest'
+import { BARE_AGENT_PROMPT_FILE } from '../../../shared/localAgents'
 
 /** Longest any one included document may be. A guard, not a design limit. */
 const MAX_SECTION_BYTES = 64 * 1024
@@ -235,6 +236,90 @@ export function assembleAgentPrompt(
 
   sections.push(desktopContextSection(context))
 
+  return `${sections.join('\n\n---\n\n')}\n`
+}
+
+/**
+ * The desktop context block for a **bare** agent.
+ *
+ * Three of the kit block's rules are dropped rather than reworded, because each
+ * of them describes a folder convention a bare folder never agreed to: `uv run`
+ * (the kit scaffolds a `pyproject.toml`; this folder may be a shell script or
+ * nothing at all), "write only under `app-data/`" (there is no `app-data/`, and
+ * the desktop deliberately keeps its own state out of this folder), and the
+ * `credentials/.env` rule (there are no declared slots to read through). Stating
+ * a rule about a file that does not exist is how a model ends up refusing to do
+ * ordinary work in the folder it was pointed at.
+ *
+ * The last line survives verbatim, and it is the one that matters most: the
+ * same folder is opened by a builder — an assistant developing the agent — and
+ * `AGENT.md` and `README.md` are exactly what that builder rewrites.
+ */
+function bareDesktopContextSection(context: DesktopPromptContext): string {
+  return [
+    '## How you are running now',
+    '',
+    'You are running locally, inside Cinna Desktop, in **conversation mode**: a person is talking to you and waiting for a reply. Answer them.',
+    '',
+    '- Your working directory is this agent folder. It belongs to the person who built you and may be open in their editor right now, so prefer reading over rewriting, and say what you changed.',
+    '- Follow whatever the instructions above say about how to run this folder\'s own scripts and tools. Cinna Desktop imposes no convention of its own here.',
+    '- Never print, echo or log a credential value, and never read a `.env` file or any other secret file to answer a question about it.',
+    `- The user's locale is ${context.locale} and their time zone is ${context.timeZone}. Format dates, times and numbers the way they would expect, and read a bare date as being in that zone.`,
+    '- Long output goes to a file in this folder with a short summary in your reply, not into the reply itself.',
+    '- **Do not switch to the Builder role.** Rewriting `AGENT.md` or `README.md` is the builder\'s job, not yours, even if the user asks for a change to how you work — tell them to open this folder in their assistant.'
+  ].join('\n')
+}
+
+/**
+ * The system prompt a **bare** agent runs on: `AGENT.md`, and nothing else the
+ * folder contains.
+ *
+ * The asymmetry with {@link assembleAgentPrompt} is the whole design. A kit
+ * folder has a known shape, so the assembler can safely reach into `scripts/`,
+ * `credentials/` and `knowledge/` and know what it will find. A bare folder has
+ * no shape at all: it is somebody's repository. Concatenating whatever `.md`
+ * files happen to be lying in it would put a changelog, a licence or another
+ * agent's notes into the system prompt as instructions.
+ *
+ * **`README.md` is deliberately not included.** A folder's README is written
+ * for the person developing the agent — how to install it, how to run it, what
+ * it needs — not for the agent, which would read "run `make install` first" as
+ * a step it should take. It is the *builder's* document, and where it is used is
+ * the init prompt (`localAgentService.initPrompt`), the briefing handed to an
+ * assistant opening the folder.
+ *
+ * HTML comments are stripped for the same reason they are in a kit folder: they
+ * are addressed to a reader of the source, and a model reads them as
+ * instructions.
+ */
+export function assembleBareAgentPrompt(
+  agentDir: string,
+  name: string,
+  context: DesktopPromptContext
+): string {
+  const sections: string[] = []
+  const raw = readTextFile(join(agentDir, BARE_AGENT_PROMPT_FILE))
+  const instructions = raw ? stripHtmlComments(raw) : ''
+
+  if (instructions !== '') {
+    sections.push(instructions)
+  } else {
+    // Same rule as the kit path: never silently produce a promptless agent.
+    // Without this the model gets only the context block and answers as a
+    // generic assistant, which reads as "the agent is broken" rather than as
+    // "the file is empty".
+    sections.push(
+      [
+        `# ${name}`,
+        '',
+        `You are ${name}.`,
+        '',
+        '`AGENT.md` in this folder is empty, so you have no instructions yet. Say that plainly when asked to do work, and suggest that the person open this folder in their assistant to write it.'
+      ].join('\n')
+    )
+  }
+
+  sections.push(bareDesktopContextSection(context))
   return `${sections.join('\n\n---\n\n')}\n`
 }
 

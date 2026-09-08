@@ -40,6 +40,7 @@ import {
   type StoredPermissionGrant
 } from '../../../shared/localAgentRequests'
 import { createLogger } from '../../logger/logger'
+import type { LocalAgentKind } from '../../../shared/localAgents'
 import { desktopStateService } from './desktopStateService'
 
 const logger = createLogger('local-agent-grants')
@@ -53,8 +54,8 @@ export const permissionGrantService = {
    * Newest first because the list is read as a history of decisions — the one a
    * user wants to revoke is almost always the one they just made.
    */
-  list(agentDir: string): StoredPermissionGrant[] {
-    const grants = desktopStateService.read(agentDir).permissionGrants
+  list(agentDir: string, kind: LocalAgentKind): StoredPermissionGrant[] {
+    const grants = desktopStateService.read(agentDir, kind).permissionGrants
     return Object.entries(grants)
       .map(([key, grant]) => ({ key, ...grant }))
       .sort((a, b) => b.decidedAt - a.decidedAt)
@@ -67,10 +68,10 @@ export const permissionGrantService = {
    * returns the empty state for a missing or unreadable file, and an unreadable
    * store means "ask the user", which is the safe direction.
    */
-  covers(agentDir: string, request: LocalPermissionRequest): boolean {
+  covers(agentDir: string, kind: LocalAgentKind, request: LocalPermissionRequest): boolean {
     return isPermissionGranted(
       request,
-      Object.values(desktopStateService.read(agentDir).permissionGrants)
+      Object.values(desktopStateService.read(agentDir, kind).permissionGrants)
     )
   },
 
@@ -87,8 +88,8 @@ export const permissionGrantService = {
    * asked again, which is worse than nothing but far better than a turn that
    * fails after the user said yes.
    */
-  remember(agentDir: string, request: LocalPermissionRequest): StoredPermissionGrant[] {
-    const existing = desktopStateService.read(agentDir).permissionGrants
+  remember(agentDir: string, kind: LocalAgentKind, request: LocalPermissionRequest): StoredPermissionGrant[] {
+    const existing = desktopStateService.read(agentDir, kind).permissionGrants
     const next = { ...existing }
     const added: StoredPermissionGrant[] = []
     const decidedAt = Date.now()
@@ -98,7 +99,7 @@ export const permissionGrantService = {
       next[key] = grant
       added.push({ key, ...grant })
     }
-    desktopStateService.patch(agentDir, { permissionGrants: next })
+    desktopStateService.patch(agentDir, kind, { permissionGrants: next })
     logger.info('remembered a permission grant', {
       action: request.action,
       patterns: added.length
@@ -107,19 +108,19 @@ export const permissionGrantService = {
   },
 
   /** Revoke one grant. Silent when the key is already gone — so is the outcome. */
-  forget(agentDir: string, key: string): void {
-    const existing = desktopStateService.read(agentDir).permissionGrants
+  forget(agentDir: string, kind: LocalAgentKind, key: string): void {
+    const existing = desktopStateService.read(agentDir, kind).permissionGrants
     if (!(key in existing)) return
     const next = { ...existing }
     delete next[key]
-    desktopStateService.patch(agentDir, { permissionGrants: next })
+    desktopStateService.patch(agentDir, kind, { permissionGrants: next })
     logger.info('forgot a permission grant')
   },
 
   /** Revoke every grant this folder holds. */
-  forgetAll(agentDir: string): void {
-    if (Object.keys(desktopStateService.read(agentDir).permissionGrants).length === 0) return
-    desktopStateService.patch(agentDir, { permissionGrants: {} })
+  forgetAll(agentDir: string, kind: LocalAgentKind): void {
+    if (Object.keys(desktopStateService.read(agentDir, kind).permissionGrants).length === 0) return
+    desktopStateService.patch(agentDir, kind, { permissionGrants: {} })
     logger.info('forgot every permission grant for an agent')
   }
 }

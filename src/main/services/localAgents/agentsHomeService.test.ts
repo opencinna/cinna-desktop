@@ -251,3 +251,47 @@ describe('the workshop contract copy', () => {
     expect(JSON.parse(readFileSync(kitJson, 'utf8')).contract_version).toBe(BUNDLED_CONTRACT)
   })
 })
+
+/**
+ * The two lookups, and why there are two.
+ *
+ * `requireRoot`'s "no id means the home" is load-bearing for `create` and every
+ * other home-defaulting caller. It is wrong for anything acting on a *named*
+ * root, where a missing id is a bug — and the cost of getting that wrong is not
+ * symmetric: the git channels run `fetch` and `merge --ff-only` in the
+ * directory they resolve, and this feature is the reason a user might have put
+ * their agents home under version control in the first place.
+ */
+describe('requireNamedRoot', () => {
+  it('refuses a missing, empty or non-string id instead of defaulting to the home', () => {
+    for (const bad of ['', undefined, null, 0, {}]) {
+      expect(() => agentsHomeService.requireNamedRoot(USER, bad)).toThrow(/no agents folder/i)
+    }
+  })
+
+  it('never creates the agents home as a side effect of being asked', () => {
+    // `requireRoot('')` reaches `ensureHome`, which *scaffolds* the directory.
+    // A settings screen rendering a git panel would then create
+    // `~/Documents/CinnaAgents` on a machine where the user deliberately had
+    // none — a write caused by a question.
+    const home = join(sandbox, 'never-created')
+    appSettingsRepo.set('localAgentsHome', home)
+    expect(() => agentsHomeService.requireNamedRoot(USER, '')).toThrow()
+    expect(existsSync(home)).toBe(false)
+  })
+
+  it('resolves a real root the same way requireRoot does', () => {
+    const workshop = mkdtempSync(join(tmpdir(), 'cinna-named-root-'))
+    try {
+      scaffoldService.installRootTemplates(workshop)
+      const added = agentsHomeService.addRoot(USER, workshop)
+      expect(agentsHomeService.requireNamedRoot(USER, added.id).path).toBe(workshop)
+    } finally {
+      rmSync(workshop, { recursive: true, force: true })
+    }
+  })
+
+  it('still refuses an id that names nothing', () => {
+    expect(() => agentsHomeService.requireNamedRoot(USER, 'not-a-root')).toThrow(/not registered/i)
+  })
+})

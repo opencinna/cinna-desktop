@@ -102,6 +102,7 @@ const localDeps: LocalTurnDeps = {
       return {
         name: dto.name,
         path: dto.path,
+        kind: dto.kind,
         enabled: dto.enabled,
         readiness: dto.readiness,
         readinessReason: dto.readinessReason
@@ -118,7 +119,7 @@ const localDeps: LocalTurnDeps = {
   },
   readSession: (chatId, agentId) =>
     a2aSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId ?? null,
-  saveSession: ({ chatId, agentId, agentDir, sessionId }) => {
+  saveSession: ({ chatId, agentId, agentDir, agentKind, sessionId }) => {
     // **Two stores, and the column names stay A2A-flavoured on purpose.**
     // `a2a_sessions.context_id` is what `agent:get-session` reads to decide a
     // chat is an agent chat, so a folder agent's engine session id goes there
@@ -134,8 +135,8 @@ const localDeps: LocalTurnDeps = {
       taskState: null
     })
     try {
-      const state = desktopStateService.read(agentDir)
-      desktopStateService.patch(agentDir, {
+      const state = desktopStateService.read(agentDir, agentKind)
+      desktopStateService.patch(agentDir, agentKind, {
         sessions: { ...state.sessions, [chatId]: { sessionId, updatedAt: Date.now() } }
       })
     } catch (err) {
@@ -155,7 +156,8 @@ const localDeps: LocalTurnDeps = {
   // folder agent, shared with the user's personal OpenCode install — so the
   // desktop keeps the rule beside the folder it was granted in and answers
   // `once` from it. See `permissionGrantService`.
-  isGranted: (agentDir, request) => permissionGrantService.covers(agentDir, request),
+  isGranted: (agentDir, agentKind, request) =>
+    permissionGrantService.covers(agentDir, agentKind, request),
   withLock: (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn),
   userId: () => getSettingsScopeUserId()
 }
@@ -181,8 +183,11 @@ export function rememberPermissionGrant(
   request: LocalPermissionRequest
 ): boolean {
   try {
-    const agentDir = localAgentService.get(getSettingsScopeUserId(), agentId).path
-    permissionGrantService.remember(agentDir, request)
+    // The DTO, not just its path: where an agent's state lives is a property
+    // of the agent, and a probe of the folder for it can be wrong (see
+    // `desktopStatePath`).
+    const agent = localAgentService.get(getSettingsScopeUserId(), agentId)
+    permissionGrantService.remember(agent.path, agent.kind, request)
     return true
   } catch (err) {
     logger.warn('could not remember a permission grant', {

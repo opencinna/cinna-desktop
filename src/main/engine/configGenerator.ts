@@ -223,10 +223,40 @@ const SECRET_FILES: Record<string, string> = {
 }
 
 /**
- * The two files that define the agent. Editing them is editing the agent.
+ * The files that define the agent. Editing one of them is editing the agent.
  *
  * Exact relative paths, because that is what the tools name: the kit puts one
- * manifest at the folder root and one workflow prompt at `docs/`.
+ * manifest at the folder root and one workflow prompt at `docs/`, and a **bare**
+ * folder puts its whole system prompt in `AGENT.md` at the root.
+ *
+ * The list covers both shapes at once rather than being built per agent. A kit
+ * folder rarely has an `AGENT.md`, and where it does, asking before rewriting it
+ * is right for the same reason; the cost of one dialog on a file that is not the
+ * agent's identity is far below the cost of an agent silently rewriting the file
+ * that *is*. The assembled prompt ends by telling the agent not to switch to the
+ * builder role for exactly this reason — and an instruction is not a control.
+ *
+ * ### `README.md` is deliberately not here, and the rule is kept halfway
+ *
+ * A bare agent's closing prompt line names `AGENT.md` **and** `README.md` as the
+ * builder's, because for that shape the README is the briefing an assistant
+ * opening the folder reads (`localAgentService.initPrompt`). Only the first is
+ * enforced, so half that sentence is backed by a control and half is an
+ * instruction. That is a considered position, not an oversight:
+ *
+ * - This list is **global**. Adding `README.md` asks on every *kit* agent's
+ *   plain documentation, which the template ships — the "fires constantly, so
+ *   users learn to click through" failure the widening above exists to undo.
+ * - "Update the README" is ordinary work a user asks an agent pointed at a
+ *   repository to do, in a way "rewrite your own instructions" never is.
+ * - The blast radii differ in kind. `AGENT.md` changes what the agent *is* on
+ *   the next turn, silently and durably, with no human in the path. `README.md`
+ *   changes text a **person** then copies, reads and pastes, and in the git
+ *   working tree this shape targets it is visible in `git status` and revertible.
+ *
+ * What would change this: an init prompt consumed automatically rather than
+ * pasted by a person. Then the human is no longer the control and `README.md`
+ * belongs here — as a bare-only profile, since the first reason still stands.
  */
 /**
  * A note on `write`: the built-in write and apply-patch tools ask under
@@ -238,7 +268,11 @@ const SECRET_FILES: Record<string, string> = {
  */
 const IDENTITY_FILES: Record<string, string> = {
   'cinna-agent.json': 'ask',
-  'docs/WORKFLOW_PROMPT.md': 'ask'
+  'docs/WORKFLOW_PROMPT.md': 'ask',
+  // A bare agent's system prompt. Without this entry the profile's own stated
+  // rule — "the agent's own identity files are ask" — was not kept for the one
+  // kind of agent whose identity is a single file.
+  'AGENT.md': 'ask'
 }
 
 export const CONVERSATION_PERMISSIONS: Record<string, unknown> = {

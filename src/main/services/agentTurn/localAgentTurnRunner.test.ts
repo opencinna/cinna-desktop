@@ -235,13 +235,14 @@ function harness(
         : {
             name: 'Helper',
             path: '/agents/helper',
+            kind: 'kit' as const,
             enabled: true,
             readiness: 'ok',
             readinessReason: null,
             ...opts.agent
           },
     readSession: () => opts.remembered ?? null,
-    isGranted: (_agentDir, request) => opts.isGranted?.(request) ?? false,
+    isGranted: (_agentDir, _agentKind, request) => opts.isGranted?.(request) ?? false,
     saveSession: (i) => void saved.push({ sessionId: i.sessionId }),
     withLock: opts.realLock
       ? (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn)

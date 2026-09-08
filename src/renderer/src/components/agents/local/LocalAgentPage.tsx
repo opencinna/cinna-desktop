@@ -12,11 +12,12 @@ import {
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
-import { RuntimePanel } from './RuntimePanel'
+import { BareRuntimePanel, RuntimePanel } from './RuntimePanel'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
 import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
+import { BareNameCard } from './BareAgentCards'
 import { PromptDocCard } from './PromptDocCard'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
 import { PermissionsCard } from './PermissionsCard'
@@ -120,7 +121,7 @@ export function LocalAgentPage(): React.JSX.Element {
   if (!activeLocalAgentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
-        Select an agent from the sidebar, or create one with +.
+        Select an agent from the sidebar, or add one with +.
       </div>
     )
   }
@@ -184,6 +185,17 @@ export function LocalAgentPage(): React.JSX.Element {
   // Only for the badge. The card runs the same query when the tab is open —
   // react-query serves both from one cache entry, so this costs no extra IPC.
   const grantCount = grants?.length ?? 0
+  // A bare folder has no `docs/CLI_COMMANDS.yaml` and never will, so the tab
+  // would be permanently empty and would say "no commands" about a file the
+  // folder was never asked to have. Every other tab still has something true to
+  // show: Overview its name and status, Prompts its `AGENT.md`, Permissions the
+  // profile it runs under, Folder the findings that explain what it is.
+  const tabs = agent.kind === 'bare' ? TABS.filter((entry) => entry.id !== 'commands') : TABS
+  // The selected tab persists across agents, so someone on Commands who clicks
+  // a bare agent would land on a tab that is not there and see an empty panel.
+  // Falling back for the render only — `setTab` is untouched, so going back to
+  // a kit agent returns to Commands.
+  const activeTab = tabs.some((entry) => entry.id === tab) ? tab : 'overview'
 
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)] [scrollbar-gutter:stable]">
@@ -203,13 +215,19 @@ export function LocalAgentPage(): React.JSX.Element {
                 {description}
               </p>
             ) : (
-              <button
-                type="button"
-                onClick={() => setTab('overview')}
-                className="mt-0.5 text-xs text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)]"
-              >
-                No description yet — add one under Overview.
-              </button>
+              // The invitation only where there is somewhere to accept it. A
+              // bare folder states no description anywhere the desktop can
+              // write one, so "add one under Overview" would send the user to a
+              // tab with no such field (ux_rules rule 7).
+              agent.kind !== 'bare' && (
+                <button
+                  type="button"
+                  onClick={() => setTab('overview')}
+                  className="mt-0.5 text-xs text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)]"
+                >
+                  No description yet — add one under Overview.
+                </button>
+              )
             )}
             <button
               type="button"
@@ -274,15 +292,19 @@ export function LocalAgentPage(): React.JSX.Element {
           stampError={stamp.error ? stamp.error.message : null}
         />
 
-        <RuntimePanel agent={agent} />
+        {agent.kind === 'bare' ? (
+          <BareRuntimePanel agent={agent} />
+        ) : (
+          <RuntimePanel agent={agent} />
+        )}
 
         <nav
           role="tablist"
           aria-label="Agent details"
           className="flex gap-1 border-b border-[var(--color-border)]"
         >
-          {TABS.map((entry) => {
-            const active = entry.id === tab
+          {tabs.map((entry) => {
+            const active = entry.id === activeTab
             return (
               <button
                 key={entry.id}
@@ -329,41 +351,70 @@ export function LocalAgentPage(): React.JSX.Element {
         </nav>
 
         <div role="tabpanel" className="space-y-3">
-          {tab === 'overview' && (
-            <>
-              <StatusCard agent={agent} />
-              <DescriptionCard agent={agent} />
-              <ExamplePromptsCard agent={agent} />
-            </>
-          )}
-          {tab === 'prompts' && (
-            <>
-              <PromptDocCard
-                agentId={agent.id}
-                prompt="workflow"
-                title="Workflow prompt"
-                hint="This document is the agent: it is loaded as the system prompt for every conversation."
-                placeholder="Describe what this agent does, step by step, addressed to the agent."
-              />
-              <PromptDocCard
-                agentId={agent.id}
-                prompt="entrypoint"
-                title="Entrypoint prompt"
-                hint="The first message of an unattended run, with nobody there to answer a question."
-                placeholder="One or two self-contained sentences telling the agent what to do."
-              />
-              <PromptDocCard
-                agentId={agent.id}
-                prompt="refiner"
-                title="Refiner prompt"
-                hint="Defaults and required inputs — what to assume when a request does not say."
-                placeholder="List the mandatory inputs and the defaults to fill in."
-              />
-            </>
-          )}
-          {tab === 'commands' && <CommandsCard agent={agent} />}
-          {tab === 'permissions' && <PermissionsCard agent={agent} />}
-          {tab === 'folder' && <FolderTab agent={agent} />}
+          {activeTab === 'overview' &&
+            /* Three of the four Overview cards name a file only a kit folder
+               has: `app-data/storage/STATUS.md`, and the manifest twice. A card
+               is a viewer over a file, and one naming a file the folder was
+               never asked to have is worse than no card — it reads as something
+               missing rather than as something that does not apply. What a bare
+               folder *does* have that the user can change is its name. */
+            (agent.kind === 'bare' ? (
+              <BareNameCard agent={agent} />
+            ) : (
+              <>
+                <StatusCard agent={agent} />
+                <DescriptionCard agent={agent} />
+                <ExamplePromptsCard agent={agent} />
+              </>
+            ))}
+          {activeTab === 'prompts' &&
+            (agent.kind === 'bare' ? (
+              <>
+                <PromptDocCard
+                  agentId={agent.id}
+                  prompt="bare_prompt"
+                  title="Instructions"
+                  hint="This file is the agent: it is loaded as the system prompt for every conversation."
+                  placeholder="Describe what this agent does, step by step, addressed to the agent."
+                />
+                <PromptDocCard
+                  agentId={agent.id}
+                  prompt="bare_readme"
+                  title="Readme"
+                  hint="Read-only here. This is what an assistant opening the folder to work on the agent is briefed from — it is not part of what the agent itself is told."
+                  placeholder="No README.md in this folder."
+                  readOnly
+                  missingNote="There is no README.md in this folder yet. Add one to brief an assistant that opens the folder to work on this agent."
+                />
+              </>
+            ) : (
+              <>
+                <PromptDocCard
+                  agentId={agent.id}
+                  prompt="workflow"
+                  title="Workflow prompt"
+                  hint="This document is the agent: it is loaded as the system prompt for every conversation."
+                  placeholder="Describe what this agent does, step by step, addressed to the agent."
+                />
+                <PromptDocCard
+                  agentId={agent.id}
+                  prompt="entrypoint"
+                  title="Entrypoint prompt"
+                  hint="The first message of an unattended run, with nobody there to answer a question."
+                  placeholder="One or two self-contained sentences telling the agent what to do."
+                />
+                <PromptDocCard
+                  agentId={agent.id}
+                  prompt="refiner"
+                  title="Refiner prompt"
+                  hint="Defaults and required inputs — what to assume when a request does not say."
+                  placeholder="List the mandatory inputs and the defaults to fill in."
+                />
+              </>
+            ))}
+          {activeTab === 'commands' && <CommandsCard agent={agent} />}
+          {activeTab === 'permissions' && <PermissionsCard agent={agent} />}
+          {activeTab === 'folder' && <FolderTab agent={agent} />}
         </div>
       </div>
     </div>

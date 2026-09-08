@@ -58,6 +58,7 @@ const { clearContractCache, getLayoutView } = await import('../../kit/contractSt
 const { manifestPath, readManifest, writeManifest } = await import('../../kit/manifestIo')
 const { scaffoldService } = await import('./scaffoldService')
 const { scannerService } = await import('./scannerService')
+const { desktopStateService } = await import('./desktopStateService')
 
 const USER = '__default__'
 
@@ -794,5 +795,192 @@ describe('the manifest metadata a folder row carries', () => {
     // fallbacks than a descriptor synthesized from the manifest blurb would,
     // and the remote write path omits the key in the same situation.
     expect(meta?.cinna_mcp).toBeUndefined()
+  })
+})
+
+/**
+ * External roots: a folder the user pointed at, walked for `AGENT.md`.
+ *
+ * The kit scan's hard-won rules — identity from a manifest, protecting an
+ * unreadable folder from the prune, arbitrating an id collision — have no
+ * counterpart here, because a bare agent's identity is derived from where it
+ * sits. What has to hold instead is that the DTO is complete enough for every
+ * surface that renders one, and that "removed from the list" outlives a rescan.
+ */
+describe('external roots', () => {
+  let external: string
+  let externalRoot: Awaited<ReturnType<typeof agentRootRepo.create>>
+
+  function bareAgent(relPath: string, body = '# Alpha\n\nDo alpha things.\n'): string {
+    const dir = join(external, ...relPath.split('/'))
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'AGENT.md'), body)
+    return dir
+  }
+
+  beforeEach(() => {
+    external = mkdtempSync(join(tmpdir(), 'cinna-external-root-'))
+    externalRoot = agentRootRepo.create(USER, {
+      path: external,
+      label: 'Support agents',
+      kind: 'external'
+    })
+  })
+
+  afterEach(() => {
+    rmSync(external, { recursive: true, force: true })
+  })
+
+  it('indexes every AGENT.md folder it finds, two levels down', () => {
+    bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+
+    const result = scannerService.scanRoot(USER, externalRoot)
+
+    expect(result.agents.map((a) => a.slug)).toEqual(['alpha', 'beta'])
+    expect(result.indexed).toBe(2)
+    for (const agent of result.agents) {
+      expect(agent.kind).toBe('bare')
+      expect(agent.identity).toBe('external')
+      expect(agent.readiness).toBe('ok')
+      // The fields every kit surface reads. A bare agent has none of them, and
+      // they must be *empty* rather than absent — the agent page, the runtime
+      // panel and the counterparty pickers all index into them.
+      expect(agent.manifest).toEqual({})
+      expect(agent.runtime).toBeNull()
+      expect(agent.credentials).toEqual([])
+      expect(agent.commands).toEqual([])
+      expect(agent.publications).toEqual([])
+    }
+    // Indexed under a positional id, so two roots holding the same layout do
+    // not collide and a rescan reproduces the same rows.
+    expect(agentRepo.getOwned(USER, result.agents[0].id)).toBeDefined()
+  })
+
+  it('never routes a bare folder through the kit scan', () => {
+    // Handed to `scanAgentFolder` a bare folder comes back as `unreadableAgent`
+    // — "the manifest could not be read" — which is a plausible-looking wrong
+    // answer, not a crash, and would reach the page, the watcher's re-index and
+    // the engine's prompt assembly all three.
+    bareAgent('alpha')
+    const [agent] = scannerService.scanRoot(USER, externalRoot).agents
+    expect(agent.identity).not.toBe('unresolved')
+    expect(agent.validation.errors).toEqual([])
+  })
+
+  it('takes the name from AGENT.md, and the user’s own name over it', () => {
+    const dir = bareAgent('alpha', '# Invoice Watcher\n\nBody.\n')
+    expect(scannerService.scanRoot(USER, externalRoot).agents[0].name).toBe('Invoice Watcher')
+
+    desktopStateService.patch(dir, 'bare', { displayName: 'My watcher' })
+    scannerService.markRootDirty(externalRoot.id)
+    expect(scannerService.scanRoot(USER, externalRoot).agents[0].name).toBe('My watcher')
+  })
+
+  it('drops an agent the user removed from the list, and puts it back', () => {
+    // "Remove from the list" has to outlive a rescan or it means nothing: the
+    // walk finds the folder every time.
+    const dir = bareAgent('alpha')
+    bareAgent('beta')
+    expect(scannerService.scanRoot(USER, externalRoot).agents).toHaveLength(2)
+
+    desktopStateService.patch(dir, 'bare', { hidden: true })
+    scannerService.markRootDirty(externalRoot.id)
+    const after = scannerService.scanRoot(USER, externalRoot)
+    expect(after.agents.map((a) => a.slug)).toEqual(['beta'])
+    expect(agentRepo.listFolder(USER).filter((r) => r.localRootId === externalRoot.id)).toHaveLength(1)
+
+    desktopStateService.patch(dir, 'bare', { hidden: false })
+    scannerService.markRootDirty(externalRoot.id)
+    expect(scannerService.scanRoot(USER, externalRoot).agents).toHaveLength(2)
+  })
+
+  it('stops being an agent when AGENT.md has gone', () => {
+    // The walk is what defines membership here — there is no manifest to lose
+    // and no identity to protect — so a folder without `AGENT.md` is simply not
+    // an agent, and its row is pruned like any other absent folder.
+    const dir = bareAgent('alpha')
+    rmSync(join(dir, 'AGENT.md'))
+    scannerService.markRootDirty(externalRoot.id)
+    expect(scannerService.scanRoot(USER, externalRoot).agents).toHaveLength(0)
+  })
+
+  it('reads a folder whose AGENT.md vanished as invalid, never as a throw', () => {
+    // Reached through the *page*, not the scan: `localAgentService.get` re-reads
+    // one folder from its row, and between an assistant deleting the file and
+    // the watcher's rescan that row still exists. The page must render a state.
+    const dir = bareAgent('alpha')
+    rmSync(join(dir, 'AGENT.md'))
+    const dto = scannerService.scanBareAgentFolder(dir, externalRoot, 'alpha')
+    expect(dto.readiness).toBe('invalid')
+    expect(dto.validation.errors.map((f) => f.code)).toEqual(['bare.prompt.missing'])
+    expect(dto.readinessReason).toContain('AGENT.md')
+  })
+
+  it('warns rather than erroring on an empty AGENT.md', () => {
+    // Matching the kit path exactly: an error makes the folder `invalid`, and
+    // an invalid folder is dropped from the engine config with nothing on
+    // screen explaining it. `promptAssembly` has a stand-in for this instead.
+    bareAgent('alpha', '   \n')
+    const [agent] = scannerService.scanRoot(USER, externalRoot).agents
+    expect(agent.readiness).toBe('ok')
+    expect(agent.validation.warnings.map((f) => f.code)).toContain('bare.prompt.empty')
+  })
+
+  it('leaves the index untouched when the root is gone', () => {
+    // The rule the kit scan keeps for an unmounted volume: writing an empty
+    // index would prune every row and cascade their sessions away.
+    bareAgent('alpha')
+    scannerService.scanRoot(USER, externalRoot)
+    const before = agentRepo.listFolder(USER).filter((r) => r.localRootId === externalRoot.id)
+    expect(before).toHaveLength(1)
+
+    rmSync(external, { recursive: true, force: true })
+    scannerService.markRootDirty(externalRoot.id)
+    const result = scannerService.scanRoot(USER, externalRoot)
+    expect(result.rootMissing).toBe(true)
+    expect(agentRepo.listFolder(USER).filter((r) => r.localRootId === externalRoot.id)).toHaveLength(1)
+  })
+
+  it('carries the counts the settings row needs, so nothing walks the tree twice', () => {
+    // `list()` serves agents from this cache because re-walking every folder on
+    // every call blocked the main thread, and the renderer refetches on every
+    // watcher push. The settings row counting independently put that walk right
+    // back — plus one state read per agent — and gave the same question two
+    // answers that could drift apart.
+    const alpha = bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+    desktopStateService.patch(alpha, 'bare', { hidden: true })
+
+    const scan = scannerService.scanRoot(USER, externalRoot)
+    expect(scan.agents).toHaveLength(1)
+    expect(scan.hiddenCount).toBe(1)
+    expect(scan.truncated).toBe(false)
+
+    // And the cache hands them back without walking again.
+    const cached = scannerService.cachedScan(externalRoot.id, externalRoot.path)
+    expect(cached?.hiddenCount).toBe(1)
+    expect(cached?.agents).toHaveLength(1)
+  })
+
+  it('offers no cached scan for a root it has not walked, or one that moved', () => {
+    // The fallback path has to be reachable, and it must not be reached by a
+    // stale answer: a root repointed at a new path is a different question.
+    expect(scannerService.cachedScan(externalRoot.id, externalRoot.path)).toBeNull()
+    scannerService.scanRoot(USER, externalRoot)
+    expect(scannerService.cachedScan(externalRoot.id, externalRoot.path)).not.toBeNull()
+    expect(scannerService.cachedScan(externalRoot.id, '/somewhere/else')).toBeNull()
+  })
+
+  it('rebuilds identically from an empty index', () => {
+    // Invariant 1 for bare agents: the row is a cache. Dropping every row and
+    // rescanning must reproduce exactly what was there before.
+    bareAgent('local_agents/alpha')
+    bareAgent('local_agents/beta')
+    const first = scannerService.scanRoot(USER, externalRoot).agents.map((a) => a.id)
+
+    agentRepo.pruneFolderIndexForRoot(USER, externalRoot.id)
+    scannerService.markRootDirty(externalRoot.id)
+    expect(scannerService.scanRoot(USER, externalRoot).agents.map((a) => a.id)).toEqual(first)
   })
 })

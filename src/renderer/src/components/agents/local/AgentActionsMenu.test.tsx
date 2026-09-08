@@ -71,7 +71,10 @@ describe('AgentActionsMenu — delete', () => {
     expect(screen.getByRole('dialog', { name: /delete agent/i })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: /move to trash/i }))
-    expect(remove).toHaveBeenCalledWith('folder:alpha', expect.anything())
+    expect(remove).toHaveBeenCalledWith(
+      { agentId: 'folder:alpha', trashFolder: true },
+      expect.anything()
+    )
 
     // Success is handled at hook level — a mutate-level callback is dropped by
     // TanStack once the caller has unmounted, and the dialog can be dismissed.
@@ -124,5 +127,69 @@ describe('AgentActionsMenu — stamp identity', () => {
   it('appears for a legacy folder whose manifest could be read', () => {
     openMenu(agent({ identity: 'legacy' }))
     expect(screen.getByRole('menuitem', { name: /stamp identity/i })).toBeTruthy()
+  })
+})
+
+/**
+ * Removing a **bare** agent is the one place the dialog asks a question rather
+ * than confirming an answer, because the folder is not the desktop's: it is
+ * very often a repository the user shares with other people, and forgetting an
+ * agent must not be able to delete it by default.
+ */
+describe('AgentActionsMenu — removing a bare agent', () => {
+  const bare = (): LocalAgentDto =>
+    agent({ id: 'folder:external:r1:alpha', kind: 'bare', identity: 'external', stamps: {} })
+
+  function openDialog(): void {
+    openMenu(bare())
+    fireEvent.click(screen.getByRole('menuitem', { name: /Remove agent/ }))
+  }
+
+  it('defaults to the recoverable choice and never trashes on the first click', () => {
+    // ux_rules rule 5: the recoverable option first, and selected. Mutation:
+    // default `trashFolder` to true and the ordinary "I do not want this in my
+    // list" click deletes somebody's repository folder.
+    openDialog()
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }))
+
+    expect(remove).toHaveBeenCalledWith(
+      { agentId: 'folder:external:r1:alpha', trashFolder: false },
+      expect.anything()
+    )
+  })
+
+  it('trashes the folder when that option is chosen, and says so on the button', () => {
+    openDialog()
+    fireEvent.click(screen.getByLabelText(/move the folder to the Trash/i))
+    // The label changes with the choice, so the button never says one thing and
+    // does the other.
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Trash' }))
+
+    expect(remove).toHaveBeenCalledWith(
+      { agentId: 'folder:external:r1:alpha', trashFolder: true },
+      expect.anything()
+    )
+  })
+
+  it('announces itself by the word it uses', () => {
+    // The accessible name *is* the visible name. Hardcoded to "Delete agent" it
+    // announced the more alarming of the two words over a dialog whose heading,
+    // menu item and button all said Remove — for the branch whose default
+    // deletes nothing.
+    openDialog()
+    expect(screen.getByRole('dialog', { name: 'Remove agent' })).toBeTruthy()
+    expect(screen.queryByRole('dialog', { name: 'Delete agent' })).toBeNull()
+  })
+
+  it('offers no such choice for a kit agent', () => {
+    // Its row is a derived index over its folder: "remove from the list" would
+    // be undone by the next scan, so it is not offered rather than refused
+    // after the click.
+    openMenu()
+    fireEvent.click(screen.getByRole('menuitem', { name: /Delete agent/ }))
+    expect(screen.queryByLabelText(/Remove from the list only/i)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Move to Trash' })).toBeTruthy()
+    // And a kit agent keeps the word it has always used.
+    expect(screen.getByRole('dialog', { name: 'Delete agent' })).toBeTruthy()
   })
 })

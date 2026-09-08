@@ -61,6 +61,7 @@ function sentenceCase(text: string): string {
  * line under the list, beside the action that failed.
  */
 export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  const bare = agent.kind === 'bare'
   const { data: grants } = useLocalAgentGrants(agent.id)
   // Owned by the card rather than by a row: a row unmounts the moment the
   // grant it renders is forgotten, and a mutation owned there would drop its
@@ -105,7 +106,11 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
   return (
     <AgentCard
       title="Permissions"
-      file={DESKTOP_STATE_FILE}
+      // A bare agent's grants are not in its folder — that is the point of
+      // adopting one, and `desktopStatePath` moves them under `userData` so a
+      // shared working tree stays clean. Naming `app-data/desktop.json` here
+      // pointed at a file that is not there and offered to reveal it.
+      file={bare ? undefined : DESKTOP_STATE_FILE}
       actions={
         rows.length > 0 && !forget.isPending ? (
           <button
@@ -122,13 +127,38 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         ) : undefined
       }
     >
+      {/*
+        Every example here has to be a file the folder actually has.
+        
+        This card is the user's only statement of what an agent may do to their
+        machine, and they read it about a repository they share with other
+        people. For a bare folder two of the three examples named files that do
+        not exist — `docs/WORKFLOW_PROMPT.md`'s manifest sibling, and
+        `credentials/.env` — and a reader who spots two fictional examples
+        discounts the third. The third is the one that matters: the paragraph
+        below, about a command reaching anything they can.
+      */}
       <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
         This agent reads, writes and runs commands inside its own folder without asking. It asks
-        first before opening a file outside the folder, fetching a URL, editing its own prompt or
-        manifest, running a command that names a key file, or running{' '}
+        first before opening a file outside the folder, fetching a URL, editing{' '}
+        {bare ? (
+          <>
+            its own <span className="font-mono">AGENT.md</span>
+          </>
+        ) : (
+          'its own prompt or manifest'
+        )}
+        , running a command that names a key file, or running{' '}
         <span className="font-mono">sudo</span> or <span className="font-mono">rm -r</span>. Its
-        file tools can never read or write <span className="font-mono">credentials/.env</span> or
-        any other key file.
+        file tools can never read or write{' '}
+        {bare ? (
+          'any file that looks like a key file'
+        ) : (
+          <>
+            <span className="font-mono">credentials/.env</span> or any other key file
+          </>
+        )}
+        .
       </p>
       {/*
         **The sentence the review made unavoidable.** The default profile allows
@@ -172,7 +202,22 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
           Nothing yet. Choosing “Always allow” on a permission request in a chat remembers it here,
           for this agent only.
         </div>
-      ) : (
+      ) : null}
+      {/*
+        Where a bare agent's grants live, and what that costs. They are keyed on
+        the folder's real path, so moving or renaming the folder does not carry
+        them — the same fact the Folder tab's identity row states about the
+        agent itself, and worth repeating here because this is the card where
+        the user decided to trust it.
+      */}
+      {bare && (
+        <div className="mt-1 text-[10px] italic text-[var(--color-text-muted)]">
+          Kept on this machine rather than in the folder, so nothing about a decision you make here
+          is written into your repository. They are tied to where the folder sits: moving or
+          renaming it starts a new agent, which is asked again.
+        </div>
+      )}
+      {loading || rows.length === 0 ? null : (
         <ul className="mt-1 space-y-1">
           {rows.map((grant) => (
             <li key={grant.key} className="flex items-start gap-2">

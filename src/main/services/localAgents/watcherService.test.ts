@@ -1,7 +1,7 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 vi.mock('electron', () => ({ app: { on: () => undefined } }))
 vi.mock('../../logger/logger', () => ({
@@ -9,7 +9,8 @@ vi.mock('../../logger/logger', () => ({
 }))
 vi.mock('../../index', () => ({ getMainWindow: () => null }))
 
-const { classifyEvent, watcherService } = await import('./watcherService')
+const { classifyEvent, classifyExternalEvent, externalFallbackDirs, watcherService } =
+  await import('./watcherService')
 const { turnLock } = await import('./turnLock')
 
 const ROOT = '/w'
@@ -83,6 +84,7 @@ describe('watching a real directory', () => {
       path: workshop,
       label: 'Agents',
       isDefault: true,
+      kind: 'workshop',
       createdAt: new Date()
     }
   }
@@ -270,5 +272,119 @@ describe('watching a real directory', () => {
     expect(watcherService.watchedRootIds()).toEqual(['r1'])
     watcherService.unwatchRoot('r1')
     expect(watcherService.watchedRootIds()).toEqual([])
+  })
+})
+
+/**
+ * The external classifier: the *inverted* filter, where only what can change
+ * the agents list is acted on and everything else is dropped.
+ *
+ * An external root is somebody's ordinary working directory — a `.venv`, a
+ * `data/` an agent writes on every run, a `.git` the update check touches — so
+ * unlike a workshop, the default here is to ignore.
+ */
+describe('classifyExternalEvent', () => {
+  let root: string
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'cinna-classify-'))
+  })
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  function dir(...segments: string[]): string {
+    const full = join(root, ...segments)
+    mkdirSync(full, { recursive: true })
+    return full
+  }
+  function file(rel: string): void {
+    const full = join(root, rel)
+    mkdirSync(dirname(full), { recursive: true })
+    writeFileSync(full, 'x')
+  }
+
+  it('acts on the two files that say what an agent is', () => {
+    file('local_agents/alpha/AGENT.md')
+    file('local_agents/alpha/README.md')
+    expect(classifyExternalEvent(root, 'local_agents/alpha/AGENT.md')).toEqual({ kind: 'root' })
+    expect(classifyExternalEvent(root, 'local_agents/alpha/README.md')).toEqual({ kind: 'root' })
+  })
+
+  it('ignores an ordinary file an agent writes, at any depth in reach', () => {
+    // The one this exists for. Assuming anything at depth ≤ 2 was a directory
+    // made every `notes.md` an agent wrote cost a full walk, a state read per
+    // agent, a DB transaction and a renderer refetch that replaced an identical
+    // list — invisible, so never attributed to anything.
+    file('notes.md')
+    file('out/result.json')
+    expect(classifyExternalEvent(root, 'notes.md')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, 'out/result.json')).toEqual({ kind: 'ignore' })
+  })
+
+  it('acts on a directory appearing within the walk’s reach', () => {
+    dir('local_agents', 'beta')
+    expect(classifyExternalEvent(root, 'local_agents')).toEqual({ kind: 'root' })
+    expect(classifyExternalEvent(root, 'local_agents/beta')).toEqual({ kind: 'root' })
+  })
+
+  it('acts on a path that has gone, because a removed folder cannot be stat’d', () => {
+    // The case the directory branch exists for, and the one that cannot be
+    // inspected. Erring towards a rescan is erring towards a scan that is
+    // idempotent and non-destructive by design.
+    expect(classifyExternalEvent(root, 'local_agents/deleted')).toEqual({ kind: 'root' })
+  })
+
+  it('ignores anything deeper than the walk can reach', () => {
+    dir('a', 'b', 'c')
+    expect(classifyExternalEvent(root, 'a/b/c')).toEqual({ kind: 'ignore' })
+  })
+
+  it('ignores every dot-entry on the path', () => {
+    // `.git` is the sharp one: the update check runs git in this very folder,
+    // so without this every fetch would trigger a rescan of the root it just
+    // read.
+    file('.git/index')
+    dir('.venv', 'lib')
+    expect(classifyExternalEvent(root, '.git/index')).toEqual({ kind: 'ignore' })
+    expect(classifyExternalEvent(root, '.venv/lib')).toEqual({ kind: 'ignore' })
+  })
+
+  it('rescans when the platform names nothing', () => {
+    expect(classifyExternalEvent(root, null)).toEqual({ kind: 'root' })
+  })
+})
+
+/**
+ * The non-recursive fallback's watch set for an external root.
+ *
+ * Pure, so the rule is assertable on macOS, where the recursive watcher
+ * attaches and this path never runs — which is exactly why it needs a test:
+ * a defect here is invisible until someone runs the app on Linux.
+ */
+describe('externalFallbackDirs', () => {
+  it('watches each agent folder and the folder holding them', () => {
+    expect(
+      externalFallbackDirs('/root', ['/root/local_agents/alpha', '/root/local_agents/beta']).sort()
+    ).toEqual(['/root/local_agents', '/root/local_agents/alpha', '/root/local_agents/beta'])
+  })
+
+  it('never watches above the root when the root is itself the agent', () => {
+    // The single-adopted-folder shape. The agent's parent is the directory
+    // *containing* the registered root — outside the boundary every other part
+    // of this feature keeps, and worse, `fs.watch` names files relative to the
+    // watched directory while the callback classifies against the root's path,
+    // so a sibling project's build would have arrived looking like a path
+    // inside the root.
+    expect(externalFallbackDirs('/home/projects/support', ['/home/projects/support'])).toEqual([])
+  })
+
+  it('drops an agent path that is not inside the root at all', () => {
+    expect(externalFallbackDirs('/root', ['/elsewhere/alpha'])).toEqual([])
+  })
+
+  it('lists each directory once', () => {
+    const dirs = externalFallbackDirs('/root', ['/root/a/one', '/root/a/two', '/root/a/three'])
+    expect(new Set(dirs).size).toBe(dirs.length)
   })
 })

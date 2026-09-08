@@ -34,10 +34,10 @@ const grant = (over: Partial<StoredPermissionGrant> = {}): StoredPermissionGrant
   ...over
 })
 
-function renderCard(): ReturnType<typeof render> {
+function renderCard(a: LocalAgentDto = agent): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
-    createElement(QueryClientProvider, { client }, createElement(PermissionsCard, { agent }))
+    createElement(QueryClientProvider, { client }, createElement(PermissionsCard, { agent: a }))
   )
 }
 
@@ -155,5 +155,61 @@ describe('PermissionsCard', () => {
     expect(
       await screen.findByText(/Nothing was forgotten — that agent folder is no longer there\./)
     ).toBeTruthy()
+  })
+})
+
+/**
+ * What the card *claims*, for a folder that never agreed to the kit.
+ *
+ * This card is the user's only statement of what an agent may do to their
+ * machine, and they read it about a repository they share with other people.
+ * Two of its three examples named files a bare folder does not have, and a
+ * reader who spots two fictional examples discounts the third — which is the
+ * one that matters, about a command reaching anything they can.
+ */
+describe('PermissionsCard — a bare agent', () => {
+  const bare = { id: 'folder:external:r1:a', name: 'Alpha', kind: 'bare' } as LocalAgentDto
+
+  it('names only files the folder actually has', async () => {
+    grantsList.mockResolvedValue([])
+    renderCard(bare)
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+
+    expect(screen.getByText('AGENT.md')).toBeTruthy()
+    expect(screen.queryByText('credentials/.env')).toBeNull()
+    expect(screen.queryByText(/prompt or manifest/)).toBeNull()
+    // The half of the key-file sentence that is true for any folder survives.
+    expect(screen.getByText(/any file that looks like a key file/)).toBeTruthy()
+  })
+
+  it('does not point at a state file that is not in the folder', async () => {
+    grantsList.mockResolvedValue([])
+    renderCard(bare)
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+
+    // Moved under `userData` precisely so a shared working tree stays clean.
+    expect(screen.queryByText('app-data/desktop.json')).toBeNull()
+    expect(screen.getByText(/Kept on this machine rather than in the folder/)).toBeTruthy()
+  })
+
+  it('says the grants are tied to where the folder sits', async () => {
+    // They are keyed on the folder's real path, so moving it starts a new agent
+    // that is asked again — the same fact the Folder tab states about identity,
+    // repeated here because this is the card where the user decided to trust it.
+    grantsList.mockResolvedValue([])
+    renderCard(bare)
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+
+    expect(screen.getByText(/moving or renaming it starts a new agent/i)).toBeTruthy()
+  })
+
+  it('keeps the kit copy for a kit agent', async () => {
+    grantsList.mockResolvedValue([])
+    renderCard()
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+
+    expect(screen.getByText('credentials/.env')).toBeTruthy()
+    expect(screen.getByText('app-data/desktop.json')).toBeTruthy()
+    expect(screen.queryByText(/Kept on this machine rather than in the folder/)).toBeNull()
   })
 })

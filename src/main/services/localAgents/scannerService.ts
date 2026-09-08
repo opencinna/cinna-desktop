@@ -42,7 +42,10 @@ import {
 import {
   describedAs,
   AGENTS_SUBDIR,
+  BARE_AGENT_PROMPT_FILE,
+  BARE_AGENT_README_FILE,
   duplicateFolderAgentId,
+  externalFolderAgentId,
   folderAgentId,
   legacyFolderAgentId,
   type FileStamp,
@@ -56,6 +59,7 @@ import {
   type LocalAgentValidation
 } from '../../../shared/localAgents'
 import { desktopStateService } from './desktopStateService'
+import { discoverBareAgents, readBareAgentName } from './externalScan'
 
 const logger = createLogger('local-agent-scan')
 
@@ -112,6 +116,18 @@ export interface ScanRootResult {
   rootMissing: boolean
   indexed: number
   pruned: number
+  /**
+   * External roots only: bare agents the user removed from the list, and
+   * whether the walk stopped at its cap.
+   *
+   * Carried on the scan because the scan is the thing that walked the tree.
+   * The settings row needs both, and computing them again meant a second walk
+   * plus one state read per agent on every `local-agent:list` — the cost this
+   * cache exists to avoid — and two independent answers to "how many agents
+   * does this root have", which is also how they could come to disagree.
+   */
+  hiddenCount: number
+  truncated: boolean
 }
 
 function toFindings(findings: Finding[]): LocalAgentFinding[] {
@@ -321,6 +337,7 @@ function unreadableAgent(
     id: folderAgentId(`unreadable:${slug}`),
     manifestId: '',
     identity: 'unresolved',
+    kind: 'kit',
     rootId: root.id,
     rootPath: root.path,
     path: agentDir,
@@ -338,10 +355,56 @@ function unreadableAgent(
     commands: [],
     status: null,
     validation: { errors: [finding], warnings: [], infos: [] },
-    desktop: desktopStateService.summarize(desktopStateService.read(agentDir)),
+    desktop: desktopStateService.summarize(desktopStateService.read(agentDir, 'kit')),
     stamps: stampsFor(agentDir),
     scannedAt: Date.now()
   }
+}
+
+/**
+ * A bare agent's own findings — everything the desktop can say about a folder
+ * that never promised to be kit-shaped.
+ *
+ * There is deliberately no *error* case for "it has no manifest": that is what
+ * a bare agent **is**. The one error is a missing or unreadable `AGENT.md`,
+ * because that is the whole contract, and a folder that has lost it is not an
+ * agent any more. An empty one is a warning and not an error, matching the kit
+ * path exactly — `promptAssembly` produces a stand-in section saying the file is
+ * empty rather than a promptless agent, and erroring would instead drop the
+ * folder out of the engine config with nothing on screen to explain it.
+ */
+function bareValidation(agentDir: string, promptText: string | null): LocalAgentValidation {
+  const errors: LocalAgentFinding[] = []
+  const warnings: LocalAgentFinding[] = []
+  const infos: LocalAgentFinding[] = []
+
+  if (promptText === null) {
+    errors.push({
+      code: 'bare.prompt.missing',
+      message: `${BARE_AGENT_PROMPT_FILE} is missing or could not be read, so this folder has no instructions.`,
+      path: BARE_AGENT_PROMPT_FILE
+    })
+  } else if (promptText.trim() === '') {
+    warnings.push({
+      code: 'bare.prompt.empty',
+      message: `${BARE_AGENT_PROMPT_FILE} is empty, so this agent has no instructions yet.`,
+      path: BARE_AGENT_PROMPT_FILE
+    })
+  }
+  if (!existsSync(join(agentDir, BARE_AGENT_README_FILE))) {
+    infos.push({
+      code: 'bare.readme.missing',
+      message: `No ${BARE_AGENT_README_FILE}, so an assistant opening this folder is briefed from ${BARE_AGENT_PROMPT_FILE} instead.`,
+      path: BARE_AGENT_README_FILE
+    })
+  }
+  infos.push({
+    code: 'bare.no_manifest',
+    message:
+      'This folder has no cinna-agent.json, so it runs without commands, credential slots or a runtime it names itself.',
+    path: MANIFEST_FILE
+  })
+  return { errors, warnings, infos }
 }
 
 export const scannerService = {
@@ -390,7 +453,7 @@ export const scannerService = {
       credentials,
       catalog.unreadable
     )
-    const desktop = desktopStateService.read(agentDir)
+    const desktop = desktopStateService.read(agentDir, 'kit')
 
     // A manifest with no `id` is legacy (contract 1.0.0 "Breaking"): the
     // contract tolerates it deliberately, so the folder is a *supported* agent
@@ -409,6 +472,7 @@ export const scannerService = {
           : folderAgentId(manifestId),
       manifestId,
       identity,
+      kind: 'kit',
       rootId: root.id,
       rootPath: root.path,
       path: agentDir,
@@ -432,6 +496,79 @@ export const scannerService = {
       validation: toValidation(report),
       desktop: desktopStateService.summarize(desktop),
       stamps: stampsFor(agentDir),
+      scannedAt
+    }
+  },
+
+  /**
+   * Read one **bare** agent folder — a folder adopted for its `AGENT.md`.
+   *
+   * Nothing kit-shaped is consulted: no manifest, no contract, no layout, no
+   * command catalog, no credential slots. What comes back is the same DTO
+   * every other surface already renders, with the manifest-derived halves
+   * empty, so the agents list, the page header, the readiness dot and the
+   * counterparty pickers need no bare-agent branch of their own.
+   *
+   * Like {@link scanAgentFolder} it never throws: an unreadable `AGENT.md` is a
+   * folder that is `invalid` with a finding naming the file, never an exception
+   * that takes the root's whole scan with it.
+   */
+  scanBareAgentFolder(agentDir: string, root: AgentRootRow, relPath: string): LocalAgentDto {
+    const scannedAt = Date.now()
+    const promptStamp = readStamp(join(agentDir, BARE_AGENT_PROMPT_FILE))
+    let promptText: string | null = null
+    try {
+      promptText = readFileSync(join(agentDir, BARE_AGENT_PROMPT_FILE), 'utf8')
+    } catch {
+      promptText = null
+    }
+
+    const validation = bareValidation(agentDir, promptText)
+    const desktop = desktopStateService.read(agentDir, 'bare')
+    // The user's own name wins over the file's, and the file's over the folder
+    // name — the order the user would expect, and the only one where a rename
+    // survives an edit to `AGENT.md`'s heading.
+    const name =
+      desktop.displayName && desktop.displayName.trim() !== ''
+        ? desktop.displayName.trim()
+        : readBareAgentName(agentDir)
+
+    const readinessState: LocalAgentReadiness = validation.errors.length > 0 ? 'invalid' : 'ok'
+
+    return {
+      id: externalFolderAgentId(root.id, relPath),
+      manifestId: '',
+      identity: 'external',
+      kind: 'bare',
+      rootId: root.id,
+      rootPath: root.path,
+      path: agentDir,
+      slug: basename(agentDir),
+      name,
+      // A bare folder states no description anywhere the desktop can trust.
+      // The header says "No description yet" rather than repeating the name.
+      description: '',
+      enabled: true,
+      readiness: readinessState,
+      readinessReason: validation.errors[0]?.message ?? null,
+      // Not `unknown`: that value means "a manifest states a version we could
+      // not parse", and the page offers a re-stamp for it. A bare folder makes
+      // no claim about the contract at all and has no manifest to stamp, so
+      // `ok` is what keeps the readiness ladder and the engine's own gate from
+      // treating it as a folder to hold back.
+      contractStatus: 'ok',
+      manifest: {},
+      publications: [],
+      runtime: null,
+      credentials: [],
+      commands: [],
+      status: null,
+      validation,
+      desktop: desktopStateService.summarize(desktop),
+      stamps: {
+        [BARE_AGENT_PROMPT_FILE]: promptStamp,
+        [BARE_AGENT_README_FILE]: readStamp(join(agentDir, BARE_AGENT_README_FILE))
+      },
       scannedAt
     }
   },
@@ -504,6 +641,7 @@ export const scannerService = {
   },
 
   scanRoot(userId: string, root: AgentRootRow): ScanRootResult {
+    if (root.kind === 'external') return this.scanExternalRoot(userId, root)
     const started = Date.now()
     const dirs = this.listAgentDirs(root.path)
     if (dirs === null) {
@@ -517,7 +655,9 @@ export const scannerService = {
         agents: [],
         rootMissing: true,
         indexed: 0,
-        pruned: 0
+        pruned: 0,
+        hiddenCount: 0,
+        truncated: false
       }
     }
 
@@ -607,7 +747,123 @@ export const scannerService = {
       agents,
       rootMissing: false,
       indexed,
-      pruned
+      pruned,
+      hiddenCount: 0,
+      truncated: false
+    }
+    lastScan.set(root.id, result)
+    return result
+  },
+
+  /**
+   * The cached scan of a root, or null when there is none for its current path.
+   *
+   * Read-only, for callers that need a *derived count* rather than the agents
+   * themselves — the settings row's "N agents". Never triggers a scan: a caller
+   * that gets null falls back to its own cheaper answer, so this can be asked
+   * on any path without turning a render into a walk.
+   */
+  cachedScan(rootId: string, rootPath: string): ScanRootResult | null {
+    const cached = lastScan.get(rootId)
+    return cached && cached.rootPath === rootPath ? cached : null
+  },
+
+  /**
+   * Scan an **external** root: a folder the user pointed at, walked for
+   * `AGENT.md`.
+   *
+   * The differences from a workshop scan are all consequences of one thing —
+   * nothing here has a manifest:
+   *
+   * - Identity is positional, from the root-relative path, so there is no id
+   *   collision to arbitrate and no `unresolved` case to protect. A folder that
+   *   has lost its `AGENT.md` is still *found* (the walk found it before, and it
+   *   is only unreadable now, which is a readiness question) — no: the walk is
+   *   what defines membership here, so a folder without `AGENT.md` is simply not
+   *   an agent any more and its row is pruned like any other absent folder.
+   * - There are no unresolved paths to protect from the prune, because the id
+   *   is a pure function of where the folder sits: as long as it is there, the
+   *   scan reproduces the same id and the row survives on the ordinary ground.
+   * - Hidden agents are dropped *before* the index is built, which is what makes
+   *   "remove from the list" outlive a rescan.
+   *
+   * A root whose folder has gone leaves the index untouched, exactly as a
+   * workshop does, and for the same reason: an empty index would prune every
+   * row and cascade their sessions away for an unmounted volume.
+   */
+  scanExternalRoot(userId: string, root: AgentRootRow): ScanRootResult {
+    const started = Date.now()
+    let rootReadable = false
+    try {
+      rootReadable = statSync(root.path).isDirectory()
+    } catch {
+      rootReadable = false
+    }
+    if (!rootReadable) {
+      logger.warn('external agents folder is unavailable; leaving its index untouched', {
+        rootId: root.id
+      })
+      // Not cached: an unavailable root should be retried, not remembered.
+      return {
+        rootId: root.id,
+        rootPath: root.path,
+        agents: [],
+        rootMissing: true,
+        indexed: 0,
+        pruned: 0,
+        hiddenCount: 0,
+        truncated: false
+      }
+    }
+
+    const { found, truncated } = discoverBareAgents(root.path)
+    const agents: LocalAgentDto[] = []
+    const entries: FolderIndexEntry[] = []
+    // Counted here rather than walked again by the settings row: this loop has
+    // already paid for the state read, and a second count is a second answer to
+    // the same question.
+    let hiddenCount = 0
+
+    for (const folder of found) {
+      // Read before scanning: a hidden folder must cost one small JSON read,
+      // not a full DTO build, and must never reach the index.
+      if (desktopStateService.read(folder.path, 'bare').hidden) {
+        hiddenCount += 1
+        continue
+      }
+      const dto = this.scanBareAgentFolder(folder.path, root, folder.relPath)
+      agents.push(dto)
+      entries.push({
+        id: dto.id,
+        name: dto.name,
+        description: describedAs(dto) || null,
+        localPath: dto.path,
+        // Nothing to synthesize from: a bare folder declares no example
+        // prompts, so the `#` list and the agents-as-MCP tool description fall
+        // back to their own framing rather than to an invented one.
+        remoteMetadata: synthesizeFolderAgentMetadata({})
+      })
+    }
+
+    const { indexed, pruned } = agentRepo.replaceFolderIndex(userId, root.id, entries, [], root.path)
+    logger.info('external agents folder scanned', {
+      rootId: root.id,
+      found: found.length,
+      listed: agents.length,
+      indexed,
+      pruned,
+      truncated,
+      durationMs: Date.now() - started
+    })
+    const result: ScanRootResult = {
+      rootId: root.id,
+      rootPath: root.path,
+      agents,
+      rootMissing: false,
+      indexed,
+      pruned,
+      hiddenCount,
+      truncated
     }
     lastScan.set(root.id, result)
     return result

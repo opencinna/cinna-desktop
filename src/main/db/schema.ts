@@ -263,6 +263,12 @@ export const agentRoots = sqliteTable('agent_roots', {
   /** Display name for the sidebar group. */
   label: text('label').notNull(),
   isDefault: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+  /**
+   * `'workshop'` — the kit shape: templates installed, agents under `Local/`.
+   * `'external'` — a folder the user pointed at, walked for `AGENT.md`, never
+   * written into. See `AgentRootKind` in `src/shared/localAgents.ts`.
+   */
+  kind: text('kind').notNull().default('workshop'),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

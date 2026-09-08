@@ -24,6 +24,14 @@ const { desktopStateService } = await import('./desktopStateService')
 
 const ask = (action: string, resources: string[] = []) => ({ action, resources, savable: [] })
 
+/**
+ * These tests are about a **kit** agent, whose grants live in the folder at
+ * `app-data/desktop.json` — which is what every assertion below reads. A bare
+ * agent's live under `userData` instead, so that the desktop writes nothing
+ * into a repository the user shares; see `desktopStatePath`.
+ */
+const KIT = 'kit' as const
+
 let agentDir: string
 
 beforeEach(() => {
@@ -39,21 +47,21 @@ describe('permissionGrantService', () => {
     // The ask path calls this before any block is written, for a folder that
     // may have no `app-data/` at all. Mutation: let `read` throw on ENOENT —
     // the first permission ask against a fresh agent dies mid-turn.
-    expect(permissionGrantService.covers(agentDir, ask('bash', ['ls']))).toBe(false)
-    expect(permissionGrantService.list(agentDir)).toEqual([])
+    expect(permissionGrantService.covers(agentDir, KIT, ask('bash', ['ls']))).toBe(false)
+    expect(permissionGrantService.list(agentDir, KIT)).toEqual([])
   })
 
   it('remembers a decision and answers the same ask from disk afterwards', () => {
-    permissionGrantService.remember(agentDir, ask('webfetch', ['https://docs.example.com/a?v=1']))
+    permissionGrantService.remember(agentDir, KIT, ask('webfetch', ['https://docs.example.com/a?v=1']))
 
     // A *different* URL on the same origin, which is the point of storing the
     // origin: the ask that comes back is never byte-identical to the one that
     // was granted. Mutation: store the resource verbatim fails this.
     expect(
-      permissionGrantService.covers(agentDir, ask('webfetch', ['https://docs.example.com/b']))
+      permissionGrantService.covers(agentDir, KIT, ask('webfetch', ['https://docs.example.com/b']))
     ).toBe(true)
     expect(
-      permissionGrantService.covers(agentDir, ask('webfetch', ['https://elsewhere.test/b']))
+      permissionGrantService.covers(agentDir, KIT, ask('webfetch', ['https://elsewhere.test/b']))
     ).toBe(false)
 
     // On disk, in the one file the desktop owns inside an agent folder — not in
@@ -84,23 +92,23 @@ describe('permissionGrantService', () => {
       })
     )
 
-    expect(permissionGrantService.list(agentDir)[0].scope).toBe('exact')
-    expect(permissionGrantService.covers(agentDir, ask('bash', ['rm -rf build/*']))).toBe(true)
+    expect(permissionGrantService.list(agentDir, KIT)[0].scope).toBe('exact')
+    expect(permissionGrantService.covers(agentDir, KIT, ask('bash', ['rm -rf build/*']))).toBe(true)
     expect(
-      permissionGrantService.covers(agentDir, ask('bash', ['rm -rf build/../../Documents']))
+      permissionGrantService.covers(agentDir, KIT, ask('bash', ['rm -rf build/../../Documents']))
     ).toBe(false)
   })
 
   it('keeps a grant per resource, so one can be revoked without the other', () => {
     // Mutation: store one row per *ask* fails this — forgetting the path the
     // user regrets would forget the one they meant to keep.
-    permissionGrantService.remember(agentDir, ask('edit', ['a.txt', 'b.txt']))
-    const grants = permissionGrantService.list(agentDir)
+    permissionGrantService.remember(agentDir, KIT, ask('edit', ['a.txt', 'b.txt']))
+    const grants = permissionGrantService.list(agentDir, KIT)
     expect(grants.map((g) => g.pattern).sort()).toEqual(['a.txt', 'b.txt'])
 
-    permissionGrantService.forget(agentDir, grants.find((g) => g.pattern === 'a.txt')!.key)
-    expect(permissionGrantService.covers(agentDir, ask('edit', ['b.txt']))).toBe(true)
-    expect(permissionGrantService.covers(agentDir, ask('edit', ['a.txt']))).toBe(false)
+    permissionGrantService.forget(agentDir, KIT, grants.find((g) => g.pattern === 'a.txt')!.key)
+    expect(permissionGrantService.covers(agentDir, KIT, ask('edit', ['b.txt']))).toBe(true)
+    expect(permissionGrantService.covers(agentDir, KIT, ask('edit', ['a.txt']))).toBe(false)
   })
 
   it('leaves everything else in the file alone', () => {
@@ -118,9 +126,9 @@ describe('permissionGrantService', () => {
       })
     )
 
-    permissionGrantService.remember(agentDir, ask('bash', ['make test']))
+    permissionGrantService.remember(agentDir, KIT, ask('bash', ['make test']))
 
-    const state = desktopStateService.read(agentDir)
+    const state = desktopStateService.read(agentDir, KIT)
     expect(state.agentToken).toBe('tok_1')
     expect(state.sessions.chat_1.sessionId).toBe('ses_1')
     expect(state.permissionGrants['bash::make test'].action).toBe('bash')
@@ -140,20 +148,20 @@ describe('permissionGrantService', () => {
         }
       })
     )
-    expect(permissionGrantService.list(agentDir).map((g) => g.key)).toEqual(['bash::ls'])
+    expect(permissionGrantService.list(agentDir, KIT).map((g) => g.key)).toEqual(['bash::ls'])
   })
 
   it('forgets everything on request, and does no write when there is nothing to forget', () => {
-    permissionGrantService.remember(agentDir, ask('bash', ['make test']))
-    permissionGrantService.forgetAll(agentDir)
-    expect(permissionGrantService.list(agentDir)).toEqual([])
+    permissionGrantService.remember(agentDir, KIT, ask('bash', ['make test']))
+    permissionGrantService.forgetAll(agentDir, KIT)
+    expect(permissionGrantService.list(agentDir, KIT)).toEqual([])
 
     // A folder that never ran must not gain a `desktop.json` because someone
     // opened the permissions card — Invariant 2 is that this file exists only
     // where the desktop actually has state to keep.
     const fresh = mkdtempSync(join(tmpdir(), 'cinna-grants-'))
     try {
-      permissionGrantService.forgetAll(fresh)
+      permissionGrantService.forgetAll(fresh, KIT)
       expect(() => readFileSync(join(fresh, 'app-data', 'desktop.json'))).toThrow()
     } finally {
       rmSync(fresh, { recursive: true, force: true })

@@ -440,9 +440,14 @@ describe('buildEngineConfig', () => {
     // Ordinary work inside the folder, which is the whole point of the change.
     expect(resolve('edit', 'scripts/report.py')).toBe('allow')
     expect(resolve('read', 'docs/CLI_COMMANDS.yaml')).toBe('allow')
-    // The agent's own identity.
+    // The agent's own identity — both shapes. `AGENT.md` is a **bare** agent's
+    // whole system prompt, so leaving it out let the one kind of agent whose
+    // identity is a single file rewrite that file with no dialog, while the
+    // profile above claimed identity files ask.
     expect(resolve('edit', 'cinna-agent.json')).toBe('ask')
     expect(resolve('edit', 'docs/WORKFLOW_PROMPT.md')).toBe('ask')
+    expect(resolve('edit', 'AGENT.md')).toBe('ask')
+    expect(resolve('write', 'AGENT.md')).toBe('ask')
 
     // The shell, where the matched string is the **command text** of each
     // command node, redirection included. The narrow shapes only fire because

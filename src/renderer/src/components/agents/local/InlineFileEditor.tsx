@@ -11,6 +11,23 @@ interface InlineFileEditorProps {
   /** Render as markdown when not focused. Off for one-liners. */
   markdown?: boolean
   minRows?: number
+  /**
+   * Render the file, refuse the click that starts editing.
+   *
+   * Distinct from `!editor.canSave`, which means "the file is not there" and
+   * says so. This one means "the file is there and this is not the place to
+   * change it", so it shows the contents and nothing else.
+   */
+  readOnly?: boolean
+  /**
+   * What to say when the file is not in the folder.
+   *
+   * The default names the scaffolder, which is right for a kit agent and
+   * nonsense for a bare one — that folder was never scaffolded and never will
+   * be, so "run the agent's scaffold again" is an instruction the reader cannot
+   * follow (ux_rules rule 7).
+   */
+  missingNote?: string
 }
 
 /**
@@ -27,13 +44,15 @@ export function InlineFileEditor({
   editor,
   placeholder,
   markdown = true,
-  minRows = 6
+  minRows = 6,
+  readOnly = false,
+  missingNote
 }: InlineFileEditorProps): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
   const startEditing = (): void => {
-    if (!editor.canSave) return
+    if (!editor.canSave || readOnly) return
     setEditing(true)
     requestAnimationFrame(() => {
       const el = textareaRef.current
@@ -104,8 +123,8 @@ export function InlineFileEditor({
   if (!editor.canSave) {
     return (
       <div className="text-[10px] text-[var(--color-text-muted)] italic">
-        This file is not in the folder. Add it with your assistant, or run the agent&apos;s
-        scaffold again.
+        {missingNote ??
+          "This file is not in the folder. Add it with your assistant, or run the agent's scaffold again."}
       </div>
     )
   }
@@ -139,7 +158,9 @@ export function InlineFileEditor({
       ) : markdown ? (
         <div
           onClick={startEditing}
-          className="markdown-body cursor-text text-xs leading-relaxed text-[var(--color-text)]"
+          className={`markdown-body text-xs leading-relaxed text-[var(--color-text)] ${
+            readOnly ? '' : 'cursor-text'
+          }`}
         >
           <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
             {editor.text}
@@ -148,7 +169,9 @@ export function InlineFileEditor({
       ) : (
         <div
           onClick={startEditing}
-          className="cursor-text whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)]"
+          className={`whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)] ${
+            readOnly ? '' : 'cursor-text'
+          }`}
         >
           {editor.text}
         </div>

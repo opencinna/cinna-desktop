@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   assembleAgentPrompt,
+  assembleBareAgentPrompt,
   listKnowledgeTopics,
   stripHtmlComments,
   type DesktopPromptContext
@@ -212,5 +213,96 @@ describe('assembleAgentPrompt', () => {
     expect(assembleAgentPrompt(dir, manifest(), CONTEXT)).toBe(
       assembleAgentPrompt(dir, manifest(), CONTEXT)
     )
+  })
+})
+
+describe('assembleBareAgentPrompt', () => {
+  let dir: string
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cinna-bare-prompt-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const context = { locale: 'en-GB', timeZone: 'Europe/Berlin' }
+
+  it('is AGENT.md, with the desktop context appended', () => {
+    writeFileSync(join(dir, 'AGENT.md'), '# Invoice watcher\n\nFlag invoices with no PO number.\n')
+    const prompt = assembleBareAgentPrompt(dir, 'Invoice watcher', context)
+
+    expect(prompt).toContain('Flag invoices with no PO number.')
+    expect(prompt).toContain('conversation mode')
+    expect(prompt).toContain('Europe/Berlin')
+  })
+
+  it('never includes README.md', () => {
+    // The rule, and the one most likely to be "fixed" by someone who thinks a
+    // README is free context. It is written *for the builder* — "run `make
+    // install` first" — and a model reads that as a step it should take.
+    // Mutation: append it as a section and the agent starts doing the setup
+    // instructions in its first reply.
+    writeFileSync(join(dir, 'AGENT.md'), 'Answer questions about invoices.\n')
+    writeFileSync(join(dir, 'README.md'), '# Setup\n\nRun `uv sync` before anything else.\n')
+    const prompt = assembleBareAgentPrompt(dir, 'Alpha', context)
+
+    expect(prompt).toContain('Answer questions about invoices.')
+    expect(prompt).not.toContain('uv sync')
+  })
+
+  it('never includes anything else in the folder either', () => {
+    // A bare folder has no shape, so a scripts/knowledge/credentials sweep
+    // would be reaching into an arbitrary repository. Mutation: reuse the kit
+    // assembler here and a folder's `scripts/README.md` — or another agent's
+    // notes — arrives as instructions.
+    mkdirSync(join(dir, 'scripts'), { recursive: true })
+    mkdirSync(join(dir, 'knowledge'), { recursive: true })
+    writeFileSync(join(dir, 'AGENT.md'), 'Do the thing.\n')
+    writeFileSync(join(dir, 'scripts', 'README.md'), 'SCRIPTS_MARKER')
+    writeFileSync(join(dir, 'knowledge', 'rules.md'), 'KNOWLEDGE_MARKER')
+
+    const prompt = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(prompt).not.toContain('SCRIPTS_MARKER')
+    expect(prompt).not.toContain('knowledge/rules.md')
+  })
+
+  it('strips HTML comments', () => {
+    writeFileSync(join(dir, 'AGENT.md'), 'Real text.\n<!-- note to the author -->\nMore.\n')
+    const prompt = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(prompt).toContain('Real text.')
+    expect(prompt).not.toContain('note to the author')
+  })
+
+  it('never produces a promptless agent for an empty or missing AGENT.md', () => {
+    // Same rule as the kit path: without the stand-in the model gets only the
+    // context block and answers as a generic assistant, which reads as "the
+    // agent is broken" rather than as "the file is empty".
+    writeFileSync(join(dir, 'AGENT.md'), '   \n')
+    const empty = assembleBareAgentPrompt(dir, 'Invoice watcher', context)
+    expect(empty).toContain('You are Invoice watcher.')
+    expect(empty).toContain('is empty')
+
+    rmSync(join(dir, 'AGENT.md'))
+    expect(assembleBareAgentPrompt(dir, 'Invoice watcher', context)).toContain('is empty')
+  })
+
+  it('keeps the do-not-become-the-builder line', () => {
+    // The line that stops an agent rewriting `AGENT.md` while the user is
+    // talking to it — the same folder is opened by a builder whose job is
+    // exactly that.
+    writeFileSync(join(dir, 'AGENT.md'), 'Do the thing.\n')
+    expect(assembleBareAgentPrompt(dir, 'Alpha', context)).toContain('Do not switch to the Builder role')
+  })
+
+  it('states no rule about files a bare folder does not have', () => {
+    // The kit block tells the agent to `uv run` its scripts and to write only
+    // under `app-data/`. Neither exists here, and a rule about a missing file
+    // is how a model ends up refusing ordinary work in the folder it was
+    // pointed at.
+    writeFileSync(join(dir, 'AGENT.md'), 'Do the thing.\n')
+    const prompt = assembleBareAgentPrompt(dir, 'Alpha', context)
+    expect(prompt).not.toContain('app-data/')
+    expect(prompt).not.toContain('uv run')
   })
 })

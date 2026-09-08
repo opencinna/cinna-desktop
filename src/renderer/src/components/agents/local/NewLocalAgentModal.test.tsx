@@ -40,6 +40,8 @@ const setSetting = vi.fn()
 const setActiveLocalAgentId = vi.fn()
 const setPendingDraftAgentId = vi.fn()
 const setActiveView = vi.fn()
+const pickFolder = vi.fn()
+const addFolder = vi.fn()
 
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
@@ -49,7 +51,9 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
   useAgentRoots: () => ({
     data: [{ id: 'root-1', label: 'Agents', path: '/tmp/agents', isDefault: true }]
   }),
-  useCreateLocalAgent: () => ({ mutate: create, isPending: false })
+  useCreateLocalAgent: () => ({ mutate: create, isPending: false }),
+  usePickAgentFolder: () => ({ mutate: pickFolder, isPending: false }),
+  useAddAgentFolder: () => ({ mutate: addFolder, isPending: false })
 }))
 vi.mock('../../../hooks/useLocalTools', () => ({
   useDefaultTool: () => ({ tool: defaultTool, launchable: [CLAUDE, CODEX], autoOpen }),
@@ -74,9 +78,23 @@ function lastOpenIn(): { request: Record<string, unknown>; options: OpenInOption
   return { request, options }
 }
 
-function open(): { onClose: ReturnType<typeof vi.fn> } {
+/** Render the dialog. It opens on the choice step. */
+function openChoice(): { onClose: ReturnType<typeof vi.fn> } {
   const onClose = vi.fn()
   render(createElement(NewLocalAgentModal, { onClose }))
+  return { onClose }
+}
+
+/**
+ * Open the dialog on the **New agent** step.
+ *
+ * The dialog now opens on a choice — new agent, or an existing folder — so
+ * every test about naming and scaffolding clicks through that first. Tests
+ * about the choice itself, and about adding a folder, use {@link openChoice}.
+ */
+function open(): { onClose: ReturnType<typeof vi.fn> } {
+  const { onClose } = openChoice()
+  fireEvent.click(screen.getByRole('button', { name: /New agent/ }))
   return { onClose }
 }
 
@@ -240,5 +258,200 @@ describe('NewLocalAgentModal', () => {
     open()
     const button = screen.getByRole('button', { name: /^create$/i }) as HTMLButtonElement
     expect(button.disabled).toBe(true)
+  })
+})
+
+/**
+ * The other half of the fork: pointing at a folder that is already an agent.
+ *
+ * What has to hold is that nothing is registered until the user has seen what
+ * was found, that a refusal keeps the dialog open, and that the path sent back
+ * is the one the picker returned rather than anything the form composed.
+ */
+describe('NewLocalAgentModal — add a folder', () => {
+  type PickOptions = { onSuccess: (result: unknown) => void; onError: (err: Error) => void }
+  function resolvePick(result: unknown): void {
+    const [, options] = pickFolder.mock.calls[0] as [unknown, PickOptions]
+    act(() => options.onSuccess(result))
+  }
+
+  const FOUND_ONE = {
+    cancelled: false,
+    path: '/repo/alpha',
+    folderName: 'alpha',
+    refusal: null,
+    truncated: false,
+    found: [
+      {
+        relPath: '.',
+        path: '/repo/alpha',
+        name: 'Invoice watcher',
+        hasReadme: true,
+        alreadyAdded: false
+      }
+    ]
+  }
+  const FOUND_MANY = {
+    cancelled: false,
+    path: '/repo',
+    folderName: 'repo',
+    refusal: null,
+    truncated: false,
+    found: [
+      {
+        relPath: 'local_agents/alpha',
+        path: '/repo/local_agents/alpha',
+        name: 'Alpha',
+        hasReadme: true,
+        alreadyAdded: false
+      },
+      {
+        relPath: 'local_agents/beta',
+        path: '/repo/local_agents/beta',
+        name: 'Beta',
+        hasReadme: false,
+        alreadyAdded: false
+      },
+      {
+        relPath: 'local_agents/gamma',
+        path: '/repo/local_agents/gamma',
+        name: 'Gamma',
+        hasReadme: false,
+        alreadyAdded: true
+      }
+    ]
+  }
+
+  it('opens on a choice, not on a name field', () => {
+    openChoice()
+    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+    expect(screen.queryByLabelText('Name')).toBeNull()
+    expect(screen.getByRole('button', { name: /Add a folder/ })).toBeTruthy()
+  })
+
+  it('names the single agent, and sends the picker’s own path back', () => {
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick(FOUND_ONE)
+
+    // Prefilled from the AGENT.md heading — one Enter is a complete answer.
+    const field = screen.getByLabelText('Name') as HTMLInputElement
+    expect(field.value).toBe('Invoice watcher')
+    fireEvent.change(field, { target: { value: 'My watcher' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Add agent' }))
+
+    const [payload] = addFolder.mock.calls[0] as [Record<string, unknown>]
+    expect(payload).toEqual({ path: '/repo/alpha', relPaths: ['.'], name: 'My watcher' })
+  })
+
+  it('lands the user on the agent it just added', () => {
+    // ux_rules rule 3: creating lands you on the thing created, and adopting is
+    // a create in every sense the user cares about. Closing straight to the
+    // empty pane left them reading "Select an agent from the sidebar" with the
+    // agent they had just added sitting unselected behind it.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick(FOUND_MANY)
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 agents' }))
+
+    const [, options] = addFolder.mock.calls[0] as [
+      unknown,
+      { onSuccess: (r: { root: unknown; agentIds: string[] }) => void }
+    ]
+    act(() =>
+      options.onSuccess({ root: {}, agentIds: ['folder:external:r1:a', 'folder:external:r1:b'] })
+    )
+
+    expect(setActiveLocalAgentId).toHaveBeenCalledWith('folder:external:r1:a')
+    expect(setActiveView).toHaveBeenCalledWith('local-agent')
+  })
+
+  it('ticks everything addable and leaves the already-added ones out of the payload', () => {
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick(FOUND_MANY)
+
+    // No name field for several: naming fifteen folders at adoption time is
+    // work nobody asked for, and each one already has a name in its AGENT.md.
+    expect(screen.queryByLabelText('Name')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Add 2 agents' }))
+
+    const [payload] = addFolder.mock.calls[0] as [Record<string, unknown>]
+    expect(payload).toEqual({
+      path: '/repo',
+      relPaths: ['local_agents/alpha', 'local_agents/beta']
+    })
+  })
+
+  it('never truncates away the folder name in the picked path', () => {
+    // The confirm step's one job is answering "which folder", and a plain
+    // `truncate` cuts from the right — removing the only part of a path that
+    // identifies it. The basename is in its own non-shrinking span, so it is on
+    // screen at any width; the parent directory is the half that ellipsises.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({
+      ...FOUND_ONE,
+      path: '/Users/me/Documents/work/clients/acme/old-invoice-agent-v2'
+    })
+
+    const leaf = screen.getByText('old-invoice-agent-v2')
+    expect(leaf.className).toContain('shrink-0')
+    expect(leaf.className).not.toContain('truncate')
+    expect(screen.getByText('/Users/me/Documents/work/clients/acme/').className).toContain(
+      'truncate'
+    )
+  })
+
+  it('says so when the walk stopped at its cap', () => {
+    // Otherwise the header reads "N agents in <folder>" over the first N by
+    // path — every count true, and all of them true of the wrong set. The user
+    // ticks Select all, the agents they came for are absent, and they read that
+    // as the scanner having missed those folders.
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({ ...FOUND_MANY, truncated: true })
+
+    expect(screen.getByText(/first 3 folders found/)).toBeTruthy()
+  })
+
+  it('says nothing about a cap it did not hit', () => {
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick(FOUND_MANY)
+
+    expect(screen.queryByText(/folders found/)).toBeNull()
+  })
+
+  it('keeps the dialog open and says why when the folder is refused', () => {
+    // ux_rules rule 6: a dialog closes on success only. Closing here would
+    // leave the user with a picker that did nothing and no message anywhere.
+    const { onClose } = openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({ ...FOUND_ONE, refusal: 'Nothing in this folder has an AGENT.md.', found: [] })
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('AGENT.md')
+    expect(screen.getByRole('button', { name: /Add a folder/ })).toBeTruthy()
+  })
+
+  it('does nothing at all when the picker is cancelled', () => {
+    const { onClose } = openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick({ cancelled: true })
+
+    expect(onClose).not.toHaveBeenCalled()
+    expect(addFolder).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toBe('')
+  })
+
+  it('goes back to the choice without adopting anything', () => {
+    openChoice()
+    fireEvent.click(screen.getByRole('button', { name: /Add a folder/ }))
+    resolvePick(FOUND_MANY)
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }))
+
+    expect(screen.getByRole('dialog', { name: 'Add an agent' })).toBeTruthy()
+    expect(addFolder).not.toHaveBeenCalled()
   })
 })

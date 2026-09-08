@@ -57,16 +57,21 @@
  * removing a root closes its watcher immediately.
  */
 
-import { readdirSync, watch, type FSWatcher } from 'node:fs'
-import { join, sep } from 'node:path'
+import { readdirSync, statSync, watch, type FSWatcher } from 'node:fs'
+import { dirname, join, sep } from 'node:path'
 import { app } from 'electron'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { createLogger } from '../../logger/logger'
 import {
   AGENTS_SUBDIR,
+  BARE_AGENT_MAX_DEPTH,
+  BARE_AGENT_PROMPT_FILE,
+  BARE_AGENT_README_FILE,
   LOCAL_AGENT_CHANGED_CHANNEL,
   type LocalAgentChangedPayload
 } from '../../../shared/localAgents'
+import { discoverBareAgents } from './externalScan'
+import { isWithin } from './pathRules'
 import { getMainWindow } from '../../index'
 import { turnLock } from './turnLock'
 
@@ -191,6 +196,69 @@ export function classifyEvent(rootPath: string, filename: string | null): WatchT
   return { kind: 'agent', dir: join(rootPath, AGENTS_SUBDIR, slug) }
 }
 
+/**
+ * Classify an event under an **external** root.
+ *
+ * A separate rule because an external root is not kit-shaped: there is no
+ * `Local/`, agents sit at any depth up to {@link BARE_AGENT_MAX_DEPTH}, and the
+ * tree around them is the user's ordinary working directory — a `.venv`, a
+ * `data/` an agent writes to on every run, a `node_modules`. A recursive watch
+ * over that reports constant churn, and the kit classifier would turn most of
+ * it into a whole-root rescan.
+ *
+ * So the filter is inverted: **only what can change the agents list is acted
+ * on.** Exactly two things can — an `AGENT.md` or a `README.md` (what an agent
+ * *is*), and a directory appearing or disappearing within the scan depth (which
+ * agents there *are*). Everything else is ignored outright.
+ *
+ * The answer is always a whole-root rescan rather than a per-agent one. A bare
+ * agent's id is derived from its path by the walk, not read out of a file, so
+ * there is no way to attribute an event to an agent without redoing the walk —
+ * which is the scan. And the scan is idempotent and non-destructive, which is
+ * what makes "rescan everything" a safe answer rather than a lazy one.
+ */
+export function classifyExternalEvent(rootPath: string, filename: string | null): WatchTarget {
+  if (!filename) return { kind: 'root' }
+
+  const normalized = filename.replace(/\\/g, sep)
+  const segments = normalized.split(sep).filter((s) => s !== '' && s !== '.')
+  if (segments.length === 0) return { kind: 'root' }
+  // A dot-entry anywhere on the path: `.git` writing an index, `.venv`, an
+  // editor's bookkeeping. `.git` alone would otherwise fire on every command
+  // the update check runs.
+  if (segments.some((segment) => segment.startsWith('.'))) return { kind: 'ignore' }
+
+  const last = segments[segments.length - 1]
+  if (last === BARE_AGENT_PROMPT_FILE || last === BARE_AGENT_README_FILE) return { kind: 'root' }
+  if (segments.length > BARE_AGENT_MAX_DEPTH) return { kind: 'ignore' }
+
+  // Within the walk's reach, a **directory** appearing or disappearing changes
+  // which agents there are; a file at the same depth cannot. The two are told
+  // apart by a stat rather than assumed, because assuming made this branch fire
+  // for every ordinary file an agent writes: `notes.md` at the root of an
+  // adopted single-agent folder, or `out/result.json` one level down, each cost
+  // a full walk, one state read per agent, a DB transaction and a renderer
+  // refetch that replaced an identical list — invisible, and therefore never
+  // attributed to anything.
+  //
+  // A path that cannot be stat'd rescans. That is the *removed* directory,
+  // which is the case this branch exists for and the one that cannot be
+  // inspected: erring towards a rescan there is erring towards a scan that is
+  // idempotent and non-destructive by design.
+  try {
+    return statSync(join(rootPath, ...segments)).isDirectory()
+      ? { kind: 'root' }
+      : { kind: 'ignore' }
+  } catch {
+    return { kind: 'root' }
+  }
+}
+
+/** The classifier this root's kind uses. */
+function classifierFor(root: AgentRootRow): (rootPath: string, name: string | null) => WatchTarget {
+  return root.kind === 'external' ? classifyExternalEvent : classifyEvent
+}
+
 function flush(state: RootWatch): void {
   state.timer = null
   if (state.closed || !deps) return
@@ -312,7 +380,10 @@ function rearm(state: RootWatch): void {
 function addWatcher(state: RootWatch, dir: string, recursive: boolean): boolean {
   try {
     const watcher = watch(dir, { recursive, persistent: false }, (_event, filename) => {
-      schedule(state, classifyEvent(state.root.path, filename ? String(filename) : null))
+      schedule(
+        state,
+        classifierFor(state.root)(state.root.path, filename ? String(filename) : null)
+      )
     })
     watcher.on('error', (err) => {
       logger.warn('a folder watcher errored', {
@@ -341,6 +412,16 @@ function addWatcher(state: RootWatch, dir: string, recursive: boolean): boolean 
 function armFallbackWatchers(state: RootWatch): void {
   if (state.closed || state.recursive) return
   closeWatchers(state)
+  if (state.root.kind === 'external') {
+    if (!addWatcher(state, state.root.path, false)) return
+    for (const dir of externalFallbackDirs(
+      state.root.path,
+      discoverBareAgents(state.root.path).found.map((folder) => folder.path)
+    )) {
+      addWatcher(state, dir, false)
+    }
+    return
+  }
   const agentsDir = join(state.root.path, AGENTS_SUBDIR)
   if (!addWatcher(state, agentsDir, false)) return
   for (const agentDir of listAgentDirsSafely(agentsDir)) {
@@ -349,6 +430,47 @@ function armFallbackWatchers(state: RootWatch): void {
       addWatcher(state, join(agentDir, sub), false)
     }
   }
+}
+
+/**
+ * Which directories the non-recursive fallback watches under an external root,
+ * besides the root itself.
+ *
+ * Every agent folder the walk found, and each agent's parent — the parent is
+ * what notices a *new* agent folder appearing beside its siblings.
+ *
+ * **Nothing above the root, ever.** When the root *is* the agent — a single
+ * adopted folder — that agent's parent is the directory *containing* the
+ * registered root, which nothing else in this feature is allowed to touch: the
+ * path guard, the scanner and `openInService` all draw the line at "at or under
+ * a registered root".
+ *
+ * Worse than the scope breach is what the events would then mean. `fs.watch`
+ * names a file relative to the directory it is watching, and the callback
+ * classifies against the *root's* path — a different directory for such a
+ * watcher — so a sibling project's file would arrive as if it were a path
+ * inside the root, and `classifyExternalEvent` would stat it against the wrong
+ * base. A build in an unrelated checkout next door would rescan this root.
+ *
+ * Dropping it costs nothing: the root has its own watcher, and a new sibling of
+ * a single adopted folder is not an agent of that root — the walk starts at the
+ * root and stops there.
+ *
+ * Pure, so the rule can be asserted without arming a real watcher on a platform
+ * where the recursive one would have attached instead.
+ */
+export function externalFallbackDirs(rootPath: string, agentDirs: readonly string[]): string[] {
+  const dirs = new Set<string>()
+  const parents = new Set<string>()
+  for (const agentDir of agentDirs) {
+    if (!isWithin(rootPath, agentDir)) continue
+    if (agentDir !== rootPath) dirs.add(agentDir)
+    parents.add(dirname(agentDir))
+  }
+  for (const parent of parents) {
+    if (parent !== rootPath && isWithin(rootPath, parent)) dirs.add(parent)
+  }
+  return [...dirs]
 }
 
 function listAgentDirsSafely(agentsDir: string): string[] {
@@ -362,7 +484,10 @@ function listAgentDirsSafely(agentsDir: string): string[] {
 }
 
 function armWatchers(state: RootWatch): void {
-  const agentsDir = join(state.root.path, AGENTS_SUBDIR)
+  // An external root has no `Local/`; its agents are wherever an `AGENT.md` is,
+  // so the whole root is what has to be watched.
+  const agentsDir =
+    state.root.kind === 'external' ? state.root.path : join(state.root.path, AGENTS_SUBDIR)
   state.recursive = false
   if (addWatcher(state, agentsDir, true)) {
     state.recursive = true
