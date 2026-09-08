@@ -225,16 +225,11 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
     await expect(page.getByRole('heading', { name: 'Chat Modes' })).toBeVisible()
     await page.getByRole('button', { name: 'Add Chat Mode' }).click()
     const form = modeForm(page)
-    // Neither select in this form has an accessible name — their labels are
-    // siblings with no `htmlFor` — so they are found by position inside the
-    // form, and the count is asserted to say which is which.
-    await expect(form.getByRole('combobox')).toHaveCount(1)
-    const credential = form.getByRole('combobox').first()
+    const credential = form.getByLabel('AI Credentials')
     await expect(credential.locator('option')).toHaveText(['None (use default)', OLLAMA])
 
     await credential.selectOption({ label: OLLAMA })
-    await expect(form.getByRole('combobox')).toHaveCount(2)
-    const model = form.getByRole('combobox').nth(1)
+    const model = form.getByLabel('Model')
     // The tags verbatim, which is what the user typed into `ollama pull`, and
     // in the order `/api/tags` was read in.
     await expect(model.locator('option')).toHaveText([
