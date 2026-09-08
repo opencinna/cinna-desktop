@@ -1,16 +1,24 @@
 import { AnthropicAdapter } from './anthropic'
 import { OpenAIAdapter } from './openai'
 import { GeminiAdapter } from './gemini'
+import { OllamaAdapter } from './ollama'
+import { OLLAMA_DEFAULT_HOST } from '../../shared/credentials'
 import { LLMAdapter } from './types'
 
-export type ProviderType = 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
+export type ProviderType =
+  | 'anthropic'
+  | 'openai'
+  | 'gemini'
+  | 'openai_compatible'
+  | 'ollama'
 
 export function isProviderType(type: string): type is ProviderType {
   return (
     type === 'anthropic' ||
     type === 'openai' ||
     type === 'gemini' ||
-    type === 'openai_compatible'
+    type === 'openai_compatible' ||
+    type === 'ollama'
   )
 }
 
@@ -43,6 +51,12 @@ export function createAdapter(
       })
     case 'gemini':
       return new GeminiAdapter(apiKey, providerId)
+    // Keyless: `apiKey` is whatever the caller had (usually `''`) and is
+    // ignored. What this adapter needs is the host, which travels in the same
+    // `baseUrl` column an `openai_compatible` gateway uses — a credential row
+    // that points somewhere is one concept, not two.
+    case 'ollama':
+      return new OllamaAdapter(providerId, opts.baseUrl || OLLAMA_DEFAULT_HOST)
     default:
       return null
   }
