@@ -215,7 +215,7 @@ test('a folder with no AGENT.md is refused, and the dialog stays open', async ({
   await expect(choice.getByRole('button', { name: /^Add a folder/ })).toBeVisible()
 })
 
-test('a bare agent has no Commands tab, and its Prompts tab is AGENT.md over a read-only README.md', async ({
+test('a bare agent has no Commands tab, its README on Overview and AGENT.md on Prompts', async ({
   cinna
 }) => {
   await cinna.skipOnboarding()
@@ -240,14 +240,35 @@ test('a bare agent has no Commands tab, and its Prompts tab is AGENT.md over a r
     await expect(tabs.getByRole('tab', { name: /^Commands/ })).toHaveCount(0)
   })
 
-  await test.step('Overview is the name, the one thing the desktop holds itself', async () => {
+  await test.step('Overview: the name the desktop holds, then the folder’s README', async () => {
     await expect(page.getByRole('heading', { level: 2, name: 'Name' })).toBeVisible()
     await expect(page.getByPlaceholder('What this agent is called')).toHaveValue(
       'Exchange Rates Agent'
     )
+
+    // The README is what the folder says about itself, so it answers the tab's
+    // question — not Prompts, where it read as part of what the agent is told.
+    const readme = page
+      .locator('section')
+      .filter({ has: page.getByRole('heading', { level: 2, name: 'Readme' }) })
+    await expect(readme.getByRole('button', { name: 'README.md', exact: true })).toHaveAttribute(
+      'title',
+      'Reveal README.md'
+    )
+    // Rendered, not raw: the fixture's backticks arrive as a `code` element, so
+    // the card reads as the document rather than as its source.
+    await expect(readme).toContainText('Run it with uv run.')
+    await expect(readme.getByText('`uv run`')).toHaveCount(0)
+    // And its own `# heading` is demoted, so the page keeps exactly one `h1`.
+    await expect(readme.getByRole('heading', { level: 3 })).toHaveText('Exchange Rates Agent')
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exchange Rates Agent')
+
+    // Read-only: the click that opens the Instructions editor does nothing here.
+    await readme.getByText('Run it with').click()
+    await expect(readme.getByRole('textbox')).toHaveCount(0)
   })
 
-  await test.step('Prompts: Instructions over AGENT.md, Readme over README.md', async () => {
+  await test.step('Prompts is AGENT.md alone — the one document the agent is told', async () => {
     await page.getByRole('tab', { name: 'Prompts' }).click()
     await expect(page.getByRole('tab', { name: 'Prompts' })).toHaveAttribute(
       'aria-selected',
@@ -257,23 +278,23 @@ test('a bare agent has no Commands tab, and its Prompts tab is AGENT.md over a r
     const card = (title: string) =>
       page.locator('section').filter({ has: page.getByRole('heading', { level: 2, name: title }) })
     const instructions = card('Instructions')
-    const readme = card('Readme')
+    // The README is not here: it is the folder's briefing for a person, and a
+    // second card on this tab read as though it too reached the agent.
+    await expect(card('Readme')).toHaveCount(0)
     // The card names the file it is a view over: the button's name is the
     // file, its `title` the action ("Reveal AGENT.md").
     const instructionsFile = instructions.getByRole('button', { name: 'AGENT.md', exact: true })
     await expect(instructionsFile).toHaveAttribute('title', 'Reveal AGENT.md')
     await expect(instructions).toContainText('You answer questions about Exchange Rates Agent.')
-    const readmeFile = readme.getByRole('button', { name: 'README.md', exact: true })
-    await expect(readmeFile).toHaveAttribute('title', 'Reveal README.md')
-    await expect(readme).toContainText('Run it with `uv run`.')
 
-    // Read-only means the click-to-edit the other card has is simply absent.
-    // The Instructions card, clicked the same way straight afterwards, is the
-    // control that keeps this from passing on a page that never rendered.
-    await readme.getByText('Run it with `uv run`.').click()
-    await expect(readme.getByRole('textbox')).toHaveCount(0)
+    // Rendered while it is read, raw while it is written: the click puts the
+    // file's own bytes in a textbox, heading marker and all.
     await instructions.getByText('You answer questions about Exchange Rates Agent.').click()
-    await expect(instructions.getByRole('textbox')).toHaveCount(1)
+    const box = instructions.getByRole('textbox')
+    await expect(box).toHaveCount(1)
+    await expect(box).toHaveValue(
+      '# Exchange Rates Agent\n\nYou answer questions about Exchange Rates Agent.\n'
+    )
   })
 })
 
