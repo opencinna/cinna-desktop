@@ -67,6 +67,10 @@ vi.mock('./PromptDocCard', () => ({
   PromptDocCard: ({ prompt }: { prompt: string }) =>
     createElement('div', { 'data-marker': `doc-${prompt}` }, `doc-${prompt}`)
 }))
+vi.mock('./BareAgentCards', () => ({
+  BareNameCard: marker('bare-name-card'),
+  BareReadmeCard: marker('bare-readme-card')
+}))
 vi.mock('./ReadOnlyCards', () => ({
   CommandsCard: marker('commands-card'),
   StatusCard: marker('status-card')
@@ -171,6 +175,22 @@ describe('LocalAgentPage — layout', () => {
       })
     )
     expect(screen.getByRole('tab', { name: /folder/i }).textContent).toContain('1')
+  })
+
+  it('puts a bare folder’s README on Overview and leaves Prompts to AGENT.md', () => {
+    // The README is what the folder tells a *person*; `AGENT.md` is the whole
+    // of what the agent is told. Showing both on Prompts read as though the
+    // README were part of the prompt, and buried the one document that is.
+    // Mutation: move `BareReadmeCard` back under `tab === 'prompts'` and both
+    // halves of this fail.
+    renderPage(agent({ kind: 'bare' } as Partial<LocalAgentDto>))
+    expect(screen.getByText('bare-name-card')).toBeTruthy()
+    expect(screen.getByText('bare-readme-card')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('tab', { name: /prompts/i }))
+    expect(screen.getByText('doc-bare_prompt')).toBeTruthy()
+    expect(screen.queryByText('doc-bare_readme')).toBeNull()
+    expect(screen.queryByText('bare-readme-card')).toBeNull()
   })
 
   it('shows the description in the header, and a nudge when it is only the name', () => {

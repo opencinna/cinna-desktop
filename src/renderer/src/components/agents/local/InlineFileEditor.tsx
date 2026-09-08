@@ -2,7 +2,10 @@ import { useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AlertTriangle, Clock } from 'lucide-react'
-import { markdownComponents } from '../../../utils/markdownComponents'
+import {
+  documentMarkdownComponents,
+  remarkStripHtml
+} from '../../../utils/markdownComponents'
 import type { AgentFileEditor } from '../../../hooks/useLocalAgents'
 
 interface InlineFileEditorProps {
@@ -11,14 +14,6 @@ interface InlineFileEditorProps {
   /** Render as markdown when not focused. Off for one-liners. */
   markdown?: boolean
   minRows?: number
-  /**
-   * Render the file, refuse the click that starts editing.
-   *
-   * Distinct from `!editor.canSave`, which means "the file is not there" and
-   * says so. This one means "the file is there and this is not the place to
-   * change it", so it shows the contents and nothing else.
-   */
-  readOnly?: boolean
   /**
    * What to say when the file is not in the folder.
    *
@@ -45,14 +40,28 @@ export function InlineFileEditor({
   placeholder,
   markdown = true,
   minRows = 6,
-  readOnly = false,
   missingNote
 }: InlineFileEditorProps): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+  /**
+   * The rendered view, measured at the moment it is replaced.
+   *
+   * Rendered markdown and the raw source are different heights, so the click
+   * that starts editing used to resize the card under the pointer (rule 1) —
+   * invisible while both views were the same monospace text, and a visible jerk
+   * as soon as `AGENT.md` began rendering. The floor holds the card at the
+   * height the user clicked; a file whose source genuinely needs more lines
+   * than its rendered form still grows, which is the one direction that cannot
+   * be avoided without hiding text from the person editing it.
+   */
+  const renderedRef = useRef<HTMLDivElement>(null)
+  const [floor, setFloor] = useState<number | undefined>(undefined)
 
   const startEditing = (): void => {
-    if (!editor.canSave || readOnly) return
+    if (!editor.canSave) return
+    const rendered = renderedRef.current
+    setFloor(rendered ? rendered.getBoundingClientRect().height : undefined)
     setEditing(true)
     requestAnimationFrame(() => {
       const el = textareaRef.current
@@ -145,6 +154,7 @@ export function InlineFileEditor({
           }}
           placeholder={placeholder}
           rows={Math.max(minRows, editor.text.split('\n').length + 1)}
+          style={floor === undefined ? undefined : { minHeight: floor }}
           className="w-full resize-none border-none bg-transparent font-mono text-xs leading-relaxed
             text-[var(--color-text)] outline-none placeholder:text-[var(--color-text-muted)]"
         />
@@ -157,21 +167,29 @@ export function InlineFileEditor({
         </div>
       ) : markdown ? (
         <div
+          ref={renderedRef}
           onClick={startEditing}
-          className={`markdown-body text-xs leading-relaxed text-[var(--color-text)] ${
-            readOnly ? '' : 'cursor-text'
-          }`}
+          className="markdown-body cursor-text text-xs leading-relaxed text-[var(--color-text)]"
         >
-          <Markdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+          {/*
+            The document map, not the chat one: these are files, and a file that
+            opens with `# Name` would otherwise put a second `h1` on a page that
+            already has one. Raw HTML is dropped the way every other viewer of
+            these files drops it — and the click that starts editing puts the
+            file's own bytes, comments and all, in the textarea.
+          */}
+          <Markdown
+            remarkPlugins={[remarkGfm, remarkStripHtml]}
+            components={documentMarkdownComponents}
+          >
             {editor.text}
           </Markdown>
         </div>
       ) : (
         <div
+          ref={renderedRef}
           onClick={startEditing}
-          className={`whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)] ${
-            readOnly ? '' : 'cursor-text'
-          }`}
+          className="cursor-text whitespace-pre-wrap text-xs leading-relaxed text-[var(--color-text)]"
         >
           {editor.text}
         </div>

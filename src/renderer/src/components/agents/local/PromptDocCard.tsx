@@ -20,14 +20,24 @@ interface PromptDocCardProps {
   hint: string
   placeholder: string
   /**
-   * Show the file but refuse edits. Used for a bare agent's `README.md`: it is
-   * the *builder's* document — what an assistant opening the folder is briefed
-   * from — so editing it from the agent's own page would be the agent editing
-   * its own briefing, which is the thing the assembled prompt tells it not to
-   * do. It is one click away in the user's editor.
+   * Render the file as markdown while it is not being edited.
+   *
+   * Off for the kit's three prompts. Those are written for a model, and the
+   * scaffold template leads with an HTML comment telling their author what to
+   * put where — `documentMarkdownComponents` strips raw HTML, as every other
+   * viewer of these files does, so rendering them would hide the one line the
+   * author most needs to read from a card that claims to be a viewer over the
+   * file. On for a bare agent's `AGENT.md`, which is prose its author wrote and
+   * reads as markdown everywhere else they open it.
    */
-  readOnly?: boolean
-  /** What to say when the file is not in the folder. See `InlineFileEditor`. */
+  markdown?: boolean
+  /**
+   * What to say when the file is not in the folder.
+   *
+   * The default names the scaffolder, which is right for a kit prompt and
+   * nonsense for a bare folder — nothing scaffolded it, so "run the agent's
+   * scaffold again" is an instruction its owner cannot follow (rule 7).
+   */
   missingNote?: string
 }
 
@@ -45,7 +55,7 @@ export function PromptDocCard({
   title,
   hint,
   placeholder,
-  readOnly = false,
+  markdown = false,
   missingNote
 }: PromptDocCardProps): React.JSX.Element {
   const { data: doc, isLoading } = useLocalAgentDoc(agentId, prompt)
@@ -60,13 +70,14 @@ export function PromptDocCard({
     (text: string): LocalAgentFieldUpdate => {
       if (prompt === 'bare_prompt') return { field: 'bare_prompt', value: text }
       if (prompt === 'bare_readme') {
-        // Unreachable: this card is only ever rendered `readOnly`, so no
-        // textarea exists and nothing calls this. It throws rather than falling
-        // through to `bare_prompt`, which is what a plausible edit here would
-        // do — and that would write the README's text over `AGENT.md`, which is
-        // the agent's whole system prompt. (Main would refuse it on the stamp,
-        // since the two files' stamps differ, but "your save was refused" is
-        // not the message this deserves.)
+        // Unreachable: the README is not one of this card's documents — it is
+        // read-only on Overview, in `BareReadmeCard`, with no textarea behind
+        // it. It throws rather than falling through to `bare_prompt`, which is
+        // what a plausible edit here would do — and that would write the
+        // README's text over `AGENT.md`, which is the agent's whole system
+        // prompt. (Main would refuse it on the stamp, since the two files'
+        // stamps differ, but "your save was refused" is not the message this
+        // deserves.)
         throw new Error('README.md is read-only here — open the folder to edit it.')
       }
       return { field: 'prompt', prompt, value: text }
@@ -97,15 +108,13 @@ export function PromptDocCard({
       {isLoading ? (
         <div className="text-[10px] text-[var(--color-text-muted)]">Loading…</div>
       ) : (
-        // Plain text, not rendered markdown: this is a document written for a
-        // model, and the scaffold template leads with an HTML comment. Rendering
-        // it would either show that comment as prose or hide part of a file the
-        // page claims to be a viewer over.
+        // Rendered or raw per document — see `markdown` above. Either way the
+        // click that starts editing puts the file's own bytes in the textarea;
+        // rendering changes how it reads, never what is saved.
         <InlineFileEditor
           editor={editor}
-          markdown={false}
+          markdown={markdown}
           placeholder={placeholder}
-          readOnly={readOnly}
           missingNote={missingNote}
         />
       )}

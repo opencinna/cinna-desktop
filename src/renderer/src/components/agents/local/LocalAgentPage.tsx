@@ -17,7 +17,7 @@ import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
 import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
-import { BareNameCard } from './BareAgentCards'
+import { BareNameCard, BareReadmeCard } from './BareAgentCards'
 import { PromptDocCard } from './PromptDocCard'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
 import { PermissionsCard } from './PermissionsCard'
@@ -360,7 +360,16 @@ export function LocalAgentPage(): React.JSX.Element {
                missing rather than as something that does not apply. What a bare
                folder *does* have that the user can change is its name. */
             (agent.kind === 'bare' ? (
-              <BareNameCard agent={agent} />
+              <>
+                <BareNameCard agent={agent} />
+                {/* Where a folder describes itself, that description belongs on
+                    the tab that asks what this agent is. Rendered, not raw: a
+                    README is written to be read as markdown, and a bare folder
+                    is very often a repository whose README is the only prose
+                    about it anywhere. It renders nothing at all when the folder
+                    has no README. */}
+                <BareReadmeCard agent={agent} />
+              </>
             ) : (
               <>
                 <StatusCard agent={agent} />
@@ -370,24 +379,20 @@ export function LocalAgentPage(): React.JSX.Element {
             ))}
           {activeTab === 'prompts' &&
             (agent.kind === 'bare' ? (
-              <>
-                <PromptDocCard
-                  agentId={agent.id}
-                  prompt="bare_prompt"
-                  title="Instructions"
-                  hint="This file is the agent: it is loaded as the system prompt for every conversation."
-                  placeholder="Describe what this agent does, step by step, addressed to the agent."
-                />
-                <PromptDocCard
-                  agentId={agent.id}
-                  prompt="bare_readme"
-                  title="Readme"
-                  hint="Read-only here. This is what an assistant opening the folder to work on the agent is briefed from — it is not part of what the agent itself is told."
-                  placeholder="No README.md in this folder."
-                  readOnly
-                  missingNote="There is no README.md in this folder yet. Add one to brief an assistant that opens the folder to work on this agent."
-                />
-              </>
+              /* One document, because a bare agent has one: `AGENT.md` is the
+                 whole system prompt. The folder's README moved to Overview,
+                 where a description of the agent is what the tab is for — here
+                 it was the longer of two cards on the tab whose point is the
+                 shorter one, and read as though it too were sent to the agent. */
+              <PromptDocCard
+                agentId={agent.id}
+                prompt="bare_prompt"
+                title="Instructions"
+                hint="This file is the agent: it is loaded as the system prompt for every conversation."
+                placeholder="Describe what this agent does, step by step, addressed to the agent."
+                markdown
+                missingNote="AGENT.md is not in this folder. Add it there — it is the file that makes this folder an agent."
+              />
             ) : (
               <>
                 <PromptDocCard

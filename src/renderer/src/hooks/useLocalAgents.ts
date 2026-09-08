@@ -145,12 +145,24 @@ export function useLocalAgentWatch(): void {
     return window.api.localAgents.onChanged((payload) => {
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
       void queryClient.invalidateQueries({ queryKey: AGENTS_KEY })
+      // The prompt documents live in their own cache entries — the DTO carries
+      // their stamps but not their text — so a folder edit has to drop those
+      // too, or an assistant's rewrite would never appear.
       if (payload.agentId) {
         void queryClient.invalidateQueries({ queryKey: localAgentKey(payload.agentId) })
-        // The prompt documents live in their own cache entries — the DTO
-        // carries their stamps but not their text — so a folder edit has to
-        // drop those too, or an assistant's rewrite would never appear.
         void queryClient.invalidateQueries({ queryKey: ['local-agent-doc', payload.agentId] })
+      } else {
+        // A whole-root push names no agent, and an edit to a **bare** agent's
+        // own files is always one of these: `classifyExternalEvent` returns
+        // `root` for an `AGENT.md` or a `README.md` basename, so the rescan
+        // broadcasts `agentId: null`. Keyed invalidation therefore missed the
+        // exact case the watcher exists for — the user rewrites the README in
+        // their editor, comes back, and the card still shows the old one, with
+        // `refetchOnWindowFocus` off and nothing else to correct it. The
+        // prefixes are what the open page holds, so this refetches one agent
+        // and its one visible document, not the list.
+        void queryClient.invalidateQueries({ queryKey: ['local-agent'] })
+        void queryClient.invalidateQueries({ queryKey: ['local-agent-doc'] })
       }
     })
   }, [queryClient])
