@@ -1,4 +1,4 @@
-import OpenAI from 'openai'
+import OpenAI, { APIUserAbortError } from 'openai'
 import { LLMAdapter, LLMError, ModelCapability, MediaPart, ModelInfo, StreamParams, StreamResult, ChatMessage, ToolDefinition, ToolCallInfo, renderTextPartsPrefix } from './types'
 import { TEXT_EXTRACTABLE_MIMES } from './capabilityMimes'
 
@@ -69,6 +69,13 @@ function humanizeOpenAIName(id: string): string {
   return parts[0] + '-' + parts[1] + ' ' + parts.slice(2).join(' ')
 }
 
+/**
+ * The host a plain `openai` credential talks to. Named here rather than left
+ * to the SDK because the SDK's own default is `OPENAI_BASE_URL` first — see
+ * the constructor.
+ */
+const OPENAI_DEFAULT_BASE_URL = 'https://api.openai.com/v1'
+
 /** Construction options for OpenAI-compatible (gateway) providers. */
 export interface OpenAIAdapterOptions {
   /** Custom API base URL — points the SDK at a self-hosted / enterprise gateway. */
@@ -88,7 +95,25 @@ export class OpenAIAdapter implements LLMAdapter {
   private fallbackModels: string[]
 
   constructor(apiKey: string, providerId: string, opts: OpenAIAdapterOptions = {}) {
-    this.client = new OpenAI({ apiKey, baseURL: opts.baseURL })
+    // Three of this client's options come from the process environment when
+    // the caller leaves them unset: `baseURL` from OPENAI_BASE_URL, and
+    // `organization` / `project` from OPENAI_ORG_ID / OPENAI_PROJECT_ID, which
+    // ride on every request as `OpenAI-Organization` and `OpenAI-Project`. So a
+    // shell could send the stored key to a host the user never configured, or
+    // bill the request to an organisation they did not choose. The app reaches
+    // this whenever it is launched from a terminal, which is how a developer
+    // launches it. The credential row decides where the request goes and who it
+    // is attributed to, and nothing else does.
+    //
+    // The base URL is pinned to a *default*, not a constant: a gateway is the
+    // same adapter constructed with `baseURL` set (see factory.ts), and that
+    // one must still point where its credential row says.
+    this.client = new OpenAI({
+      apiKey,
+      baseURL: opts.baseURL ?? OPENAI_DEFAULT_BASE_URL,
+      organization: null,
+      project: null
+    })
     this.providerId = providerId
     this.fallbackModels = opts.fallbackModels ?? []
   }
@@ -176,6 +201,15 @@ export class OpenAIAdapter implements LLMAdapter {
       }
     }
 
+    // A cancelled turn must reject, the way every other adapter's does. The
+    // SDK's SSE reader treats an abort as a clean end of stream — `Stream`'s
+    // iterator catches the AbortError and *returns* — so without this the
+    // loop above simply ends and `stream()` resolves with whatever text had
+    // arrived. The caller cannot tell that from a finished turn: it saves the
+    // partial text as the assistant's message, posts `done` to the renderer,
+    // and reports the run succeeded.
+    if (signal?.aborted) throw new APIUserAbortError()
+
     for (const partial of partialToolCalls.values()) {
       let input: Record<string, unknown> = {}
       try {
@@ -211,6 +245,14 @@ export class OpenAIAdapter implements LLMAdapter {
     const msg = error.message
     const err = error as Error & { status?: number; code?: string }
     const code = err.status
+    // Ahead of the status table: an exhausted quota arrives as a 429 carrying
+    // `insufficient_quota`, and would otherwise read as a rate limit — sending
+    // the user to wait and retry for a state that waiting never clears. It can
+    // also arrive mid-stream, where the SDK builds the error with no status
+    // at all, so this is not reachable from inside the table either.
+    if (err.code === 'insufficient_quota') {
+      return { short: 'OpenAI quota exceeded — check billing', detail: msg }
+    }
     if (code) {
       switch (code) {
         case 429:
@@ -224,9 +266,6 @@ export class OpenAIAdapter implements LLMAdapter {
         case 500: case 502: case 503:
           return { short: 'OpenAI server error — try again', detail: msg }
       }
-    }
-    if (err.code === 'insufficient_quota') {
-      return { short: 'OpenAI quota exceeded — check billing', detail: msg }
     }
     return { short: msg.length > 120 ? msg.slice(0, 117) + '...' : msg, detail: msg }
   }
