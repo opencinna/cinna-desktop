@@ -290,6 +290,7 @@ export function isPermissionGranted(
  */
 export function describePermissionAction(action: string): string {
   switch (action) {
+    // OpenCode's coarse operations.
     case 'bash':
       return 'run a command'
     case 'edit':
@@ -302,6 +303,36 @@ export function describePermissionAction(action: string): string {
       return 'fetch from the web'
     case 'external_directory':
       return 'use a folder outside its own'
+    // **Claude's tool names, which are a different vocabulary and stay one.**
+    // The engines are not mapped onto each other — a grant is stored under the
+    // action the engine that raised it actually named, so a rule written on one
+    // never silently authorises the other. What is shared is only this
+    // sentence, because the user reads the same block either way and "The agent
+    // is asking to Bash" is not English.
+    case 'Bash':
+      return 'run a command'
+    case 'Edit':
+      return 'edit a file'
+    case 'Write':
+      return 'write a file'
+    case 'Read':
+      return 'read a file'
+    case 'NotebookEdit':
+      return 'edit a notebook'
+    case 'WebFetch':
+      return 'fetch from the web'
+    case 'WebSearch':
+      return 'search the web'
+    // `Agent` is what `claude` 2.1.266 actually emits; `Task` is the name in
+    // the SDK's types. Both, because a tool name this table misses renders as
+    // itself — "The agent is asking to Agent" is not a sentence.
+    case 'Agent':
+    case 'Task':
+      return 'run a subagent'
+    case 'Glob':
+      return 'search for files'
+    case 'Grep':
+      return 'search file contents'
     default:
       return action
   }

@@ -20,10 +20,18 @@ import { runAgentTurn, type RunAgentTurnInput, type RunAgentTurnResult } from '.
 import { createLogger } from '../../logger/logger'
 import { EngineEventBus } from './engineEventBus'
 import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner'
+import { ClaudeAgentTurnRunner, type ClaudeTurnDeps } from './claudeAgentTurnRunner'
 import { isFolderAgent, type AgentTurnRunner } from './runner'
+import { toolDetectionService } from '../localAgents/toolDetectionService'
+import { runtimeService } from '../localAgents/runtimeService'
+import { providerService } from '../providerService'
+import { assembleAgentPrompt, assembleBareAgentPrompt, resolveDesktopPromptContext } from '../localAgents/promptAssembly'
+import { getShellEnv } from '../../shell/env'
+import { app } from 'electron'
 import type { AgentRow } from '../../db/agents'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
+import { DEFAULT_AGENT_ENGINE, type AgentEngine } from '../../../shared/engine'
 
 const logger = createLogger('agent-turn')
 
@@ -165,6 +173,57 @@ const localDeps: LocalTurnDeps = {
 export const localAgentTurnRunner = new LocalAgentTurnRunner(localDeps)
 
 /**
+ * The world the Claude runner takes, supplied here for the same reason the
+ * local one's is: this module is the only place `toolDetectionService`,
+ * `promptAssembly`, `runtimeService` and Electron's `app` are named together,
+ * so the runner itself stays drivable in a test with no binary and no Electron.
+ *
+ * `getAgent`, `readSession`, `saveSession`, `withLock` and `userId` are the
+ * **same implementations** the OpenCode path uses — deliberately, because
+ * "this agent is busy in another chat" and "this chat remembers a session"
+ * must not mean two different things depending on which engine answered.
+ */
+const claudeDeps: ClaudeTurnDeps = {
+  getAgent: localDeps.getAgent,
+  readSession: localDeps.readSession,
+  saveSession: localDeps.saveSession,
+  withLock: localDeps.withLock,
+  userId: localDeps.userId,
+  // The same grant store the OpenCode path reads. A grant is scoped to a
+  // folder, and the key gains no engine segment — but the *action* it is stored
+  // under is the engine's own vocabulary, so a rule written for OpenCode's
+  // `bash` never silently authorises Claude's `Bash`.
+  isGranted: localDeps.isGranted,
+  // The assembled folder prompt, not the SDK's `claude_code` preset: the preset
+  // is a coding assistant's system prompt and the folder already says what this
+  // agent is. A bare folder has no manifest, so nothing in the kit assembler
+  // applies to it — the same split `collectEngineAgents` makes.
+  systemPrompt: (userId, agentId) => {
+    const agent = localAgentService.get(userId, agentId)
+    const context = resolveDesktopPromptContext()
+    return agent.kind === 'bare'
+      ? assembleBareAgentPrompt(agent.path, agent.name, context)
+      : assembleAgentPrompt(agent.path, agent.manifest, context)
+  },
+  // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a plan
+  // serves what the plan serves, and `runtimeService.resolve` returns the alias
+  // for this engine. Null hands the choice to the CLI's own default.
+  model: (userId, agentId) => {
+    try {
+      const agent = localAgentService.get(userId, agentId)
+      return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId
+    } catch {
+      return null
+    }
+  },
+  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  shellEnv: () => getShellEnv(),
+  appVersion: () => app.getVersion()
+}
+
+export const claudeAgentTurnRunner = new ClaudeAgentTurnRunner(claudeDeps)
+
+/**
  * Write a user's *Always allow* against the folder the ask came from.
  *
  * Lives here rather than in the IPC handler that calls it for two reasons.
@@ -206,6 +265,34 @@ export function rememberPermissionGrant(
  * asking "why did this agent take that path", and exactly one place to change
  * when a third kind of agent arrives.
  */
-export function resolveTurnRunner(agent: Pick<AgentRow, 'source'>): AgentTurnRunner {
-  return isFolderAgent(agent) ? localAgentTurnRunner : a2aTurnRunner
+export function resolveTurnRunner(agent: Pick<AgentRow, 'source' | 'id'>): AgentTurnRunner {
+  if (!isFolderAgent(agent)) return a2aTurnRunner
+  return folderEngine(agent.id) === 'claude' ? claudeAgentTurnRunner : localAgentTurnRunner
+}
+
+/**
+ * Which engine a folder agent's manifest asks for.
+ *
+ * A filesystem read, on the turn path — which is why it is guarded rather than
+ * trusted. `localAgentService.get` throws `not_found` when the row is gone or
+ * its folder moved, and a manifest is unparseable for a moment every time an
+ * assistant saves it. **Falling back to the default engine is the safe
+ * direction**: the OpenCode runner already renders every one of those states as
+ * a readable turn error, whereas dispatching to the Claude runner on a folder
+ * we could not read would replace them with "no Claude Code was found".
+ *
+ * An unrecognised engine value resolves to the default too — the contract's
+ * tolerant read, applied at the last place it could still be forgotten.
+ */
+function folderEngine(agentId: string): AgentEngine {
+  try {
+    const dto = localAgentService.get(getSettingsScopeUserId(), agentId)
+    return runtimeService.resolve(dto.runtime, providerService.listMerged()).engine
+  } catch (err) {
+    logger.warn('could not read a folder agent’s engine; using the default', {
+      agentId,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return DEFAULT_AGENT_ENGINE
+  }
 }

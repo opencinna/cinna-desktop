@@ -13,6 +13,22 @@ files:
   # Without this it would be packed twice: once here (and unpacked again by
   # asarUnpack) and once as an extra resource.
   - '!resources/cinna-kit-contract/**'
+  # **The Claude Agent SDK's bundled `claude`, which we must never ship.**
+  #
+  # `@anthropic-ai/claude-agent-sdk` declares eight optional platform packages,
+  # one per target, and each is a single ~190 MB `claude` executable. We drive
+  # the binary the *user* installed — `pathToClaudeCodeExecutable` always points
+  # at what `toolDetectionService` found — so the bundled copy is never
+  # executed. But not executing it is not the same as not shipping it: npm
+  # installs it from the dependency alone, and without this line every installer
+  # grows by ~190 MB and carries a second Claude Code the user never chose,
+  # cannot see and cannot update.
+  #
+  # Verified safe to drop: with the platform package deleted outright, the SDK
+  # still imports and runs a full turn, because the bundled-binary resolution
+  # path is only reached when `pathToClaudeCodeExecutable` is absent. See
+  # `docs/agents/local_agents/claude_contract.md` §5a.
+  - '!node_modules/@anthropic-ai/claude-agent-sdk-*/**'
 asarUnpack:
   # For the icon PNGs, which are imported with electron-vite's `?asset`.
   # The kit contract is excluded from `files` above, so this never matches it.
