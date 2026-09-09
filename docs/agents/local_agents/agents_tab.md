@@ -302,9 +302,9 @@ Typing in the folder field holds the raw text rather than normalising per keystr
 - A prompt containing a **newline** (only an assistant or a hand edit can produce one) is *flattened* to one line on display, never split into two. Flattening is visible and reversible; splitting silently changes how many prompts the agent has
 - A line that is too long, or too many lines, is reported **with its number** before the save is sent. Main can only answer "one of these is too long", which against a ten-line textarea is not something a user can act on. The list is still built in full — never silently shortened
 
-### Chat controls render disabled
+### Chat controls shipped disabled before the runner existed
 
-The runner is Phase 6. **Start chat** on the page header and **Run** on each command row are present, disabled and titled with why. Hiding them would make the finished page's shape invisible; enabling them would produce an error where the user expected a reply. (Both are live now: `/run:<name>` in [Catalog Commands](commands.md), **Start chat** with it.)
+Both are live now — **Start chat** on the page header and **Run** on each command row, the latter sending `/run:<name>` ([Catalog Commands](commands.md)). Until the runner landed in Phase 6 they were present, disabled and titled with why: hiding them would have made the finished page's shape invisible, and enabling them would have produced an error where the user expected a reply.
 
 (The Runs with panel's pickers were disabled in Phase 3 for the same reason and became interactive in Phase 5, which also gave it an engine status line — see [The Local Engine](engine.md). They are still disabled in one ordinary case: while the model registry is loading, since a picker that cannot tell a foreign model from an unlisted one cannot edit honestly.)
 
