@@ -13,9 +13,10 @@ import { CommandsCard } from './ReadOnlyCards'
  * left to pin for it once a chat exists — see `useCliCommands`/`ChatInput`,
  * unchanged by this phase).
  *
- * `startNewChat` and `setActiveView` are the two calls this button has to
- * make correctly — everything downstream of them (chat creation, the actual
- * `/run:` dispatch) is already covered elsewhere and is not re-proven here.
+ * `startNewChat`, `setActiveView` and `setSidebarTab` are the three calls this
+ * button has to make correctly — everything downstream of them (chat creation,
+ * the actual `/run:` dispatch) is already covered elsewhere and is not
+ * re-proven here.
  */
 
 const startNewChat = vi.fn().mockResolvedValue(undefined)
@@ -24,9 +25,14 @@ vi.mock('../../../hooks/useNewChatFlow', () => ({
 }))
 
 const setActiveView = vi.fn()
+const setSidebarTab = vi.fn()
 vi.mock('../../../stores/ui.store', () => ({
-  useUIStore: (selector: (s: { setActiveView: typeof setActiveView }) => unknown) =>
-    selector({ setActiveView })
+  useUIStore: (
+    selector: (s: {
+      setActiveView: typeof setActiveView
+      setSidebarTab: typeof setSidebarTab
+    }) => unknown
+  ) => selector({ setActiveView, setSidebarTab })
 }))
 
 // `useOpenAgentPath` is a real react-query mutation calling `window.api` —
@@ -64,6 +70,9 @@ describe('CommandsCard — Run', () => {
     fireEvent.click(screen.getByRole('button', { name: /run/i }))
 
     expect(setActiveView).toHaveBeenCalledWith('chat')
+    // The run leaves the user in a conversation, so the sidebar follows it —
+    // the same move both "Start chat" buttons make.
+    expect(setSidebarTab).toHaveBeenCalledWith('chats')
     await waitFor(() => expect(startNewChat).toHaveBeenCalledTimes(1))
     expect(startNewChat).toHaveBeenCalledWith(
       expect.objectContaining({

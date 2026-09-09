@@ -14,11 +14,13 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
  * was once a hard-coded `disabled` button: the runner could serve a turn since
  * Phase 6 and nothing in the renderer could reach it. It uses the mechanism
  * `AgentStatusOverlay`'s own "Start chat" already proves — `setActiveView('chat')`
- * + `setPendingAgentId` — so only those two calls are pinned.
+ * + `setPendingAgentId` — plus the sidebar move the sidebar row's chat button
+ * already makes, so only those three calls are pinned.
  */
 
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
+const setSidebarTab = vi.fn()
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
@@ -27,7 +29,8 @@ vi.mock('../../../stores/ui.store', () => ({
       pendingDraftAgentId: null,
       setPendingDraftAgentId: vi.fn(),
       setActiveView,
-      setPendingAgentId
+      setPendingAgentId,
+      setSidebarTab
     })
 }))
 
@@ -111,6 +114,12 @@ describe('LocalAgentPage — Start chat', () => {
     fireEvent.click(screen.getByRole('button', { name: /start chat/i }))
     expect(setActiveView).toHaveBeenCalledWith('chat')
     expect(setPendingAgentId).toHaveBeenCalledWith('folder:alpha')
+  })
+
+  it('moves the sidebar to Chats, so it does not stay on the agents list', () => {
+    renderPage()
+    fireEvent.click(screen.getByRole('button', { name: /start chat/i }))
+    expect(setSidebarTab).toHaveBeenCalledWith('chats')
   })
 
   it('is enabled — this used to be a hard-coded `disabled` button', () => {

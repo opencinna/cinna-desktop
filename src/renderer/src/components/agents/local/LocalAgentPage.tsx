@@ -69,7 +69,10 @@ function readinessDot(agent: LocalAgentDto): { cls: string; title: string } {
  *
  * **Start chat** uses the exact mechanism the remote-agent status overlay
  * already uses (`AgentStatusOverlay`'s own "Start chat": `setActiveView('chat')`
- * + `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`).
+ * + `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`), and it
+ * moves the sidebar to Chats with it, exactly as the sidebar row's chat button
+ * does (`LocalAgentsList.tsx`). Landing in a conversation with the agents list
+ * still beside it left the sidebar pointing at a screen that is no longer on.
  */
 export function LocalAgentPage(): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
@@ -78,6 +81,7 @@ export function LocalAgentPage(): React.JSX.Element {
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
   /** Whether there is an agents folder at all — see the placeholder below. */
   const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
@@ -255,6 +259,10 @@ export function LocalAgentPage(): React.JSX.Element {
               onClick={() => {
                 setActiveView('chat')
                 setPendingAgentId(agent.id)
+                // The chat opens in the centre; the sidebar follows it, so the
+                // user is not left looking at the agents list beside a
+                // conversation it no longer relates to.
+                setSidebarTab('chats')
               }}
               title={`Start a new chat with ${agent.name}`}
               className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5

@@ -97,11 +97,13 @@ export function CredentialsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
  * directly to this agent and sends `/run:<name>` — the same message the
  * composer's `/` popup would insert, so the two entry points converge on one
  * execution path (`agent_a2a.ipc.ts`'s `/run:` interception) rather than
- * this card doing its own thing.
+ * this card doing its own thing. It lands the sidebar on Chats as the two
+ * "Start chat" buttons do: this leaves the user in a conversation too.
  */
 export function CommandsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const openPath = useOpenAgentPath()
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
   const { startNewChat } = useNewChatFlow()
   const [runningName, setRunningName] = useState<string | null>(null)
 
@@ -111,8 +113,11 @@ export function CommandsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     try {
       // Switch to the chat view first — `startNewChat` sets `activeChatId`
       // but does not itself decide which screen is on top, and the whole
-      // point of "Run" is to watch the command stream in.
+      // point of "Run" is to watch the command stream in. The sidebar moves
+      // with it for the reason both chat buttons move it: once the centre is
+      // a conversation, an agents list beside it relates to nothing on screen.
       setActiveView('chat')
+      setSidebarTab('chats')
       await startNewChat({
         message: `/run:${name}`,
         agentIds: [agent.id],
