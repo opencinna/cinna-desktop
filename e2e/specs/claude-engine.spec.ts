@@ -49,16 +49,62 @@ import type { DetectedTool } from '../../src/shared/localTools'
  * test skips rather than asserting on an option that must not exist there —
  * the absent case is `RuntimePanel.test.tsx`'s, which can fake detection.
  *
- * The model registry is stubbed for the *credential* half only, so that branch
- * is healthy rather than "could not load the model list": `provider:list-models`
- * is a real network round trip per credential, and the Claude branch — which
- * has no catalogue at all — must be compared against a working credential, not
- * against a broken one.
+ * The model catalogue is stubbed for the *credential* half only, so that branch
+ * is healthy rather than "could not load the model list": the Claude branch —
+ * which has no catalogue at all — must be compared against a working
+ * credential, not against a broken one.
+ *
+ * ## Why the catalogue is a keyless credential, and not an environment variable
+ *
+ * It used to come from `ANTHROPIC_BASE_URL`, and that stopped working — for a
+ * good reason, which is the same reason the replacement is stable. `18e97b2`
+ * pinned the Anthropic client's `baseURL` to `https://api.anthropic.com`
+ * precisely so a shell variable cannot send a stored key to a host the user
+ * never configured, and `openai.ts` does the same with its default. Left as it
+ * was, this spec asserted a healthy credential branch against a catalogue that
+ * silently went empty — `providers.listModels()` answering `[]` while a stub
+ * server sat there unvisited — which is a fixture that fails *open*.
+ *
+ * The redirect that survives is the one the product means to exist: a
+ * **keyless** credential, whose host the user types and which therefore travels
+ * on the row. `providerService.upsert` **drops `baseUrl` for any type that
+ * requires a key** — deliberately, because pointing a row holding a real API
+ * key at an arbitrary URL "is key exfiltration with extra steps" — so an
+ * `openai_compatible` gateway cannot be arranged from a spec at all, and an
+ * Ollama row can. That makes the fake Ollama the only stub-served catalogue a
+ * spec may build, and it is one the suite already relies on
+ * (`ollama-credential.spec.ts`).
+ *
+ * Its ids classify by **parameter size** rather than by product line, so the
+ * three tags below give all three tiers something to resolve to and Medium
+ * lands on `qwen3:8b`. Nothing about the Claude branch depends on which
+ * credential the other branch holds; what matters is that the comparison is
+ * against a working one — and the credential sentence now names a tag that
+ * only the stub can have produced, so a fixture that stops being served fails
+ * this spec instead of quietly weakening it.
+ *
+ * ## Why the login probe is stubbed here and nowhere else
+ *
+ * Readiness on this engine is answered before a turn by `claude auth status`,
+ * and under the suite's throwaway `HOME` a real `claude` answers *logged out* —
+ * so the panel's reserved line would carry the red remedy rather than anything
+ * about the choice this spec is making. That state is real and is asserted
+ * against the real binary in `claude-logged-out.spec.ts`. Here the probe is
+ * pinned to `unknown` — the honest "readiness was not answered", not a
+ * fabricated login — which is the state the install sentence below describes.
+ * It also means this spec spawns no `claude` at all, which is the stronger
+ * property for a file whose whole header is about never spending the user's
+ * subscription.
  */
 
-const CREDENTIAL = 'Anthropic Personal'
-/** What the stub lists, and what the healthy credential branch resolves Medium to. */
-const CLAUDE_MODEL = { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' }
+const CREDENTIAL = 'Local Models'
+/**
+ * The fake Ollama's catalogue, one tag per tier — parameter size is what
+ * decides which (`PARAMS_SMALL` / `PARAMS_MID` / `PARAMS_LARGE`). The **tag
+ * itself** is the display name on this provider: the adapter passes it through
+ * verbatim rather than prettifying it.
+ */
+const TAGS = { simple: 'llama3.2:3b', medium: 'qwen3:8b', complex: 'qwen3:32b' }
 const AGENT = 'Ledger Watcher'
 
 /** The Runs-on select's value for the engine — `CLAUDE_OPTION` in the panel. */
@@ -68,51 +114,60 @@ const CREDENTIAL_GROUP = 'AI credentials'
 
 /** The reserved status line on each branch. */
 const ON_CLAUDE = 'Claude Agent runs on your own Claude Code install, on sonnet.'
-const ON_CREDENTIAL = `Medium — the balanced default, on ${CLAUDE_MODEL.name}.`
+const ON_CREDENTIAL = `Medium — the balanced default, on ${TAGS.medium}.`
 
-/** One Anthropic catalogue, so the credential branch resolves its tier. */
+/**
+ * What the login probe answers here: *we did not find out*. See the header —
+ * the real answer under a throwaway `HOME` is `logged_out`, and that belongs to
+ * `claude-logged-out.spec.ts`.
+ */
+const AUTH_UNKNOWN = { state: 'unknown', authMethod: null, subscriptionType: null } as const
+
+/**
+ * A fake Ollama, so the credential branch resolves its tier.
+ *
+ * Two endpoints, because the app asks two questions: `/api/version` is how
+ * detection decides something is answering there at all, and `/api/tags` is the
+ * catalogue. `parameter_size` is carried because a real daemon carries it,
+ * though the tier is read from the tag.
+ */
 function modelRegistry(): Server {
   return createServer((req, res) => {
     res.setHeader('content-type', 'application/json')
-    if (!req.url?.startsWith('/v1/models')) {
+    if (req.url?.startsWith('/api/version')) {
+      res.end(JSON.stringify({ version: '0.6.2' }))
+      return
+    }
+    if (!req.url?.startsWith('/api/tags')) {
       res.statusCode = 404
       res.end('{}')
       return
     }
     res.end(
       JSON.stringify({
-        data: [
-          {
-            type: 'model',
-            id: CLAUDE_MODEL.id,
-            display_name: CLAUDE_MODEL.name,
-            created_at: '2025-09-29T00:00:00Z'
-          }
-        ],
-        has_more: false,
-        first_id: CLAUDE_MODEL.id,
-        last_id: null
+        models: [
+          { name: TAGS.simple, model: TAGS.simple, details: { parameter_size: '3B' } },
+          { name: TAGS.medium, model: TAGS.medium, details: { parameter_size: '8B' } },
+          { name: TAGS.complex, model: TAGS.complex, details: { parameter_size: '32B' } }
+        ]
       })
     )
   })
 }
 
-/**
- * Filled in `beforeAll`, read by the fixture at launch — which happens later,
- * and for every `relaunch()` too. Nothing is written to `process.env`, so no
- * other spec in this worker can inherit a base URL pointing at a server that
- * has since stopped listening.
- */
-const REGISTRY_ENV: Record<string, string> = {}
-test.use({ env: REGISTRY_ENV })
-
 let server: Server
+/** Where the credential row points, known once the server has a port. */
+let registryUrl = ''
 
 test.beforeAll(async () => {
   server = modelRegistry()
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   const { port } = server.address() as AddressInfo
-  REGISTRY_ENV.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`
+  // Reaches the app through the credential row that the test seeds, not through
+  // the environment: nothing is written to `process.env` and no launch option
+  // is involved, so a later spec in this worker cannot inherit a base URL
+  // pointing at a server that has since stopped listening.
+  registryUrl = `http://127.0.0.1:${port}`
 })
 
 test.afterAll(async () => {
@@ -183,15 +238,18 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
       'which is RuntimePanel.test.tsx’s case rather than this one'
   )
 
+  // Keyless, so the row keeps the host — see the header. A keyed row silently
+  // loses its `baseUrl` here and would talk to the real vendor API with a fake
+  // key, which is how this spec's catalogue went empty.
   await cinna.page.evaluate(
-    (name) =>
+    (input) =>
       window.api.providers.upsert({
-        type: 'anthropic',
-        name,
-        apiKey: 'e2e-anthropic-key',
+        type: 'ollama',
+        name: input.name,
+        baseUrl: input.baseUrl,
         enabled: true
       }),
-    CREDENTIAL
+    { name: CREDENTIAL, baseUrl: registryUrl }
   )
 
   const root = await addAgentRoot(cinna)
@@ -231,6 +289,17 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
   await cinna.relaunch()
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
+
+  // **After the relaunch**, because handlers are registered per app process and
+  // the fresh one carries the product's own. Replacing it — rather than faking
+  // detection — keeps everything this spec asserts real: the option is offered
+  // because a `claude` was found on the PATH, and only the sentence about
+  // whether that install can answer is pinned. It also means no `claude` child
+  // is spawned by this file at all.
+  await cinna.electronApp.evaluate(({ ipcMain }, status) => {
+    ipcMain.removeHandler('local-tools:claude-auth')
+    ipcMain.handle('local-tools:claude-auth', () => status)
+  }, AUTH_UNKNOWN)
 
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
