@@ -43,11 +43,12 @@ No database schema: detection is a runtime probe and nothing about it is persist
 | Channel | Type | Purpose |
 |---------|------|---------|
 | `local-tools:list` | invoke | The detected tools (cached in main for the app lifetime) → `DetectedTool[]` |
-| `local-tools:refresh` | invoke | Drop the PATH-lookup cache, re-detect → `DetectedTool[]` |
+| `local-tools:refresh` | invoke | Drop the PATH-lookup cache, re-detect → `DetectedTool[]`. Also re-asks the Claude login probe, **after** the re-detection has resolved: the probe reads the memoized detection promise synchronously, so starting it first would answer from the cache this call is about to discard — on exactly the machine the button exists for, one where a tool has just been installed. Fire-and-forget, so a refused login probe cannot fail the detection |
+| `local-tools:claude-auth` | invoke | Whether the detected `claude` is logged in → `ClaudeAuthStatus`. The sibling fact to detection, answered the same way — by asking the machine — and cached in main behind a short window so the panel may ask on every mount. Owned by [The Claude Engine](claude_engine.md); it lives on this surface because it is a fact about the machine's tools, not about an agent |
 | `local-tools:open-in` | invoke | Perform an `OpenInRequest` → `{ success: true }`, or a `LocalToolsError` |
 | `local-agent:init-prompt` | invoke | `(agentId) → string` — the briefing for one folder. Throws `LocalAgentError('not_found')`; **not** a `LocalAgentOutcome`, because no renderer branch reads the code |
 
-All three `local-tools:*` handlers call `userActivation.requireActivated()` and are wrapped by `ipcHandle()`; they hold no logic beyond that — validation of the folder and the tool id lives in the service. Registration goes through `registerLocalToolsHandlers()` from `src/main/ipc/index.ts` (enforced by `src/main/ipc/registration.test.ts`).
+All four `local-tools:*` handlers call `userActivation.requireActivated()` and are wrapped by `ipcHandle()`; they hold no logic beyond that — validation of the folder and the tool id lives in the service. Registration goes through `registerLocalToolsHandlers()` from `src/main/ipc/index.ts` (enforced by `src/main/ipc/registration.test.ts`).
 
 `local-agent:init-prompt` belongs to this feature by behaviour and to the `local-agent:*` family by registration (`registerLocalAgentHandlers()`), because it takes an **agent id** and resolves the folder from the index — a launch channel takes a path and re-validates it against the roots, and this one must not accept a path at all. It is activation-gated and scoped with `getSettingsScopeUserId()` like its siblings, and is listed again in the channel tables of [Folder Index — Technical Details](folder_index_tech.md) and [Agents Tab — Technical Details](agents_tab_tech.md).
 
@@ -94,7 +95,7 @@ All three `local-tools:*` handlers call `userActivation.requireActivated()` and 
 
 - `useLocalTools()` — TanStack Query over `local-tools:list` with `staleTime: Infinity`; the main-process cache makes it cheap after the first call and `useRefreshLocalTools` is the only invalidation
 - `useAvailableTools(kind)` — filters to `available && kind === …`; the Settings tools card's list
-- `useRefreshLocalTools()` — mutation over `local-tools:refresh`, writing the result straight into the query cache
+- `useRefreshLocalTools()` — mutation over `local-tools:refresh`, writing the result straight into the query cache and invalidating `CLAUDE_AUTH_KEY`, since main re-asks the login on the same call. `useClaudeAuth()` is documented with [The Claude Engine](claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
 - `useOpenIn()` — mutation over `local-tools:open-in`. Main re-validates the folder, so a rejection here is expected and must be surfaced, not swallowed
 - `useDefaultTool()` — `{tool, launchable, autoOpen}`, memoised over the tools query and the app-settings query. `tool` is `null` when the setting is empty **or** names a tool that is not currently launchable; `autoOpen` is true only when `tool` resolved and `localAgentsAutoOpen` is on. This is where an uninstalled default degrades to "ask"
 - `useCopyAgentInitPrompt()` — mutation over `local-agent:init-prompt` **plus** `navigator.clipboard.writeText`, both inside the `mutationFn`. A rejected clipboard write is re-thrown as an app-authored `Error`, never the `DOMException`: it *is* an `Error`, so `unwrapIpcError` would take its message verbatim and show the user Chromium's own words ("Document is not focused." — what a notification stealing focus mid-copy produces)

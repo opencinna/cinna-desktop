@@ -54,13 +54,15 @@ This is the "develop your agent in your own assistant" half of Local Agents: the
 ### Refreshing detection after installing a tool
 1. User installs, say, Claude Code while the app is running
 2. Settings → Local Agents → Developer Tools → **Refresh** (beside the section title) drops the cached `PATH` lookups and re-detects
-3. Caveat: adding a *new* `PATH` entry to a shell profile still needs an app restart — see [Shell Environment Resolution](../../development/shell_environment/shell_environment.md)
+3. Refresh also re-asks whether the detected `claude` is **logged in**, since somebody who has just installed it is about to log in too. **The Developer Tools table never shows that answer** — it has two columns, Tool and Version — so this is a side effect with no surface, and a deliberate one: the button means "look at this machine again", and fresh detection beside a stale login would be the inconsistency. The answer itself belongs to [The Claude Engine](claude_engine.md), which is also where it is displayed; a login column here was considered and refused, because the agent page already carries the fact and its own poll clears a stale alarm without anyone opening Settings
+4. Caveat: adding a *new* `PATH` entry to a shell profile still needs an app restart — see [Shell Environment Resolution](../../development/shell_environment/shell_environment.md)
 
 ## Business Rules
 
 ### Detection
 
 - Detection runs **once per app lifetime** and is cached, because probing the filesystem on every render of the agent page would be wasteful. `Refresh` is the only invalidation
+- **Detection answers whether a tool exists, and nothing about its state.** Whether the `claude` it found is logged in is a different question with a different lifetime — it changes while the app is open — and is asked, cached and surfaced by [The Claude Engine](claude_engine.md) over its own channel. This feature must not grow a second meaning for "detected"
 - Every binary is looked up on the **login-shell `PATH`**, not the app's own — a GUI-launched app on macOS otherwise cannot see Homebrew, mise, nvm, cargo or `~/.local/bin`
 - On macOS, editors additionally fall back to their application bundle in `/Applications` and `~/Applications`. Many people drag VS Code or Cursor across and never run "Install 'code' command in PATH", so PATH-only detection would report an editor they can see in their Dock as missing
 - A detection failure never poisons the cache: every tool is reported unavailable and the next call retries
@@ -138,7 +140,7 @@ The init prompt is the exception, and deliberately so: it throws a local-agent `
 Agent page (Open-in split button + ⋯ menu) · New-agent "Build it with…" · Settings (Open agents with)
   -> useLocalTools / useDefaultTool / useOpenIn   (window.api.localTools.*)
        |   useSetDefaultTool -> app-settings: localAgentsDefaultTool (allowlisted), localAgentsAutoOpen
-       -> local-tools:list | local-tools:refresh | local-tools:open-in
+       -> local-tools:list | local-tools:refresh | local-tools:open-in | local-tools:claude-auth
             -> toolDetectionService  -> which() over the login-shell PATH
                                      -> macOS .app bundle fallback (editors)
             -> openInService
@@ -165,7 +167,7 @@ Agent page (Open-in menu -> "Copy prompt for another tool")
 ## Integration Points
 
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — every binary lookup, and the `PATH` all of this depends on
-- [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session: the three `local-tools:*` ones and `local-agent:init-prompt`
+- [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session: the four `local-tools:*` ones and `local-agent:init-prompt`
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the index row the init prompt takes its folder and its display name from, and the `local-agent:*` channel family it is registered with
 - [Release & Distribution](../../development/distribution/release.md) — the macOS entitlement and usage description ship with the signed, notarised build
 - [Logger](../../development/logger/logger.md) — the `local-tools` and `open-in` scopes carry the diagnostics above

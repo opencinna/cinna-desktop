@@ -66,6 +66,8 @@ src/
 
 7. **MCP OAuth callback uses localhost**: Temporary HTTP server on `127.0.0.1` with random port; shuts down after callback or 2-minute timeout. Redirect URI changes each auth flow — DCR handles this
 
+8. **`refetchOnWindowFocus` is inert for app switching**: TanStack Query's `focusManager` (`@tanstack/query-core@5.99.0`) registers exactly one listener — `visibilitychange`. It fires when the window is hidden, occluded, minimized or moved to another Space, and **not** when another application takes the foreground over a still-visible Electron window. Driven through the built app, a focus-refetching query was unchanged across `blur`/`focus`, `hide`/`show` and `minimize`/`restore`, with `document.visibilityState` never leaving `"visible"`. So a query whose answer changes because the user went off to *another app* — the Claude login probe is the live example — needs an explicit trigger: an interval, gated on the state that needs one, rather than the option that looks like it covers this. Keep `refetchOnWindowFocus: 'always'` alongside it for the events `visibilitychange` really does cover (`'always'`, not `true`, which defers to `staleTime` and would hold the stale answer). See [The Claude Engine (tech)](../../agents/local_agents/claude_engine_tech.md#useclaudeauth-uselocaltoolsts-and-why-it-polls)
+
 ## UI Layout
 
 ```

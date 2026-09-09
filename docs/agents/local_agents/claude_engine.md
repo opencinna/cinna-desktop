@@ -54,7 +54,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 ### Chatting with an agent on Claude
 1. The user sends a message in a chat bound to the agent. Everything up to the runner is the shared path: same composer, same persistence, same transcript, same cancel button
 2. Dispatch reads the agent's own engine and sends the turn to the Claude runner
-3. Readiness is answered **before** the turn: no `claude` on this machine is a sentence naming the remedy, not a turn that fails with the CLI's own words
+3. Readiness is answered **before** the turn, on both rungs and for free: no `claude` on this machine, and a `claude` that is not logged in, are each a sentence naming the remedy rather than a turn that fails with the CLI's own words
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
 5. The SDK is asked for a turn in the agent's folder, with the folder's assembled system prompt, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
@@ -67,9 +67,12 @@ Both were live hazards and the second is the one that actually bit. The child en
 5. **Read-only tools never ask.** With no `allowedTools` and the default permission mode, a `Read` runs with no ask at all. The grants govern the mutating surface, not the whole tool surface, and this is a limit of the mechanism rather than a policy
 
 ### Claude Code is there but not logged in
-1. Detection finds the binary, so the option is offered and the agent looks healthy — **whether an install is logged in is not knowable without spawning it**
-2. The first turn fails, and the failure is translated into the one useful sentence: *"This agent runs on Claude, and that installation is not logged in. Run `claude` in a terminal to log in."*
-3. The remedy is named and nothing offers to perform it. Logging in is something only the user can do, in their own terminal, against their own account
+1. Detection finds the binary, so the option is offered. Whether that install is *logged in* is asked separately, and **for free**: `claude auth status` runs no turn and bills nothing
+2. The panel's status line says so before anything is spent — *"Run `claude` in a terminal: that Claude Code install is not logged in."* The remedy leads, because that line is measured to clip at the 800 px minimum window and the half that survives has to be the half naming the action
+3. A turn asked for anyway is **refused before the SDK is called**: *"This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal."* Nothing is spawned and nothing is billed
+   - The second half is **word for word the panel's**, because a user meets this condition on two surfaces and two paraphrases of one instruction read as two instructions. The panel's wording is what the skip reason moved to match, not the other way round — that line is measured to the pixel and cannot afford *installation*. The opening clause stays only because a turn error in a transcript has nothing around it naming the engine, while the panel says so two rows up
+4. The remedy is named and nothing offers to perform it. Logging in is something only the user can do, in their own terminal, against their own account
+5. The user goes and does it — which is the reason the panel keeps asking while the answer is *logged out*. Coming back to a red alarm about a machine that is now fine is the failure that rule exists to prevent
 
 ## Business Rules
 
@@ -119,6 +122,31 @@ So the environment is built by **narrowing with the helper the app already has, 
 Most of the excluded names would not survive the narrowing anyway. They are stripped **by name regardless**, because the list is the statement of intent: a future widening of the shared allowlist must not quietly restore the billing trap.
 
 The built environment is then **audited before it is handed over**, and a leak is logged loudly by name — never by value, since logging the value of a key to explain that it leaked recreates the leak in the log. It is checked on the value actually being passed rather than trusted to the function that produced it, because the environment is the one input here whose corruption is invisible in the result: a turn billed to the wrong account looks exactly like a turn billed to the right one.
+
+### Readiness is answered before the turn, and the login is free to ask
+
+Two facts decide whether this engine can run an agent, and **both are knowable without spending anything**:
+
+- **Is there a `claude` on this machine** — `toolDetectionService`, which spawns nothing at all
+- **Is that install logged in** — `claude auth status`, which spawns the binary but runs no turn and bills nothing
+
+The second used to cost a turn. The runner learned *Not logged in* from a **thrown turn error** and told it apart from other failures by matching the CLI's own words. That works, and it is the wrong shape: the user asks a question, waits a turn's worth of latency, and gets back an error about authentication.
+
+The two are asked **in that order**, and both **before the per-agent turn lock** — there is nothing to ask about a login when there is no binary, `claude_not_installed` outranks the login everywhere it is read, and "there is no Claude Code here" must not queue behind another chat's turn.
+
+**Only a definite `logged_out` refuses a turn.** `unknown` is a first-class answer and never blocks: a probe that timed out, could not spawn, or met an output shape it did not recognise is not evidence of a logged-out install, and the thrown-error fallback is still there as the second line. A readiness check that can refuse a working engine on its own uncertainty is worse than no readiness check.
+
+**The probe runs in the same constructed child environment the turn will.** This is not tidiness — it is the `USER` finding applied to the check itself. The binary answers differently depending on its child environment, so a probe run under the full login-shell environment would cheerfully report a login for a child that then cannot authenticate, and readiness would be answering about a different process than the one the turn spawns.
+
+**Settings → Local Agents → Developer Tools → Refresh re-asks the login too, and nothing on that screen says so.** That table has two columns, Tool and Version, so the one control in the app that deliberately re-checks the login sits on a screen that never displays it. It is recorded here as a decision rather than left to be found as a bug: the button means *"go and look at this machine again"*, and after it a stale login answer beside fresh detection would be the inconsistency — most of all on the machine the button exists for, where Claude Code has just been installed and is about to be logged into. A **login column is deliberately not added** to that table. It would be a second surface for a fact the agent page already carries, and it is not needed as a recovery path: the panel's own poll clears a stale alarm within about ten seconds, without the user going to Settings at all.
+
+The answer is **cached for a short window, not for the app's lifetime** the way detection is. Whether a binary exists barely changes while the app is open; whether it is logged in changes precisely *because* the app has just told the user to go and log in. A permanently cached "no" would leave them staring at the alarm they had already fixed. One probe is shared by the turn path and the panel, so a render and a turn starting together spawn one child rather than two.
+
+### The account behind that login is never read
+
+`claude auth status` answers with the account's **email**, **organisation id** and organisation name alongside the login state. None of the three is lifted out of the CLI's JSON — not into the returned shape, not into a log line, not across IPC to the renderer.
+
+**That is the defence, and it is deliberately not a rule about logging.** A field that is never read cannot leak from a debug line somebody adds six months from now; a rule saying "do not log the account" is one careless edit from being untrue. What survives is who *pays* rather than who they are: the authentication method as the CLI words it, and the plan tier when it names one. Same reasoning as the engine config's Invariant 4, applied to somebody else's login.
 
 ### The desktop's boundary must not be redefined by files it did not write
 
@@ -188,11 +216,20 @@ A notice and not a panel line, because notices are the existing channel for agen
 
 **Silent when the value is `'none'` or absent.** This app never *asserts* a subscription — asserting one because a variable was stripped would be a claim about an environment it does not fully control — it only reports when the CLI says otherwise. A turn that failed before the CLI said anything has no observation to report, and inventing one is the exact assertion this rule exists against. The turn itself still succeeds: this is a warning about billing, not a failure, and blanking a good answer would help nobody.
 
-### What the panel will not claim
+### What the panel says, and what it still will not claim
 
-**Whether an install is logged in is not knowable without spawning it**, so the panel does not guess. Its Claude column is a muted dot and the detected version — deliberately not the success colour, because one option away in the same slot a green dot means *the process is running*, and the weaker claim would be read as the stronger. The reserved status line says what the agent runs on and on which alias, and says *install*, not *login*.
+The panel now reports the login, because the login became free to ask. The reserved status line names it in one of three shapes: *runs on your own Claude Code login*, with the plan in brackets when the CLI reported one; the weaker *runs on your own Claude Code install* when the probe answered `unknown`; and the logged-out remedy, which **leads with the action** — *"Run `claude` in a terminal: …"* — because at the 800 px minimum window this line is measured to clip, and the surviving half has to be the half the user can act on.
 
-Nothing is asserted before detection answers either. "Detection has not answered" and "the answer is no" are separate states, and collapsing them put the full red not-installed alarm on screen for half a second on machines that *do* have Claude Code — which is the default first visit for every agent on this engine, and the sentence even named a remedy the user would satisfy by installing what they already had.
+What is still never asserted is a **subscription the CLI did not name**. The plan is passed through, capitalised and no further; a lookup table here would blank out a plan this app had not heard of on the one line meant to say who pays, and inferring one because an environment variable was stripped would be a claim about an environment this app does not fully control.
+
+Two states are silence rather than reassurance, and they are different states:
+
+- **Detection has not answered.** The full red not-installed alarm appeared for half a second on machines that *do* have Claude Code — the default first visit for every agent on this engine — naming a remedy the user would satisfy by installing what they already had
+- **The login probe has not answered.** Filling the slot with the reassuring install sentence meant a logged-out machine read healthy in muted grey and was contradicted in red about a tenth of a second later (measured at t=891 ms and t=996 ms). Nothing moves either way — the line is reserved — so what a retraction costs is that the *next* reassuring sentence here is worth less. An answer of `unknown` is not this case: it is an answer, and the install sentence is the true thing to say about it
+
+The **Engine column still names the install and never the login** — it is fixed at 219 px and does not widen with the window, so it holds the shortest true thing and the line that can grow carries the meaning. Its **dot** does move, once: `--color-warning` for a definite `logged_out`, which is the type scale's *"Awaiting auth"* case, and warning rather than danger because the install is fine and one command fixes it. The reserved line below was turning red while the one glanceable indicator in the row stayed neutral about a state the app had just gone and found out.
+
+Everything else about that dot is unchanged, and one rule in particular: it is **never the success colour**. One option away in that exact slot a green dot means *the process is running*, so a green here would be one indicator, in one position, meaning two things — and the weaker claim read as the stronger. `unknown`, in-flight and `logged_in` all stay muted; only "no install at all" is danger.
 
 The panel says nothing about which account paid for a turn either, and **that is a choice of channel rather than silence** — the observation goes into the transcript instead. See below.
 
@@ -208,16 +245,16 @@ The panel says nothing about which account paid for a turn either, and **that is
 
 ## Known gaps, carried honestly
 
-These are open, and the first one can still invalidate the feature:
+These are open:
 
-- **The macOS Keychain path has never been exercised.** The probe machine stores its Claude credential in a file under `$HOME`, so what is verified is only that a *file-backed* credential is reachable from a spawned child given `HOME` and `USER`. Whether a signed, hardened-runtime Electron main process can spawn a child that reads a **Keychain** item — and whether a consent prompt appears on first use — remains unknown and is not testable from a dev build. Homebrew and npm installs on macOS are understood to use the Keychain
-- **A real spawn against a genuinely logged-out install is untested.** The not-logged-in sentence is driven by matching the CLI's error text, and the ladder above it has never run end to end on a machine in that state. A free answer exists — `claude auth status` reports `loggedIn` without running a turn, verified against 2.1.266 for a file-backed credential in [the contract, §5](claude_contract.md#5-not-installed-not-logged-in--and-the-third-state) — and it is deliberately not wired in yet: readiness here still comes from detection alone, and the ladder learns *Not logged in* from the failed turn
+- **The Keychain question is largely closed, and it was the wrong question.** This entry used to say the path had never been exercised. It had been all along: the probe machine's credentials *file* had been expired for a month while every probe succeeded, so the live credential was the Keychain item throughout — see [the contract, §1](claude_contract.md). The remaining half was then measured directly: a Developer ID-signed `node` under `--options runtime` carrying **this app's own entitlements**, none of them Keychain-related, spawned `claude auth status` with the credentials file moved aside and got a logged-in answer with **no consent prompt**. What that does not cover is written out in [§8 item 1](claude_contract.md#8-still-unverified--and-one-of-these-can-still-kill-the-feature) and must not be read as covered: the parent was a signed `node`, not the packaged `.app` with its `entitlementsInherit` chain; nothing was notarized, quarantined or launched past Gatekeeper; only the native installer's `claude` was the accessing binary; and "no prompt" is on a machine where `claude` has been run interactively many times
+- **A real spawn against a genuinely logged-out install is still untested.** The readiness probe is verified against a logged-out *environment* rather than a logged-out *machine* (`USER` withheld, and an empty `HOME`), and the thrown-error fallback below it is still driven by matching the CLI's error text
 - **Whether an API key in the environment actually shadows an OAuth login is not proven.** The stripping rule rests on the SDK documenting the two as distinct credential sources, which is strong but is not observation
-- **Only one install shape was tested** — the native installer. The SDK branches on the executable path's extension, so an npm shim and a Homebrew wrapper take different code paths
+- **Only one install shape was tested** — the native installer. The SDK branches on the executable path's extension, so an npm shim and a Homebrew wrapper take different code paths — and they are also *different binaries* to the Keychain, so the item's ACL is evaluated afresh for each and the no-prompt result above does not carry over
 - **The installer exclusion is verified on `darwin-arm64` only.** The other seven platform packages are not built here
 - **The Anthropic API SDK moved 0.89 → 0.93** to satisfy the Agent SDK's peer requirement, and the bump lands on the ordinary Anthropic chat adapter, `src/main/llm/anthropic.ts`, not on anything here. That adapter is covered — `src/main/llm/anthropic.test.ts` runs the SDK's real client against a stubbed wire — but nothing in this feature exercises it, so a further bump forced from here is verified there, not here; see [LLM Adapters — Technical Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - **Out-of-plan usage has no good surface.** It arrives mid-turn as an error from the CLI and its message is passed through, which is honest but not helpful. We do not know the user's limits and inventing a sentence about them would be worse than the CLI's own
-- **No automated test ever runs a turn on it.** The E2E scenario drives the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and stops there, because spawning `claude` bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
+- **No automated test ever runs a turn on it.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real install read as logged out. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
 
 ## Architecture Overview
 
@@ -236,6 +273,14 @@ resolveTurnRunner(agent)             dispatch: source → engine
    ├── source ≠ folder ────────────────────────► A2A runner
    ├── engine = opencode ──────────────────────► local (OpenCode) runner
    └── engine = claude ────────────────────────► Claude runner
+                                                     │
+   readiness — before the lock, before any turn:     │
+     toolDetectionService → no `claude`  ──► refused │  nothing spawned
+     claudeAuthProbe      → `logged_out` ──► refused │  nothing billed
+       `claude auth status`, cached, in the same     │  `unknown` never blocks
+       constructed environment the turn will use     │
+     the panel asks the same probe:                  │
+       useClaudeAuth → local-tools:claude-auth       │
                                                      │
               ┌──────────────────────────────────────┤
               ▼                                      ▼
@@ -270,7 +315,7 @@ resolveTurnRunner(agent)             dispatch: source → engine
 - [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, and why *Always* is never written into a tool's own store
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line
-- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all
+- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all. The login probe is its sibling and rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings → Local Agents re-asks both
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell environment and the child allowlist the constructed environment starts from
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rule 1 in particular, for a picker that changes which controls exist beneath it
 - Technical details: [The Claude Engine (tech)](claude_engine_tech.md)
