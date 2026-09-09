@@ -3,7 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator } from '@playwright/test'
-import { test, expect, homeDir, type CinnaApp } from '../fixtures/app'
+import { answerAgentsFolder, test, expect, homeDir, type CinnaApp } from '../fixtures/app'
 
 /**
  * Adopting a folder that already holds an `AGENT.md` — a **bare** agent.
@@ -79,6 +79,8 @@ async function stubTrash(cinna: CinnaApp): Promise<void> {
 async function openAddDialog(cinna: CinnaApp): Promise<void> {
   const { page } = cinna
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: 'Add an agent', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Add an agent' })).toBeVisible()
 }
@@ -224,6 +226,7 @@ test('a bare agent has no Commands tab, its README on Overview and AGENT.md on P
 
   const { page } = cinna
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: 'Exchange Rates Agent', exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exchange Rates Agent')
 
@@ -310,6 +313,7 @@ test('removing a bare agent from the list leaves the folder, and Settings puts i
   const { page } = cinna
   const row = page.getByRole('button', { name: 'Sales Leaderboard Agent', exact: true })
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await answerAgentsFolder(cinna)
   await row.click()
 
   await test.step('the confirm offers two choices, and the button follows the choice', async () => {
@@ -385,6 +389,7 @@ test('removing a bare agent from the list leaves the folder, and Settings puts i
 
     await page.getByRole('button', { name: 'Back', exact: true }).click()
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await answerAgentsFolder(cinna)
     await expect(row).toHaveText('Sales Leaderboard Agent')
     expect(treeOf(folder)).toEqual(before)
   })
@@ -599,6 +604,7 @@ test.describe('a bare agent chooses its own credential', () => {
   async function openAgentPage(cinna: CinnaApp): Promise<Locator> {
     const page = cinna.page
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    await answerAgentsFolder(cinna)
     await page.getByRole('button', { name: AGENT, exact: true }).click()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
     return page.getByRole('region', { name: 'Runs with' })

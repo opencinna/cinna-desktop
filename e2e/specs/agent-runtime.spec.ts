@@ -2,7 +2,7 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, type CinnaApp } from '../fixtures/app'
+import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
@@ -158,6 +158,8 @@ async function seedCredentials(cinna: CinnaApp): Promise<void> {
 async function openAgentPage(cinna: CinnaApp): Promise<void> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 }
@@ -252,6 +254,8 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
 
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 

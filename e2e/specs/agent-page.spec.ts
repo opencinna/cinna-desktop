@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { test, expect, type CinnaApp } from '../fixtures/app'
+import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot } from '../fixtures/seed'
 
 /**
@@ -41,6 +41,9 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
 
   await test.step('create from the name field with Enter', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    // A fresh `$HOME` has no agents folder, so opening the tab asks about it
+    // before anything is written there — see `answerAgentsFolder`.
+    await answerAgentsFolder(cinna)
     // The + opens a choice — scaffold a new agent, or point at a folder that
     // already is one — so the New agent form is one card in.
     await page.getByRole('button', { name: 'Add an agent' }).click()
@@ -166,6 +169,9 @@ test('Copy prompt for another tool confirms inside the menu and copies a briefin
 
   await test.step('an agent created from the name field', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
+    // A fresh `$HOME` has no agents folder, so opening the tab asks about it
+    // before anything is written there — see `answerAgentsFolder`.
+    await answerAgentsFolder(cinna)
     // The + opens a choice — scaffold a new agent, or point at a folder that
     // already is one — so the New agent form is one card in.
     await page.getByRole('button', { name: 'Add an agent' }).click()

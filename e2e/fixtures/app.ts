@@ -218,6 +218,41 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
 
 export { expect } from '@playwright/test'
 
+/**
+ * Answer the agents-folder question, the way a first run does.
+ *
+ * Every test gets a fresh `$HOME`, so `$HOME/Documents/CinnaAgents` has never
+ * been created and the app asks about it before writing there — on a real Mac
+ * that write raises the system's Documents-folder prompt, and the dialog exists
+ * so the prompt is not the first the user hears of it. Opening the Agents tab
+ * is what raises the question, so a spec that goes on to press `+` finds the
+ * dialog over it.
+ *
+ * A no-op when the app already has somewhere to put an agent — an adopted root,
+ * or a home this test has already made.
+ */
+export async function answerAgentsFolder(cinna: CinnaApp): Promise<void> {
+  // Decided from the two facts that decide it in the app, never from whether
+  // the dialog happens to be up yet. It is raised when the agents list
+  // *resolves*, not when the tab is clicked, so a visibility check races it —
+  // and losing that race is silent: the helper returns, the dialog then lands
+  // over whatever the spec did next, and a later step fails for a reason that
+  // looks unrelated.
+  //
+  // Asked only when there is nowhere to put an agent: no registered root, and
+  // no home folder on disk. A spec that adopted its own workshop first is never
+  // asked, and waiting for a dialog that is not coming is the same flake in
+  // reverse.
+  const roots = await cinna.page.evaluate(() => window.api.localAgents.rootsList())
+  if (roots.length > 0) return
+  if (existsSync(join(cinna.sandbox.home, 'Documents', 'CinnaAgents'))) return
+  // No visibility check: the button's own auto-wait is what covers the gap
+  // between the click on the tab and the query that raises the dialog.
+  const dialog = cinna.page.getByRole('dialog', { name: 'Where your agents will live' })
+  await dialog.getByRole('button', { name: 'Create folder' }).click()
+  await dialog.waitFor({ state: 'hidden' })
+}
+
 /** A directory under the sandbox `$HOME`, where the app's path rules allow agent roots. */
 export function homeDir(cinna: CinnaApp, ...segments: string[]): string {
   const dir = join(cinna.sandbox.home, ...segments)

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { test, expect, type CinnaApp } from '../fixtures/app'
+import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 import { DESKTOP_STATE_FILE } from '../../src/shared/kit/manifest'
 
@@ -70,6 +70,8 @@ function grantKeysOnDisk(agentPath: string): string[] {
 async function openAgentPage(cinna: CinnaApp): Promise<void> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 }
