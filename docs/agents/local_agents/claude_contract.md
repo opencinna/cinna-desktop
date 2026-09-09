@@ -27,10 +27,19 @@ Reproduce with these exact conditions or the results do not transfer.
 | SDK version | `@anthropic-ai/claude-agent-sdk@0.3.266` |
 | Platform | `darwin-arm64` |
 | Binary | `/Users/evgenyl/.local/bin/claude` — **native installer**. Not Homebrew, not the npm shim |
-| Credential | a claude.ai login. `~/.claude/.credentials.json` **exists on disk**; the Keychain path was not exercised |
+| Credential | a claude.ai login, held in the **login Keychain** (`Claude Code-credentials`). A `~/.claude/.credentials.json` also exists and is a **stale decoy** — see the correction below |
 | Auth as reported | `apiKeySource: 'none'` on every successful init |
 | Model as served | `claude-opus-5[1m]`, chosen by the CLI with no `model` option passed |
 | Probe | `scratchpad/probe/*.mjs` — throwaway, not in the repo. §8 is the runbook to rebuild it |
+
+> **Correction, 9 September 2026 — which store this machine actually uses.** The row above
+> originally read *"`~/.claude/.credentials.json` exists on disk; the Keychain path was not
+> exercised"*, and inferred the second half from the first. The file's own `expiresAt` is
+> **2026-08-09** and its mtime **2026-08-08**; the Keychain item's `mdat` is **2026-09-09**, the day
+> of these probes. The file's token had been expired for a month while every probe here succeeded,
+> so **the credential in play was the Keychain one and always had been.** Everything in this
+> document was therefore observed against a *Keychain-backed* credential, not a file-backed one —
+> which changes what §8's first item is still asking. Corrected there.
 
 Every turn below was a real turn against the user's own plan. The cost line the SDK reports
 (`total_cost_usd`) ranged 0.06–0.16 USD per single-tool probe turn — see §6 on why that number is
@@ -278,22 +287,37 @@ process-exit error with `Claude Code returned an error result: ${text}`. So:
 - **Not logged in** is *not* answerable without spawning, but it is answerable without a turn.
   `claude auth status` (2.1.266; *"Show authentication status"*, `--json` by default, `--text`
   optional) logs nothing in or out, runs no turn, and reports `loggedIn` with an `authMethod`.
-  Observed on this machine, three runs, **exit code 0 in all three — the JSON field is the signal,
-  not the exit code**:
+  **The JSON field is the signal — and the exit code is not, but not for the reason first
+  recorded.** This section originally said *"exit code 0 in all three"*. Re-measured 9 September
+  2026, three runs per row, against the same `claude` 2.1.266:
 
-  | Environment | `loggedIn` | `authMethod` |
-  |---|---|---|
-  | the full shell | `true` | `claude.ai` |
-  | `env -i PATH HOME USER` | `true` | `claude.ai` |
-  | `env -i PATH HOME` | **`false`** | `none` |
+  | Environment | exit | `loggedIn` | `authMethod` | `subscriptionType` |
+  |---|---|---|---|---|
+  | the full shell | **0** | `true` | `claude.ai` | the plan |
+  | `env -i PATH HOME USER` | **0** | `true` | `claude.ai` | the plan |
+  | `env -i PATH HOME` | **1** | **`false`** | `none` | *absent* |
+  | `env -i PATH HOME USER`, `HOME` an empty directory | **1** | **`false`** | `none` | *absent* |
+
+  A logged-out install exits **1**, with valid JSON on stdout and an **empty stderr**. The last row
+  is there because it reaches the logged-out state a second, independent way, and rules out the
+  exit code being about the withheld `USER` rather than about the login.
+
+  **So a caller must parse stdout regardless of the exit code.** Treating non-zero as "the probe
+  failed" collapses the one state this command exists to detect into *unknown*, and readiness
+  silently goes back to being answered by a billed turn. `claudeAuth.ts` is built on that rule and
+  a mutation check holds it.
+
+  The response also carries `apiProvider` and `subscriptionType`, which the original table did not
+  record; `subscriptionType` is present only when logged in.
 
   That last row reproduces §2's `USER` finding for free, and the probe is the cheap bisect §9 step 1
   used to need a billed turn for. The output also carries the account's email and organisation id;
-  a caller that logs it logs those. **Verified, not wired in:** `claudeAgentTurnRunner.ts` still
-  answers readiness from `toolDetectionService` alone and learns *Not logged in* from the thrown
-  turn error (§4). Verified for a **file-backed** credential on the native installer only; whether
-  `auth status` reads the Keychain on a Homebrew or npm install, and whether it stays free of a
-  consent prompt there, is §8's first question wearing a different hat. The billed probe still
+  a caller that logs it logs those. **Wired in, 9 September 2026.** `claudeAuth.ts` runs it
+  under the same constructed child environment the turn will use — the same rule §2's `USER` row
+  exists for — and `claudeAgentTurnRunner` refuses a turn on a definite `logged_out`. `unknown`
+  never blocks: the thrown-error fallback in §4 stays as the second line. Verified on the native
+  installer against a **Keychain-backed** credential; the Homebrew wrapper and the npm shim are
+  still untested (§8). The billed probe still
   works as described — `claude --print --output-format json 'say OK'` exits **1** with
   `is_error: true` and `result: "Not logged in · Please run /login"`, and **0** otherwise — it is
   just no longer the cheapest.
@@ -394,13 +418,37 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
 
 ## 8. Still unverified — and one of these can still kill the feature
 
-1. **The Keychain.** The probe machine stores its credential in `~/.claude/.credentials.json`, so
-   **the Keychain path was never exercised** — the plan's highest-risk question is still open, and
-   the probe that looked like it answered it did not. What is now known is narrower and still
-   useful: a file-backed credential under `$HOME` is reachable from a spawned child given `HOME` and
-   `USER`. Homebrew and npm installs on macOS are understood to use the Keychain; whether a
-   **signed, hardened-runtime** Electron main process can spawn a child that reads that item, and
-   whether a consent prompt appears on first use, remains unknown and untestable from a dev build.
+1. **The Keychain — largely closed, 9 September 2026, and it was the wrong question.** This item
+   used to say the path had never been exercised. It had: §1's correction shows the probe machine's
+   file credential expired on 2026-08-09 while every probe since succeeded, so the Keychain item was
+   the live one throughout.
+
+   The remaining half — whether a **signed, hardened-runtime** parent can spawn a child that reads
+   it — was then measured directly. A copy of `node` was signed with a Developer ID Application
+   certificate, `--options runtime`, and **this app's own `build/entitlements.mac.plist`**, which
+   grants `allow-jit`, `allow-unsigned-executable-memory`, `allow-dyld-environment-variables` and
+   `apple-events` and **nothing Keychain-related** (`codesign -d` confirms `flags=0x10000(runtime)`
+   and exactly those four keys). From it, `claude auth status` was spawned under the constructed
+   child environment, twice:
+
+   | Parent | `~/.claude/.credentials.json` | exit | `loggedIn` | consent prompt |
+   |---|---|---|---|---|
+   | signed, hardened runtime, no Keychain entitlement | present (stale) | 0 | `true` | none |
+   | signed, hardened runtime, no Keychain entitlement | **moved aside** — the Keychain is the only store left | 0 | `true` | none |
+
+   The file was restored and verified byte-identical by SHA-256. **A hardened-runtime, Developer
+   ID-signed parent with no Keychain entitlement does not gate its child's Keychain read, and no
+   consent prompt appeared.**
+
+   What that does **not** cover, and none of it should be read as covered:
+   - the parent is a signed `node`, **not the packaged `.app`** — no bundle identity, no
+     `entitlementsInherit` chain across Electron's helper processes;
+   - not **notarized**, not quarantined, not launched from `/Applications` past Gatekeeper, where
+     first-launch TCC state can differ;
+   - the accessing binary is the **native installer's** `claude`. A Homebrew wrapper and an npm shim
+     are different binaries and therefore different ACL evaluations against the same item;
+   - "no prompt appeared" is on a machine where `claude` has been run interactively many times. A
+     prompt on genuinely first use by a new accessing binary is not ruled out.
 2. **`ANTHROPIC_API_KEY` shadowing an OAuth login.** Not proven. The probe designed for it could not
    run: with a bogus key the turn fails for reasons indistinguishable from the key being ignored,
    and a *valid* API key was not available. The stripping rule stands on the SDK documenting the two
@@ -409,10 +457,10 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    extension — a path ending `.js`/`.mjs`/`.ts` is run **through node**, anything else is spawned
    **directly** — so an npm shim and a native binary take different code paths, and the Homebrew
    wrapper is a third shape. Untested.
-4. **`claude auth status` against the Keychain.** The free probe (§5) is verified against a
-   file-backed credential only. Whether it answers `loggedIn` on a Homebrew or npm install, and
-   whether it does so without a consent prompt, is untested — the same gap as item 1, reached from
-   the other side.
+4. **`claude auth status` on the other install shapes.** Verified against a Keychain-backed
+   credential on the native installer (§5, and item 1 above). Whether it answers `loggedIn` on a
+   **Homebrew or npm** install, and whether it does so without a consent prompt there, is untested —
+   the same gap as item 1's last bullet, reached from the other side.
 4a. **The exclusion on targets other than `darwin-arm64`** (§5a). Verified on
    that one; `linux-*`, `win32-*` and `darwin-x64` are not built here.
 5. **`SDKAuthStatusMessage`** — what emits it (§5).
