@@ -160,7 +160,7 @@ async function openAgentPage(cinna: CinnaApp): Promise<void> {
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
   // A fresh `$HOME` has no agents folder, so the tab asks about it first.
   await answerAgentsFolder(cinna)
-  await page.getByRole('button', { name: AGENT }).click()
+  await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 }
 
@@ -256,7 +256,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
   // A fresh `$HOME` has no agents folder, so the tab asks about it first.
   await answerAgentsFolder(cinna)
-  await page.getByRole('button', { name: AGENT }).click()
+  await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 
   const panel = page.getByRole('region', { name: 'Runs with' })

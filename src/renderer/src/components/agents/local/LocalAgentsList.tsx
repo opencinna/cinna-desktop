@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Circle, Plus } from 'lucide-react'
+import { Circle, MessageSquare, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
@@ -46,35 +46,93 @@ function AgentRow({
   const activeView = useUIStore((s) => s.activeView)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
   const isActive = activeLocalAgentId === agent.id && activeView === 'local-agent'
   const subline = agentSubline(agent, credentialInactive)
+  // No chat button on a row the chat could not attach to. A duplicate-id
+  // folder is listed but never indexed, so the new-chat screen would look the
+  // agent up, find nothing and show nothing — the click would fail silently.
+  // An invalid manifest cannot run either. The jobs row withholds run-now for
+  // the same reason, and the red dot and sub-line already say why.
+  const canChat = agent.readiness !== 'invalid'
 
+  const openPage = (): void => {
+    setActiveLocalAgentId(agent.id)
+    setActiveView('local-agent')
+  }
+
+  const startChat = (e: React.MouseEvent): void => {
+    // The wrapper underneath opens the agent page; this click must not.
+    e.stopPropagation()
+    setActiveView('chat')
+    setPendingAgentId(agent.id)
+    // The chat opens in the centre; the sidebar follows it, so the user is
+    // not left looking at the agents list beside a conversation it no longer
+    // relates to.
+    setSidebarTab('chats')
+  }
+
+  // The row and its chat button are siblings under one hover group, not a
+  // button inside a button. Nesting would have made the row a `div`, and an
+  // `aria-label`led button inside a `role="button"` joins the row's accessible
+  // name while it is rendered — the row would be "Alpha" at rest and "Alpha
+  // Start a new chat with Alpha" under the pointer, which is where every E2E
+  // locator finds it. As a sibling the button lends the row nothing and can
+  // stay in the tree, so a keyboard user reaches it by Tab.
   return (
-    <button
-      type="button"
-      onClick={() => {
-        setActiveLocalAgentId(agent.id)
-        setActiveView('local-agent')
-      }}
-      className={`w-full text-left flex items-start gap-1.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+    <div
+      // The click lives on the wrapper so the whole highlighted row opens the
+      // page, gap and trailing slot included, as the jobs row does. The inner
+      // `<button>` is the accessible control; its own clicks — from the
+      // pointer or from Enter — bubble up here.
+      onClick={openPage}
+      className={`group flex items-start rounded-md cursor-pointer transition-colors ${
         isActive
           ? 'app-nav-active text-[var(--color-text)]'
           : 'text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]'
       }`}
     >
-      <Circle
-        size={6}
-        className={`mt-1.5 shrink-0 fill-current ${readinessColor(agent, credentialInactive)}`}
-      />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-xs">{agent.name}</span>
-        {subline && (
-          <span className="block truncate text-[10px] text-[var(--color-text-muted)]">
-            {subline}
-          </span>
+      <button
+        type="button"
+        className="min-w-0 flex-1 text-left flex items-start gap-1.5 pl-2.5 py-1.5 rounded-md"
+      >
+        <Circle
+          size={6}
+          className={`mt-1.5 shrink-0 fill-current ${readinessColor(agent, credentialInactive)}`}
+        />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs">{agent.name}</span>
+          {subline && (
+            <span className="block truncate text-[10px] text-[var(--color-text-muted)]">
+              {subline}
+            </span>
+          )}
+        </span>
+      </button>
+      {/*
+        A trailing 16x16 slot the row always has, so the name truncates at the
+        same point whether or not the chat button is in it: nothing shifts under
+        the pointer that just arrived (ux_rules rule 1). It mirrors the jobs
+        row's run-now button and does what the page's "Start chat" does.
+      */}
+      <span className="inline-flex items-center justify-center w-4 h-4 shrink-0 ml-1.5 mr-2.5 my-1.5">
+        {canChat && (
+          <button
+            type="button"
+            onClick={startChat}
+            className="inline-flex items-center justify-center w-4 h-4 rounded
+              opacity-0 group-hover:opacity-100 focus-visible:opacity-100
+              bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
+              transition-opacity shrink-0"
+            title={`Start a new chat with ${agent.name}`}
+            aria-label={`Start a new chat with ${agent.name}`}
+          >
+            <MessageSquare size={10} />
+          </button>
         )}
       </span>
-    </button>
+    </div>
   )
 }
 
