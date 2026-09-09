@@ -572,9 +572,27 @@ export const chatStreamingService = {
 
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done' })
-      jobService.reportRunCompletion(chatId, 'succeeded')
+      // **The exit a stop most often takes, and the one the abort branch below
+      // does not cover.** A runner that is cancelled cleanly returns what it
+      // streamed with no error — that is the documented contract, and both
+      // folder runners honour it — so the turn leaves through *this* line, not
+      // through the `catch`. Reporting `succeeded` for it is the same lie the
+      // OpenAI adapter used to tell by resolving on abort: the run reads as a
+      // job that finished, and nothing distinguishes it from one that did.
+      jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
     } catch (err) {
-      if (abortController.signal.aborted) return
+      if (abortController.signal.aborted) {
+        // **A stop is not an error, but it is an end.** Every adapter now
+        // rejects when its signal fires — Anthropic and Gemini always did, and
+        // the OpenAI one used to swallow the abort and resolve, which is how a
+        // cancelled turn came out of the `try` above and was reported
+        // `succeeded`. With that fixed, all three arrive here, and returning in
+        // silence leaves the job run this chat belongs to at `running` for the
+        // life of the app: nothing reaps a stale one, and the sidebar's
+        // "currently running" indicator counts it for ever.
+        jobService.reportRunCompletion(chatId, 'cancelled')
+        return
+      }
       const error = err instanceof Error ? err : new Error(String(err))
       const parsed = adapter.parseError(error)
       logger.error('stream failed', {

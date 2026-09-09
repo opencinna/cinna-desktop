@@ -567,8 +567,21 @@ export const jobService = {
    * Stream-completion hook — called by chatStreamingService /
    * a2aStreamingService when the chat finishes (or errors). No-op if the
    * chat isn't linked to a job run or the run is already terminal.
+   *
+   * **`cancelled` is here because a stop is an ending, not a non-event.** A
+   * user who presses Stop leaves the stream through its abort branch, and while
+   * that branch reported nothing the run stayed `running` for the life of the
+   * app: nothing reaps a stale one, and `countInProgressByJob` — the sidebar's
+   * "is this job running?" indicator — counts `pending` and `running`, so the
+   * job advertised itself as busy for ever. `setRunStatus` could already write
+   * the status; it is only reachable from the explicit run-cancel action in
+   * `job.ipc.ts`, which is a different gesture from stopping the chat.
    */
-  reportRunCompletion(chatId: string, outcome: 'succeeded' | 'failed', errorMessage?: string): void {
+  reportRunCompletion(
+    chatId: string,
+    outcome: 'succeeded' | 'failed' | 'cancelled',
+    errorMessage?: string
+  ): void {
     const run = jobRunsRepo.getByLocalChatId(chatId)
     if (!run) return
     if (run.status !== 'running' && run.status !== 'pending') return

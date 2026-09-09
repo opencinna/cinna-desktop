@@ -470,6 +470,15 @@ export const a2aStreamingService = {
             code: result.error.code
           })
           jobService.reportRunCompletion(chatId, 'failed', result.error.message)
+        } else {
+          // **Suppressing the error surface is not the same as reporting
+          // nothing.** A stop is not a failure and must not be saved or posted
+          // as one — but it is still an ending, and a job run left unfinalized
+          // stays `running` for the life of the app: nothing reaps a stale one,
+          // and `countInProgressByJob` keeps the job's "currently running"
+          // badge lit. Same rule, and the same call, as `chatStreamingService`'s
+          // abort branch.
+          jobService.reportRunCompletion(chatId, 'cancelled')
         }
         return
       }
@@ -496,7 +505,14 @@ export const a2aStreamingService = {
 
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done' })
-      jobService.reportRunCompletion(chatId, 'succeeded')
+      // **The exit a stop most often takes, and the one the abort branch below
+      // does not cover.** A runner that is cancelled cleanly returns what it
+      // streamed with no error — that is the documented contract, and both
+      // folder runners honour it — so the turn leaves through *this* line, not
+      // through the `catch`. Reporting `succeeded` for it is the same lie the
+      // OpenAI adapter used to tell by resolving on abort: the run reads as a
+      // job that finished, and nothing distinguishes it from one that did.
+      jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
     } catch (err) {
       // **A runner is not trusted to keep its own contract here.**
       // `AgentTurnRunner.runTurn` documents that it never throws, and the A2A
@@ -520,6 +536,10 @@ export const a2aStreamingService = {
         port.postMessage({ type: 'error', error: message })
         messageRepo.saveError({ chatId, short: message, detail: String(err) })
         jobService.reportRunCompletion(chatId, 'failed', message)
+      } else {
+        // The other way a stopped turn leaves this function, and it needs the
+        // same ending for the same reason.
+        jobService.reportRunCompletion(chatId, 'cancelled')
       }
     } finally {
       port.close()

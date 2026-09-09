@@ -96,6 +96,86 @@ describe('a2aStreamingService.streamToAgent', () => {
     ])
   })
 
+  it('a runner cancelled cleanly is a stop, not a success — the exit a stop actually takes', async () => {
+    // **The common case, and the one the error branches below do not cover.** A
+    // cancelled runner returns what it streamed with *no error* — that is the
+    // documented `AgentTurnRunner` contract and what both folder runners do —
+    // so a stopped turn leaves through the success path. Reporting `succeeded`
+    // there is the same lie the OpenAI adapter told by resolving on abort: the
+    // job run reads as one that finished, indistinguishable from one that did.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      runner: {
+        runTurn: async () => {
+          const requestId = p.posted.find((e) => e.type === 'request-id')
+          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+          // Exactly what a cancelled runner returns: whatever streamed, no error.
+          return { text: 'half an ans', parts: [{ kind: 'text' as const, text: 'half an ans' }], notices: [] }
+        }
+      },
+      chatId: 'chat_1',
+      agentId: 'folder:abc',
+      agentName: 'Helper',
+      wireContent: 'hi',
+      port: p.port
+    })
+
+    // `done` still goes out and the partial answer is still kept — a stop is
+    // not an error and the user keeps what they were given.
+    expect(p.posted.map((e) => e.type)).toContain('done')
+    expect(p.posted.map((e) => e.type)).not.toContain('error')
+    expect(runCompletions).toEqual([{ status: 'cancelled', message: undefined }])
+  })
+
+  it.each([
+    [
+      'the runner reports the cancel as an error',
+      async (): Promise<{ text: string; parts: []; notices: []; error: { message: string; raw: string } }> => ({
+        text: '',
+        parts: [],
+        notices: [],
+        error: { message: 'aborted', raw: 'aborted' }
+      })
+    ],
+    [
+      'the runner throws on the way out',
+      async (): Promise<never> => {
+        throw new Error('aborted')
+      }
+    ]
+  ])('finalizes a stopped run as cancelled when %s', async (_label, runTurn) => {
+    // **Suppressing the error surface is not the same as reporting nothing.**
+    // Both branches below correctly refuse to post or save a cancel as a
+    // failure — and both used to return without finalizing the run at all, so a
+    // stopped agent-backed job sat at `running` for the life of the app, with
+    // the sidebar's "currently running" badge lit. `chatStreamingService` had
+    // the same hole on the LLM path; this is the other half of that fix.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      runner: {
+        runTurn: async (input) => {
+          // Stop it the way the user does: through the service's own cancel,
+          // keyed by the request id it just posted.
+          const requestId = p.posted.find((e) => e.type === 'request-id')
+          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+          void input
+          return runTurn()
+        }
+      },
+      chatId: 'chat_1',
+      agentId: 'folder:abc',
+      agentName: 'Helper',
+      wireContent: 'hi',
+      port: p.port
+    })
+
+    // A stop is not a failure: nothing posted as an error, nothing persisted.
+    expect(p.posted.map((e) => e.type)).not.toContain('error')
+    expect(saved).toHaveLength(0)
+    // But it is an ending.
+    expect(runCompletions).toEqual([{ status: 'cancelled', message: undefined }])
+  })
+
   it('still posts done on the ordinary path', async () => {
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
