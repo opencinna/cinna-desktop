@@ -537,7 +537,15 @@ describe('engineManager', () => {
     // the floor for a broken version is `2 × healthMs`. A generous absolute
     // bound would sit *above* that and pass either way — which is exactly how a
     // fail-fast test ends up asserting nothing.
-    expect(Date.now() - started).toBeLessThan(ENGINE_TIMEOUTS.healthMs)
+    //
+    // It sits just under that floor rather than at `1 ×`, and the difference is
+    // flakiness, not rigour. This spawns two real node processes and measures
+    // wall-clock: it runs at ~715 ms and was seen at 980 ms in a full parallel
+    // suite that happened to share the machine with a typecheck, so `1 ×` left
+    // 2.8× headroom on a number that moves with load. A regression still cannot
+    // pass — it cannot finish before `2 × healthMs` — and there is now roughly
+    // twice the room before an unrelated busy machine turns this red.
+    expect(Date.now() - started).toBeLessThan(1.75 * ENGINE_TIMEOUTS.healthMs)
   }, 30_000)
 
   it('reports failed when the server answers but is not healthy', async () => {
