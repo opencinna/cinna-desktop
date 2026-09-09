@@ -5,7 +5,9 @@
 
 ## Purpose
 
-What actually runs a folder agent: one desktop-managed `opencode serve` process bound to loopback, a generated OpenCode configuration derived from this machine's AI credentials and folder agents, the **runtime** (credential + model) each agent resolves to — from a model the manifest names, a work complexity it names instead, or the defaults below it — and the per-agent system prompt assembled out of the agent's own files.
+What runs a folder agent by default: one desktop-managed `opencode serve` process bound to loopback, a generated OpenCode configuration derived from this machine's AI credentials and folder agents, the **runtime** (credential + model) each agent resolves to — from a model the manifest names, a work complexity it names instead, or the defaults below it — and the per-agent system prompt assembled out of the agent's own files.
+
+**"By default" is now literal.** An agent's runtime carries an **engine**, and an agent that names `claude` runs on the user's own Claude Code instead — no server, no credential, nothing in this config. Everything below is about the OpenCode engine, which is what an agent that names no engine gets; the second one is [The Claude Engine](claude_engine.md), and the prompt assembly and runtime resolution described here are shared with it.
 
 Phase 5 of Local Agents. It builds the machinery a turn will need and stops one step short of a turn: nothing here sends a message. The **runner** — sessions, streaming, permission prompts — is Phase 6, and the seam it attaches to is `engineManager.ensureRunning()` plus `engineManager.agentKey()`.
 
@@ -39,7 +41,7 @@ Both halves are load-bearing, and both were bugs before they were properties.
 - **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Stable for the life of the agent, and what Phase 6 binds engine sessions to
 - **Loaded config** — the record carried on the running process: a digest of its config-and-prompt bytes, a digest of its credential environment, and the agent keys and skips **that process actually loaded**. Dies with the process
 - **Reconcile** — what `ensureRunning` does when the engine is already up: re-derive the config from current state and restart only if the running process no longer matches
-- **Runtime** — what an agent runs on, reduced to `{credential, model}` because the engine is always OpenCode. The manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue
+- **Runtime** — what an agent runs on: `{engine, credential, model}`. On this engine — the default, and every agent that names no engine — the credential and the model are the whole of it, and the manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue. An agent that names `engine: "claude"` instead has no credential at all and is not in this config; see [The Claude Engine](claude_engine.md)
 - **Work complexity** — `simple` | `medium` | `complex`, written into `cinna-agent.json` in place of a model id. It says how hard the agent's work is and lets the host pick; a model id is the least portable thing that file can carry
 - **Default runtime** — the fallback runtime, derived from the user's default chat mode
 - **Medium floor** — the last step of model resolution: an agent that would otherwise have no model at all runs on the Medium tier of the credential it was already given
@@ -249,11 +251,12 @@ The one delete in this slice is scoped hard: stale prompt pruning only ever touc
 
 ### Which agents get an entry, and which do not
 
-Three different outcomes, and only the middle one is visible as a "skip":
+Four different outcomes, and only the third is visible as a "skip":
 
 | Situation | Result | Where the user learns why |
 |---|---|---|
 | Readiness `invalid` or `contract_too_new` | **Not offered to the generator at all.** A folder that does not validate has no business being handed to a model: its prompt files may be half-written and its manifest may say anything | The readiness strip on the agent page |
+| The runtime names another engine | **Not offered either, and deliberately not as a skip.** An agent on [Claude](claude_engine.md) resolves to no credential, so an entry for it would be skipped as *credential unavailable* — a sentence about a key it does not spend, and one the user would act on by picking a different credential, which cannot help. The generated model would be wrong too: the config names a runtime as `<credential>/<model>` and a Claude runtime's model is a plan alias no OpenCode provider lists | The panel reports that engine's own state instead |
 | Runtime resolves to no credential the engine can use, or to no model | **Skipped**, with a reason recorded on the generated config | The “Runs with” panel's status line |
 | Everything resolves | An agent entry with its model, prompt file reference and permission profile | — |
 
@@ -267,7 +270,7 @@ But the design only holds if the other half is built. **The gate does not exist 
 
 ### Runtime resolution: the agent's own runtime, then the Default runtime
 
-A runtime is `{credential, model}` and it is resolved from two sources, in order: the agent's own declared runtime, then the **Default runtime** derived from the user's default chat mode. It may name the model outright (`runtime.model`) or name a work complexity instead (`runtime.complexity`); both arrive at a model through the one chain below.
+A runtime is `{engine, credential, model}`. The credential and the model are resolved from two sources, in order: the agent's own declared runtime, then the **Default runtime** derived from the user's default chat mode. (A runtime naming the Claude engine leaves this ladder before its first step — it has no credential, and running it through branches written about credential rows reports a healthy agent as broken. See [The Claude Engine](claude_engine.md).) It may name the model outright (`runtime.model`) or name a work complexity instead (`runtime.complexity`); both arrive at a model through the one chain below.
 
 **Where that declaration is *stored* is not this service's business.** A kit agent states it in its manifest's `runtime` block; a [bare agent](bare_agents.md#a-bare-agent-picks-its-own-runtime-and-the-answer-is-kept-where-the-folder-is-not) has no manifest and states it in that agent's state under `<userData>`, because the desktop writes nothing into an adopted folder. The scanner puts both on `LocalAgentDto.runtime`, so `runtimeService.resolve` and `engineConfigSource` read one field and neither has a branch for the second kind. Everything below therefore says "the agent's runtime" where it used to say "the manifest", and the sentences about a **file the user commits** are true of the kit half only.
 
@@ -479,6 +482,7 @@ engine:status | :start | :stop | :skips          local-agent:update-field
 ## Integration Points
 
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents the config is generated from, the readiness that decides which are offered at all, and the `turnLock` whose `anyHeld()` gates every restart
+- [The Claude Engine](claude_engine.md) — the second engine a folder agent can name: no server, no credential, no entry in this config. It reuses this document's prompt assembly and the first half of its runtime resolution, and widens the child-environment narrowing rule below by exactly one variable
 - [Local Agent Permissions](permissions.md) — the profile this generator writes, entry by entry, and the desktop-held grants that answer an ask it produces
 - [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel (its layout, its one reserved status line and the jump rule behind it), the Settings → Local Agents engine controls, and the stamped `update-field` path a runtime write reuses
 - [Kit Contract & Manifest Layer](kit_contract.md) — the `runtime` block in `cinna-agent.json`, the validator's secret pattern reused on the credential reference, and the templates whose HTML comments the prompt assembly strips

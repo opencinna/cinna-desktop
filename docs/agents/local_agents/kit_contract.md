@@ -154,9 +154,9 @@ The validator **never throws**. Its callers are a scanner and a page, and neithe
 
 The two grades are not interchangeable, and an `error` is not a stronger message — it is a decision about whether the agent exists. The scanner turns any error into readiness `invalid`, and an `invalid` folder is dropped from the engine config entirely, so an error is "this folder does not run".
 
-That is why everything a **newer minor** of the contract might add is reported as a warning. The two `runtime.complexity` cases are the worked example: a value outside the three the contract defines, and a manifest carrying `model` *and* `complexity` at once. Erroring on either would brick a folder written by a future 1.x tool, which is precisely what "minor bumps are additive and safe to ignore" promises against and what the compatibility gate — same major, run as-is — says will not happen. Both have defined behaviour instead of a refusal: an unrecognised tier reads as no tier, and where both keys are present the **model wins**.
+That is why everything a **newer minor** of the contract might add is reported as a warning. The `runtime.complexity` and `runtime.engine` cases are the worked examples: a value outside the three tiers the contract defines, a manifest carrying `model` *and* `complexity` at once, an `engine` this build has never heard of, and `engine: "claude"` sitting beside a `credential`. Erroring on any of them would brick a folder written by a future 1.x tool, which is precisely what "minor bumps are additive and safe to ignore" promises against and what the compatibility gate — same major, run as-is — says will not happen. Each has defined behaviour instead of a refusal: an unrecognised tier reads as no tier, an unrecognised engine reads as **no engine** so the agent falls to the host default, where a model and a tier are both present the **model wins**, and where an engine that uses no credential names one the **credential is ignored**.
 
-Writing is the other half, and it is strict: this desktop refuses to write either shape. Tolerating what another tool wrote and being careless about what we write are different jobs, and a tool that emitted a manifest its own validator then flagged would be teaching the user to ignore its own findings.
+Writing is the other half, and it is strict: this desktop refuses to write any of those shapes. Tolerating what another tool wrote and being careless about what we write are different jobs, and a tool that emitted a manifest its own validator then flagged would be teaching the user to ignore its own findings.
 
 ### Scaffold ignore files
 
@@ -185,7 +185,7 @@ No mtime, no inode, no size, no directory order, nothing machine-specific. Two m
 ## Architecture Overview
 
 ```
-resources/cinna-kit-contract/          (bundled, pinned at 1.1.0)
+resources/cinna-kit-contract/          (bundled, pinned at 1.2.0)
   kit.json  VERSION  CHANGELOG.md
   schema/cinna-agent.schema.json       <- the manifest rules
   layout.json                          <- the folder model as data

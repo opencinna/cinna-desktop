@@ -29,7 +29,7 @@ The corollary is the shape of the work: this slice is a **lift**, not a rewrite.
 ## Core Concepts
 
 - **Runner** — one agent turn, whatever kind of agent it is. Takes the shared turn input, returns the shared turn result, and **never throws**
-- **Runner dispatch** — one function that answers "which runner does this agent's turn go through", used by both call sites. Dispatch is on `agents.source`, not on the absence of a card URL
+- **Runner dispatch** — one function that answers "which runner does this agent's turn go through", used by both call sites. Dispatch is on `agents.source` — never on the absence of a card URL — and then, for a folder agent, on the **engine** its runtime names (see [The Claude Engine](claude_engine.md))
 - **Engine session** — an OpenCode `ses_…` created against the agent's folder and its agent key. One per (chat, agent), remembered so a conversation survives a restart
 - **Admission ack** — what the engine answers a prompt with: a receipt saying the input was accepted, carrying an `admittedSeq`. Not the answer. The answer arrives on a *separate* subscription
 - **Event bus** — the one process-wide subscription to the engine's global event stream, fanned out to turns by session id
@@ -87,13 +87,15 @@ If a standing grant already covers the ask, **none of that happens**: the engine
 
 ## Business Rules
 
-### One turn primitive, two implementations, one resolver
+### One turn primitive, three implementations, one resolver
 
-`AgentTurnRunner` is a single method: take the shared input, return the shared result. Two implementations exist — the A2A one (which is `runAgentTurn` unchanged, behind the shared shape) and the local one. One resolver picks between them, on `agents.source`.
+`AgentTurnRunner` is a single method: take the shared input, return the shared result. Three implementations exist — the A2A one (which is `runAgentTurn` unchanged, behind the shared shape), the local one described here, and the [Claude](claude_engine.md) one. One resolver picks between them: `agents.source` first, and then, for a folder agent, the engine its runtime names.
+
+**The engine branch is second, and reading the folder happens only after `source` has answered.** A remote agent has no folder to read, and reading one for it would be a filesystem hit on every turn of an agent the engine axis has nothing to do with. When that read fails — the row is gone, the folder moved, an assistant is mid-save on the manifest — dispatch falls back to the **default** engine, because this runner renders every one of those states as a readable turn error while the other would replace them all with "no Claude Code was found".
 
 **Dispatch is on `source`, never on "has no card URL".** A missing card is a symptom several unrelated states share — a remote agent that has never been tested has no cached card either. This is not hypothetical: a combined `!agent || !agent.cardUrl` guard is what stood at the dispatch seam, and because folder agents are inserted with a null card URL it matched every one of them and answered "Agent not found or not configured" before any local branch could be reached. The friendlier branch below it was unreachable code for the whole of Phase 5.
 
-**The resolver is the one dispatch point, and both call sites use it** — the direct-chat IPC handler and the orchestrated-tool provider. There is exactly one place to look when asking why an agent took a given path, and exactly one place to change when a third kind of agent arrives.
+**The resolver is the one dispatch point, and both call sites use it** — the direct-chat IPC handler and the orchestrated-tool provider. There is exactly one place to look when asking why an agent took a given path, and exactly one place to change when a third kind of agent arrives — which it since has: the [Claude](claude_engine.md) runner was added there and nowhere else.
 
 ### `runTurn` never throws
 
@@ -111,9 +113,9 @@ The prompt call returns an admission ack and the agent loop starts immediately. 
 
 The turn also *waits* for the socket, and the wait **rejects** rather than hanging if the stream cannot be opened — so a turn against a dead engine fails as an error the user can read instead of waiting forever for deltas that will never come.
 
-### One bus, because there is one engine
+### One bus, because there is one OpenCode process
 
-One `opencode serve` backs every folder agent, and the global stream carries every session's events. A subscription per turn would open N sockets each receiving all N turns' events and discarding N−1 of them. So there is one process-wide subscription, fanned out by session id, connected lazily on the first subscriber and dropped on the last — an idle desktop holds nothing open.
+One `opencode serve` backs every folder agent that runs on it, and the global stream carries every session's events. (Nothing in this section applies to the [Claude](claude_engine.md) runner, which is an async generator in this process: no socket, no shared stream, nothing to fan out.) A subscription per turn would open N sockets each receiving all N turns' events and discarding N−1 of them. So there is one process-wide subscription, fanned out by session id, connected lazily on the first subscriber and dropped on the last — an idle desktop holds nothing open.
 
 That sharing has a consequence: **one turn's handler throwing must not take the stream down for everyone**, so every listener callback is run guarded.
 
@@ -242,7 +244,7 @@ User types in a folder-agent chat
   │
 Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin controller]
   │                          │ persist the user message (shared path)
-  │                          │ resolveTurnRunner(agent)  ── on agents.source
+  │                          │ resolveTurnRunner(agent)  ── on agents.source, then engine
   │                          ▼
   │                        a2aStreamingService.streamToAgent  [direct-chat wrapper,
   │                          │                                 runner-agnostic]
@@ -283,6 +285,7 @@ Renderer ── agent:answer-request   ────────▶ pendingReques
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — supplies everything this slice consumes: `ensureRunning` as the config choke point, `agentKey()` and the skip reasons, the single request door, and the global lock predicate that keeps the engine from restarting mid-turn
 - [The OpenCode Engine Contract](opencode_contract.md) — what is actually known about the endpoints and events this slice speaks, and what is not
+- [The Claude Engine](claude_engine.md) — the third implementation of this seam, and everything it deliberately does **not** share with this one: no bus, no cursor, no hole-and-heal, no shared process
 - [Local Agent Permissions](permissions.md) — what an ask can be about in the first place, and where a standing grant lives. This slice owns the parking and the reply; that one owns the decision and the store
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this runner gates on, the readiness values it refuses, and the per-agent turn lock
 - [Agents Tab & Agent Page](agents_tab.md) — the chat controls that were rendered disabled until this phase landed

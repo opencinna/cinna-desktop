@@ -6,7 +6,7 @@
 - `src/main/llm/types.ts` — `LLMAdapter` interface, `ModelInfo`, `ChatMessage`, `ToolCallInfo`, `StreamResult`, `StreamParams`, `LLMError` types
 - `src/main/llm/registry.ts` — In-memory `Map<providerId, LLMAdapter>`, `registerAdapter()`, `unregisterAdapter()`, `getAdapter()`, `clearAllAdapters()`, `getAllModels()`
 - `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId, opts)` + `isProviderType(type)` (extracted from `llm.ipc.ts`). `ProviderType` is `anthropic | openai | gemini | openai_compatible | ollama`
-- `src/main/llm/anthropic.ts` — `AnthropicAdapter` (single-turn streamer, returns `StreamResult`)
+- `src/main/llm/anthropic.ts` — `AnthropicAdapter` (single-turn streamer, returns `StreamResult`). On `@anthropic-ai/sdk` — see [SDK versions, and one that moved for a reason outside this domain](#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - `src/main/llm/openai.ts` — `OpenAIAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/gemini.ts` — `GeminiAdapter` (single-turn streamer, returns `StreamResult`)
 - `src/main/llm/ollama.ts` — `OllamaAdapter` (keyless; `stream()` delegates to `OpenAIAdapter` on `<host>/v1`, `listModels()` uses the native `/api/tags`) plus `fetchOllamaTags()` / `probeOllama()` — see [Local Models Tech](../local_models/local_models_tech.md)
@@ -68,6 +68,16 @@
 - `src/renderer/src/components/settings/DisableCredentialDialog.tsx` — the confirm in front of that toggle, plus `describeDependents()`, which the card's standing line shares so the dialog's names and the card's count cannot disagree about what a dependent is
 - `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable provider card with: enable/disable toggle (`aria-label` **Switch on / Switch off**, the words the dialog uses), API key field (masked) — or, for a keyless credential, a plain **Host** field seeded from the stored value — test connection button, model selector dropdown (fetches models on demand via `provider:test`), delete button. No per-provider default flag — the "default" concept now lives on chat modes.
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — New provider form: type selector with search filter, API key **or** host input, test before save. The Ollama branch and its layout rules are documented in [Local Models](../local_models/local_models.md#what-the-ui-must-not-do)
+
+## SDK versions, and one that moved for a reason outside this domain
+
+Each adapter is a thin wrapper over its vendor's own SDK: `@anthropic-ai/sdk`, `openai`, `@google/generative-ai`. Versions are in `package.json`; only one of them is worth a paragraph.
+
+**`@anthropic-ai/sdk` was moved `^0.89.0` → `^0.93.0` by a change in a different feature.** [The Claude Engine](../../agents/local_agents/claude_engine.md) adds `@anthropic-ai/claude-agent-sdk`, which peer-requires `>= 0.93`, so the bump was forced rather than chosen — and it lands on `anthropic.ts`, a **shipping chat provider used by every Anthropic credential in the app**.
+
+**`AnthropicAdapter` has no unit tests.** The only evidence it still behaves across that bump is that it typechecks, and a typecheck cannot see a changed default, a renamed streaming event or a different error shape. This is an open risk, recorded here because this is the file a maintainer reads when an Anthropic chat starts behaving oddly, and the cause would otherwise look unrelated to anything in this domain. The Claude engine's own contract carries it too, as §8's fourth entry.
+
+Anyone touching this adapter should treat covering it as part of the work rather than as a separate task.
 
 ## Security
 

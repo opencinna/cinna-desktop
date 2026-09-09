@@ -10,7 +10,7 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 
 - **Permission Profile** — the `permission` block written onto every agent entry in the generated engine config (`CONVERSATION_PERMISSIONS`). Identical for every folder agent unless that agent's `cinna-agent.json` overrides it. It is not per-conversation and not editable from the UI
 - **Permission Ask** — the engine parking mid-turn on a `permission.v2.asked` event, rendered as a [Parked Request](agent_turn.md#permissions-and-questions-are-tool-parts-there-is-no-permission-part-kind) in the transcript with **Allow once / Always allow / Deny**
-- **Action** — the engine's coarse name for the operation (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`). Coarser than the tool: the `write` tool asks under `edit`
+- **Action** — the name the engine that raised the ask gave the operation. On the OpenCode engine that is a coarse one (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`), coarser than the tool: the `write` tool asks under `edit`. On the [Claude](claude_engine.md) engine it is that engine's own tool name (`Bash`, `Edit`, `WebFetch`). **The two vocabularies are stored as they arrive and are never mapped onto each other**, so a rule written on one engine cannot silently authorise the other; what they share is only the sentence the user reads
 - **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in that agent's desktop state — `app-data/desktop.json` for a kit folder, a file under `<userData>/external-agents/` for a [bare](bare_agents.md) one, since the desktop writes nothing into an adopted folder
 - **Grant Scope** — how widely a grant's pattern reaches: `exact` (the resource character for character), `origin` (a URL prefix the desktop synthesised), `action` (the whole action, from an ask that named no resource). **Recorded, never inferred from the pattern's characters**
 - **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
@@ -172,6 +172,7 @@ Nothing is lost that the agent cannot ask for again, which is what the empty sta
 - **It does not offer profile editing in the UI.** The profile is generated; the only per-agent override is `runtime.permissions` in the manifest, edited as a file
 - **It does not survive a publish.** A grant is machine-local by construction, like everything else about a folder agent — see [Local Agents Are Not Synced](local_only.md)
 - **It holds no history.** A revoked grant leaves no record that it existed; the list is the current state, not a log
+- **On the [Claude](claude_engine.md) engine it does not govern the whole tool surface.** Read-only tools never reach that engine's permission callback at all — a `Read` runs with no ask — so the grants there cover the mutating surface only. Gating everything would need a different mechanism, and this says so rather than claiming a completeness it does not have
 
 ## Architecture Overview
 
@@ -203,6 +204,7 @@ Dynamic half — one ask, mid-turn
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — generates the profile into the config, and owns the merge with a manifest's `runtime.permissions`
 - [The Agent Turn Runner](agent_turn.md) — where an ask becomes a parked request, how the answer travels out of band, and why there is no `permission` part kind
+- [The Claude Engine](claude_engine.md) — the second engine writing into this same grant store, under its own action vocabulary, and why *Always allow* is never persisted into that tool's own rules either
 - [The OpenCode Engine Contract](opencode_contract.md) — the matcher, the rule-resolution order, the shell tool's gating, and the proof behind §4
 - [Agents Tab & Agent Page](agents_tab.md) — the page the Permissions tab lives on
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.permissions` in the manifest schema, and `cloud_import_excludes` keeping `app-data/` out of a publication

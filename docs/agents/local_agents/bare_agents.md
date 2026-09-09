@@ -130,14 +130,16 @@ Every caller already knows: the scanner and the service hold `root.kind`, the tu
 
 ### A bare agent picks its own runtime, and the answer is kept where the folder is not
 
-Which credential pays for an agent and how hard its work is are the two questions a user most needs an answer to, and a folder adopted from somebody's own repository is not a lesser agent for having no manifest. So the **Runs with** panel is the same panel for both kinds, with the same credential picker, the same Work-Complexity/Advanced pair and the same reserved status line.
+Which credential pays for an agent and how hard its work is are the two questions a user most needs an answer to, and a folder adopted from somebody's own repository is not a lesser agent for having no manifest. So the **Runs with** panel is the same panel for both kinds, with the same `Runs on` picker, the same Work-Complexity/Advanced pair and the same reserved status line. That includes the **engine**: a bare agent can be put on [the Claude engine](claude_engine.md) from the same select, and the same rules follow it — no credential on that path, the tier surviving the switch, the Advanced picker gone.
 
 What differs is one thing: where the choice goes.
 
 - A **kit** agent's runtime is a `runtime` block in `cinna-agent.json`, written under the file's stamp so an assistant editing the manifest at the same moment cannot be clobbered
 - A **bare** agent's goes into that agent's state under `<userData>`, as `DesktopState.runtime`. There is **no stamp**, and there is nothing to stamp: the write touches no file in the folder, so no other tool can have changed it underneath, and nothing appears in the user's `git status`. It travels on its own channel for the same reason renaming does — `local-agent:update-field`'s whole contract is a stamped write to a file in the folder, and a stamp for a file the write does not touch guards nothing
 
-The **validation is shared**, deliberately: `runtimeService.validate` is what both writers run, so a key-shaped credential and a model-and-tier pair are refused on this path too. A bare agent's choice never leaves the machine, but a pasted API key does not become safe by landing in `userData` rather than in a file the user commits.
+The **validation is shared**, deliberately: `runtimeService.validate` is what both writers run, so a key-shaped credential, a model-and-tier pair and an engine-with-credential pair are all refused on this path too. A bare agent's choice never leaves the machine, but a pasted API key does not become safe by landing in `userData` rather than in a file the user commits.
+
+**Every key the panel can write has to be on the read side's allowlist, and the engine is the case that proves why.** `desktopStateService.coerceRuntime` narrows what it reads back to the fields the picker can set — a deliberate narrowing, so a hand-edited state file cannot smuggle in something no control produced. When `engine` was added to the panel and not to that list, the write succeeded and the next read silently dropped it: the picker snapped back to Default in front of the user with nothing reporting a failure, because nothing *had* failed. Caught in review, and the same shape of bug `complexity` would have had at contract 1.1.0.
 
 The scanner then puts both on the same DTO field, `LocalAgentDto.runtime`. That is what keeps this to one difference: `runtimeService.resolve`, the engine's config source, the tier resolution and every message the panel can produce read one field and ask nothing about where it came from. Neither was changed to add this.
 
