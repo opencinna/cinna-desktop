@@ -1564,6 +1564,7 @@ describe('removing a bare agent', () => {
 
   it('keeps a bare agent’s runtime out of its folder and through a rescan', () => {
     const saved = localAgentService.setBareRuntime(USER, bareId, {
+      engine: null,
       credential: 'Anthropic',
       modelId: null,
       complexity: 'medium'
@@ -1585,6 +1586,7 @@ describe('removing a bare agent', () => {
     // Clearing it is a real state, not a no-op: the agent goes back to the
     // Default runtime, which is what `null` means everywhere else too.
     const cleared = localAgentService.setBareRuntime(USER, bareId, {
+      engine: null,
       credential: null,
       modelId: null,
       complexity: null
@@ -1597,6 +1599,7 @@ describe('removing a bare agent', () => {
     // would be the place the rule quietly stops applying.
     expect(() =>
       localAgentService.setBareRuntime(USER, bareId, {
+        engine: null,
         credential: null,
         modelId: 'claude-sonnet-4-5',
         complexity: 'complex'
@@ -1609,6 +1612,7 @@ describe('removing a bare agent', () => {
     // This channel carries none, so it would clobber an assistant's edit.
     expect(() =>
       localAgentService.setBareRuntime(USER, agentId, {
+        engine: null,
         credential: 'Anthropic',
         modelId: null,
         complexity: null

@@ -122,7 +122,29 @@ describe('bare agent state', () => {
     expect(() => desktopStateService.forgetAt(join(dir, 'nowhere.json'))).not.toThrow()
   })
 
-  it('keeps only the three runtime keys a picker can set', () => {
+  it('keeps a bare agent’s engine, which is a key a picker can set', () => {
+    // **The hole the engine axis opened here.** `toRuntimeRef` produces
+    // `{ engine: 'claude' }` for an agent that chose only an engine, and this
+    // store is where a bare agent's choice lands — so a narrowing that did not
+    // know the key wrote it, forgot it on the next read, and the picker snapped
+    // back to Default in front of the user with nothing reporting a failure.
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: { engine: 'claude' }
+    })
+    expect(desktopStateService.read(dir, 'bare').runtime).toEqual({ engine: 'claude' })
+
+    desktopStateService.write(dir, 'bare', {
+      ...desktopStateService.read(dir, 'bare'),
+      runtime: { engine: 'claude', complexity: 'complex' }
+    })
+    expect(desktopStateService.read(dir, 'bare').runtime).toEqual({
+      engine: 'claude',
+      complexity: 'complex'
+    })
+  })
+
+  it('keeps only the runtime keys a picker can set', () => {
     // This file has one writer, so unlike a manifest there is nothing to
     // round-trip: anything else in the block is a leftover from a build whose
     // surface is gone, and handing it to the engine long afterwards is how a

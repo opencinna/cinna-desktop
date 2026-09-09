@@ -211,11 +211,18 @@ function coerce(raw: unknown): DesktopState {
  */
 function coerceRuntime(raw: unknown): AgentRuntimeRef | null {
   if (!isRecord(raw)) return null
+  // `engine` joins the allowlist for the same reason `complexity` did at 1.1.0:
+  // the narrowing keeps "only what the picker can set", and this is about to be
+  // one. Left out, a bare agent set to run on Claude writes the choice, reads
+  // back `runtime: null`, and the picker snaps to Default in front of the user
+  // with nothing reporting a failure — the write succeeded, the read forgot.
+  const engine = asString(raw.engine)
   const credential = asString(raw.credential)
   const model = asString(raw.model)
   const complexity = asString(raw.complexity)
-  if (!credential && !model && !complexity) return null
+  if (!engine && !credential && !model && !complexity) return null
   const runtime: AgentRuntimeRef = {}
+  if (engine) runtime.engine = engine
   if (credential) runtime.credential = credential
   if (model) runtime.model = model
   if (complexity) runtime.complexity = complexity

@@ -8,6 +8,31 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.2.0 — engine
+
+Additive. A 1.0.0 or 1.1.0 folder is read and written unchanged by a 1.2.0 tool,
+and an older tool ignores the new key and runs the agent on its own default
+engine.
+
+### Added
+
+- Optional `runtime.engine` — which engine runs the agent. Known values:
+  `opencode` (a host-managed OpenCode server) and `claude` (the Claude Agent
+  SDK, driving a `claude` binary already installed on the machine, under that
+  install's own login). Absent means the host's default engine.
+
+  **An unrecognised value reads as "no engine declared"**, not as a broken
+  folder — the same tolerance `runtime.complexity` gets, and for the same
+  reason: a host must keep running a folder a newer tool wrote. For this field
+  the point is sharper, because engines are expected to grow, so the schema
+  deliberately does **not** close the value set with an enum.
+
+  **`engine: "claude"` and `credential` are mutually exclusive.** That engine
+  spends no host credential — the binary it drives resolves its own login — so a
+  manifest naming one would make a host's runtime panel report a key that pays
+  for nothing. Writing both is refused; reading both is a *warning* and the
+  credential is ignored.
+
 ## 1.1.0 — work complexity
 
 Additive. A 1.0.0 folder is read and written unchanged by a 1.1.0 tool, and a

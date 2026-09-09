@@ -136,6 +136,13 @@
       ],
       "additionalProperties": true,
       "properties": {
+        "engine": {
+          "description": "Which engine runs the agent. Known values: `opencode` (a host-managed OpenCode server) and `claude` (the Claude Agent SDK, driving a `claude` binary already installed on the machine under its own login). Added in contract 1.2.0; a host that does not recognise the value runs the agent on its own default engine rather than refusing the folder. Deliberately not an enum: a newer minor may name an engine this schema predates, and the contract's additive promise says such a folder must still validate. `claude` and `credential` are not meaningful together — that engine uses no host credential.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "model": {
           "description": "Model identifier as the host names it. Seeds the cloud's per-mode model override at import.",
           "type": [

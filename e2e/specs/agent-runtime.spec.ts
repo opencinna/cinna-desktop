@@ -232,7 +232,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
         agentId: input.agentId,
         update: {
           field: 'runtime',
-          value: { credential: input.credential, modelId: input.modelId, complexity: null }
+          value: { engine: null, credential: input.credential, modelId: input.modelId, complexity: null }
         },
         expectedStamp: input.expectedStamp
       }),
@@ -260,7 +260,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
 
   const panel = page.getByRole('region', { name: 'Runs with' })
-  const credential = panel.getByLabel('Credential')
+  const credential = panel.getByLabel('Runs on')
   // The manifest pins a model, so the panel opens on the Advanced model picker
   // rather than the Work Complexity tier. That is the manifest deciding the
   // view, not a remembered preference.
@@ -382,7 +382,7 @@ test('a work complexity resolves to a model, warns when it cannot, and Advanced 
           agentId: input.agentId,
           update: {
             field: 'runtime',
-            value: { credential: input.credential, modelId: null, complexity: 'medium' }
+            value: { engine: null, credential: input.credential, modelId: null, complexity: 'medium' }
           },
           expectedStamp: input.expectedStamp
         }),

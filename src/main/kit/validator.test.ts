@@ -251,6 +251,44 @@ describe('validateAgentFolder — manifest errors', () => {
     expect(codes(report.warnings)).toContain('manifest.credentials.type_unknown')
   })
 
+  it('warns about an engine it does not recognise but does not reject the folder', () => {
+    // Contract 1.2.0's tolerant read, at the one layer that can brick a folder:
+    // an *error* here makes `scannerService` mark the agent `invalid` and
+    // `collectEngineAgents` drop it from the engine entirely, which is exactly
+    // what "minor bumps are additive and safe to ignore" promises against.
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'codex' }
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings)).toContain('manifest.runtime.engine')
+  })
+
+  it('warns when the Claude engine is paired with a credential', () => {
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'claude', credential: 'Anthropic' }
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings)).toContain('manifest.runtime.engine')
+  })
+
+  it('says nothing about an engine it knows, on its own', () => {
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 'claude' }
+    })
+    const report = validateAgentFolder(agentDir, OPTIONS)
+    expect(report.errors).toEqual([])
+    expect(codes(report.warnings)).not.toContain('manifest.runtime.engine')
+  })
+
+  it('rejects a non-string engine', () => {
+    patchManifest(agentDir, (m) => {
+      m.runtime = { engine: 7 as never }
+    })
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.runtime.type')
+  })
+
   it('requires a prompt on a static_prompt schedule and a command on a script_trigger', () => {
     patchManifest(agentDir, (m) => {
       m.schedules = [

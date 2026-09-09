@@ -9,11 +9,13 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
+import { useLocalTools } from '../../../hooks/useLocalTools'
 import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
+import { claudeModelForComplexity, isAgentEngine, type AgentEngine } from '../../../../../shared/engine'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
 import {
@@ -108,9 +110,66 @@ const FIELD =
   'text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none ' +
   'disabled:cursor-not-allowed disabled:opacity-50'
 const LABEL = 'mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]'
+/**
+ * The Runs-on select's value for the Claude engine.
+ *
+ * Prefixed so it cannot be confused with a credential *name*, which is what
+ * every other option's value is. A credential literally called `engine:claude`
+ * would be shadowed by this; that is accepted rather than defended against,
+ * because the alternative is a second parallel control and the collision needs
+ * a user to name a credential after an implementation detail of this select.
+ */
+const CLAUDE_OPTION = 'engine:claude'
+
 const NOTE = 'text-[10px] text-[var(--color-text-muted)]'
 const WARN = 'text-[10px] text-[var(--color-warning)]'
 const DANGER = 'text-[10px] text-[var(--color-danger)]'
+
+/**
+ * The third column's row: a dot, a word, and optionally one button.
+ *
+ * **Extracted because the panel's footprint depends on it.** Both engines
+ * render into this slot, and switching between them must not change the panel's
+ * height — the page's tab strip sits directly below and moving it out from
+ * under the pointer that just used the select is what ux_rules rule 1 exists to
+ * prevent. While the two branches each inlined their own `h-[26px]`, that
+ * property held only because two independent literals happened to agree, and
+ * nothing would have failed if one of them drifted.
+ *
+ * `dot` and `tone` are passed in rather than derived, because **the two engines
+ * mean different things by the same colours** and that difference is the point:
+ * on OpenCode a green dot means *the process is running*, and on Claude the
+ * only knowable fact is that a binary was found, which is deliberately muted
+ * instead. One row, two vocabularies, and both visible in one place.
+ */
+function EngineRow({
+  label,
+  dot,
+  tone,
+  text,
+  title,
+  action
+}: {
+  label: string
+  dot: string
+  tone: string
+  text: string
+  title: string
+  action?: React.ReactNode
+}): React.JSX.Element {
+  return (
+    <div>
+      <span className={LABEL}>{label}</span>
+      <div className="flex h-[26px] items-center gap-2 text-xs">
+        <Circle size={7} className={`shrink-0 fill-current ${dot}`} />
+        <span className={`min-w-0 truncate ${tone}`} title={title}>
+          {text}
+        </span>
+        {action}
+      </div>
+    </div>
+  )
+}
 
 /** The engine's state as a dot and a word, and the button that changes it. */
 function EngineStatus(): React.JSX.Element {
@@ -137,19 +196,16 @@ function EngineStatus(): React.JSX.Element {
         : 'text-[var(--color-text-muted)]'
 
   return (
-    <div>
-      <span className={LABEL}>Engine</span>
-      <div className="flex h-[26px] items-center gap-2 text-xs">
-        <Circle size={7} className={`shrink-0 fill-current ${dot}`} />
-        <span
-          className={`min-w-0 truncate ${
-            status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
-          }`}
-          title={text}
-        >
-          {text}
-        </span>
-        {status !== 'running' && (
+    <EngineRow
+      label="Engine"
+      dot={dot}
+      tone={
+        status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
+      }
+      text={text}
+      title={text}
+      action={
+        status !== 'running' ? (
           <button
             type="button"
             onClick={() => start.mutate()}
@@ -160,9 +216,75 @@ function EngineStatus(): React.JSX.Element {
           >
             {busy ? <Loader2 size={11} className="animate-spin" /> : 'Start'}
           </button>
-        )}
-      </div>
-    </div>
+        ) : undefined
+      }
+    />
+  )
+}
+
+/**
+ * The user's own Claude Code install, as a fact about their machine.
+ *
+ * Deliberately **not** a mirror of {@link EngineStatus}: there is no process
+ * this app starts, nothing to report as running or stopped, and so no Start
+ * button. What can be said is what was detected, and that is all that is said.
+ *
+ * "Claude Code" is the right words here even though the picker above says
+ * "Claude Agent" — a product name is constrained for a third-party surface, but
+ * naming the tool the user installed, at the path they installed it to, is a
+ * statement about their machine and is what makes the line diagnosable.
+ *
+ * **Whether that install is logged in is not knowable without spawning it**, so
+ * this line does not guess. A panel that claimed a subscription because we
+ * stripped a variable would be asserting a negative about an environment we do
+ * not fully control; the turn reports what it actually authenticated with, and
+ * the readiness error says so if it could not.
+ */
+function ClaudeStatus({
+  tool,
+  unknown
+}: {
+  tool?: { path: string | null; version: string | null }
+  /** Detection is still in flight — say so rather than denying an install. */
+  unknown?: boolean
+}): React.JSX.Element {
+  if (unknown) {
+    return (
+      <EngineRow
+        label="Engine"
+        dot="text-[var(--color-text-muted)]"
+        tone="text-[var(--color-text-muted)]"
+        text="Checking…"
+        title="Looking for Claude Code on this machine"
+      />
+    )
+  }
+  // **Short enough for the column that will never grow.** This cell is fixed at
+  // 219px once the grid reaches three columns and does not widen with the
+  // window — the panel's content caps at 729px — so the *wider* the window, the
+  // more certain a long string clips. "No Claude Code found on this machine"
+  // needs 232px and was therefore permanently truncated at every width from
+  // 1200px up, which is where a default-sized window sits (ux_rules rule 7).
+  // The reserved line below carries the explanation; this cell names the state.
+  const text = tool ? `Claude Code${tool.version ? ` ${tool.version}` : ''}` : 'Not installed'
+  return (
+    <EngineRow
+      // The same label as the OpenCode branch, not a second name for one slot:
+      // "Runs with" is the whole section's accessible name, and a control inside
+      // it announcing those words would be two things with one name on one
+      // surface (rule 10). On this path the engine *is* the user's Claude Code.
+      label="Engine"
+      // **Not the success colour, deliberately.** One option away in the same
+      // select, a green dot in this exact slot means *the process is running*.
+      // Here the only knowable fact is that a binary was found on the PATH —
+      // whether that install is logged in cannot be known without spawning it.
+      // Green in both would be one indicator, in one position, meaning two
+      // things, and the weaker claim would be read as the stronger (rule 9).
+      dot={tool ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-danger)]'}
+      tone={tool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-danger)]'}
+      text={text}
+      title={tool?.path ?? 'No Claude Code was found on this machine.'}
+    />
   )
 }
 
@@ -323,8 +445,56 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   } | null>(null)
   const skip = skips?.agents.find((entry) => entry.agentId === agent.id) ?? null
 
+  const { data: tools } = useLocalTools()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
+  /**
+   * The engine the manifest already names, carried through every save.
+   *
+   * This panel has no engine control yet, but `applyToManifest` rewrites the
+   * whole `runtime` block — so *not* sending this would delete an engine choice
+   * a manifest already carries the moment the user changes the model, in a file
+   * they commit. Read through `isAgentEngine`, so a value a newer tool wrote
+   * that this build does not recognise reads as none rather than being written
+   * back as itself.
+   */
+  const declaredEngine = isAgentEngine(agent.runtime?.engine) ? agent.runtime.engine : null
+  /**
+   * This agent runs on the user's own Claude Code install rather than on a
+   * credential this app holds.
+   *
+   * Almost every gate below is about a credential, a model catalogue or the
+   * OpenCode engine — none of which exists on this path — so this is checked
+   * early and branched on rather than woven through each one.
+   */
+  const onClaude = declaredEngine === 'claude'
+  /**
+   * The `claude` this machine has, or undefined.
+   *
+   * Detection is what decides whether the option is *offered at all*: an
+   * absent Claude Code means an absent option, never an option that fails after
+   * the click (ux_rules rule 4). An agent whose manifest already names the
+   * engine keeps its option regardless, or the select would render blank over a
+   * file that plainly says what it runs on — the same rule the credential list
+   * follows for a keyless credential.
+   */
+  const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
+  /**
+   * Detection has not answered yet.
+   *
+   * **A third state, and the panel is wrong without it.** `claudeTool` is
+   * `undefined` both while the query is in flight and when the answer is
+   * genuinely "no", and collapsing the two put the full red not-installed
+   * alarm on screen for half a second on a machine that *has* Claude Code —
+   * the default first visit for every agent on this engine. The sentence even
+   * named a remedy the user would satisfy by installing what they already had.
+   *
+   * The panel already has this pattern: `pickerUnknown` refuses to claim which
+   * model picker an agent gets until something can answer. Unknown is cheaper
+   * here than there, because nothing is disabled by it — the control stays
+   * usable, only the *claim* waits.
+   */
+  const toolsUnknown = tools === undefined
   const declaredComplexity = isWorkComplexity(agent.runtime?.complexity)
     ? agent.runtime.complexity
     : null
@@ -468,11 +638,16 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * would quietly trade a deliberately pinned dated snapshot for a floating one.
    */
   const [pinned, setPinned] = useState<{ agentId: string; modelId: string } | null>(null)
-  const advanced = unconvertible
-    ? true
-    : view?.agentId === agent.id
-      ? view.advanced
-      : (declaredView ?? settings?.localAgentsModelAdvanced === true)
+  const advanced = onClaude
+    ? // **There is no raw model list on the Claude path**, so the view cannot be
+      // Advanced whatever the remembered preference says. Forcing it here rather
+      // than at the render keeps one answer to "which picker is showing".
+      false
+    : unconvertible
+      ? true
+      : view?.agentId === agent.id
+        ? view.advanced
+        : (declaredView ?? settings?.localAgentsModelAdvanced === true)
   /**
    * True while nothing can answer "which picker" yet: the manifest declares
    * neither and the preference has not arrived.
@@ -483,7 +658,8 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * is Advanced — the swap happening behind a disabled control rather than not
    * happening (rule 1). So neither picker is claimed until one is known.
    */
-  const pickerUnknown = declaredView === null && view?.agentId !== agent.id && !settingsLoaded
+  const pickerUnknown =
+    !onClaude && declaredView === null && view?.agentId !== agent.id && !settingsLoaded
 
   /**
    * The Default runtime, flattened the way `runtimeService.resolveDefault`
@@ -603,7 +779,15 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   const modelsLoaded = models !== undefined
   const canEdit = bare || (stamp !== null && agent.readiness !== 'contract_too_new')
   const disabled =
-    !canEdit || (!modelsLoaded && !modelsFailed) || !settingsLoaded || saving
+    !canEdit ||
+    // **The Claude path never waits for the model registry.** There is no
+    // catalogue to resolve a tier against — a plan serves what the plan serves,
+    // addressed by alias — so gating on it would leave both pickers disabled
+    // for ever on a machine with no AI credential configured at all, which is
+    // exactly the machine most likely to be using this engine.
+    (!onClaude && !modelsLoaded && !modelsFailed) ||
+    !settingsLoaded ||
+    saving
 
   /**
    * One line, one message, in the reserved slot below the selects.
@@ -647,6 +831,56 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     if (secrets) return secrets
     if (dropped && dropped.agentId === agent.id && noteStillTrue(dropped)) {
       return { text: dropped.text, tone: NOTE }
+    }
+    /**
+     * **The Claude engine leaves the credential ladder entirely**, above every
+     * loading state below it.
+     *
+     * Everything from here down is about a credential row, a model catalogue or
+     * the OpenCode engine. Run this path through them and a perfectly healthy
+     * agent is explained with "your default chat mode uses a credential that is
+     * switched off" — a sentence about a key it does not spend, which the user
+     * would act on by changing something that cannot help.
+     *
+     * What is said instead is only what is knowable *before* a turn. Whether
+     * that install is logged in is not: it takes spawning the binary to find
+     * out, and the turn reports it. Claiming a subscription here because we
+     * stripped an environment variable would be asserting a negative about an
+     * environment this app does not fully control.
+     */
+    if (onClaude) {
+      // Silent until detection answers. The healthy sentence would assert an
+      // install just as wrongly as the alarm denies one, and this slot is
+      // reserved, so saying nothing costs no movement.
+      if (toolsUnknown) return null
+      if (!claudeTool) {
+        return {
+          // Names the remedy and stops there. Installing Claude Code is
+          // something only the user can do, and this app must not offer to.
+          // Names both, for the same reason as the healthy line above — and
+          // this is now the *only* place the full explanation lives, since the
+          // Engine column was cut to "Not installed" to stop it truncating.
+          text: 'Claude Agent needs Claude Code, which is not installed on this machine.',
+          tone: DANGER
+        }
+      }
+      return {
+        // **Both names, in one sentence, because both are on the screen.** The
+        // select says "Claude Agent" and the column beside it says "Claude Code
+        // 2.1.266" — one product under a permitted product name and a factual
+        // one — and nothing else on the surface says they are the same thing.
+        // Tying them here rather than in either cell is what keeps it free:
+        // this line spans the panel, while the option and the Engine column are
+        // the two width-constrained places (rule 7).
+        //
+        // **"install", not "login".** Whether that install is authenticated is
+        // knowable only by spawning it — the turn reports what it actually
+        // used — so "your own Claude Code login" would give an installed-but-
+        // logged-out machine a completely healthy screen and let the user
+        // discover otherwise at the first turn (rule 9).
+        text: `Claude Agent runs on your own Claude Code install, on ${claudeModelForComplexity(declaredComplexity)}.`,
+        tone: NOTE
+      }
     }
     // Before the provider list lands, every credential looks missing. Saying so
     // would put a false warning in the slot and then take it away again.
@@ -750,11 +984,39 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     return null
   })()
 
+  /**
+   * The credential a commit should carry, given which engine is showing.
+   *
+   * **Null on the Claude path, always.** A manifest may legally carry both an
+   * engine and a credential — the validator only warns, so a folder written by
+   * a newer tool keeps running — and this panel reads it correctly by showing
+   * no credential at all. Forwarding `declaredCredential` anyway handed
+   * `runtimeService.validate` the one pair it refuses, built out of a control
+   * that is not on screen: the write failed, the picker snapped back, and the
+   * tier became unchangeable with the refusal explaining a credential the user
+   * could not see (ux_rules rule 6). Dropping it is what switching *to* this
+   * engine already does.
+   */
+  const commitCredential = (value: string | null): string | null => (onClaude ? null : value)
+
   const commit = (
     credential: string | null,
     modelId: string | null,
     complexity: WorkComplexity | null,
-    options: { note?: string; view?: boolean; persist?: boolean; keep?: string | null } = {}
+    options: {
+      note?: string
+      view?: boolean
+      persist?: boolean
+      keep?: string | null
+      /**
+       * The engine to write. **Absent means "the one the manifest already
+       * names"**, which is what every caller but the engine picker wants: this
+       * panel rewrites the whole `runtime` block, so a save about the model
+       * that did not carry the engine would delete the user's engine choice out
+       * of a file they commit.
+       */
+      engine?: AgentEngine | null
+    } = {}
   ): void => {
     if (!bare && !stamp) return
     setError(null)
@@ -763,7 +1025,12 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     setSecrets(null)
     if (options.note) note(options.note, { model: modelId, complexity })
     else setDropped(null)
-    const runtime = { credential, modelId, complexity }
+    const runtime = {
+      engine: options.engine === undefined ? declaredEngine : options.engine,
+      credential,
+      modelId,
+      complexity
+    }
     const handlers = {
       /**
        * The view moves only once the file has. A refused write (a read-only
@@ -825,6 +1092,40 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * against, and wiping the user's model on a credential change they may be
    * about to undo would take a choice out of a file they committed.
    */
+  /**
+   * The one picker's answer, which is now either an engine or a credential.
+   *
+   * Switching **to** Claude clears the credential — that path spends none, and
+   * `runtimeService.validate` refuses to write both. Switching **away** clears
+   * the engine. In both directions the *tier* survives, for the same reason it
+   * survives a credential change: `medium` means the same thing on either
+   * engine, so the user's answer to "how hard is this work" is not something a
+   * change of runtime should silently discard.
+   *
+   * A concrete model does not survive the move to Claude. It cannot: an id from
+   * a provider's catalogue means nothing to a plan addressed by alias, and
+   * carrying it over would leave the manifest naming a model that engine will
+   * never serve. The status line says so rather than letting it vanish quietly.
+   */
+  const changeRuntimeTarget = (value: string): void => {
+    if (value === CLAUDE_OPTION) {
+      commit(null, null, declaredComplexity, {
+        engine: 'claude',
+        note: declaredModel
+          ? `Dropped “${nameOf(declaredModel)}” — Claude Agent runs on ${claudeModelForComplexity(declaredComplexity)}.`
+          : undefined
+      })
+      return
+    }
+    if (onClaude) {
+      // Leaving the Claude engine for a credential. The model is already null
+      // on that path, so there is nothing to drop.
+      commit(value || null, null, declaredComplexity, { engine: null })
+      return
+    }
+    changeCredential(value)
+  }
+
   const changeCredential = (value: string): void => {
     const next = value ? (usable.find((provider) => provider.name === value) ?? null) : fallbackProvider
     const stale = modelBelongsElsewhere(declaredModel, next, models ?? [], providers ?? [])
@@ -956,7 +1257,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         )
         return
       }
-      commit(declaredCredential, model, null, {
+      commit(commitCredential(declaredCredential), model, null, {
         view: next,
         persist: true,
         keep: null,
@@ -972,7 +1273,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       // guarantee that lives only in whether a control is clickable is one line
       // of JSX away from being lost.
       if (!tier) return
-      commit(declaredCredential, null, tier, {
+      commit(commitCredential(declaredCredential), null, tier, {
         view: next,
         persist: true,
         keep: declaredModel,
@@ -1005,31 +1306,51 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       <div className="grid grid-cols-2 gap-3 @2xl:grid-cols-3">
         <div>
           <label htmlFor="runtime-credential" className={LABEL}>
-            Credential
+            Runs on
           </label>
           <select
             id="runtime-credential"
             className={FIELD}
             title={
-              selected
-                ? selected.name
-                : fallbackProvider
-                  ? `Default: ${fallbackProvider.name}`
-                  : undefined
+              onClaude
+                ? 'Your own Claude Code login — this app holds no credential for it'
+                : selected
+                  ? selected.name
+                  : fallbackProvider
+                    ? `Default: ${fallbackProvider.name}`
+                    : undefined
             }
             disabled={disabled}
-            value={selected?.name ?? ''}
-            onChange={(event) => changeCredential(event.target.value)}
+            value={onClaude ? CLAUDE_OPTION : (selected?.name ?? '')}
+            onChange={(event) => changeRuntimeTarget(event.target.value)}
           >
             <option value="">
               {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
             </option>
+            {/*
+              **Two honest lists behind one separator, not one list pretending.**
+              An engine is not a credential row — it has no key, no `enabled`
+              flag and no catalogue — so merging them into a flat list would make
+              every credential-shaped question below ("is it switched off?")
+              read as if it applied to both.
+
+              The label is “Claude Agent” rather than “Claude Code”: the latter
+              is not a permitted name for a third-party product's own surface.
+              The status line beneath may still say “Claude Code 2.1.266”,
+              because that is a statement about the user's machine.
+            */}
+            {(claudeTool || onClaude) && (
+              <optgroup label="On this machine">
+                <option value={CLAUDE_OPTION}>Claude Agent</option>
+              </optgroup>
+            )}
             {/*
               A credential the manifest names that is not offered — configured
               but keyless — still needs an option, or the select would render
               blank over a file that plainly names one. Same reason the Model
               select carries an entry for an id the registry never listed.
             */}
+            <optgroup label="AI credentials">
             {selected && !usable.some((provider) => provider.id === selected.id) && (
               <option value={selected.name}>{credentialOptionLabel(selected)}</option>
             )}
@@ -1046,6 +1367,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
                 {credentialOptionLabel(provider)}
               </option>
             ))}
+            </optgroup>
           </select>
         </div>
 
@@ -1063,8 +1385,25 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               }
               className={`${LABEL} mb-0`}
             >
-              {pickerUnknown ? 'Runs on' : advanced ? 'Model' : 'Work complexity'}
+              {/*
+                Three names for one column, and the pending one is deliberately
+                neither of the other two: claiming "Model" or "Work complexity"
+                before it is known is the swap rule 1 forbids. It is also not
+                "Runs on" — that is the *first* column's name, and one surface
+                must not announce two controls identically (rule 10).
+              */}
+              {pickerUnknown ? 'Model choice' : advanced ? 'Model' : 'Work complexity'}
             </label>
+            {/*
+              **Hidden, not disabled-and-empty, on the Claude engine** — a
+              control that lists nothing is worse than a control that is not
+              there, and a disabled checkbox invites a click that can never do
+              anything. It is removed from *inside* the fixed-height row, so the
+              panel keeps its footprint and the page's tab strip does not move
+              out from under the pointer that just used the select (rule 1). The
+              reserved line below says what this agent runs on instead.
+            */}
+            {!onClaude && (
             <label
               className="flex shrink-0 cursor-pointer items-center gap-1 text-[10px] text-[var(--color-text-muted)]
                 transition-colors hover:text-[var(--color-text)]"
@@ -1089,11 +1428,12 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               />
               Advanced
             </label>
+            )}
           </div>
           {pickerUnknown ? (
             /* Same footprint, no claim: which picker this agent gets is not
                known yet, and guessing is what produces the swap. */
-            <select id="runtime-pending" aria-label="Runs on" className={FIELD} disabled>
+            <select id="runtime-pending" aria-label="Model choice" className={FIELD} disabled>
               <option>Loading…</option>
             </select>
           ) : advanced ? (
@@ -1104,7 +1444,9 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               title={inheritedName ? `Default: ${inheritedName}` : undefined}
               disabled={disabled}
               value={declaredModel ?? ''}
-              onChange={(event) => commit(declaredCredential, event.target.value || null, null)}
+              onChange={(event) =>
+                commit(commitCredential(declaredCredential), event.target.value || null, null)
+              }
             >
               <option value="">
                 {!modelsLoaded ? 'Default' : inheritedName ? `Default (${inheritedName})` : 'Default (none set)'}
@@ -1138,14 +1480,21 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               value={declaredComplexity ?? ''}
               onChange={(event) =>
                 commit(
-                  declaredCredential,
+                  commitCredential(declaredCredential),
                   null,
                   isWorkComplexity(event.target.value) ? event.target.value : null
                 )
               }
             >
               <option value="">
-                {!modelsLoaded || inheritedName ? 'Default' : 'Default (none set)'}
+                {onClaude
+                  ? // The Medium floor, named: an agent that picks no tier on
+                    // this engine runs on `sonnet`, and there is no catalogue
+                    // that could make that "none set".
+                    `Default (${claudeModelForComplexity(null)})`
+                  : !modelsLoaded || inheritedName
+                    ? 'Default'
+                    : 'Default (none set)'}
               </option>
               {/*
                 The tier alone, and the model it resolves to on the line below.
@@ -1159,7 +1508,12 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               {WORK_COMPLEXITIES.map((tier) => (
                 <option key={tier} value={tier} title={WORK_COMPLEXITY_HINTS[tier]}>
                   {WORK_COMPLEXITY_LABELS[tier]}
-                  {modelsLoaded && !tierModels[tier] ? ' (none listed)' : ''}
+                  {/*
+                    "(none listed)" is a statement about a credential's
+                    catalogue. There is none here, and every tier resolves — so
+                    the suffix would be both false and alarming.
+                  */}
+                  {!onClaude && modelsLoaded && !tierModels[tier] ? ' (none listed)' : ''}
                 </option>
               ))}
             </select>
@@ -1167,7 +1521,19 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         </div>
 
         <div className="col-span-2 @2xl:col-span-1">
-          <EngineStatus />
+          {/*
+            **The OpenCode engine's state is not this agent's business.** A
+            Claude agent never starts that process, so reporting "Not running"
+            beside it — with a Start button — would be a fact about something
+            unrelated, offering an action that changes nothing for this agent
+            (ux_rules rule 9). The column keeps its place and its label so the
+            grid does not reflow; only what it reports changes.
+          */}
+          {onClaude ? (
+            <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} />
+          ) : (
+            <EngineStatus />
+          )}
         </div>
       </div>
 

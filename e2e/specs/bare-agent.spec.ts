@@ -649,7 +649,7 @@ test.describe('a bare agent chooses its own credential', () => {
     let panel = await openAgentPage(cinna)
 
     await test.step('the panel is a control now, not a sentence', async () => {
-      const credential = panel.getByLabel('Credential')
+      const credential = panel.getByLabel('Runs on')
       // Disabled until `provider:list-models` lands for both credentials; before
       // that the panel cannot tell a foreign model from an unlisted one.
       await expect(credential).toBeEnabled()
@@ -666,8 +666,8 @@ test.describe('a bare agent chooses its own credential', () => {
     })
 
     await test.step('choosing a credential writes it under userData, and only there', async () => {
-      await panel.getByLabel('Credential').selectOption(OPENAI_CRED)
-      await expect(panel.getByLabel('Credential')).toHaveValue(OPENAI_CRED)
+      await panel.getByLabel('Runs on').selectOption(OPENAI_CRED)
+      await expect(panel.getByLabel('Runs on')).toHaveValue(OPENAI_CRED)
       // The file is the assertion. A `runtime` block in the folder's own
       // `cinna-agent.json`, or an `app-data/desktop.json` beside `AGENT.md`,
       // would satisfy every locator above and none of the three below.
@@ -688,7 +688,7 @@ test.describe('a bare agent chooses its own credential', () => {
       // Startup does not scan, and the panel reads `agent.runtime` off the index.
       await cinna.page.evaluate(() => window.api.localAgents.rescan())
       panel = await openAgentPage(cinna)
-      const credential = panel.getByLabel('Credential')
+      const credential = panel.getByLabel('Runs on')
       await expect(credential).toBeEnabled()
       await expect(credential).toHaveValue(OPENAI_CRED)
       expect(treeOf(folder)).toEqual(before)

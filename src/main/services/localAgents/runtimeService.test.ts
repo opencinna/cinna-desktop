@@ -265,7 +265,7 @@ describe('runtimeService.resolve', () => {
     // disabled credential is left out of the config (`collectEngineProviders`),
     // so an agent on one does not run at all.
     const off = [provider({ id: 'p1', name: 'Personal' }), provider({ id: 'p2', name: 'Work', enabled: false })]
-    const resolved = runtimeService.resolve({ credential: 'Work' }, off)
+    const resolved = runtimeService.resolve({ engine: null, credential: 'Work' }, off)
     expect(resolved.credentialId).toBe('p2')
     // The sentence deliberately does not name the credential — see
     // `describeCredential`: it is the longest line in the ladder and the panel
@@ -283,7 +283,7 @@ describe('runtimeService.resolve', () => {
 
   it('prefers the manifest over the default', () => {
     expect(
-      runtimeService.resolve({ credential: 'Work', model: 'other-model' }, providers)
+      runtimeService.resolve({ engine: null, credential: 'Work', model: 'other-model' }, providers)
     ).toMatchObject({
       source: 'manifest',
       credentialId: 'p2',
@@ -310,7 +310,7 @@ describe('runtimeService.resolve', () => {
       provider({ id: 'p1', name: 'Personal' }),
       provider({ id: 'p3', name: 'OpenAI', type: 'openai' })
     ]
-    const resolved = runtimeService.resolve({ credential: 'OpenAI' }, mixed)
+    const resolved = runtimeService.resolve({ engine: null, credential: 'OpenAI' }, mixed)
     expect(resolved.credentialId).toBe('p3')
     expect(resolved.modelId).toBeNull()
     expect(resolved.reason).toMatch(/No models listed for this credential/)
@@ -321,7 +321,7 @@ describe('runtimeService.resolve', () => {
     // is the provider's, not the row's, so this pairing runs — dropping it would
     // silently take a working agent off the air.
     const two = [provider({ id: 'p1', name: 'Personal' }), provider({ id: 'p2', name: 'Mine' })]
-    expect(runtimeService.resolve({ credential: 'Mine' }, two)).toMatchObject({
+    expect(runtimeService.resolve({ engine: null, credential: 'Mine' }, two)).toMatchObject({
       credentialId: 'p2',
       modelId: 'default-model',
       reason: null
@@ -333,7 +333,7 @@ describe('runtimeService.resolve', () => {
     // own default is what the user set in Settings → AI Credentials.
     defaultMode.current = { providerId: 'p1', modelId: null }
     const own = [provider({ id: 'p1', name: 'Personal', defaultModelId: 'claude-opus-4-1' })]
-    expect(runtimeService.resolve({ credential: 'Personal' }, own)).toMatchObject({
+    expect(runtimeService.resolve({ engine: null, credential: 'Personal' }, own)).toMatchObject({
       credentialId: 'p1',
       modelId: 'claude-opus-4-1'
     })
@@ -344,7 +344,7 @@ describe('runtimeService.resolve', () => {
       provider({ id: 'p1', name: 'Personal' }),
       provider({ id: 'p3', name: 'OpenAI', type: 'openai', defaultModelId: 'gpt-5' })
     ]
-    expect(runtimeService.resolve({ credential: 'OpenAI' }, mixed)).toMatchObject({
+    expect(runtimeService.resolve({ engine: null, credential: 'OpenAI' }, mixed)).toMatchObject({
       credentialId: 'p3',
       modelId: 'gpt-5',
       reason: null
@@ -358,18 +358,18 @@ describe('runtimeService.resolve', () => {
       provider({ id: 'g1', name: 'Gateway A', type: 'openai_compatible' }),
       provider({ id: 'g2', name: 'Gateway B', type: 'openai_compatible' })
     ]
-    expect(runtimeService.resolve({ credential: 'Gateway B' }, gateways).modelId).toBeNull()
+    expect(runtimeService.resolve({ engine: null, credential: 'Gateway B' }, gateways).modelId).toBeNull()
   })
 
   it('still borrows the default’s model when the manifest names the default’s credential', () => {
-    expect(runtimeService.resolve({ credential: 'Personal' }, providers)).toMatchObject({
+    expect(runtimeService.resolve({ engine: null, credential: 'Personal' }, providers)).toMatchObject({
       credentialId: 'p1',
       modelId: 'default-model'
     })
   })
 
   it('falls back but says so when the manifest names a credential this machine lacks', () => {
-    const resolved = runtimeService.resolve({ credential: 'Somebody else’s' }, providers)
+    const resolved = runtimeService.resolve({ engine: null, credential: 'Somebody else’s' }, providers)
     expect(resolved.credentialId).toBe('p1')
     expect(resolved.credentialRef).toBe('Somebody else’s')
     expect(resolved.reason).toMatch(/not configured on this machine/)
@@ -377,7 +377,7 @@ describe('runtimeService.resolve', () => {
 
   it('has no runtime at all when neither the manifest nor a default resolves', () => {
     defaultMode.current = null
-    const resolved = runtimeService.resolve({ credential: 'Missing' }, providers)
+    const resolved = runtimeService.resolve({ engine: null, credential: 'Missing' }, providers)
     expect(resolved.credentialId).toBeNull()
     expect(resolved.source).toBe('none')
   })
@@ -386,7 +386,7 @@ describe('runtimeService.resolve', () => {
 describe('runtimeService.applyToManifest', () => {
   it('writes a credential name and a model', () => {
     const manifest: CinnaAgentManifest = {}
-    runtimeService.applyToManifest(manifest, { credential: 'Work', modelId: 'gpt-5', complexity: null })
+    runtimeService.applyToManifest(manifest, { engine: null, credential: 'Work', modelId: 'gpt-5', complexity: null })
     expect(manifest.runtime).toEqual({ credential: 'Work', model: 'gpt-5' })
   })
 
@@ -394,7 +394,7 @@ describe('runtimeService.applyToManifest', () => {
     const manifest: CinnaAgentManifest = {}
     for (const value of ['sk-ant-api03-abc', 'ghp_abcdef', 'AIzaSyABCDEF', 'AKIAIOSFODNN7']) {
       expect(() =>
-        runtimeService.applyToManifest(manifest, { credential: value, modelId: null, complexity: null })
+        runtimeService.applyToManifest(manifest, { engine: null, credential: value, modelId: null, complexity: null })
       ).toThrow(/looks like an API key/i)
     }
     // Nothing was written on the way through.
@@ -402,8 +402,8 @@ describe('runtimeService.applyToManifest', () => {
   })
 
   it('removes the block entirely when both fields are cleared', () => {
-    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
-    runtimeService.applyToManifest(manifest, { credential: null, modelId: null, complexity: null })
+    const manifest: CinnaAgentManifest = { runtime: { engine: null, credential: 'Work', model: 'gpt-5' } }
+    runtimeService.applyToManifest(manifest, { engine: null, credential: null, modelId: null, complexity: null })
     // `{}` rather than absence would show up as a change in the user's manifest
     // diff that they did not make.
     expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
@@ -411,17 +411,17 @@ describe('runtimeService.applyToManifest', () => {
 
   it('keeps a block that still carries something the desktop does not own', () => {
     const manifest: CinnaAgentManifest = {
-      runtime: { credential: 'Work', model: 'gpt-5', permissions: { bash: 'deny' } }
+      runtime: { engine: null, credential: 'Work', model: 'gpt-5', permissions: { bash: 'deny' } }
     }
-    runtimeService.applyToManifest(manifest, { credential: null, modelId: null, complexity: null })
+    runtimeService.applyToManifest(manifest, { engine: null, credential: null, modelId: null, complexity: null })
     expect(manifest.runtime).toEqual({ permissions: { bash: 'deny' } })
   })
 
   it('preserves unknown keys through an edit', () => {
     const manifest: CinnaAgentManifest = {
-      runtime: { credential: 'Work', model: 'gpt-5', somethingNewer: 42 }
+      runtime: { engine: null, credential: 'Work', model: 'gpt-5', somethingNewer: 42 }
     }
-    runtimeService.applyToManifest(manifest, { credential: 'Personal', modelId: 'claude', complexity: null })
+    runtimeService.applyToManifest(manifest, { engine: null, credential: 'Personal', modelId: 'claude', complexity: null })
     expect(manifest.runtime).toEqual({
       somethingNewer: 42,
       credential: 'Personal',
@@ -430,11 +430,12 @@ describe('runtimeService.applyToManifest', () => {
   })
 
   it('treats whitespace as clearing, and refuses a non-string', () => {
-    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
-    runtimeService.applyToManifest(manifest, { credential: '  ', modelId: '  ', complexity: null })
+    const manifest: CinnaAgentManifest = { runtime: { engine: null, credential: 'Work', model: 'gpt-5' } }
+    runtimeService.applyToManifest(manifest, { engine: null, credential: '  ', modelId: '  ', complexity: null })
     expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
     expect(() =>
       runtimeService.applyToManifest(manifest, {
+        engine: null,
         credential: 42 as unknown as string,
         modelId: null,
         complexity: null
@@ -444,7 +445,7 @@ describe('runtimeService.applyToManifest', () => {
 
   it('refuses a value long enough to be a pasted key', () => {
     expect(() =>
-      runtimeService.applyToManifest({}, { credential: 'x'.repeat(500), modelId: null, complexity: null })
+      runtimeService.applyToManifest({}, { engine: null, credential: 'x'.repeat(500), modelId: null, complexity: null })
     ).toThrow(/too long/i)
   })
 })
@@ -472,7 +473,7 @@ describe('resolve — work complexity', () => {
 
   it('resolves a tier against the chosen credential, not the whole registry', () => {
     const result = runtimeService.resolve(
-      { credential: 'OpenAI', complexity: 'simple' },
+      { engine: null, credential: 'OpenAI', complexity: 'simple' },
       providers,
       catalogue
     )
@@ -492,7 +493,7 @@ describe('resolve — work complexity', () => {
       { id: 'gpt-4o-mini', providerId: 'p3' }
     ]
     const result = runtimeService.resolve(
-      { credential: 'Work OpenAI', complexity: 'simple' },
+      { engine: null, credential: 'Work OpenAI', complexity: 'simple' },
       [...providers, second],
       split
     )
@@ -506,7 +507,7 @@ describe('resolve — work complexity', () => {
       { id: 'gpt-5.5-mini', providerId: 'p3' }
     ]
     const result = runtimeService.resolve(
-      { credential: 'Work OpenAI', model: 'gpt-5.4-mini' },
+      { engine: null, credential: 'Work OpenAI', model: 'gpt-5.4-mini' },
       [...providers, second],
       split
     )
@@ -516,7 +517,7 @@ describe('resolve — work complexity', () => {
 
   it('says so, and runs nothing, when the credential lists no model in the tier', () => {
     const result = runtimeService.resolve(
-      { credential: 'OpenAI', complexity: 'complex' },
+      { engine: null, credential: 'OpenAI', complexity: 'complex' },
       providers,
       catalogue
     )
@@ -528,14 +529,14 @@ describe('resolve — work complexity', () => {
   })
 
   it('does not claim a catalogue lists nothing when none was read', () => {
-    const result = runtimeService.resolve({ credential: 'OpenAI', complexity: 'simple' }, providers)
+    const result = runtimeService.resolve({ engine: null, credential: 'OpenAI', complexity: 'simple' }, providers)
     expect(result.reason).toMatch(/model list has not loaded/i)
   })
 
   it('borrows nothing from the default runtime when a tier comes up empty', () => {
     defaultMode.current = { providerId: 'p1', modelId: 'claude-opus-4-1-20250805' }
     const result = runtimeService.resolve(
-      { credential: 'OpenAI', complexity: 'complex' },
+      { engine: null, credential: 'OpenAI', complexity: 'complex' },
       providers,
       catalogue
     )
@@ -552,7 +553,7 @@ describe('resolve — work complexity', () => {
     // different-runtime defect, and a bill for work declared simple.
     defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4-5' }
     const result = runtimeService.resolve(
-      { credential: 'Anthropic Work', complexity: 'simple' },
+      { engine: null, credential: 'Anthropic Work', complexity: 'simple' },
       providers,
       catalogue
     )
@@ -568,7 +569,7 @@ describe('resolve — work complexity', () => {
       { id: 'gpt-5', providerId: 'p2' }
     ]
     const result = runtimeService.resolve(
-      { credential: 'Nope', model: 'gpt-5.4-mini' },
+      { engine: null, credential: 'Nope', model: 'gpt-5.4-mini' },
       providers,
       retired
     )
@@ -582,7 +583,7 @@ describe('resolve — work complexity', () => {
       { id: 'gpt-5', providerId: 'p2' }
     ]
     const result = runtimeService.resolve(
-      { credential: 'OpenAI', model: 'gpt-5.4-mini' },
+      { engine: null, credential: 'OpenAI', model: 'gpt-5.4-mini' },
       providers,
       retired
     )
@@ -595,7 +596,7 @@ describe('resolve — work complexity', () => {
     // A gateway that does not implement `/models`. "Nothing lists it" must not
     // read as "it is stale".
     const result = runtimeService.resolve(
-      { credential: 'OpenAI', model: 'some-gateway-model' },
+      { engine: null, credential: 'OpenAI', model: 'some-gateway-model' },
       providers,
       []
     )
@@ -637,8 +638,9 @@ describe('resolve — work complexity', () => {
 
 describe('applyToManifest — work complexity', () => {
   it('writes a tier and clears the model it replaces', () => {
-    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', model: 'gpt-5' } }
+    const manifest: CinnaAgentManifest = { runtime: { engine: null, credential: 'Work', model: 'gpt-5' } }
     runtimeService.applyToManifest(manifest, {
+      engine: null,
       credential: 'Work',
       modelId: null,
       complexity: 'medium'
@@ -647,8 +649,9 @@ describe('applyToManifest — work complexity', () => {
   })
 
   it('writes a model and clears the tier it replaces', () => {
-    const manifest: CinnaAgentManifest = { runtime: { credential: 'Work', complexity: 'medium' } }
+    const manifest: CinnaAgentManifest = { runtime: { engine: null, credential: 'Work', complexity: 'medium' } }
     runtimeService.applyToManifest(manifest, {
+      engine: null,
       credential: 'Work',
       modelId: 'gpt-5',
       complexity: null
@@ -660,7 +663,7 @@ describe('applyToManifest — work complexity', () => {
     expect(() =>
       runtimeService.applyToManifest(
         {},
-        { credential: null, modelId: 'gpt-5', complexity: 'simple' }
+        { engine: null, credential: null, modelId: 'gpt-5', complexity: 'simple' }
       )
     ).toThrow(/not both/i)
   })
@@ -668,6 +671,7 @@ describe('applyToManifest — work complexity', () => {
   it('refuses a tier the contract does not define', () => {
     expect(() =>
       runtimeService.applyToManifest({}, {
+        engine: null,
         credential: null,
         modelId: null,
         complexity: 'extreme' as never
@@ -678,6 +682,7 @@ describe('applyToManifest — work complexity', () => {
   it('removes the runtime block when the tier is cleared too', () => {
     const manifest: CinnaAgentManifest = { runtime: { complexity: 'complex' } }
     runtimeService.applyToManifest(manifest, {
+      engine: null,
       credential: null,
       modelId: null,
       complexity: null
@@ -690,10 +695,206 @@ describe('applyToManifest — work complexity', () => {
       runtime: { model: 'gpt-5', permissions: { bash: 'ask' }, future: 1 }
     }
     runtimeService.applyToManifest(manifest, {
+      engine: null,
       credential: null,
       modelId: null,
       complexity: 'simple'
     })
     expect(manifest.runtime).toEqual({ permissions: { bash: 'ask' }, future: 1, complexity: 'simple' })
+  })
+})
+
+/**
+ * The engine axis — contract 1.2.0.
+ *
+ * The rule that carries the weight here is the **read/write asymmetry**, and it
+ * is not symmetric by accident: an engine value this build has never heard of
+ * has to read as "no engine" so a folder written by a newer tool keeps running,
+ * while this desktop still refuses to author the same ambiguity itself.
+ *
+ * The other one is that `engine: 'claude'` leaves the credential ladder
+ * entirely. Every branch of that ladder is written about a credential row with
+ * a key and an `enabled` flag; run a credential-less engine through it and an
+ * agent gets reported as broken because the user's *default chat mode* points
+ * at a switched-off key it was never going to spend.
+ */
+describe('resolve — the engine axis', () => {
+  it('defaults to opencode when the manifest names no engine', () => {
+    expect(runtimeService.resolve(null, []).engine).toBe('opencode')
+    expect(runtimeService.resolve({ model: 'gpt-5' }, []).engine).toBe('opencode')
+  })
+
+  it('reads an engine the manifest declares', () => {
+    expect(runtimeService.resolve({ engine: 'claude' }, []).engine).toBe('claude')
+    expect(runtimeService.resolve({ engine: 'opencode' }, []).engine).toBe('opencode')
+  })
+
+  it('reads an unrecognised engine as no engine rather than failing', () => {
+    // The tolerant half. A folder written by a 1.3.0 tool naming an engine this
+    // build has never heard of must still run, on the default — which is to say
+    // it must resolve *identically* to the same manifest with no engine key at
+    // all. Asserting `reason === null` would be asserting something else: this
+    // fixture has no default chat mode, so it has a reason either way.
+    defaultMode.current = { providerId: 'p1', modelId: 'gpt-5' }
+    const providers = [provider({ id: 'p1' })]
+
+    expect(runtimeService.resolve({ engine: 'codex' }, providers)).toEqual(
+      runtimeService.resolve({}, providers)
+    )
+  })
+
+  it('resolves the Claude engine with no credential at all', () => {
+    // The default chat mode points at a credential that is switched *off* —
+    // the exact state that makes the OpenCode ladder produce a reason. It must
+    // not leak onto a path that spends no credential.
+    defaultMode.current = { providerId: 'p1', modelId: 'claude-sonnet-4' }
+    const providers = [provider({ id: 'p1', enabled: false })]
+
+    const resolved = runtimeService.resolve({ engine: 'claude' }, providers)
+
+    expect(resolved.credentialId).toBe(null)
+    expect(resolved.credentialName).toBe(null)
+    expect(resolved.credentialType).toBe(null)
+    expect(resolved.reason).toBe(null)
+  })
+
+  it('ignores a credential declared alongside the Claude engine', () => {
+    const providers = [provider({ id: 'p1', name: 'Anthropic' })]
+    const resolved = runtimeService.resolve(
+      { engine: 'claude', credential: 'Anthropic' },
+      providers
+    )
+    expect(resolved.credentialId).toBe(null)
+    expect(resolved.credentialRef).toBe(null)
+  })
+
+  it('resolves a tier to an alias, and no tier to the Medium floor', () => {
+    // Aliases, not a catalogue: a plan serves what the plan serves, and there is
+    // no `listModels()` on this path to resolve a tier against.
+    expect(runtimeService.resolve({ engine: 'claude', complexity: 'simple' }, []).modelId).toBe('haiku')
+    expect(runtimeService.resolve({ engine: 'claude', complexity: 'medium' }, []).modelId).toBe('sonnet')
+    expect(runtimeService.resolve({ engine: 'claude', complexity: 'complex' }, []).modelId).toBe('opus')
+    expect(runtimeService.resolve({ engine: 'claude' }, []).modelId).toBe('sonnet')
+  })
+
+  it('lets a declared model beat a tier, as the OpenCode path does', () => {
+    const resolved = runtimeService.resolve(
+      { engine: 'claude', model: 'opus', complexity: 'simple' },
+      []
+    )
+    expect(resolved.modelId).toBe('opus')
+    expect(resolved.modelSource).toBe('declared')
+  })
+})
+
+describe('the engine axis — writing', () => {
+  it('refuses a credential alongside the Claude engine, on both writers', () => {
+    const input = { engine: 'claude' as const, credential: 'Anthropic', modelId: null, complexity: null }
+    expect(() => runtimeService.toRuntimeRef(input)).toThrow(/own login/)
+    expect(() => runtimeService.applyToManifest({}, input)).toThrow(/own login/)
+  })
+
+  it('refuses an engine this app cannot run', () => {
+    expect(() =>
+      runtimeService.toRuntimeRef({
+        engine: 'codex' as never,
+        credential: null,
+        modelId: null,
+        complexity: null
+      })
+    ).toThrow(/not an engine/)
+  })
+
+  it('writes the engine into the manifest, and clears it again', () => {
+    const manifest: CinnaAgentManifest = {}
+    runtimeService.applyToManifest(manifest, {
+      engine: 'claude',
+      credential: null,
+      modelId: null,
+      complexity: 'complex'
+    })
+    expect(manifest.runtime).toEqual({ engine: 'claude', complexity: 'complex' })
+
+    runtimeService.applyToManifest(manifest, {
+      engine: null,
+      credential: null,
+      modelId: null,
+      complexity: null
+    })
+    expect(Object.hasOwn(manifest, 'runtime')).toBe(false)
+  })
+
+  it('an engine alone is a runtime, not nothing', () => {
+    // `toRuntimeRef` returns null for "no choice made", and a bare agent that
+    // chose only an engine has made one.
+    expect(
+      runtimeService.toRuntimeRef({
+        engine: 'claude',
+        credential: null,
+        modelId: null,
+        complexity: null
+      })
+    ).toEqual({ engine: 'claude' })
+  })
+
+  it('preserves unknown runtime keys across an engine write', () => {
+    const manifest: CinnaAgentManifest = { runtime: { permissions: { bash: 'ask' }, future: 1 } }
+    runtimeService.applyToManifest(manifest, {
+      engine: 'claude',
+      credential: null,
+      modelId: null,
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ permissions: { bash: 'ask' }, future: 1, engine: 'claude' })
+  })
+})
+
+describe('the engine survives a save that is not about it', () => {
+  it('does not drop runtime.engine when the panel saves a model', () => {
+    // **The regression the engine key introduced for itself.** Before it was a
+    // known field it was an *unknown* one, preserved verbatim by the manifest
+    // layer's round-trip rule. Making it known and then deleting it on every
+    // write removed that protection for exactly the key being added — so a
+    // manifest an assistant or cinna-core wrote loses the engine choice the
+    // moment the user changes the model, silently, in a file they commit.
+    const manifest: CinnaAgentManifest = {
+      runtime: { engine: 'claude', complexity: 'complex' }
+    }
+    // The panel now carries the manifest's own engine through every save, so
+    // changing the model leaves the engine choice alone.
+    runtimeService.applyToManifest(manifest, {
+      engine: 'claude',
+      credential: null,
+      modelId: 'gpt-5',
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ engine: 'claude', model: 'gpt-5' })
+  })
+
+  it('is protected by the type, because omitting the field still erases it', () => {
+    // The guard is `LocalAgentRuntimeInput.engine` being **required**, not a
+    // runtime check — and this cast is what a caller that forgot would compile
+    // to. `applyToManifest` rewrites the whole `runtime` block, so an absent
+    // field is indistinguishable from "the user cleared it": the manifest's
+    // round-trip promise stops protecting a key the moment the layer knows
+    // about it. Hence the compiler, rather than a default, does the asking.
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'claude' } }
+    runtimeService.applyToManifest(manifest, {
+      credential: null,
+      modelId: 'gpt-5',
+      complexity: null
+    } as never)
+    expect(manifest.runtime).toEqual({ model: 'gpt-5' })
+  })
+
+  it('still clears the engine when the caller explicitly says none', () => {
+    const manifest: CinnaAgentManifest = { runtime: { engine: 'claude', model: 'gpt-5' } }
+    runtimeService.applyToManifest(manifest, {
+      engine: null,
+      credential: null,
+      modelId: 'gpt-5',
+      complexity: null
+    })
+    expect(manifest.runtime).toEqual({ model: 'gpt-5' })
   })
 })

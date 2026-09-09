@@ -47,6 +47,7 @@ import {
 } from '../../shared/kit/manifest'
 import { checkContractCompatibility, compareVersionStrings } from '../../shared/kit/contractVersion'
 import { isWorkComplexity } from '../../shared/modelFamilies'
+import { isAgentEngine } from '../../shared/engine'
 import { KitError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { matchesPattern, type LayoutView } from './layout'
@@ -311,10 +312,37 @@ function checkRuntime(report: Report, manifest: CinnaAgentManifest): void {
     report.error('manifest.runtime.type', '`runtime` must be an object or null.', MANIFEST_FILE)
     return
   }
-  for (const key of ['model', 'credential'] as const) {
+  for (const key of ['model', 'credential', 'engine'] as const) {
     const value = runtime[key]
     if (value !== undefined && value !== null && typeof value !== 'string') {
       report.error('manifest.runtime.type', `\`runtime.${key}\` must be a string or null.`, MANIFEST_FILE)
+    }
+  }
+  // Contract 1.2.0, warnings for the same reason `complexity` warns: an error
+  // here makes `scannerService` mark the folder `invalid` and drops it from the
+  // engine entirely, which is exactly the brick the "minor bumps are additive"
+  // promise is against. Both cases have defined behaviour instead of a refusal:
+  // an unrecognised engine reads as no engine (`isAgentEngine` in
+  // `runtimeService`), and `engine: "claude"` with a credential ignores the
+  // credential.
+  const engine = runtime.engine
+  if (typeof engine === 'string' && engine.trim() !== '') {
+    if (!isAgentEngine(engine.trim())) {
+      report.warn(
+        'manifest.runtime.engine',
+        '`runtime.engine` is not one this build recognises, so the agent runs on the host default engine instead.',
+        MANIFEST_FILE
+      )
+    } else if (
+      engine.trim() === 'claude' &&
+      typeof runtime.credential === 'string' &&
+      runtime.credential.trim() !== ''
+    ) {
+      report.warn(
+        'manifest.runtime.engine',
+        '`runtime.engine` is `claude` and `runtime.credential` is set. That engine runs on the login of the `claude` install itself and spends no credential configured here, so the credential is ignored. Remove it.',
+        MANIFEST_FILE
+      )
     }
   }
   // Contract 1.1.0, and warnings rather than errors on purpose.

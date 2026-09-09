@@ -94,6 +94,53 @@ export const ENGINE_STATE_CHANNEL = 'engine:state'
 /** The pinned engine version this build downloads when it must manage one. */
 export const PINNED_ENGINE_VERSION = '1.18.27'
 
+/**
+ * What actually runs an agent's turn.
+ *
+ * - `opencode` — the desktop-managed `opencode serve` process. The default, and
+ *   the only engine that existed before this axis; every agent that names no
+ *   engine is one.
+ * - `claude` — the Claude Agent SDK, in-process, spawning the `claude` binary
+ *   the user installed under that install's own login. The desktop holds no
+ *   credential on this path and no API key is involved.
+ *
+ * Deliberately two-valued. Nothing here is built to accommodate a third engine
+ * and it should not be until there is one — the abstraction that fits two is
+ * not reliably the one that fits three.
+ */
+export type AgentEngine = 'opencode' | 'claude'
+
+/** The engine an agent that names none runs on. */
+export const DEFAULT_AGENT_ENGINE: AgentEngine = 'opencode'
+
+/** Whether a value off a manifest is an engine this build knows. */
+export function isAgentEngine(value: unknown): value is AgentEngine {
+  return value === 'opencode' || value === 'claude'
+}
+
+/**
+ * Work Complexity → the model alias the Claude engine asks for.
+ *
+ * A small table, deliberately **not** `modelFamilies.ts`. That module classifies
+ * a live catalogue against a credential's `listModels()`, and on this path there
+ * is no credential and no catalogue: a plan serves what the plan serves,
+ * addressed by alias. Resolving a tier through a classifier with nothing to
+ * classify would produce `null` for every agent.
+ *
+ * The Medium floor still applies in spirit — an agent that names no tier runs on
+ * `sonnet`.
+ */
+const CLAUDE_TIER_ALIAS: Record<WorkComplexity, string> = {
+  simple: 'haiku',
+  medium: 'sonnet',
+  complex: 'opus'
+}
+
+/** The alias the Claude engine runs a tier on; `sonnet` when none is named. */
+export function claudeModelForComplexity(complexity: WorkComplexity | null): string {
+  return complexity ? CLAUDE_TIER_ALIAS[complexity] : CLAUDE_TIER_ALIAS.medium
+}
+
 /** Which of the two resolution steps produced a runtime. */
 export type RuntimeSource =
   /** The manifest's own `runtime` block. */
@@ -104,15 +151,30 @@ export type RuntimeSource =
   | 'none'
 
 /**
- * A resolved runtime: which credential, which model.
+ * A resolved runtime: which engine, which credential, which model.
  *
- * The engine is always OpenCode, so a runtime reduces to these two. The
- * manifest stores a credential **reference** (`credentialRef`) and a model id;
- * `credentialId` is that reference resolved against the credentials this
+ * The manifest stores a credential **reference** (`credentialRef`) and a model
+ * id; `credentialId` is that reference resolved against the credentials this
  * machine actually has, and is null when it resolves to nothing.
+ *
+ * `engine` is a field here and **not** a synthetic credential row, which is the
+ * tempting alternative — one list, one uniform consumer. It is rejected because
+ * `isCredentialUsable`, `findCredentialByReference`, `collectEngineProviders`
+ * and every skip reason are written about a row with a key, an `enabled` flag
+ * and a catalogue behind it. A synthetic row satisfies none of those and would
+ * lie to each differently — worst at "the user switched this credential off",
+ * which has no meaning for an engine that bills nobody's key.
+ *
+ * `engine` and {@link RuntimeSource} answer different questions: *which* engine,
+ * and *where the choice came from*.
  */
 export interface ResolvedRuntime {
   source: RuntimeSource
+  /**
+   * The engine this agent's turns run on. Always `opencode` unless the manifest
+   * says otherwise, so an agent written before the axis existed is unchanged.
+   */
+  engine: AgentEngine
   /** Verbatim from the manifest, when it declares one. Never a key. */
   credentialRef: string | null
   /** The provider row the reference resolved to. */
@@ -148,6 +210,24 @@ export interface ResolvedRuntime {
  * this is a renderer-supplied string that lands in a file the user may commit.
  */
 export interface LocalAgentRuntimeInput {
+  /**
+   * Which engine to run on. `null` clears it, exactly as the other three fields
+   * behave — clearing every field removes the `runtime` block.
+   *
+   * **Required, not optional, and that is the whole point.** `applyToManifest`
+   * deletes this key before rewriting it, so a caller that simply omits it
+   * *erases the user's engine choice* from a file they commit. While `engine`
+   * was merely an unknown key the manifest layer preserved it verbatim; making
+   * it known removed that protection for exactly the field being added. An
+   * optional field here is both silent and destructive when absent, so the
+   * compiler is made to ask every caller instead.
+   *
+   * `claude` and {@link credential} are refused together — see
+   * `runtimeService.validate`. They are not mutually meaningful: there is no
+   * credential on the Claude path, and a manifest carrying one would make the
+   * Runs-with panel name a key that pays for nothing.
+   */
+  engine: AgentEngine | null
   /** A credential **name** — what the manifest carries, so it travels. */
   credential: string | null
   /** A concrete model id — the Advanced picker's answer. */

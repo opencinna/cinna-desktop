@@ -1,4 +1,4 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { render, screen, fireEvent, cleanup } from '@testing-library/react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import type { WorkComplexity } from '../../../../../shared/modelFamilies'
@@ -95,6 +95,23 @@ vi.mock('../../../hooks/useModels', () => ({
   useModels: () => ({ data: models, isError: modelsFailed })
 }))
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: providers }) }))
+/**
+ * Detection decides whether the Claude Agent option is offered at all, so it is
+ * a fixture rather than a constant: an absent `claude` must mean an absent
+ * option, never one that fails after the click.
+ */
+let claudeInstalled = true
+/** `undefined` is a third state: detection has not answered yet. */
+let toolsLoaded = true
+vi.mock('../../../hooks/useLocalTools', () => ({
+  useLocalTools: () => ({
+    data: !toolsLoaded
+      ? undefined
+      : claudeInstalled
+        ? [{ id: 'claude', kind: 'cli-assistant', label: 'Claude Code', available: true, path: '/usr/local/bin/claude', version: '2.1.266', source: 'path' }]
+        : []
+  })
+}))
 vi.mock('../../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({
     data: settingsLoaded ? { localAgentsModelAdvanced: advanced } : undefined
@@ -137,6 +154,8 @@ function bareAgent(runtime: Record<string, string> | null): LocalAgentDto {
 }
 
 beforeEach(() => {
+  claudeInstalled = true
+  toolsLoaded = true
   save.mockClear()
   saveBare.mockClear()
   setSetting.mockClear()
@@ -152,6 +171,16 @@ beforeEach(() => {
 })
 
 /** What `commit` sent to the stamped write. */
+/**
+ * The three fields these tests are about: credential, model, tier.
+ *
+ * `engine` is deliberately dropped here rather than added to every expectation
+ * below. The panel sends it on every save — it must, or a save about the model
+ * would delete an engine choice the manifest already carries — but it is a
+ * pass-through the tests in this helper's callers are not about. The two that
+ * *are* about it read `save.mock.calls` directly, so the field cannot be
+ * silently lost by a helper that never looked at it.
+ */
 function saved(): {
   credential: string | null
   modelId: string | null
@@ -160,25 +189,28 @@ function saved(): {
   const [vars] = save.mock.calls[0] as [
     {
       runtime: {
+        engine: string | null
         credential: string | null
         modelId: string | null
         complexity: WorkComplexity | null
       }
     }
   ]
-  return vars.runtime
+  const { engine: _engine, ...rest } = vars.runtime
+  void _engine
+  return rest
 }
 
 describe('RuntimePanel', () => {
   it('drops the old credential’s model when the credential changes', () => {
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} />)
-    fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
     expect(saved()).toEqual({ credential: 'OpenAI', modelId: null, complexity: null })
   })
 
   it('keeps a model the registry has never listed — it is hand-written, not stale', () => {
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'some-gateway-model' })} />)
-    fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
     expect(saved()).toEqual({ credential: 'OpenAI', modelId: 'some-gateway-model', complexity: null })
   })
 
@@ -237,7 +269,7 @@ describe('RuntimePanel', () => {
     // The clear rewrites a file the user commits; doing it wordlessly is the
     // silent-failure case ux_rules rule 6 is about.
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} />)
-    fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
     expect(screen.getByText(/Dropped “Claude Sonnet 4.5” — OpenAI does not list it/)).toBeTruthy()
   })
 
@@ -246,7 +278,7 @@ describe('RuntimePanel', () => {
     // credential, or one whose listModels call just failed. Same catalogue, so
     // the model stays, and the panel cannot both lend it and call it foreign.
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} />)
-    fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'My Anthropic' } })
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'My Anthropic' } })
     expect(saved()).toEqual({ credential: 'My Anthropic', modelId: 'claude-sonnet-4-5', complexity: null })
     expect(screen.queryByText(/Pick a model/)).toBeNull()
   })
@@ -273,7 +305,7 @@ describe('RuntimePanel', () => {
     models = undefined
     modelsFailed = true
     render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
-    expect(screen.getByLabelText('Credential')).toHaveProperty('disabled', false)
+    expect(screen.getByLabelText('Runs on')).toHaveProperty('disabled', false)
     expect(screen.getByText(/Could not load the model list/)).toBeTruthy()
   })
 
@@ -283,7 +315,7 @@ describe('RuntimePanel', () => {
     // belongs to another credential.
     models = undefined
     render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} />)
-    expect(screen.getByLabelText('Credential')).toHaveProperty('disabled', true)
+    expect(screen.getByLabelText('Runs on')).toHaveProperty('disabled', true)
     expect(screen.getByLabelText('Model')).toHaveProperty('disabled', true)
     expect(screen.getByText('Loading the model list…')).toBeTruthy()
   })
@@ -293,7 +325,7 @@ describe('RuntimePanel', () => {
     // from a file the user commits, on a change they may be about to undo.
     defaultMode = null
     render(<RuntimePanel agent={agent({ credential: 'OpenAI', model: 'gpt-5' })} />)
-    fireEvent.change(screen.getByLabelText('Credential'), { target: { value: '' } })
+    fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: '' } })
     expect(saved()).toEqual({ credential: null, modelId: 'gpt-5', complexity: null })
   })
 
@@ -327,7 +359,7 @@ describe('RuntimePanel', () => {
 
     it('keeps the tier when the credential changes — that is what makes it portable', () => {
       render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'medium' })} />)
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       expect(saved()).toEqual({ credential: 'OpenAI', modelId: null, complexity: 'medium' })
     })
 
@@ -396,7 +428,7 @@ describe('RuntimePanel', () => {
       const { rerender } = render(
         <RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} />
       )
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       expect(saved().modelId).toBeNull()
       afterSave(rerender)
       expect(screen.getByLabelText('Model')).toBeTruthy()
@@ -550,6 +582,7 @@ describe('RuntimePanel', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
       const [, second] = save.mock.calls as unknown as [unknown, [{ runtime: unknown }]]
       expect(second[0].runtime).toEqual({
+        engine: null,
         credential: 'Anthropic',
         modelId: 'claude-haiku-4-5-20251001',
         complexity: null
@@ -565,7 +598,7 @@ describe('RuntimePanel', () => {
           agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5', complexity: 'medium' })}
         />
       )
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'My Anthropic' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'My Anthropic' } })
       const runtime = saved()
       expect(runtime.complexity).toBeNull()
       expect(runtime.modelId).toBe('claude-sonnet-4-5')
@@ -615,7 +648,7 @@ describe('RuntimePanel', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /Advanced/ }))
       expect(save).not.toHaveBeenCalled()
       expect(screen.getByLabelText('Model')).toBeTruthy()
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       expect(saved()).toEqual({ credential: 'OpenAI', modelId: null, complexity: 'complex' })
     })
 
@@ -626,7 +659,7 @@ describe('RuntimePanel', () => {
         />
       )
       // Model view: the model survives, the unseen tier is what gives way.
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'My Anthropic' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'My Anthropic' } })
       expect(saved()).toEqual({
         credential: 'My Anthropic',
         modelId: 'claude-sonnet-4-5',
@@ -735,7 +768,7 @@ describe('RuntimePanel', () => {
       expect(screen.queryByText(/not configured on this machine/)).toBeNull()
       // …and the select shows it, rather than rendering blank over a file that
       // plainly names a credential.
-      expect(screen.getByLabelText('Credential')).toHaveProperty('value', 'Dry Anthropic')
+      expect(screen.getByLabelText('Runs on')).toHaveProperty('value', 'Dry Anthropic')
     })
 
     it('warns when the credential lists nothing in the tier the agent asks for', () => {
@@ -816,6 +849,181 @@ describe('RuntimePanel', () => {
     })
   })
 
+  describe('an engine the panel cannot yet change', () => {
+    it('carries a declared engine through a save about something else', () => {
+      // **The panel rewrites the whole `runtime` block**, so every save has to
+      // carry the engine or it deletes the user's choice out of a file they
+      // commit. Changing the *tier* is that case: it says nothing about which
+      // engine runs the agent, so the engine must come through untouched.
+      // (Changing the Runs-on select is no longer "something else" — that
+      // control now sets the engine, and the two tests below cover it.)
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+      fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'simple' } })
+      const [vars] = save.mock.calls[0] as [
+        { runtime: { engine: string | null; complexity: string | null } }
+      ]
+      expect(vars.runtime.engine).toBe('claude')
+      expect(vars.runtime.complexity).toBe('simple')
+    })
+
+    it('offers Claude Agent only where Claude Code is installed', () => {
+      // An absent tool means an absent option, never one that fails after the
+      // click (ux_rules rule 4).
+      render(<RuntimePanel agent={agent(null)} />)
+      expect(screen.getByRole('option', { name: 'Claude Agent' })).toBeTruthy()
+
+      claudeInstalled = false
+      cleanup()
+      render(<RuntimePanel agent={agent(null)} />)
+      expect(screen.queryByRole('option', { name: 'Claude Agent' })).toBeNull()
+    })
+
+    it('keeps the option for an agent already on it, with nothing installed', () => {
+      // Otherwise the select renders blank over a manifest that plainly says
+      // what the agent runs on — the same rule the credential list follows for
+      // a credential that is configured but keyless.
+      claudeInstalled = false
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByRole('option', { name: 'Claude Agent' })).toBeTruthy()
+      expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('engine:claude')
+    })
+
+    it('switching to Claude clears the credential and keeps the tier', () => {
+      // The credential cannot travel — `runtimeService.validate` refuses to
+      // write both, because that path spends none. The *tier* does: `medium`
+      // means the same thing on either engine, so the user's answer to "how
+      // hard is this work" is not something a change of runtime should discard.
+      render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'complex' })} />)
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'engine:claude' } })
+      const [vars] = save.mock.calls[0] as [
+        { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
+      ]
+      expect(vars.runtime).toMatchObject({
+        engine: 'claude',
+        credential: null,
+        complexity: 'complex'
+      })
+    })
+
+    it('switching away from Claude clears the engine', () => {
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'medium' })} />)
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
+      const [vars] = save.mock.calls[0] as [
+        { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
+      ]
+      expect(vars.runtime).toMatchObject({
+        engine: null,
+        credential: 'OpenAI',
+        complexity: 'medium'
+      })
+    })
+
+    it('hides Advanced rather than offering a list with nothing in it', () => {
+      // A control that lists nothing is worse than a control that is not there,
+      // and there is no raw model catalogue on this path to list. Hidden from
+      // inside the fixed-height row, so the panel keeps its footprint (rule 1).
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.queryByRole('checkbox', { name: /Advanced/ })).toBeNull()
+      expect(screen.getByLabelText('Work complexity')).toBeTruthy()
+    })
+
+    it('says what it runs on, and what is missing when nothing is installed', () => {
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+      // Both names in one sentence: the select says "Claude Agent", the column
+      // beside it says "Claude Code", and nothing else ties them together.
+      expect(
+        screen.getByText(/Claude Agent runs on your own Claude Code install, on opus/)
+      ).toBeTruthy()
+
+      claudeInstalled = false
+      cleanup()
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      // The full sentence lives in the reserved line; the Engine column only
+      // names the state, because that column is fixed-width and cannot grow.
+      expect(screen.getByText(/Claude Agent needs Claude Code, which is not installed/)).toBeTruthy()
+      expect(screen.getByText('Not installed')).toBeTruthy()
+    })
+
+    it('does not report the OpenCode engine to an agent that never starts it', () => {
+      // Reporting "Not running", with a Start button, beside an agent with no
+      // relationship to that process is a fact about something unrelated and an
+      // action that changes nothing for it (ux_rules rule 9).
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
+      expect(screen.getByText(/Claude Code 2\.1\.266/)).toBeTruthy()
+    })
+
+    it('does not wait for the model registry it will never consult', () => {
+      // There is no catalogue to resolve a tier against on this path, so gating
+      // on one would leave both pickers disabled for ever — on precisely the
+      // machine most likely to be using this engine: one with no AI credential
+      // configured at all.
+      models = undefined as never
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.getByLabelText('Runs on')).toHaveProperty('disabled', false)
+      expect(screen.getByLabelText('Work complexity')).toHaveProperty('disabled', false)
+    })
+
+    it('can change the tier of an agent whose manifest also names a credential', () => {
+      // **A manifest carrying both is legal to *read*** — the validator only
+      // warns, because a folder written by a newer tool must keep running — and
+      // the panel correctly shows no credential for it. But the tier's commit
+      // was passing `declaredCredential` anyway, so the panel handed
+      // `runtimeService.validate` the one pair it refuses, built from a control
+      // that is not on screen. The write failed, the select snapped back, and
+      // the tier was unchangeable for ever with nothing saying why.
+      render(
+        <RuntimePanel agent={agent({ engine: 'claude', credential: 'Anthropic' })} />
+      )
+      fireEvent.change(screen.getByLabelText('Work complexity'), { target: { value: 'complex' } })
+      const [vars] = save.mock.calls[0] as [
+        { runtime: { engine: string | null; credential: string | null; complexity: string | null } }
+      ]
+      expect(vars.runtime).toMatchObject({
+        engine: 'claude',
+        // Dropped, exactly as switching *to* Claude drops it: the panel stopped
+        // showing it, so it must stop sending it.
+        credential: null,
+        complexity: 'complex'
+      })
+    })
+
+    it('claims nothing about the machine before detection has answered', () => {
+      // **"The query has not answered" and "the answer is no" are not the same
+      // fact**, and collapsing them put the full red not-installed alarm on
+      // screen for half a second on a machine that *has* Claude Code — the
+      // default first visit for every agent on this engine, not an edge case.
+      // Worse, the sentence names a remedy the user would satisfy by installing
+      // something they already have (ux_rules rule 9, and rule 2's warning
+      // about teaching people to skip alarms).
+      toolsLoaded = false
+      render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.queryByText(/not installed/i)).toBeNull()
+      expect(screen.queryByText(/needs Claude Code/)).toBeNull()
+      // The row keeps its place and says only that it is still looking.
+      expect(screen.getByText('Checking…')).toBeTruthy()
+    })
+
+    it('says nothing in the reserved line while detection is unanswered', () => {
+      // Rather than the healthy sentence, which would assert an install just as
+      // wrongly as the alarm denies one.
+      toolsLoaded = false
+      render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
+      expect(screen.queryByText(/Claude Agent runs on your own Claude Code install/)).toBeNull()
+    })
+
+    it('does not write back an engine value it does not recognise', () => {
+      // The tolerant read, at the one layer that could turn a value a newer
+      // tool wrote into one *this* build vouches for. Reading it as none and
+      // clearing it is right: the agent falls to the default either way, and
+      // echoing an unknown value back would be this desktop asserting it.
+      render(<RuntimePanel agent={agent({ engine: 'codex' })} />)
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
+      const [vars] = save.mock.calls[0] as [{ runtime: { engine: string | null } }]
+      expect(vars.runtime.engine).toBeNull()
+    })
+  })
+
   /**
    * A bare agent picks its runtime like any other; only the destination differs.
    * The panel used to be a second, control-less component for this kind, so the
@@ -825,18 +1033,18 @@ describe('RuntimePanel', () => {
   describe('a bare agent', () => {
     it('edits its runtime with no stamp to guard the write', () => {
       render(<RuntimePanel agent={bareAgent(null)} />)
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       expect(save).not.toHaveBeenCalled()
       const [vars] = saveBare.mock.calls[0] as [{ agentId: string; runtime: unknown }]
       expect(vars).toEqual({
         agentId: 'folder:external:r1:support',
-        runtime: { credential: 'OpenAI', modelId: null, complexity: null }
+        runtime: { engine: null, credential: 'OpenAI', modelId: null, complexity: null }
       })
     })
 
     it('opens on the runtime it was given, exactly as a manifest one does', () => {
       render(<RuntimePanel agent={bareAgent({ credential: 'OpenAI', model: 'gpt-5' })} />)
-      expect((screen.getByLabelText('Credential') as HTMLSelectElement).value).toBe('OpenAI')
+      expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('OpenAI')
       expect((screen.getByLabelText('Model') as HTMLSelectElement).value).toBe('gpt-5')
     })
 
@@ -851,7 +1059,7 @@ describe('RuntimePanel', () => {
     it('never claims the manifest went stale — there is no manifest', () => {
       writeFails = true
       render(<RuntimePanel agent={bareAgent(null)} />)
-      fireEvent.change(screen.getByLabelText('Credential'), { target: { value: 'OpenAI' } })
+      fireEvent.change(screen.getByLabelText('Runs on'), { target: { value: 'OpenAI' } })
       expect(screen.getByText('Could not save this agent’s local state.')).toBeTruthy()
       expect(screen.queryByText(/cinna-agent.json changed on disk/)).toBeNull()
     })

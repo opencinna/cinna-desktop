@@ -1,8 +1,9 @@
 /**
  * What a folder agent runs on.
  *
- * A runtime is `{credential, model}` — the engine is always OpenCode, so those
- * two are the whole of it. Resolution has exactly two steps, in this order:
+ * A runtime is `{engine, credential, model}`. On the OpenCode engine — the
+ * default, and every agent that names no engine — the credential and the model
+ * are the whole of it, and resolution has exactly two steps, in this order:
  *
  * 1. the manifest's own `runtime` block, and
  * 2. the **Default runtime**, derived from the user's default chat mode.
@@ -10,6 +11,11 @@
  * There is deliberately no third step. A "first credential that happens to have
  * a key" fallback would make an agent run on a credential the user never chose
  * and never saw, which is a billing surprise at best.
+ *
+ * On the **Claude** engine there is no credential at all: the `claude` binary
+ * resolves its own login and this app never sees it. That path returns early in
+ * {@link runtimeService.resolve} rather than threading a null credential through
+ * a ladder written about credential rows.
  *
  * ## What goes in the manifest, and what does not
  *
@@ -44,7 +50,14 @@ import { SECRET_LOOKALIKE } from '../../kit/validator'
 import { findCredentialByReference, isCredentialUsable } from '../../../shared/credentials'
 import { LocalAgentError } from '../../errors'
 import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/manifest'
-import type { LocalAgentRuntimeInput, ResolvedRuntime } from '../../../shared/engine'
+import {
+  claudeModelForComplexity,
+  DEFAULT_AGENT_ENGINE,
+  isAgentEngine,
+  type AgentEngine,
+  type LocalAgentRuntimeInput,
+  type ResolvedRuntime
+} from '../../../shared/engine'
 import {
   defaultRuntimeModelId,
   resolveRuntimeModel,
@@ -61,6 +74,7 @@ const MAX_MODEL_ID = 200
 
 const UNRESOLVED: ResolvedRuntime = {
   source: 'none',
+  engine: DEFAULT_AGENT_ENGINE,
   credentialRef: null,
   credentialId: null,
   credentialName: null,
@@ -80,6 +94,19 @@ function catalogueFor(
   return (models as readonly { id: string; providerId?: string }[])
     .filter((model) => model.providerId === providerId)
     .map((model) => ({ id: model.id }))
+}
+
+/**
+ * `runtime.engine`, if it is one this build knows.
+ *
+ * The tolerant half of the contract's read/write asymmetry: an engine value
+ * this build does not recognise reads as **no engine**, so the agent falls to
+ * the default and keeps running. A folder written by a newer tool must not be
+ * bricked by a field this one has never heard of.
+ */
+function declaredEngine(runtime: AgentRuntimeRef | null | undefined): AgentEngine | null {
+  const value = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
+  return isAgentEngine(value) ? value : null
 }
 
 /** `runtime.complexity`, if it is one of the three the contract allows. */
@@ -186,6 +213,7 @@ export const runtimeService = {
     if (override) {
       return {
         source: 'default',
+        engine: DEFAULT_AGENT_ENGINE,
         credentialRef: null,
         credentialId: override.id,
         credentialName: override.name,
@@ -221,6 +249,7 @@ export const runtimeService = {
     }
     return {
       source: 'default',
+      engine: DEFAULT_AGENT_ENGINE,
       credentialRef: null,
       credentialId: provider.id,
       credentialName: provider.name,
@@ -265,10 +294,50 @@ export const runtimeService = {
     providers: ProviderDto[] = providerService.listMerged(),
     models: readonly { id: string; providerId: string }[] = []
   ): ResolvedRuntime {
-    const fallback = this.resolveDefault(providers)
     const ref = typeof runtime?.credential === 'string' ? runtime.credential.trim() : ''
     const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
     const complexity = declaredComplexity(runtime)
+    const engine = declaredEngine(runtime) ?? DEFAULT_AGENT_ENGINE
+
+    // **The Claude engine resolves nothing about credentials, because it has
+    // none.** Returning early rather than threading `engine` through the ladder
+    // below is the point: every branch down there — the Default runtime, the
+    // missing-credential fallback, `describeRuntime` — is written about a
+    // credential row with a key, an `enabled` flag and a catalogue. Run this
+    // path through them and the panel reports an agent as broken because the
+    // user's default chat mode points at a switched-off key that this agent was
+    // never going to spend.
+    //
+    // A `credential` alongside `engine: "claude"` is ignored here and warned
+    // about by the validator; `validate` refuses to *write* one. Reading is
+    // tolerant, writing is strict — the same asymmetry `complexity` has.
+    if (engine === 'claude') {
+      return {
+        source: 'manifest',
+        engine,
+        credentialRef: null,
+        credentialId: null,
+        credentialName: null,
+        credentialType: null,
+        // A declared model wins over a tier, matching `resolveRuntimeModel`'s
+        // own precedence, so the two paths cannot disagree about which of the
+        // pair the user meant.
+        modelId: model !== '' ? model : claudeModelForComplexity(complexity),
+        modelSource: model !== '' ? 'declared' : complexity ? 'tier' : 'floor',
+        replacedModelId: null,
+        // Readiness — installed, logged in — is not a credential question and is
+        // answered before a turn rather than here. See `describeEngineSkip`.
+        reason: null
+      }
+    }
+
+    // **Below the Claude branch on purpose.** `resolveDefault` reads the user's
+    // default chat mode and this machine's credential override — neither of
+    // which means anything on a path with no credential. Computing it first was
+    // not merely wasted work: a throw in either store turned a Claude agent
+    // into an OpenCode one at the dispatch above, silently, and the agent then
+    // answered "this agent is not available in the running engine yet" for ever.
+    const fallback = this.resolveDefault(providers)
 
     const provider = ref === '' ? null : findCredential(providers, ref)
     const missingCredential = ref !== '' && !provider
@@ -357,6 +426,7 @@ export const runtimeService = {
       return {
         ...fallback,
         source: fallback.credentialId ? 'default' : 'none',
+        engine,
         credentialRef: ref,
         modelId: choice.modelId,
         modelSource: choice.origin,
@@ -367,6 +437,7 @@ export const runtimeService = {
 
     return {
       source: source === 'default' && !fallback.credentialId ? 'none' : source,
+      engine,
       credentialRef: ref === '' ? null : ref,
       credentialId,
       credentialName: chosen?.name ?? fallback.credentialName,
@@ -403,6 +474,7 @@ export const runtimeService = {
    *   authors the ambiguity it tolerates in others.
    */
   validate(input: LocalAgentRuntimeInput): {
+    engine: AgentEngine | null
     credential: string | null
     modelId: string | null
     complexity: WorkComplexity | null
@@ -410,6 +482,22 @@ export const runtimeService = {
     const credential = normaliseRef(input?.credential, 'The credential', MAX_CREDENTIAL_REF)
     const modelId = normaliseRef(input?.modelId, 'The model', MAX_MODEL_ID)
     const complexity = input?.complexity ?? null
+    const engine = input?.engine ?? null
+
+    if (engine !== null && !isAgentEngine(engine)) {
+      throw new LocalAgentError('invalid_input', 'That is not an engine this app can run.')
+    }
+    // Refused rather than resolved by precedence, and refused on **both** write
+    // paths because this method is shared by them. A manifest carrying both is
+    // only a validator *warning* — reading stays tolerant so a folder written by
+    // a newer tool keeps running — but this desktop never authors the ambiguity
+    // it tolerates in others.
+    if (engine === 'claude' && credential !== null) {
+      throw new LocalAgentError(
+        'invalid_input',
+        'An agent on the Claude engine runs on that install’s own login, so it does not use a credential configured here.'
+      )
+    }
 
     if (credential !== null && SECRET_LOOKALIKE.test(credential)) {
       throw new LocalAgentError(
@@ -429,7 +517,7 @@ export const runtimeService = {
         'A runtime names a model or a work complexity, not both.'
       )
     }
-    return { credential, modelId, complexity }
+    return { engine, credential, modelId, complexity }
   },
 
   /**
@@ -443,9 +531,12 @@ export const runtimeService = {
    * case of its own.
    */
   toRuntimeRef(input: LocalAgentRuntimeInput): AgentRuntimeRef | null {
-    const { credential, modelId, complexity } = this.validate(input)
-    if (credential === null && modelId === null && complexity === null) return null
+    const { engine, credential, modelId, complexity } = this.validate(input)
+    if (engine === null && credential === null && modelId === null && complexity === null) {
+      return null
+    }
     const runtime: AgentRuntimeRef = {}
+    if (engine !== null) runtime.engine = engine
     if (credential !== null) runtime.credential = credential
     if (modelId !== null) runtime.model = modelId
     if (complexity !== null) runtime.complexity = complexity
@@ -466,15 +557,17 @@ export const runtimeService = {
    * round-trip rule.
    */
   applyToManifest(manifest: CinnaAgentManifest, input: LocalAgentRuntimeInput): void {
-    const { credential, modelId, complexity } = this.validate(input)
+    const { engine, credential, modelId, complexity } = this.validate(input)
 
     const existing =
       manifest.runtime && typeof manifest.runtime === 'object' ? { ...manifest.runtime } : {}
+    delete existing.engine
     delete existing.credential
     delete existing.model
     delete existing.complexity
 
     if (
+      engine === null &&
       credential === null &&
       modelId === null &&
       complexity === null &&
@@ -485,6 +578,7 @@ export const runtimeService = {
     }
 
     const next: AgentRuntimeRef = { ...existing }
+    if (engine !== null) next.engine = engine
     if (credential !== null) next.credential = credential
     if (modelId !== null) next.model = modelId
     if (complexity !== null) next.complexity = complexity

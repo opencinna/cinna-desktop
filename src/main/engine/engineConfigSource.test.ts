@@ -102,8 +102,12 @@ vi.mock('../services/localAgents/localAgentService', () => ({
 }))
 vi.mock('../services/localAgents/runtimeService', () => ({
   runtimeService: {
-    resolve: (runtime: { credential?: string } | null | undefined) => ({
+    resolve: (runtime: { credential?: string; engine?: string } | null | undefined) => ({
       source: 'manifest',
+      // Defaulted here, not omitted: `collectEngineAgents` skips anything whose
+      // engine is not `opencode`, so a mock that leaves this out silently
+      // collects nothing at all.
+      engine: runtime?.engine ?? 'opencode',
       credentialRef: null,
       credentialName: null,
       credentialType: null,
@@ -386,6 +390,19 @@ describe('collectEngineAgents', () => {
     expect(collected.agentId).toBe('folder:aaa')
     expect(collected.providerId).toBe('')
     expect(collected.modelId).toBe('')
+  })
+
+  it('leaves an agent on another engine out of the OpenCode config entirely', () => {
+    // Not merely tidiness. A Claude runtime resolves to no credential, so
+    // collecting it would make `configGenerator` skip it as
+    // `credential_unavailable` — and the Runs-with panel would explain a
+    // healthy agent with "its credential is not available to it", a sentence
+    // about a key it does not spend and would not be helped by changing.
+    state.agents = [
+      agent({ id: 'folder:claude', runtime: { engine: 'claude' } }),
+      agent({ id: 'folder:ok' })
+    ]
+    expect(collectEngineAgents('user-1').map((entry) => entry.agentId)).toEqual(['folder:ok'])
   })
 
   it('passes a manifest permission override through, and nothing else', () => {

@@ -73,6 +73,21 @@ export interface AgentFeatures {
  * to the catalogue that lists it, while `medium` means the same thing everywhere.
  */
 export interface AgentRuntimeRef {
+  /**
+   * Which engine runs the agent: `opencode` (the host-managed server) or
+   * `claude` (the Claude Agent SDK, driving the `claude` binary already
+   * installed on the machine under its own login).
+   *
+   * Added in contract 1.2.0, additively. An **unrecognised value reads as no
+   * engine** and the agent falls to the host default — it does not fail
+   * validation and does not brick the folder, because a folder written by a
+   * newer tool must keep running.
+   *
+   * `engine: "claude"` and `credential` are not meaningful together: that path
+   * has no credential. Writing both is refused; reading both ignores the
+   * credential.
+   */
+  engine?: string | null
   model?: string | null
   /**
    * Work Complexity: `simple` | `medium` | `complex`. The host resolves it
