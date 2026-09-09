@@ -22,7 +22,7 @@
 - `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Opt-in toggles in two titled sections (AI Functions, Interface); see [Auto Chat Titles](../../chat/auto_titles/auto_titles.md)
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Two sections: **About** (repository and website links) and the force-onboarding arming toggle (`isForceOnboardingArmed` / `setForceOnboarding` in `constants/onboarding`, localStorage-backed — not an `app_settings` key)
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Agent Folders, Engine Settings and Developer Tools; see [Agents Tab](../../agents/local_agents/agents_tab.md)
-- `src/renderer/src/components/settings/AgentsRootGit.tsx` — The per-root update check rendered inside an Agent Folders row; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
+- `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — The Repository dialog opened from an Agent Folders row: remote, branches, head commit, Check and Update; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
 - `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` — Every phase of `LocalDevState`, with Set up / Repair / Add to PATH / Reset consent; see [Local Development](../../agents/local_dev/local_dev.md)
 - `src/renderer/src/components/settings/ProfileChatModesSection.tsx` — Account-provisioned chat modes (Profile scope), off the same `useChatModes` hook as the Default tab
 - `src/renderer/src/components/settings/ProfileLLMSection.tsx` — Account-provisioned (managed) providers (Profile scope)

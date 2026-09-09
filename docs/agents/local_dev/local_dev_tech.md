@@ -8,7 +8,7 @@ Three trees are discussed and they look alike, so they are written differently t
 
 | Written as | Means |
 |---|---|
-| `src/…`, `docs/…` | A file in **this repository** |
+| `src/…`, `docs/…` | A file in **this repository** | <!-- nocheck -->
 | `<userData>/localdev/…` | The managed toolchain, inside the app data directory |
 | `<AgentsHome>/Cloud/<host>/…` | The cinna-cli account workspace, inside the user's own [Agents Home](../local_agents/folder_index.md) |
 

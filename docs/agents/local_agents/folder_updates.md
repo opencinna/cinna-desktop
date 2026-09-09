@@ -108,7 +108,7 @@ Each refusal sentence also leads with the action rather than the diagnosis ("Com
 ## Architecture Overview
 
 ```
-Settings → Local Agents → AgentsRootGit (one per root)
+Settings → Local Agents → RootRepositoryDialog (opened from a folder row)
    root.isGitRepo (from :roots-list)   ← looksLikeGitRepo, a stat walk in main
    useGitStatus(rootId)        ─► local-agent:git-status  {rootId, fetch:false}
    useCheckForUpdates()        ─► local-agent:git-status  {rootId, fetch:true}
@@ -138,8 +138,8 @@ Settings → Local Agents → AgentsRootGit (one per root)
 - `src/main/services/localAgents/agentsHomeService.ts` — calls `looksLikeGitRepo` when building each `AgentRootDto`
 - `src/shared/agentGit.ts` — `GitCommit`, `GitRefusal`, `GitStatus`, `GitUpdateResult`. Shared because the preload bridge and the settings panel both name them and neither may import from `src/main`
 - `src/main/ipc/local_agent.ipc.ts` — the two channels
-- `src/renderer/src/components/settings/AgentsRootGit.tsx` — the panel, and `REFUSAL_TEXT`: the code → sentence map, so the tests never assert on prose
-- `src/renderer/src/components/settings/AgentsRootGit.test.tsx` — the repository named only when it is above the folder, nothing rendered for a non-repository, the reserved block, refusals blaming the repository, and Update and Check each hidden where they could only refuse
+- `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — the Repository dialog a folder row opens (remote, branches, head commit, Check and Update), and `REFUSAL_TEXT`: the code → sentence map, so the tests never assert on prose
+- `src/renderer/src/components/settings/RootRepositoryDialog.test.tsx` — the repository named only when it is above the folder, a non-repository explained rather than shown as empty fields, "still reading" while the answer is in flight, a remote linked only when a browser can open it, refusals blaming the repository, and Update and Check each hidden where they could only refuse
 - `src/renderer/src/hooks/useLocalAgents.ts` — `useGitStatus`, `useCheckForUpdates`, `useUpdateFromGit`
 
 ### IPC Channels

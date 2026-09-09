@@ -70,7 +70,7 @@
 - `src/renderer/src/hooks/useChatStream.ts` — `StartLlmOptions.attachments?: MessageAttachment[]`, `StartAgentOptions.attachments?: MessageAttachment[]`; types unified on shared `MessageAttachment`
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `NewChatOptions.attachments?: ComposerAttachment[]`. `resolvePendingAttachments(chatId, scope, attachments)` ingests pending entries via `files:ingest-paths`, preserves order, throws on failure. Outer try/catch surfaces error via `useChatStore.setSendError` and deletes the orphan chat via `window.api.chat.delete`
 - `src/renderer/src/components/chat/AttachmentBadge.tsx` — `AttachmentBadgeData` is the visual subset (no `source`). `AttachmentList<T extends AttachmentBadgeData>` is generic so callers retain their concrete type through `onClick`
-- `src/renderer/src/components/chat/AttachMenuPopup.tsx` — Right-anchored action menu over `[+]`; `AttachMenuItem[]` for extensibility
+- `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — The left-side `[+]` composer menu; its **Attach files** row (`canAttachFiles` / `onAttachFiles`) is what the old right-anchored `AttachMenuPopup` became. See [Composer Menu](../composer_menu/composer_menu.md)
 - `src/renderer/src/components/chat/ChatInput.tsx` — Owns the attach button gating + scope decision:
   - `modelCapability = useModelCapability(chatData?.providerId, chatData?.modelId)`
   - `attachScope` = `'cinna'` on new-chat or active remote-agent target; `'local'` on active LLM target

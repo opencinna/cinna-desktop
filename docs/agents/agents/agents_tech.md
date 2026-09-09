@@ -41,7 +41,7 @@
 | Settings section | `src/renderer/src/components/settings/AgentsSettingsSection.tsx` |
 | Add agent form | `src/renderer/src/components/settings/A2AAgentForm.tsx` |
 | Agent settings card | `src/renderer/src/components/settings/AgentCard.tsx` |
-| Chat agent selector | `src/renderer/src/components/chat/AgentSelector.tsx` |
+| Chat agent selector | `src/renderer/src/components/chat/ComposerPlusMenu.tsx` (the `[+]` menu) → `src/renderer/src/components/agents/AgentPickerModal.tsx` (the picker); the standalone `AgentSelector` dropdown was folded into these — see [Composer Menu](../../chat/composer_menu/composer_menu.md) |
 | @-mention popup | `src/renderer/src/components/chat/AgentMentionPopup.tsx` |
 | Chat input (mention detection) | `src/renderer/src/components/chat/ChatInput.tsx` — `findMentionToken()`, `@`-mention state, `forwardRef` with `ChatInputHandle` |
 | Chat integration | `src/renderer/src/components/layout/MainArea.tsx` — `selectedAgent` state, `chatInputRef`, agent message flow |
