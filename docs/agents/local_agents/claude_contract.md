@@ -275,12 +275,28 @@ process-exit error with `Claude Code returned an error result: ${text}`. So:
 ## 5. Not installed, not logged in — and the third state
 
 - **Not installed** is answerable without spawning: `toolDetectionService` already reports it.
-- **Not logged in** is *not* answerable without spawning, and the cheapest probe that answers it is
-  a real turn — which is the state the plan wants to avoid entering. `claude --print --output-format
-  json 'say OK'` exits **1** with `is_error: true` and `result: "Not logged in · Please run /login"`,
-  and exits **0** otherwise; that is a readiness probe, but it is a billed turn.
-  **Unverified: whether a cheaper non-billing probe exists.** Left open deliberately rather than
-  guessed at.
+- **Not logged in** is *not* answerable without spawning, but it is answerable without a turn.
+  `claude auth status` (2.1.266; *"Show authentication status"*, `--json` by default, `--text`
+  optional) logs nothing in or out, runs no turn, and reports `loggedIn` with an `authMethod`.
+  Observed on this machine, three runs, **exit code 0 in all three — the JSON field is the signal,
+  not the exit code**:
+
+  | Environment | `loggedIn` | `authMethod` |
+  |---|---|---|
+  | the full shell | `true` | `claude.ai` |
+  | `env -i PATH HOME USER` | `true` | `claude.ai` |
+  | `env -i PATH HOME` | **`false`** | `none` |
+
+  That last row reproduces §2's `USER` finding for free, and the probe is the cheap bisect §9 step 1
+  used to need a billed turn for. The output also carries the account's email and organisation id;
+  a caller that logs it logs those. **Verified, not wired in:** `claudeAgentTurnRunner.ts` still
+  answers readiness from `toolDetectionService` alone and learns *Not logged in* from the thrown
+  turn error (§4). Verified for a **file-backed** credential on the native installer only; whether
+  `auth status` reads the Keychain on a Homebrew or npm install, and whether it stays free of a
+  consent prompt there, is §8's first question wearing a different hat. The billed probe still
+  works as described — `claude --print --output-format json 'say OK'` exits **1** with
+  `is_error: true` and `result: "Not logged in · Please run /login"`, and **0** otherwise — it is
+  just no longer the cheapest.
 - **`SDKAuthStatusMessage` was never emitted** in any probe, including the not-logged-in run. The
   plan's readiness design leans on it. It exists in the type union; nothing observed produces it.
   Treat it as a signal that may arrive, never as the mechanism.
@@ -316,9 +332,20 @@ adapter**, which has nothing to do with this feature.
 
 The blast radius is one file — `src/main/llm/anthropic.ts` is the only consumer
 — and the bump taken was the smallest that satisfies the peer (`^0.93.0`, not
-the current `0.124.0`). **Unverified: that the adapter still behaves correctly.**
-There are no unit tests for it, so `tsc` is the only signal; a semantic change
-inside a shape whose types did not move would pass silently.
+the current `0.124.0`). **Verified — by a different method from the rest of this
+document.** `src/main/llm/anthropic.test.ts` runs the 0.93 client itself, not a
+mock of it, against a stubbed `fetch` answering with Messages-API SSE frames and
+error envelopes, so a renamed streaming event, a tool input no longer parsed from
+partial JSON, a moved error status or a dropped abort fails there where `tsc`
+passes. What it does not do is watch the live API: the wire is what the API is
+documented to send. Writing it found two defects, both older than the bump: a
+credential, endpoint and headers the client took from the process environment
+over the stored key — the same class of fault §7 of this document exists for —
+and one in the adapter's error mapping; 0.89.0's `core/error.js` and
+`core/streaming.js` were fetched with `npm pack` and are identical on the second,
+and the first is an SDK default that predates 0.89. What is covered, and both
+defects, are in [LLM Adapters — Technical
+Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain).
 
 **Verified twice over.** First, removing the bundled package breaks nothing:
 with `node_modules/@anthropic-ai/claude-agent-sdk-darwin-arm64` deleted
@@ -382,11 +409,12 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    extension — a path ending `.js`/`.mjs`/`.ts` is run **through node**, anything else is spawned
    **directly** — so an npm shim and a native binary take different code paths, and the Homebrew
    wrapper is a third shape. Untested.
-4. **A cheaper readiness probe than a billed turn** (§5).
+4. **`claude auth status` against the Keychain.** The free probe (§5) is verified against a
+   file-backed credential only. Whether it answers `loggedIn` on a Homebrew or npm install, and
+   whether it does so without a consent prompt, is untested — the same gap as item 1, reached from
+   the other side.
 4a. **The exclusion on targets other than `darwin-arm64`** (§5a). Verified on
    that one; `linux-*`, `win32-*` and `darwin-x64` are not built here.
-4b. **The Anthropic chat adapter on `@anthropic-ai/sdk` 0.93** (§5a). Typechecks;
-   untested, because that adapter has no tests.
 5. **`SDKAuthStatusMessage`** — what emits it (§5).
 6. **Windows.** Unconsidered, as the plan says.
 
@@ -396,8 +424,13 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
 mkdir -p /tmp/claude-probe && cd /tmp/claude-probe && npm init -y
 npm i @anthropic-ai/claude-agent-sdk@0.3.266
 
-# 1. The environment bisect — the finding that matters most.
-#    Spawn `claude --print --output-format json 'say OK'` with, in turn:
+# 1. The environment bisect — the finding that matters most. Free, no turn:
+#      env -i PATH=$PATH HOME=$HOME            claude auth status  → loggedIn: false
+#      env -i PATH=$PATH HOME=$HOME USER=$USER claude auth status  → loggedIn: true
+#    Exit code is 0 either way; read the JSON. Do not paste the output into a
+#    doc — it carries the account's email and organisation id.
+#    The billed form, if you want to see the turn itself fail:
+#    spawn `claude --print --output-format json 'say OK'` with, in turn:
 #      {PATH,HOME}                     → expect exit 1, "Not logged in"
 #      {PATH,HOME,USER}                → expect exit 0
 #    Any future CLI that changes this invalidates §7.
