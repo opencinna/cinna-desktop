@@ -32,7 +32,20 @@ export class AnthropicAdapter implements LLMAdapter {
   private providerId: string
 
   constructor(apiKey: string, providerId: string) {
-    this.client = new Anthropic({ apiKey })
+    // The client fills `authToken` and `baseURL` from ANTHROPIC_AUTH_TOKEN and
+    // ANTHROPIC_BASE_URL when the caller leaves them unset, sends *both*
+    // credentials when it holds both, and merges ANTHROPIC_CUSTOM_HEADERS over
+    // its own auth headers. The credential row is the only thing that decides
+    // what is sent and where: a stored key must never ride along with — or be
+    // replaced by — a shell's credential, or go to a host the user did not
+    // configure in the app. Explicit values win over the environment on every
+    // one of those paths; a `null` header is a deletion.
+    this.client = new Anthropic({
+      apiKey,
+      authToken: null,
+      baseURL: 'https://api.anthropic.com',
+      defaultHeaders: { 'x-api-key': apiKey, authorization: null }
+    })
     this.providerId = providerId
   }
 
@@ -117,10 +130,18 @@ export class AnthropicAdapter implements LLMAdapter {
   }
 
   parseError(error: Error): LLMError {
-    const msg = error.message
-    // Anthropic SDK throws APIError with status property
-    const err = error as Error & { status?: number }
+    // The SDK's APIError carries the HTTP status, the API's error `type`, and
+    // the response body itself — `{type:'error', error:{type, message}}`. Its
+    // own `message` is "<status> " + the body as JSON, because the body has
+    // no top-level `message`; the sentence the API wrote is one level down.
+    const err = error as Error & {
+      status?: number
+      type?: string | null
+      error?: { error?: { type?: string; message?: string } }
+    }
+    const apiMessage = typeof err.error?.error?.message === 'string' ? err.error.error.message : undefined
     const code = err.status
+    const msg = apiMessage ? (code ? `${code} ${apiMessage}` : apiMessage) : error.message
     if (code) {
       switch (code) {
         case 429:
@@ -136,6 +157,11 @@ export class AnthropicAdapter implements LLMAdapter {
         case 500: case 502: case 503:
           return { short: 'Anthropic server error — try again', detail: msg }
       }
+    }
+    // An overload can also arrive inside an open stream, as an `error` event
+    // with no HTTP status — the same failure a 529 is outside one.
+    if ((err.type ?? err.error?.error?.type) === 'overloaded_error') {
+      return { short: 'Anthropic API overloaded — try again', detail: msg }
     }
     if (msg.includes('credit') || msg.includes('billing')) {
       return { short: 'Billing issue — check your Anthropic account', detail: msg }

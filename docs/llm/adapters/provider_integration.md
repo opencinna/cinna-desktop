@@ -41,7 +41,7 @@ For the higher-level abstraction and configuration story see [Adapters](./adapte
 | **Tool-call ID** | Provider-supplied `block.id` | Provider-supplied `tool_call.id` | Provider does **not** emit IDs — adapter generates `gemini-<nanoid>` | OpenAI's |
 | **Tool result back to model** | `role: 'user'` with `tool_result` content block referencing `tool_use_id` | `role: 'tool'` with `tool_call_id` | `role: 'function'` Content with `functionResponse` part (SDK validates role; `'user'` is rejected) | OpenAI's |
 | **Result content shape** | String | String | Plain object — adapter wraps MCP `[{type:'text', text:...}]` arrays as `{ result: '<joined text>' }` | String |
-| **Error parsing** | `status` property on SDK `APIError` | `status` property on SDK `APIError` | Status parsed from `[<code> <statusText>]` substring in message; safety reasons (`SAFETY`/`RECITATION`/`BLOCKED`) detected from response error string | Connection `code` (`ECONNREFUSED`/`ENOTFOUND`/…) and `TimeoutError` first — the failure is usually a process that isn't running, not an account |
+| **Error parsing** | `status` on SDK `APIError`, with the sentence read from the error body's `error.message` — the SDK's own `message` is the body as JSON; `overloaded_error` matched by type, because a mid-stream overload has no status | `status` property on SDK `APIError` | Status parsed from `[<code> <statusText>]` substring in message; safety reasons (`SAFETY`/`RECITATION`/`BLOCKED`) detected from response error string | Connection `code` (`ECONNREFUSED`/`ENOTFOUND`/…) and `TimeoutError` first — the failure is usually a process that isn't running, not an account |
 | **Credential** | Encrypted API key | Encrypted API key | Encrypted API key | **None** — a host in `base_url`; the SDK is handed `KEYLESS_PLACEHOLDER_KEY`, which Ollama ignores |
 | **Model listing** | `client.beta.models.list()` | `client.models.list()`, filtered | REST `v1beta/models` | Native `GET /api/tags`, **not** `/v1/models` — only the native listing returns `parameter_size`, and that is what a local model's Work Complexity tier is made of |
 
@@ -75,6 +75,10 @@ MCP servers return content as `[{ type: 'text', text: '...' }, ...]` arrays. Gem
 ### Anthropic: dynamic model list via beta endpoint
 
 `client.beta.models.list()` is the source of truth — no hardcoded fallback. Errors propagate so a bad test key surfaces the real cause rather than a stale picker.
+
+### Anthropic: the SDK's error message is the JSON body
+
+The API's error body is `{type:'error', error:{type, message}}` — no top-level `message` — so the SDK builds `APIError.message` as the status followed by the whole body serialised as JSON, and the sentence the API wrote sits one level down at `error.error.message`. `parseError()` reads it from there and keeps the status prefix. Until it did, every `detail` the user was shown was that envelope, and an overload arriving inside an open stream — an SSE `error` event, which the SDK throws as an `APIError` with **no HTTP status** and the API's `type` on the error — missed the status table and put the envelope, truncated at 120 characters, on the `short` line as well. The mid-stream case is matched on `type === 'overloaded_error'`; it is the same failure a 529 is outside a stream and reads the same way. Both behaviours are the SDK's since at least 0.89 — the defect was found by `src/main/llm/anthropic.test.ts`, written for the 0.93 bump, not caused by the bump.
 
 ### OpenAI: model filtering
 
@@ -125,7 +129,7 @@ An adapter must not call MCP, must not loop, must not persist. It receives histo
 1. Create `src/main/llm/<provider>.ts` implementing `LLMAdapter`. <!-- nocheck -->
 2. Fill in the five translations in `stream()` using the matrix above as a checklist.
 3. Check the provider's tool-schema acceptance before passing `inputSchema` through. If it's stricter than JSON Schema (like Gemini), add a sanitizer function in the adapter file — keep it local, not shared, until a second provider needs the same fix.
-4. Implement `parseError()` covering rate limit (429), auth (401/403), not found (404), 5xx, and any provider-specific safety/content blocks.
+4. Implement `parseError()` covering rate limit (429), auth (401/403), not found (404), 5xx, and any provider-specific safety/content blocks. Do not assume a status: an error raised inside an open stream can carry none, and it must still map to a sentence rather than fall through to the raw message — see the Anthropic quirk above.
 5. Add the type to `createAdapter()` in `src/main/llm/factory.ts` and the `ProviderType` union + `isProviderType` predicate.
 6. If it needs no credential, add it to `KEYLESS_PROVIDER_TYPES` in `src/shared/credentials.ts` rather than teaching any call site about it — see [Local Models & Keyless Credentials](../local_models/local_models.md).
 7. If a folder agent should be able to run on it, it also needs an `EngineProviderType`, a `PROVIDER_NPM` package and a `CUSTOM_MODEL_LIMITS` row — see [The Local Engine](../../agents/local_agents/engine.md).
