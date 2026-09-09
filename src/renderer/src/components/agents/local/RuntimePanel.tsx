@@ -9,13 +9,13 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
-import { useLocalTools } from '../../../hooks/useLocalTools'
+import { useClaudeAuth, useLocalTools } from '../../../hooks/useLocalTools'
 import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
-import { claudeModelForComplexity, isAgentEngine, type AgentEngine } from '../../../../../shared/engine'
+import { claudeModelForComplexity, isAgentEngine, type AgentEngine, type ClaudeAuthState } from '../../../../../shared/engine'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
 import {
@@ -223,6 +223,18 @@ function EngineStatus(): React.JSX.Element {
 }
 
 /**
+ * `“max”` → `“ (Max plan)”`, and nothing at all when the CLI named none.
+ *
+ * The value is passed through, capitalised and no more: this app does not own
+ * the set of plan names, and a lookup table here would render a plan it had
+ * not heard of as blank on the one line that is meant to say who pays.
+ */
+function planSuffix(subscriptionType: string | null): string {
+  if (!subscriptionType) return ''
+  return ` (${subscriptionType.charAt(0).toUpperCase()}${subscriptionType.slice(1)} plan)`
+}
+
+/**
  * The user's own Claude Code install, as a fact about their machine.
  *
  * Deliberately **not** a mirror of {@link EngineStatus}: there is no process
@@ -234,19 +246,23 @@ function EngineStatus(): React.JSX.Element {
  * naming the tool the user installed, at the path they installed it to, is a
  * statement about their machine and is what makes the line diagnosable.
  *
- * **Whether that install is logged in is not knowable without spawning it**, so
- * this line does not guess. A panel that claimed a subscription because we
- * stripped a variable would be asserting a negative about an environment we do
- * not fully control; the turn reports what it actually authenticated with, and
- * the readiness error says so if it could not.
+ * **The cell's text is about the install; only its dot knows about the login.**
+ * Not because the login is unknowable — `claude auth status` answers it for
+ * free, and the reserved line below says what it found — but because this
+ * column is fixed at 219px and does not widen with the window, so the text
+ * holds the shortest true thing and the line that can grow carries the
+ * meaning. The dot is the exception, and `const dot` below says why.
  */
 function ClaudeStatus({
   tool,
-  unknown
+  unknown,
+  auth
 }: {
   tool?: { path: string | null; version: string | null }
   /** Detection is still in flight — say so rather than denying an install. */
   unknown?: boolean
+  /** What the login probe found, or undefined while it is still asking. */
+  auth?: ClaudeAuthState
 }): React.JSX.Element {
   if (unknown) {
     return (
@@ -267,6 +283,29 @@ function ClaudeStatus({
   // 1200px up, which is where a default-sized window sits (ux_rules rule 7).
   // The reserved line below carries the explanation; this cell names the state.
   const text = tool ? `Claude Code${tool.version ? ` ${tool.version}` : ''}` : 'Not installed'
+  /**
+   * **Warning for a login this app knows is missing, and only for that.**
+   *
+   * The reserved line below turns red on a logged-out machine while this dot —
+   * the one glanceable indicator in the row — stayed neutral grey, saying
+   * nothing about a state the app had just gone and found out. The type scale's
+   * Status Indicator Pattern assigns `--color-warning` to exactly this case
+   * ("Awaiting auth"), which is also why it is not `--color-danger`: the
+   * install is fine and one command fixes it.
+   *
+   * The rule this does **not** break is the one about green, and it is the
+   * reason this dot is never the success colour whatever the login says: one
+   * option away in this same select a green dot in this exact slot means *the
+   * process is running*. Green in both would be one indicator, in one position,
+   * meaning two things, and the weaker claim would be read as the stronger
+   * (rule 9). `unknown` and in-flight stay muted too, because neither is
+   * evidence of anything.
+   */
+  const dot = !tool
+    ? 'text-[var(--color-danger)]'
+    : auth === 'logged_out'
+      ? 'text-[var(--color-warning)]'
+      : 'text-[var(--color-text-muted)]'
   return (
     <EngineRow
       // The same label as the OpenCode branch, not a second name for one slot:
@@ -274,13 +313,7 @@ function ClaudeStatus({
       // it announcing those words would be two things with one name on one
       // surface (rule 10). On this path the engine *is* the user's Claude Code.
       label="Engine"
-      // **Not the success colour, deliberately.** One option away in the same
-      // select, a green dot in this exact slot means *the process is running*.
-      // Here the only knowable fact is that a binary was found on the PATH —
-      // whether that install is logged in cannot be known without spawning it.
-      // Green in both would be one indicator, in one position, meaning two
-      // things, and the weaker claim would be read as the stronger (rule 9).
-      dot={tool ? 'text-[var(--color-text-muted)]' : 'text-[var(--color-danger)]'}
+      dot={dot}
       tone={tool ? 'text-[var(--color-text-secondary)]' : 'text-[var(--color-danger)]'}
       text={text}
       title={tool?.path ?? 'No Claude Code was found on this machine.'}
@@ -446,6 +479,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   const skip = skips?.agents.find((entry) => entry.agentId === agent.id) ?? null
 
   const { data: tools } = useLocalTools()
+  const { data: claudeAuth } = useClaudeAuth()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
@@ -842,11 +876,14 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
      * switched off" — a sentence about a key it does not spend, which the user
      * would act on by changing something that cannot help.
      *
-     * What is said instead is only what is knowable *before* a turn. Whether
-     * that install is logged in is not: it takes spawning the binary to find
-     * out, and the turn reports it. Claiming a subscription here because we
-     * stripped an environment variable would be asserting a negative about an
-     * environment this app does not fully control.
+     * What is said is only what is knowable *before* a turn — and that set grew.
+     * Whether the install is logged in used to need a turn to find out, so this
+     * line claimed nothing about it; `claude auth status` now answers it for
+     * free, and the ladder below says login or logout on the strength of that.
+     * What is still never asserted is a subscription the CLI did not name: the
+     * plan is reported when it reports one, and inferring one because this app
+     * stripped an environment variable would be a claim about an environment it
+     * does not fully control.
      */
     if (onClaude) {
       // Silent until detection answers. The healthy sentence would assert an
@@ -864,6 +901,32 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
           tone: DANGER
         }
       }
+      // **The login, now that it is knowable before a turn** — `claude auth
+      // status` answers it for free, so the panel is no longer guessing.
+      //
+      // **Silent until the probe answers**, for the same reason `toolsUnknown`
+      // is silent one rung up. `undefined` is the query in flight, and filling
+      // the slot with the reassuring install sentence meant a logged-out
+      // machine read healthy in muted grey and was then contradicted in red
+      // about a tenth of a second later — measured at t=891ms and t=996ms on a
+      // real machine. There is no movement either way, the line is reserved;
+      // what a retraction costs is that the next reassuring sentence here is
+      // worth less. `unknown` is different and does *not* land here: that is an
+      // answer, and the install sentence is the true thing to say about it.
+      if (claudeAuth === undefined) return null
+      if (claudeAuth.state === 'logged_out') {
+        return {
+          // **Remedy first, because this line is measured to clip.** At the
+          // 800px minimum it needs 432px and has 414px, so the problem-first
+          // wording lost `…in a ter|minal.` — the half rule 7 says has to
+          // survive, and the half the sibling entry 60 lines below already
+          // leads with. Not `describeEngineSkip('claude_not_logged_in')`: that
+          // sentence is a *turn error* and opens "This agent runs on Claude…",
+          // which is narration on a panel that says so two rows up.
+          text: 'Run `claude` in a terminal: that Claude Code install is not logged in.',
+          tone: DANGER
+        }
+      }
       return {
         // **Both names, in one sentence, because both are on the screen.** The
         // select says "Claude Agent" and the column beside it says "Claude Code
@@ -873,12 +936,18 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         // this line spans the panel, while the option and the Engine column are
         // the two width-constrained places (rule 7).
         //
-        // **"install", not "login".** Whether that install is authenticated is
-        // knowable only by spawning it — the turn reports what it actually
-        // used — so "your own Claude Code login" would give an installed-but-
-        // logged-out machine a completely healthy screen and let the user
-        // discover otherwise at the first turn (rule 9).
-        text: `Claude Agent runs on your own Claude Code install, on ${claudeModelForComplexity(declaredComplexity)}.`,
+        // **"login" only once one was observed.** Until the probe answers this
+        // says "install", which is the weaker claim and the only one detection
+        // supports; a machine that is installed but logged out would otherwise
+        // read as completely healthy and the user would find out at the first
+        // turn (rule 9). The plan is named when the CLI reports one and never
+        // inferred — asserting a subscription because an environment variable
+        // was stripped is a claim about an environment this app does not fully
+        // control.
+        text:
+          claudeAuth.state === 'logged_in'
+            ? `Claude Agent runs on your own Claude Code login${planSuffix(claudeAuth.subscriptionType)}, on ${claudeModelForComplexity(declaredComplexity)}.`
+            : `Claude Agent runs on your own Claude Code install, on ${claudeModelForComplexity(declaredComplexity)}.`,
         tone: NOTE
       }
     }
@@ -1530,7 +1599,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
             grid does not reflow; only what it reports changes.
           */}
           {onClaude ? (
-            <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} />
+            <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} auth={claudeAuth?.state} />
           ) : (
             <EngineStatus />
           )}

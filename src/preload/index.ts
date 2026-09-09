@@ -27,7 +27,7 @@ import type {
 } from '../shared/localAgents'
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { StoredPermissionGrant } from '../shared/localAgentRequests'
-import type { EngineSkips, EngineState, LocalAgentRuntimeInput } from '../shared/engine'
+import type { ClaudeAuthStatus, EngineSkips, EngineState, LocalAgentRuntimeInput } from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
@@ -1130,6 +1130,12 @@ const api = {
     list: (): Promise<DetectedTool[]> => ipcRenderer.invoke('local-tools:list'),
     /** Drop the cached PATH lookups and detect again (Settings → Refresh). */
     refresh: (): Promise<DetectedTool[]> => ipcRenderer.invoke('local-tools:refresh'),
+    /**
+     * Whether the detected `claude` is logged in. Carries no account — see
+     * `ClaudeAuthStatus`; the CLI's email and organisation id are never read
+     * on the other side of this call.
+     */
+    claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>
       ipcRenderer.invoke('local-tools:open-in', request)
   },

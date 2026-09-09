@@ -141,6 +141,43 @@ export function claudeModelForComplexity(complexity: WorkComplexity | null): str
   return complexity ? CLAUDE_TIER_ALIAS[complexity] : CLAUDE_TIER_ALIAS.medium
 }
 
+/**
+ * Whether the user's own `claude` install is logged in.
+ *
+ * `unknown` is a first-class answer, not a synonym for "no". The panel already
+ * makes the same distinction for detection — "we have not asked yet" and "the
+ * answer is no" are different states, and collapsing them is what put a red
+ * alarm on every healthy first visit.
+ */
+export type ClaudeAuthState = 'logged_in' | 'logged_out' | 'unknown'
+
+/**
+ * What `claude auth status` says, reduced to what a caller may see.
+ *
+ * **The account's email, organisation id and organisation name are in that
+ * response and are not in this type.** They are never lifted out of the CLI's
+ * JSON at all, so they cannot reach a log line, this process boundary, or a
+ * screenshot. What survives is who *pays* — a subscription and its tier —
+ * without saying who they are, which is the question the "Runs with" panel
+ * actually has. Invariant 4's reasoning, applied to somebody else's login.
+ */
+export interface ClaudeAuthStatus {
+  state: ClaudeAuthState
+  /**
+   * How that install authenticates, as the CLI words it — `claude.ai` for a
+   * subscription login, `none` when logged out. Passed through, never mapped:
+   * this app does not own the value set.
+   */
+  authMethod: string | null
+  /**
+   * The plan, when the CLI reports one (`max`, `pro`, …). Null otherwise, and
+   * **never inferred** — a subscription this app asserts because it stripped an
+   * environment variable is a claim about an environment it does not fully
+   * control.
+   */
+  subscriptionType: string | null
+}
+
 /** Which of the two resolution steps produced a runtime. */
 export type RuntimeSource =
   /** The manifest's own `runtime` block. */

@@ -75,6 +75,7 @@ function makeDeps(over: Partial<ClaudeTurnDeps> = {}): ClaudeTurnDeps {
     systemPrompt: () => 'You are the invoices agent.',
     model: () => 'sonnet',
     claudePath: async () => '/usr/local/bin/claude',
+    claudeAuth: async () => ({ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }) as const,
     shellEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x', USER: 'x' }),
     appVersion: () => '1.2.3',
     readSession: () => null,
@@ -214,6 +215,67 @@ describe('readiness, answered before the turn rather than as a failed one', () =
     ).runTurn(turn())
     expect(result.error?.message).toMatch(/not logged in/i)
     expect(result.error?.message).toMatch(/claude` in a terminal/)
+  })
+
+  it('a logged-out install is refused before a turn is spawned, not after one fails', async () => {
+    // The rung that used to cost a turn. `claude auth status` answers it for
+    // free, so the user reads the remedy instead of waiting for a turn to come
+    // back with the CLI's own words.
+    let spawned = false
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({
+        claudeAuth: async () => ({ state: 'logged_out', authMethod: 'none', subscriptionType: null }),
+        query: stubQuery({
+          onOptions: () => void (spawned = true),
+          messages: [init, ...answer]
+        })
+      })
+    ).runTurn(turn())
+
+    expect(result.error?.message).toMatch(/not logged in/i)
+    expect(result.error?.message).toMatch(/claude` in a terminal/)
+    expect(spawned).toBe(false)
+  })
+
+  it('a probe that could not answer runs the turn anyway', async () => {
+    // `unknown` is not evidence of a logged-out install. A readiness check that
+    // can refuse a working engine on its own uncertainty is worse than none —
+    // and the thrown-error fallback above still covers the case it missed.
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({ claudeAuth: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null }) })
+    ).runTurn(turn())
+
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe('marzipan')
+  })
+
+  it('a readiness probe that rejects does not become a thrown turn', async () => {
+    // This one is awaited outside `runTurn`'s `try`. A rejection escaping here
+    // loses its code across `ipcMain.handle` and leaves the renderer streaming
+    // with neither `done` nor `error` — the never-throws contract broken by the
+    // check that exists to make turns fail *less*.
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({ claudeAuth: async () => { throw new Error('the probe blew up') } })
+    ).runTurn(turn())
+
+    expect(result.error).toBeUndefined()
+    expect(result.text).toBe('marzipan')
+  })
+
+  it('no install outranks a login: the probe is never consulted for it', async () => {
+    let asked = false
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({
+        claudePath: async () => null,
+        claudeAuth: async () => {
+          asked = true
+          return { state: 'logged_out', authMethod: 'none', subscriptionType: null }
+        }
+      })
+    ).runTurn(turn())
+
+    expect(result.error?.message).toMatch(/no Claude Code installation was found/)
+    expect(asked).toBe(false)
   })
 
   it('refuses a switched-off agent and a folder that does not validate', async () => {

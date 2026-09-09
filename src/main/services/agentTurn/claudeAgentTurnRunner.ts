@@ -49,6 +49,7 @@ import { createLogger } from '../../logger/logger'
 import type { AgentTurnRunner } from './runner'
 import type { LocalAgentKind } from '../../../shared/localAgents'
 import { auditClaudeEnv, buildClaudeEnv } from './claudeEnv'
+import type { ClaudeAuthStatus } from './claudeAuth'
 import { ClaudeMessageStream } from './claudeMessages'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
 import { pendingRequests } from './pendingRequests'
@@ -95,6 +96,18 @@ export interface ClaudeTurnDeps {
    * behind another chat's turn.
    */
   claudePath(): Promise<string | null>
+  /**
+   * Whether that install is logged in, asked without running a turn.
+   *
+   * Free (`claude auth status` bills nothing and logs nobody in or out), and
+   * answered *before* the lock is taken, for the same reason `claudePath` is:
+   * "log in with `claude` in a terminal" is a sentence, not a failed turn.
+   *
+   * `unknown` must never block — a probe that could not answer is not evidence
+   * of a logged-out install, and the thrown-error fallback below still covers
+   * it. See `claudeAuth.ts`.
+   */
+  claudeAuth(): Promise<ClaudeAuthStatus>
   /** The login-shell environment, for {@link buildClaudeEnv}. */
   shellEnv(): Promise<NodeJS.ProcessEnv>
   /** This app's version, for the client-app identifier. */
@@ -181,6 +194,25 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
     // instead of a turn that fails with the CLI's own words.
     const claudePath = await this.deps.claudePath()
     if (!claudePath) return fail(describeEngineSkip('claude_not_installed'))
+
+    // The second rung, and the one that used to cost a turn. It is asked after
+    // the path because there is nothing to ask when there is no binary, and it
+    // is `unknown`-tolerant on purpose: only a definite `logged_out` stops a
+    // turn. Anything else — a probe that timed out, a CLI whose output shape
+    // moved — falls through to the run, where `isNotLoggedIn` still catches the
+    // thrown error. A readiness check that can refuse a working engine on its
+    // own uncertainty is worse than no readiness check.
+    // `.catch` and not a `try`, because this sits *outside* the one below and a
+    // rejection here would escape `runTurn` — the never-throws contract broken
+    // by the check that exists to make turns fail less. A probe that could not
+    // answer is `unknown`, which never blocks.
+    const auth = await this.deps
+      .claudeAuth()
+      .catch((): ClaudeAuthStatus => ({ state: 'unknown', authMethod: null, subscriptionType: null }))
+    if (auth.state === 'logged_out') {
+      logger.info('a Claude turn was refused: that install is not logged in', { agentId })
+      return fail(describeEngineSkip('claude_not_logged_in'))
+    }
 
     try {
       return await this.deps.withLock(agentId, 'turn', () =>

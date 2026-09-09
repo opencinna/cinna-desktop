@@ -237,7 +237,17 @@ export function describeEngineSkip(code: EngineSkipCode): string {
     // credentials.
     case 'claude_not_installed':
       return 'This agent runs on Claude, and no Claude Code installation was found on this machine.'
+    // **The second half is word-for-word the panel's line.** A user meets this
+    // condition on two surfaces — the "Runs with" panel before a turn, and here
+    // if they start one anyway — and two paraphrases of one instruction read as
+    // two instructions. The panel's own wording is what moved to match, not the
+    // other way round: it was measured at exactly 414px against 414px available
+    // at the 800px minimum, so it cannot afford `installation`.
+    //
+    // The opening clause stays, and is the reason this is not simply the same
+    // string: the panel says which engine two rows up, and a turn error in a
+    // chat transcript has nothing around it that does.
     case 'claude_not_logged_in':
-      return 'This agent runs on Claude, and that installation is not logged in. Run `claude` in a terminal to log in.'
+      return 'This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal.'
   }
 }

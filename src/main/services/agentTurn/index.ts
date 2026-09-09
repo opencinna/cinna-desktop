@@ -21,12 +21,14 @@ import { createLogger } from '../../logger/logger'
 import { EngineEventBus } from './engineEventBus'
 import { LocalAgentTurnRunner, type LocalTurnDeps } from './localAgentTurnRunner'
 import { ClaudeAgentTurnRunner, type ClaudeTurnDeps } from './claudeAgentTurnRunner'
+import { ClaudeAuthProbe } from './claudeAuth'
 import { isFolderAgent, type AgentTurnRunner } from './runner'
 import { toolDetectionService } from '../localAgents/toolDetectionService'
 import { runtimeService } from '../localAgents/runtimeService'
 import { providerService } from '../providerService'
 import { assembleAgentPrompt, assembleBareAgentPrompt, resolveDesktopPromptContext } from '../localAgents/promptAssembly'
 import { getShellEnv } from '../../shell/env'
+import { buildClaudeEnv } from './claudeEnv'
 import { app } from 'electron'
 import type { AgentRow } from '../../db/agents'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
@@ -183,6 +185,23 @@ export const localAgentTurnRunner = new LocalAgentTurnRunner(localDeps)
  * "this agent is busy in another chat" and "this chat remembers a session"
  * must not mean two different things depending on which engine answered.
  */
+/**
+ * Whether the user's `claude` is logged in — one probe, shared by the turn path
+ * and by the "Runs with" panel.
+ *
+ * **Built on the same environment the turn runs in**, and that is the whole
+ * reason it is wired here rather than constructed at either call site. This
+ * binary answers differently depending on its child environment — withholding
+ * `USER` makes a logged-in install report *"Not logged in"* — so a probe run
+ * under the full shell environment would report a login for a child that then
+ * cannot authenticate. Readiness would be answering about a different process
+ * than the one the turn spawns.
+ */
+export const claudeAuthProbe = new ClaudeAuthProbe({
+  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
+})
+
 const claudeDeps: ClaudeTurnDeps = {
   getAgent: localDeps.getAgent,
   readSession: localDeps.readSession,
@@ -217,6 +236,7 @@ const claudeDeps: ClaudeTurnDeps = {
     }
   },
   claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  claudeAuth: () => claudeAuthProbe.status(),
   shellEnv: () => getShellEnv(),
   appVersion: () => app.getVersion()
 }
