@@ -1,5 +1,6 @@
 import type { Locator } from '@playwright/test'
 import { test, expect, type CinnaApp } from '../fixtures/app'
+import { stubLlmFetch } from '../fixtures/llmFetch'
 
 /**
  * A credential's on/off switch, and the four surfaces that have to agree it is
@@ -53,17 +54,23 @@ const LONELY = 'Spare Key'
 const MODE = 'Deep Research'
 
 /**
- * Both SDKs' base URLs, pointed at a port nothing listens on.
+ * Nothing here reaches a vendor, and it used to.
  *
  * `provider:list-models` is a real network round trip per credential, and this
  * spec asserts nothing about a catalogue — the chat-mode Model select only has
- * to *exist* and carry its label. So the two fake keys below are refused by a
- * closed loopback port instead of being sent to Anthropic and OpenAI. Passed
- * through the fixture's per-launch `env` rather than assigned to
- * `process.env`, which the fixture copies wholesale into every app every later
- * spec in this worker launches.
+ * to *exist* and carry its label. It used to keep the two fake keys below off
+ * the internet by pointing `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at a closed
+ * loopback port. **That guard went inert**: both adapters now pin their base URL
+ * so a shell variable cannot redirect a stored key, which is the whole point of
+ * the pins, so the requests went to `api.anthropic.com` and `api.openai.com`
+ * with a fake key on every run — and the spec passed anyway, because its
+ * assertions never touch a catalogue. Nothing failed to say so.
+ *
+ * There is no base URL left to move: this spec is *about* keyed credentials, and
+ * `providerService.upsert` refuses a `baseUrl` on any keyed row. So the stub
+ * goes below the adapter instead — see `stubLlmFetch`, which answers both
+ * vendors in-process and passes everything else through.
  */
-test.use({ env: { ANTHROPIC_BASE_URL: 'http://127.0.0.1:1', OPENAI_BASE_URL: 'http://127.0.0.1:1/v1' } })
 
 /**
  * Footer user menu → Settings → `tab`.
@@ -107,6 +114,9 @@ function toggle(page: CinnaApp['page'], action: 'on' | 'off', name: string): Loc
 test('switching a credential off asks first, names the chat mode it stops, and every surface says so', async ({
   cinna
 }) => {
+  // Before anything can list a catalogue. Re-installed after the relaunch below,
+  // because the stub lives in the app process and a restart is a new one.
+  await stubLlmFetch(cinna)
   await cinna.skipOnboarding()
 
   await test.step('two credentials on the profile', async () => {
@@ -131,6 +141,7 @@ test('switching a credential off asks first, names the chat mode it stops, and e
     // `['providers']` from outside the renderer — so the pickers below would
     // render as a profile with no credentials at all.
     await cinna.relaunch()
+    await stubLlmFetch(cinna)
     await cinna.skipOnboarding()
   })
 

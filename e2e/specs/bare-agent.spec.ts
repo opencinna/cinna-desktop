@@ -1,9 +1,8 @@
-import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Locator } from '@playwright/test'
 import { answerAgentsFolder, test, expect, homeDir, type CinnaApp } from '../fixtures/app'
+import { stubLlmFetch } from '../fixtures/llmFetch'
 
 /**
  * Adopting a folder that already holds an `AGENT.md` — a **bare** agent.
@@ -510,13 +509,16 @@ test('re-picking an adopted folder re-selects its agents, and confirms what leav
  *
  * It needs a **model registry**, which is one live network round trip per
  * credential (`provider:list-models`), so the panel's controls stay disabled
- * for as long as it has not landed. The endpoint is replaced and nothing else,
- * exactly as `agent-runtime.spec.ts` does it: both SDKs read their base URL
- * from the environment, the fixture hands the app this process's environment,
- * and the app then runs its real adapters over real HTTP against a server in
- * this file. Scoped to a `describe` so the tests above it — which seed no
- * credentials and make no such call — run with the environment untouched, and
- * restored in `afterAll` so `live.spec.ts` in the same worker never sees it.
+ * for as long as it has not landed. The *transport* is replaced and nothing
+ * else, exactly as `agent-runtime.spec.ts` does it: `stubLlmFetch` swaps
+ * `globalThis.fetch` in the main process and the app runs its real adapters
+ * against it.
+ *
+ * This used to redirect the SDKs with `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`
+ * and was red because that stopped working — the adapters pin their base URL
+ * now, so a shell variable cannot send a stored key somewhere the user never
+ * configured. Nothing here touches `process.env` any more, so there is also
+ * nothing for `live.spec.ts` in the same worker to inherit.
  */
 test.describe('a bare agent chooses its own credential', () => {
   const ANTHROPIC_CRED = 'Anthropic Personal'
@@ -524,64 +526,11 @@ test.describe('a bare agent chooses its own credential', () => {
   const CLAUDE = { id: 'claude-sonnet-4-5-20250929', name: 'Claude Sonnet 4.5' }
   const AGENT = 'Invoice Triage Agent'
 
-  /** Both catalogues on one port, told apart by the header the SDK sends. */
-  function modelRegistry(): Server {
-    return createServer((req, res) => {
-      res.setHeader('content-type', 'application/json')
-      if (!req.url?.startsWith('/v1/models')) {
-        res.statusCode = 404
-        res.end('{}')
-        return
-      }
-      const anthropic = typeof req.headers['x-api-key'] === 'string'
-      res.end(
-        JSON.stringify(
-          anthropic
-            ? {
-                data: [
-                  {
-                    type: 'model',
-                    id: CLAUDE.id,
-                    display_name: CLAUDE.name,
-                    created_at: '2025-09-29T00:00:00Z'
-                  }
-                ],
-                has_more: false,
-                first_id: CLAUDE.id,
-                last_id: null
-              }
-            : {
-                object: 'list',
-                data: [
-                  { id: 'gpt-4o-mini', object: 'model', created: 1_720_000_000, owned_by: 'openai' }
-                ]
-              }
-        )
-      )
-    })
+  /** What each vendor's list endpoint serves. Told apart by host, not by header. */
+  const CATALOGUES = {
+    anthropic: [CLAUDE],
+    openai: [{ id: 'gpt-4o-mini' }]
   }
-
-  let server: Server
-  const savedEnv: Record<string, string | undefined> = {}
-
-  test.beforeAll(async () => {
-    server = modelRegistry()
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const { port } = server.address() as AddressInfo
-    savedEnv.ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL
-    savedEnv.OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
-    process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`
-    // The OpenAI SDK's default base URL already carries `/v1`; Anthropic's does not.
-    process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`
-  })
-
-  test.afterAll(async () => {
-    for (const [key, value] of Object.entries(savedEnv)) {
-      if (value === undefined) delete process.env[key]
-      else process.env[key] = value
-    }
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-  })
 
   /** Every state file the desktop keeps for bare agents, by filename. */
   function stateFiles(cinna: CinnaApp): string[] {
@@ -613,6 +562,9 @@ test.describe('a bare agent chooses its own credential', () => {
   test('the choice is saved in Cinna, survives a restart, and never lands in the folder', async ({
     cinna
   }) => {
+    // Before anything lists a catalogue, and again after every relaunch — the
+    // stub lives in the app process and a restart is a new one.
+    await stubLlmFetch(cinna, CATALOGUES)
     await cinna.skipOnboarding()
     await cinna.page.evaluate(
       async (names) => {
@@ -644,6 +596,7 @@ test.describe('a bare agent chooses its own credential', () => {
     // nothing — the same staleness the agent list has. A restart is the
     // arrangement, not part of what is under test.
     await cinna.relaunch()
+    await stubLlmFetch(cinna, CATALOGUES)
     await cinna.skipOnboarding()
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     let panel = await openAgentPage(cinna)
@@ -684,6 +637,7 @@ test.describe('a bare agent chooses its own credential', () => {
 
     await test.step('a restart and a rescan read it back off disk', async () => {
       await cinna.relaunch()
+      await stubLlmFetch(cinna, CATALOGUES)
       await cinna.skipOnboarding()
       // Startup does not scan, and the panel reads `agent.runtime` off the index.
       await cinna.page.evaluate(() => window.api.localAgents.rescan())

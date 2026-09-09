@@ -1,9 +1,8 @@
-import { createServer, type Server } from 'node:http'
-import type { AddressInfo } from 'node:net'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
+import { stubLlmFetch } from '../fixtures/llmFetch'
 import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
 
 /**
@@ -26,18 +25,25 @@ import { MANIFEST_FILE } from '../../src/shared/kit/manifest'
  * that belongs to another catalogue from one it simply has not listed
  * (`shared/runtimeDefaults`, `modelBelongsElsewhere`, declines to guess in
  * exactly that case). The suite has no Anthropic key and one Anthropic model
- * turn is not what this scenario is about, so the *endpoint* is replaced and
- * nothing else: both SDKs read their base URL from the environment
- * (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`), the fixture hands the app the
- * test process's environment, and the app then runs its real adapters, real
- * `providerService.listModels`, real registry over real HTTP to a server in
- * this file. Provider *types* stay `anthropic` and `openai`, so the drop goes
- * through the cross-type branch of the rule and not the `openai_compatible`
- * per-row one.
+ * turn is not what this scenario is about, so the *transport* is replaced and
+ * nothing else: `stubLlmFetch` swaps `globalThis.fetch` in the main process, and
+ * the app then runs its real adapters, real `providerService.listModels` and
+ * real registry against it. Provider *types* stay `anthropic` and `openai`, so
+ * the drop goes through the cross-type branch of the rule and not the
+ * `openai_compatible` per-row one — which is the reason this cannot be a keyless
+ * Ollama row, the way `claude-engine.spec.ts`'s single catalogue can.
  *
- * The variables are set in `beforeAll` and removed in `afterAll`: the fixture
- * copies `process.env` at launch, and `live.spec.ts` in the same worker must
- * not inherit a base URL pointing at this server.
+ * This used to point `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` at a local HTTP
+ * server instead, and both tests here were red because that stopped working:
+ * the adapters pin their base URL now, so that a shell variable cannot send a
+ * stored key to a host the user never configured. The fixture had been leaning
+ * on the vulnerability. Stubbing the transport is below the adapter and so
+ * immune to that, needs no environment at all — nothing to leak into
+ * `live.spec.ts` in the same worker — and is what the unit tests
+ * (`anthropic.test.ts`, `openai.test.ts`) already do one level down.
+ *
+ * **Re-installed after every `relaunch()`**: the stub lives in the app process,
+ * and a restart is a new one.
  */
 
 const ANTHROPIC_CRED = 'Anthropic Personal'
@@ -62,71 +68,8 @@ const HEALTHY = `Medium — the balanced default, on ${CLAUDE.name}.`
 const REMEDY = `Pick another complexity or another credential — ${ANTHROPIC_CRED} lists no model for Complex work.`
 const PINNED = `Pinned “${CLAUDE.name}” — what Medium resolved to.`
 
-/**
- * Both catalogues on one port. Told apart by the header the SDK sends:
- * Anthropic authenticates with `x-api-key`, OpenAI with a bearer token.
- */
-function modelRegistry(): Server {
-  return createServer((req, res) => {
-    res.setHeader('content-type', 'application/json')
-    if (!req.url?.startsWith('/v1/models')) {
-      res.statusCode = 404
-      res.end('{}')
-      return
-    }
-    const anthropic = typeof req.headers['x-api-key'] === 'string'
-    res.end(
-      JSON.stringify(
-        anthropic
-          ? {
-              data: [
-                {
-                  type: 'model',
-                  id: CLAUDE.id,
-                  display_name: CLAUDE.name,
-                  created_at: '2025-09-29T00:00:00Z'
-                }
-              ],
-              has_more: false,
-              first_id: CLAUDE.id,
-              last_id: null
-            }
-          : {
-              object: 'list',
-              data: OPENAI_MODELS.map((model) => ({
-                id: model.id,
-                object: 'model',
-                created: model.created,
-                owned_by: 'openai'
-              }))
-            }
-      )
-    )
-  })
-}
-
-let server: Server
-const savedEnv: Record<string, string | undefined> = {}
-
-test.beforeAll(async () => {
-  server = modelRegistry()
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-  const { port } = server.address() as AddressInfo
-  savedEnv.ANTHROPIC_BASE_URL = process.env.ANTHROPIC_BASE_URL
-  savedEnv.OPENAI_BASE_URL = process.env.OPENAI_BASE_URL
-  process.env.ANTHROPIC_BASE_URL = `http://127.0.0.1:${port}`
-  // The OpenAI SDK's default base URL already carries `/v1`; the Anthropic
-  // SDK's does not and its paths do.
-  process.env.OPENAI_BASE_URL = `http://127.0.0.1:${port}/v1`
-})
-
-test.afterAll(async () => {
-  for (const [key, value] of Object.entries(savedEnv)) {
-    if (value === undefined) delete process.env[key]
-    else process.env[key] = value
-  }
-  await new Promise<void>((resolve) => server.close(() => resolve()))
-})
+/** What each vendor's list endpoint serves. Told apart by host, not by header. */
+const CATALOGUES = { anthropic: [CLAUDE], openai: OPENAI_MODELS }
 
 /** The manifest's `runtime` block as it stands on disk right now. */
 function manifestRuntime(agentPath: string): unknown {
@@ -214,6 +157,7 @@ async function layout(cinna: CinnaApp): Promise<Layout> {
 test('changing the credential rewrites the manifest, says what it dropped, and does not move the page', async ({
   cinna
 }) => {
+  await stubLlmFetch(cinna, CATALOGUES)
   await cinna.skipOnboarding()
 
   await test.step('two credentials and an agent that declares the Anthropic one', async () => {
@@ -249,6 +193,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
   // A folder agent seeded over IPC is invisible to the renderer's queries until
   // the window restarts.
   await cinna.relaunch()
+  await stubLlmFetch(cinna, CATALOGUES)
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
 
@@ -367,6 +312,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
 test('a work complexity resolves to a model, warns when it cannot, and Advanced converts the manifest', async ({
   cinna
 }) => {
+  await stubLlmFetch(cinna, CATALOGUES)
   await cinna.skipOnboarding()
   await seedCredentials(cinna)
 
@@ -404,6 +350,7 @@ test('a work complexity resolves to a model, warns when it cannot, and Advanced 
   // A folder agent seeded over IPC is invisible to the renderer's queries until
   // the window restarts, and the index is rebuilt by a scan, not at startup.
   await cinna.relaunch()
+  await stubLlmFetch(cinna, CATALOGUES)
   await cinna.skipOnboarding()
   await cinna.page.evaluate(() => window.api.localAgents.rescan())
   await openAgentPage(cinna)
@@ -491,7 +438,8 @@ test('a work complexity resolves to a model, warns when it cannot, and Advanced 
       window.api.settings.set('localAgentsModelAdvanced', false)
     )
     await cinna.relaunch()
-    await cinna.skipOnboarding()
+    await stubLlmFetch(cinna, CATALOGUES)
+  await cinna.skipOnboarding()
     await cinna.page.evaluate(() => window.api.localAgents.rescan())
     await openAgentPage(cinna)
 
