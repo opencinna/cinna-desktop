@@ -115,7 +115,7 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 
 ## IPC Channels
 
-Settings components interact with these IPC channels via `window.api.*`. The list below covers the tabs documented here; the tabs with their own feature docs carry their own channel lists — `window.api.localAgents.*` / `localTools.*` / `engine.*` in [Agents Tab](../../agents/local_agents/agents_tab_tech.md), `localDev.*` in [Local Development](../../agents/local_dev/local_dev.md), `catalog.*` in [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) and `sync.*` in [Data Sync](../../sync/data_sync/data_sync.md).
+Settings components interact with these IPC channels via `window.api.*`. The list below covers the tabs documented here; the tabs with their own feature docs carry their own channel lists — `window.api.localAgents.*` / `localTools.*` / `engine.*` in [Agents Tab](../../agents/local_agents/agents_tab_tech.md) (the `home-state` / `home-grant` / `home-choose` channels behind Local Agents' recovery row are in [The Agents Folder Question](../../agents/local_agents/home_access_tech.md)), `localDev.*` in [Local Development](../../agents/local_dev/local_dev.md), `catalog.*` in [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) and `sync.*` in [Data Sync](../../sync/data_sync/data_sync.md).
 
 ### LLM Providers (`window.api.providers.*`)
 

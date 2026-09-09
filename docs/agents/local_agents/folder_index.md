@@ -32,7 +32,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 
 - **Folder Agent** — An agent that *is* a folder on disk (`agents.source = 'folder'`, row id `folder:<manifest uuid>`). Contrast with `'local'` (a hand-added A2A URL) and `'remote'` (Cinna-synced)
 - **Agents Root** — A registered folder agents are scanned from. Two kinds, in the `agent_roots.kind` column: **workshop** (the kit shape — `Local/` with one directory per agent, `Cloud/`, the root markdown files and a `.cinna-kit/` copy of the contract) and **external** (a folder the user pointed at, walked for `AGENT.md`, with nothing installed into it). Unqualified, "root" and "workshop" in this document mean the first
-- **Agents Home** — The one root marked default: `~/Documents/CinnaAgents` unless the `localAgentsHome` app setting says otherwise. Where the New Agent button writes. Cannot be removed, only moved. Always a workshop
+- **Agents Home** — The one root marked default: `~/Documents/CinnaAgents` unless the `localAgentsHome` app setting says otherwise. Where the New Agent button writes. Cannot be removed, only moved. Always a workshop. On macOS its first creation is gated on an in-app explainer — [The Agents Folder Question](home_access.md)
 - **Bare Agent** — An agent found in an external root: a folder holding an `AGENT.md` and no manifest. Same DTO, same rows, same prune, same watcher — see [Bare Agents & External Roots](bare_agents.md)
 - **Folder Index** — The `agents` rows derived from a scan, plus the `agent_roots` rows saying where to look
 - **Readiness** — How ready a folder is to run: `ok`, `credentials_needed`, `invalid`, `contract_too_new`. A *state*, never an exception
@@ -46,9 +46,10 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 
 ### Opening the Agents tab for the first time
 1. The home is resolved from the `localAgentsHome` setting, or the built-in default
-2. The folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and `.cinna-kit/` is populated from the bundled contract
-3. Each root is scanned; every folder becomes a list entry and (where its identity could be read) an `agents` row
-4. Each root starts being watched
+2. On macOS, where the home sits in a folder the system guards and this install has never created it, **nothing is written yet**: the app explains the folder first and the list comes back empty with the reason. See [The Agents Folder Question](home_access.md)
+3. The folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and `.cinna-kit/` is populated from the bundled contract
+4. Each root is scanned; every folder becomes a list entry and (where its identity could be read) an `agents` row
+5. Each root starts being watched
 
 ### Creating an agent
 1. The user supplies a name, and optionally one sentence describing what the agent should do. Absent or blank, the name is written as the description — the kit schema requires a non-empty one, and a folder invalid from its first second is a worse start than a redundant sentence. The index row's `description` column is `null` in that case, so no picker renders the name twice
@@ -81,12 +82,14 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 3. The whole picked folder is registered as an **external** root, scanned and watched. Step 4 above — the one that writes — does not happen at all. See [Bare Agents & External Roots](bare_agents.md)
 
 ### Moving the agents home
-1. The setting is validated at the boundary and rejected if it is not a usable root
-2. The default root row is repointed at the new path and the new location is scanned
-3. Rows still pointing under the old location are **kept**, not pruned — the setting moved, the agents did not. Pointing the home back re-adopts them, sessions intact
+1. The path comes from the OS directory picker opened in main (`local-agent:home-choose`) — the only way the home changes today, and the same rule as adopting a root: the renderer never supplies a path
+2. The setting is validated at the boundary and rejected if it is not a usable root
+3. The default root row is repointed at the new path and the new location is scanned
+4. Rows still pointing under the old location are **kept**, not pruned — the setting moved, the agents did not. Pointing the home back re-adopts them, sessions intact
+5. A new location that cannot be created leaves the setting where it was: a home the app could not make must not stay configured, or the next resolve would repoint the home root at a folder that does not exist. See [The Agents Folder Question](home_access.md)
 
 ### Removing an extra root
-1. The home cannot be removed; the settings screen offers to move it instead
+1. The home cannot be removed. Moving it is a different action, and today it is offered only where the home could not be created — the picker in [The Agents Folder Question](home_access.md) is the one path that writes `localAgentsHome`. A home that is working has no move affordance
 2. An extra root's index rows are pruned in one transaction, its watcher is closed, and the row is deleted
 3. **The folder on disk is never touched**
 
@@ -95,6 +98,7 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 ### Roots and the agents home
 
 - Exactly one root per user is the home. It is created lazily and idempotently: everything missing is created, everything present is left alone (every root file is `survives_update: true` in the contract layout)
+- **The first creation of a home inside a macOS-guarded folder is neither lazy nor automatic.** It raises the system's Files-and-Folders prompt, so it is refused until the user has been shown what the folder is, and the refusal lives in the one function every path to the home goes through. What is withheld is the **home row alone** — an adopted workshop still lists, still scans and still works, because the app being unable to make *its* folder says nothing about the folder the user chose. See [The Agents Folder Question](home_access.md)
 - A root already registered at the home's path is adopted as the home rather than duplicated
 - The `.cinna-kit/` copy is refreshed only when the workshop's copy is **older** than the bundled contract. An equal or newer copy is left alone — overwriting would undo a contract refresh, or an edit an assistant is entitled to make in the workshop, and copying on every call would defeat the contract cache
 - The configured home is re-validated on **every read**, not trusted. A value that no longer passes the path rules falls back to the default and is logged; the user keeps a working Agents tab instead of an app that refuses to open one
@@ -285,13 +289,14 @@ Files on disk  ── truth ──►  agents rows + agent_roots rows  ── de
 ## Integration Points
 
 - [Kit Contract & Manifest Layer](kit_contract.md) — the manifest reader, validator, layout rules and templates every scan and scaffold runs on; also the stamp used by every write
+- [The Agents Folder Question](home_access.md) — the gate in front of the *first* creation of the home on macOS: why the app asks before the system does, and what the rest of the app shows while the question stands
 - [Bare Agents & External Roots](bare_agents.md) — the second kind of root: what the walk finds, where a manifest-less agent's identity and state come from, and everything a folder gives up by keeping none of the contract
 - [Agents Folder Updates](folder_updates.md) — fast-forwarding a registered root that is a git working tree, and the rescan that follows
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the registered roots are exactly the allowed area of its path guard, registered by this slice at IPC registration. Until that runs, open-in refuses everything
 - [Agents](../agents/agents.md) — folder agents join the same merged agents list, the same id-prefix scope resolution, and the same `enabled` toggle; A2A endpoint and token resolution short-circuit for them
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — folder agents are machine-local and live in the default (settings) scope
 - [Database Migrations](../../development/migrations/migrations_llm.md) — `agent_roots`, the `agents` columns, and why the chain moved into its own module
-- [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session
+- [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session, except `local-agent:home-state`, which the onboarding copy needs before there is one
 - [Jobs](../../jobs/jobs/jobs.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — both pick counterparties from the agents list, and both offer folder agents; see [Folder Agents as Counterparties](counterparty.md)
 
 Sub-doc: [Technical Details](folder_index_tech.md)

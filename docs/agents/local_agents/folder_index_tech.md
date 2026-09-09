@@ -7,7 +7,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 ### Shared
 - `src/shared/localAgents.ts` — the whole wire contract: `FOLDER_AGENT_ID_PREFIX` (`folder:`), `FOLDER_AGENT_SOURCE` (`folder`), `FOLDER_AGENT_PROTOCOL` (`local-folder`), `AGENTS_SUBDIR` (`Local`), `LOCAL_AGENT_CHANGED_CHANNEL`, `isFolderAgentId()`, `folderAgentId()`, and the DTOs (`LocalAgentDto`, `AgentRootDto`, `LocalAgentReadiness`, `LocalAgentValidation`, `LocalAgentCredentialState`, `LocalAgentCommand`, `LocalAgentStatusSummary`, `LocalAgentDesktopSummary`, `FileStamp`, `CreateLocalAgentInput`, `UpdateLocalAgentFieldInput`, `LocalAgentFieldUpdate`, `OpenLocalAgentPathInput`, `RescanResult`, `LocalAgentChangedPayload`). Also the pieces the renderer needs to save correctly: `LOCAL_AGENT_PROMPT_PATHS`, `fieldFilePath(update)` (which file a given update writes, i.e. which stamp to send), `STALE_WRITE_ERROR_CODES` / `isStaleWriteError(error)`, and `slugifyAgentName()` — the slug rule lives here so the new-agent form previews the exact folder the scaffolder will create
 - `src/shared/localAgents.test.ts` — the id prefix round-trip. It is the whole file: the suite that pinned the folder-agent counterparty exclusion was **replaced** rather than deleted, by two suites that pin the opposite claim in the pickers where it now lives (`ChatInput.agentMention.test.tsx`, `JobEditForm.agentPicker.test.tsx`)
-- `src/shared/appSettings.ts` — `localAgentsHome` joins `AppSettingsSchema`. First non-boolean setting in the store
+- `src/shared/appSettings.ts` — `localAgentsHome` joins `AppSettingsSchema`. First non-boolean setting in the store. `localAgentsHomeAcknowledged` is its companion, owned by [The Agents Folder Question](home_access_tech.md#configuration)
 
 ### Main process — database
 - `src/main/db/migrations/agent-roots.ts` — creates `agent_roots` plus its indexes
@@ -24,6 +24,8 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 
 ### Main process — services (`src/main/services/localAgents/`)
 - `agentsHomeService.ts` — the home, extra roots, root templates, `.cinna-kit/` sync, overlap rule
+- `homePath.ts` — where the home is and nothing else: `defaultHomePath()`, `configuredHomePath()`, `isGuardedLocation()`. Split out because resolving the path is pure string work while creating the folder is a write that can raise a macOS permission prompt ([The Agents Folder Question](home_access.md))
+- `homeAccessService.ts` — the consent gate in front of the first write into a guarded home
 - `scaffoldService.ts` — the TypeScript port of `kit.py new`
 - `scannerService.ts` — folder → `LocalAgentDto` → index; the per-root scan cache; `scanExternalRoot()` / `scanBareAgentFolder()`
 - `externalScan.ts` — the `AGENT.md` walk an external root is scanned by ([Bare Agents](bare_agents.md))
@@ -33,7 +35,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `turnLock.ts` — the per-agent lock the runner, the editors and the watcher share
 - `pathRules.ts` — `assertUsableRoot()` and `resolveWithinRoot()`
 - `localAgentService.ts` — the composition root, and the operations IPC calls
-- Tests: `agentsHomeService.test.ts`, `scannerService.test.ts`, `localAgentService.test.ts`, `watcherService.test.ts`, `turnLock.test.ts`, `pathRules.test.ts`, and `openInService.test.ts` (Phase 2's merge condition — the open-in allow path only became reachable once this slice registered the real roots provider)
+- Tests: `agentsHomeService.test.ts`, `homeAccessService.test.ts`, `scannerService.test.ts`, `localAgentService.test.ts`, `watcherService.test.ts`, `turnLock.test.ts`, `pathRules.test.ts`, and `openInService.test.ts` (Phase 2's merge condition — the open-in allow path only became reachable once this slice registered the real roots provider)
 
 ### Main process — elsewhere
 - `src/main/services/agentService.ts` — the `folder:` scope branch and the endpoint/token short-circuits
@@ -45,10 +47,10 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/ipc/agent_a2a.ipc.ts` and `src/main/services/a2aAsMcpProvider.ts` — handle the `null` endpoint a folder agent resolves to
 
 ### Preload
-- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, `delete` and `openCredentials`, which belong to the Agents tab slice, and `folderPick`, `folderAdd`, `rename`, `setRuntime`, `rootRestoreHidden`, `gitStatus`, `gitUpdate`, which belong to [Bare Agents](bare_agents_tech.md#ipc-channels) and [Folder Updates](folder_updates.md#ipc-channels)). Typed by inference; there is no hand-written interface
+- `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, `delete` and `openCredentials`, which belong to the Agents tab slice, and `folderPick`, `folderAdd`, `rename`, `setRuntime`, `rootRestoreHidden`, `gitStatus`, `gitUpdate`, `homeState`, `homeGrant`, `homeChoose`, which belong to [Bare Agents](bare_agents_tech.md#ipc-channels), [Folder Updates](folder_updates.md#ipc-channels) and [The Agents Folder Question](home_access_tech.md#ipc-channels)). Typed by inference; there is no hand-written interface
 
 ### Renderer
-- `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useDeleteLocalAgent`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useOpenAgentCredentials`, `useValidateLocalAgent`
+- `src/renderer/src/hooks/useLocalAgents.ts` — `useLocalAgents`, `useLocalAgent`, `useAgentRoots`, `useLocalAgentWatch`, `useCreateLocalAgent`, `useUpdateLocalAgentField`, `useDeleteLocalAgent`, `useRescanLocalAgents`, `useAddAgentRoot`, `useRemoveAgentRoot`, `useOpenAgentPath`, `useOpenAgentCredentials`, `useValidateLocalAgent`, plus the agents-home question's own hooks ([tech](home_access_tech.md#renderer))
 - `src/renderer/src/components/chat/ChatInput.tsx` and `src/renderer/src/components/jobs/JobEditForm.tsx` — the two counterparty pickers. Both filter on `a.enabled` alone; see [Folder Agents as Counterparties](counterparty.md)
 
 ## Database Schema
@@ -92,7 +94,7 @@ Nothing about boot behaviour changed: `client.ts` still owns the connection, `jo
 
 | Channel | Type | Signature |
 |---|---|---|
-| `local-agent:list` | invoke | `() → { roots: AgentRootDto[]; agents: LocalAgentDto[] }` |
+| `local-agent:list` | invoke | `() → { roots: AgentRootDto[]; agents: LocalAgentDto[]; homeAccess: AgentsHomeAccess }` — `homeAccess` rides along rather than being a query of its own so the sidebar's first paint already knows whether an empty list means "no agents yet" or "the folder has not been created". `needs_consent` and `denied` both come back as an empty list, never as a rejection ([The Agents Folder Question](home_access.md)) |
 | `local-agent:get` | invoke | `(agentId) → LocalAgentDto` (always a fresh read) |
 | `local-agent:create` | invoke | `(CreateLocalAgentInput) → LocalAgentDto` |
 | `local-agent:update-field` | invoke | `(UpdateLocalAgentFieldInput) → LocalAgentDto` |
@@ -108,18 +110,22 @@ Nothing about boot behaviour changed: `client.ts` still owns the connection, `jo
 | `local-agent:open-credentials` | invoke | `(agentId) → OpenLocalAgentCredentialsResult` — opens `credentials/.env`, creating it from the declared variable names when it is absent. The Agents tab slice's; listed here because it is the **only** channel in the feature that writes to that file, and the secrets rule below is what it has to keep. It takes an id and no path, unlike `:open-path`, precisely because it writes |
 | `local-agent:changed` | main → renderer | `LocalAgentChangedPayload` — `{ rootId, agentId \| null, reason: 'watch' \| 'rescan' \| 'create' }` |
 
-The rest of the family is documented with the features that own it: `local-agent:folder-pick`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden` ([Bare Agents](bare_agents_tech.md#ipc-channels)), `:git-status`, `:git-update` ([Folder Updates](folder_updates.md#ipc-channels)), and the grant channels ([Permissions](permissions_tech.md)).
+The rest of the family is documented with the features that own it: `local-agent:folder-pick`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden` ([Bare Agents](bare_agents_tech.md#ipc-channels)), `:git-status`, `:git-update` ([Folder Updates](folder_updates.md#ipc-channels)), `:home-state`, `:home-grant`, `:home-choose` ([The Agents Folder Question](home_access_tech.md#ipc-channels)), and the grant channels ([Permissions](permissions_tech.md)).
 
-Every handler calls `userActivation.requireActivated()`, resolves its user with `getSettingsScopeUserId()`, and is wrapped by `ipcHandle()`. They hold no logic beyond that. `registerLocalAgentHandlers()` calls `localAgentService.configure(getSettingsScopeUserId)` first — the composition root — so the open-in roots provider and the watcher callbacks are wired before any handler can run.
+Every handler calls `userActivation.requireActivated()`, resolves its user with `getSettingsScopeUserId()`, and is wrapped by `ipcHandle()` — with one deliberate exception, `local-agent:home-state`, which the onboarding copy needs before there is an activated user to gate on. They hold no logic beyond that, apart from the two dialog-opening channels (`:root-add` below, and `:home-choose`, whose move-try-restore of the home setting is described in [The Agents Folder Question](home_access_tech.md)). `registerLocalAgentHandlers()` calls `localAgentService.configure(getSettingsScopeUserId)` first — the composition root — so the open-in roots provider and the watcher callbacks are wired before any handler can run.
 
 `local-agent:root-add` is the pattern for any future path-taking channel: it opens `dialog.showOpenDialog` in main and, when the picked folder is non-empty and does not already look like a workshop, a native `showMessageBox` confirmation. Both prompts live in main, so nothing that reaches the channel can skip them.
 
 ## Services & Key Methods
 
 ### `src/main/services/localAgents/agentsHomeService.ts`
-- `ensureHome(userId)` — resolve → create → register → install templates and `.cinna-kit/`. Idempotent; called from `list`, `rescan`, `listRoots`, `create` and `requireRoot`
-- `installRoot(path)` / `syncWorkshopContract(path)` — templates, then the contract copy. The copy runs only when the workshop version is strictly older than the bundled one, and `clearContractCache()` is called only when a copy actually happened
-- `listRoots(userId)` / `listRootRows(userId)` — DTOs (home first) and raw rows
+- `ensureHome(userId)` — resolve → create → register → install templates and `.cinna-kit/`. Idempotent; on the path of `rescan`, `create` and `requireRoot`, and reached from `list` / `listRoots` through `tryEnsureHome`. **Throws `home_consent_required` when the home is in a macOS-guarded folder the user has not been told about** — the gate is here, at the one function every path to the home goes through, so a new caller that forgets the rule gets an error rather than an unexplained permission prompt. See [The Agents Folder Question](home_access.md)
+- `prepare(userId)` → `Promise<AgentsHomeState>` — the only way past that refusal: async `mkdir` (so the macOS prompt does not block the main thread), then `ensureHome`'s synchronous scaffolding
+- `tryEnsureHome(userId)` → `AgentsHomeAccess` — the attempt with its answer returned instead of thrown. **Gates the home, not the list**: what is missing while the question stands is one row
+- `homePath` — `configuredHomePath` from `homePath.ts`, for a caller that wants the path and will not create it
+- `installRoot(path)` / `syncWorkshopContract(path)` — templates, then the contract copy. The copy runs only when the workshop version is strictly older than the bundled one, and `clearContractCache()` is called only when a copy actually happened. An `EPERM` / `EACCES` from the template install is `home_access_denied`, not `write_failed`
+- `listRoots(userId)` / `listRootRows(userId)` — DTOs (home first) and raw rows, each preceded by one `tryEnsureHome`
+- `rootDtos(userId)` / `rootRows(userId)` — the same two, **without** the attempt, for a caller that has already run `tryEnsureHome` and holds its answer. `localAgentService.list` does; re-running it per accessor meant two or three attempts of which only the first was reported
 - `rootPaths(userId)` — what the open-in guard is given. Deliberately does **not** call `ensureHome`: creating directories as a side effect of a launcher would be surprising, and a failure must mean "nothing is allowed"
 - `requireRoot(userId, rootId?)` — the named root, or the home
 - `requireNamedRoot(userId, rootId)` — the named root, and **never** the home: a channel that acts on one root (the git pair, `root-restore-hidden`) must refuse a missing id rather than default to the home *and create it* as a side effect
@@ -167,7 +173,7 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 
 ### `src/main/services/localAgents/localAgentService.ts`
 - `configure(getUserId)` — registers the open-in roots provider and the watcher deps. Runs once, from the IPC registrar
-- `list(userId)` — cached scan per root + `watchRoot`, then `overlayEnabled`
+- `list(userId)` — one `tryEnsureHome`, whose answer becomes `homeAccess`, then a cached scan per root + `watchRoot`, then `overlayEnabled`. The roots come from `rootRows` / `rootDtos` rather than `listRootRows` / `listRoots` so the home is attempted once and that one answer is what the renderer sees
 - `overlayEnabled(userId, agents)` — folds the row's `enabled` back onto every scanned snapshot
 - `get(userId, agentId)` — always a fresh scan; the agent page is watched while editing
 - `locate(userId, agentId)` — id → `{root, agentDir}` **through the index row**, never from a renderer-supplied string
@@ -202,6 +208,7 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 | Setting | Where | Notes |
 |---|---|---|
 | `localAgentsHome` | `src/shared/appSettings.ts`, default `''` in `src/main/db/appSettings.ts` | `''` means the built-in default `~/Documents/CinnaAgents`. Kept as a string, not `string \| null`, so the service's `typeof` check works |
+| `localAgentsHomeAcknowledged` | same files, default `''` | JSON `{"<path>": true}` — the home paths the user has had explained before the app writes into a macOS-guarded folder. Documented with [The Agents Folder Question](home_access_tech.md#configuration) |
 
 Validation happens twice, on purpose:
 
@@ -225,7 +232,7 @@ The contract root, template trees and `layout.json` come from `src/main/kit/cont
 
 ## Error Codes
 
-`LocalAgentError` (`src/main/errors.ts`): `not_found`, `root_not_found`, `root_immutable`, `invalid_path`, `already_exists`, `invalid_input`, `file_modified`, `turn_in_progress`, `write_failed`. Kit-level failures keep using `KitError` (`manifest_modified`, `manifest_invalid_json`, `contract_missing`, …); `folder_immutable` is on `AgentErrorCode`, deliberately distinct from `remote_immutable` whose renderer story ("managed by Cinna sync") would be wrong here.
+`LocalAgentError` (`src/main/errors.ts`): `not_found`, `root_not_found`, `root_immutable`, `invalid_path`, `already_exists`, `invalid_input`, `file_modified`, `turn_in_progress`, `home_consent_required`, `home_access_denied`, `write_failed`. The two home codes are [The Agents Folder Question](home_access_tech.md#error-codes)'s: neither is a failure to display, and `home_access_denied` is split from `write_failed` precisely because its only fixes — another folder, or a switch in System Settings — are things the app can offer. Kit-level failures keep using `KitError` (`manifest_modified`, `manifest_invalid_json`, `contract_missing`, …); `folder_immutable` is on `AgentErrorCode`, deliberately distinct from `remote_immutable` whose renderer story ("managed by Cinna sync") would be wrong here.
 
 A stale write reports **two** codes because two writers raise it — `KitError('manifest_modified')` from `manifestIo.writeIfUnchanged` and `LocalAgentError('file_modified')` from `writeTextIfUnchanged`. Both are listed in `STALE_WRITE_ERROR_CODES`, both mean "reload before saving", and neither may be retried. A single `invalid_input` for both would leave the page unable to tell a bad value from an assistant's concurrent edit.
 

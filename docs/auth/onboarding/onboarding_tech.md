@@ -50,7 +50,7 @@ No schema changes. The feature only writes to existing tables via existing servi
 | `auth:login` | `cinna-confirm`'s **Switch to it**, when a profile for the link's origin already exists |
 | `connect:get-pending` / `connect:consume` / `connect:intent` | The buffered deep link that opens the screen on `cinna-confirm` |
 | `localdev:get-state` / `localdev:consent` / `localdev:state` | The `localdev` step's state and the consent answer |
-| `local-agent:roots-list` | The `localdev` step reads the Agents Home purely to name the folder in the consent copy |
+| `local-agent:home-state` | The `localdev` step reads the Agents Home purely to name the folder in the consent copy. **This channel creates nothing** and is the one local-agent channel with no activation gate, both for the same reason: it is called from a first-run screen, and it used to be `local-agent:roots-list`, which runs `ensureHome` — so naming the folder created it and raised the macOS Documents-folder prompt in the middle of signing in ([The Agents Folder Question](../../agents/local_agents/home_access.md)) |
 
 Onboarding introduces no IPC channels of its own; the last three rows belong to the deep-link, local-development and local-agents features.
 

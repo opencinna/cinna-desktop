@@ -53,7 +53,7 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 ### Renderer
 - `src/renderer/src/stores/localDev.store.ts` — `useLocalDevStore`: `state`, `subscribed`, `answeredHosts`, `subscribe()`, `set()`, `consent()`, `resetConsent()`, `repair()`, `openWorkspace()`
 - `src/renderer/src/hooks/useLocalDev.ts` — `useLocalDev()`, subscribes on mount
-- `src/renderer/src/hooks/useAgentsHomeHint.ts` — `useAgentsHomeHint(enabled?)`: `<AgentsHome>/Cloud` for the consent copy, from `localAgents.rootsList()`. One hook because three surfaces ask the same question and all three only use the answer to fill in a sentence; `''` until known and on failure, so a caller with no path leaves the line out rather than promising a folder it cannot name
+- `src/renderer/src/hooks/useAgentsHomeHint.ts` — `useAgentsHomeHint(enabled?)`: `<AgentsHome>/Cloud` for the consent copy, from `localAgents.homeState()`. One hook because three surfaces ask the same question and all three only use the answer to fill in a sentence; `''` until known and on failure, so a caller with no path leaves the line out rather than promising a folder it cannot name. **It reads the path and does not create it.** It used to go through `rootsList()`, which runs `ensureHome` — so a sentence naming the agents folder created it, and on macOS raised the Documents-folder permission prompt in the middle of signing in, before the app had said a word about agents ([The Agents Folder Question](../local_agents/home_access.md))
 - `src/renderer/src/components/localdev/LocalDevConsentPanel.tsx` — the shared question/progress/failure/ready panel
 - `src/renderer/src/components/localdev/LocalDevOnboardingStep.tsx` — the `localdev` onboarding step
 - `src/renderer/src/components/localdev/LocalDevConsentModal.tsx` — the same panel over an app that is past first run
@@ -97,7 +97,7 @@ Two rules hold across all of them:
 
 ### `src/main/localdev/localDevService.ts`
 
-`runReconcile(userId, force)` in order (`prefetchEngine(generation)` is started just before step 6 and awaited just before step 11):
+`runReconcile(userId, force)` in order (`prefetchEngine(generation)` is started just before step 6 and awaited just before step 12):
 
 1. `userRepo.get(userId)` — not a `cinna_user` with a `cinnaServerUrl` → `idle` and return
 2. `force` → `clearEndpointCache()`
@@ -105,15 +105,16 @@ Two rules hold across all of them:
 4. Missing `cinna_cli_version` **or** `mutagen_version` → `unsupported/server`. (The absence of the whole block and a half-filled block are the same answer)
 5. `host = new URL(serverUrl).host`; consent lookup. Without `force`: `undefined` → `consent`, `false` → `declined`. With `force` and anything but `true`: write `true` and continue
 6. `toolchain.ensure(pins, onProgress)`, or `.repair(…)` when `reinstallToolchain` — `force && state.phase === 'attention' && state.reason === 'toolchain'`, captured **before the first `setState`** overwrites the reason the run was started. Then `toolchain.toolchainEnv(pins)`. A `ToolchainError` goes through `fromToolchainError`
-7. `mkdir(dirname(workspacePath))` — only the **`Cloud/` parent**. `ensureHome` does not create `Cloud/`; it appears on demand here, the first time a server needs one. cinna-cli creates the workspace directory itself and refuses one that already holds a `.cinna/account.json`, so the split is "the app owns the shape of the agents home, cinna-cli owns the workspace"
-8. `.cinna/account.json` absent → `createWorkspace`
-9. `readAccountStatus` (60 s ceiling). `token === 'expired'` → `refreshAccountToken` and re-read; `token === 'unreachable'` → `attention/network`, because the workspace is fine and calling it a workspace problem sends the user looking in the wrong place
-10. `context_package.state === 'behind'` → `cinna account refresh-context` (5 min ceiling), failure logged only
-11. `await engine`, then `ready { workspacePath, cliVersion, cinnaBinPath }`
+7. `agentsHomeService.prepare(userId)` — the agents home has to exist before its `Cloud/` can, and on macOS creating it for the first time raises the Documents-folder prompt. `prepare` takes that prompt asynchronously and records that the folder has been explained, which it has: the consent screen that got the reconciler here named it. Without this step `workspacePathFor` reaches `ensureHome` and is refused for want of an explanation the user has already read. A non-`ready` answer ends the reconcile at `attention / workspace` with a detail naming the folder and the fix — branched on the home's `guarded` flag, not on the platform, since a read-only or root-owned folder fails the same way on Linux, where System Settings → Privacy & Security is not a place
+8. `mkdir(dirname(workspacePath))` — only the **`Cloud/` parent**. `ensureHome` does not create `Cloud/`; it appears on demand here, the first time a server needs one. cinna-cli creates the workspace directory itself and refuses one that already holds a `.cinna/account.json`, so the split is "the app owns the shape of the agents home, cinna-cli owns the workspace"
+9. `.cinna/account.json` absent → `createWorkspace`
+10. `readAccountStatus` (60 s ceiling). `token === 'expired'` → `refreshAccountToken` and re-read; `token === 'unreachable'` → `attention/network`, because the workspace is fine and calling it a workspace problem sends the user looking in the wrong place
+11. `context_package.state === 'behind'` → `cinna account refresh-context` (5 min ceiling), failure logged only
+12. `await engine`, then `ready { workspacePath, cliVersion, cinnaBinPath }`
 
 `reconcile` wraps that in the single-flight promise and a `.catch` that turns a thrown bug into `attention/workspace` — the user still needs a state they can act on rather than a spinner that never resolves.
 
-**Every stopping failure calls `markFailed` before `setState`**, so the checklist and the phase always agree. The `mkdir(dirname(workspacePath))` branch at step 7 was the one that did not, and set `attention` with the engine row still spinning beside it; it now goes through `markFailed(detail, 'workspace')` like the toolchain and cinna-cli branches.
+**Every stopping failure calls `markFailed` before `setState`**, so the checklist and the phase always agree. The `mkdir(dirname(workspacePath))` branch at step 8 was the one that did not, and set `attention` with the engine row still spinning beside it; it now goes through `markFailed(detail, 'workspace')` like the toolchain and cinna-cli branches.
 
 `setConsent(userId, host, accepted)` writes the answer, then **awaits `inFlight` before reconciling**. The answer now arrives from the connect screen moments after activation, and the run activation started read the consent before this one wrote it — joining it would return `consent` and drop the answer.
 
@@ -139,7 +140,7 @@ The checklist helpers, all operating on the module-level `tasks` array: `resetTa
 
 `mintSetupCommand` — `POST` to `localDev.setup_token_endpoint || '/api/v1/cli/account/setup-tokens'` via `cinnaFetch`. Branches: no `setup_command` in the response → `attention/workspace`; `CinnaApiError('reauth_required')` with `detail === '403'` → **`unsupported/role`**; any other `reauth_required` → `attention/token_expired`; anything else → `attention/network`.
 
-`workspacePathFor(userId, host)` — `agentsHomeService.ensureHome(userId).path` + `getLayout(home).workshop.cloud_dir` + `hostDirName(host)`. `Cloud` is read from the kit contract's layout, never spelled as a literal here. `hostDirName` replaces `:` only (a hostname cannot contain a path separator).
+`workspacePathFor(userId, host)` — `agentsHomeService.ensureHome(userId).path` + `getLayout(home).workshop.cloud_dir` + `hostDirName(host)`. `ensureHome` refuses a guarded home nobody has been told about, which is why the reconciler runs `prepare` before ever calling this. `Cloud` is read from the kit contract's layout, never spelled as a literal here. `hostDirName` replaces `:` only (a hostname cannot contain a path separator).
 
 `addToPath()` — `lstat` the target; a symlink already pointing inside `toolchain.root()` is unlinked and recreated (a version bump); **anything else is refused with a reason naming the path**.
 
