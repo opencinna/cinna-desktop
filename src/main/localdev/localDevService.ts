@@ -921,6 +921,26 @@ async function reconcileOnce(
   // server may pin a cinna-cli older than the protocol this app prefers, and
   // handing that one `--json` fails it before it does anything.
   const caps = await probeCliCapabilities(cinnaBin, cliVersion, env)
+
+  // The agents home has to exist before its `Cloud/` can, and on macOS creating
+  // it for the first time raises the Documents-folder prompt. `prepare` takes
+  // that prompt asynchronously and records that the folder has been explained —
+  // which it has: the consent screen that got us here names it. Without this,
+  // `workspacePathFor` would reach `ensureHome` and be refused for want of an
+  // explanation the user has already read.
+  const home = await agentsHomeService.prepare(userId)
+  if (home.access !== 'ready') {
+    // `guarded` rather than the platform, and rather than assuming a refusal is
+    // always TCC: a read-only or root-owned folder fails the same way on Linux,
+    // where System Settings → Privacy & Security is not a place.
+    const detail = home.guarded
+      ? `macOS did not allow Cinna to create the agents folder at ${home.path}. Choose another folder under Settings → Local Agents, or allow it under System Settings → Privacy & Security → Files and Folders.`
+      : `Cinna could not create the agents folder at ${home.path}. Choose another folder under Settings → Local Agents.`
+    markFailed(detail, 'workspace')
+    setState({ phase: 'attention', reason: 'workspace', detail })
+    return state
+  }
+
   const workspacePath = workspacePathFor(userId, host)
 
   // Only the `Cloud/` parent. cinna-cli creates the workspace directory itself

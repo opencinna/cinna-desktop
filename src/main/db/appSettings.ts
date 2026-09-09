@@ -30,6 +30,8 @@ export const DEFAULTS: AppSettingsSchema = {
   localAgentsAutoOpen: false,
   // Work Complexity is the default view; the raw model list is opt-in.
   localAgentsModelAdvanced: false,
+  // JSON `{ "<path>": true }`. Empty = the agents home has never been explained.
+  localAgentsHomeAcknowledged: '',
   // JSON `{ "<host>": boolean }`. Empty = nobody has been asked yet.
   localDevConsent: ''
 }

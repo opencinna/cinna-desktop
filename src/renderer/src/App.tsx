@@ -8,6 +8,7 @@ import { OnboardingScreen } from './components/auth/OnboardingScreen'
 import { ReauthModal } from './components/auth/ReauthModal'
 import { ConnectIntentModal } from './components/auth/ConnectIntentModal'
 import { LocalDevConsentModal } from './components/localdev/LocalDevConsentModal'
+import { AgentsHomeModal } from './components/agents/local/AgentsHomeModal'
 import { SyncSetupModal } from './components/sync/SyncSetupModal'
 import { LogsOverlay } from './components/logger/LogsOverlay'
 import { AgentStatusOverlay } from './components/agents/AgentStatusOverlay'
@@ -201,6 +202,11 @@ function App(): React.JSX.Element {
               step of the onboarding screen, and two surfaces asking it at once
               would be two answers racing to be recorded. */}
           <LocalDevConsentModal />
+          {/* Inside the gate for the same reason as its neighbours, and for one
+              of its own: during first run nothing has asked for an agent yet,
+              and explaining the agents folder to someone who is still choosing
+              a provider is the interruption this modal was built to remove. */}
+          <AgentsHomeModal />
         </OnboardingGate>
         <LogsOverlay />
         <AgentStatusOverlay />

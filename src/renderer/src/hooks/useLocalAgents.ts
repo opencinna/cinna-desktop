@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import type {
   AddAgentFolderInput,
   AddAgentFolderResult,
   AgentCredentialBinding,
   AgentRootDto,
+  AgentsHomeAccess,
+  AgentsHomeState,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
   DeleteLocalAgentResult,
@@ -25,6 +27,7 @@ import {
   isStaleWriteError,
   unwrapLocalAgentOutcome
 } from '../../../shared/localAgents'
+import { useAgentsHomeStore } from '../stores/agentsHome.store'
 import {
   editFileText,
   receiveFileSnapshot,
@@ -103,6 +106,7 @@ const BLOCKED_RETRY_MS = 3000
 export interface LocalAgentsSnapshot {
   roots: AgentRootDto[]
   agents: LocalAgentDto[]
+  homeAccess: AgentsHomeAccess
 }
 
 /** Every root and every folder agent in them. Scans on each fetch. */
@@ -111,6 +115,123 @@ export function useLocalAgents() {
     queryKey: LOCAL_AGENTS_KEY,
     queryFn: () => window.api.localAgents.list()
   })
+}
+
+/**
+ * Raise the agents-folder question while this surface is mounted.
+ *
+ * Called by the Agents sidebar and by nothing else, deliberately. It is the one
+ * surface whose presence means "the user went looking for an agent", which is
+ * the only moment the folder is worth interrupting for. Settings reads the same
+ * state and reports it in a row instead: someone who has just forgotten their
+ * last root is managing folders on purpose, and a modal landing over the button
+ * they were reaching for is the interruption this whole arrangement removes.
+ */
+export function useRaiseAgentsHomeQuestion(): void {
+  const access = useAgentsHomeQuestion()
+  const request = useAgentsHomeStore((s) => s.request)
+  useEffect(() => {
+    if (access) request(access)
+  }, [access, request])
+}
+
+/**
+ * The folder question as something the user needs to act on — which it is only
+ * when there is **nowhere to put an agent**.
+ *
+ * A user who adopted their own workshop has a working app; the home is then a
+ * Settings matter, not a modal. Raising it anyway would interrupt someone whose
+ * agents are right there in the sidebar, to ask about a folder they have chosen
+ * not to use. Settings reads the raw `homeAccess` instead, because reporting
+ * where the home is *is* its job.
+ */
+function actionableAccess(snapshot: LocalAgentsSnapshot): AgentsHomeAccess {
+  return snapshot.roots.length > 0 ? 'ready' : snapshot.homeAccess
+}
+
+/**
+ * The agents-folder question, for the surfaces that have to act on it — the
+ * sidebar list, its `+`, and its empty main pane.
+ *
+ * `ready` whenever any root is registered: see {@link actionableAccess}.
+ *
+ * Straight from main, which is the point: a refusal is remembered in the main
+ * process for the life of the process (`homeAccessService`), so `list` reports
+ * `denied` itself. The renderer briefly kept its own latch for this, and two
+ * answers to "is the folder usable?" is one too many.
+ *
+ * `undefined` until the list has landed: not knowing is not the same as ready,
+ * and a surface that guessed would flash the wrong empty state.
+ */
+export function useAgentsHomeQuestion(): AgentsHomeAccess | undefined {
+  const { data } = useLocalAgents()
+  return data && actionableAccess(data)
+}
+
+/** Cache key of the agents-home state — path, and whether it can be used. */
+export const AGENTS_HOME_KEY = ['agents-home'] as const
+
+/**
+ * Where the agents folder is and whether it exists yet.
+ *
+ * Creates nothing, on either side of the bridge — which is what lets the modal
+ * that explains the folder name it, and the onboarding copy quote it, without
+ * the act of asking being the write being explained.
+ */
+export function useAgentsHome() {
+  return useQuery<AgentsHomeState>({
+    queryKey: AGENTS_HOME_KEY,
+    queryFn: () => window.api.localAgents.homeState()
+  })
+}
+
+/**
+ * Create the agents folder.
+ *
+ * On macOS the system's Documents-folder prompt appears inside this call and
+ * stays up until the user answers, so the mutation can be pending for a long
+ * time with nothing to show — the button that starts it says what is about to
+ * happen rather than leaving a spinner to explain itself.
+ *
+ * A refusal resolves as `denied`; it is not an error. The caller's next move is
+ * to ask a different question, not to report a failure.
+ */
+export function useGrantAgentsHome() {
+  const queryClient = useQueryClient()
+  return useMutation<AgentsHomeState>({
+    mutationFn: () => window.api.localAgents.homeGrant(),
+    onSuccess: (state) => afterHomeChange(queryClient, state)
+  })
+}
+
+/** Move the agents folder somewhere else and create it there. Opens the OS picker. */
+export function useChooseAgentsHome() {
+  const queryClient = useQueryClient()
+  return useMutation<{ cancelled: true } | { cancelled: false; state: AgentsHomeState }>({
+    mutationFn: () => window.api.localAgents.homeChoose(),
+    onSuccess: (result) => {
+      if (result.cancelled) return
+      afterHomeChange(queryClient, result.state)
+    }
+  })
+}
+
+/**
+ * Fold a new home state back into the caches that depend on it.
+ *
+ * Written into the cache rather than invalidated, so the modal's own state
+ * changes in the same commit as the answer: an invalidate would leave it
+ * rendering the question for the length of a refetch. The lists *are*
+ * invalidated — they have to go back to main to find out what is in the folder.
+ */
+function afterHomeChange(queryClient: QueryClient, state: AgentsHomeState): void {
+  queryClient.setQueryData(AGENTS_HOME_KEY, state)
+  useAgentsHomeStore.getState().request(state.access)
+  // Both outcomes, not just the good one. A refusal changes what main reports
+  // for the rest of the process, so a list left holding `needs_consent` would
+  // be the surfaces disagreeing with the dialog the user is looking at.
+  void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+  void queryClient.invalidateQueries({ queryKey: LOCAL_AGENT_ROOTS_KEY })
 }
 
 /**

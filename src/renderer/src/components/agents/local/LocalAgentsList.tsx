@@ -1,7 +1,13 @@
 import { useMemo, useState } from 'react'
 import { Circle, Plus } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
-import { useAgentCredentialBindings, useLocalAgents } from '../../../hooks/useLocalAgents'
+import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
+import {
+  useAgentCredentialBindings,
+  useAgentsHomeQuestion,
+  useLocalAgents,
+  useRaiseAgentsHomeQuestion
+} from '../../../hooks/useLocalAgents'
 import { useProviders } from '../../../hooks/useProviders'
 import { agentSubline, groupAgentsByRoot } from '../../../utils/localAgents'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
@@ -91,6 +97,9 @@ export function LocalAgentsList(): React.JSX.Element {
     [data]
   )
   const total = data?.agents.length ?? 0
+  const homeAccess = useAgentsHomeQuestion()
+  // The Agents tab being open is what makes the folder question worth asking.
+  useRaiseAgentsHomeQuestion()
 
   /**
    * Agents whose resolved credential cannot run.
@@ -123,12 +132,22 @@ export function LocalAgentsList(): React.JSX.Element {
           Agents
         </span>
         <button
-          onClick={() => setCreating(true)}
+          onClick={() =>
+            homeAccess && homeAccess !== 'ready'
+              ? useAgentsHomeStore.getState().reopen(homeAccess)
+              : setCreating(true)
+          }
           className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           // Not "New agent" any more: this opens a choice between scaffolding
           // one and pointing at a folder that already is one. It also has to
           // differ from the "New agent" card the dialog then shows, or the two
           // are one ambiguous name to a screen reader and to every test.
+          //
+          // With no agents folder it raises the folder question instead. The
+          // dialog it would otherwise open offers to "create a folder in your
+          // agents folder" — the one that does not exist — so the click ends in
+          // a step that cannot finish, which is the same dead end the empty
+          // state below exists to prevent (ux_rules rule 9).
           title="Add an agent"
           aria-label="Add an agent"
         >
@@ -142,6 +161,25 @@ export function LocalAgentsList(): React.JSX.Element {
         ) : error ? (
           <div className="px-2.5 py-2 text-[10px] text-[var(--color-danger)]">
             {error instanceof Error ? error.message : 'Could not read the agents folder.'}
+          </div>
+        ) : homeAccess && homeAccess !== 'ready' ? (
+          /* An empty list here is not "no agents yet" — the folder they would
+             live in has not been made. Saying the wrong one of those sends the
+             user to a `+` that opens a dialog which cannot finish (ux_rules
+             rule 9). The button is the way back from the modal's "Not now". */
+          <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)] space-y-2">
+            <div>Your agents need a folder.</div>
+            {/* Named for the question it opens, not for the button inside it.
+                "Choose folder…" belongs to the control that opens the OS
+                picker; a trigger one click away wearing the same name is two
+                actions under one name, and one locator matching both
+                (ux_rules rule 10). */}
+            <button
+              onClick={() => useAgentsHomeStore.getState().reopen(homeAccess)}
+              className="text-xs font-medium text-[var(--color-accent)] hover:underline"
+            >
+              {homeAccess === 'denied' ? 'Pick another folder' : 'Set one up'}
+            </button>
           </div>
         ) : total === 0 && groups.length <= 1 ? (
           <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">

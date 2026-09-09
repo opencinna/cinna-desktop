@@ -172,6 +172,19 @@ export type LocalAgentErrorCode =
   | 'file_modified'
   /** A turn holds the per-agent lock; the desktop never writes mid-stream. */
   | 'turn_in_progress'
+  /**
+   * The agents home is in a macOS-guarded folder and the user has not been told
+   * yet. Not a failure of anything the user did: the caller's job is to explain
+   * the folder and call `homeAccessService.grant`, not to report an error.
+   */
+  | 'home_consent_required'
+  /**
+   * macOS refused the write into the agents home — the Documents-folder prompt
+   * was declined, or the grant was revoked in System Settings. Distinct from
+   * `write_failed` because the only fix is a different folder or a flipped
+   * switch, and both are things the app can offer.
+   */
+  | 'home_access_denied'
   /** Creating the home, copying a template, or writing a file failed. */
   | 'write_failed'
 

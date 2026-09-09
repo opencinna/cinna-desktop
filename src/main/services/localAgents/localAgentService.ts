@@ -70,6 +70,7 @@ import {
   type AddAgentFolderInput,
   type AddAgentFolderResult,
   type AgentRootDto,
+  type AgentsHomeAccess,
   type CreateLocalAgentInput,
   type DeleteLocalAgentInput,
   type DeleteLocalAgentResult,
@@ -116,6 +117,16 @@ const PROMPT_PATHS = LOCAL_AGENT_PROMPT_PATHS
 export interface LocalAgentListResult {
   roots: AgentRootDto[]
   agents: LocalAgentDto[]
+  /**
+   * Whether the agents home is usable — carried on the list rather than left to
+   * a query of its own so the sidebar's first paint already knows the answer.
+   *
+   * `needs_consent` and `denied` both come back as an **empty** list, not as a
+   * rejection: neither is a broken app, and a red error where the agents go
+   * would be the wrong thing to say about a folder that has simply not been
+   * created yet.
+   */
+  homeAccess: AgentsHomeAccess
 }
 
 /**
@@ -525,7 +536,12 @@ export const localAgentService = {
 
   /** Every root and every folder agent in them. */
   list(userId: string): LocalAgentListResult {
-    const roots = agentsHomeService.listRootRows(userId)
+    // One attempt at the home, whose answer is reported; the accessors below
+    // then read the roots as they stand. Going through `listRootRows` and
+    // `listRoots` would try to create the home two more times, and only the
+    // first attempt's answer would have reached the renderer.
+    const homeAccess = agentsHomeService.tryEnsureHome(userId)
+    const roots = agentsHomeService.rootRows(userId)
     const agents: LocalAgentDto[] = []
     for (const root of roots) {
       // Cached: the watcher is what notices a change, and it marks the root
@@ -537,8 +553,9 @@ export const localAgentService = {
       watcherService.watchRoot(root)
     }
     return {
-      roots: agentsHomeService.listRoots(userId),
-      agents: this.overlayEnabled(userId, agents)
+      roots: agentsHomeService.rootDtos(userId),
+      agents: this.overlayEnabled(userId, agents),
+      homeAccess
     }
   },
 
@@ -1132,7 +1149,11 @@ export const localAgentService = {
     return { agentId, trashed: trashFolder }
   },
 
-  /** Roots, for the settings screen. */
+  /**
+   * Roots, for the settings screen. Missing the home while it is waiting on the
+   * user's answer, and complete in every other respect — see
+   * {@link agentsHomeService.tryEnsureHome}.
+   */
   listRoots(userId: string): AgentRootDto[] {
     return agentsHomeService.listRoots(userId)
   },

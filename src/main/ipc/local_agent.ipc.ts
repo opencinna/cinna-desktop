@@ -1,4 +1,4 @@
-import { dialog } from 'electron'
+import { dialog, type OpenDialogOptions } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { localAgentService } from '../services/localAgents/localAgentService'
@@ -6,6 +6,8 @@ import { runtimeService } from '../services/localAgents/runtimeService'
 import { providerService } from '../services/providerService'
 import { localAgentDraftService } from '../services/localAgents/draftService'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
+import { homeAccessService } from '../services/localAgents/homeAccessService'
+import { appSettingsService } from '../services/appSettingsService'
 import { gitService } from '../services/localAgents/gitService'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
@@ -18,6 +20,8 @@ import type {
   AgentCredentialBinding,
   AddAgentFolderResult,
   AgentRootDto,
+  AgentsHomeAccess,
+  AgentsHomeState,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
   DeleteLocalAgentResult,
@@ -90,9 +94,95 @@ export function registerLocalAgentHandlers(): void {
 
   ipcHandle(
     'local-agent:list',
-    (): { roots: AgentRootDto[]; agents: LocalAgentDto[] } => {
+    (): { roots: AgentRootDto[]; agents: LocalAgentDto[]; homeAccess: AgentsHomeAccess } => {
       userActivation.requireActivated()
       return localAgentService.list(getSettingsScopeUserId())
+    }
+  )
+
+  /**
+   * Where the agents home is, and whether it can be used yet.
+   *
+   * Deliberately **not** activation-gated: the onboarding copy names this folder
+   * before there is an activated user to gate on. And on a fresh install it
+   * touches no files, which is what lets the modal ask about the folder without
+   * the asking being the write it is explaining — see `homePath.ts` for the
+   * exact shape of that guarantee.
+   */
+  ipcHandle('local-agent:home-state', (): AgentsHomeState => {
+    return homeAccessService.state(getSettingsScopeUserId())
+  })
+
+  /**
+   * Create the agents home now that the user has been shown what it is for.
+   *
+   * The macOS Documents prompt lands during this call — which is why it is a
+   * call of its own, made from a button the user pressed, rather than a side
+   * effect of whichever screen happened to ask where the agents live.
+   */
+  ipcHandle('local-agent:home-grant', async (): Promise<AgentsHomeState> => {
+    userActivation.requireActivated()
+    return agentsHomeService.prepare(getSettingsScopeUserId())
+  })
+
+  /**
+   * Move the agents home somewhere else and create it there.
+   *
+   * The recovery from a refused Documents folder, and the only way to change
+   * the home at all. The path comes from the OS picker for the same reason
+   * `:root-add`'s does — a folder the user chose in a system dialog is
+   * trustworthy, a string the renderer supplied is not — and choosing it in
+   * that dialog is also what grants access to it, so the folder that follows a
+   * refusal never raises a second prompt.
+   */
+  ipcHandle(
+    'local-agent:home-choose',
+    async (): Promise<{ cancelled: true } | { cancelled: false; state: AgentsHomeState }> => {
+      userActivation.requireActivated()
+      const win = getMainWindow()
+      const options: OpenDialogOptions = {
+        title: 'Choose where to keep your agents',
+        properties: ['openDirectory', 'createDirectory'],
+        buttonLabel: 'Keep agents here'
+      }
+      const result = win
+        ? await dialog.showOpenDialog(win, options)
+        : await dialog.showOpenDialog(options)
+      const picked = result.filePaths[0]
+      if (result.canceled || !picked) return { cancelled: true }
+
+      // Through the settings service, so the picked folder faces the same path
+      // rules as a value typed into the store — the picker can reach `/` and
+      // the user's home itself, and neither may become a folder this app
+      // scaffolds into.
+      //
+      // `prepare` reads the setting to know which folder to make, so the value
+      // has to move first — but a folder that could not be created must not
+      // stay the configured home. Left there, the next `ensureHome` takes its
+      // "the home moved" branch and repoints the home root at a folder that
+      // does not exist. So: move it, try it, and put it back if it did not work.
+      const previous = appSettingsService.getAll().localAgentsHome
+      appSettingsService.set('localAgentsHome', picked)
+      let state: AgentsHomeState
+      try {
+        state = await agentsHomeService.prepare(getSettingsScopeUserId())
+      } catch (err) {
+        appSettingsService.set('localAgentsHome', previous)
+        throw err
+      }
+      if (state.access !== 'ready') {
+        appSettingsService.set('localAgentsHome', previous)
+        // Thrown rather than returned. A folder the user chose in a system
+        // dialog and could not be written to is a failure of *that* click, and
+        // it belongs in the dialog's message slot beside the button they
+        // pressed — not as a new state describing a home that has just been
+        // rolled back underneath it.
+        throw new LocalAgentError(
+          'home_access_denied',
+          `Cinna could not create an agents folder in ${picked}. Pick another one.`
+        )
+      }
+      return { cancelled: false, state }
     }
   )
 

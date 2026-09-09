@@ -35,6 +35,9 @@ let AGENT: LocalAgentDto
 
 vi.mock('../../../hooks/useLocalAgents', () => ({
   useLocalAgent: () => ({ data: AGENT, isLoading: false, error: null }),
+  // The page's empty placeholder branches on whether there is an agents folder
+  // at all; with one, it reads as it always did.
+  useAgentsHomeQuestion: () => 'ready',
   useDraftLocalAgent: () => ({ isPending: false, data: undefined, mutate: vi.fn() }),
   useOpenAgentPath: () => ({ mutate: vi.fn() }),
   useRescanLocalAgents: () => ({ mutate: vi.fn(), isPending: false }),

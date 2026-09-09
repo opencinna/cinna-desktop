@@ -53,8 +53,13 @@ mac:
   extendInfo:
     - NSCameraUsageDescription: Application requests access to the device's camera.
     - NSMicrophoneUsageDescription: Application requests access to the device's microphone.
-    - NSDocumentsFolderUsageDescription: Application requests access to the user's Documents folder.
-    - NSDownloadsFolderUsageDescription: Application requests access to the user's Downloads folder.
+    # Shown inside the system's Files-and-Folders prompt, under the app name. It
+    # is the only explanation the user gets if the prompt ever arrives ahead of
+    # the app's own — so it names the folder and says why it exists, rather than
+    # electron-vite's default, which reads like a demand from nowhere. The
+    # in-app explainer that normally comes first lives in `homeAccessService`.
+    - NSDocumentsFolderUsageDescription: Cinna keeps each of your agents in its own folder under Documents/CinnaAgents, so you can open them in an editor and keep them when you reinstall.
+    - NSDownloadsFolderUsageDescription: Cinna saves files you download from a chat to your Downloads folder.
     - NSAppleEventsUsageDescription: Cinna needs to control Terminal or iTerm to open a terminal in your agent folder.
   notarize: true
   target:

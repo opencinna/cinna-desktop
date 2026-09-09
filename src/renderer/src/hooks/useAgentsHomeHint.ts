@@ -10,6 +10,13 @@ import { useEffect, useState } from 'react'
  * `workshop.cloud_dir`; it is spelled here purely as a hint, and the main
  * process resolves the real path from the contract when it creates the folder.
  *
+ * **Reads the path; does not create it.** This used to go through the roots
+ * list, which runs `ensureHome` — so a sentence naming the agents folder
+ * created it, and on macOS raised the Documents-folder permission prompt in the
+ * middle of signing in, before the app had said a word about agents. It now
+ * asks `local-agent:home-state`, which touches nothing. See
+ * `main/services/localAgents/homeAccessService.ts`.
+ *
  * Returns `''` until it is known, and on failure. A caller that has no path
  * leaves the line out rather than promising a folder it cannot name, which is
  * why nothing here reports an error: there is no version of this worth
@@ -26,11 +33,9 @@ export function useAgentsHomeHint(enabled = true): string {
     if (!enabled) return
     let cancelled = false
     void window.api.localAgents
-      .rootsList()
-      .then((roots) => {
-        if (cancelled) return
-        const home = roots.find((r) => r.isDefault) ?? roots[0]
-        if (home) setHint(`${home.path}/Cloud`)
+      .homeState()
+      .then((home) => {
+        if (!cancelled) setHint(`${home.path}/Cloud`)
       })
       .catch(() => undefined)
     return () => {

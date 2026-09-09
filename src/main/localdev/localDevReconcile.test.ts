@@ -82,7 +82,12 @@ vi.mock('../auth/cinna-oauth', () => ({
 
 const agentsHome = mkdtempSync(join(tmpdir(), 'cinna-localdev-'))
 vi.mock('../services/localAgents/agentsHomeService', () => ({
-  agentsHomeService: { ensureHome: () => ({ path: agentsHome }) }
+  agentsHomeService: {
+    ensureHome: () => ({ path: agentsHome }),
+    // The reconcile calls this before it can name the workspace: on macOS it is
+    // what takes the Documents-folder prompt, off it a plain `mkdir`.
+    prepare: async () => ({ path: agentsHome, guarded: false, access: 'ready' })
+  }
 }))
 vi.mock('../kit/contractStore', () => ({
   getLayout: () => ({ workshop: { cloud_dir: 'Cloud' } })

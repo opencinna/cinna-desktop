@@ -4,6 +4,7 @@ import { isCredentialActive, isCredentialUsable } from '../../../../shared/crede
 import { credentialOptionLabel } from '../../utils/credentialLabel'
 import {
   useAddAgentRoot,
+  useAgentsHome,
   useLocalAgents,
   useRemoveAgentRoot,
   useRescanLocalAgents
@@ -23,6 +24,7 @@ import { RootRepositoryDialog } from './RootRepositoryDialog'
 import { useEngineState, useStartEngine } from '../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { useAgentsHomeStore } from '../../stores/agentsHome.store'
 import { ForgetAgentRootDialog } from './ForgetAgentRootDialog'
 import {
   SettingsAddButton,
@@ -72,6 +74,13 @@ import {
  */
 export function LocalAgentsSettingsSection(): React.JSX.Element {
   const { data, isLoading } = useLocalAgents()
+  /**
+   * The home's own state, not the actionable question the sidebar asks. This
+   * screen reports where the agents folder is whether or not other roots make
+   * the app usable without it — that is what it is for.
+   */
+  const homeAccess = data?.homeAccess
+  const { data: home } = useAgentsHome()
   const { data: tools } = useLocalTools()
   const { data: providers } = useProviders()
   const { data: defaultMode } = useDefaultChatMode()
@@ -248,7 +257,49 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               <SettingsHint>Loading…</SettingsHint>
             </SettingsRow>
           ) : (
-            roots.map((root) => {
+            <>
+            {homeAccess && homeAccess !== 'ready' && (
+            /**
+             * The home is missing from the list below, not the list itself —
+             * a folder the user adopted is still there and still theirs. This
+             * row is the home's place in it until it exists, and it is where a
+             * user who dismissed the folder question, or whose Documents folder
+             * macOS refused, comes to finish it. The row carries the button
+             * that resolves what it reports (ux_rules rule 12).
+             */
+            <SettingsRow className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                {/* The label carries the *state*, not the section title said a
+                    second time — this is the only row in this state, directly
+                    under a heading that already reads "Agent Folders"
+                    (ux_rules rule 7). */}
+                <SettingsLabel>
+                  {homeAccess !== 'denied'
+                    ? 'No agents folder yet'
+                    : home?.guarded
+                      ? 'macOS did not allow that folder'
+                      : 'That folder could not be written to'}
+                </SettingsLabel>
+                {/* Wrapping, not truncated. The path is the row's only fact,
+                    and at the 800px minimum window `truncate` cut it mid-folder
+                    — on the refused branch the folder name itself was gone
+                    (ux_rules rule 7). */}
+                <SettingsHint className="break-all">{home?.path ?? ''}</SettingsHint>
+              </div>
+              <SettingsButton
+                onClick={() => useAgentsHomeStore.getState().reopen(homeAccess)}
+                // The visible name, in full: an accessible name that does not
+                // contain it leaves "click Set up" with nothing to match
+                // (ux_rules rule 10). And neither branch may borrow the modal's
+                // "Choose folder…", which opens the OS picker one click later.
+                aria-label={homeAccess === 'denied' ? 'Pick another folder' : 'Set up the agents folder'}
+              >
+                <FolderPlus size={13} />
+                {homeAccess === 'denied' ? 'Pick another folder' : 'Set up'}
+              </SettingsButton>
+            </SettingsRow>
+            )}
+            {roots.map((root) => {
               /**
                * One line, fixed by construction rather than by how long the
                * sentence happens to be. `line-clamp-2` here grew the row by
@@ -425,7 +476,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 )}
               </SettingsRow>
               )
-            })
+            })}
+            </>
           )}
         </SettingsRows>
 

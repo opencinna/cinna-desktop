@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Circle, MessageSquare } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
+  useAgentsHomeQuestion,
   useDraftLocalAgent,
   useLocalAgent,
   useLocalAgentGrants,
@@ -77,6 +78,8 @@ export function LocalAgentPage(): React.JSX.Element {
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
+  /** Whether there is an agents folder at all — see the placeholder below. */
+  const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
   const { data: grants } = useLocalAgentGrants(activeLocalAgentId)
   const draft = useDraftLocalAgent()
@@ -121,7 +124,13 @@ export function LocalAgentPage(): React.JSX.Element {
   if (!activeLocalAgentId) {
     return (
       <div className="flex-1 flex items-center justify-center text-sm text-[var(--color-text-muted)]">
-        Select an agent from the sidebar, or add one with +.
+        {/* The `+` is the folder question while there is no agents folder, so
+            pointing at it as the way to add an agent would name a step that
+            cannot finish — the same claim the sidebar's empty state branches
+            for (ux_rules rule 9). */}
+        {homeAccess && homeAccess !== 'ready'
+          ? 'Your agents need a folder before you can add one.'
+          : 'Select an agent from the sidebar, or add one with +.'}
       </div>
     )
   }

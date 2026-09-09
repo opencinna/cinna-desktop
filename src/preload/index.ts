@@ -7,6 +7,8 @@ import type {
   AddAgentFolderResult,
   AgentCredentialBinding,
   AgentRootDto,
+  AgentsHomeAccess,
+  AgentsHomeState,
   CreateLocalAgentInput,
   DeleteLocalAgentInput,
   DeleteLocalAgentResult,
@@ -1139,9 +1141,29 @@ const api = {
    * main re-resolves inside the agent folder before using it.
    */
   localAgents: {
-    /** Every registered root and every agent scanned from them. */
-    list: (): Promise<{ roots: AgentRootDto[]; agents: LocalAgentDto[] }> =>
-      ipcRenderer.invoke('local-agent:list'),
+    /**
+     * Every registered root and every agent scanned from them.
+     *
+     * `homeAccess` rides along because the answer decides what the sidebar
+     * shows: an empty list is either "no agents yet" or "the folder has not
+     * been created", and those want different words and a different button.
+     */
+    list: (): Promise<{
+      roots: AgentRootDto[]
+      agents: LocalAgentDto[]
+      homeAccess: AgentsHomeAccess
+    }> => ipcRenderer.invoke('local-agent:list'),
+    /** Where the agents home is and whether it can be used. Creates nothing. */
+    homeState: (): Promise<AgentsHomeState> => ipcRenderer.invoke('local-agent:home-state'),
+    /**
+     * Create the agents home. On macOS this is where the system's
+     * Documents-folder prompt appears, so call it from a button, never from a
+     * mount effect — `denied` is the user having answered no.
+     */
+    homeGrant: (): Promise<AgentsHomeState> => ipcRenderer.invoke('local-agent:home-grant'),
+    /** Pick a different home and create it there. Opens the OS folder picker. */
+    homeChoose: (): Promise<{ cancelled: true } | { cancelled: false; state: AgentsHomeState }> =>
+      ipcRenderer.invoke('local-agent:home-choose'),
     /** Which AI credential each agent's runtime resolves to — see the type. */
     credentialBindings: (): Promise<AgentCredentialBinding[]> =>
       ipcRenderer.invoke('local-agent:credential-bindings'),

@@ -100,6 +100,23 @@ export interface AppSettingsSchema {
    */
   localAgentsModelAdvanced: boolean
   /**
+   * Agents-home paths the user has been told about, as a JSON object of
+   * `{ "<path>": true }`.
+   *
+   * macOS only in effect. Creating `~/Documents/CinnaAgents` raises the
+   * system's Documents-folder prompt, and a prompt nobody expected is a prompt
+   * people refuse; the app explains the folder first and records the answer
+   * here so it explains it once. Keyed by path because the explanation is about
+   * a *place* — pointing the home at a different guarded folder later is a new
+   * thing to say, and pointing it somewhere unguarded needs nothing said at all.
+   *
+   * Only `true` is ever written. A refusal is not recorded: macOS remembers it,
+   * a retry after the user flips the switch in System Settings costs one failed
+   * `mkdir`, and a remembered "denied" would keep reporting a problem the user
+   * had already fixed.
+   */
+  localAgentsHomeAcknowledged: string
+  /**
    * Which Cinna hosts the user has agreed to set up local development for, as
    * a JSON object of `{ "<host>": true | false }`.
    *

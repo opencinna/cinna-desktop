@@ -33,7 +33,17 @@ let storedConsent: Record<string, boolean> = {}
     onState: () => () => undefined,
     getConsent: async () => storedConsent
   },
-  localAgents: { rootsList: async () => [] }
+  // The panel names the agents folder in its (?) copy. It reads the path, and
+  // deliberately does not create it — asking used to go through the roots list,
+  // which scaffolds the folder and raises the macOS Documents prompt mid
+  // sign-in.
+  localAgents: {
+    homeState: async () => ({
+      path: '/Users/test/Documents/CinnaAgents',
+      access: 'ready',
+      guarded: true
+    })
+  }
 }
 
 const { ConnectIntentPanel } = await import('./ConnectIntentPanel')

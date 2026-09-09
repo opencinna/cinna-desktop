@@ -94,6 +94,38 @@ const VALUE_CHECKS: {
    * the problem by the engine's own status line rather than by a rejected save.
    */
   /**
+   * A JSON object of `{ "<path>": true }`, or empty — the agents-home paths the
+   * user has had explained to them. Same reasoning as `localDevConsent`: the
+   * shape is checked once here rather than defended at every read.
+   *
+   * `false` is refused rather than accepted and ignored. A refusal is
+   * deliberately not recorded (see the schema note), so a `false` in this store
+   * could only come from something writing a shape this feature does not have.
+   */
+  localAgentsHomeAcknowledged: (value) => {
+    if (value.trim() === '') return
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(value)
+    } catch {
+      throw new AppSettingsError('invalid_value', 'The agents-home acknowledgement must be JSON.')
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new AppSettingsError(
+        'invalid_value',
+        'The agents-home acknowledgement must be an object.'
+      )
+    }
+    for (const entry of Object.values(parsed as Record<string, unknown>)) {
+      if (entry !== true) {
+        throw new AppSettingsError(
+          'invalid_value',
+          'The agents-home acknowledgement maps a folder path to true.'
+        )
+      }
+    }
+  },
+  /**
    * A JSON object of `{ "<host>": boolean }`, or empty. The generic `typeof`
    * gate only proves it is a string, and this value is written by the
    * local-dev consent flow *and* reachable through the generic `settings:set`

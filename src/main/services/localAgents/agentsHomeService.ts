@@ -13,6 +13,12 @@
  * (every root file is `survives_update: true` in the contract's layout), and
  * touches the disk only for the pieces that are actually absent.
  *
+ * One thing is neither idempotent nor lazy: the **first** creation of a home
+ * inside a macOS-guarded folder. `ensureHome` refuses it until the user has
+ * been told what the folder is, and {@link agentsHomeService.prepare} is the
+ * only way through. See `homeAccessService` for why the app has to answer that
+ * question itself.
+ *
  * The configured home is **validated on every read** rather than trusted.
  * `localAgentsHome` reaches the store through the generic `settings:set`
  * channel, which type-checks but cannot know what a plausible agents folder is;
@@ -21,11 +27,9 @@
  */
 
 import { cpSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
 import { agentRootRepo, type AgentRootRow } from '../../db/agentRoots'
 import { agentRepo } from '../../db/agents'
-import { appSettingsRepo } from '../../db/appSettings'
 import {
   clearContractCache,
   getBundledContractDir,
@@ -38,47 +42,26 @@ import { compareVersionStrings } from '../../../shared/kit/contractVersion'
 import {
   AGENTS_SUBDIR,
   type AgentRootDto,
-  type AgentRootKind
+  type AgentRootKind,
+  type AgentsHomeAccess,
+  type AgentsHomeState
 } from '../../../shared/localAgents'
 import { desktopStateService } from './desktopStateService'
 import { discoverBareAgents } from './externalScan'
 import { looksLikeGitRepo } from './gitService'
+import { homeAccessService } from './homeAccessService'
+import { configuredHomePath, defaultHomePath } from './homePath'
 import { assertUsableRoot, isWithin } from './pathRules'
 import { scannerService } from './scannerService'
 import { scaffoldService } from './scaffoldService'
 
 const logger = createLogger('local-agents-home')
 
-/** Where a fresh install puts the agents home. */
-const DEFAULT_HOME_DIRS = ['Documents', 'CinnaAgents']
-
 /** Folder a workshop keeps its copy of the contract in, per `layout.json`. */
 const WORKSHOP_KIT_DIR = '.cinna-kit'
 
 /** Label of the home root in the sidebar. */
 const DEFAULT_HOME_LABEL = 'Agents'
-
-function defaultHomePath(): string {
-  return join(homedir(), ...DEFAULT_HOME_DIRS)
-}
-
-/**
- * The configured home, or the default. A configured path that no longer passes
- * the path rules is reported and ignored — the user keeps a working app rather
- * than an app that refuses to open its Agents tab.
- */
-function configuredHomePath(): string {
-  const configured = appSettingsRepo.get('localAgentsHome')
-  if (typeof configured !== 'string' || configured.trim() === '') return defaultHomePath()
-  try {
-    return assertUsableRoot(configured)
-  } catch {
-    logger.warn('the configured agents home is not usable; falling back to the default', {
-      configuredLength: configured.length
-    })
-    return defaultHomePath()
-  }
-}
 
 /**
  * The `contract_version` of the copy installed in a workshop, or null when
@@ -187,11 +170,27 @@ export const agentsHomeService = {
   /** The path a fresh install would use, for the settings screen's hint. */
   defaultHomePath,
 
+  /** Where the home is, without creating anything. See `homePath.ts`. */
+  homePath: configuredHomePath,
+
   /**
    * Resolve the home, create it if it is missing, register it, and make sure
    * its templates and `.cinna-kit/` copy are in place. Idempotent.
+   *
+   * **Refuses with `home_consent_required`** while the user has not been told
+   * about a guarded home — see `homeAccessService`. The refusal is here, at the
+   * one function every read and write path goes through, rather than at the
+   * handful of call sites that happen to be user-facing today: a new caller
+   * that forgets the rule gets an error, not a permission prompt in front of
+   * someone who has no idea what it is for.
    */
   ensureHome(userId: string): AgentRootRow {
+    if (homeAccessService.mustAsk(userId)) {
+      throw new LocalAgentError(
+        'home_consent_required',
+        'The agents folder has not been set up yet.'
+      )
+    }
     const path = configuredHomePath()
     const existing = agentRootRepo.getDefault(userId)
 
@@ -227,6 +226,34 @@ export const agentsHomeService = {
   },
 
   /**
+   * Create the home for the first time, with the user's answer in hand.
+   *
+   * The counterpart to {@link ensureHome}'s refusal, and the only way past it.
+   * Two steps in a deliberate order: `homeAccessService.grant` makes the
+   * directory **asynchronously**, so the macOS prompt waits on a threadpool
+   * thread instead of freezing the window; then `ensureHome` does its
+   * synchronous scaffolding, which by then writes into a folder this app is
+   * already allowed into and so never waits on anything.
+   *
+   * Reports `denied` rather than throwing it. Being refused is an answer to a
+   * question the app asked, and what follows is a different question — where
+   * else the agents should live — not an error to display.
+   */
+  async prepare(userId: string): Promise<AgentsHomeState> {
+    const state = await homeAccessService.grant()
+    if (state.access !== 'ready') return state
+    try {
+      this.ensureHome(userId)
+    } catch (err) {
+      if (err instanceof LocalAgentError && err.code === 'home_access_denied') {
+        return { ...state, access: 'denied' }
+      }
+      throw err
+    }
+    return state
+  },
+
+  /**
    * Create the folder if needed, install the root templates, and keep
    * `.cinna-kit/` populated from the bundled contract. Safe to re-run.
    */
@@ -235,6 +262,18 @@ export const agentsHomeService = {
       scaffoldService.installRootTemplates(rootPath)
     } catch (err) {
       logger.error('could not install the root templates', { error: err })
+      const code = (err as NodeJS.ErrnoException).code
+      // A refusal, not a failure. macOS answers a write into a guarded folder
+      // it has been told to block with `EPERM` — no prompt, no delay — and the
+      // only fixes are a different folder or a switch in System Settings, both
+      // of which the app can offer once it knows which of the two happened.
+      if (code === 'EPERM' || code === 'EACCES') {
+        throw new LocalAgentError(
+          'home_access_denied',
+          'Cinna is not allowed to write to the agents folder.',
+          err instanceof Error ? err.message : String(err)
+        )
+      }
       throw new LocalAgentError(
         'write_failed',
         'Could not set up the agents folder.',
@@ -295,9 +334,67 @@ export const agentsHomeService = {
     })
   },
 
+  /**
+   * Attempt the home, reporting what happened instead of throwing it.
+   *
+   * The gate is on the **home**, never on the list. An earlier version let
+   * `home_consent_required` escape as far as `list`, which answered with no
+   * roots at all — so a user who dismissed the folder question and then adopted
+   * their own workshop watched it register successfully and never appear
+   * (`addRoot` does not go through here), and repointing the home setting
+   * emptied a sidebar that had two roots in it a moment before. What is missing
+   * while the question stands is one row, not the list.
+   */
+  tryEnsureHome(userId: string): AgentsHomeAccess {
+    const path = configuredHomePath()
+    // A refusal this process has already had. Re-attempting would be a second
+    // `EPERM` per call for an answer we have; `homeAccessService.grant` is the
+    // retry, and it is reached from a button.
+    if (homeAccessService.refused(path)) return 'denied'
+    try {
+      this.ensureHome(userId)
+      homeAccessService.clearRefusal()
+      return 'ready'
+    } catch (err) {
+      if (err instanceof LocalAgentError && err.code === 'home_consent_required') {
+        return 'needs_consent'
+      }
+      if (err instanceof LocalAgentError && err.code === 'home_access_denied') {
+        homeAccessService.noteRefusal(path)
+        return 'denied'
+      }
+      throw err
+    }
+  },
+
   /** Every registered root, home first, as the sidebar groups them. */
   listRoots(userId: string): AgentRootDto[] {
-    this.ensureHome(userId)
+    this.tryEnsureHome(userId)
+    return this.rootDtos(userId)
+  },
+
+  /** The raw rows, for the scanner and the watcher. */
+  listRootRows(userId: string): AgentRootRow[] {
+    this.tryEnsureHome(userId)
+    return agentRootRepo.list(userId)
+  },
+
+  /**
+   * The rows as they stand, with no attempt to create the home. See
+   * {@link rootDtos}.
+   */
+  rootRows(userId: string): AgentRootRow[] {
+    return agentRootRepo.list(userId)
+  },
+
+  /**
+   * The roots as they stand, with no attempt to create the home.
+   *
+   * For a caller that has already run {@link tryEnsureHome} and holds its
+   * answer — `list` does, and re-running it per accessor meant two or three
+   * attempts, of which only the first was reported.
+   */
+  rootDtos(userId: string): AgentRootDto[] {
     return agentRootRepo
       .list(userId)
       .sort((a, b) =>
@@ -308,12 +405,6 @@ export const agentsHomeService = {
             : 1
       )
       .map(toDto)
-  },
-
-  /** The raw rows, for the scanner and the watcher. */
-  listRootRows(userId: string): AgentRootRow[] {
-    this.ensureHome(userId)
-    return agentRootRepo.list(userId)
   },
 
   /**

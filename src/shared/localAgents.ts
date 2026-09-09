@@ -357,6 +357,35 @@ export interface LocalAgentDto {
   scannedAt: number
 }
 
+/**
+ * Whether the agents home is usable, and if not, why not.
+ *
+ * Only ever anything but `ready` on macOS. Creating `~/Documents/CinnaAgents`
+ * is a write into a TCC-protected folder, so the first one raises the system's
+ * "would like to access files in your Documents folder" prompt — a dialog that
+ * arrives with no context unless the app has said what it is about to do.
+ *
+ * * `ready` — the folder can be created (or already was). Nothing to ask.
+ * * `needs_consent` — nothing has touched the folder yet and macOS is about to
+ *   ask. The app explains first; **no code path may write until it has.**
+ * * `denied` — the user said no, or macOS refused. The folder has to move.
+ */
+export type AgentsHomeAccess = 'ready' | 'needs_consent' | 'denied'
+
+/**
+ * Where the agents home is and whether it can be used — answered **without
+ * touching the filesystem**, which is the whole point: a `readdir` on a path
+ * inside Documents is itself the thing that raises the prompt, so a state
+ * query that statted the folder could not be asked before the explainer.
+ */
+export interface AgentsHomeState {
+  /** Absolute path of the home — the configured one, or the built-in default. */
+  path: string
+  access: AgentsHomeAccess
+  /** True when the path sits in a macOS location TCC guards. */
+  guarded: boolean
+}
+
 /** A registered agents root — the default home, or one the user added. */
 export interface AgentRootDto {
   id: string
