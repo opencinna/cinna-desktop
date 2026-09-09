@@ -38,14 +38,23 @@
  *    Hence {@link ClaudeAuthProbe} takes {@link buildClaudeEnv}'s output, not
  *    `process.env`.
  *
- * ## What is deliberately not read
+ * ## What is read, and what is deliberately not
  *
- * The response also carries the account's **email**, **organisation id** and
- * organisation name. None of the three is lifted out of the JSON — not into the
- * returned shape, not into a log line, not across IPC. That is stronger than a
- * rule about logging: a field that is never read cannot leak from a debug line
- * somebody adds later. What is kept is the plan type, which says who pays
- * without saying who they are.
+ * The response carries the account's **email**, **organisation id** and
+ * **organisation name**. The two organisation fields are never lifted out of the
+ * JSON at all — not into the returned shape, not into a log line, not across
+ * IPC. That is stronger than a rule about logging: a field nothing reads cannot
+ * leak from a debug line somebody adds later.
+ *
+ * The email and the plan are read, because together they are the answer to the
+ * question the "Runs with" panel exists to ask — *which account pays for this
+ * turn?* A tier alone says a subscription is paying without saying which one,
+ * and a machine with more than one Claude login is exactly where that matters.
+ *
+ * **Neither reaches the logger.** The lines below carry states, auth methods and
+ * durations, and a byte count where the output itself would be. Displaying a
+ * user their own account is not the same as writing it into a log file that
+ * travels with a bug report.
  */
 
 import { execFile } from 'node:child_process'
@@ -62,7 +71,12 @@ export type { ClaudeAuthState, ClaudeAuthStatus } from '../../../shared/engine'
  */
 const logger = createLogger('claude-auth')
 
-const UNKNOWN: ClaudeAuthStatus = { state: 'unknown', authMethod: null, subscriptionType: null }
+const UNKNOWN: ClaudeAuthStatus = {
+  state: 'unknown',
+  authMethod: null,
+  subscriptionType: null,
+  email: null
+}
 
 /** How long the probe may take. Observed at ~0.27s; this is a hang guard. */
 export const CLAUDE_AUTH_TIMEOUT_MS = 5000
@@ -95,7 +109,10 @@ export function parseClaudeAuthStatus(stdout: string): ClaudeAuthStatus {
   return {
     state: record.loggedIn ? 'logged_in' : 'logged_out',
     authMethod: str(record.authMethod),
-    subscriptionType: str(record.subscriptionType)
+    subscriptionType: str(record.subscriptionType),
+    // `orgId` and `orgName` sit beside this one in the response and are
+    // deliberately not among the fields read. See the header.
+    email: str(record.email)
   }
 }
 

@@ -208,7 +208,12 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
     // answer is `unknown`, which never blocks.
     const auth = await this.deps
       .claudeAuth()
-      .catch((): ClaudeAuthStatus => ({ state: 'unknown', authMethod: null, subscriptionType: null }))
+      .catch((): ClaudeAuthStatus => ({
+        state: 'unknown',
+        authMethod: null,
+        subscriptionType: null,
+        email: null
+      }))
     if (auth.state === 'logged_out') {
       logger.info('a Claude turn was refused: that install is not logged in', { agentId })
       return fail(describeEngineSkip('claude_not_logged_in'))

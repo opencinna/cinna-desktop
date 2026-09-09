@@ -75,7 +75,7 @@ function makeDeps(over: Partial<ClaudeTurnDeps> = {}): ClaudeTurnDeps {
     systemPrompt: () => 'You are the invoices agent.',
     model: () => 'sonnet',
     claudePath: async () => '/usr/local/bin/claude',
-    claudeAuth: async () => ({ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }) as const,
+    claudeAuth: async () => ({ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'someone@example.com' }) as const,
     shellEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x', USER: 'x' }),
     appVersion: () => '1.2.3',
     readSession: () => null,
@@ -224,7 +224,7 @@ describe('readiness, answered before the turn rather than as a failed one', () =
     let spawned = false
     const result = await new ClaudeAgentTurnRunner(
       makeDeps({
-        claudeAuth: async () => ({ state: 'logged_out', authMethod: 'none', subscriptionType: null }),
+        claudeAuth: async () => ({ state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }),
         query: stubQuery({
           onOptions: () => void (spawned = true),
           messages: [init, ...answer]
@@ -242,7 +242,7 @@ describe('readiness, answered before the turn rather than as a failed one', () =
     // can refuse a working engine on its own uncertainty is worse than none —
     // and the thrown-error fallback above still covers the case it missed.
     const result = await new ClaudeAgentTurnRunner(
-      makeDeps({ claudeAuth: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null }) })
+      makeDeps({ claudeAuth: async () => ({ state: 'unknown', authMethod: null, subscriptionType: null, email: null }) })
     ).runTurn(turn())
 
     expect(result.error).toBeUndefined()
@@ -269,7 +269,7 @@ describe('readiness, answered before the turn rather than as a failed one', () =
         claudePath: async () => null,
         claudeAuth: async () => {
           asked = true
-          return { state: 'logged_out', authMethod: 'none', subscriptionType: null }
+          return { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
         }
       })
     ).runTurn(turn())

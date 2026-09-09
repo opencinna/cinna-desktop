@@ -151,13 +151,21 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
     // this answer, so a machine that returned `unknown` here would make every
     // UI assertion below fail for a reason that has nothing to do with the
     // panel — and the point of naming it separately is that the failure says
-    // so. `authMethod` comes back as the CLI's own word for "no login"; no
-    // account identity crosses this boundary at all (`ClaudeAuthStatus`).
+    // so. `authMethod` comes back as the CLI's own word for "no login".
+    //
+    // **The whole shape, not a subset.** A logged-out install names no account
+    // and no plan, so every field but the state is null — and asserting the
+    // object entire is what makes this spec notice a field arriving at this
+    // boundary that nobody meant to send. It already has: it failed when
+    // `email` was added, which is the intended behaviour of the assertion
+    // rather than friction. `orgId` and `orgName` are in the CLI's answer and
+    // are never read, so they must never appear here.
     const status = await cinna.page.evaluate(() => window.api.localTools.claudeAuth())
     expect(status, 'claude auth status under the sandbox HOME').toEqual({
       state: 'logged_out',
       authMethod: 'none',
-      subscriptionType: null
+      subscriptionType: null,
+      email: null
     })
   })
 

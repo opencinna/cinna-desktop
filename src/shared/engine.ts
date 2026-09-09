@@ -154,12 +154,21 @@ export type ClaudeAuthState = 'logged_in' | 'logged_out' | 'unknown'
 /**
  * What `claude auth status` says, reduced to what a caller may see.
  *
- * **The account's email, organisation id and organisation name are in that
- * response and are not in this type.** They are never lifted out of the CLI's
- * JSON at all, so they cannot reach a log line, this process boundary, or a
- * screenshot. What survives is who *pays* — a subscription and its tier —
- * without saying who they are, which is the question the "Runs with" panel
- * actually has. Invariant 4's reasoning, applied to somebody else's login.
+ * **The account's organisation id and organisation name are in that response and
+ * are not in this type.** They are never lifted out of the CLI's JSON at all, so
+ * they cannot reach a log line, this process boundary, or a screenshot — a field
+ * that is never read cannot leak from a debug line somebody adds later, which is
+ * a stronger defence than a rule about logging.
+ *
+ * The **email** and the plan do cross, because they are the answer to the
+ * question the "Runs with" panel exists to ask: *which account pays for this?*
+ * A tier alone says a subscription is paying and not which one, and a machine
+ * with more than one Claude login is exactly where that matters. It is the
+ * user's own account shown to the user on their own machine — no credential
+ * crosses, and Invariant 4 is about keys.
+ *
+ * It stays out of the logs regardless. `claudeAuth.ts` logs states, methods and
+ * durations, never the account.
  */
 export interface ClaudeAuthStatus {
   state: ClaudeAuthState
@@ -176,6 +185,12 @@ export interface ClaudeAuthStatus {
    * control.
    */
   subscriptionType: string | null
+  /**
+   * The account that will pay, as the CLI reports it. Null when it names none —
+   * a logged-out install has no `email` field at all, and one authenticated some
+   * other way may not either.
+   */
+  email: string | null
 }
 
 /** Which of the two resolution steps produced a runtime. */

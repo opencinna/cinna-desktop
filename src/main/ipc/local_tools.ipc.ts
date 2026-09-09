@@ -43,9 +43,11 @@ export function registerLocalToolsHandlers(): void {
    * cached behind a short window in the main process, so the panel may ask on
    * every mount.
    *
-   * **What comes back carries no account.** The CLI's answer holds the user's
-   * email and organisation id; `claudeAuth.ts` never reads them, so nothing
-   * here has to remember not to forward them.
+   * **What comes back carries the account and not the organisation.** The CLI's
+   * answer holds the user's email, organisation id and organisation name;
+   * `claudeAuth.ts` reads the first — it is the answer to *which login pays for
+   * this turn*, which the panel asks — and never the other two, so nothing here
+   * has to remember not to forward them.
    */
   ipcHandle('local-tools:claude-auth', (): Promise<ClaudeAuthStatus> => {
     userActivation.requireActivated()

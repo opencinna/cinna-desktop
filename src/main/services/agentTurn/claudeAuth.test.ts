@@ -19,6 +19,11 @@ import {
  * The second half of the verification is not here and cannot be: whether the
  * command behaves this way is a fact about the binary, recorded in
  * `docs/agents/local_agents/claude_contract.md` §5 and re-checked by hand.
+ *
+ * The third rule is about what leaves this module: the account's email is read,
+ * because the panel's whole question is which login pays; the organisation id
+ * and name are not, because nothing asked. The test below pins both halves, so
+ * a later "while we are here" widening has to argue with a named assertion.
  */
 
 const LOGGED_IN = JSON.stringify({
@@ -49,24 +54,30 @@ describe('parseClaudeAuthStatus', () => {
     expect(parseClaudeAuthStatus(LOGGED_IN)).toEqual({
       state: 'logged_in',
       authMethod: 'claude.ai',
-      subscriptionType: 'max'
+      subscriptionType: 'max',
+      email: 'someone@example.com'
     })
   })
 
-  it('never carries the account out of the CLI’s JSON', () => {
-    // Not a formality. The response holds the user's email, organisation id and
-    // organisation name; the defence is that nothing reads them, so no log line
-    // added later can print one.
+  it('carries the account, and never the organisation', () => {
+    // Not a formality, and the asymmetry is the point. The email answers the
+    // question the panel exists to ask — which login pays for this turn — and a
+    // tier alone cannot, on a machine holding more than one Claude login. The
+    // organisation fields answer nothing anybody asked, so nothing reads them,
+    // and a field nothing reads cannot leak from a debug line added later.
     const status = parseClaudeAuthStatus(LOGGED_IN) as unknown as Record<string, unknown>
-    expect(Object.keys(status).sort()).toEqual(['authMethod', 'state', 'subscriptionType'])
-    expect(JSON.stringify(status)).not.toMatch(/example\.com|org_abc123|Example Org/)
+    expect(Object.keys(status).sort()).toEqual(['authMethod', 'email', 'state', 'subscriptionType'])
+    expect(status.email).toBe('someone@example.com')
+    expect(JSON.stringify(status)).not.toMatch(/org_abc123|Example Org/)
   })
 
   it('reads a logged-out install as logged out, and asserts no plan for it', () => {
     expect(parseClaudeAuthStatus(LOGGED_OUT)).toEqual({
       state: 'logged_out',
       authMethod: 'none',
-      subscriptionType: null
+      subscriptionType: null,
+      // A logged-out install has no `email` field at all — there is no account.
+      email: null
     })
   })
 
@@ -83,7 +94,8 @@ describe('parseClaudeAuthStatus', () => {
     expect(parseClaudeAuthStatus(stdout)).toEqual({
       state: 'unknown',
       authMethod: null,
-      subscriptionType: null
+      subscriptionType: null,
+      email: null
     })
   })
 })
@@ -169,7 +181,7 @@ describe('ClaudeAuthProbe', () => {
   function harness(
     over: Partial<{ answers: ClaudeAuthStatus[]; claudePath: string | null; ttlMs: number }> = {}
   ): { probe: ClaudeAuthProbe; calls: () => number; tick: (ms: number) => void } {
-    const answers = over.answers ?? [{ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }]
+    const answers = over.answers ?? [{ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'someone@example.com' }]
     let n = 0
     let now = 1_000_000
     const probe = new ClaudeAuthProbe({
@@ -194,8 +206,8 @@ describe('ClaudeAuthProbe', () => {
     const { probe, calls, tick } = harness({
       ttlMs: 30_000,
       answers: [
-        { state: 'logged_out', authMethod: 'none', subscriptionType: null },
-        { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }
+        { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null },
+        { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'someone@example.com' }
       ]
     })
     expect((await probe.status()).state).toBe('logged_out')
@@ -208,8 +220,8 @@ describe('ClaudeAuthProbe', () => {
     const { probe, tick } = harness({
       ttlMs: 30_000,
       answers: [
-        { state: 'logged_out', authMethod: 'none', subscriptionType: null },
-        { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }
+        { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null },
+        { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'someone@example.com' }
       ]
     })
     await probe.status()
@@ -233,8 +245,8 @@ describe('ClaudeAuthProbe', () => {
       { claudePath: async () => { throw new Error('PATH walk failed') }, env: async () => ({}) },
       { claudePath: async () => '/usr/local/bin/claude', env: async () => { throw new Error('no shell env') } }
     ]) {
-      const probe = new ClaudeAuthProbe({ ...deps, probe: async () => ({ state: 'logged_in', authMethod: null, subscriptionType: null }) })
-      await expect(probe.status()).resolves.toMatchObject({ state: 'unknown' })
+      const probe = new ClaudeAuthProbe({ ...deps, probe: async () => ({ state: 'logged_in', authMethod: null, subscriptionType: null, email: 'someone@example.com' }) })
+      await expect(probe.status()).resolves.toMatchObject({ state: 'unknown', email: null })
     }
   })
 

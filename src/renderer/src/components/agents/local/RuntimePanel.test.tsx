@@ -111,7 +111,9 @@ let toolsLoaded = true
  * be right in the window where only the first has answered. Every test that
  * does not set this is therefore exercising that window.
  */
-let claudeAuth: { state: string; authMethod: string | null; subscriptionType: string | null } | undefined
+let claudeAuth:
+  | { state: string; authMethod: string | null; subscriptionType: string | null; email: string | null }
+  | undefined
 vi.mock('../../../hooks/useLocalTools', () => ({
   useLocalTools: () => ({
     data: !toolsLoaded
@@ -942,7 +944,7 @@ describe('RuntimePanel', () => {
       // `unknown` rather than the default `undefined`: this assertion is about
       // the install sentence, and the panel is deliberately silent until the
       // probe has answered something.
-      claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null }
+      claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
       // Both names in one sentence: the select says "Claude Agent", the column
       // beside it says "Claude Code", and nothing else ties them together.
@@ -959,33 +961,47 @@ describe('RuntimePanel', () => {
       expect(screen.getByText('Not installed')).toBeTruthy()
     })
 
-    it('names the login, and the plan that pays for it, once the probe has answered', () => {
+    it('names the account and the plan that pays for it, once the probe has answered', () => {
       // The claim the panel could not make before `claude auth status` was
       // wired in: readiness was answerable only by spending a turn, so the line
       // said "install" — the weaker fact — and a logged-out machine read as
-      // completely healthy until the first turn failed.
-      claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }
+      // completely healthy until the first turn failed. The account is the half
+      // a tier cannot supply: "Max plan" says a subscription pays and not which
+      // one, on a machine that may hold more than one Claude login.
+      claudeAuth = {
+        state: 'logged_in',
+        authMethod: 'claude.ai',
+        subscriptionType: 'max',
+        email: 'someone@example.com'
+      }
       render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} />)
       expect(
-        screen.getByText(/Claude Agent runs on your own Claude Code login \(Max plan\), on opus/)
+        screen.getByText(
+          /Claude Agent runs on your own Claude Code login — someone@example\.com \(Max plan\), on opus/
+        )
       ).toBeTruthy()
     })
 
-    it('claims a login but no plan when the CLI named none', () => {
-      // A subscription is never inferred. An install authenticated some other
-      // way is still logged in, and saying "(undefined plan)" — or guessing —
-      // would be an assertion about an account this app cannot see.
-      claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: null }
+    it.each([
+      ['no plan', { subscriptionType: null, email: 'someone@example.com' }, /login — someone@example\.com, on sonnet/],
+      ['no account', { subscriptionType: 'max', email: null }, /login \(Max plan\), on sonnet/],
+      ['neither', { subscriptionType: null, email: null }, /login, on sonnet/]
+    ])('says only what the CLI named when it reported %s', (_label, over, expected) => {
+      // Four shapes, spelled out rather than assembled from optional fragments:
+      // a stray dash or an empty parenthesis on the line that exists to say who
+      // pays is worse than the shorter true sentence. Nothing is inferred —
+      // an install authenticated some other way is still logged in.
+      claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', ...over }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
-      expect(screen.getByText(/your own Claude Code login, on sonnet/)).toBeTruthy()
-      expect(screen.queryByText(/plan\)/)).toBeNull()
+      const line = screen.getByText(expected)
+      expect(line.textContent).not.toMatch(/—\s*\(|\(\s*\)|—\s*,/)
     })
 
     it('leads a logged-out machine with the remedy, because this line is measured to clip', () => {
       // Problem-first, the sentence needed 432px against 414px available at the
       // 800px minimum and lost `…in a ter|minal.` — the half rule 7 says has to
       // survive. The assertion is on the order, not just the presence.
-      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null }
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       const line = screen.getByText(/not logged in/)
       expect(line.textContent).toMatch(/^Run `claude` in a terminal/)
@@ -1001,7 +1017,7 @@ describe('RuntimePanel', () => {
       // had just gone and found out. Warning, not danger: the install is fine
       // and one command fixes it. Not green either, ever: one option away in
       // this same slot green means *the process is running*.
-      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null }
+      claudeAuth = { state: 'logged_out', authMethod: 'none', subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       const row = screen.getByText(/Claude Code 2\.1\.266/).closest('div')
       expect(row?.parentElement?.innerHTML).toContain('--color-warning')
@@ -1009,8 +1025,8 @@ describe('RuntimePanel', () => {
 
     it.each([
       ['the probe has not answered', undefined],
-      ['the probe could not answer', { state: 'unknown', authMethod: null, subscriptionType: null }],
-      ['the install is logged in', { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max' }]
+      ['the probe could not answer', { state: 'unknown', authMethod: null, subscriptionType: null, email: null }],
+      ['the install is logged in', { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: null }]
     ])('leaves the dot muted when %s', (_label, answer) => {
       // Neither absence nor uncertainty is evidence, and a healthy login must
       // not go green here for the reason above.
@@ -1041,7 +1057,7 @@ describe('RuntimePanel', () => {
       // read — and "runs on your own Claude Code install" is the true thing to
       // say about that machine. Blanking here would lose the only line that
       // says what the agent runs on.
-      claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null }
+      claudeAuth = { state: 'unknown', authMethod: null, subscriptionType: null, email: null }
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       expect(screen.getByText(/runs on your own Claude Code install, on sonnet/)).toBeTruthy()
       expect(screen.queryByText(/logged in/)).toBeNull()

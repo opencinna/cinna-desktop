@@ -223,15 +223,32 @@ function EngineStatus(): React.JSX.Element {
 }
 
 /**
- * `“max”` → `“ (Max plan)”`, and nothing at all when the CLI named none.
+ * Who pays, as much of it as the CLI actually said.
  *
- * The value is passed through, capitalised and no more: this app does not own
- * the set of plan names, and a lookup table here would render a plan it had
- * not heard of as blank on the one line that is meant to say who pays.
+ * The account and the plan answer one question between them — *which login is
+ * this turn billed to?* — and either can be absent, so the four shapes are
+ * spelled out rather than assembled from optional fragments: a half-built
+ * sentence with a stray dash or an empty parenthesis is worse than the shorter
+ * true one.
+ *
+ * The plan is passed through, capitalised and no more. This app does not own the
+ * set of plan names, and a lookup table would render one it had not heard of as
+ * blank on the very line that exists to say who pays.
+ *
+ * The account **is** shown, and the organisation deliberately is not: `orgId`
+ * and `orgName` are never read out of the CLI's answer at all. This line can
+ * outrun its width at the 800px minimum with a long address, which the `title`
+ * on the status line covers — the alternative was naming a subscription without
+ * naming whose, on a machine that may hold more than one login.
  */
-function planSuffix(subscriptionType: string | null): string {
-  if (!subscriptionType) return ''
-  return ` (${subscriptionType.charAt(0).toUpperCase()}${subscriptionType.slice(1)} plan)`
+function accountSuffix(email: string | null, subscriptionType: string | null): string {
+  const plan = subscriptionType
+    ? `${subscriptionType.charAt(0).toUpperCase()}${subscriptionType.slice(1)} plan`
+    : null
+  if (email && plan) return ` — ${email} (${plan})`
+  if (email) return ` — ${email}`
+  if (plan) return ` (${plan})`
+  return ''
 }
 
 /**
@@ -946,7 +963,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         // control.
         text:
           claudeAuth.state === 'logged_in'
-            ? `Claude Agent runs on your own Claude Code login${planSuffix(claudeAuth.subscriptionType)}, on ${claudeModelForComplexity(declaredComplexity)}.`
+            ? `Claude Agent runs on your own Claude Code login${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}, on ${claudeModelForComplexity(declaredComplexity)}.`
             : `Claude Agent runs on your own Claude Code install, on ${claudeModelForComplexity(declaredComplexity)}.`,
         tone: NOTE
       }

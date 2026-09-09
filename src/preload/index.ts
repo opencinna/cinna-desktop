@@ -1131,9 +1131,10 @@ const api = {
     /** Drop the cached PATH lookups and detect again (Settings → Refresh). */
     refresh: (): Promise<DetectedTool[]> => ipcRenderer.invoke('local-tools:refresh'),
     /**
-     * Whether the detected `claude` is logged in. Carries no account — see
-     * `ClaudeAuthStatus`; the CLI's email and organisation id are never read
-     * on the other side of this call.
+     * Whether the detected `claude` is logged in, and which account pays for it
+     * — see `ClaudeAuthStatus`. The CLI's organisation id and name are never
+     * read on the other side of this call; the email is, because a plan tier
+     * alone cannot say *which* login on a machine holding more than one.
      */
     claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>

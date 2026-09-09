@@ -144,7 +144,7 @@ The answer is **cached for a short window, not for the app's lifetime** the way 
 
 ### The account behind that login is never read
 
-`claude auth status` answers with the account's **email**, **organisation id** and organisation name alongside the login state. None of the three is lifted out of the CLI's JSON — not into the returned shape, not into a log line, not across IPC to the renderer.
+`claude auth status` answers with the account's **email**, **organisation id** and organisation name alongside the login state. The two organisation fields are not lifted out of the CLI's JSON — not into the returned shape, not into a log line, not across IPC to the renderer.
 
 **That is the defence, and it is deliberately not a rule about logging.** A field that is never read cannot leak from a debug line somebody adds six months from now; a rule saying "do not log the account" is one careless edit from being untrue. What survives is who *pays* rather than who they are: the authentication method as the CLI words it, and the plan tier when it names one. Same reasoning as the engine config's Invariant 4, applied to somebody else's login.
 
