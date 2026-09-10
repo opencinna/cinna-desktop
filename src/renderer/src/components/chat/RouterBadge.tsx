@@ -12,16 +12,14 @@ export interface RouterBadgeInfo {
   modelName?: string
 }
 
-interface RouterBadgeProps extends RouterBadgeInfo {
-  /**
-   * Where the explainer tooltip opens. Default `'top'` (above the badge,
-   * right-aligned) suits the composer, which sits at the bottom of the screen.
-   * Use `'bottom-right'` (below the badge, extending right) where the default
-   * would be clipped by surrounding chrome — e.g. the job detail footer, where
-   * an above-left tooltip slides under the floating sidebar.
-   */
-  tooltipPlacement?: 'top' | 'bottom-right'
-}
+/**
+ * `CommPatternBadge` carried a `tooltipPlacement` prop here, and it is gone: its
+ * only caller — the job detail footer — stopped passing it in `f2c3144` when
+ * that footer was reworked, so the branch had been unreachable for months and
+ * its docstring described a layout that no longer exists. Carrying a dead
+ * option into a new file because the old one had it is how a component acquires
+ * a surface nobody can explain.
+ */
 
 /** Icon, short label and tone per router. The label is what the pill shows. */
 const FACE: Record<ChatRouter, { label: string; icon: typeof Radio; tone: string }> = {
@@ -71,15 +69,12 @@ export function RouterBadge({
   router,
   agentName,
   answererName,
-  modelName,
-  tooltipPlacement = 'top'
-}: RouterBadgeProps): React.JSX.Element {
+  modelName
+}: RouterBadgeInfo): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
 
   const face = FACE[router]
   const Icon = face.icon
-  const tooltipPos =
-    tooltipPlacement === 'bottom-right' ? 'top-full mt-1.5 left-0' : 'bottom-full mb-1.5 right-0'
   const who = agentName ? `“${agentName}”` : 'the agent'
   const next = answererName ? `“${answererName}”` : 'the agent you last wrote to'
   const model = modelName ?? 'your local model'
@@ -112,7 +107,7 @@ export function RouterBadge({
 
       {hovered && (
         <div
-          className={`absolute ${tooltipPos} z-50 w-72 rounded-lg border
+          className={`absolute bottom-full mb-1.5 right-0 z-50 w-72 rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >

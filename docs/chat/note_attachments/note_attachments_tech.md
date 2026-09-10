@@ -59,7 +59,7 @@ No new tables. The feature reads from the existing `notes` table (see [Notes —
 - `src/renderer/src/hooks/useNotes.ts:useAttachNotesAsFiles()` — `useMutation` wrapping `window.api.notes.attachAsFiles`. Rejects with `Error(result.error)` on `success: false` so callers can `try/await`.
 - `src/renderer/src/hooks/useNotes.ts:useFetchNote()` — Imperative single-note fetcher for event handlers. Returns a `(noteId) => Promise<NoteData>` callback that delegates to `queryClient.fetchQuery` against the same `['notes', id]` cache key as `useNote`, so a recently previewed note hits cache. Used by the composer's double-Enter expansion.
 - `src/renderer/src/hooks/useChatNotes.ts:useChatNotes(chatId)` — Mirrors `useChatAttachments` structurally: `{ notes, add, remove, clear }`. `useEffect([chatId])` wipes the buffer on chat switch. `add` dedups by id.
-- `src/renderer/src/hooks/useNewChatFlow.ts:ingestPendingNotes()` — Calls the same `attachNotesAsync` mutation, concatenated with resolved file attachments before `startLlm` / `startAgent`.
+- `src/renderer/src/hooks/useNewChatFlow.ts:ingestPendingNotes()` — Calls the same `attachNotesAsync` mutation, concatenated with resolved file attachments before `startRun`.
 
 ## Configuration
 

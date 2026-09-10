@@ -7,16 +7,17 @@
 - `src/main/services/a2aAsMcpProvider.ts` — `A2AAsMcpProvider` (implements `ToolProvider`, one per attached agent), `buildAgentToolProviders` factory, `sanitizeToolSlug`, collision-suffix logic
 - `src/main/services/a2aStreamingService.ts` — `runAgentTurn` (port-free dual-output core) + `streamToAgent` (thin direct-A2A wrapper driving `runAgentTurn`) + `cancel`
 - `src/main/services/chatStreamingService.ts` — orchestrator: builds `ToolProvider[]`, unions tools + routing map, combined announce (`resolvePendingAnnounce`), dispatch loop routing by `providerType`, sub-event forwarding, parts persistence, depth guard (`MAX_TOOL_ROUNDS`)
-- `src/main/services/chatService.ts` — `listOnDemandAgents`, `addOnDemandAgent` (validates via `agentService.findAgent`), `removeOnDemandAgent`
+- `src/main/services/chatService.ts` — `listOnDemandAgents`, `addOnDemandAgent` (validates via `agentService.findAgent`), `removeOnDemandAgent`, `setRouter` (the transition on and off `'coordinator'`)
 - `src/main/services/agentService.ts` — `findAgent` (dual-scope resolve), `resolveEndpointIfNeeded`, `resolveAccessToken` (reused by the agent provider); `syncRemoteAgents` carries `target.mcp` into `remote_metadata.cinna_mcp`
-- `src/main/db/schema.ts` — `chatOnDemandAgents` table; `messages.toolAgentId` column; `chats.orchestrated` flag
-- `src/main/db/migrations/chats.ts` / `migrations/messages.ts` — `ALTER TABLE` for `chats.orchestrated` / `messages.tool_agent_id`
+- `src/main/db/schema.ts` — `chatOnDemandAgents` table; `messages.toolAgentId` column; `chats.router` (`'coordinator'` is this feature; the `chats.orchestrated` column beside it is a write-only mirror — see [Chat Routing](../chat_routing/chat_routing_tech.md))
+- `src/main/db/migrations/chats.ts` / `migrations/messages.ts` — `ALTER TABLE` for `chats.orchestrated` / `messages.tool_agent_id`; `migrations/chat-router.ts` adds `chats.router` and backfills `'coordinator'` from it
 - `src/main/db/migrations/chats.ts` — `CREATE TABLE IF NOT EXISTS chat_on_demand_agents`
 - `src/main/db/migrations/messages.ts` — `ALTER TABLE messages ADD COLUMN tool_agent_id`
-- `src/main/db/chatOnDemandAgent.ts` — `chatOnDemandAgentRepo` (add/remove/list/listAgentIds/peekPending/clearPending)
+- `src/main/db/chatOnDemandAgent.ts` — `chatOnDemandAgentRepo` (add/remove/list/listAgentIds/peekPending/clearPending). `list` orders by `created_at, agent_id`: without it SQLite returns composite-primary-key order — by a nanoid — which a `human` chat's "first attached answers" fallback made user-visible
 - `src/main/db/messages.ts` — `saveToolCall` accepts `toolAgentId` + `parts` (rich sub-thread payload on the tool_call row)
 - `src/main/db/agents.ts` — `a2aSessionRepo.getByChatAndAgent` / `upsert` (per-`(chat, agent)` continuity used by `runAgentTurn`)
-- `src/main/ipc/chat.ipc.ts` — `chat:on-demand-agent-{list,add,remove}` handlers
+- `src/main/ipc/chat.ipc.ts` — `chat:on-demand-agent-{list,add,remove}` and `chat:set-router` handlers
+- `src/main/ipc/run.ipc.ts` — `run:send` resolves the answerer; `{ kind: 'model' }` is what reaches `chatStreamingService.stream` here
 - `src/main/mcp/manager.ts` — `getToolsForProviders` now tags tools `providerType: 'mcp'`
 
 ### Shared
@@ -31,16 +32,16 @@
 - `src/preload/index.ts` — `window.api.chat.{listOnDemandAgents,addOnDemandAgent,removeOnDemandAgent}`; `MessageData.toolAgentId`
 
 ### Renderer
-- `src/shared/commPattern.ts` — `derivePattern(agentIds, mcpIds): 'A2A' | 'AI'` (single source of truth, shared by renderer + main; moved here from the renderer util so the job runner can import it too)
-- `src/renderer/src/components/chat/CommPatternBadge.tsx` — badge + hover tooltip, left of the Cog
+- `src/shared/chatRouting.ts` — the routing rule, shared by renderer + main. `newChatRouter` answers `'coordinator'` for any agent mixed with an MCP server, and for the composer's explicit toggle
+- `src/renderer/src/components/chat/RouterBadge.tsx` — the three-value badge; **Model routes** is this feature's value
 - `src/renderer/src/components/chat/OnDemandAgentChips.tsx` — removable agent chips, two modes: DB-backed (`chatId` prop, active chat) and buffer-backed (`pendingIds` + `onRemovePending`, new chat) — mirrors `ActiveMcpChips`
 - `src/renderer/src/hooks/useAgents.ts` — `useChatOnDemandAgents`, `useAddOnDemandAgent`, `useRemoveOnDemandAgent` (React Query hooks, cache key `['chat-on-demand-agent', chatId]`, scoped `on-demand-agent` logger on error)
 - `src/renderer/src/components/chat/AgentContribution.tsx` — reusable parts renderer (name label + hash color + thinking/tool/tool_result/text/command_result blocks). Builds a `RenderNode[]` and runs it through the shared `groupConsecutiveCollapsibles` (from `CollapsibleGroup.tsx`) so consecutive auxiliary steps fold into dots in compact mode; renders every part inline in verbose. Takes a `verbose` prop threaded from `AgentToolSubThread`.
 - `src/renderer/src/components/chat/CollapsibleGroup.tsx` — dots-group component + shared `RenderNode` type and `groupConsecutiveCollapsibles` helper, used by both this sub-thread and the main transcript (`MessageStream`)
 - `src/renderer/src/components/chat/AgentToolSubThread.tsx` — expandable wrapper (header: agent badge, `· {n} steps · {status}` appended in verbose mode; hash-colored inset, auto-expand/collapse). Threads `verbose` into `AgentContribution`.
 - `src/renderer/src/components/chat/MessageStream.tsx` — renders `AgentToolSubThread` for persisted tool_call rows with `parts` and for streaming blocks with `providerType === 'agent'`
-- `src/renderer/src/components/chat/ChatInput.tsx` — `@`-mention agent picks route to `onTogglePendingAgent`; renders chips + badge (new-chat)
-- `src/renderer/src/components/layout/MainArea.tsx` — owns `pendingAgentIds`, computes `combinedAgentIds` + `commPatternInfo`, applies the destination check
+- `src/renderer/src/components/chat/ChatInput.tsx` — `@`-mention agent picks route to `onTogglePendingAgent` (new chat) or `useAttachAgentToChat` (active chat); renders chips, badge and the `[+]` coordinate toggle
+- `src/renderer/src/components/layout/MainArea.tsx` — owns `pendingAgentIds`, computes `combinedAgentIds` + `routerInfo`, and requires a model only when the selection resolves to `'coordinator'` (or names no agent at all)
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `startNewChat(agentIds[], ...)` decision rule + on-demand agent flush
 - `src/renderer/src/hooks/useChatStream.ts` — `handleRun` passes `providerType`/`providerAgentId` to `addToolCall` and routes a `child` event: a nested `needs_input` / `input_resolved` to the chat store's `inputRequests`, tagged with the `toolCallId`; a `child` inside a `child` is dropped; everything else goes to `appendToolSubEvent`. `tool_result` / `tool_error` drop that call's asks (`dropInputRequestsFor`)
 - `src/renderer/src/stores/chat.store.ts` — `ToolCallBlock.{providerType,agentId,subParts}`, `appendToolSubEvent`, `appendAgentDeltaPart` merge helper (calls `continuesPart`), `dropInputRequestsFor`
@@ -65,7 +66,9 @@ Column: `messages.tool_agent_id` (TEXT, nullable; see `src/main/db/migrations/me
 - `chat:on-demand-agent-add` — `(chatId: string, agentId: string) => { success: true }`
 - `chat:on-demand-agent-remove` — `(chatId: string, agentId: string) => { success: true }`
 
-All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `llm:send-message` MessagePort stream carries a sub-turn's events wrapped in `child` (validated by `isRunEvent` at the contextBridge boundary in `src/preload/index.ts`).
+- `chat:set-router` — `(chatId, 'coordinator' | 'human' | 'direct') => { success: true }`; see [Chat Routing](../chat_routing/chat_routing_tech.md)
+
+All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `run:send` MessagePort stream carries a sub-turn's events wrapped in `child` (validated by `isRunEvent` at the contextBridge boundary in `src/preload/index.ts`). `llm:send-message` still reaches the same code as a forward, for one phase.
 
 ## Services & Key Methods
 
@@ -81,10 +84,10 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 
 ## Renderer Components
 
-- `MainArea` — `combinedAgentIds = dedupe([selectedAgent?.id, ...pendingAgentIds])`; `commPatternInfo = { pattern, agentName?, modelName? }` (agentName only when exactly one agent; modelName from resolved chat-mode model); destination check: A2A always OK, else requires a resolvable model
-- `ChatInput` — new-chat `@` agent pick calls `onTogglePendingAgent`; an active-chat `@` agent pick calls `useAttachAgentToChat(chatId)`, which promotes the chat (`chat:promote-to-orchestrated`) when not already orchestrated and then `addOnDemandAgent`; renders `OnDemandAgentChips` (DB mode in active chats, buffer mode on new-chat) and the on-demand MCP chips; `CommPatternBadge` renders on the right, left of the `[+]` attach button (new-chat only); `selectedAgent` still drives example prompts via the agent selector
-- `useChatComposer.submit` — reads the chat snapshot and dispatches: agent-rooted + not orchestrated → `startAgent` (direct A2A); otherwise → `startLlm` (orchestrator)
-- `useNewChatFlow.startNewChat` — `isA2A = agentIds.length === 1 && onDemandMcpIds.length === 0`; A2A binds `agentId` + `startAgent`; else flushes `addOnDemandMcp` + `addOnDemandAgent` then `startLlm`
+- `MainArea` — `combinedAgentIds = dedupe([selectedAgent?.id, ...pendingAgentIds])`; `routerInfo = { router, agentName?, answererName?, modelName? }` (modelName from the resolved chat-mode model); the send requires a resolvable model only for `'coordinator'` or a selection with no agent in it
+- `ChatInput` — new-chat `@` agent pick calls `onTogglePendingAgent`; an active-chat `@` agent pick calls `useAttachAgentToChat(chatId)`, which moves the chat onto the router that shape needs (`chat:set-router` — `'coordinator'` only when the chat had no agent of its own) and then `addOnDemandAgent`; renders `OnDemandAgentChips` (DB mode in active chats, buffer mode on new-chat) and the on-demand MCP chips; `RouterBadge` renders at the right of the controls row, left of Send, in **both** new and active chats; `selectedAgent` still drives example prompts via the agent selector
+- `useChatComposer.submit` — no longer picks a destination. It calls `startRun` on the one channel; main reads `chats.router` and reaches `chatStreamingService` for a coordinated chat. See [Chat Routing](../chat_routing/chat_routing_tech.md)
+- `useNewChatFlow.startNewChat` — `newChatRouter(agentIds, onDemandMcpIds)`; a coordinated chat binds no root, flushes `addOnDemandMcp` + `addOnDemandAgent`, resolves a provider/model, and sends with `target = { kind: 'model' }`
 - `chat.store.appendToolSubEvent(toolCallId, event)` — only `delta` events (skips `notice`); merges into `ToolCallBlock.subParts` via `appendAgentDeltaPart`, which calls `continuesPart` (`src/shared/partMerge.ts`) — the accumulator's own rule, so the live sub-thread splits exactly where the persisted one will. A nested `status`, `done` or `error` is dropped here, so a sub-turn ending never ends the outer turn
 - Nested asks — a folder agent called as a tool that parks on a permission or question sends `needs_input` inside a `child`. `handleRun` records it in `inputRequests` with the `toolCallId`, and `dropInputRequestsFor` removes it when that call's `tool_result` / `tool_error` arrives. `AgentToolSubThread` renders no control for it, so today it ends at its park timeout
 - `AgentToolSubThread` — colors by `presetForAgentId(agentId ?? agentName)`; `useEffect` collapses on the live→done transition (verbose keeps open); renders `AgentContribution` (passing `verbose`) or a "Working…" placeholder when `parts` empty + pending
@@ -92,7 +95,7 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 
 ## Configuration
 
-None. No env vars, no settings. Orchestrated mode is available whenever the selection resolves to `AI` *and* a chat-mode provider + model are configured.
+None. No env vars, no settings. Coordination is available whenever a chat-mode provider + model are configured; without one, the switch onto `'coordinator'` is refused with `ChatError('not_configured', …)`.
 
 ## Security
 

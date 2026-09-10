@@ -20,7 +20,7 @@ Caller (chatTitleService, future summaryService)
        -> Promise<string>   (trimmed, capped to maxOutputChars)
        -> throws AiFunctionError('no_provider' | 'llm_failed' | 'empty_output')
 
-Promotion (chatService.promoteToOrchestrated)
+Handing a chat to the model (chatService.setRouter -> 'coordinator')
    └── aiFunctions.resolveProviderModelFromChatMode(userId, chatId) -> { providerId, modelId }
        -> throws AiFunctionError('no_provider')
 ```

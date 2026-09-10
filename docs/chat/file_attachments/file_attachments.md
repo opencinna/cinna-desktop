@@ -147,7 +147,7 @@ New-chat — pick or drag-drop:
     → createChat / updateChat / mcp flush
     → resolvePendingAttachments(chatId, scope, attachments)
        → files:ingest-paths                     [swaps pending for real]
-    → startAgent / startLlm with real attachments
+    → startRun with real attachments
 
 Send → LLM stream loop:
   chatStreamingService._runStreamLoop

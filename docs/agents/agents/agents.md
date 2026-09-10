@@ -134,9 +134,9 @@ Chat Flow — First Message (agent selection via Bot icon or @-mention):
                                    → On done: messageRepo.saveAssistant({ content, parts })
 
 Chat Flow — Subsequent Messages:
-  ChatInput → useSendMessage() → agents.getSession(chatId)
-    → session found → window.api.agents.sendMessage(session.agentId, ...)
-      → agent_a2a.ipc.ts loads session → buildSendParams(content, contextId, taskId)
+  ChatInput → useChatStream.startRun() → window.api.run.send(chatId, ...)
+    → main reads chats.router → the bound agent answers
+      → the driver loads the a2a_sessions row → buildSendParams(content, contextId, taskId)
         → External Agent (receives conversation context)
         → a2a_sessions row updated with latest contextId/taskId
 ```

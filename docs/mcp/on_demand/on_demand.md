@@ -9,7 +9,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - **Baseline MCPs** — The chat-mode-driven MCP set tracked in `chat_mcp_providers`. Available for every send unless the chat mode is changed.
 - **On-Demand MCP** — An MCP server the user `@-mentions` inside the chat composer. Attached to the chat in a separate table (`chat_on_demand_mcps`) so the user's per-chat engagements don't tangle with the chat mode's baseline.
 - **Engagement** — Picking an MCP from the `@` popup. Persists for the rest of the chat session until the user removes it via the chip.
-- **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement.
+- **Pending Announce** — Per-engagement flag that marks an MCP as "user just engaged this — tell the LLM once". The stream loop consumes the flag on the next send and prepends a silent system note; the flag flips to false so follow-up turns don't repeat the announcement. **Only a turn the local model answers consumes it** — see the rule below.
 - **MCP Chip** — A pill rendered with the other capability chips below the composer, one per MCP active in the chat. On-demand engagements are removable (`×` detaches them); mode-owned baseline servers are shown **locked** (no `×`) so the strip reflects everything the LLM actually gets, not just the user's own picks. Baseline chips are omitted when `ChatControls` is visible, since its toggle pills already list them.
 - **`@` Popup MCP Section** — The agent-mention popup grows a second section labelled "MCP" inside active chats; selecting an MCP row engages it for the chat (an agent row instead attaches an on-demand agent).
 - **`[+]` Capability Picker** — The mouse-driven equivalent of the `@` popup: the left-side `[+]` composer menu → **Add agents / MCP** opens a searchable card modal (`AgentPickerModal` in `activeFirst` multi-select mode). Selecting/deselecting a card runs the exact same engage/detach calls (`addOnDemandMcp` / `removeOnDemandMcp`, or the pending-buffer toggle on the new-chat screen) — so the `@` popup and the `[+]` picker are interchangeable entry points. Selected cards float to the top when the modal opens and hold position while toggling. In active chats it shows on-demand engagements + the bound root agent as "selected" (the root stays non-removable, mirroring `@`).
@@ -62,6 +62,7 @@ Let users engage an MCP server inside a specific chat *only when they need it*, 
 - New-chat screen picks live in a renderer-only buffer until the chat is created. `useNewChatFlow.startNewChat` flushes the buffer via `chat:on-demand-mcp-add` *before* the first send dispatches, so the announce prefix fires on the very first turn.
 - Detaching an on-demand MCP removes the row outright; there is no "soft disable" intermediate state.
 - The silent announcement is built once per engagement: the moment the user picks the MCP, `pendingAnnounce = true`; the next stream consumes it and flips it false; only re-adding the MCP (via the popup) re-arms it.
+- **The flag is consumed by the local model's stream loop, and by nothing else.** In a chat an agent answers — `direct` to an agent, or `human`, where no model runs at all — an on-demand MCP row can sit with `pendingAnnounce` still set indefinitely, because there is nobody to read the prefix. That is correct rather than a leak: MCP servers are the *model's* tools and an agent cannot call them, so an unread announce describes a tool nothing could have used. The flag stays armed and fires on the first turn after the chat moves to `coordinator`, which is the first turn where it means anything. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
 - The popup's "MCP" section is hidden outside active chats — the new-chat agent picker is unaffected.
 - Only MCPs with `enabled = true` in settings appear in the popup. Disabled MCPs can't connect and would just engage a dead chip.
 - The chip color is **fixed** (accent, matching the in-transcript MCP tool badge) — it no longer encodes connection status. Connection health is surfaced separately and only when there's a problem: a red status dot (with hover detail) after the name for any non-`connected` status.
@@ -93,12 +94,12 @@ ChatInput resolves the mode-owned baseline once:
 
 User presses Enter
   Active chat:
-    -> llm:send-message -> chatStreamingService.stream
+    -> run:send (main routes to the model) -> chatStreamingService.stream
   New chat:
     -> useNewChatFlow.startNewChat
          -> chat:create
-         -> chat:on-demand-mcp-add per buffered id (BEFORE startLlm)
-         -> startLlm -> llm:send-message -> chatStreamingService.stream
+         -> chat:on-demand-mcp-add per buffered id (BEFORE the send)
+         -> startRun -> run:send -> chatStreamingService.stream
 
 chatStreamingService.stream:
   -> baseline MCP ids (chat_mcp_providers)
@@ -119,5 +120,6 @@ User clicks × on a chip
 
 - [MCP Connections](../connections/connections.md) — Owns the MCP connection lifecycle; on-demand engagement reuses the live connection rather than opening a fresh one.
 - [Messaging](../../chat/messaging/messaging.md) — `chatStreamingService` is the chokepoint that unions the on-demand set with the baseline and emits the announce prefix.
+- [Chat Routing](../../chat/chat_routing/chat_routing.md) — whether that chokepoint runs at all is the chat's router; a chat an agent answers never reaches it, so its `pendingAnnounce` flags stay armed.
 - [Mention Popups](../../chat/mention_popups/mention_popups.md) — The `@` popup gains an "MCP" section inside active chats; the new-chat agent picker is unchanged.
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — Baseline MCPs come from the active chat mode; on-demand engagements layer on top without mutating the mode.

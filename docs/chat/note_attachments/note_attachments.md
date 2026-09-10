@@ -100,7 +100,7 @@ Send pressed
       -> createChat -> scope decided
       -> ingestPendingNotes -> same attach IPC
       -> concat with resolved file attachments
-      -> startLlm / startAgent
+      -> startRun
 ```
 
 ## Integration Points

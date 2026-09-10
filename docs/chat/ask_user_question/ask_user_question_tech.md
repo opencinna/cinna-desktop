@@ -14,7 +14,7 @@ Renderer-only feature. No main-process, IPC, database, or preload changes — it
 
 ### Reused, not modified
 - `src/renderer/src/hooks/useChatComposer.ts` — `submit()` routes the answer turn (A2A vs LLM, orchestrated handling).
-- `src/renderer/src/hooks/useChatStream.ts` — `startAgent` / `startLlm` invoked by the composer.
+- `src/renderer/src/hooks/useChatStream.ts` — `startRun` invoked by the composer.
 - `src/shared/messageParts.ts` — `MessagePart` (`kind: 'tool'`, `toolName`, `toolInput`) the feature reads.
 - `src/main/agents/streamPartsAccumulator.ts` — produces the `tool`-kind part from `cinna.tool_*` metadata (upstream, unchanged).
 
@@ -24,7 +24,7 @@ None. No new table, column, or `messages.role`. The question persists inside the
 
 ## IPC Channels
 
-None added. The answer turn flows through the existing send path: `useChatComposer.submit()` → `useChatStream.startAgent` / `startLlm` → `window.api.agents.sendMessage` / `window.api.llm.sendMessage` (see [Messaging](../messaging/messaging.md)).
+None added. The answer turn flows through the existing send path: `useChatComposer.submit()` → `useChatStream.startRun` → `window.api.run.send`, so it reaches whoever the chat's router says answers — including the agent a `human` chat is currently addressed to (see [Messaging](../messaging/messaging.md) and [Chat Routing](../chat_routing/chat_routing.md)).
 
 ## Key Functions & Methods
 

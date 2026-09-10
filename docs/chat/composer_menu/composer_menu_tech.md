@@ -4,6 +4,7 @@
 
 ### Renderer — components
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the `[+]` button + popover. Owns `open` and `view: 'root' | 'modes'` state, outside-click / Esc close, and the chat-mode sub-view. Purely presentational — all data/handlers arrive via props.
+- `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the popover itself; `PlusCoordinateToggle { coordinating, pending?, onToggle }` is the **Let the model coordinate** row (`role="menuitemcheckbox"`, `aria-disabled` while pending, reserved `w-3.5` tick slot). Omitted entirely when there is no agent to coordinate.
 - `src/renderer/src/components/agents/AgentPickerModal.tsx` — shared card-grid modal (portal-rendered, autofocused search, multi-select). Extended with the `activeFirst` prop for this feature; also used by Jobs (`JobEditForm`). The optional `catalogItems` / `installingBundleId` / `onInstallCatalog` / `catalogError` props render the bottom **Catalog** section (Install cards with a spinner, plus an inline error row; the `CatalogPickerItem` type lives here too).
 - `src/renderer/src/components/chat/ChatInput.tsx` — composer host. Renders `ComposerPlusMenu` as the first footer-left element and the `AgentPickerModal` (gated by `capabilityPickerOpen`); wires `pickAttachments`, `chatModeMenu`, and the capability picker.
 - `src/renderer/src/components/layout/MainArea.tsx` — owns new-chat selection state and the chat-mode select handlers; passes `chatModeMenu` to both `ChatInput` instances.
@@ -39,7 +40,8 @@ Implemented in `AgentPickerModal.tsx`:
 ## IPC Channels
 
 This feature adds **no new IPC channels** — toggles route through existing ones (see the linked docs for signatures):
-- On-demand agents/MCPs: `chat:on-demand-agent-add` / `-remove`, `chat:on-demand-mcp-add` / `-remove`, plus orchestration promotion — see [On-Demand MCP](../../mcp/on_demand/on_demand.md) and [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md).
+- On-demand agents/MCPs: `chat:on-demand-agent-add` / `-remove`, `chat:on-demand-mcp-add` / `-remove` — see [On-Demand MCP](../../mcp/on_demand/on_demand.md).
+- `chat:set-router` — fired by the **Let the model coordinate** row and by an agent pick that changes a chat's shape. `ChatInput` owns the mutation and calls `mutateAsync(...).catch(setSendError)` rather than a `mutate`-level `onError`, which is dropped if the caller has unmounted and would swallow the only explanation of a refusal. See [Chat Routing](../chat_routing/chat_routing_tech.md).
 - New-chat picks are renderer-only buffers flushed at creation — see `src/renderer/src/hooks/useNewChatFlow.ts`.
 - Chat-mode application: `chat:update` + `chat:set-mcp-providers` via `MainArea.handleActiveChatModeChange` — see [Chat Modes](../chat_modes/chat_modes.md).
 - Attachments: the `files:*` channels — see [File Attachments](../file_attachments/file_attachments.md).

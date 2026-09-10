@@ -244,16 +244,17 @@ Its wiring: `createA2aDriver({runTurn: runAgentTurn, resolveEndpoint: resolveEnd
 - **`isCatalogCommand(agent, typed)`** — `agent.capabilities.commands === 'catalog'` and `RUN_REFERENCE_PATTERN.test(typed.trim())`, the same grammar as main's `matchRunCommand`
 - **`readinessTitle(r)`** — `r.detail || readinessText(r)`. `readinessText(r)` is `r.reason ?? 'This agent is not ready to take a message.'`
 - **`readinessSeverity`** — `credentials_needed`, `not_logged_in` and `not_installed` are `warning`; `unreachable`, `invalid` and `contract_too_new` are `danger`
-- **`ComposerReadinessLine`** — a fixed-height (`h-4`) `data-readiness-line` row under the controls row. It is rendered whenever the composer has a direct target, refused or not, so a refusal arriving or clearing moves nothing. It holds:
+- **`ComposerReadinessLine`** — a fixed-height (`h-4`) `data-readiness-line` row under the controls row. In an active chat it is rendered whenever the chat holds an agent **at all** — refused or not, and whoever is answering right now — so neither a refusal arriving nor a router change moves anything. Gating it on the agent that would *answer* lifted the whole composer 21px when the user handed the chat to the model, which is not an agent whose readiness there is anything to say about. On the new-chat screen it is rendered whenever a message would go straight to an agent. It holds:
   - a truncating `role="status"` `aria-live="polite"` span carrying `id={reasonId}`, which Send's `aria-describedby` points at
   - an `aria-hidden` `·` separator
   - an action button that is `aria-disabled` while pending, with `min-w-[6.5rem]` or `min-w-[5rem]` depending on its longer label
 
   It used to sit inline in the controls row, where the action and separator cost about 100px. There they wrapped two chips at the narrowest window and four at every width, moved the textarea when the refusal cleared, and squeezed the reason itself to nothing — leaving "· Check again" with no sentence before it
 - **`RefusableExamplePrompts`** — two wrappers that are always rendered. The outer one carries `title={readinessTitle}`, `aria-disabled` and `cursor-not-allowed`; the inner one carries `inert` plus `opacity-50 pointer-events-none`. A refusal arriving or clearing swaps classes rather than the tree, so the tags keep their footprint and do not replay their entry animation
-- **`ChatInput.directTarget`**
-  - In an existing chat: the bound agent, unless `chatData.orchestrated`
-  - In a new chat: `selectedAgent`, when `commPatternInfo.pattern === 'A2A'`
+- **`ChatInput.directTarget`** — the agent a message goes *straight* to, which is the only agent the composer refuses a send to. An agent the local model calls as a tool is not refused here: its failure comes back as a tool call the model can read
+  - In an existing chat: the router's own answer — `routingOf(chat).answerer({ addressed, lastAddressed, attached })` resolved to an agent row, so in a chat the user routes the refusal names **the addressed agent**
+  - In a new chat: `selectedAgent`, when `routerInfo.router !== 'coordinator'`
+  - See [Chat Routing](../../chat/chat_routing/chat_routing.md)
 - **`AgentCard`**
   - `readinessIssue` requires `agent.enabled`, and a state that is not `ok`
   - The reason renders while `readinessIssue && !testAgent.data?.success`. A failed test does not replace it; a passing test shows *Connected*, since the re-check the same press started clears the reason moments later; a failed test's error, with itself as its `title`, renders only when there is no refusal
@@ -340,7 +341,7 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
   - a throwing driver or broadcast; a forgotten answer not coming back
 - `src/main/services/agentService.readiness.test.ts` — readiness on the DTO; `kick` with each row's own scope; `forget` on delete and on switch-off, including a synced agent switched off by its profile
 - `src/main/ipc/agent.ipc.checkReadiness.test.ts` — the check runs in the owning scope with `fresh: true`; `null` for an agent that is not found; the installed probe passes the options on to the driver
-- `src/main/ipc/agent_a2a.answerRequest.test.ts` — *what reaches the driver*, including a gone row whose answer is still delivered with no rule; `src/main/ipc/agent_a2a.commandDispatch.test.ts` — `streamToAgent` receives `resolveCommandRunner`'s turn rather than the driver's own
+- `src/main/ipc/agent_a2a.answerRequest.test.ts` — *what reaches the driver*, including a gone row whose answer is still delivered with no rule; `src/main/ipc/run.commandDispatch.test.ts` — `streamToAgent` receives `resolveCommandRunner`'s turn rather than the driver's own (the dispatch moved with the send path onto `run:send`; the command is still matched on the *typed* text, never on the catch-up packet in front of it)
 - **Persistence:**
   - `src/main/db/agents.test.ts` — *the driver a row names*
   - `src/main/db/migrations/migrations.test.ts` — *adds the driver columns*, and *agents.driver on an install that predates it*: mapped by source, a no-op on replay, never rewriting a row that names a driver

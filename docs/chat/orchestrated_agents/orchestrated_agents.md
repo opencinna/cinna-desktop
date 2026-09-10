@@ -1,79 +1,68 @@
 # Orchestrated Agents (Agents-as-MCP)
 
-> **Status:** implemented. This is the engine for any chat with more than one counterparty.
+> **Status:** implemented. This is what the **`coordinator`** router does — one of the three values documented in [Chat Routing](../chat_routing/chat_routing.md), which is where the decision to *use* it is made.
 
 ## Purpose
 
-Let a single chat mix on-demand agents and on-demand MCP tools usefully. When more than one counterparty is in play (an LLM plus an agent, two agents, or an agent plus MCP tools), the local model becomes the **conductor**: it runs the conversation and calls each attached agent as if it were an MCP tool, unioned with the real MCP tools. A lone agent with no MCPs still talks directly over A2A, unchanged.
+Let a single chat mix agents and MCP tools usefully, with the local model as the **conductor**: it runs the conversation and calls each attached agent as if it were an MCP tool, unioned with the real MCP tools.
 
-The routing decision is evaluated **dynamically**, not just at chat creation: bringing a second counterparty into a one-on-one chat (`@`-mentioning a second agent into a direct-A2A chat, or any agent into a plain LLM chat) **promotes** that chat to orchestrated on the spot.
+**This doc covers what happens once a chat is coordinated, not when it should be.** Who answers a message in a chat is `chats.router`, and a coordinated chat is one of three shapes it can be — the others are one agent answering directly (`direct`) and several agents the user addresses one at a time with no model between them (`human`). See [Chat Routing](../chat_routing/chat_routing.md) for the rule, the transitions and the badge.
+
+A chat arrives here two ways: created that way (any agent mixed with an MCP server, or the composer's explicit "Let the model coordinate"), or moved here later by the same toggle. It is the one router transition that needs a model, so it is the only one that can be refused.
 
 ## Core Concepts
 
-- **Communication Pattern** — How a new chat will route, derived purely from the current selection:
-  - **A2A** — exactly one agent and zero on-demand MCPs → the agent is bound as the chat root and talked to directly (full per-part streaming fidelity; current behavior, untouched).
-  - **AI (orchestrated)** — anything else (LLM root + ≥1 agent, ≥2 agents, or agents mixed with MCPs) → the local model orchestrates, calling each agent/MCP as a tool. Zero agents → plain LLM chat (also "AI").
-- **Orchestrated Mode** — An LLM-root chat (`chats.agent_id = null`) with a non-empty on-demand agent set. The local model drives the tool-call loop; each attached agent is exposed as one emulated MCP tool. Marked by `chats.orchestrated`, set at creation or at in-chat promotion and stable thereafter (removing every agent chip does not revert the chat to direct routing).
-- **Promotion** — The in-chat transition from one counterparty to two. A direct-A2A chat's bound agent is moved into the on-demand agent set (so the orchestrator can still call it as a tool — its `a2a_sessions` row is preserved, so its prior context survives), `agent_id` is detached, a model is resolved (chat mode → default chat mode), and `orchestrated` flips true. A plain LLM chat just flips the flag (it already has a model). Refused when no LLM provider/chat mode is configured.
-- **History handoff** — When a promoted chat's prior one-on-one turns (assistant rows carrying `source_agent_id`) are replayed into the orchestrator, each is prefixed with attribution (`[From the "<agent>" agent — available to you as the \`<tool>\` tool]`). This is what makes the orchestrator understand those earlier answers came from a specialist it can now re-delegate to, rather than treating them as its own words. A stateless, one-time reframe applied at history rebuild — nothing is persisted.
-- **On-Demand Agent** — An agent the user `@-mentions` (or picks via the agent selector) into a chat so the orchestrator can call it. Mirrors [On-Demand MCP](../../mcp/on_demand/on_demand.md) exactly — separate table, sticky chips, one-shot announce.
+- **Coordinated chat** — an LLM-root chat (`chats.agent_id = null`) whose attached agents are exposed to the local model as emulated MCP tools. `chats.router = 'coordinator'`. It is stable: removing every agent chip does not silently re-route the chat, and the way back off it is the composer's coordinate toggle.
+- **Handing a chat over** — moving to `coordinator` re-exposes a `direct` chat's bound agent as an on-demand agent (so the conductor can still call it — its `a2a_sessions` row is preserved, so its prior context survives), detaches `agent_id`, and resolves a model (chat mode → default chat mode). Refused with `not_configured` when no LLM provider or chat mode is available. Handled by `chatService.setRouter`; see [Chat Routing](../chat_routing/chat_routing.md).
+- **History handoff** — When a handed-over chat's prior one-on-one turns (assistant rows carrying `source_agent_id`) are replayed into the orchestrator, each is prefixed with attribution (`[From the "<agent>" agent — available to you as the \`<tool>\` tool]`). This is what makes the orchestrator understand those earlier answers came from a specialist it can now re-delegate to, rather than treating them as its own words. A stateless, one-time reframe applied at history rebuild — nothing is persisted.
+- **On-Demand Agent** — An agent the user `@-mentions` (or picks via the agent selector) into a chat. In a coordinated chat it is a tool the conductor can call; in a `human` chat it is one of the counterparties the user addresses. Mirrors [On-Demand MCP](../../mcp/on_demand/on_demand.md) exactly — separate table, sticky chips, one-shot announce.
 - **Tool Provider** — A polymorphic tool source the orchestrator unions: an MCP provider (real MCP tools) or an agent provider (one emulated tool per agent). The orchestrator routes each tool call by provider type.
 - **`cinna.mcp` Descriptor** — Optional backend-supplied shape describing how an agent should appear as a tool (tool name, description, input schema). When absent, the desktop synthesizes a minimal `{ message }` tool from the agent's name/description/example prompts.
 - **Agent Sub-thread** — An agent-backed tool call rendered not as an opaque result string but as an expandable nested thread showing the agent's own work (thinking / tool / tool_result / text). This is what makes orchestrated mode *better* than a flat tool result rather than worse.
 - **Dual Output** — Every agent turn yields two things: a **compact** result (final agent text) fed back to the orchestrator LLM, and the **full-fidelity** `parts[]` shown in the sub-thread. The rich parts never re-enter orchestrator context.
-- **CommPattern Badge** — Indicator left of the chat-mode Cog on the new-chat composer showing `A2A` or `AI`, with a hover tooltip explaining the cost/behavior trade-offs.
+- **Router Badge** — the pill left of Send, which reads **Model routes** for a coordinated chat and names the model in its tooltip along with what it costs (local-model tokens every turn *plus* each agent invocation, tool schemas in context, higher latency, and an agent's live stream summarized into one tool result). See [Chat Routing](../chat_routing/chat_routing.md).
 
 ## User Stories / Flows
 
-### Talking to a single agent (A2A — unchanged)
-
-1. User picks one agent (via the agent selector or `@`-mention) and attaches no MCPs.
-2. The composer badge reads **A2A**.
-3. User sends. The chat is created agent-rooted; the message streams directly to the agent over A2A with full per-part fidelity. No local model is involved.
-
-### Mixing an agent with MCP tools (orchestrated)
+### Mixing an agent with MCP tools
 
 1. User is on the new-chat screen with a default chat mode active (so a local model is available).
-2. User `@`-mentions the "Email" agent and the "GitHub" MCP. Two chips appear below the composer; the badge flips to **AI**.
+2. User `@`-mentions the "Email" agent and the "GitHub" MCP. Two chips appear below the composer; the badge flips to **Model routes** — an agent mixed with an MCP server needs a conductor, because the servers are the *model's* tools and an agent cannot call them.
 3. User types a task and sends.
-4. A LLM-root chat is created; the agent is flushed onto `chat_on_demand_agents` and the MCP onto `chat_on_demand_mcps` before the first send.
-5. The orchestrator (the chat-mode model) receives a tool set unioning the GitHub MCP tools and one `email` tool. It calls them as needed, in one loop.
+4. An LLM-root chat is created; the agent is flushed onto `chat_on_demand_agents` and the MCP onto `chat_on_demand_mcps` before the first send.
+5. The conductor (the chat-mode model) receives a tool set unioning the GitHub MCP tools and one `email` tool. It calls them as needed, in one loop.
 6. The GitHub call renders as a normal tool block; the Email call renders as an expandable sub-thread that streams the agent's thinking/tool steps live.
 
-### Two agents in one chat (orchestrated)
+### Handing a running chat to the model
 
-1. User picks two agents, no MCPs. Badge reads **AI**.
-2. Both agents are exposed to the orchestrator as tools. The model decides which to call (or both) and composes their results.
-
-### Promoting a one-on-one chat mid-conversation
-
-1. User is in a direct-A2A chat with the "Email" agent and has a few turns of history — the agent has been the conversation's voice.
-2. User `@`-mentions a second agent ("ERP"). The chat is promoted: Email moves into the on-demand agent set (keeping its A2A session), the chat detaches its root, a model is resolved from the chat mode (or default chat mode), and the composer flips from direct to orchestrated.
-3. The next send goes to the orchestrator. Its rebuilt history shows the earlier Email turns prefixed with attribution, and Email + ERP are both available as tools — so it understands the prior exchange and can re-delegate to either.
-4. If the user has no LLM provider or chat mode configured, promotion is refused with an explanatory error and the chat stays a direct one-on-one. (Single-agent direct A2A needs no local model; orchestration does.)
+1. User is in a chat with the "Email" agent and has a few turns of history — the agent has been the conversation's voice.
+2. User ticks **Let the model coordinate** in the composer's `[+]` menu. Email moves into the on-demand agent set (keeping its A2A session), the chat detaches its root, and a model is resolved from the chat mode (or default chat mode).
+3. The next send goes to the conductor. Its rebuilt history shows the earlier Email turns prefixed with attribution, and every attached agent is available as a tool — so it understands the prior exchange and can re-delegate.
+4. If the user has no LLM provider or chat mode configured, the switch is refused with an explanatory error and the chat stays where it was. **This is the only router transition that needs a model**, and therefore the only one that can be refused; bringing a second agent into a chat does not go through here at all.
+5. Unticking the toggle hands the chat back: to `human` if agents remain, to `direct` if none do.
 
 ### Watching an agent work inside a tool call
 
-1. During an orchestrated turn the model calls an agent tool.
+1. During a coordinated turn the model calls an agent tool.
 2. That tool renders as a sub-thread headed by the agent's badge (with `· {n} steps · {status}` appended in verbose mode), auto-expanded while the agent streams, inset with a left border in the agent's color. Inside, consecutive thinking/tool/tool_result steps fold into expandable dots in compact mode; verbose shows every step inline.
 3. The orchestrator-authored task message is shown as the first line ("the ask that went to the agent").
 4. When the agent finishes, the sub-thread collapses to its header (unless verbose mode is on). The orchestrator receives only the agent's compact final text and continues.
 
 ### Managing capabilities mid-chat
 
-1. User is in an active orchestrated chat. The attached agents and MCPs show as removable chips below the composer (alongside the on-demand-MCP chips).
+1. User is in an active coordinated chat. The attached agents and MCPs show as removable chips below the composer (alongside the on-demand-MCP chips).
 2. To remove a capability, the user clicks the `×` on its chip — the agent/MCP detaches from the chat immediately and the next send no longer exposes it.
 3. To add another agent, the user `@`-mentions it; it attaches as an on-demand agent (a new chip appears) and the next send unions it into the tool set.
 
 ### Continuity across turns
 
-1. A follow-up message in an orchestrated chat re-invokes the same agent tool.
+1. A follow-up message in a coordinated chat re-invokes the same agent tool.
 2. The desktop reuses the agent's own `a2a_sessions` row for that `(chat, agent)` pair, so the agent retains its context — the orchestrator never carries `context_id`.
 
 ## Business Rules
 
-- **Routing decision** is `derivePattern(agentIds, mcpIds)`: one agent + zero on-demand MCPs → A2A; everything else → orchestrated/LLM. The badge and `startNewChat` share this single helper.
-- **Orchestrated mode requires a local model.** A2A binds an agent and needs no model; orchestrated (and plain LLM) chats need a resolvable chat-mode provider + model, or the send is refused with an explanatory error.
+- **Which chats end up here is not decided in this feature.** `newChatRouter` and `chats.router` decide it, in `src/shared/chatRouting.ts` — see [Chat Routing](../chat_routing/chat_routing.md). What matters here: a chat is coordinated when an agent is mixed with an MCP server, or when the user asks the model to conduct.
+- **A coordinated chat requires a local model**, and it is the only router that does. It needs a resolvable chat-mode provider + model, or the switch (and the send) is refused with an explanatory error naming the way out.
 - **The orchestrator LLM only ever passes `{ message }`** to an agent tool. `context_id` is deliberately omitted from the tool schema — continuity is the desktop's own concern via `a2a_sessions` per `(chat, agent)`.
 - **Compact result back to the LLM; rich parts to the UI.** The tool result fed to the orchestrator each round is the agent's final text only. The full `parts[]` are persisted on the tool-call row and streamed to the sub-thread, but never re-fed into orchestrator context (avoids token blow-up and runaway recursion).
 - **Tool naming.** LLM-facing tool name = a sanitized slug from the descriptor's `tool_name`/`display_name` or the agent name (`^[a-z0-9_-]+$`, ≤64 chars). Collisions (agent-vs-agent or agent-vs-MCP) get a stable id-derived suffix (e.g. `assistant_a3f`) — never a positional `_2`. The routing key (stable agent id) is never shown to the LLM.
@@ -83,7 +72,7 @@ The routing decision is evaluated **dynamically**, not just at chat creation: br
 - **Abort.** Aborting the orchestrator propagates an `AbortSignal` into the in-flight agent sub-turn, cancelling it.
 - **Depth guard.** The orchestrator's tool-call loop is bounded (max rounds) so an agent tool that triggers server-side handovers can't loop the conductor unbounded.
 - **The orchestrator is the only context-handoff mechanism.** It authors each agent's tool `message` (so every agent gets a self-contained prompt) and holds the full chat history, so no per-agent prompt-rewriting or transcript-replay machinery is needed. Per-agent continuity is `a2a_sessions`.
-- **In-chat `@`-agent always adds a tool.** An `@`-agent pick attaches an on-demand agent. When the chat isn't yet orchestrated (direct-A2A or plain LLM), the pick promotes it first (see Promotion). Re-picking the sole bound agent of a direct-A2A chat is a no-op — it's already the conversation partner. A plain LLM chat is promoted in-chat the same way.
+- **In-chat `@`-agent does not always add a tool.** An `@`-agent pick attaches an on-demand agent, but what that *means* now depends on the chat: a plain LLM chat becomes coordinated (the model is the counterparty already, and an arriving agent is a tool it can call, not a replacement for it), while a chat with an agent in it becomes `human` and the pick addresses that agent instead. Re-picking the sole bound agent of a `direct` chat is still a no-op — it is already the conversation partner. See [Chat Routing](../chat_routing/chat_routing.md).
 - **Abort cancels the remote agent.** Aborting an orchestrated turn aborts the orchestrator's `AbortController`, which both stops the in-flight agent sub-turn's stream *and* sends a `cancelTask` to the remote agent (so it doesn't keep running server-side).
 - **Capability chips in active chats.** Attached agents and MCPs render as removable chips below the composer in active chats (DB-backed), mirroring on-demand MCP chips. Removing a chip detaches that capability from the chat immediately.
 - **Sub-thread auto-expand.** The active sub-thread is expanded while streaming and collapses on completion; verbose mode keeps it expanded. Notices (agent startup pings) are excluded from the persisted/streamed sub-thread parts.
@@ -92,26 +81,17 @@ The routing decision is evaluated **dynamically**, not just at chat creation: br
 ## Architecture Overview
 
 ```
-New-chat selection (MainArea)
-  selectedAgent (agent selector) + pendingAgentIds (@-mentions) -> combinedAgentIds
-  pendingMcpIds (@-mentions)
-  derivePattern(combinedAgentIds, pendingMcpIds) -> A2A | AI  (CommPatternBadge)
+How a chat becomes coordinated -> see docs/chat/chat_routing/
+  new chat : newChatRouter(agentIds, mcpIds) -> 'coordinator' when an agent
+             meets an MCP server (or the explicit toggle)
+  active   : [+] "Let the model coordinate" -> chat:set-router 'coordinator'
+             (chatService.setRouter: resolve a model, move the root agent into
+              chat_on_demand_agents, null agent_id; refuse not_configured when
+              no model is resolvable)
+             a @-agent pick in a plain LLM chat lands here too
 
-Send -> useNewChatFlow.startNewChat(agentIds[], mcpIds[], onDemandMcpIds[])
-  1 agent + 0 on-demand MCP -> bind agentId (root) -> startAgent (direct A2A)
-  else -> LLM-root chat
-            -> flush chat_on_demand_agents + chat_on_demand_mcps
-            -> startLlm
-
-In-chat @-agent (ChatInput.selectAgent)
-  not orchestrated yet -> chat:promote-to-orchestrated
-       (chatService.promoteToOrchestrated: resolve model, move root agent
-        into chat_on_demand_agents, null agent_id, set orchestrated;
-        refuse with not_configured when no model resolvable)
-  -> chat:on-demand-agent-add
-  composer.submit reads the (optimistically promoted) snapshot -> startLlm
-
-llm:send-message -> chatStreamingService.stream
+run:send (main resolves the answerer as { kind: 'model' })
+  -> chatStreamingService.stream
   history rebuild: assistant rows with source_agent_id (prior direct-A2A turns)
     -> prefixed with agent attribution so the orchestrator re-delegates
   -> build ToolProvider[]: McpToolProvider per connected MCP
@@ -132,8 +112,9 @@ Renderer
 
 ## Integration Points
 
+- [Chat Routing](../chat_routing/chat_routing.md) — who answers a message in a chat, and where `coordinator` sits among the three answers. The transitions in and out of this mode, the badge and the `[+]` toggle all live there.
 - [Messaging](../messaging/messaging.md) — `chatStreamingService` is the orchestrator; it now unions MCP + agent tool providers and routes dispatch by provider type. A sub-turn's events reach the renderer wrapped in `child` — see [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md).
-- [On-Demand MCP](../../mcp/on_demand/on_demand.md) — `chat_on_demand_agents` is a verbatim mirror; the announce prefix is combined across MCPs and agents. The promoted root agent is added as a pending-announce on-demand agent, so it is announced like any freshly attached agent.
+- [On-Demand MCP](../../mcp/on_demand/on_demand.md) — `chat_on_demand_agents` is a verbatim mirror; the announce prefix is combined across MCPs and agents. The former root agent is added as a pending-announce on-demand agent, so it is announced like any freshly attached agent.
 - [Agents](../../agents/agents/agents.md) — Agent turns reuse the A2A client, endpoint/token resolution, and the `a2a_sessions` table via the port-free `runAgentTurn` core.
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — The agent's rich `parts[]` (`cinna.content_kind`) stream over the same external A2A surface; orchestrated mode just stops collapsing them.
 - [Remote Agents](../../agents/remote_agents/remote_agents.md) — The `cinna.mcp` descriptor is carried through the remote-agent sync into `agents.remote_metadata`.

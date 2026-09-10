@@ -143,7 +143,7 @@ Picking a counterparty
   useAgents() (unfiltered)
     → filter(a.enabled)   ← the only filter left
       ├─ composer '@' popup
-      ├─ '[+]' capability picker      → chat_on_demand_agents → derivePattern → runner or orchestrator
+      ├─ '[+]' capability picker      → chat_on_demand_agents → chats.router → runner or conductor
       └─ Jobs agent picker            → job_agents
 
 A job's folder dependency, wherever the job is opened

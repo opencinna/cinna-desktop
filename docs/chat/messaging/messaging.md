@@ -64,8 +64,11 @@ Full conversation management — creating chats, sending messages, streaming LLM
 ## Architecture Overview
 
 ```
-User -> ChatInput (renderer) -> useChatStream.startLlm()
-  -> MessageChannel -> ipcMain.on('llm:send-message')  (LlmSendPayload)
+User -> ChatInput (renderer) -> useChatStream.startRun()
+  -> MessageChannel -> ipcMain.on('run:send')  (RunSendPayload)
+  -> main resolves who answers from chats.router  (see docs/chat/chat_routing/)
+     -> { kind: 'agent' } : the driver path
+     -> { kind: 'model' } : below
   -> messageRoutingService.prepareLlmSend({ userId, chatId, userContent })
      -> chatRepo.getOwned() (verify ownership)
      -> messageRepo.saveUser()

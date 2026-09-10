@@ -44,7 +44,12 @@ Parents before children; pure table-creation before backfills; legacy-table back
 18. `migrateAgentDrivers` (`migrations/agent-drivers.ts`) — `agents.driver` + `agents.driver_config`, and the backfill: `'a2a'` for `source IN ('local', 'remote')`, `'opencode'` for `source = 'folder'`.
     - **Placement:** it runs `ALTER` and DML on a table `migrateAgents` created, so it comes after every table-creation migration, returns early without `hasTable('agents')`, and gates each `ADD COLUMN` on `hasColumn`
     - **Idempotency:** each backfill `UPDATE` carries `driver IS NULL`, so a row that already names a driver is never rewritten on any later boot. That is what keeps the scanner's correction of a Claude folder backfilled as `opencode`. See [Agent Drivers](../../agents/drivers/drivers_tech.md#database-schema)
-19. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
+19. `migrateChatRouter` (`migrations/chat-router.ts`) — `chats.router` + `chat_agent_cursors`.
+    - **Placement:** after `agents` **and** `chats` exist (the cursor table FK-references both), and after the driver migrations so the whole agent-runtime set reads in plan order. Returns early without `hasTable('chats')`; the cursor table is additionally gated on `hasTable('agents')`
+    - **Backfill:** `orchestrated = 1` → `router = 'coordinator'`; everything else stays on the column default `'direct'`. No row is ever backfilled to `'human'` — that value is only reached by a gesture made after the migration, so nothing has to guess which of a chat's agents was being addressed
+    - **Idempotency:** the `UPDATE` is nested inside the `if (!hasColumn(…, 'router'))` block rather than gated on a data predicate. On a second boot the column exists and it never runs again, so a chat the user has since moved off `coordinator` is not dragged back onto it. This is the *other* shape of the `agent-drivers.ts` rule — guard by the schema change when the column is new, guard by `IS NULL` when it is not
+    - **`orchestrated` is deliberately not dropped.** It is written as a mirror of `router` for one phase, so a downgrade to the previous build still routes every chat the way it was routing
+20. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
 
 ## Helpers (`migrations/helpers.ts`)
 
@@ -77,7 +82,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 ## Validation (run for any `src/main/db/` change)
 
 - **Build:** `npx electron-vite build` (full main+preload+renderer). Type-check renderer: `npx tsc --noEmit --project tsconfig.web.json`. Never bare `npx tsc --noEmit` (hangs).
-- **Fresh-DB simulation:** extend `src/main/db/migrations/migrations.test.ts`, which drives the real `runAllMigrations()` against an empty `node:sqlite` database (the `better-sqlite3` binding is Electron-ABI-bound and won't load under plain `node`). It already asserts: replay from empty without throwing, a clean `PRAGMA foreign_key_check`, second and third runs as no-ops, a re-run over a populated DB, and the `agents.driver` backfill on an install that predates the column (mapped by source, a no-op on replay, never rewriting a row that names a driver). Watch for FK-cascade DML hitting a not-yet-created table; model the FK-off-then-on lifecycle if testing cascade behavior.
+- **Fresh-DB simulation:** extend `src/main/db/migrations/migrations.test.ts`, which drives the real `runAllMigrations()` against an empty `node:sqlite` database (the `better-sqlite3` binding is Electron-ABI-bound and won't load under plain `node`). It already asserts: replay from empty without throwing, a clean `PRAGMA foreign_key_check`, second and third runs as no-ops, a re-run over a populated DB, the `agents.driver` backfill on an install that predates the column (mapped by source, a no-op on replay, never rewriting a row that names a driver), and the `chats.router` backfill (`orchestrated = 1` → `'coordinator'`, no row reaching `'human'`, and a chat moved off `coordinator` staying off it on replay). Watch for FK-cascade DML hitting a not-yet-created table; model the FK-off-then-on lifecycle if testing cascade behavior.
 - **Idempotency:** run the migration block a second time against the populated DB; it must not throw.
 - **Real fresh install (definitive):** remove/relocate `userData/cinna.db`, launch, confirm the window opens with no fatal dialog and no `no such table` / `no such column` in `cinna-errors.log`.
 

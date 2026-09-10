@@ -104,7 +104,7 @@ Renderer (useNewChatFlow.startNewChat)
    ├── createChat()                         → DB chat row, title = 'New Chat'
    ├── deriveTitleFromMessage(message)      → shared truncation
    ├── updateChat({ title: truncated, … })  → renderer fallback applied
-   └── startLlm / startAgent                → IPC send
+   └── startRun                             → IPC send (run:send)
            │
            ▼
 Main: messageRoutingService.prepareLlmSend / prepareAgentSend
