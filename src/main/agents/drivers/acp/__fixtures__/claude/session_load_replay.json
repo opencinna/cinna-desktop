@@ -1,0 +1,178 @@
+{
+  "recording": "claude/s2-load-after-restart.ndjson",
+  "note": "session/load replaying a finished turn into a fresh process. Two things differ from a live turn. The user_message_chunk leads — the desktop’s own message coming back, which must be dropped including its messageId, or the five tool calls behind it would be filed under the user. And every tool_call arrives with its rawInput already complete, where live it streams in over three updates. Distilled: the user chunk, the ToolSearch and MCP calls with their results, the refused Edit, and the reply.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "user_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Spike test, be terse. Do exactly these steps in order, one tool call each, continue even if a step is denied:\n1) call the MCP tool spike_secret_word;\n2) run the Bash command: echo hello > bash.txt\n3) use the Write tool to create note.txt containing exactly: one\n4) use the Edit tool to replace one with two in note.txt.\nThen reply with a single line: the secret word and which steps were denied."
+        },
+        "messageId": "f22e4b6b-8604-4ed6-8298-0e877df0b9e6"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch"
+          }
+        },
+        "toolCallId": "toolu_01L5hSFidchQk6QKc5NoRfq3",
+        "sessionUpdate": "tool_call",
+        "rawInput": {
+          "query": "select:mcp__cinna-spike__spike_secret_word",
+          "max_results": 1
+        },
+        "status": "pending",
+        "title": "ToolSearch",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "ToolSearch"
+          }
+        },
+        "toolCallId": "toolu_01L5hSFidchQk6QKc5NoRfq3",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "tool_reference",
+            "tool_name": "mcp__cinna-spike__spike_secret_word"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Tool: mcp__cinna-spike__spike_secret_word"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "mcp__cinna-spike__spike_secret_word",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "pomegranate"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "pomegranate"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call",
+        "rawInput": {
+          "replace_all": false,
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt",
+          "old_string": "one",
+          "new_string": "two"
+        },
+        "status": "pending",
+        "title": "Edit /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt",
+            "oldText": "one",
+            "newText": "two"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call_update",
+        "status": "failed",
+        "rawOutput": "User refused permission to run tool",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```\nUser refused permission to run tool\n```"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Secret word: pomegranate; denied: step 4 (Edit)."
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    }
+  ]
+}

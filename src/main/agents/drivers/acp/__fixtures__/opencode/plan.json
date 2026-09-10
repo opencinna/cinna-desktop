@@ -1,0 +1,52 @@
+{
+  "recording": null,
+  "note": "SYNTHESIZED. No recording in either spike emits a plan update — the spike model (local gemma4) never produced one, and the Claude adapter reports its todo list as a TodoWrite tool call instead. Shaped from Plan/PlanEntry in @agentclientprotocol/sdk 1.4.0: replace semantics, a complete list of entries each time.",
+  "notifications": [
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Read the folder config",
+            "priority": "high",
+            "status": "completed"
+          },
+          {
+            "content": "Write notes.txt",
+            "priority": "medium",
+            "status": "in_progress"
+          },
+          {
+            "content": "Report back",
+            "priority": "low",
+            "status": "pending"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "plan",
+        "entries": [
+          {
+            "content": "Read the folder config",
+            "priority": "high",
+            "status": "completed"
+          },
+          {
+            "content": "Write notes.txt",
+            "priority": "medium",
+            "status": "completed"
+          },
+          {
+            "content": "Report back",
+            "priority": "low",
+            "status": "in_progress"
+          }
+        ]
+      }
+    }
+  ]
+}

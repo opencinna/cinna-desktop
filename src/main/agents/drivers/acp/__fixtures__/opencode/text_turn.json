@@ -1,0 +1,95 @@
+{
+  "recording": "opencode/q1-folder.ndjson",
+  "note": "One plain turn, verbatim: three thought chunks then four message chunks under one messageId, and the usage_update the translator ignores.",
+  "notifications": [
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": "The user wants"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": " me to say hello in"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": " five words or fewer."
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": "Hello there"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": ","
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": " how are"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c739c06001n0Xk2mF3pOgbv0",
+        "content": {
+          "type": "text",
+          "text": " you?"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f738c69f8ffeCu3j62nBHE6fNz",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 8013,
+        "size": 200000,
+        "cost": {
+          "amount": 0,
+          "currency": "USD"
+        }
+      }
+    }
+  ]
+}

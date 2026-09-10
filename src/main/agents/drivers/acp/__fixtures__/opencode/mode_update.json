@@ -1,0 +1,13 @@
+{
+  "recording": null,
+  "note": "SYNTHESIZED. No recording in either spike emits current_mode_update — OpenCode reports the session mode only in the session/new and session/set_config_option *results*, which are RPC responses, not notifications. Shaped from CurrentModeUpdate in @agentclientprotocol/sdk 1.4.0; the mode id is the one q2-permission.ndjson line 3 lists for this folder.",
+  "notifications": [
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "current_mode_update",
+        "currentModeId": "folder-pineapple"
+      }
+    }
+  ]
+}

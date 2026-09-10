@@ -13,12 +13,17 @@
  */
 import type { AgentRow } from '../../db/agents'
 import type { AgentCapabilities } from '../../../shared/agentDrivers'
-import { driverOfRow } from './driverOf'
+import { driverOfRow, launcherOfRow } from './driverOf'
 
-type CapabilityRow = Pick<AgentRow, 'driver' | 'source' | 'accessTokenEncrypted'>
+type CapabilityRow = Pick<
+  AgentRow,
+  'driver' | 'driverConfig' | 'source' | 'accessTokenEncrypted'
+>
 
 export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
   switch (driverOfRow(agent)) {
+    case 'acp':
+      return acpCapabilities(launcherOfRow(agent))
     case 'opencode':
       return {
         ...folderCapabilities(),
@@ -60,6 +65,45 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
         cwd: false
       }
     }
+  }
+}
+
+/**
+ * One driver, and still two answers — because a capability is about what the
+ * *engine* behind the protocol can do, not about the protocol.
+ *
+ * The two differences are both measured, and both move in the opposite
+ * direction to what a transport change would suggest:
+ *
+ * - **Questions.** Claude *gains* them: the ACP adapter enables its
+ *   `AskUserQuestion` tool when the client declares `elicitation.form`, which
+ *   the launcher does. OpenCode *loses* them: its `question` tool is not
+ *   registered under `OPENCODE_CLIENT=acp`, and its ACP layer bridges no
+ *   question to `elicitation/create` at all — so the model asks in prose. See
+ *   the Q3 verdict in the phase 3 plan.
+ * - **Auth.** Claude's turn is paid for by the user's own CLI login, so the
+ *   desktop holds no credential for it; OpenCode's is paid for by a credential
+ *   in Settings, which is not an auth state a user is ever asked about here.
+ *
+ * A launcher this build has no implementation for (`gemini`, `codex` before
+ * their step) is described as a CLI-authenticated agent with no question path,
+ * which is what both of them are — the driver refuses the turn in words either
+ * way, and a capability answer that pretended otherwise would put the composer
+ * and the turn into disagreement.
+ */
+function acpCapabilities(launcher: string): AgentCapabilities {
+  return {
+    ...folderCapabilities(),
+    input: {
+      permission: true,
+      question: launcher !== 'opencode',
+      auth: false,
+      // The desktop renders an elicitation *as* a question — one widget, one
+      // answer path — so nothing downstream needs a fourth ask kind to
+      // distinguish it.
+      elicitation: false
+    },
+    auth: launcher === 'opencode' ? 'none' : 'cli'
   }
 }
 

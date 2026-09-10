@@ -1,0 +1,86 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "The reply that closes the turn, verbatim: five message chunks under one messageId, the usage_update the translator ignores, and the session_info_update that names the session.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Sec"
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ret word: pomegranate"
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "; den"
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "ied: step 4 ("
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "content": {
+          "type": "text",
+          "text": "Edit)."
+        },
+        "messageId": "msg_011CevBwaeLrjUDYkhGk7Rws"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "usage_update",
+        "used": 16963,
+        "size": 1000000,
+        "cost": {
+          "amount": 0.11186750000000001,
+          "currency": "USD"
+        },
+        "_meta": {
+          "_claude/origin": {
+            "kind": "human"
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "session_info_update",
+        "title": "Spike test",
+        "updatedAt": "2026-09-10T17:55:55.529Z"
+      }
+    }
+  ]
+}

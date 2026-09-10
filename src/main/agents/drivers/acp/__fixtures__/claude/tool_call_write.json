@@ -1,0 +1,111 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "Write. The in-progress update at recording line 30 carries a diff of the *input*, not output, which is why a result part is only written for a completed or failed status. The completed update reports through rawOutput alone.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_012wmERDc5HsJqcyQYo3AgKA",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Preparing file…",
+        "kind": "edit",
+        "content": [],
+        "locations": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_012wmERDc5HsJqcyQYo3AgKA",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt"
+        },
+        "title": "Write /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_012wmERDc5HsJqcyQYo3AgKA",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt",
+          "content": "one"
+        },
+        "title": "Write /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt",
+            "oldText": null,
+            "newText": "one"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "type": "create",
+              "filePath": "/private/tmp/spike-acp-claude/s2/note.txt",
+              "content": "one",
+              "structuredPatch": [],
+              "originalFile": null,
+              "userModified": false
+            },
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_012wmERDc5HsJqcyQYo3AgKA",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Write"
+          }
+        },
+        "toolCallId": "toolu_012wmERDc5HsJqcyQYo3AgKA",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "File created successfully at: /private/tmp/spike-acp-claude/s2/note.txt (file state is current in your context — no need to Read it back)"
+      }
+    }
+  ]
+}

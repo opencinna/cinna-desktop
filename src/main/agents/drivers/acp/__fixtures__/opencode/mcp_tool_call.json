@@ -1,0 +1,143 @@
+{
+  "recording": "opencode/q5-mcp.ndjson",
+  "note": "An MCP tool (spike-mcp_secret_number) called mid-turn. Distilled: the last three message chunks before the call, the three tool updates, then the first two thought chunks and the last three message chunks of the reply that continues after it — the reply is a new messageId, so its text must not join the part before the call.",
+  "notifications": [
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c78e051001btKZEADG79w2OI",
+        "content": {
+          "type": "text",
+          "text": "write"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c78e051001btKZEADG79w2OI",
+        "content": {
+          "type": "text",
+          "text": "`"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c78e051001btKZEADG79w2OI",
+        "content": {
+          "type": "text",
+          "text": "\n\n"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_z6ammnfg",
+        "title": "spike-mcp_secret_number",
+        "kind": "other",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_z6ammnfg",
+        "status": "in_progress",
+        "kind": "other",
+        "title": "spike-mcp_secret_number",
+        "locations": [],
+        "rawInput": {
+          "name": "ada"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_z6ammnfg",
+        "status": "completed",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "The secret number for ada is 424242."
+            }
+          }
+        ],
+        "rawOutput": {
+          "output": "The secret number for ada is 424242.",
+          "metadata": {
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c79732c001TZeHenuTZp3Eso",
+        "content": {
+          "type": "text",
+          "text": "The"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c79732c001TZeHenuTZp3Eso",
+        "content": {
+          "type": "text",
+          "text": " user"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c79732c001TZeHenuTZp3Eso",
+        "content": {
+          "type": "text",
+          "text": "P"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c79732c001TZeHenuTZp3Eso",
+        "content": {
+          "type": "text",
+          "text": "INE"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f73872078ffeqVuguMP5qMf4QU",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c79732c001TZeHenuTZp3Eso",
+        "content": {
+          "type": "text",
+          "text": "APPLE"
+        }
+      }
+    }
+  ]
+}

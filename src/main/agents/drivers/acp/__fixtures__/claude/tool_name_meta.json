@@ -1,0 +1,101 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "Bash. The whole reason `_meta.claudeCode.toolName` comes first: the tool_call titles itself \"Terminal\", and the later updates retitle it with the command. rawInput arrives empty and fills in. The result is a bare string rawOutput, with no content array.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01VgZ5tf7zvrjuBH7kcfTg7e",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Terminal",
+        "kind": "execute",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01VgZ5tf7zvrjuBH7kcfTg7e",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "echo hello > bash.txt"
+        },
+        "title": "echo hello > bash.txt",
+        "kind": "execute"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash",
+            "title": "Write hello to bash.txt"
+          }
+        },
+        "toolCallId": "toolu_01VgZ5tf7zvrjuBH7kcfTg7e",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "command": "echo hello > bash.txt",
+          "description": "Write hello to bash.txt"
+        },
+        "title": "echo hello > bash.txt",
+        "kind": "execute",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Write hello to bash.txt"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": {
+              "stdout": "",
+              "stderr": "",
+              "interrupted": false,
+              "isImage": false,
+              "noOutputExpected": false
+            },
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01VgZ5tf7zvrjuBH7kcfTg7e",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Bash"
+          }
+        },
+        "toolCallId": "toolu_01VgZ5tf7zvrjuBH7kcfTg7e",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": "(Bash completed with no output)"
+      }
+    }
+  ]
+}

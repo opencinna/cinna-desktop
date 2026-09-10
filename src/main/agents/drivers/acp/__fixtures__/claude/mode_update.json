@@ -1,0 +1,122 @@
+{
+  "recording": "claude/s6-load-set-mode-noturn.ndjson",
+  "note": "The adapter answers session/set_mode with {} and reports the new mode as a config_option_update for the `mode` option — auto (recording line 20), then default (line 23). No current_mode_update appears anywhere in the Claude recordings, which is why the mode is read out of config_option_update. TRUNCATED: the real update also carries the model and thinking-level options; only `mode` is kept.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "mode",
+            "name": "Mode",
+            "description": "Session permission mode",
+            "category": "mode",
+            "type": "select",
+            "currentValue": "auto",
+            "options": [
+              {
+                "value": "default",
+                "name": "Manual",
+                "description": "Always ask before making changes",
+                "_meta": {
+                  "kind": "standard"
+                }
+              },
+              {
+                "value": "acceptEdits",
+                "name": "Accept edits",
+                "description": "Automatically accept all file edits",
+                "_meta": {
+                  "kind": "standard"
+                }
+              },
+              {
+                "value": "plan",
+                "name": "Plan",
+                "description": "Create a plan before making changes",
+                "_meta": {
+                  "kind": "plan"
+                }
+              },
+              {
+                "value": "auto",
+                "name": "Auto",
+                "description": "Claude handles permission decisions",
+                "_meta": {
+                  "kind": "auto_review"
+                }
+              },
+              {
+                "value": "bypassPermissions",
+                "name": "Bypass permissions",
+                "description": "Accepts all permissions",
+                "_meta": {
+                  "kind": "full_access"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "config_option_update",
+        "configOptions": [
+          {
+            "id": "mode",
+            "name": "Mode",
+            "description": "Session permission mode",
+            "category": "mode",
+            "type": "select",
+            "currentValue": "default",
+            "options": [
+              {
+                "value": "default",
+                "name": "Manual",
+                "description": "Always ask before making changes",
+                "_meta": {
+                  "kind": "standard"
+                }
+              },
+              {
+                "value": "acceptEdits",
+                "name": "Accept edits",
+                "description": "Automatically accept all file edits",
+                "_meta": {
+                  "kind": "standard"
+                }
+              },
+              {
+                "value": "plan",
+                "name": "Plan",
+                "description": "Create a plan before making changes",
+                "_meta": {
+                  "kind": "plan"
+                }
+              },
+              {
+                "value": "auto",
+                "name": "Auto",
+                "description": "Claude handles permission decisions",
+                "_meta": {
+                  "kind": "auto_review"
+                }
+              },
+              {
+                "value": "bypassPermissions",
+                "name": "Bypass permissions",
+                "description": "Accepts all permissions",
+                "_meta": {
+                  "kind": "full_access"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

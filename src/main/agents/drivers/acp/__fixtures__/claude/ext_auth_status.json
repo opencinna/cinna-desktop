@@ -1,0 +1,17 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "An extension notification, not a session/update: the adapter volunteers the login it found, unasked, right after session/new. SCRUBBED — the real notification carries the account email and the organisation named after it (the spike could not suppress it without refusing subscription use). Nothing here maps onto AcpStreamUpdate, and that is the point: applyExt must swallow it.",
+  "method": "_auth/status_update",
+  "params": {
+    "authStatus": {
+      "kind": "account",
+      "label": "Claude Max",
+      "account": {
+        "plan": "max",
+        "email": "[redacted]",
+        "organization": "[redacted]"
+      }
+    }
+  },
+  "notifications": []
+}

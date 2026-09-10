@@ -1,0 +1,85 @@
+{
+  "recording": "opencode/q2-permission.ndjson",
+  "note": "The bash tool, turn 2, rejected. The ask itself is a session/request_permission RPC (recording line 444), not a session/update, so it is carried here as `permission`; the failed tool_call_update is what the agent emitted after the reject.",
+  "notifications": [
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_dv44kkcu",
+        "title": "bash",
+        "kind": "execute",
+        "status": "pending",
+        "locations": [
+          {
+            "path": "/tmp/spike-acp-opencode/agent1"
+          }
+        ],
+        "rawInput": {
+          "cwd": "/tmp/spike-acp-opencode/agent1"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_dv44kkcu",
+        "status": "in_progress",
+        "kind": "execute",
+        "title": "echo spike > bash_out.txt",
+        "locations": [
+          {
+            "path": "/tmp/spike-acp-opencode/agent1"
+          }
+        ],
+        "rawInput": {
+          "command": "echo spike > bash_out.txt",
+          "cwd": "/tmp/spike-acp-opencode/agent1"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_dv44kkcu",
+        "status": "failed",
+        "kind": "execute",
+        "title": "echo spike > bash_out.txt",
+        "locations": [
+          {
+            "path": "/tmp/spike-acp-opencode/agent1"
+          }
+        ],
+        "rawInput": {
+          "command": "echo spike > bash_out.txt",
+          "cwd": "/tmp/spike-acp-opencode/agent1"
+        },
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "The user rejected permission to use this specific tool call."
+            }
+          }
+        ],
+        "rawOutput": {
+          "error": "The user rejected permission to use this specific tool call."
+        }
+      }
+    }
+  ],
+  "permission": {
+    "requestId": "per_1",
+    "request": {
+      "action": "bash",
+      "resources": [
+        "echo spike > bash_out.txt"
+      ],
+      "savable": [],
+      "callId": "call_dv44kkcu"
+    }
+  }
+}

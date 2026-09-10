@@ -1,0 +1,108 @@
+{
+  "recording": "opencode/q2-permission.ndjson",
+  "note": "The write tool, turn 1. tool_call names it \"write\" and the completed update overwrites title with the file path — first title wins. Chunks around it are the last two of the message before the call and the first two after it (a different messageId).",
+  "notifications": [
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c7747470014wJ3Ly507l04vB",
+        "content": {
+          "type": "text",
+          "text": " immediately"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "agent_thought_chunk",
+        "messageId": "msg_08c7747470014wJ3Ly507l04vB",
+        "content": {
+          "type": "text",
+          "text": "."
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call",
+        "toolCallId": "call_h5kx0vip",
+        "title": "write",
+        "kind": "edit",
+        "status": "pending",
+        "locations": [],
+        "rawInput": {}
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_h5kx0vip",
+        "status": "in_progress",
+        "kind": "edit",
+        "title": "write",
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-opencode/agent1/notes.txt"
+          }
+        ],
+        "rawInput": {
+          "content": "hello from spike",
+          "filePath": "/private/tmp/spike-acp-opencode/agent1/notes.txt"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "tool_call_update",
+        "toolCallId": "call_h5kx0vip",
+        "status": "completed",
+        "title": "private/tmp/spike-acp-opencode/agent1/notes.txt",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "Wrote file successfully."
+            }
+          }
+        ],
+        "rawOutput": {
+          "output": "Wrote file successfully.",
+          "metadata": {
+            "diagnostics": {},
+            "filepath": "/private/tmp/spike-acp-opencode/agent1/notes.txt",
+            "exists": false,
+            "truncated": false
+          }
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c779bee001OXS6mbset3wpVH",
+        "content": {
+          "type": "text",
+          "text": "hello"
+        }
+      }
+    },
+    {
+      "sessionId": "ses_f7388b8daffeVOcyNpj4DeuuSq",
+      "update": {
+        "sessionUpdate": "agent_message_chunk",
+        "messageId": "msg_08c779bee001OXS6mbset3wpVH",
+        "content": {
+          "type": "text",
+          "text": " from"
+        }
+      }
+    }
+  ]
+}

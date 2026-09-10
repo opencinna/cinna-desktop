@@ -18,15 +18,24 @@ import type { InputResumeMode } from './runEvents'
  *
  * `source` still says who *owns* a row (`local` / `remote` / `folder`: whether
  * sync may touch it); `driver` says how it runs. They were one column and are
- * two concerns. Phase 3 collapses `opencode` and `claude` into `acp`.
+ * two concerns.
+ *
+ * **`opencode` and `claude` are on their way out.** Phase 3 of the agent
+ * runtime plan replaces both with `acp` — one driver speaking the Agent Client
+ * Protocol to a child process, with the engine recorded as
+ * `driver_config.launcher` instead of as an identity. They are still here
+ * because the switch is the *next* commit: the ACP driver and its process pool
+ * land first, tested on their own against a fake agent, so that the commit
+ * which flips every folder row over changes wiring and nothing else. Both
+ * values go, together with the two runners behind them, when it does.
  */
-export type AgentDriverId = 'a2a' | 'opencode' | 'claude'
+export type AgentDriverId = 'a2a' | 'acp' | 'opencode' | 'claude'
 
-export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'opencode', 'claude']
+export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp', 'opencode', 'claude']
 
 /** Whether a stored value names a driver this build has. */
 export function isAgentDriverId(value: unknown): value is AgentDriverId {
-  return value === 'a2a' || value === 'opencode' || value === 'claude'
+  return value === 'a2a' || value === 'acp' || value === 'opencode' || value === 'claude'
 }
 
 export interface AgentCapabilities {

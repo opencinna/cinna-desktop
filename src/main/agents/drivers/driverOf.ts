@@ -6,6 +6,7 @@
 import type { AgentRow } from '../../db/agents'
 import { isAgentDriverId, type AgentDriverId } from '../../../shared/agentDrivers'
 import { DEFAULT_AGENT_ENGINE, isAgentEngine } from '../../../shared/engine'
+import { ACP_LAUNCHER_IDS, type AcpLauncherId } from './acp/types'
 
 /**
  * The driver a folder agent runs on, from its runtime block (the manifest's,
@@ -32,4 +33,40 @@ export function driverOfFolder(runtime: { engine?: unknown } | null | undefined)
 export function driverOfRow(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriverId {
   if (isAgentDriverId(agent.driver)) return agent.driver
   return agent.source === 'folder' ? DEFAULT_AGENT_ENGINE : 'a2a'
+}
+
+/**
+ * Which engine an ACP agent runs — `driver_config.launcher`.
+ *
+ * The default rather than a refusal for a row whose config is missing or names
+ * an engine this build has not heard of, because the value is a *cache* of what
+ * the folder said: the turn re-reads the folder and reconciles anyway, so the
+ * only thing a stricter read would buy is a broken agent list while a rescan
+ * catches up.
+ */
+export function launcherOfRow(agent: Pick<AgentRow, 'driverConfig'>): AcpLauncherId {
+  const raw = agent.driverConfig?.launcher
+  return isAcpLauncherId(raw) ? raw : DEFAULT_AGENT_ENGINE
+}
+
+/**
+ * The launcher a folder's runtime block names, or **null when it could not be
+ * read**.
+ *
+ * Null is the same "keep what the row says" signal `folderIndexDriver` has
+ * always carried: a scan changes readiness, never identity, and a manifest is
+ * unparseable for a moment every time an assistant saves it. An insert with
+ * null takes the default engine; there is no earlier value to keep.
+ */
+export function launcherOfFolder(
+  runtime: { engine?: unknown } | null | undefined
+): AcpLauncherId | null {
+  const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
+  if (raw === '') return null
+  return isAcpLauncherId(raw) ? raw : null
+}
+
+/** Whether a stored value names a launcher this build has. */
+export function isAcpLauncherId(value: unknown): value is AcpLauncherId {
+  return typeof value === 'string' && (ACP_LAUNCHER_IDS as readonly string[]).includes(value)
 }

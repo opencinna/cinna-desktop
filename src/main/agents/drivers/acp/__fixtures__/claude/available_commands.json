@@ -1,0 +1,36 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "available_commands_update, TRUNCATED: the adapter sends 51 commands (every skill and slash command the CLI has); four are kept, verbatim, including one with an input hint and ones with input: null.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "sessionUpdate": "available_commands_update",
+        "availableCommands": [
+          {
+            "name": "design",
+            "description": "Grant or revoke Claude agent access to your Design projects",
+            "input": {
+              "hint": "consent | revoke"
+            }
+          },
+          {
+            "name": "run",
+            "description": "Launch and drive this project's app to see a change working. Use when asked to run, start, or screenshot the app, or to confirm a change works in the real app (not just tests). First looks for a project skill that already covers launching the app; otherwise falls back to built-in patterns per project type (CLI, server, TUI, Electron, browser-driven, library).",
+            "input": null
+          },
+          {
+            "name": "init",
+            "description": "Initialize a new CLAUDE.md file with codebase documentation",
+            "input": null
+          },
+          {
+            "name": "security-review",
+            "description": "Complete a security review of the pending changes on the current branch",
+            "input": null
+          }
+        ]
+      }
+    }
+  ]
+}

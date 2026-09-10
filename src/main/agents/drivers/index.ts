@@ -12,7 +12,17 @@
  * `services/agentTurn/index.ts`, whose `resolveTurnRunner` it replaces.
  */
 
+import { createRequire } from 'node:module'
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { engineManager } from '../../engine/engineManager'
+import {
+  configuredEnginePath,
+  realBinaryResolverDeps,
+  resolveEngineBinaryWith,
+  type ResolvedEngineBinary
+} from '../../engine/binaryResolver'
+import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { a2aSessionRepo, type AgentRow } from '../../db/agents'
 import { getSettingsScopeUserId } from '../../auth/scope'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
@@ -41,8 +51,9 @@ import {
   assembleBareAgentPrompt,
   resolveDesktopPromptContext
 } from '../../services/localAgents/promptAssembly'
-import { getShellEnv } from '../../shell/env'
+import { getShellEnv, shellEnvForChild } from '../../shell/env'
 import { buildClaudeEnv } from '../../services/agentTurn/claudeEnv'
+import { readFolderAgents } from '../../services/agentTurn/claudeAgents'
 import { app } from 'electron'
 import { fetchAgentCard } from '../a2a-client'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
@@ -50,6 +61,15 @@ import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
 import type { AgentDriverId } from '../../../shared/agentDrivers'
 import { createA2aDriver } from './a2aDriver'
+import { createAcpDriver, type AcpFolderView } from './acp/acpDriver'
+import { createAcpProcessPool } from './acp/acpProcessPool'
+import { startAcpConnection } from './acp/acpConnection'
+import {
+  createClaudeLauncher,
+  createOpencodeLauncher,
+  type AcpLauncher
+} from './acp/acpLaunchers'
+import type { AcpLauncherId } from './acp/types'
 import { createOpencodeDriver } from './opencodeDriver'
 import { createClaudeDriver } from './claudeDriver'
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
@@ -342,7 +362,174 @@ const folderDrivers: Record<FolderDriverId, FolderDriver> = {
   })
 }
 
+/**
+ * The ACP world: one process per agent, one driver over both launchers.
+ *
+ * Wired here for the same reason everything else in this file is — it is the
+ * only module under `agents/drivers/` allowed to name Electron, the engine
+ * manager's siblings and the local-agent services, so the driver, the pool and
+ * the launchers stay drivable in a test with no binary and no `app`.
+ */
+export const acpProcessPool = createAcpProcessPool({ start: startAcpConnection })
+
+/**
+ * How this build runs a Node program, and where the Claude ACP adapter is.
+ *
+ * Both live here rather than beside the launcher because both are Electron
+ * questions, and this module is the only file under `agents/drivers/` allowed
+ * to ask one.
+ *
+ * **There is no `node` to rely on.** A user who installed Cinna has Electron,
+ * not necessarily a Node runtime, and picking one off `PATH` would run the
+ * adapter on whatever version happens to be there. `ELECTRON_RUN_AS_NODE=1`
+ * makes this app's own binary behave as the Node it already embeds.
+ *
+ * **Packaging note — read before changing `electron-builder.yml`.** The adapter
+ * is `asarUnpack`ed, so the path below is a real file on disk. It has to be: a
+ * child process reads the adapter with its own `fs`, and a path inside
+ * `app.asar` is not a file to anything but Electron's patched reader. The
+ * `files` entry that excludes the adapter's *nested* `claude-agent-sdk-*`
+ * platform packages is what keeps the unpacked copy from carrying a second
+ * ~190 MB `claude` the user never chose; `CLAUDE_CODE_EXECUTABLE` is what makes
+ * that exclusion safe.
+ */
+function electronNodeRuntime(): { command: string; args: string[]; env: Record<string, string> } {
+  return { command: process.execPath, args: [], env: { ELECTRON_RUN_AS_NODE: '1' } }
+}
+
+const ADAPTER_PACKAGE = '@agentclientprotocol/claude-agent-acp'
+const ADAPTER_ENTRY = 'dist/index.js'
+
+function claudeAdapterEntry(): string {
+  const packaged = join(
+    process.resourcesPath ?? '',
+    'app.asar.unpacked',
+    'node_modules',
+    ADAPTER_PACKAGE,
+    ADAPTER_ENTRY
+  )
+  if (app.isPackaged) {
+    if (!existsSync(packaged)) {
+      throw new Error(`the Claude ACP adapter is not at ${packaged}`)
+    }
+    return packaged
+  }
+  // In development it is an ordinary dependency. Resolved rather than joined
+  // from `process.cwd()`: the resolution follows npm's own layout, hoisted or
+  // not, which is the same question `require` answers for every other import.
+  return createRequire(import.meta.url).resolve(`${ADAPTER_PACKAGE}/${ADAPTER_ENTRY}`)
+}
+
+/**
+ * The resolved `opencode`, resolved once.
+ *
+ * **Memoised across the app's life on purpose.** On a machine with no install
+ * this downloads and verifies the pinned version, which takes a minute; a
+ * per-turn resolution would do it again for every agent, and two turns starting
+ * together would download it twice into the same directory. The promise is
+ * dropped on failure so a user who fixes the path in Settings is not stuck with
+ * the old answer for the rest of the session.
+ */
+let engineBinary: Promise<ResolvedEngineBinary> | null = null
+
+function resolveEngineBinaryOnce(): Promise<ResolvedEngineBinary> {
+  if (!engineBinary) {
+    engineBinary = resolveEngineBinaryWith(realBinaryResolverDeps(configuredEnginePath)).catch(
+      (err: unknown) => {
+        engineBinary = null
+        throw err
+      }
+    )
+  }
+  return engineBinary
+}
+
+const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
+  opencode: createOpencodeLauncher({
+    binary: resolveEngineBinaryOnce,
+    // `refreshModels: false` for the same reason the reconcile passes it: this
+    // runs once per turn, and a per-turn fan-out of provider API calls would
+    // put network latency in front of every message the user sends. The local
+    // credentials are still re-asked, because `ollama pull` happens between
+    // one turn and the next.
+    configInput: (userId) => collectEngineConfigInput(userId, { refreshModels: false }),
+    configRoot: () => join(app.getPath('userData'), 'acp'),
+    childEnv: async () => shellEnvForChild(await getShellEnv())
+  }),
+  claude: createClaudeLauncher({
+    claudePath: async (options) => {
+      const path = await claudeDeps.claudePath()
+      if (path || !options?.fresh) return path
+      // Detection is memoized for the life of the app, so *Check again* after
+      // installing Claude Code would never see it.
+      await toolDetectionService.refresh()
+      return claudeDeps.claudePath()
+    },
+    claudeAuth: (options) =>
+      options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status(),
+    adapterEntry: claudeAdapterEntry,
+    nodeRuntime: electronNodeRuntime,
+    claudeEnv: async () =>
+      buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() }),
+    systemPrompt: (userId, agentId) => claudeDeps.systemPrompt(userId, agentId),
+    model: (userId, agentId) => claudeDeps.model(userId, agentId),
+    approval: (userId, agentId) => claudeDeps.approval(userId, agentId),
+    // Read fresh each turn, like the prompt: a subagent definition edited while
+    // the app runs takes effect on the next turn, not the next launch.
+    folderAgents: (agentPath) => readFolderAgents(agentPath).agents
+  })
+}
+
+/**
+ * The folder, widened for the ACP driver.
+ *
+ * The launcher needs the folder's own identity — its slug becomes the engine's
+ * agent key, its description the entry's description — which the two folder
+ * drivers never had to know, because `configGenerator` collected all of that
+ * separately for the shared server.
+ */
+function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
+  try {
+    const dto = localAgentService.get(userId, agentId)
+    return {
+      name: dto.name,
+      slug: dto.slug,
+      description: dto.description,
+      path: dto.path,
+      kind: dto.kind,
+      enabled: dto.enabled,
+      readiness: dto.readiness,
+      readinessReason: dto.readinessReason,
+      runtime: dto.runtime
+    }
+  } catch (err) {
+    logger.warn('a folder agent could not be read; keeping the launcher its row names', {
+      agentId,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return null
+  }
+}
+
+export const acpDriver = createAcpDriver({
+  pool: acpProcessPool,
+  launcher: (id) => acpLaunchers[id],
+  readFolder: readAcpFolder,
+  // **The same implementations the two runners used**, deliberately: "this
+  // agent is busy in another chat", "this chat remembers a session" and "you
+  // allowed this always" must not mean two different things depending on which
+  // transport answered.
+  readSession: localDeps.readSession,
+  saveSession: localDeps.saveSession,
+  isGranted: localDeps.isGranted,
+  rememberGrant,
+  registerRequest: (input) => pendingRequests.register(input),
+  resolveRequest: folderWorld.resolveRequest,
+  withLock: localDeps.withLock
+})
+
 const drivers: Record<AgentDriverId, AgentDriver> = {
+  acp: acpDriver,
   a2a: createA2aDriver({
     runTurn: runAgentTurn,
     resolveEndpoint: resolveEndpointIfNeeded,

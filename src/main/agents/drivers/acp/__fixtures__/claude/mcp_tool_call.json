@@ -1,0 +1,85 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "An MCP tool through the Claude adapter: the tool name is the full mcp__<server>__<tool> name, and the result arrives twice — once as a bare _meta.claudeCode.toolResponse update with no status (ignored) and once as the completed update carrying both content and rawOutput.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "mcp__cinna-spike__spike_secret_word",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {},
+        "title": "mcp__cinna-spike__spike_secret_word",
+        "kind": "other",
+        "content": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolResponse": [
+              {
+                "type": "text",
+                "text": "pomegranate"
+              }
+            ],
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call_update"
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "mcp__cinna-spike__spike_secret_word"
+          }
+        },
+        "toolCallId": "toolu_01XGFAXMFyieRnTN7An6emr8",
+        "sessionUpdate": "tool_call_update",
+        "status": "completed",
+        "rawOutput": [
+          {
+            "type": "text",
+            "text": "pomegranate"
+          }
+        ],
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "pomegranate"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "recording": "claude/s2-perms-turn.ndjson",
+  "note": "Edit, refused. The ask is a session/request_permission RPC (recording line 44), not a session/update, so it is carried here as `permission`; `request` is what claudePermissions builds today from toolCall.name + rawInput. The failed update is what the adapter emitted after the reject.",
+  "notifications": [
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call",
+        "rawInput": {},
+        "status": "pending",
+        "title": "Edit",
+        "kind": "edit",
+        "content": [],
+        "locations": []
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt"
+        },
+        "title": "Edit /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt",
+          "old_string": "one"
+        },
+        "title": "Edit /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call_update",
+        "rawInput": {
+          "replace_all": false,
+          "file_path": "/private/tmp/spike-acp-claude/s2/note.txt",
+          "old_string": "one",
+          "new_string": "two"
+        },
+        "title": "Edit /private/tmp/spike-acp-claude/s2/note.txt",
+        "kind": "edit",
+        "content": [
+          {
+            "type": "diff",
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt",
+            "oldText": "one",
+            "newText": "two"
+          }
+        ],
+        "locations": [
+          {
+            "path": "/private/tmp/spike-acp-claude/s2/note.txt"
+          }
+        ]
+      }
+    },
+    {
+      "sessionId": "1786838a-6a70-43bb-8955-fd6a4b8e1a82",
+      "update": {
+        "_meta": {
+          "claudeCode": {
+            "toolName": "Edit",
+            "nonExecutionKind": "permission-rule"
+          }
+        },
+        "toolCallId": "toolu_01CZ5yipLiU8Ab27KimFxZdW",
+        "sessionUpdate": "tool_call_update",
+        "status": "failed",
+        "rawOutput": "User refused permission to run tool",
+        "content": [
+          {
+            "type": "content",
+            "content": {
+              "type": "text",
+              "text": "```\nUser refused permission to run tool\n```"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "permission": {
+    "requestId": "per_2",
+    "request": {
+      "action": "Edit",
+      "resources": [
+        "/private/tmp/spike-acp-claude/s2/note.txt"
+      ],
+      "savable": [],
+      "callId": "toolu_01CZ5yipLiU8Ab27KimFxZdW"
+    }
+  }
+}
