@@ -408,7 +408,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     <div
       ref={containerRef}
       className="flex-1 overflow-y-auto px-4 pb-4 pt-[calc(var(--topbar-h)+12px)]"
-      style={bottomPadding ? { paddingBottom: bottomPadding + 16 } : undefined}
+      style={bottomPadding ? { paddingBottom: bottomPadding + 41 } : undefined}
     >
       <div ref={contentRef} className="max-w-3xl mx-auto space-y-3">
         {messages.length === 0 && !isStreaming && !hasStreamingContent && (
