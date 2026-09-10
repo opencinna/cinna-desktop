@@ -21,7 +21,7 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  *    dot carries the unreachable tone (`--color-danger`, `READINESS_TONE` in
  *    `ComposerReadiness.tsx`) rather than the healthy `--color-success`.
  * 3. The new-chat composer, with that agent as the single agent (the routing
- *    badge reads `Direct A2A connection`): **Send is disabled**, its accessible
+ *    badge reads `Direct agent connection`): **Send is disabled**, its accessible
  *    description is the reason, **Check again** is offered, and Enter creates
  *    no chat and leaves the typed message in the textarea.
  * 4. Recovery: the fake agent starts on the port, **Check again** is pressed,
@@ -219,7 +219,7 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
       await composer.fill('@')
       const mentions = page.getByRole('listbox', { name: 'Agents and MCP servers' })
       await mentions.getByRole('option').filter({ hasText: AGENT }).click()
-      await expect(page.getByRole('status', { name: 'Direct A2A connection' })).toBeVisible()
+      await expect(page.getByRole('status', { name: 'Direct agent connection' })).toBeVisible()
 
       await composer.fill(MESSAGE)
       const send = page.getByRole('button', { name: 'Send', exact: true })
