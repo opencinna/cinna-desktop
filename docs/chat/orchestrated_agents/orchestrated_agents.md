@@ -79,6 +79,7 @@ The routing decision is evaluated **dynamically**, not just at chat creation: br
 - **Tool naming.** LLM-facing tool name = a sanitized slug from the descriptor's `tool_name`/`display_name` or the agent name (`^[a-z0-9_-]+$`, ≤64 chars). Collisions (agent-vs-agent or agent-vs-MCP) get a stable id-derived suffix (e.g. `assistant_a3f`) — never a positional `_2`. The routing key (stable agent id) is never shown to the LLM.
 - **On-demand agents mirror on-demand MCPs.** Sticky per-chat engagement (`chat_on_demand_agents`), one-shot announce prefix on the next send, removable chips, re-arm on re-add. The announce is combined with the MCP announce into one system note.
 - **Handover depth.** An agent's own tool calls render as leaf blocks in the sub-thread. If an agent hands off to *another* agent server-side, that renders as a single labeled leaf — the desktop does not recurse into sub-sub-threads (v1).
+- **A nested agent's ask cannot be answered yet.** A folder agent called as a tool may stop to ask permission or a question. The ask reaches the renderer and is recorded against its tool call, and the registry would accept an answer by id — but no sub-thread renders a control for it, so it waits out its park timeout and is rejected.
 - **Abort.** Aborting the orchestrator propagates an `AbortSignal` into the in-flight agent sub-turn, cancelling it.
 - **Depth guard.** The orchestrator's tool-call loop is bounded (max rounds) so an agent tool that triggers server-side handovers can't loop the conductor unbounded.
 - **The orchestrator is the only context-handoff mechanism.** It authors each agent's tool `message` (so every agent gets a self-contained prompt) and holds the full chat history, so no per-agent prompt-rewriting or transcript-replay machinery is needed. Per-agent continuity is `a2a_sessions`.
@@ -120,18 +121,18 @@ llm:send-message -> chatStreamingService.stream
        provider.callTool(name, input, { onEvent, signal })
          mcp   -> mcpManager.callTool (raw result)
          agent -> runAgentTurn(...) -> { text (compact), parts (rich) }
-                    onEvent wraps each AgentStreamEvent as tool_subevent
+                    onEvent wraps each RunEvent of the sub-turn as child { toolCallId, agentId }
        -> compact text back to LLM; parts persisted on tool_call row
 
 Renderer
   tool_use(providerType:'agent') -> ToolCallBlock w/ subParts
-  tool_subevent -> appendToolSubEvent accumulates MessagePart[]
+  child -> appendToolSubEvent accumulates MessagePart[]   (nested asks -> chat store inputRequests)
   MessageStream -> AgentToolSubThread -> AgentContribution (parts render)
 ```
 
 ## Integration Points
 
-- [Messaging](../messaging/messaging.md) — `chatStreamingService` is the orchestrator; it now unions MCP + agent tool providers and routes dispatch by provider type. The `LlmStreamEvent` union gains `tool_subevent`.
+- [Messaging](../messaging/messaging.md) — `chatStreamingService` is the orchestrator; it now unions MCP + agent tool providers and routes dispatch by provider type. A sub-turn's events reach the renderer wrapped in `child` — see [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md).
 - [On-Demand MCP](../../mcp/on_demand/on_demand.md) — `chat_on_demand_agents` is a verbatim mirror; the announce prefix is combined across MCPs and agents. The promoted root agent is added as a pending-announce on-demand agent, so it is announced like any freshly attached agent.
 - [Agents](../../agents/agents/agents.md) — Agent turns reuse the A2A client, endpoint/token resolution, and the `a2a_sessions` table via the port-free `runAgentTurn` core.
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — The agent's rich `parts[]` (`cinna.content_kind`) stream over the same external A2A surface; orchestrated mode just stops collapsing them.

@@ -157,7 +157,7 @@ The same never-shrink / never-shorten guard is applied to tool narrations, tool 
 
 **This is the convention a future contributor will otherwise break, so it is stated flatly: neither a `permission` nor a `question` stream-part kind exists, and none is to be added** (seam 7 in the plan).
 
-The stream vocabulary is a wire contract shared by the main process, the preload guard and the renderer, and it already has a convention for "a tool call the renderer should render as an interactive widget": Ask-User-Question is detected renderer-side by pattern-matching a `tool` part whose `cinna.tool_name` normalises to `askuserquestion` (see [Ask User Question](../../chat/ask_user_question/ask_user_question.md)). A permission ask is the same thing — a call the agent cannot proceed past until a human answers — so it follows the identical convention under a reserved tool name, and the renderer gains a sibling block component while the wire contract is untouched.
+The stream vocabulary is a wire contract shared by the main process, the preload guard and the renderer, and it already has a convention for "a tool call the renderer should render as an interactive widget": Ask-User-Question is detected renderer-side by pattern-matching a `tool` part whose `cinna.tool_name` normalises to `askuserquestion` (see [Ask User Question](../../chat/ask_user_question/ask_user_question.md)). A permission ask is the same thing — a call the agent cannot proceed past until a human answers — so it follows the identical convention under a reserved tool name, and the renderer gains a sibling block component. The **part** is the transcript, and it is all a reloaded chat has. A running turn also announces the ask on the stream — `needs_input` right after the part, `input_resolved` when it settles ([Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)) — but those events are never persisted, which is why they cannot replace the part.
 
 The reserved permission name is deliberately not a name any model would emit. OpenCode's permission asks are *about* tools (`bash`, `edit`, `webfetch`) and carry the real tool name separately, so naming the request after a tool would make an agent's own call to that tool indistinguishable from a request to run it.
 
@@ -165,7 +165,7 @@ The request id rides in the part's existing `cinna.tool_id` field, because that 
 
 ### An engine request id is a live address that dies with the turn
 
-This is what separates a local agent's question from a cloud agent's, and the separation is load-bearing on the replay path. A cloud agent's question ends its turn and stays answerable afterwards — answering it sends the next user turn. A local agent's request is answerable **only while the engine is still parked on it**, so a persisted block bearing one of those ids must render read-only however recent the message is. Whether it is still live is a question only the main process can answer, and it answers it from the pending-request registry.
+This is what separates a local agent's question from a cloud agent's, and the separation is load-bearing on the replay path. A cloud agent's question ends its turn and stays answerable afterwards — answering it sends the next user turn. A local agent's request is answerable **only while the engine is still parked on it**, so a persisted block bearing one of those ids must render read-only however recent the message is. Whether it is still live is a question only the main process can answer, and while a turn runs it answers two ways. The stream says so as it happens: the runner posts `needs_input` with `resume: 'reply'` the moment the ask is parked, and `input_resolved` when it is answered, rejected or expires. The renderer also polls the pending-request registry, and the poll is not redundant — a reloaded renderer has no port, so the registry is the only thing that can re-open its prompt, and an ask raised before the renderer subscribed never reaches it as an event. Where the two disagree, *settled* wins: the poll can go on listing an ask for a tick after it expired or was answered elsewhere, and buttons whose answer can only be refused are worse than buttons withdrawn a tick early. The asks a turn's own ending sweeps away get no `input_resolved`; the `done` or `error` above the runner already says nothing is parked.
 
 ### The answer travels out of band, and every exit clears what is parked
 
@@ -274,6 +274,11 @@ Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin co
   │                   RunAgentTurnResult { text, parts, notices, contextId, error? }
   │                          │ persist assistant row + notices, save the session
   ◀── MessagePort ───────────┘ post `done`, close the port
+
+In band, on the turn's own stream (wrapped in `child` when orchestrated):
+Runner ── park ──────────────▶ needs_input {resume:'reply'} ──▶ chat store inputRequests
+Runner ── settled, turn open ▶ input_resolved              ──▶ chat store settledInputRequestIds
+       (teardown sweep posts nothing)
 
 Out of band, while the turn streams:
 Renderer ── agent:pending-requests (poll) ──▶ pendingRequests.listForChat

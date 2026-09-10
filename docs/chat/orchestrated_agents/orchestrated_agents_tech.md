@@ -21,7 +21,8 @@
 
 ### Shared
 - `src/shared/agentMetadata.ts` — `CinnaMcpDescriptor` type + `RemoteAgentMetadata.cinna_mcp`
-- `src/shared/llmStreamEvents.ts` — `LlmToolSubEvent` variant (`tool_subevent`), `LlmToolUseEvent.providerType` + `providerAgentId`, guard `isLlmStreamEvent`
+- `src/shared/runEvents.ts` — `RunChildEvent` (`child { toolCallId, agentId, event }`), `RunToolUseEvent.providerType` + `providerAgentId`, guard `isRunEvent`. See [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)
+- `src/shared/partMerge.ts` — `continuesPart`, the merge rule `appendAgentDeltaPart` shares with the main-process accumulator
 - `src/shared/messageParts.ts` — `MessagePart` shape reused for the persisted/streamed sub-thread
 - `src/main/llm/types.ts` — `ToolDefinition.providerType`
 - `src/main/mcp/types.ts` — `McpTool.providerType: 'mcp'`
@@ -41,8 +42,8 @@
 - `src/renderer/src/components/chat/ChatInput.tsx` — `@`-mention agent picks route to `onTogglePendingAgent`; renders chips + badge (new-chat)
 - `src/renderer/src/components/layout/MainArea.tsx` — owns `pendingAgentIds`, computes `combinedAgentIds` + `commPatternInfo`, applies the destination check
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `startNewChat(agentIds[], ...)` decision rule + on-demand agent flush
-- `src/renderer/src/hooks/useChatStream.ts` — `handleLlm` routes `tool_subevent` to `appendToolSubEvent`, passes `providerType`/`providerAgentId` to `addToolCall`
-- `src/renderer/src/stores/chat.store.ts` — `ToolCallBlock.{providerType,agentId,subParts}`, `appendToolSubEvent`, `appendAgentDeltaPart` merge helper
+- `src/renderer/src/hooks/useChatStream.ts` — `handleRun` passes `providerType`/`providerAgentId` to `addToolCall` and routes a `child` event: a nested `needs_input` / `input_resolved` to the chat store's `inputRequests`, tagged with the `toolCallId`; a `child` inside a `child` is dropped; everything else goes to `appendToolSubEvent`. `tool_result` / `tool_error` drop that call's asks (`dropInputRequestsFor`)
+- `src/renderer/src/stores/chat.store.ts` — `ToolCallBlock.{providerType,agentId,subParts}`, `appendToolSubEvent`, `appendAgentDeltaPart` merge helper (calls `continuesPart`), `dropInputRequestsFor`
 - `src/renderer/src/utils/agentColors.ts` — `presetForAgentId` hash color (reused by the sub-thread)
 
 ## Database Schema
@@ -64,16 +65,16 @@ Column: `messages.tool_agent_id` (TEXT, nullable; see `src/main/db/migrations/me
 - `chat:on-demand-agent-add` — `(chatId: string, agentId: string) => { success: true }`
 - `chat:on-demand-agent-remove` — `(chatId: string, agentId: string) => { success: true }`
 
-All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `llm:send-message` MessagePort stream gains the `tool_subevent` event variant (validated by `isLlmStreamEvent` at the contextBridge boundary in `src/preload/index.ts`).
+All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `llm:send-message` MessagePort stream carries a sub-turn's events wrapped in `child` (validated by `isRunEvent` at the contextBridge boundary in `src/preload/index.ts`).
 
 ## Services & Key Methods
 
 - `chatStreamingService.stream(input)` — builds `McpToolProvider`s for connected MCPs, calls `buildAgentToolProviders(chatId, settingsUserId, profileUserId, reservedNames)`, unions `getTools()` into `tools[]` + `toolRouting: Map<name, ToolProvider>`, resolves combined announce, threads pending ids into `_runStreamLoop`
-- `chatStreamingService._runStreamLoop(...)` — dispatch routes via `provider.callTool(name, input, { onEvent, signal })`; agent providers get an `onEvent` that posts `{ type: 'tool_subevent', toolCallId, event }`; persists `saveToolCall({ ..., toolAgentId, parts })`; clears both MCP + agent pending sets on `round === 0`
+- `chatStreamingService._runStreamLoop(...)` — dispatch routes via `provider.callTool(name, input, { onEvent, signal })`; agent providers get an `onEvent` that posts `{ type: 'child', toolCallId, agentId: providerAgentId, event }` — wired only when the provider has an agent id, so a provider without one runs buffered rather than post a `child` naming an invented agent; persists `saveToolCall({ ..., toolAgentId, parts })`; clears both MCP + agent pending sets on `round === 0`
 - `buildAgentToolProviders(...)` (`a2aAsMcpProvider.ts`) — reads `chatOnDemandAgentRepo.listAgentIds`, resolves each via `agentService.findAgent`, skips unresolved/no-card-url with a warn, assigns collision-free slugs (id-derived suffix), constructs providers
 - `A2AAsMcpProvider.getTools()` — synthesizes one tool from `remote_metadata.cinna_mcp` (description/input_schema) or a fallback `{ message }` schema from name/description/example_prompts; `mcpProviderId` field set to the agent id (unused for routing, never shown to LLM)
 - `A2AAsMcpProvider.callTool(name, { message }, opts)` — resolves endpoint+token (`agentService`), runs `runAgentTurn`, returns `{ content: text, parts }` or `{ content: error, parts, isError }`. Captures the SDK client + task id via `onClient`/`onTaskId` and, on `signal` abort, calls `client.cancelTask` so the remote agent stops too
-- `runAgentTurn(input)` (`a2aStreamingService.ts`) — port-free A2A pump: creates client, streams via `StreamPartsAccumulator`, upserts `a2aSessionRepo`, returns `{ text, parts, notices, contextId, taskId, taskState, error? }`; honors `signal`, forwards delta/status via `onEvent`, surfaces client/taskId via `onClient`/`onTaskId`
+- `runAgentTurn(input)` (`a2aStreamingService.ts`) — port-free A2A pump: creates client, streams via `StreamPartsAccumulator`, upserts `a2aSessionRepo`, returns `{ text, parts, notices, contextId, taskId, taskState, error? }` — a thrown failure returns empty `text` / `parts` / `notices` beside the `error`, **except** when the turn had already been stopped: then the throw is how the stop ended (a server dropping the connection after `tasks/cancel`), and what the accumulator streamed is returned so the stopped text is kept (golden `a2a/canceled_then_stream_error`); honors `signal`, forwards delta/status via `onEvent`, surfaces client/taskId via `onClient`/`onTaskId`
 - `a2aStreamingService.streamToAgent(input)` — direct-A2A wrapper: registers the request for `cancel`, drives `runAgentTurn`, persists notices + assistant message, posts port events, reports job completion (behavior preserved byte-for-byte)
 - `chatService.addOnDemandAgent(userId, chatId, agentId)` — `requireOwnedChat` + `agentService.findAgent` existence check, then `chatOnDemandAgentRepo.add`
 - `agentService.syncRemoteAgents` — merges `target.mcp` into `metadata.cinna_mcp` on the upsert
@@ -84,7 +85,8 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 - `ChatInput` — new-chat `@` agent pick calls `onTogglePendingAgent`; an active-chat `@` agent pick calls `useAttachAgentToChat(chatId)`, which promotes the chat (`chat:promote-to-orchestrated`) when not already orchestrated and then `addOnDemandAgent`; renders `OnDemandAgentChips` (DB mode in active chats, buffer mode on new-chat) and the on-demand MCP chips; `CommPatternBadge` renders on the right, left of the `[+]` attach button (new-chat only); `selectedAgent` still drives example prompts via the agent selector
 - `useChatComposer.submit` — reads the chat snapshot and dispatches: agent-rooted + not orchestrated → `startAgent` (direct A2A); otherwise → `startLlm` (orchestrator)
 - `useNewChatFlow.startNewChat` — `isA2A = agentIds.length === 1 && onDemandMcpIds.length === 0`; A2A binds `agentId` + `startAgent`; else flushes `addOnDemandMcp` + `addOnDemandAgent` then `startLlm`
-- `chat.store.appendToolSubEvent(toolCallId, event)` — only `delta` events (skips `notice`); merges into `ToolCallBlock.subParts` via `appendAgentDeltaPart` (mirrors the main accumulator's `appendToList` merge rules)
+- `chat.store.appendToolSubEvent(toolCallId, event)` — only `delta` events (skips `notice`); merges into `ToolCallBlock.subParts` via `appendAgentDeltaPart`, which calls `continuesPart` (`src/shared/partMerge.ts`) — the accumulator's own rule, so the live sub-thread splits exactly where the persisted one will. A nested `status`, `done` or `error` is dropped here, so a sub-turn ending never ends the outer turn
+- Nested asks — a folder agent called as a tool that parks on a permission or question sends `needs_input` inside a `child`. `handleRun` records it in `inputRequests` with the `toolCallId`, and `dropInputRequestsFor` removes it when that call's `tool_result` / `tool_error` arrives. `AgentToolSubThread` renders no control for it, so today it ends at its park timeout
 - `AgentToolSubThread` — colors by `presetForAgentId(agentId ?? agentName)`; `useEffect` collapses on the live→done transition (verbose keeps open); renders `AgentContribution` (passing `verbose`) or a "Working…" placeholder when `parts` empty + pending
 - `AgentContribution` — maps `MessagePart[]` to block components, then `groupConsecutiveCollapsibles` folds consecutive thinking/tool/tool_result into dots (compact) / renders inline (verbose); optional name label + `askMessage` first line; streaming cursor on the last part
 

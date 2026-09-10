@@ -13,9 +13,10 @@
  * `AgentTurnRunner.runTurn` contract that says they never throw.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
+import type { RunEvent } from '../../shared/runEvents'
 
 const saved: { short: string }[] = []
+const savedAssistant: Record<string, unknown>[] = []
 const runCompletions: { status: string; message?: string }[] = []
 
 vi.mock('../logger/logger', () => ({
@@ -24,7 +25,7 @@ vi.mock('../logger/logger', () => ({
 vi.mock('../db/messages', () => ({
   messageRepo: {
     saveError: (i: { short: string }) => saved.push(i),
-    saveAssistant: () => {},
+    saveAssistant: (i: Record<string, unknown>) => void savedAssistant.push(i),
     saveTransition: () => {},
     touchChat: () => {}
   }
@@ -37,10 +38,15 @@ vi.mock('./jobService', () => ({
   }
 }))
 
-import { a2aStreamingService } from './a2aStreamingService'
+import {
+  A2A_AUTH_REQUIRED_FALLBACK,
+  a2aInputRequestOf,
+  a2aStreamingService,
+  toRunState
+} from './a2aStreamingService'
 
-function fakePort(): { posted: AgentStreamEvent[]; closed: boolean; port: { postMessage: (m: AgentStreamEvent) => void; close: () => void } } {
-  const posted: AgentStreamEvent[] = []
+function fakePort(): { posted: RunEvent[]; closed: boolean; port: { postMessage: (m: RunEvent) => void; close: () => void } } {
+  const posted: RunEvent[] = []
   const state = { closed: false }
   return {
     posted,
@@ -59,6 +65,7 @@ function fakePort(): { posted: AgentStreamEvent[]; closed: boolean; port: { post
 describe('a2aStreamingService.streamToAgent', () => {
   beforeEach(() => {
     saved.length = 0
+    savedAssistant.length = 0
     runCompletions.length = 0
   })
 
@@ -125,6 +132,9 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(p.posted.map((e) => e.type)).toContain('done')
     expect(p.posted.map((e) => e.type)).not.toContain('error')
     expect(runCompletions).toEqual([{ status: 'cancelled', message: undefined }])
+    // …and the `done` itself says it was a stop, which is the only place on the
+    // wire that does: the runner's result looks like any other success.
+    expect(p.posted.find((e) => e.type === 'done')).toEqual({ type: 'done', stopReason: 'canceled' })
   })
 
   it.each([
@@ -174,6 +184,44 @@ describe('a2aStreamingService.streamToAgent', () => {
     expect(saved).toHaveLength(0)
     // But it is an ending.
     expect(runCompletions).toEqual([{ status: 'cancelled', message: undefined }])
+    // …and the renderer has to hear that it ended: its Stop clears no state of
+    // its own, so a stop that posted no terminal event left the chat streaming
+    // until the user switched away. Mutation: restore the early `return` for an
+    // aborted turn's error, or drop the `done` in the `catch`, fails this.
+    expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'canceled' })
+  })
+
+  it('keeps what a stopped turn streamed even when its result also carries an error', async () => {
+    // A local runner that errors after a partial answer returns its parts beside
+    // the error. When the user had already stopped the turn, that is a stop, and
+    // the parts are kept like any stopped turn's — the refetch `done` triggers
+    // would otherwise clear text the user watched arrive.
+    const p = fakePort()
+    await a2aStreamingService.streamToAgent({
+      runner: {
+        runTurn: async () => {
+          const requestId = p.posted.find((e) => e.type === 'request-id')
+          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+          return {
+            text: 'half',
+            parts: [{ kind: 'text' as const, text: 'half' }],
+            notices: [],
+            error: { message: 'aborted', raw: 'aborted' }
+          }
+        }
+      },
+      chatId: 'chat_1',
+      agentId: 'folder:abc',
+      agentName: 'Helper',
+      wireContent: 'hi',
+      port: p.port
+    })
+
+    expect(savedAssistant).toEqual([
+      { chatId: 'chat_1', content: 'half', parts: [{ kind: 'text', text: 'half' }], sourceAgentId: 'folder:abc' }
+    ])
+    expect(saved).toHaveLength(0)
+    expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'canceled' })
   })
 
   it('still posts done on the ordinary path', async () => {
@@ -188,6 +236,83 @@ describe('a2aStreamingService.streamToAgent', () => {
     })
     // Guards against a `catch` written so broadly it swallows success.
     expect(p.posted.map((e) => e.type)).toEqual(['request-id', 'done'])
+    expect(p.posted[1]).toEqual({ type: 'done', stopReason: 'end_turn' })
     expect(runCompletions).toEqual([{ status: 'succeeded', message: undefined }])
+  })
+})
+
+describe('toRunState', () => {
+  it.each([
+    ['submitted', 'submitted'],
+    ['working', 'working'],
+    ['completed', 'completed'],
+    ['failed', 'failed'],
+    ['canceled', 'canceled'],
+    ['rejected', 'rejected'],
+    ['input-required', 'needs_input'],
+    ['auth-required', 'needs_input'],
+    // A2A's own `unknown`, a near miss that must not be forgiven, and a state
+    // no version of A2A has: none of them is a state the union knows.
+    ['unknown', 'unknown'],
+    ['cancelled', 'unknown'],
+    ['paused', 'unknown'],
+    [undefined, 'unknown']
+  ] as const)('maps %s to %s', (state, expected) => {
+    expect(toRunState(state)).toBe(expected)
+  })
+})
+
+describe('a2aInputRequestOf', () => {
+  const message = (...parts: { kind: string; text?: string; metadata?: Record<string, unknown> }[]) => ({
+    messageId: 'msg-1',
+    parts
+  })
+
+  it('asks nothing for a state that is not waiting on the user', () => {
+    for (const state of ['working', 'completed', 'failed', undefined]) {
+      expect(a2aInputRequestOf(state, message({ kind: 'text', text: 'Which one?' }))).toBeUndefined()
+    }
+  })
+
+  it('turns an auth-required status message into an auth request', () => {
+    expect(
+      a2aInputRequestOf('auth-required', message({ kind: 'text', text: '  Sign in to GitHub to continue.\n' }))
+    ).toEqual({ kind: 'auth', message: 'Sign in to GitHub to continue.' })
+  })
+
+  it('still says what the agent needs when auth-required carries no text', () => {
+    // No message at all, and a message whose only part is not answer text:
+    // either way the user must be told something, not shown an empty ask.
+    expect(a2aInputRequestOf('auth-required', undefined)).toEqual({
+      kind: 'auth',
+      message: A2A_AUTH_REQUIRED_FALLBACK
+    })
+    expect(
+      a2aInputRequestOf(
+        'auth-required',
+        message({ kind: 'text', text: 'checking scopes', metadata: { 'cinna.content_kind': 'thinking' } })
+      )
+    ).toEqual({ kind: 'auth', message: A2A_AUTH_REQUIRED_FALLBACK })
+  })
+
+  it('makes one open question of the text parts only, joined as paragraphs', () => {
+    expect(
+      a2aInputRequestOf(
+        'input-required',
+        message(
+          { kind: 'text', text: 'deciding', metadata: { 'cinna.content_kind': 'thinking' } },
+          { kind: 'text', text: 'Which environment?' },
+          { kind: 'file' },
+          { kind: 'text', text: 'Staging or production.', metadata: { 'cinna.content_kind': 'text' } }
+        )
+      )
+    ).toEqual({
+      kind: 'question',
+      questions: [{ question: 'Which environment?\n\nStaging or production.', multiSelect: false, options: [] }]
+    })
+  })
+
+  it('asks no question when input-required carries no text', () => {
+    expect(a2aInputRequestOf('input-required', undefined)).toEqual({ kind: 'question', questions: [] })
   })
 })

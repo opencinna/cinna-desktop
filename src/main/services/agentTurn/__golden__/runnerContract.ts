@@ -20,18 +20,26 @@
  *   task state (`abort.reports`).
  * - A parked ask (where the runner parks) is the turn's only registration in
  *   `pendingRequests` and is gone on every exit: answer, reject, abort, timeout.
+ * - A parked ask is announced: exactly one `needs_input` for the registered id,
+ *   `resume: 'reply'`, of the registration's kind, before any answer is posted
+ *   (`park.needs_input`, phase 1).
+ * - A parked ask settled while the turn is open says so once: exactly one
+ *   `input_resolved`, after its `needs_input`, carrying the answer that was
+ *   posted (`park.input_resolved`) — or `{kind: 'rejected'}` when it was
+ *   rejected or timed out. An ask swept away by an abort gets none: the
+ *   terminal event posted above the runner already says the park is gone.
  * - A session id the turn produces reaches `saveSession`, and the next turn on
  *   the same chat receives it through `readSession`.
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type TestFunction } from 'vitest'
 import { pendingRequests, type RequestResolution } from '../pendingRequests'
-import type { AgentStreamEvent } from '../../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../../shared/runEvents'
 import type { RunAgentTurnResult } from '../../a2aStreamingService'
 
 /** The sink and signal the suite hands a turn. */
 export interface TurnIO {
-  onEvent: (event: AgentStreamEvent) => void
+  onEvent: (event: RunEvent) => void
   signal: AbortSignal
 }
 
@@ -154,21 +162,38 @@ async function settled<T>(promise: Promise<T>, what: string, { setup = false }: 
 }
 
 interface Driven {
-  events: AgentStreamEvent[]
+  events: RunEvent[]
   controller: AbortController
   promise: Promise<RunAgentTurnResult>
 }
 
 function drive(turn: ContractTurn): Driven {
-  const events: AgentStreamEvent[] = []
+  const events: RunEvent[] = []
   const controller = new AbortController()
   const promise = turn.run({ onEvent: (e) => void events.push(e), signal: controller.signal })
   return { events, controller, promise }
 }
 
-function expectNotTerminalFirst(events: AgentStreamEvent[]): void {
+function expectNotTerminalFirst(events: RunEvent[]): void {
   if (events.length === 0) return
   expect(['done', 'error']).not.toContain(events[0].type)
+}
+
+/** Every event of one variant, in the order it was posted. */
+function ofType<T extends RunEvent['type']>(events: RunEvent[], type: T): Extract<RunEvent, { type: T }>[] {
+  return events.filter((e): e is Extract<RunEvent, { type: T }> => e.type === type)
+}
+
+/**
+ * The turn said its one ask was settled, once, with `resolution`.
+ *
+ * Every `input_resolved` the turn posted is counted, not only those for this
+ * id: a `parks()` turn asks exactly once, so any other is a stray.
+ */
+function expectResolvedOnce(events: RunEvent[], requestId: string, resolution: RequestResolution): void {
+  const resolved = ofType(events, 'input_resolved')
+  expect(resolved.map((e) => e.requestId), 'input_resolved events this turn posted').toEqual([requestId])
+  expect(resolved[0].resolution).toEqual(resolution)
 }
 
 export type ContractClause =
@@ -178,6 +203,8 @@ export type ContractClause =
   | 'abort.reports'
   | 'session'
   | 'park.answer'
+  | 'park.needs_input'
+  | 'park.input_resolved'
   | 'park.reject'
   | 'park.abort'
   | 'park.timeout'
@@ -253,7 +280,7 @@ export function describeRunnerContract(
 
   describe(`runner contract: ${name}`, () => {
     /** Every `register` call this test made, in order. */
-    let registered: { requestId: string; timeoutMs?: number }[]
+    let registered: { requestId: string; kind: 'permission' | 'question'; timeoutMs?: number }[]
     /** Set by a test to force the park timeout through the real timer path. */
     let forceTimeoutMs: number | undefined
 
@@ -263,7 +290,7 @@ export function describeRunnerContract(
       pendingRequests.clear()
       const original = pendingRequests.register.bind(pendingRequests)
       vi.spyOn(pendingRequests, 'register').mockImplementation((input) => {
-        registered.push({ requestId: input.requestId, timeoutMs: input.timeoutMs })
+        registered.push({ requestId: input.requestId, kind: input.kind, timeoutMs: input.timeoutMs })
         return original(forceTimeoutMs === undefined ? input : { ...input, timeoutMs: forceTimeoutMs })
       })
     })
@@ -371,6 +398,40 @@ export function describeRunnerContract(
         expectNotTerminalFirst(p.d.events)
       })
 
+      clause('park.needs_input', 'a parked ask emits needs_input before the run goes quiet', async () => {
+        const p = await park()
+        const { kind } = registered[0]
+        await until(() => ofType(p.d.events, 'needs_input').length > 0, 'needs_input for the parked ask')
+        // Checked before anything is answered: a block the renderer is told is
+        // answerable only once it has been answered is one nobody could answer.
+        const asked = ofType(p.d.events, 'needs_input')
+        expect(asked.map((e) => e.requestId), 'needs_input events before the answer').toEqual([p.requestId])
+        expect(asked[0].resume).toBe('reply')
+        expect(asked[0].request.kind).toBe(kind)
+
+        expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
+        await p.turn.afterSettle?.()
+        await settled(p.d.promise, 'an answered turn')
+        // And not again on the way out — an answer is not a second ask.
+        expect(ofType(p.d.events, 'needs_input').map((e) => e.requestId), 'needs_input events').toEqual([
+          p.requestId
+        ])
+      })
+
+      clause('park.input_resolved', 'answering emits input_resolved', async () => {
+        const p = await park()
+        expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
+        await p.turn.afterSettle?.()
+        await settled(p.d.promise, 'an answered turn')
+        // Once, although a runner may hear of the same answer twice — its own
+        // and the engine's echo of it.
+        expectResolvedOnce(p.d.events, p.requestId, p.turn.answer)
+        const asked = p.d.events.findIndex((e) => e.type === 'needs_input' && e.requestId === p.requestId)
+        const resolved = p.d.events.findIndex((e) => e.type === 'input_resolved' && e.requestId === p.requestId)
+        expect(asked, 'needs_input for the answered ask').toBeGreaterThanOrEqual(0)
+        expect(resolved, 'input_resolved after its needs_input').toBeGreaterThan(asked)
+      })
+
       clause('park.reject', 'is registered once and released when rejected', async () => {
         const p = await park()
         const owner = pendingRequests.owner(p.requestId)
@@ -378,6 +439,7 @@ export function describeRunnerContract(
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'a rejected turn')
         expectReleased(p.requestId, owner?.chatId ?? null)
+        expectResolvedOnce(p.d.events, p.requestId, { kind: 'rejected' })
       })
 
       clause('park.abort', 'is registered once, released, and quiet when the turn is aborted', async () => {
@@ -392,6 +454,9 @@ export function describeRunnerContract(
         await sleep(QUIET_MS)
         expect(p.d.events.length, 'events posted after the aborted turn settled').toBe(count)
         expectReleased(p.requestId, owner?.chatId ?? null)
+        // Released, but not resolved: nobody answered, and the turn's own end
+        // is what the renderer hears about.
+        expect(ofType(p.d.events, 'input_resolved'), 'input_resolved for an ask the abort swept away').toEqual([])
       })
 
       clause('park.timeout', 'is registered once and released when the park times out', async () => {
@@ -405,6 +470,9 @@ export function describeRunnerContract(
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'a timed-out parked turn')
         expectReleased(p.requestId, owner?.chatId ?? null)
+        // An expiry is settled while the turn is still open, so it is reported
+        // — as the rejection the registry settled it with.
+        expectResolvedOnce(p.d.events, p.requestId, { kind: 'rejected' })
       })
     })
   })

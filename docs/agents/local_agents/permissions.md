@@ -154,7 +154,25 @@ One retry, because the engine is a local process and the realistic failure is tr
 
 ### A refused answer leaves the controls where they were
 
-The optimistic removal used to happen before the outcome was read, so an answer main refused took the buttons with it: the block greyed out, the error line said the request had expired, and there was no other way to answer it. A refusal now leaves the block exactly as it was, with the error beside the control that raised it.
+The optimistic removal used to happen before the outcome was read, so an answer main refused took the buttons with it: the block greyed out, the error line said the request had expired, and there was no other way to answer it. A refusal now leaves the block exactly as it was, with the error on a line **below** the buttons. It used to render above them, so the line appearing pushed the controls down under the pointer the user was about to retry with.
+
+### A block keeps its buttons while its own answer is in flight
+
+An ask can be reported settled before the answer call that settled it has returned: the stream's `input_resolved`, and the optimistic update beside it, may land first. A block that followed only whether the ask was still open dropped its buttons in that gap, collapsed for a frame and moved everything below it. So a block stays live while its own answer is in flight and turns into its decision line when that answer returns. For the same reason the transcript always gives the block its request id; whether the block is answerable is a separate flag, and having an id does not make a replayed block live.
+
+### A block settled elsewhere says how, and keeps its height until it can
+
+A live ask can also be settled without this window's answer: its park expired, or it was answered in another window. The block then shows the runner's own outcome line in place of its buttons — the Claude runner's "No answer — the request expired.", for example — which is the same line a reopened chat shows. The stream says an ask is settled and says how in two separate messages, so between them the block keeps its live look and height with every button disabled. It holds only while the turn is streaming, because a replayed block that recorded no outcome would otherwise hold for ever. Before this, a block settled elsewhere lost its buttons without a word about what had happened and collapsed by the height of the button row, about 43 px, jumping whatever sat below it.
+
+### A second ask does not move the first one's buttons
+
+Asks can arrive back to back. With the transcript following the bottom, the second ask's block scrolled the first one's buttons away and put its own *Allow once* exactly where the pointer was, so a click meant for one ask approved the other. While an ask on the current stream is waiting for an answer, the transcript stops following new content: the view stays where it is, and the *Jump to latest* pill says there is more below. The block that raised the ask is still followed into view, and a change to the viewport itself — the composer gaining a line — is still followed, so the buttons never slide under the composer. A block that went live from the registry alone, after a reload, does not hold the view, and neither does a nested agent's ask, which has no block on screen. The mechanics are in [Transcript Scrolling](../../chat/conversation_ui/scroll_following.md).
+
+### Known issues in the block
+
+- **Answering one of two stacked asks moves the other.** The answered block's button row is replaced by its shorter decision line, so a block below it moves up by about 12 px. The hold stops new content from moving a block; it does nothing about a block above it changing height
+- **A block the stream did not announce turns live late, and grows.** After a reload, or for an ask raised before this window subscribed to the turn, the block renders read-only first and becomes the live card only when the registry read lists it — on mount after a reload, up to one 700 ms poll tick mid-stream — growing by about 43 px as its buttons appear
+- **A nested agent's ask cannot be answered.** An orchestrated folder agent's ask is recorded but has no control, so it ends at its park timeout — see [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md)
 
 ### On Claude, Automatic stands in front of both mechanisms, and the block is a backstop there
 

@@ -31,6 +31,18 @@
       "toolId": "<permission-request#1>"
     },
     {
+      "type": "needs_input",
+      "requestId": "<permission-request#1>",
+      "request": {
+        "kind": "permission",
+        "action": "Bash",
+        "resources": [
+          "rm -rf /tmp/x"
+        ]
+      },
+      "resume": "reply"
+    },
+    {
       "type": "delta",
       "kind": "tool_result",
       "text": "No answer — the request expired.",

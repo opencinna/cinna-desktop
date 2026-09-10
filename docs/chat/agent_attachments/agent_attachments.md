@@ -56,7 +56,7 @@ Image / PDF / binary attachments still download on click.
 
 ### Viewing an agent attachment in an orchestrated sub-thread
 1. An orchestrated agent-as-tool turn produces a `FilePart` in its sub-stream.
-2. The file delta arrives as a `tool_subevent` → accumulates into the tool
+2. The file delta arrives wrapped in a `child` event → accumulates into the tool
    call's `subParts` and persists on the `tool_call` row's `parts`.
 3. `AgentContribution` renders the badge inside the expandable
    `AgentToolSubThread`.
@@ -131,8 +131,8 @@ A2A stream (direct or orchestrated):
     → on completion: messageRepo.saveAssistant({ parts })  [or tool_call.parts]
 
 Renderer:
-  handleAgent('delta') → chat.store.appendDelta(..., file)   [direct]
-    or appendToolSubEvent → appendAgentDeltaPart(..., file)  [orchestrated]
+  handleRun('delta') → chat.store.appendDelta(..., file)   [direct]
+    or handleRun('child') → appendToolSubEvent → appendAgentDeltaPart(..., file)  [orchestrated]
   MessageStream / AgentContribution: kind === 'file' → <AgentAttachment file>
     → AttachmentList (badge) onClick → useFileDownload.download(att)
 
@@ -147,7 +147,7 @@ Download:
 ## File References
 
 - Accumulator: `src/main/agents/streamPartsAccumulator.ts` (`ingestFilePart`, `partFileOf`, `FILE_*_METADATA_KEY`)
-- Shared types: `src/shared/messageParts.ts` (`'file'` kind, `MessagePartFile`), `src/shared/agentStreamEvents.ts` (`AgentDeltaEvent.file`)
+- Shared types: `src/shared/messageParts.ts` (`'file'` kind, `MessagePartFile`), `src/shared/runEvents.ts` (`RunDeltaEvent.file`)
 - Tag stripping: `src/shared/cinnaAttach.ts` (`stripCinnaAttachTags`), applied in the accumulator + `MessageBubble`
 - Renderer store: `src/renderer/src/stores/chat.store.ts` (`appendDelta`, `appendAgentDeltaPart`)
 - Badge component: `src/renderer/src/components/chat/AgentAttachment.tsx`

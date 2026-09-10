@@ -11,17 +11,29 @@ interface PermissionRequestBlockProps {
   request: LocalPermissionRequest
   /**
    * The engine's request id (`per_*`), which is also the address the answer is
-   * posted to. Absent for a historical block re-rendered from a persisted
-   * message, which is read-only.
+   * posted to. Having one does not make a block answerable — a historical
+   * block may carry its id too — `interactive` does.
    */
   requestId?: string
-  /** True while the engine is still parked on this request. */
+  /**
+   * True while the engine is still parked on this request. May turn false
+   * while this block's own answer is in flight; the block keeps its buttons
+   * until that answer settles.
+   */
   interactive: boolean
   /**
    * What the transcript records was decided, when this block is replayed from
    * history. Comes from the paired `tool_result` the runner emits on settle.
    */
   decision?: string
+  /**
+   * The stream has said this ask is settled, and the line saying how has not
+   * arrived yet — they are two port messages, not one. Keeps the block at its
+   * live height with its buttons disabled until `decision` lands in their
+   * place, so an ask settled by expiry or by another window does not collapse
+   * and jump whatever sits below it (ux_rules §1).
+   */
+  awaitingDecision?: boolean
   onAnswer: (
     requestId: string,
     reply: 'once' | 'always' | 'reject'
@@ -56,6 +68,7 @@ export function PermissionRequestBlock({
   requestId,
   interactive,
   decision,
+  awaitingDecision,
   onAnswer
 }: PermissionRequestBlockProps): React.JSX.Element {
   // **Which** answer is in flight, not merely that one is. Three buttons all
@@ -69,7 +82,14 @@ export function PermissionRequestBlock({
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const live = interactive && !!requestId && !answered
+  // **Held live while its own answer is in flight.** The stream's
+  // `input_resolved`, and the optimistic store update beside it, can land
+  // before `onAnswer` resolves — so `interactive` may already be false while
+  // `answered` is not yet set. Dropping the buttons in that gap collapsed the
+  // block for a frame and jumped everything below it (ux_rules §1).
+  const live = (interactive || busy !== null) && !!requestId && !answered
+  // Settled elsewhere, outcome still in transit: look live, answer nothing.
+  const holding = !live && !!awaitingDecision && !answered && !decision
   // What *Always allow* would write, in the same words the main process will
   // store it in — derived from the shared helper rather than restated here, so
   // the promise on screen and the rule in `desktop.json` cannot drift apart.
@@ -101,13 +121,13 @@ export function PermissionRequestBlock({
     <div
       className={
         'rounded-lg border px-3.5 py-3 ' +
-        (live
+        (live || holding
           ? 'border-[var(--color-warning)]/50 bg-[var(--color-warning)]/8'
           : 'border-[var(--color-border)] bg-[var(--color-bg-secondary)] opacity-90')
       }
     >
       <div className="flex items-start gap-2.5">
-        {live ? (
+        {live || holding ? (
           <ShieldAlert size={16} className="shrink-0 mt-0.5 text-[var(--color-warning)]" />
         ) : (
           <ShieldCheck size={16} className="shrink-0 mt-0.5 text-[var(--color-text-muted)]" />
@@ -120,7 +140,7 @@ export function PermissionRequestBlock({
               external_directory" is not a question anyone can answer. An
               action this table has never seen still names itself.
             */}
-            {live
+            {live || holding
               ? `The agent is asking to ${describePermissionAction(request.action)}`
               : `Permission to ${describePermissionAction(request.action)}`}
           </div>
@@ -162,13 +182,11 @@ export function PermissionRequestBlock({
             </div>
           )}
 
-          {error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
-
-          {live && (
+          {(live || holding) && (
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                disabled={busy !== null}
+                disabled={!live || busy !== null}
                 onClick={() => void answer('once')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
@@ -191,7 +209,7 @@ export function PermissionRequestBlock({
               */}
               <button
                 type="button"
-                disabled={busy !== null}
+                disabled={!live || busy !== null}
                 onClick={() => void answer('always')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]
@@ -206,7 +224,7 @@ export function PermissionRequestBlock({
               </button>
               <button
                 type="button"
-                disabled={busy !== null}
+                disabled={!live || busy !== null}
                 onClick={() => void answer('reject')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]
@@ -223,13 +241,20 @@ export function PermissionRequestBlock({
           )}
 
           {/*
+            Under the buttons, for the reason the hint below is: an error that
+            rendered above them pushed a refused answer's controls down under
+            the pointer the user was about to retry with (ux_rules §1).
+          */}
+          {error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
+
+          {/*
             Below the buttons, not above them: a line that sits over a control
             the user is about to click would move it as it renders (ux_rules
             §1). It is static for the life of the block — the pattern is a
             function of the ask, not of what has been clicked — so nothing here
             moves while the user decides.
           */}
-          {live && scopeIsWider && (
+          {(live || holding) && scopeIsWider && (
             <div className="mt-2 text-[11px] text-[var(--color-text-muted)] break-all">
               Always allow remembers {grantScope} for this agent only.
             </div>

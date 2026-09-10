@@ -5,10 +5,65 @@ import type {
   MessagePartFile,
   ToolStream
 } from '../../../shared/messageParts'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { InputRequest, InputResumeMode, RunEvent } from '../../../shared/runEvents'
 import type { MessageAttachment } from '../../../shared/attachments'
+import { continuesPart } from '../../../shared/partMerge'
 
 export type { ContentKind, ToolStream }
+
+/**
+ * A run waiting on a human, as announced by a `needs_input` stream event.
+ *
+ * `toolCallId` is set when the ask came from a nested agent (a `child` event),
+ * naming the orchestrator's tool call whose sub-thread raised it.
+ */
+export interface PendingInputRequest {
+  requestId: string
+  request: InputRequest
+  resume: InputResumeMode
+  toolCallId?: string
+}
+
+/**
+ * Whether the stream says `requestId` is answerable **now**, by id.
+ *
+ * Only a `reply` entry counts: that run is parked on the ask and the answer is
+ * posted to its address. A `next_message` entry is a turn that already ended
+ * waiting — its answer path is the composer, so it never makes a block live.
+ */
+export function isLiveInputRequest(
+  state: { inputRequests: PendingInputRequest[] },
+  requestId: string | undefined
+): boolean {
+  if (!requestId) return false
+  return state.inputRequests.some((r) => r.requestId === requestId && r.resume === 'reply')
+}
+
+/**
+ * Whether the stream has said `requestId` is settled — `input_resolved`, or an
+ * answer this window delivered.
+ *
+ * Checked before either source that can call a block live, because the
+ * registry poll (`useAgentRequests`) can go on listing a settled ask for up to
+ * a tick: a park that timed out, or an ask answered elsewhere, would otherwise
+ * keep offering buttons whose answer can only be refused.
+ */
+export function isSettledInputRequest(
+  state: { settledInputRequestIds: string[] },
+  requestId: string | undefined
+): boolean {
+  return !!requestId && state.settledInputRequestIds.includes(requestId)
+}
+
+/**
+ * What ending a stream leaves behind: a `reply` address dies with its turn, an
+ * A2A question stays answerable by the next message.
+ */
+function withoutReplyRequests(requests: PendingInputRequest[]): PendingInputRequest[] {
+  return requests.some((r) => r.resume === 'reply')
+    ? requests.filter((r) => r.resume !== 'reply')
+    : requests
+}
 
 export interface ToolCallBlock {
   type: 'tool_call'
@@ -25,7 +80,7 @@ export interface ToolCallBlock {
   agentId?: string
   /**
    * Live agent sub-thread (orchestrated mode): the agent's `parts[]` built up
-   * from `tool_subevent` deltas keyed by this block's `id`. Rendered as a
+   * from `child` deltas keyed by this block's `id`. Rendered as a
    * nested `<AgentContribution>` inside the tool-call block.
    */
   subParts?: MessagePart[]
@@ -52,16 +107,9 @@ function appendAgentDeltaPart(
   const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation, file } = delta
   const out = parts.slice()
   const last = out[out.length - 1]
-  const sameKind = last && last.kind === kind
-  // `file` parts are discrete attachments — never merge them, even with an
-  // adjacent file part (two attachments must stay two badges).
-  const mergeable =
-    sameKind &&
-    kind !== 'file' &&
-    (kind === 'tool_result'
-      ? last.toolId === toolId && last.toolStream === toolStream
-      : last.toolName === toolName)
-  if (last && mergeable) {
+  // The accumulator's own rule (`shared/partMerge.ts`), so the live sub-thread
+  // splits exactly where the persisted one will.
+  if (last && continuesPart(last, { kind, toolName, toolId, toolStream })) {
     out[out.length - 1] = {
       ...last,
       text: last.text + text,
@@ -134,6 +182,14 @@ interface ChatStore {
   // configured"). Set by the new-chat pre-flight check and by stream `error`
   // events; cleared on next user action.
   sendError: string | null
+  // Asks the stream has announced and not yet settled, in arrival order. Only
+  // the current stream's: starting one or switching chats clears the list, and
+  // ending one drops the `reply` entries whose parked turn just died.
+  inputRequests: PendingInputRequest[]
+  // Ids the stream has said are settled, so a block stops being live before
+  // the registry poll catches up. Cleared only when a stream starts or the chat
+  // changes: the poll's last read can land after the stream has ended.
+  settledInputRequestIds: string[]
 
   setActiveChatId: (id: string | null) => void
   startStreaming: (requestId: string) => void
@@ -158,8 +214,14 @@ interface ChatStore {
   }) => void
   resolveToolCall: (id: string, result: unknown) => void
   failToolCall: (id: string, error: string) => void
-  /** Accumulate one nested A2A stream event into an agent tool's sub-thread. */
-  appendToolSubEvent: (toolCallId: string, event: AgentStreamEvent) => void
+  /** Accumulate one nested agent's stream event into an agent tool's sub-thread. */
+  appendToolSubEvent: (toolCallId: string, event: RunEvent) => void
+  /** Record a `needs_input`; a repeat of a known `requestId` replaces it in place. */
+  addInputRequest: (entry: PendingInputRequest) => void
+  /** Forget a settled ask, and remember its id as settled — known to the store or not. */
+  resolveInputRequest: (requestId: string) => void
+  /** Drop the asks a nested agent raised under this tool call, once the call has ended. */
+  dropInputRequestsFor: (toolCallId: string) => void
   finishStreaming: () => void
   clearStreamingBlocks: () => void
   stopStreaming: () => void
@@ -176,6 +238,8 @@ export const useChatStore = create<ChatStore>((set) => ({
   pendingUserMessage: null,
   streamedIncrementallyChatId: null,
   sendError: null,
+  inputRequests: [],
+  settledInputRequestIds: [],
 
   setActiveChatId: (id) =>
     set({
@@ -184,7 +248,9 @@ export const useChatStore = create<ChatStore>((set) => ({
       isStreaming: false,
       pendingUserMessage: null,
       streamedIncrementallyChatId: null,
-      sendError: null
+      sendError: null,
+      inputRequests: [],
+      settledInputRequestIds: []
     }),
 
   setPendingUserMessage: (message) =>
@@ -204,7 +270,11 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamingBlocks: [],
       activeRequestId: requestId,
       streamedIncrementallyChatId: null,
-      sendError: null
+      sendError: null,
+      // A new turn is the answer to any `next_message` ask the last one ended
+      // on, and a `reply` ask cannot outlive its own turn.
+      inputRequests: [],
+      settledInputRequestIds: []
     }),
 
   appendDelta: (
@@ -220,17 +290,9 @@ export const useChatStore = create<ChatStore>((set) => ({
     set((state) => {
       const blocks = [...state.streamingBlocks]
       const last = blocks[blocks.length - 1]
-      // Mirror main-process accumulator: tool_result blocks merge on
-      // (toolId, toolStream); all other text-kinds merge on toolName. `file`
-      // blocks are discrete attachments and never merge.
-      const sameKind = last?.type === 'text' && last.kind === kind
-      const isMergeable =
-        sameKind &&
-        kind !== 'file' &&
-        (kind === 'tool_result'
-          ? last.toolId === toolId && last.toolStream === toolStream
-          : last.toolName === toolName)
-      if (last?.type === 'text' && isMergeable) {
+      // The main-process accumulator's rule, from one place
+      // (`shared/partMerge.ts`), so live blocks split where persisted parts do.
+      if (last?.type === 'text' && continuesPart(last, { kind, toolName, toolId, toolStream })) {
         blocks[blocks.length - 1] = {
           ...last,
           content: last.content + text,
@@ -291,6 +353,48 @@ export const useChatStore = create<ChatStore>((set) => ({
       }
     }),
 
+  addInputRequest: (entry) =>
+    set((state) => {
+      // An id asked again is open again.
+      const settledInputRequestIds = state.settledInputRequestIds.includes(entry.requestId)
+        ? state.settledInputRequestIds.filter((id) => id !== entry.requestId)
+        : state.settledInputRequestIds
+      const index = state.inputRequests.findIndex((r) => r.requestId === entry.requestId)
+      if (index === -1) {
+        return { inputRequests: [...state.inputRequests, entry], settledInputRequestIds }
+      }
+      const inputRequests = state.inputRequests.slice()
+      inputRequests[index] = entry
+      return { inputRequests, settledInputRequestIds }
+    }),
+
+  resolveInputRequest: (requestId) =>
+    set((state) => {
+      const held = state.inputRequests.some((r) => r.requestId === requestId)
+      const known = state.settledInputRequestIds.includes(requestId)
+      // The usual second call — the runner's echo after an optimistic answer —
+      // changes nothing, and returning the same state spares every whole-store
+      // subscriber a render.
+      if (!held && known) return state
+      return {
+        inputRequests: held
+          ? state.inputRequests.filter((r) => r.requestId !== requestId)
+          : state.inputRequests,
+        // Remembered even for an id the store never held: an ask known only
+        // through the registry poll is just as settled.
+        settledInputRequestIds: known
+          ? state.settledInputRequestIds
+          : [...state.settledInputRequestIds, requestId]
+      }
+    }),
+
+  dropInputRequestsFor: (toolCallId) =>
+    set((state) =>
+      toolCallId && state.inputRequests.some((r) => r.toolCallId === toolCallId)
+        ? { inputRequests: state.inputRequests.filter((r) => r.toolCallId !== toolCallId) }
+        : state
+    ),
+
   resolveToolCall: (id, result) =>
     set((state) => ({
       streamingBlocks: state.streamingBlocks.map((b) =>
@@ -312,19 +416,27 @@ export const useChatStore = create<ChatStore>((set) => ({
     // follows the same lifecycle so there's no gap when `done` beats the
     // refetch. The post-refetch clear (not this transition) is what finally
     // retires the optimistic copy, by which point its persisted row is in view.
-    set({ isStreaming: false }),
+    set((state) => ({
+      isStreaming: false,
+      inputRequests: withoutReplyRequests(state.inputRequests)
+    })),
 
   clearStreamingBlocks: () =>
-    set({ streamingBlocks: [], activeRequestId: null }),
+    set((state) => ({
+      streamingBlocks: [],
+      activeRequestId: null,
+      inputRequests: withoutReplyRequests(state.inputRequests)
+    })),
 
   stopStreaming: () =>
-    set({
+    set((state) => ({
       isStreaming: false,
       streamingBlocks: [],
       activeRequestId: null,
       pendingUserMessage: null,
-      streamedIncrementallyChatId: null
-    }),
+      streamedIncrementallyChatId: null,
+      inputRequests: withoutReplyRequests(state.inputRequests)
+    })),
 
   setSendError: (error) => set({ sendError: error }),
 
@@ -336,6 +448,8 @@ export const useChatStore = create<ChatStore>((set) => ({
       activeRequestId: null,
       pendingUserMessage: null,
       streamedIncrementallyChatId: null,
-      sendError: null
+      sendError: null,
+      inputRequests: [],
+      settledInputRequestIds: []
     })
 }))

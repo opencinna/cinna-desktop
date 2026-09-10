@@ -22,6 +22,33 @@
       "toolId": "que_8"
     },
     {
+      "type": "needs_input",
+      "requestId": "que_8",
+      "request": {
+        "kind": "question",
+        "questions": [
+          {
+            "question": "Which?",
+            "header": "Pick",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "A"
+              }
+            ]
+          }
+        ]
+      },
+      "resume": "reply"
+    },
+    {
+      "type": "input_resolved",
+      "requestId": "que_8",
+      "resolution": {
+        "kind": "rejected"
+      }
+    },
+    {
       "type": "delta",
       "kind": "tool_result",
       "text": "No answer was given.",

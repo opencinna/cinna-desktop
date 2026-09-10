@@ -34,28 +34,13 @@ import { createLogger } from '../../logger/logger'
 import {
   REQUEST_PARK_TIMEOUT_MS,
   type LocalPermissionRequest,
-  type PermissionReply
+  type RequestResolution
 } from '../../../shared/localAgentRequests'
 
-const logger = createLogger('local-agent-requests')
+// Declared in shared because an `input_resolved` stream event carries it.
+export type { RequestResolution }
 
-/** How a pending request was settled. */
-export type RequestResolution =
-  | {
-      kind: 'permission'
-      reply: PermissionReply
-      /**
-       * True when the user's *Always allow* was stored against this agent.
-       *
-       * Set by whoever wrote the grant, so the transcript can say "remembered
-       * for this agent" only where a rule actually exists. A failed write still
-       * settles as `once` — the user allowed the action and it goes ahead — and
-       * this stays false, which is what keeps the record honest.
-       */
-      remembered?: boolean
-    }
-  | { kind: 'question'; answers: string[][] }
-  | { kind: 'rejected' }
+const logger = createLogger('local-agent-requests')
 
 interface Entry {
   chatId: string

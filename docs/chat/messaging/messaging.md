@@ -30,7 +30,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
    - If no tool calls, loop ends
    - Otherwise, executes each tool call via MCP, saves each `tool_call` message to DB
    - Appends messages to history, continues the loop
-6. Deltas stream back through the port: `request-id` -> `delta` -> `tool_use` -> `tool_result` -> `done`
+6. Events stream back through the port in the one vocabulary every chat uses ([Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)): `request-id` -> `delta` (kind `text`) -> `tool_use` -> `tool_result` -> `done`. An agent called as a tool streams its own work as `child` events
 
 ### Tool-call flow
 1. LLM adapter returns tool calls in the `StreamResult`
@@ -42,9 +42,12 @@ Full conversation management — creating chats, sending messages, streaming LLM
 7. On reload, the full tool-call history renders from DB — no data is lost
 
 ### Cancellation
-1. User clicks cancel during streaming
+1. User clicks Stop during streaming
 2. Renderer calls `llm:cancel` IPC
-3. Main process aborts the in-flight request via AbortSignal
+3. Main process aborts the in-flight request via AbortSignal; an agent sub-turn in flight is cancelled with it
+4. Between adapter calls (for example while a tool runs), the loop stops and the turn ends normally. Tool calls in that round that had not run yet are recorded as not run, because a provider refuses a history with an unanswered tool call
+5. Mid-reply — the usual case — the adapter rejects, and the text streamed so far in that round is saved as an ordinary assistant message, unless it is only whitespace
+6. Either way `done` is posted with `stopReason: 'canceled'`: the chat leaves its streaming state, the partial reply stays in the transcript, and a job run is recorded as cancelled. See [Cancellation](messaging_tech.md#cancellation)
 
 ## Business Rules
 
@@ -54,6 +57,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 - Chat title defaults to the first user message, truncated to 50 chars
 - The provider/model for a new chat comes from the active [chat mode](../chat_modes/chat_modes.md) (auto-applied default mode if the user hasn't picked one explicitly); the model defaults to the mode's `modelId`, falling back to the provider's `default_model_id` and finally the first available model. There is no provider-level "default" flag — if no mode or agent is chosen, sending raises an inline "can't determine destination" error
 - Streaming errors are parsed by the adapter's `parseError()` into user-friendly short + raw detail messages, then persisted to DB as `role: 'error'` messages so they survive navigation
+- A stop ends the turn and keeps what arrived: the reply so far is saved as an ordinary assistant message and the chat leaves its streaming state. The stop itself is never saved or shown as an error message — only a real failure is; the one error-flagged record a stop writes is the "not run" result of a tool call it skipped, which the next request needs. The renderer's Stop clears nothing itself, so a stop that posted no ending used to leave the chat stuck offering only Stop
 - Tool calls are only available when MCP servers are connected and enabled for the chat
 - The user's sent message renders instantly (an optimistic bubble) and stays visible without flicker through the entire streaming turn, swapping seamlessly to its persisted row once the chat refetches; sending the same text twice in a row still shows a distinct bubble for each turn (see the optimistic user-message lifecycle in `messaging_tech.md`)
 

@@ -2,24 +2,31 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, act } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import type { AgentStreamEvent, AgentTaskState } from '../../../shared/agentStreamEvents'
-import type { LlmStreamEvent } from '../../../shared/llmStreamEvents'
+import type {
+  InputRequest,
+  RunEvent,
+  RunInputResolvedEvent,
+  RunNeedsInputEvent,
+  RunState
+} from '../../../shared/runEvents'
 import type { ContentKind } from '../../../shared/messageParts'
 import { PERMISSION_TOOL_NAME, QUESTION_TOOL_NAME } from '../../../shared/localAgentRequests'
 
 /**
  * What every stream event does to renderer state, as `useChatStream` handles it
- * today — the receiver-side characterization for the agent-runtime refactor.
+ * — the receiver-side characterization for the agent-runtime refactor.
  *
- * Phase 1 merges `handleLlm` and `handleAgent` into one `handleRun` and the two
- * event unions into one. A merge like that fails quietly: a `case` that was in
- * one switch and not the other disappears, or an event one handler ignored
- * starts doing something, and every surface still renders. So each row here
- * feeds one event through the hook the way production does — mount, send,
+ * Phase 1 merged `handleLlm` and `handleAgent` into one `handleRun` and the two
+ * event unions into `RunEvent`. A merge like that fails quietly: a `case` that
+ * was in one switch and not the other disappears, or an event one handler
+ * ignored starts doing something, and every surface still renders. So each row
+ * here feeds one event through the hook the way production does — mount, send,
  * capture the callback `window.api` was handed, emit — and records **exactly
  * which chat-store fields changed and which queries were invalidated**. A field
  * a row does not name is asserted unchanged, so "the hook ignores this" is a
- * pinned fact rather than an absence of assertions.
+ * pinned fact rather than an absence of assertions. The table was written
+ * before the merge; a row whose expectation the merge changed on purpose says
+ * why in a comment.
  *
  * Two snapshots per row, because `done` is two-phase on purpose: the cursor
  * goes away at once, but the streaming blocks and the optimistic user bubble
@@ -32,7 +39,7 @@ import { PERMISSION_TOOL_NAME, QUESTION_TOOL_NAME } from '../../../shared/localA
  * nothing, and a fix can show it changed exactly one row.
  *
  * The coverage guards at the bottom are typed `Record<Union, true>`, so adding
- * an event variant, a content kind or a task state fails the typecheck until a
+ * an event variant, a content kind or a run state fails the typecheck until a
  * row for it exists.
  */
 
@@ -41,7 +48,7 @@ import { PERMISSION_TOOL_NAME, QUESTION_TOOL_NAME } from '../../../shared/localA
 }
 
 const { useChatStream } = await import('./useChatStream')
-const { useChatStore } = await import('../stores/chat.store')
+const { useChatStore, isLiveInputRequest, isSettledInputRequest } = await import('../stores/chat.store')
 const { useAuthStore } = await import('../stores/auth.store')
 
 const CHAT_ID = 'chat-1'
@@ -56,7 +63,9 @@ const SNAPSHOT_KEYS = [
   'streamingBlocks',
   'pendingUserMessage',
   'streamedIncrementallyChatId',
-  'sendError'
+  'sendError',
+  'inputRequests',
+  'settledInputRequestIds'
 ] as const
 type SnapshotKey = (typeof SNAPSHOT_KEYS)[number]
 type Snapshot = Record<SnapshotKey, unknown>
@@ -153,7 +162,8 @@ async function flush(): Promise<void> {
   })
 }
 
-async function runRow<E>(path: 'llm' | 'agent', row: Row<E>): Promise<void> {
+/** Mount the hook, send once, and return the stream callback `window.api` was handed. */
+function mount(path: 'llm' | 'agent'): (event: RunEvent) => void {
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
   const { result } = renderHook(() => useChatStream(), { wrapper })
@@ -166,7 +176,11 @@ async function runRow<E>(path: 'llm' | 'agent', row: Row<E>): Promise<void> {
   expect(send).toHaveBeenCalledTimes(1)
   // The optimistic bubble is set by the send, before any event arrives.
   expect(useChatStore.getState().pendingUserMessage).toEqual(PENDING)
-  const emit = send.mock.calls[0][path === 'llm' ? 2 : 3] as (event: E) => void
+  return send.mock.calls[0][path === 'llm' ? 2 : 3] as (event: RunEvent) => void
+}
+
+async function runRow(path: 'llm' | 'agent', row: Row<RunEvent>): Promise<void> {
+  const emit = mount(path)
 
   act(() => {
     for (const event of row.seed) emit(event)
@@ -197,8 +211,10 @@ async function runRow<E>(path: 'llm' | 'agent', row: Row<E>): Promise<void> {
   expect(statusGet.mock.calls.map(([args]) => args)).toEqual(
     row.pullsStatus ? [{ agentId: AGENT_ID, forceRefresh: false }] : []
   )
+  // Any handler log line (`… error:`), so one under a stale prefix would still
+  // show up as a mismatch rather than be filtered out.
   const handlerLogs = consoleError.mock.calls.filter(
-    ([first]) => first === 'LLM error:' || first === 'Agent error:'
+    ([first]) => typeof first === 'string' && / error:$/.test(first)
   )
   expect(handlerLogs).toEqual(row.logged ? [row.logged] : [])
 }
@@ -236,25 +252,70 @@ function textBlock(kind: ContentKind, content: string, extra: Record<string, unk
   return { type: 'text', kind, content, ...extra }
 }
 
+const MCP_CALL: RunEvent = {
+  type: 'tool_use',
+  id: 'call-1',
+  name: 'search_docs',
+  input: { q: 'streams' },
+  provider: 'Docs',
+  providerType: 'mcp'
+}
+const MCP_BLOCK = {
+  type: 'tool_call',
+  id: 'call-1',
+  name: 'search_docs',
+  input: { q: 'streams' },
+  provider: 'Docs',
+  providerType: 'mcp',
+  status: 'pending'
+}
+
+// Asks as `needs_input` announces them. A local agent's is `reply` and keyed by
+// its engine request id; an A2A agent's is `next_message` and keyed by its task.
+const PERMISSION_REQUEST: InputRequest = { kind: 'permission', action: 'bash', resources: ['rm -rf build'] }
+const EDIT_REQUEST: InputRequest = { kind: 'permission', action: 'edit', resources: ['notes.txt'] }
+const QUESTION_REQUEST: InputRequest = {
+  kind: 'question',
+  questions: [{ question: 'Which branch?', multiSelect: false, options: [{ label: 'main' }, { label: 'dev' }] }]
+}
+const ASK_REPLY: RunNeedsInputEvent = { type: 'needs_input', requestId: 'per_1', request: PERMISSION_REQUEST, resume: 'reply' }
+const ASK_REPLY_2: RunNeedsInputEvent = { type: 'needs_input', requestId: 'per_2', request: EDIT_REQUEST, resume: 'reply' }
+const ASK_NEXT: RunNeedsInputEvent = { type: 'needs_input', requestId: 'task-1', request: QUESTION_REQUEST, resume: 'next_message' }
+
+/** The store entry a `needs_input` becomes. */
+function entry(ask: RunNeedsInputEvent, toolCallId?: string): Record<string, unknown> {
+  return {
+    requestId: ask.requestId,
+    request: ask.request,
+    resume: ask.resume,
+    ...(toolCallId ? { toolCallId } : {})
+  }
+}
+
+function resolved(requestId: string): RunInputResolvedEvent {
+  return { type: 'input_resolved', requestId, resolution: { kind: 'permission', reply: 'once' } }
+}
+
 // ---------------------------------------------------------------------------
-// handleAgent — `window.api.agents.sendMessage`
+// The agent path — `window.api.agents.sendMessage`
 // ---------------------------------------------------------------------------
 
-const AGENT_TEXT: AgentStreamEvent = { type: 'delta', kind: 'text', text: 'Working on it' }
+const AGENT_TEXT: RunEvent = { type: 'delta', kind: 'text', text: 'Working on it' }
 
-const ALL_TASK_STATES: Record<AgentTaskState, true> = {
+// Edited on purpose: A2A's `input-required` and `auth-required` both arrive as
+// `needs_input` now, so the two rows that pinned them became one.
+const ALL_RUN_STATES: Record<RunState, true> = {
   submitted: true,
   working: true,
-  'input-required': true,
+  needs_input: true,
   completed: true,
   canceled: true,
   failed: true,
   rejected: true,
-  'auth-required': true,
   unknown: true
 }
 
-const AGENT_ROWS: Row<AgentStreamEvent>[] = [
+const AGENT_ROWS: Row<RunEvent>[] = [
   {
     name: 'request-id starts the stream: blocks, sendError and incremental flag reset, pending bubble kept',
     seed: [],
@@ -283,11 +344,11 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
     },
     invalidates: []
   },
-  // PINNED: every task state is ignored — including the terminal `failed` /
+  // PINNED: every run state is ignored — including the terminal `failed` /
   // `canceled` / `rejected`. A stream that reports `failed` and never sends
   // `error` or `done` leaves `isStreaming` true.
-  ...(Object.keys(ALL_TASK_STATES) as AgentTaskState[]).map(
-    (state): Row<AgentStreamEvent> => ({
+  ...(Object.keys(ALL_RUN_STATES) as RunState[]).map(
+    (state): Row<RunEvent> => ({
       name: `status ${state} is ignored`,
       seed: [REQUEST_ID, AGENT_TEXT],
       event: { type: 'status', state, taskId: 't-1', contextId: 'ctx-1' },
@@ -363,7 +424,7 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
     invalidates: []
   },
   {
-    // Contrast with the `tool_subevent` notice row, which is skipped.
+    // Contrast with the `child` notice row, which is skipped.
     name: 'delta notice is appended as a block at top level',
     seed: [REQUEST_ID],
     event: { type: 'delta', kind: 'notice', text: 'Agent restarted' },
@@ -403,9 +464,10 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
     invalidates: []
   },
 
-  // Local-agent asks. The hook does nothing special: an ask is an ordinary
-  // `tool` block, and "is it answerable" is decided downstream from the
-  // `per_` / `que_` id. No streaming change, no invalidation, no status pull.
+  // Local-agent asks as transcript parts. The `tool` delta is still an ordinary
+  // block with no streaming change, no invalidation and no status pull; what
+  // makes it answerable arrives separately as `needs_input` (rows below), and a
+  // persisted transcript still recognises an ask by its `per_` / `que_` id.
   {
     name: 'local-agent permission ask (per_ id) is a plain tool block',
     seed: [REQUEST_ID, AGENT_TEXT],
@@ -479,13 +541,12 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
     invalidates: []
   },
   {
-    // PINNED: `tool` blocks merge on `toolName` alone, not `toolId`. The second
-    // ask folds into the first block, which keeps the first ask's id and input
-    // — and since an ask's text is empty the block comes out byte-identical, so
-    // the second ask produces no mutation at all. Its `per_` id, the address its
-    // answer must be posted to, never reaches the store. The same rule merges
-    // any two back-to-back calls to one tool.
-    name: 'PINNED: a second back-to-back permission ask is swallowed by the first block',
+    // Fixed in phase 1, was PINNED: `tool` blocks merged on `toolName` alone, so
+    // the second ask folded into the first block and its `per_` id — the
+    // address its answer is posted to — never reached the store, leaving that
+    // ask parked until its timeout. A `tool` block now also splits on a
+    // different `toolId` (`shared/partMerge.ts`).
+    name: 'a second back-to-back permission ask with its own id is its own block',
     seed: [
       REQUEST_ID,
       { type: 'delta', kind: 'tool', text: '', toolName: PERMISSION_TOOL_NAME, toolId: 'per_1', toolInput: PERMISSION_INPUT }
@@ -498,7 +559,116 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
       toolId: 'per_2',
       toolInput: { action: 'edit', resources: ['notes.txt'], savable: [] }
     },
-    settled: {},
+    settled: {
+      streamingBlocks: [
+        textBlock('tool', '', { toolName: PERMISSION_TOOL_NAME, toolId: 'per_1', toolInput: PERMISSION_INPUT }),
+        textBlock('tool', '', {
+          toolName: PERMISSION_TOOL_NAME,
+          toolId: 'per_2',
+          toolInput: { action: 'edit', resources: ['notes.txt'], savable: [] }
+        })
+      ]
+    },
+    invalidates: []
+  },
+
+  // `needs_input` / `input_resolved`: the asks the stream says are open. They
+  // touch `inputRequests` and nothing else — no block, no streaming change.
+  {
+    name: 'needs_input reply adds an entry and changes nothing else',
+    seed: [
+      REQUEST_ID,
+      { type: 'delta', kind: 'tool', text: '', toolName: PERMISSION_TOOL_NAME, toolId: 'per_1', toolInput: PERMISSION_INPUT }
+    ],
+    seedState: { streamedIncrementallyChatId: null },
+    event: ASK_REPLY,
+    settled: { inputRequests: [entry(ASK_REPLY)] },
+    invalidates: []
+  },
+  {
+    // The A2A shape: the turn ends waiting, so the status comes first.
+    name: 'needs_input next_message adds an entry',
+    seed: [REQUEST_ID, AGENT_TEXT, { type: 'status', state: 'needs_input', taskId: 'task-1' }],
+    event: ASK_NEXT,
+    settled: { inputRequests: [entry(ASK_NEXT)] },
+    invalidates: []
+  },
+  {
+    name: 'a second needs_input with a different id keeps both, in arrival order',
+    seed: [REQUEST_ID, ASK_REPLY],
+    event: ASK_REPLY_2,
+    settled: { inputRequests: [entry(ASK_REPLY), entry(ASK_REPLY_2)] },
+    invalidates: []
+  },
+  {
+    name: 'needs_input repeating a known id replaces that entry where it stands',
+    seed: [REQUEST_ID, ASK_REPLY, ASK_REPLY_2],
+    event: { ...ASK_REPLY, request: EDIT_REQUEST },
+    settled: { inputRequests: [entry({ ...ASK_REPLY, request: EDIT_REQUEST }), entry(ASK_REPLY_2)] },
+    invalidates: []
+  },
+  {
+    name: 'input_resolved removes only its own id, and records it as settled',
+    seed: [REQUEST_ID, ASK_REPLY, ASK_REPLY_2],
+    event: resolved('per_1'),
+    settled: { inputRequests: [entry(ASK_REPLY_2)], settledInputRequestIds: ['per_1'] },
+    invalidates: []
+  },
+  {
+    // An ask known only through the registry poll (no `needs_input` reached
+    // this store) is just as settled, so the id is recorded anyway.
+    name: 'input_resolved for an id the store never held only records it as settled',
+    seed: [REQUEST_ID, ASK_REPLY],
+    event: resolved('per_nope'),
+    settled: { settledInputRequestIds: ['per_nope'] },
+    invalidates: []
+  },
+  {
+    name: 'needs_input for a settled id opens it again',
+    seed: [REQUEST_ID, ASK_REPLY, resolved('per_1')],
+    event: ASK_REPLY,
+    settled: { inputRequests: [entry(ASK_REPLY)], settledInputRequestIds: [] },
+    invalidates: []
+  },
+  {
+    name: 'request-id forgets settled ids',
+    seed: [REQUEST_ID, ASK_REPLY, resolved('per_1')],
+    event: { type: 'request-id', requestId: 'req-2' },
+    settled: { activeRequestId: 'req-2', settledInputRequestIds: [] },
+    invalidates: []
+  },
+  {
+    name: 'request-id clears every input request, reply and next_message alike',
+    seed: [REQUEST_ID, ASK_REPLY, ASK_NEXT],
+    event: { type: 'request-id', requestId: 'req-2' },
+    settled: { activeRequestId: 'req-2', inputRequests: [] },
+    invalidates: []
+  },
+
+  // Behaviour change: `handleAgent` had no case for the tool-call events and
+  // ignored them. One handler means the agent path now does what the LLM path
+  // does; main never sends them on this channel.
+  {
+    name: 'tool_use on the agent path appends a pending tool_call block',
+    seed: [REQUEST_ID],
+    event: MCP_CALL,
+    settled: { streamingBlocks: [MCP_BLOCK], streamedIncrementallyChatId: CHAT_ID },
+    invalidates: []
+  },
+  {
+    name: 'tool_result on the agent path resolves the matching call',
+    seed: [REQUEST_ID, MCP_CALL],
+    seedState: { streamedIncrementallyChatId: null },
+    event: { type: 'tool_result', id: 'call-1', result: { hits: 3 } },
+    settled: { streamingBlocks: [{ ...MCP_BLOCK, status: 'done', result: { hits: 3 } }] },
+    invalidates: []
+  },
+  {
+    name: 'tool_error on the agent path fails the matching call',
+    seed: [REQUEST_ID, MCP_CALL],
+    seedState: { streamedIncrementallyChatId: null },
+    event: { type: 'tool_error', id: 'call-1', error: 'timeout' },
+    settled: { streamingBlocks: [{ ...MCP_BLOCK, status: 'error', error: 'timeout' }] },
     invalidates: []
   },
 
@@ -512,52 +682,56 @@ const AGENT_ROWS: Row<AgentStreamEvent>[] = [
     pullsStatus: true
   },
   {
+    // A parked address dies with its turn; an A2A question stays answerable by
+    // the next message.
+    name: 'done drops a reply ask at once and keeps a next_message ask',
+    seed: [REQUEST_ID, AGENT_TEXT, ASK_REPLY, ASK_NEXT],
+    event: { type: 'done', stopReason: 'end_turn' },
+    sync: { isStreaming: false, inputRequests: [entry(ASK_NEXT)] },
+    settled: { ...DONE_SETTLED, inputRequests: [entry(ASK_NEXT)] },
+    invalidates: DONE_INVALIDATES,
+    pullsStatus: true
+  },
+  {
     // PINNED: unlike `done`, blocks and the optimistic bubble are dropped
     // before the `['chat', id]` refetch lands, and `['chats']` / `['jobs']` are
     // not invalidated. `sendError` is left alone by design (the error arrives
     // as a persisted SystemMessage row).
+    // Edited on purpose: one handler, one log prefix (was `Agent error:`).
     name: 'error without code stops streaming immediately and refetches the chat only',
     seed: [REQUEST_ID, AGENT_TEXT],
     event: { type: 'error', error: 'boom' },
     settled: ERROR_CHANGES,
     invalidates: [['chat', CHAT_ID]],
     pullsStatus: true,
-    logged: ['Agent error:', 'boom']
+    logged: ['Stream error:', 'boom']
   },
   {
+    // Edited on purpose: one handler, one log prefix (was `Agent error:`).
     name: 'error with code behaves identically — the code is not read here',
     seed: [REQUEST_ID, AGENT_TEXT],
     event: { type: 'error', error: 'Sign in again', code: 'cinna_reauth_required' },
     settled: ERROR_CHANGES,
     invalidates: [['chat', CHAT_ID]],
     pullsStatus: true,
-    logged: ['Agent error:', 'Sign in again']
+    logged: ['Stream error:', 'Sign in again']
+  },
+  {
+    name: 'error drops a reply ask and keeps a next_message ask',
+    seed: [REQUEST_ID, AGENT_TEXT, ASK_REPLY, ASK_NEXT],
+    event: { type: 'error', error: 'boom' },
+    settled: { ...ERROR_CHANGES, inputRequests: [entry(ASK_NEXT)] },
+    invalidates: [['chat', CHAT_ID]],
+    pullsStatus: true,
+    logged: ['Stream error:', 'boom']
   }
 ]
 
 // ---------------------------------------------------------------------------
-// handleLlm — `window.api.llm.sendMessage`
+// The LLM path — `window.api.llm.sendMessage`
 // ---------------------------------------------------------------------------
 
-const MCP_CALL: LlmStreamEvent = {
-  type: 'tool_use',
-  id: 'call-1',
-  name: 'search_docs',
-  input: { q: 'streams' },
-  provider: 'Docs',
-  providerType: 'mcp'
-}
-const MCP_BLOCK = {
-  type: 'tool_call',
-  id: 'call-1',
-  name: 'search_docs',
-  input: { q: 'streams' },
-  provider: 'Docs',
-  providerType: 'mcp',
-  status: 'pending'
-}
-
-const AGENT_CALL: LlmStreamEvent = {
+const AGENT_CALL: RunEvent = {
   type: 'tool_use',
   id: 'call-2',
   name: 'ask_alpha',
@@ -580,23 +754,25 @@ function agentCallBlock(subParts?: Record<string, unknown>[]): Record<string, un
   }
 }
 
-const LLM_TEXT: LlmStreamEvent = { type: 'delta', text: 'Hello' }
+// Edited on purpose: an LLM delta now carries `kind: 'text'`; the store result
+// is the one the bare `{ text }` delta produced.
+const LLM_TEXT: RunEvent = { type: 'delta', kind: 'text', text: 'Hello' }
 
-function sub(event: AgentStreamEvent, toolCallId = 'call-2'): LlmStreamEvent {
-  return { type: 'tool_subevent', toolCallId, event }
+function child(event: RunEvent, toolCallId = 'call-2'): RunEvent {
+  return { type: 'child', toolCallId, agentId: AGENT_ID, event }
 }
 
-/** A sub-event row: seeded with an agent tool call, incremental flag cleared so it is visible. */
-function subRow(
+/** A child-event row: seeded with an agent tool call, incremental flag cleared so it is visible. */
+function childRow(
   name: string,
-  event: AgentStreamEvent,
+  event: RunEvent,
   subParts: Record<string, unknown>[] | null
-): Row<LlmStreamEvent> {
+): Row<RunEvent> {
   return {
     name,
     seed: [REQUEST_ID, AGENT_CALL],
     seedState: { streamedIncrementallyChatId: null },
-    event: sub(event),
+    event: child(event),
     settled: subParts
       ? { streamingBlocks: [agentCallBlock(subParts)], streamedIncrementallyChatId: CHAT_ID }
       : {},
@@ -604,7 +780,7 @@ function subRow(
   }
 }
 
-const LLM_ROWS: Row<LlmStreamEvent>[] = [
+const LLM_ROWS: Row<RunEvent>[] = [
   {
     name: 'request-id starts the stream: blocks, sendError and incremental flag reset, pending bubble kept',
     seed: [],
@@ -638,9 +814,10 @@ const LLM_ROWS: Row<LlmStreamEvent>[] = [
     invalidates: []
   },
   {
+    // Edited on purpose: both deltas carry `kind: 'text'` (see `LLM_TEXT`).
     name: 'delta merges into a preceding text block',
-    seed: [REQUEST_ID, { type: 'delta', text: 'Hel' }],
-    event: { type: 'delta', text: 'lo' },
+    seed: [REQUEST_ID, { type: 'delta', kind: 'text', text: 'Hel' }],
+    event: { type: 'delta', kind: 'text', text: 'lo' },
     settled: { streamingBlocks: [textBlock('text', 'Hello')] },
     invalidates: []
   },
@@ -696,77 +873,127 @@ const LLM_ROWS: Row<LlmStreamEvent>[] = [
     invalidates: []
   },
 
-  // tool_subevent: only nested deltas reach the sub-thread; every other nested
-  // event — including a nested `done` or `error` — leaves the outer turn alone.
-  subRow('tool_subevent request-id is ignored', REQUEST_ID, null),
-  ...(['working', 'input-required', 'auth-required', 'completed', 'failed', 'canceled'] as const).map(
-    (state) => subRow(`tool_subevent status ${state} is ignored`, { type: 'status', state, taskId: 't-1' }, null)
+  // child: only nested deltas reach the sub-thread; every other nested event —
+  // including a nested `done` or `error` — leaves the outer turn alone.
+  //
+  // Edited on purpose, every row down to the `child` ask rows: these were the
+  // `tool_subevent` rows. Only the wrapper changed (`child`, which also names
+  // the nested agent); each expectation is as it was. The nested statuses lost
+  // `input-required` / `auth-required`, which are both `needs_input` now.
+  childRow('child request-id is ignored', REQUEST_ID, null),
+  ...(['working', 'needs_input', 'completed', 'failed', 'canceled'] as const).map(
+    (state) => childRow(`child status ${state} is ignored`, { type: 'status', state, taskId: 't-1' }, null)
   ),
-  subRow('tool_subevent delta text appends a sub-part', { type: 'delta', kind: 'text', text: 'Hi' }, [
+  childRow('child delta text appends a sub-part', { type: 'delta', kind: 'text', text: 'Hi' }, [
     { kind: 'text', text: 'Hi' }
   ]),
-  subRow('tool_subevent delta thinking appends a sub-part', { type: 'delta', kind: 'thinking', text: 'Hmm' }, [
+  childRow('child delta thinking appends a sub-part', { type: 'delta', kind: 'thinking', text: 'Hmm' }, [
     { kind: 'thinking', text: 'Hmm' }
   ]),
-  subRow(
-    'tool_subevent delta tool carries toolId, toolName and toolInput',
+  childRow(
+    'child delta tool carries toolId, toolName and toolInput',
     { type: 'delta', kind: 'tool', text: 'ls', toolId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'ls' } },
     [{ kind: 'tool', text: 'ls', toolId: 'toolu_1', toolName: 'Bash', toolInput: { command: 'ls' } }]
   ),
-  subRow(
-    'tool_subevent delta tool_result carries toolId and toolStream',
+  childRow(
+    'child delta tool_result carries toolId and toolStream',
     { type: 'delta', kind: 'tool_result', text: 'ok', toolId: 'toolu_1', toolStream: 'stderr' },
     [{ kind: 'tool_result', text: 'ok', toolId: 'toolu_1', toolStream: 'stderr' }]
   ),
   // Contrast with the top-level agent notice row, which is appended.
-  subRow('tool_subevent delta notice is skipped', { type: 'delta', kind: 'notice', text: 'restarted' }, null),
-  subRow(
-    'tool_subevent delta command_result carries commandInvocation',
+  childRow('child delta notice is skipped', { type: 'delta', kind: 'notice', text: 'restarted' }, null),
+  childRow(
+    'child delta command_result carries commandInvocation',
     { type: 'delta', kind: 'command_result', text: '3 files', commandInvocation: '/files' },
     [{ kind: 'command_result', text: '3 files', commandInvocation: '/files' }]
   ),
-  subRow('tool_subevent delta file carries the file', { type: 'delta', kind: 'file', text: '', file: FILE }, [
+  childRow('child delta file carries the file', { type: 'delta', kind: 'file', text: '', file: FILE }, [
     { kind: 'file', text: '', file: FILE }
   ]),
-  subRow(
-    'tool_subevent local-agent permission ask (per_ id) is a plain sub-part',
+  childRow(
+    'child local-agent permission ask (per_ id) is a plain sub-part',
     { type: 'delta', kind: 'tool', text: '', toolName: PERMISSION_TOOL_NAME, toolId: 'per_abc', toolInput: PERMISSION_INPUT },
     [{ kind: 'tool', text: '', toolName: PERMISSION_TOOL_NAME, toolId: 'per_abc', toolInput: PERMISSION_INPUT }]
   ),
-  subRow(
-    'tool_subevent local-agent question (que_ id) is a plain sub-part',
+  childRow(
+    'child local-agent question (que_ id) is a plain sub-part',
     { type: 'delta', kind: 'tool', text: '', toolName: QUESTION_TOOL_NAME, toolId: 'que_abc', toolInput: QUESTION_INPUT },
     [{ kind: 'tool', text: '', toolName: QUESTION_TOOL_NAME, toolId: 'que_abc', toolInput: QUESTION_INPUT }]
   ),
-  subRow('tool_subevent done does not finish the outer turn', { type: 'done' }, null),
-  subRow(
-    'tool_subevent error does not stop the outer turn',
+  childRow('child done does not finish the outer turn', { type: 'done' }, null),
+  childRow(
+    'child error does not stop the outer turn',
     { type: 'error', error: 'agent failed', code: 'cinna_reauth_required' },
     null
   ),
   {
-    name: 'tool_subevent delta merges into the previous sub-part',
-    seed: [REQUEST_ID, AGENT_CALL, sub({ type: 'delta', kind: 'text', text: 'Hel' })],
-    event: sub({ type: 'delta', kind: 'text', text: 'lo' }),
+    name: 'child delta merges into the previous sub-part',
+    seed: [REQUEST_ID, AGENT_CALL, child({ type: 'delta', kind: 'text', text: 'Hel' })],
+    event: child({ type: 'delta', kind: 'text', text: 'lo' }),
     settled: { streamingBlocks: [agentCallBlock([{ kind: 'text', text: 'Hello' }])] },
     invalidates: []
   },
   {
-    name: 'tool_subevent on an mcp tool call still grows a sub-thread (matched by id only)',
+    name: 'child on an mcp tool call still grows a sub-thread (matched by id only)',
     seed: [REQUEST_ID, MCP_CALL],
-    event: sub({ type: 'delta', kind: 'text', text: 'Hi' }, 'call-1'),
+    event: child({ type: 'delta', kind: 'text', text: 'Hi' }, 'call-1'),
     settled: { streamingBlocks: [{ ...MCP_BLOCK, subParts: [{ kind: 'text', text: 'Hi' }] }] },
     invalidates: []
   },
   {
     // PINNED: no block matches, yet the incremental flag is still set.
-    name: 'PINNED: tool_subevent delta for an unknown toolCallId sets the incremental flag and nothing else',
+    name: 'PINNED: child delta for an unknown toolCallId sets the incremental flag and nothing else',
     seed: [REQUEST_ID, AGENT_CALL],
     seedState: { streamedIncrementallyChatId: null },
-    event: sub({ type: 'delta', kind: 'text', text: 'Hi' }, 'nope'),
+    event: child({ type: 'delta', kind: 'text', text: 'Hi' }, 'nope'),
     settled: { streamedIncrementallyChatId: CHAT_ID },
     invalidates: []
   },
+
+  // New with `child`: a nested agent's tool-call events carry no parts, and its
+  // asks are the chat's asks.
+  childRow('child tool_use is ignored', MCP_CALL, null),
+  childRow('child tool_result is ignored', { type: 'tool_result', id: 'call-1', result: 'x' }, null),
+  childRow('child tool_error is ignored', { type: 'tool_error', id: 'call-1', error: 'x' }, null),
+  {
+    name: 'child needs_input adds an entry naming the tool call that raised it',
+    seed: [REQUEST_ID, AGENT_CALL],
+    seedState: { streamedIncrementallyChatId: null },
+    event: child(ASK_REPLY),
+    settled: { inputRequests: [entry(ASK_REPLY, 'call-2')] },
+    invalidates: []
+  },
+  {
+    name: 'child input_resolved removes it and records it as settled',
+    seed: [REQUEST_ID, AGENT_CALL, child(ASK_REPLY)],
+    event: child(resolved('per_1')),
+    settled: { inputRequests: [], settledInputRequestIds: ['per_1'] },
+    invalidates: []
+  },
+  {
+    // The nested agent's turn ended with its call, so an ask it parked is gone
+    // even if no `input_resolved` said so (teardown posts none).
+    name: 'tool_result drops the asks its nested agent raised',
+    seed: [REQUEST_ID, AGENT_CALL, child(ASK_REPLY)],
+    event: { type: 'tool_result', id: 'call-2', result: 'done' },
+    settled: {
+      streamingBlocks: [{ ...agentCallBlock(), status: 'done', result: 'done' }],
+      inputRequests: []
+    },
+    invalidates: []
+  },
+  {
+    name: 'tool_error drops the asks its nested agent raised',
+    seed: [REQUEST_ID, AGENT_CALL, child(ASK_REPLY)],
+    event: { type: 'tool_error', id: 'call-2', error: 'agent failed' },
+    settled: {
+      streamingBlocks: [{ ...agentCallBlock(), status: 'error', error: 'agent failed' }],
+      inputRequests: []
+    },
+    invalidates: []
+  },
+  // One level of hierarchy: even a delta that would append is dropped.
+  childRow('child inside a child is ignored', child({ type: 'delta', kind: 'text', text: 'Hi' }), null),
 
   {
     name: 'done: cursor off at once; blocks, request id and pending bubble cleared after the refetch',
@@ -777,32 +1004,103 @@ const LLM_ROWS: Row<LlmStreamEvent>[] = [
     invalidates: DONE_INVALIDATES
   },
   {
+    // Edited on purpose: one handler, one log prefix (was `LLM error:`).
     name: 'error without errorDetail stops streaming immediately and refetches the chat only',
     seed: [REQUEST_ID, LLM_TEXT],
     event: { type: 'error', error: 'rate limited' },
     settled: ERROR_CHANGES,
     invalidates: [['chat', CHAT_ID]],
-    logged: ['LLM error:', 'rate limited']
+    logged: ['Stream error:', 'rate limited']
   },
   {
+    // Edited on purpose: one handler, one log prefix (was `LLM error:`).
     name: 'error with errorDetail behaves identically — the detail is not read here',
     seed: [REQUEST_ID, LLM_TEXT],
     event: { type: 'error', error: 'rate limited', errorDetail: '429 Too Many Requests' },
     settled: ERROR_CHANGES,
     invalidates: [['chat', CHAT_ID]],
-    logged: ['LLM error:', 'rate limited']
+    logged: ['Stream error:', 'rate limited']
   }
 ]
 
-describe('useChatStream — handleAgent, one row per event', () => {
+// Both tables stay: they drive `handleRun` through the two different send paths.
+describe('useChatStream — handleRun via startAgent, one row per event', () => {
   it.each(AGENT_ROWS)('$name', async (row) => {
     await runRow('agent', row)
   })
 })
 
-describe('useChatStream — handleLlm, one row per event', () => {
+describe('useChatStream — handleRun via startLlm, one row per event', () => {
   it.each(LLM_ROWS)('$name', async (row) => {
     await runRow('llm', row)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// What `renderRequestBlock` reads
+// ---------------------------------------------------------------------------
+
+describe('isLiveInputRequest — which answer path a needs_input opens', () => {
+  it('a reply ask makes its block answerable; a next_message ask leaves the composer as the answer path', () => {
+    const emit = mount('agent')
+    act(() => {
+      for (const event of [REQUEST_ID, ASK_REPLY, ASK_NEXT]) emit(event)
+    })
+    const state = useChatStore.getState()
+    expect(isLiveInputRequest(state, 'per_1')).toBe(true)
+    expect(isLiveInputRequest(state, 'task-1')).toBe(false)
+    // A block with no id and a block nobody asked about are never live.
+    expect(isLiveInputRequest(state, undefined)).toBe(false)
+    expect(isLiveInputRequest(state, 'per_nope')).toBe(false)
+  })
+
+  it('a nested agent’s reply ask is recorded as a reply ask — though no sub-thread renders a control for it yet', () => {
+    const emit = mount('llm')
+    act(() => {
+      for (const event of [REQUEST_ID, AGENT_CALL, child(ASK_REPLY)]) emit(event)
+    })
+    expect(isLiveInputRequest(useChatStore.getState(), 'per_1')).toBe(true)
+  })
+
+  it('stops being answerable once answered', () => {
+    const emit = mount('agent')
+    act(() => {
+      for (const event of [REQUEST_ID, ASK_REPLY, resolved('per_1')]) emit(event)
+    })
+    expect(isLiveInputRequest(useChatStore.getState(), 'per_1')).toBe(false)
+  })
+
+  it('a settled id outranks the registry poll until the next stream starts', () => {
+    // `renderRequestBlock` checks `isSettledInputRequest` before the poll's
+    // `isPending`, which can still list a timed-out ask for up to a tick.
+    const emit = mount('agent')
+    act(() => {
+      for (const event of [REQUEST_ID, ASK_REPLY, resolved('per_1')]) emit(event)
+    })
+    expect(isSettledInputRequest(useChatStore.getState(), 'per_1')).toBe(true)
+    expect(isSettledInputRequest(useChatStore.getState(), 'per_2')).toBe(false)
+    expect(isSettledInputRequest(useChatStore.getState(), undefined)).toBe(false)
+
+    // The poll's last read can land after the stream ends, so ending it keeps the id.
+    act(() => useChatStore.getState().finishStreaming())
+    expect(isSettledInputRequest(useChatStore.getState(), 'per_1')).toBe(true)
+
+    act(() => useChatStore.getState().startStreaming('req-2'))
+    expect(isSettledInputRequest(useChatStore.getState(), 'per_1')).toBe(false)
+  })
+
+  it('a reply ask dies with its turn; a next_message ask survives finishStreaming but not the next stream', () => {
+    const emit = mount('agent')
+    act(() => {
+      for (const event of [REQUEST_ID, ASK_REPLY, ASK_NEXT]) emit(event)
+    })
+
+    act(() => useChatStore.getState().finishStreaming())
+    expect(isLiveInputRequest(useChatStore.getState(), 'per_1')).toBe(false)
+    expect(useChatStore.getState().inputRequests).toEqual([entry(ASK_NEXT)])
+
+    act(() => useChatStore.getState().startStreaming('req-2'))
+    expect(useChatStore.getState().inputRequests).toEqual([])
   })
 })
 
@@ -810,20 +1108,16 @@ describe('useChatStream — handleLlm, one row per event', () => {
 // Coverage guards — a new variant fails the typecheck here until it has a row.
 // ---------------------------------------------------------------------------
 
-const AGENT_EVENT_TYPES: Record<AgentStreamEvent['type'], true> = {
+const RUN_EVENT_TYPES: Record<RunEvent['type'], true> = {
   'request-id': true,
   status: true,
-  delta: true,
-  done: true,
-  error: true
-}
-const LLM_EVENT_TYPES: Record<LlmStreamEvent['type'], true> = {
-  'request-id': true,
   delta: true,
   tool_use: true,
   tool_result: true,
   tool_error: true,
-  tool_subevent: true,
+  needs_input: true,
+  input_resolved: true,
+  child: true,
   done: true,
   error: true
 }
@@ -838,22 +1132,24 @@ const CONTENT_KINDS: Record<ContentKind, true> = {
 }
 
 describe('useChatStream event tables — coverage', () => {
-  it('has an agent row for every AgentStreamEvent variant, content kind and task state', () => {
+  it('has a row for every RunEvent variant in at least one table', () => {
+    const events = [...AGENT_ROWS, ...LLM_ROWS].map((row) => row.event)
+    expect(new Set(events.map((e) => e.type))).toEqual(new Set(Object.keys(RUN_EVENT_TYPES)))
+  })
+
+  it('has an agent row for every content kind and run state', () => {
     const events = AGENT_ROWS.map((row) => row.event)
-    expect(new Set(events.map((e) => e.type))).toEqual(new Set(Object.keys(AGENT_EVENT_TYPES)))
     expect(
       new Set(events.flatMap((e) => (e.type === 'delta' ? [e.kind] : [])))
     ).toEqual(new Set(Object.keys(CONTENT_KINDS)))
     expect(
       new Set(events.flatMap((e) => (e.type === 'status' ? [e.state] : [])))
-    ).toEqual(new Set(Object.keys(ALL_TASK_STATES)))
+    ).toEqual(new Set(Object.keys(ALL_RUN_STATES)))
   })
 
-  it('has an llm row for every LlmStreamEvent variant, and a sub-event row for every nested variant and kind', () => {
-    const events = LLM_ROWS.map((row) => row.event)
-    expect(new Set(events.map((e) => e.type))).toEqual(new Set(Object.keys(LLM_EVENT_TYPES)))
-    const nested = events.flatMap((e) => (e.type === 'tool_subevent' ? [e.event] : []))
-    expect(new Set(nested.map((e) => e.type))).toEqual(new Set(Object.keys(AGENT_EVENT_TYPES)))
+  it('has a child row for every nested variant and content kind', () => {
+    const nested = LLM_ROWS.flatMap((row) => (row.event.type === 'child' ? [row.event.event] : []))
+    expect(new Set(nested.map((e) => e.type))).toEqual(new Set(Object.keys(RUN_EVENT_TYPES)))
     expect(
       new Set(nested.flatMap((e) => (e.type === 'delta' ? [e.kind] : [])))
     ).toEqual(new Set(Object.keys(CONTENT_KINDS)))

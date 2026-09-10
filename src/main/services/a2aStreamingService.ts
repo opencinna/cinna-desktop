@@ -18,13 +18,14 @@ import {
 import type { A2AClient } from '@a2a-js/sdk/client'
 import {
   StreamPartsAccumulator,
+  partKindOf,
   type AccumulatedNotice,
   type MessageLike,
   type ArtifactLike
 } from '../agents/streamPartsAccumulator'
 import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
-import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
+import type { InputRequest, RunEvent, RunState } from '../../shared/runEvents'
 import type { MessagePart } from '../../shared/messageParts'
 import type { AgentTurnRunner } from './agentTurn/runner'
 
@@ -32,13 +33,70 @@ const logger = createLogger('A2A')
 
 /**
  * Typed stream port. Every event sent to the renderer over this channel must
- * conform to `AgentStreamEvent` — the discriminated union flows through the
+ * conform to `RunEvent` — the discriminated union flows through the
  * accumulator's `DeltaPort` (narrower), the streaming service itself (full
- * union), and the renderer's `useChatStream.handleAgent` consumer.
+ * union), and the renderer's `useChatStream` consumer.
  */
 export interface StreamPort {
-  postMessage(msg: AgentStreamEvent): void
+  postMessage(msg: RunEvent): void
   close(): void
+}
+
+/**
+ * An A2A task state in the protocol-neutral {@link RunState} vocabulary.
+ *
+ * `input-required` and `auth-required` both become `needs_input`: the renderer
+ * cares that the run is waiting on the user, and which of the two it is rides
+ * on the `needs_input` event that follows. Anything A2A adds later — or a
+ * server invents — is `unknown` rather than passed through as a string the
+ * union does not have.
+ */
+export function toRunState(state: string | undefined): RunState {
+  switch (state) {
+    case 'submitted':
+    case 'working':
+    case 'completed':
+    case 'failed':
+    case 'canceled':
+    case 'rejected':
+      return state
+    case 'input-required':
+    case 'auth-required':
+      return 'needs_input'
+    default:
+      return 'unknown'
+  }
+}
+
+/** Shown when an `auth-required` status carries no text of its own. */
+export const A2A_AUTH_REQUIRED_FALLBACK = 'The agent needs you to sign in before it can continue.'
+
+/**
+ * What an A2A task parked in `input-required` / `auth-required` is asking for,
+ * built from the text of its status message. `undefined` for any other state.
+ *
+ * Only `text`-kind parts count: a status message may also carry thinking, a
+ * tool part or a notice, and none of those is the question. A2A gives a
+ * question no structure — no options, no header — so it becomes one open
+ * question, or none when the agent sent no text at all.
+ */
+export function a2aInputRequestOf(
+  state: string | undefined,
+  message: MessageLike | undefined
+): InputRequest | undefined {
+  if (state !== 'input-required' && state !== 'auth-required') return undefined
+  const text = (message?.parts ?? [])
+    .filter((p) => partKindOf(p) === 'text' && typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('\n\n')
+    .trim()
+  if (state === 'auth-required') {
+    return { kind: 'auth', message: text || A2A_AUTH_REQUIRED_FALLBACK }
+  }
+  return {
+    kind: 'question',
+    questions: text ? [{ question: text, multiSelect: false, options: [] }] : []
+  }
 }
 
 interface ActiveRequest {
@@ -119,11 +177,11 @@ export interface RunAgentTurnInput {
   /** Aborts the in-flight turn (orchestrator abort, user cancel). */
   signal: AbortSignal
   /**
-   * Live event sink — receives every `delta` / `status` event as it streams.
-   * Direct mode forwards these to the chat port verbatim; orchestrated mode
-   * wraps each as a `tool_subevent`. Omit for a fully buffered turn.
+   * Live event sink — receives every `delta` / `status` / `needs_input` event
+   * as it streams. Direct mode forwards these to the chat port verbatim;
+   * orchestrated mode wraps each in a `child`. Omit for a fully buffered turn.
    */
-  onEvent?: (event: AgentStreamEvent) => void
+  onEvent?: (event: RunEvent) => void
   /** Surfaces the SDK client once created (so callers can `cancelTask`). */
   onClient?: (client: A2AClient) => void
   /** Surfaces the live task id as it's discovered (for `cancelTask`). */
@@ -208,8 +266,26 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
 
   // Forwards delta events from the accumulator to the caller's sink.
   const deltaPort = {
-    postMessage: (msg: AgentStreamEvent): void => onEvent?.(msg)
+    postMessage: (msg: RunEvent): void => onEvent?.(msg)
   }
+
+  // Built before the `try`, not inside it: a stop that ends in a throw still
+  // returns what was streamed — see the `catch`.
+  const accumulator = new StreamPartsAccumulator({
+    onToolCall: ({ name, input: toolInput }) => {
+      logger.info(`tool call → ${name}`, { input: toolInput })
+    },
+    onFile: (event) => {
+      if (event.status === 'attached') {
+        logger.info(`attachment → ${event.filename}`, { fileId: event.fileId })
+      } else if (event.status === 'skipped') {
+        logger.warn('attachment skipped', { reason: event.reason })
+      } else {
+        // Duplicate file id — expected on history replay / re-declared paths.
+        logger.debug('attachment deduped', { fileId: event.fileId })
+      }
+    }
+  })
 
   try {
     const client = await createA2AClient(endpointUrl, cardUrl, accessToken)
@@ -241,22 +317,6 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
     }
     if (sessionTaskId) onTaskId?.(sessionTaskId)
 
-    const accumulator = new StreamPartsAccumulator({
-      onToolCall: ({ name, input: toolInput }) => {
-        logger.info(`tool call → ${name}`, { input: toolInput })
-      },
-      onFile: (event) => {
-        if (event.status === 'attached') {
-          logger.info(`attachment → ${event.filename}`, { fileId: event.fileId })
-        } else if (event.status === 'skipped') {
-          logger.warn('attachment skipped', { reason: event.reason })
-        } else {
-          // Duplicate file id — expected on history replay / re-declared paths.
-          logger.debug('attachment deduped', { fileId: event.fileId })
-        }
-      }
-    })
-
     if (supportsStreaming) {
       const params = buildSendParams(wireContent, sessionContextId, sessionTaskId, metadata)
       logger.debug('→ sendMessageStream', params)
@@ -280,10 +340,23 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
             latestTaskState = su.status.state
             onEvent?.({
               type: 'status',
-              state: su.status.state,
+              state: toRunState(su.status.state),
               taskId: su.taskId,
               contextId: su.contextId
             })
+            // A2A ends the turn to ask, so the answer is the user's next
+            // message: posted after the `status` (and after the delta that
+            // already showed the question's text) so the renderer has both the
+            // block and the state by the time it learns the run is waiting.
+            const request = a2aInputRequestOf(su.status.state, su.status.message)
+            if (request) {
+              onEvent?.({
+                type: 'needs_input',
+                requestId: su.taskId,
+                request,
+                resume: 'next_message'
+              })
+            }
           } else if (event.kind === 'artifact-update') {
             const au = event as TaskArtifactUpdateEvent
             if (au.artifact) {
@@ -296,6 +369,9 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
             if (m.contextId) latestContextId = m.contextId
             if (m.taskId) setTaskId(m.taskId)
           } else if (event.kind === 'task') {
+            // A `task` frame posts no `status` today, so it posts no
+            // `needs_input` either, even when it arrives already parked; nor
+            // does the non-streaming path below. Only a `status-update` does.
             const t = event as Task
             latestContextId = t.contextId
             setTaskId(t.id)
@@ -393,10 +469,17 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       reauth: isReauth,
       stack: err instanceof Error ? err.stack : undefined
     })
+    // **A stop keeps what it streamed.** When the user had already stopped the
+    // turn, a throw from the stream — a server dropping the connection after
+    // `tasks/cancel`, say — is how the stop ended, not a verdict on what came
+    // before it. `streamToAgent` treats an aborted result as a stop and saves
+    // its parts, so the text the user watched arrive does not vanish on the
+    // refetch `done` triggers. Any other failure still returns nothing streamed.
+    const kept = signal.aborted
     return {
-      text: '',
-      parts: [],
-      notices: [],
+      text: kept ? accumulator.answerText() : '',
+      parts: kept ? accumulator.snapshotParts() : [],
+      notices: kept ? accumulator.snapshotNotices() : [],
       error: { message: humanized, raw: rawError, code }
     }
   }
@@ -454,32 +537,28 @@ export const a2aStreamingService = {
         }
       })
 
-      if (result.error) {
-        // Suppress the error surface if the user aborted — a cancel is not a
-        // failure.
-        if (!abortController.signal.aborted) {
-          port.postMessage(
-            result.error.code
-              ? { type: 'error', error: result.error.message, code: result.error.code }
-              : { type: 'error', error: result.error.message }
-          )
-          messageRepo.saveError({
-            chatId,
-            short: result.error.message,
-            detail: result.error.raw,
-            code: result.error.code
-          })
-          jobService.reportRunCompletion(chatId, 'failed', result.error.message)
-        } else {
-          // **Suppressing the error surface is not the same as reporting
-          // nothing.** A stop is not a failure and must not be saved or posted
-          // as one — but it is still an ending, and a job run left unfinalized
-          // stays `running` for the life of the app: nothing reaps a stale one,
-          // and `countInProgressByJob` keeps the job's "currently running"
-          // badge lit. Same rule, and the same call, as `chatStreamingService`'s
-          // abort branch.
-          jobService.reportRunCompletion(chatId, 'cancelled')
-        }
+      // **A stopped turn that also carries an error is a stop, not a failure.**
+      // It must not be saved or posted as one — but it is still an ending, and
+      // it falls through to the one below rather than returning in silence:
+      // that keeps what the turn streamed, posts `done {canceled}` (the
+      // renderer's Stop clears no state of its own, so a stop that posts no
+      // terminal event leaves the chat streaming until the user switches
+      // away), and finalizes the job run as `cancelled` — a run left
+      // unfinalized stays `running` for the life of the app. Same ending as
+      // `chatStreamingService`'s abort branch.
+      if (result.error && !abortController.signal.aborted) {
+        port.postMessage(
+          result.error.code
+            ? { type: 'error', error: result.error.message, code: result.error.code }
+            : { type: 'error', error: result.error.message }
+        )
+        messageRepo.saveError({
+          chatId,
+          short: result.error.message,
+          detail: result.error.raw,
+          code: result.error.code
+        })
+        jobService.reportRunCompletion(chatId, 'failed', result.error.message)
         return
       }
 
@@ -504,7 +583,10 @@ export const a2aStreamingService = {
       }
 
       messageRepo.touchChat(chatId)
-      port.postMessage({ type: 'done' })
+      port.postMessage({
+        type: 'done',
+        stopReason: abortController.signal.aborted ? 'canceled' : 'end_turn'
+      })
       // **The exit a stop most often takes, and the one the abort branch below
       // does not cover.** A runner that is cancelled cleanly returns what it
       // streamed with no error — that is the documented contract, and both
@@ -538,7 +620,9 @@ export const a2aStreamingService = {
         jobService.reportRunCompletion(chatId, 'failed', message)
       } else {
         // The other way a stopped turn leaves this function, and it needs the
-        // same ending for the same reason.
+        // same ending for the same reasons — the renderer included. Nothing the
+        // runner streamed survives a throw, so there is nothing to keep.
+        port.postMessage({ type: 'done', stopReason: 'canceled' })
         jobService.reportRunCompletion(chatId, 'cancelled')
       }
     } finally {

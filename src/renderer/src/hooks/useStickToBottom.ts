@@ -72,13 +72,57 @@ export interface StickToBottom {
  * `resetKey` (the chat id) re-pins and jumps: opening a different chat starts
  * at its latest message, whatever the previous chat's scroll state was.
  */
-export function useStickToBottom(resetKey?: string | null): StickToBottom {
+export interface StickToBottomOptions {
+  /**
+   * Stop following new content while true, and unpin instead once it grows past
+   * the band — so the "jump to latest" pill appears rather than the view moving.
+   * Takes effect from the frame after it turns on (the content that turned it
+   * on is still followed), and a viewport change is still followed.
+   *
+   * For the one moment a moving view is worse than a stale one: a control the
+   * user is about to click. MessageStream sets it while the stream has
+   * announced a top-level ask that is still unsettled (a block made live by the
+   * registry poll alone, after a reload, does not hold), because a second ask
+   * arriving under a pinned view put its own button exactly where the first
+   * one's had been.
+   */
+  hold?: boolean
+}
+
+export function useStickToBottom(
+  resetKey?: string | null,
+  { hold = false }: StickToBottomOptions = {}
+): StickToBottom {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const contentRef = useRef<HTMLDivElement | null>(null)
   const [pinned, setPinnedState] = useState(true)
   // Mirrored in a ref because the ResizeObserver and scroll callbacks are
   // registered once and would otherwise close over a stale `pinned`.
   const pinnedRef = useRef(true)
+  // Same reason — but engaged late, on purpose. The ask that turns `hold` on
+  // arrives with its own block, usually committed in the same frame, and that
+  // block is exactly what must be followed into view: guarding it would unpin
+  // the view and leave the first ask below the fold behind the pill. Two
+  // animation frames put the switch after the resize-observer step of the frame
+  // the block paints in; one would not, because rAF callbacks run *before* that
+  // step. Releasing is immediate.
+  const holdRef = useRef(false)
+  useLayoutEffect(() => {
+    if (!hold) {
+      holdRef.current = false
+      return
+    }
+    let inner = 0
+    const outer = requestAnimationFrame(() => {
+      inner = requestAnimationFrame(() => {
+        holdRef.current = true
+      })
+    })
+    return () => {
+      cancelAnimationFrame(outer)
+      cancelAnimationFrame(inner)
+    }
+  }, [hold])
 
   const setPinned = useCallback((next: boolean) => {
     pinnedRef.current = next
@@ -168,7 +212,24 @@ export function useStickToBottom(resetKey?: string | null): StickToBottom {
     const container = containerRef.current
     const content = contentRef.current
     if (!container || !content) return
+    let lastContentHeight = content.offsetHeight
     const ro = new ResizeObserver(() => {
+      const contentHeight = content.offsetHeight
+      const contentGrew = contentHeight > lastContentHeight
+      lastContentHeight = contentHeight
+      // Held against **new content** only. When the transcript did not grow,
+      // the viewport moved — the composer gained a line, a banner appeared —
+      // and the pointer is on the composer, not on a block; not following then
+      // would slide the ask's own buttons under the composer overlay.
+      if (pinnedRef.current && holdRef.current && contentGrew) {
+        // Held: the view stays where it is. Growth still inside the band moves
+        // nothing and needs no pill; growth past it unpins, which is what shows
+        // the pill. Unpinning here cannot re-enter for the reason `settle()`
+        // below cannot — the pill is a sibling of the observed boxes.
+        const distance = container.scrollHeight - container.scrollTop - container.clientHeight
+        if (distance > BOTTOM_THRESHOLD_PX) setPinned(false)
+        return
+      }
       if (pinnedRef.current) {
         if (!wheelSuspendRef.current) stick()
         return
@@ -219,7 +280,7 @@ export function useStickToBottom(resetKey?: string | null): StickToBottom {
         // Settle first, then catch up: whatever arrived during the suspension
         // was not stuck to, so a still-pinned transcript is behind the bottom.
         settle()
-        if (pinnedRef.current) stick()
+        if (pinnedRef.current && !holdRef.current) stick()
       }, WHEEL_SUSPEND_MS)
     }
     const onWheel = (e: WheelEvent): void => {

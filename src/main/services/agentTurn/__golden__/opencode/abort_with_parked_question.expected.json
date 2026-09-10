@@ -29,6 +29,26 @@
         ]
       },
       "toolId": "que_7"
+    },
+    {
+      "type": "needs_input",
+      "requestId": "que_7",
+      "request": {
+        "kind": "question",
+        "questions": [
+          {
+            "question": "Which?",
+            "header": "Pick",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "A"
+              }
+            ]
+          }
+        ]
+      },
+      "resume": "reply"
     }
   ],
   "result": {

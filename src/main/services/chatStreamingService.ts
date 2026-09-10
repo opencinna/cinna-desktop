@@ -24,21 +24,27 @@ import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { MediaPart } from '../llm/types'
 import type { MessagePart } from '../../shared/messageParts'
-import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
-import type { LlmStreamEvent } from '../../shared/llmStreamEvents'
+import type { RunEvent } from '../../shared/runEvents'
 
 const logger = createLogger('LLM')
 const MAX_TOOL_ROUNDS = 10
 
 /**
+ * The result recorded for a tool call a stop skipped. Written for the model,
+ * which reads it as that call's result on the chat's next turn.
+ */
+const TOOL_NOT_RUN = 'Not run: the user stopped the turn before this tool call was executed.'
+
+/**
  * Typed stream port. Every event sent to the renderer over this channel
- * must conform to `LlmStreamEvent` — symmetric to the A2A pipeline's
- * `StreamPort`, but with a distinct event union (LLM tool calls flow via
- * `tool_use` / `tool_result` / `tool_error`, not `tool` / `tool_result`
- * content-kind parts).
+ * must conform to `RunEvent` — the same union as the A2A pipeline's
+ * `StreamPort`. What differs is which variants this side posts: the LLM's
+ * own tool calls flow as `tool_use` / `tool_result` / `tool_error`, not as
+ * `tool` / `tool_result` content-kind deltas, and its text is a `delta` of
+ * kind `text`.
  */
 export interface StreamPort {
-  postMessage(msg: LlmStreamEvent): void
+  postMessage(msg: RunEvent): void
   close(): void
 }
 
@@ -302,6 +308,11 @@ export const chatStreamingService = {
     /** On-demand agent ids whose `pendingAnnounce` to clear — same timing. */
     pendingAnnounceAgentIds: string[]
   ): Promise<void> {
+    // What the current round has streamed and nothing has saved yet. An adapter
+    // rejects when its signal fires, so a stop mid-reply lands in the `catch`
+    // with this text on the user's screen and nowhere in the database — see the
+    // abort branch there.
+    let partial = ''
     try {
       const dbMessages = chatRepo.listMessages(chatId)
       // Capability acts as a filter for the per-turn `media[]` so adapters
@@ -415,7 +426,8 @@ export const chatStreamingService = {
           tools: tools.length > 0 ? tools : undefined,
           signal: abortController.signal,
           onDelta: (text) => {
-            port.postMessage({ type: 'delta', text })
+            partial += text
+            port.postMessage({ type: 'delta', kind: 'text', text })
           }
         })
 
@@ -458,12 +470,35 @@ export const chatStreamingService = {
           content: result.content,
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null
         })
+        // Saved whole, so a stop from here on has nothing partial to keep.
+        partial = ''
         currentMessages.push(assistantMsg)
 
         if (result.toolCalls.length === 0) break
 
-        for (const tc of result.toolCalls) {
-          if (abortController.signal.aborted) break
+        for (const [index, tc] of result.toolCalls.entries()) {
+          if (abortController.signal.aborted) {
+            // **Every call the model asked for needs a result row.** The
+            // round's assistant row is already saved with all of them, and both
+            // providers refuse a history holding a `tool_use` / `tool_calls`
+            // entry with no matching result — on every later request in this
+            // chat, which a stop would otherwise leave permanently unusable. So
+            // each call the stop skipped gets a row saying why.
+            for (const skipped of result.toolCalls.slice(index)) {
+              const skippedProvider = toolRouting.get(skipped.name)
+              messageRepo.saveToolCall({
+                chatId,
+                content: TOOL_NOT_RUN,
+                toolCallId: skipped.id,
+                toolName: skipped.name,
+                toolInput: skipped.input,
+                toolError: true,
+                toolProvider: skippedProvider?.displayName || undefined,
+                toolAgentId: skippedProvider?.agentId
+              })
+            }
+            break
+          }
 
           const provider = toolRouting.get(tc.name)
           const providerName = provider?.displayName ?? ''
@@ -493,16 +528,27 @@ export const chatStreamingService = {
               providerType: provider.providerType
             })
 
-            // Agent tools forward each A2A stream event into the chat port as
-            // a `tool_subevent` keyed by this tool-call id, so the renderer
-            // can stream the agent's work into a nested sub-thread. MCP tools
+            // Agent tools forward each event of the agent's turn into the chat
+            // port as a `child` keyed by this tool-call id, so the renderer can
+            // stream the agent's work into a nested sub-thread. MCP tools
             // ignore the sink. The orchestrator's `AbortController` is threaded
             // through so aborting cancels the in-flight agent sub-turn.
-            const onEvent = isAgent
-              ? (event: AgentStreamEvent): void => {
-                  port.postMessage({ type: 'tool_subevent', toolCallId: tc.id, event })
-                }
-              : undefined
+            //
+            // `child` names the agent, so the sink is wired only when the
+            // provider has an id to give it. `A2AAsMcpProvider` always does; a
+            // provider that did not would run buffered rather than post a
+            // `child` with an invented id.
+            const onEvent =
+              isAgent && providerAgentId
+                ? (event: RunEvent): void => {
+                    port.postMessage({
+                      type: 'child',
+                      toolCallId: tc.id,
+                      agentId: providerAgentId,
+                      event
+                    })
+                  }
+                : undefined
 
             const exec = await provider.callTool(tc.name, tc.input, {
               onEvent,
@@ -571,7 +617,10 @@ export const chatStreamingService = {
       }
 
       messageRepo.touchChat(chatId)
-      port.postMessage({ type: 'done' })
+      port.postMessage({
+        type: 'done',
+        stopReason: abortController.signal.aborted ? 'canceled' : 'end_turn'
+      })
       // **The exit a stop most often takes, and the one the abort branch below
       // does not cover.** A runner that is cancelled cleanly returns what it
       // streamed with no error — that is the documented contract, and both
@@ -590,6 +639,22 @@ export const chatStreamingService = {
         // silence leaves the job run this chat belongs to at `running` for the
         // life of the app: nothing reaps a stale one, and the sidebar's
         // "currently running" indicator counts it for ever.
+        //
+        // **And the renderer has to hear that it ended.** This branch used to
+        // return having posted nothing, and the renderer's Stop only cancels —
+        // it clears no state of its own — so the chat sat in the streaming
+        // state, offering nothing but Stop, until the user switched chats. The
+        // round's partial reply is saved first: `done` refetches the chat and
+        // clears the live blocks, and text the user watched arrive must not
+        // vanish with them.
+        // Whitespace alone is not a reply to keep — and Anthropic refuses an
+        // assistant turn whose text is only whitespace, on every later request
+        // in the chat.
+        if (partial.trim()) {
+          messageRepo.saveAssistant({ chatId, content: partial })
+          messageRepo.touchChat(chatId)
+        }
+        port.postMessage({ type: 'done', stopReason: 'canceled' })
         jobService.reportRunCompletion(chatId, 'cancelled')
         return
       }

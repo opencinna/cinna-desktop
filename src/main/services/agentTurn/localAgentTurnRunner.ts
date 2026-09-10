@@ -44,15 +44,21 @@
  * orchestrated mode — which has no port — works identically. Every exit from a
  * turn rejects whatever is still pending, because a parked request with no
  * answer coming is a session that never goes idle.
+ *
+ * The stream also says so in its own words: `needs_input` once the ask is
+ * answerable, and `input_resolved` once it is not — answered here, answered
+ * elsewhere, or expired. An ask the turn's own ending sweeps away gets no
+ * `input_resolved`; the terminal event posted above this runner already tells
+ * the renderer that nothing is parked any more.
  */
 
 import type { RunAgentTurnInput, RunAgentTurnResult } from '../a2aStreamingService'
 import { StreamPartsAccumulator } from '../../agents/streamPartsAccumulator'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { InputRequest, RunEvent } from '../../../shared/runEvents'
 import { createLogger } from '../../logger/logger'
 import type { AgentTurnRunner } from './runner'
 import type { EngineEventBus, SessionEventListener } from './engineEventBus'
-import { parseEngineEvent, type EngineEvent } from './engineEvents'
+import { ENGINE_EVENT, parseEngineEvent, type EngineEvent } from './engineEvents'
 import { SseParser } from './sseParser'
 import { TurnStream, type PendingRequest } from './turnStream'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
@@ -169,8 +175,54 @@ interface Outcome {
   aborted?: boolean
 }
 
+/** How a parked ask is reported on the turn's stream. Built per turn in `stream()`. */
+interface AskReporter {
+  /** The ask is registered and its block is in the transcript: it can be answered now. */
+  needsInput(asked: PendingRequest): void
+  /** The ask was settled while the turn was still open. At most once per id. */
+  resolved(requestId: string, resolution: RequestResolution): void
+}
+
 function fail(message: string, raw?: string): RunAgentTurnResult {
   return { text: '', parts: [], notices: [], error: { message, raw: raw ?? message } }
+}
+
+/** What the renderer is told the turn is waiting on, from what `TurnStream` read. */
+function inputRequest(asked: PendingRequest): InputRequest {
+  if (asked.kind === 'question') return { kind: 'question', questions: asked.questions ?? [] }
+  return {
+    kind: 'permission',
+    action: asked.request?.action ?? '',
+    resources: asked.request?.resources ?? [],
+    callId: asked.request?.callId
+  }
+}
+
+/**
+ * The resolution an engine event reports, for an ask settled somewhere other
+ * than this turn's own answer path — another window on the same engine, or a
+ * client that is not this app.
+ *
+ * Read off the event rather than assumed, and anything the desktop's own
+ * vocabulary cannot say is `rejected`: the ask is closed either way, and a
+ * reply this app does not know is not one it may report as an allow.
+ */
+function engineResolution(event: EngineEvent): RequestResolution {
+  const data = event.data ?? {}
+  if (event.type === ENGINE_EVENT.permissionReplied) {
+    const reply = data.reply
+    return reply === 'once' || reply === 'always' || reply === 'reject'
+      ? { kind: 'permission', reply }
+      : { kind: 'rejected' }
+  }
+  if (event.type === ENGINE_EVENT.questionReplied) {
+    const answers = data.answers
+    const wellFormed =
+      Array.isArray(answers) &&
+      answers.every((a) => Array.isArray(a) && a.every((s) => typeof s === 'string'))
+    return wellFormed ? { kind: 'question', answers: answers as string[][] } : { kind: 'rejected' }
+  }
+  return { kind: 'rejected' }
 }
 
 /**
@@ -308,7 +360,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     // the chat's MessagePort; orchestrated mode wraps them; a buffered turn
     // passes no sink at all and they go nowhere.
     const deltaPort = {
-      postMessage: (event: AgentStreamEvent): void => ctx.input.onEvent?.(event)
+      postMessage: (event: RunEvent): void => ctx.input.onEvent?.(event)
     }
 
     let settle!: (outcome: Outcome) => void
@@ -352,6 +404,38 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     const parked = new Map<string, () => void>()
     let disconnected = false
 
+    /**
+     * Whether an ask's comings and goings are still news. Flipped in `finally`
+     * **before** the sweep cancels what is parked: an ask the turn's own ending
+     * rejects is not an answer, and the `done` or `error` posted above this
+     * runner already says the park is gone. It gates the two ask events and
+     * nothing else — every delta keeps the order it always had.
+     */
+    let open = true
+    /**
+     * Ids already reported settled. The ordinary flow reports one twice over:
+     * the user's answer is reported, the reply is posted, and the engine then
+     * echoes `permission.v2.replied` for the same id while it may still be in
+     * `parked`.
+     */
+    const resolvedIds = new Set<string>()
+    const report: AskReporter = {
+      needsInput: (asked) => {
+        if (!open) return
+        ctx.input.onEvent?.({
+          type: 'needs_input',
+          requestId: asked.requestId,
+          request: inputRequest(asked),
+          resume: 'reply'
+        })
+      },
+      resolved: (requestId, resolution) => {
+        if (!open || resolvedIds.has(requestId)) return
+        resolvedIds.add(requestId)
+        ctx.input.onEvent?.({ type: 'input_resolved', requestId, resolution })
+      }
+    }
+
     const startedAt = Date.now()
     // What the engine actually sent, counted by type. The first real turn
     // against a live credential currently leaves almost no trace, and every
@@ -369,6 +453,13 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         admittedSeq = event.durable.seq
       }
       const update = turn.apply(event)
+      // Settled by the engine while it is still parked here — answered from
+      // another window, or echoed back after our own reply, which the dedupe
+      // swallows. Said before the decision line, as an answer from this window
+      // is, so the renderer stops offering the block before it reads the result.
+      if (update.settled && parked.has(update.settled)) {
+        report.resolved(update.settled, engineResolution(event))
+      }
       if (update.message) accumulator.ingestMessage(update.message, deltaPort)
       if (update.settled) {
         // **Both stores, not just the local one.** `parked` holds this turn's
@@ -385,7 +476,7 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
         pendingRequests.drop(update.settled)
       }
       if (update.asked?.auto) this.autoAllow(update.asked, ctx, sessionId)
-      else if (update.asked) this.park(update.asked, ctx, sessionId, parked, turn)
+      else if (update.asked) this.park(update.asked, ctx, sessionId, parked, turn, report)
       if (update.error) settle({ error: update.error })
       if (update.idle) settle({ idle: true })
     }
@@ -426,6 +517,11 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       const outcome = await finished
 
       if (outcome.aborted) {
+        // Closed before the interrupt, not in `finally`: a stop is teardown, and
+        // the engine may settle a parked ask while this POST is in flight — the
+        // stream is still subscribed, so that echo would otherwise be reported
+        // after the turn was stopped. See `open`.
+        open = false
         // Tell the engine, not just ourselves: an agent loop we stopped reading
         // keeps running, keeps spending tokens, and keeps holding the session.
         await this.post(`/api/session/${sessionId}/interrupt`).catch((err) =>
@@ -472,6 +568,8 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       clearTimeout(ceiling)
       signal.removeEventListener('abort', onAbort)
       unsubscribe()
+      // Closed first, so the sweep below reports nothing — see `open`.
+      open = false
       // Every exit clears the parked requests. A question left unanswered is a
       // session that never goes idle again, and the reject endpoint is the
       // clean way out of one.
@@ -493,7 +591,8 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
     ctx: { chatId: string; agentId: string },
     sessionId: string,
     parked: Map<string, () => void>,
-    turn: TurnStream
+    turn: TurnStream,
+    report: AskReporter
   ): void {
     const handle = pendingRequests.register({
       requestId: asked.requestId,
@@ -506,8 +605,12 @@ export class LocalAgentTurnRunner implements AgentTurnRunner {
       request: asked.request
     })
     parked.set(asked.requestId, handle.cancel)
+    // After the registration, and after `ingest` has already streamed the
+    // ask's block: an answer posted the moment this arrives finds both.
+    report.needsInput(asked)
     void handle.answered
       .then((resolution) => {
+        report.resolved(asked.requestId, resolution)
         // Said before it is posted, and only when the store actually took it:
         // `remembered` is set by whoever wrote the grant, so the transcript
         // cannot claim a rule that is not on disk.

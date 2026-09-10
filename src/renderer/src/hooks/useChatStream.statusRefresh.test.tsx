@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
+import type { RunEvent } from '../../../shared/runEvents'
 
 /**
  * What `useChatStream` does to the status surfaces when an agent turn ends.
@@ -28,7 +29,7 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
-type StreamCallback = (event: { type: string }) => void
+type StreamCallback = (event: RunEvent) => void
 
 let sendMessage: ReturnType<typeof vi.fn>
 let statusGet: ReturnType<typeof vi.fn>
@@ -51,7 +52,7 @@ beforeEach(() => {
   // Drives the turn straight to `done` so the post-turn branch runs.
   sendMessage = vi.fn(
     (_agentId: string, _chatId: string, _content: string, cb: StreamCallback) => {
-      cb({ type: 'request-id' })
+      cb({ type: 'request-id', requestId: 'req-1' })
       cb({ type: 'done' })
     }
   )
@@ -114,8 +115,8 @@ describe('useChatStream — the post-turn status pull', () => {
     signInAs('local_user')
     sendMessage.mockImplementation(
       (_a: string, _c: string, _t: string, cb: StreamCallback) => {
-        cb({ type: 'request-id' })
-        cb({ type: 'error' })
+        cb({ type: 'request-id', requestId: 'req-1' })
+        cb({ type: 'error', error: 'boom' })
       }
     )
     await runTurn('folder:alpha')
@@ -128,8 +129,8 @@ describe('useChatStream — the post-turn status pull', () => {
     signInAs('local_user')
     sendMessage.mockImplementation(
       (_a: string, _c: string, _t: string, cb: StreamCallback) => {
-        cb({ type: 'request-id' })
-        cb({ type: 'delta' })
+        cb({ type: 'request-id', requestId: 'req-1' })
+        cb({ type: 'delta', kind: 'text', text: 'hi' })
       }
     )
     await runTurn('folder:alpha')

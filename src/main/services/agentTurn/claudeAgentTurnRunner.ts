@@ -54,7 +54,7 @@
 import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { RunAgentTurnInput, RunAgentTurnResult } from '../a2aStreamingService'
 import { StreamPartsAccumulator } from '../../agents/streamPartsAccumulator'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../shared/runEvents'
 import { createLogger } from '../../logger/logger'
 import type { AgentTurnRunner } from './runner'
 import type { LocalAgentKind } from '../../../shared/localAgents'
@@ -302,7 +302,7 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
       onToolCall: ({ name, input }) => logger.info(`tool call → ${name}`, { input })
     })
     const deltaPort = {
-      postMessage: (event: AgentStreamEvent): void => ctx.input.onEvent?.(event)
+      postMessage: (event: RunEvent): void => ctx.input.onEvent?.(event)
     }
 
     const env = buildClaudeEnv({
@@ -400,6 +400,15 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
 
     /** Ids this turn parked on, so every exit can release them. */
     const parked = new Map<string, () => void>()
+    /**
+     * Whether an ask's `needs_input` / `input_resolved` is still news. Flipped
+     * in `finally` **before** the sweep releases what is parked: an ask the
+     * turn's own ending settles was answered by nobody, and the `done` or
+     * `error` posted above this runner already says the park is gone. It gates
+     * those two events and nothing else — the transcript's decision line is
+     * written exactly as it was.
+     */
+    let open = true
 
     /**
      * The permission gate.
@@ -450,6 +459,21 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
 
       const asked = stream.askPermission(requestId, request)
       if (asked.message) accumulator.ingestMessage(asked.message, deltaPort)
+      // After the registration and the block, so an answer posted the moment
+      // this arrives finds both.
+      if (open) {
+        ctx.input.onEvent?.({
+          type: 'needs_input',
+          requestId,
+          request: {
+            kind: 'permission',
+            action: request.action,
+            resources: request.resources,
+            callId: request.callId
+          },
+          resume: 'reply'
+        })
+      }
 
       /** Record the decision beside the ask, then answer the SDK. */
       const settle = (
@@ -465,6 +489,10 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
 
       try {
         const resolution = await handle.answered
+        // Before the decision line, so the renderer stops offering the block
+        // before it reads what was decided. The promise settles once, so this
+        // is said at most once per ask.
+        if (open) ctx.input.onEvent?.({ type: 'input_resolved', requestId, resolution })
 
         // **`rejected` is not a user saying no.** `pendingRequests` settles
         // with it when the park times out or the turn ends underneath — and it
@@ -782,6 +810,7 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
       // keeps `isPending` returning true, so a persisted block goes on
       // rendering as answerable and answering it reports success into a turn
       // that ended.
+      open = false // first, so the release below reports nothing — see `open`
       for (const [, cancel] of parked) cancel()
       parked.clear()
     }

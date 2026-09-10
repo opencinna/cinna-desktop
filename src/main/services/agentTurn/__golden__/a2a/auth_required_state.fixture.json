@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The agent streams a sentence, then ends the turn in `auth-required` with its sign-in request carried on the final status-update's `status.message`. Unlike auth_required_401 this is the protocol state, not a transport rejection: the turn completes.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Open a pull request for the fix",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "task", "id": "task-ar-1", "contextId": "ctx-ar-1", "status": { "state": "submitted" }, "history": [] } },
+        { "result": { "kind": "status-update", "taskId": "task-ar-1", "contextId": "ctx-ar-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-ar-1", "contextId": "ctx-ar-1", "artifact": { "artifactId": "art-ar-1", "parts": [ { "kind": "text", "text": "I can open that pull request.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-ar-1", "contextId": "ctx-ar-1", "status": { "state": "auth-required", "message": { "kind": "message", "role": "agent", "messageId": "msg-ar-signin", "taskId": "task-ar-1", "contextId": "ctx-ar-1", "parts": [ { "kind": "text", "text": "Sign in to GitHub to continue.", "metadata": { "cinna.content_kind": "text" } } ] } }, "final": true } }
+      ]
+    }
+  }
+}

@@ -6,11 +6,12 @@ The chat transcript follows the bottom of the conversation while a reply streams
 
 ## Core Concepts
 
-- **Pinned / unpinned** — the one piece of state. While *pinned*, the view is held at the bottom as the content grows; while *unpinned* it stays exactly where the user left it, whatever arrives. The user's own scrolling is the only thing that changes it (plus sending, and opening another chat — both below). An arriving chunk never re-pins.
+- **Pinned / unpinned** — the one piece of state. While *pinned*, the view is held at the bottom as the content grows; while *unpinned* it stays exactly where the user left it, whatever arrives. The user's own scrolling is the only thing that re-pins it (plus sending, and opening another chat — both below). An arriving chunk never re-pins; the one thing besides the user that unpins is new content outgrowing a hold.
 - **The bottom band** — 64 px. Both the definition of "at the bottom" and the width of the zone in which the user still counts as following. Wide enough that a sub-pixel `scrollHeight` rounding or the last line of a growing paragraph does not silently unpin; narrow enough that one deliberate wheel notch does.
 - **Sticking** — how following is implemented: an immediate assignment of the scroll position, performed after layout and before paint, in response to the content resizing. It is not an animation and not a per-render effect.
 - **Wheel suspension** — a short window (150 ms) opened by an upward wheel or trackpad gesture during which sticking does not run, so a chunk landing mid-gesture cannot pull the view back out from under it.
 - **Jump to latest** — the pill shown while unpinned, centred just above the composer. Clicking it re-pins and jumps to the bottom. It is the only way back other than scrolling there.
+- **Hold** — the transcript's owner asking it to stop following new content for a while. While held, growth still inside the bottom band moves nothing, and growth past it unpins — which is what shows the pill — instead of moving the view. `MessageStream` holds while a local agent's ask on the current stream is waiting for an answer.
 
 ## User Flows
 
@@ -20,6 +21,7 @@ The chat transcript follows the bottom of the conversation while a reply streams
 4. **Coming back.** The user scrolls to within the bottom band, or clicks the pill. Following resumes mid-stream and the pill disappears.
 5. **Switching chats.** Opening a different chat starts at that chat's latest message, whatever the previous chat's scroll position was. Scroll position is not remembered per chat.
 6. **The viewport changing underneath.** The window is resized, or the composer grows a line and the transcript's bottom padding grows with it. A pinned view stays at the bottom; it does not leave the newest line drifting under the composer.
+7. **An ask waiting for an answer.** A local agent stops to ask permission or a question. Its block is followed into view like any other content; from then until the ask is settled, whatever arrives below it does not move the view, and the pill appears once it would have. The composer growing a line is still followed. When the ask settles, following resumes if the view is still pinned.
 
 ## Rules
 
@@ -34,6 +36,9 @@ Each rule below exists because of a specific way the transcript misbehaved.
 - **A deliberate jump cancels any open suspension.** The suspension exists to protect a gesture in flight, and clicking "Jump to latest" or opening another chat supersedes one. A suspension carried across a chat switch would open the new transcript at the top and then jump it to the bottom when the timer fired — the movement the whole model exists to avoid, on the one screen where the user has done nothing yet.
 - **A transcript too short to scroll stays pinned.** There is nowhere to scroll to, so there is nothing to offer a way back from, and the pill never appears.
 - **Shrinking content re-evaluates the pin.** Content getting shorter — a collapsible closing, a long tool result collapsing at the persisted hand-off — can put the view back inside the band without the scroll position moving at all, so no scroll event fires. Without a re-check the pill would linger a few pixels from the bottom. This can only ever re-pin: a resize never moves the view up.
+- **A pending ask holds the view.** Two asks can arrive back to back. With the view pinned, the second ask's block scrolled the first one's buttons away and put its own "Allow once" exactly where the pointer was, so a click meant for one permission approved the other. A moving view is worse than a stale one only when the user is about to click something, and this is the one exception to following. It is scoped to top-level asks announced on the current stream: a nested agent's ask has no block on screen to protect, and a block that went live from the registry poll alone — after a reload — does not hold the view.
+- **The hold engages two frames late, and releases at once.** An ask's block and the event that turns the hold on usually commit in the same frame, and that block is exactly what must be followed into view. A hold that engaged immediately guarded the block's own growth, unpinned the view on it and left the first ask below the fold behind the pill. Animation-frame callbacks run *before* the resize-observer step, so one frame does not get past the observer run of the frame the block paints in; two do.
+- **A hold guards against new content, never against the viewport.** Only growth of the transcript content itself is held. When the viewport changes instead — the composer gains a line, a banner appears — the pointer is on the composer, and not following would slide the ask's own buttons under the composer overlay. A wheel suspension that closes while held does not catch up either.
 
 ## Why the window shook: two independent causes
 
@@ -55,7 +60,8 @@ The reported symptom — a local agent streaming a long markdown table, the chat
 
 ```
 MainArea (relative container, owns composer height)
-  ├── MessageStream  ──uses──>  useStickToBottom(chatId)
+  ├── MessageStream  ──uses──>  useStickToBottom(chatId, { hold })
+  │      hold = a top-level, unsettled `reply` ask in the chat store's inputRequests
   │      scroll container (ref) ── ResizeObserver ──> stick (instant, pre-paint)
   │      content box (ref)      ── scroll / wheel  ──> pinned / unpinned
   └── "Jump to latest" pill (rendered while unpinned, offset by composer height)
@@ -67,3 +73,5 @@ MainArea (relative container, owns composer height)
 - [Transcript Scrolling — Technical Details](scroll_following_tech.md)
 - [Messaging](../messaging/messaging.md) — the streaming pipeline whose chunk rate this model is built to survive
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rule 1, nothing jumps while the user is acting
+- [Local Agent Permissions](../../agents/local_agents/permissions.md) — the permission block the hold protects
+- [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md) — `needs_input` / `input_resolved`, which turn the hold on and off

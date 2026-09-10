@@ -13,7 +13,7 @@
  */
 import { describe, expect, it } from 'vitest'
 import { StreamPartsAccumulator } from '../../agents/streamPartsAccumulator'
-import type { AgentDeltaEvent } from '../../../shared/agentStreamEvents'
+import type { RunDeltaEvent } from '../../../shared/runEvents'
 import type { MessagePart } from '../../../shared/messageParts'
 import { PERMISSION_TOOL_NAME } from '../../../shared/localAgentRequests'
 import {
@@ -36,14 +36,14 @@ const ev = (type: string, data: Record<string, unknown>, seq?: number): EngineEv
 /** Drive a list of events through both halves, exactly as the runner will. */
 function run(events: EngineEvent[]): {
   parts: MessagePart[]
-  deltas: AgentDeltaEvent[]
+  deltas: RunDeltaEvent[]
   answer: string
   stream: TurnStream
 } {
   const stream = new TurnStream()
   const accumulator = new StreamPartsAccumulator()
-  const deltas: AgentDeltaEvent[] = []
-  const port = { postMessage: (m: AgentDeltaEvent): void => void deltas.push(m) }
+  const deltas: RunDeltaEvent[] = []
+  const port = { postMessage: (m: RunDeltaEvent): void => void deltas.push(m) }
   for (const event of events) {
     const update = stream.apply(event)
     if (update.message) accumulator.ingestMessage(update.message, port)
@@ -507,7 +507,23 @@ describe('TurnStream → StreamPartsAccumulator', () => {
       })
     )
 
-    expect(update.asked).toEqual({ kind: 'question', requestId: 'que_3' })
+    // The questions ride on the ask as well as in the part: the runner's
+    // `needs_input` is built from `asked`, not re-read off the transcript.
+    expect(update.asked).toEqual({
+      kind: 'question',
+      requestId: 'que_3',
+      questions: [
+        {
+          question: 'Which database?',
+          header: 'DB',
+          multiSelect: true,
+          options: [
+            { label: 'Postgres', description: 'relational' },
+            { label: 'SQLite', description: 'embedded' }
+          ]
+        }
+      ]
+    })
     const input = update.message!.parts[0].metadata!['cinna.tool_input'] as {
       questions: { multiSelect: boolean }[]
     }

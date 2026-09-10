@@ -22,11 +22,13 @@ class StubResizeObserver {
 const CONTENT_HEIGHT = 2000
 const VIEWPORT_HEIGHT = 500
 
-function Harness({ chatId }: { chatId: string }): React.JSX.Element {
-  const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId)
+function Harness({ chatId, hold = false }: { chatId: string; hold?: boolean }): React.JSX.Element {
+  const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId, { hold })
   return (
     <div ref={containerRef} data-testid="scroller">
-      <div ref={contentRef}>content</div>
+      <div ref={contentRef} data-testid="content">
+        content
+      </div>
       <button onClick={scrollToBottom}>jump</button>
       <span data-testid="pinned">{pinned ? 'pinned' : 'free'}</span>
     </div>
@@ -47,6 +49,10 @@ interface Harnessed {
    * view up without a user gesture.
    */
   shrink: (by: number) => void
+  /** An answerable request block appears (true) or is settled (false) — the hook's `hold`. */
+  setHold: (hold: boolean) => void
+  /** The viewport changes height with the transcript unchanged — the composer gaining a line. */
+  resizeViewport: (to: number) => void
 }
 
 function setup(contentHeight = CONTENT_HEIGHT): Harnessed {
@@ -54,13 +60,19 @@ function setup(contentHeight = CONTENT_HEIGHT): Harnessed {
   const scroller = view.getByTestId('scroller')
   let top = 0
   let height = contentHeight
+  let viewport = VIEWPORT_HEIGHT
   // A browser clamps to [0, scrollHeight - clientHeight]. Both ends matter:
   // without the lower bound the harness cannot represent a transcript shorter
   // than its viewport, where `stick()` would write a negative `scrollTop` that
   // no browser ever produces.
-  const clamp = (v: number): number => Math.max(0, Math.min(v, height - VIEWPORT_HEIGHT))
+  const clamp = (v: number): number => Math.max(0, Math.min(v, height - viewport))
   Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => height })
-  Object.defineProperty(scroller, 'clientHeight', { value: VIEWPORT_HEIGHT, configurable: true })
+  Object.defineProperty(scroller, 'clientHeight', { configurable: true, get: () => viewport })
+  // The transcript's own height, which is what tells new content from a moved viewport.
+  Object.defineProperty(view.getByTestId('content'), 'offsetHeight', {
+    configurable: true,
+    get: () => height
+  })
   Object.defineProperty(scroller, 'scrollTop', {
     configurable: true,
     get: () => top,
@@ -78,6 +90,11 @@ function setup(contentHeight = CONTENT_HEIGHT): Harnessed {
     shrink: (by: number) => {
       height -= by
       top = clamp(top)
+    },
+    setHold: (hold: boolean) => view.rerender(<Harness chatId="chat-1" hold={hold} />),
+    resizeViewport: (to: number) => {
+      viewport = to
+      top = clamp(top)
     }
   }
 }
@@ -91,6 +108,13 @@ describe('useStickToBottom', () => {
   afterEach(() => {
     vi.useRealTimers()
   })
+
+  /** Let a few animation frames pass — long enough for a hold to engage. */
+  const passFrames = (): void => {
+    act(() => {
+      vi.advanceTimersByTime(50)
+    })
+  }
 
   /** Let the wheel suspension window close. */
   const passWheelWindow = (): void => {
@@ -310,6 +334,115 @@ describe('useStickToBottom', () => {
       fireResize()
     })
     expect(scroller.scrollTop).toBe(scroller.scrollHeight - VIEWPORT_HEIGHT)
+  })
+
+  // --- holding still while a control is answerable ------------------------
+  //
+  // A second permission ask arriving under a pinned view scrolled the first
+  // block's buttons away and put the second's exactly where the pointer was.
+
+  it('does not move the view while held, and unpins once content passes the band', () => {
+    const { scroller, pinnedText, grow, setHold } = setup()
+    act(() => fireResize())
+    const bottom = scroller.scrollTop
+    act(() => setHold(true))
+    passFrames()
+
+    // Growth still inside the band: nothing moves, and no pill.
+    act(() => {
+      grow(40)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(bottom)
+    expect(pinnedText()).toBe('pinned')
+
+    // Growth past it: the view still stays put, and unpinning is what shows the
+    // pill. Mutation: dropping the hold branch in the observer fails both.
+    act(() => {
+      grow(200)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(bottom)
+    expect(pinnedText()).toBe('free')
+  })
+
+  it('does not catch up when a wheel suspension closes while held', () => {
+    // Mutation: `if (pinnedRef.current) stick()` in the suspension timer, without
+    // the hold check, fails this.
+    const { scroller, grow, setHold } = setup()
+    act(() => fireResize())
+    const bottom = scroller.scrollTop
+    act(() => setHold(true))
+    passFrames()
+    act(() => {
+      scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -300, bubbles: true }))
+      grow(40)
+      fireResize()
+    })
+    passWheelWindow()
+    expect(scroller.scrollTop).toBe(bottom)
+  })
+
+  it('follows again once the hold is released', () => {
+    const { scroller, grow, setHold } = setup()
+    act(() => fireResize())
+    act(() => setHold(true))
+    passFrames()
+    act(() => {
+      grow(40)
+      fireResize()
+    })
+    act(() => setHold(false))
+    act(() => {
+      grow(40)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(scroller.scrollHeight - VIEWPORT_HEIGHT)
+  })
+
+  it('still follows the block that turns the hold on, and holds from the next frame', () => {
+    // An ask's block and its `needs_input` arrive back to back, so the hold
+    // usually commits in the same frame as the block it is about to protect —
+    // and that block has to be followed into view, or the first ask lands below
+    // the fold behind the pill. Mutation: set `holdRef.current = hold` directly
+    // in the layout effect fails this.
+    const { scroller, pinnedText, grow, setHold } = setup()
+    act(() => fireResize())
+    // Committed — its layout effect has run — but no frame has passed yet: the
+    // position the block that raised the ask is in when the observer sees it.
+    // (One `act` for both would flush the effect only after the resize, and
+    // pass whether the hold were delayed or not.)
+    act(() => setHold(true))
+    act(() => {
+      grow(110)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(scroller.scrollHeight - VIEWPORT_HEIGHT)
+    expect(pinnedText()).toBe('pinned')
+
+    passFrames()
+    const bottom = scroller.scrollTop
+    act(() => {
+      grow(110)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(bottom)
+    expect(pinnedText()).toBe('free')
+  })
+
+  it('keeps a held view at the bottom when the viewport shrinks and the transcript does not grow', () => {
+    // The composer gaining a line shrinks the viewport; the pointer is on the
+    // composer then, and not following would slide the ask's own buttons under
+    // it. Mutation: drop `contentGrew` from the held branch fails this.
+    const { scroller, setHold, resizeViewport } = setup()
+    act(() => fireResize())
+    act(() => setHold(true))
+    passFrames()
+    act(() => {
+      resizeViewport(VIEWPORT_HEIGHT - 60)
+      fireResize()
+    })
+    expect(scroller.scrollTop).toBe(CONTENT_HEIGHT - (VIEWPORT_HEIGHT - 60))
   })
 
   it('keeps following when an upward wheel is swallowed by a nested scroller', () => {

@@ -35,7 +35,11 @@
  * Merge rules:
  * - Consecutive `text` / `thinking` / `command_result` parts merge into one
  *   entry when the kind matches.
- * - Consecutive `tool` parts merge only when `toolName` matches.
+ * - Consecutive `tool` parts merge only when `toolName` matches and they do
+ *   not name two different `toolId`s (two calls are two parts).
+ *
+ * The rule lives in `shared/partMerge.ts`, shared with the renderer's live
+ * blocks, so a transcript streams and reloads with the same parts.
  * - Consecutive `tool_result` parts merge only when `toolId` AND `toolStream`
  *   match — preserves interleaved stdout/stderr chronology as separate parts.
  * - `notice` parts never merge with surrounding parts; each unique
@@ -50,8 +54,9 @@ import type {
   MessagePartFile,
   ToolStream
 } from '../../shared/messageParts'
-import type { AgentDeltaEvent } from '../../shared/agentStreamEvents'
+import type { RunDeltaEvent } from '../../shared/runEvents'
 import { stripCinnaAttachTags } from '../../shared/cinnaAttach'
+import { continuesPart } from '../../shared/partMerge'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
@@ -98,10 +103,10 @@ export interface ArtifactLike {
 /**
  * Sender-side narrow view of the agent stream port — accepts only delta
  * events (the only shape the accumulator emits). Any `StreamPort` typed with
- * the wider `AgentStreamEvent` union is assignable here.
+ * the wider `RunEvent` union is assignable here.
  */
 export interface DeltaPort {
-  postMessage: (msg: AgentDeltaEvent) => void
+  postMessage: (msg: RunDeltaEvent) => void
 }
 
 export function partKindOf(part: PartLike): ContentKind {
@@ -333,13 +338,7 @@ export class StreamPartsAccumulator {
     commandInvocation?: string
   ): void {
     const last = this.parts[this.parts.length - 1]
-    const sameKind = last && last.kind === kind
-    const mergeable =
-      sameKind &&
-      (kind === 'tool_result'
-        ? last.toolId === toolId && last.toolStream === toolStream
-        : last.toolName === toolName)
-    if (last && mergeable) {
+    if (last && continuesPart(last, { kind, toolName, toolId, toolStream })) {
       last.text += delta
       // Backend may attach `tool_input` / `tool_id` / `command_invocation` only
       // on the first frame of a part — preserve once captured rather than

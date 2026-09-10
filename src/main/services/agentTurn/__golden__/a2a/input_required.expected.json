@@ -4,6 +4,7 @@
     "The question's delta is posted before the `input-required` status event, so a consumer only learns the text was a question after rendering it as answer text.",
     "No error and no dedicated event. input-required ends the turn as a normal completion with taskState input-required, and the user's answer travels as the next message (see resume_remembered_context)."
   ],
+  "_phase1_note": "Phase 1: the input-required status is posted as state `needs_input` (RunState) and is followed immediately by a `needs_input` event — kind `question`, the status message's text as one open question, requestId the task id, resume `next_message`. So there is now a dedicated event, and a consumer learns the text was a question from it, still after the delta. Still no error: the turn completes, `result.taskState` stays the raw `input-required`, and the answer is still the next user message.",
   "events": [
     {
       "type": "status",
@@ -23,9 +24,24 @@
     },
     {
       "type": "status",
-      "state": "input-required",
+      "state": "needs_input",
       "taskId": "task-ir-1",
       "contextId": "ctx-ir-1"
+    },
+    {
+      "type": "needs_input",
+      "requestId": "task-ir-1",
+      "request": {
+        "kind": "question",
+        "questions": [
+          {
+            "question": "Which environment: staging or production?",
+            "multiSelect": false,
+            "options": []
+          }
+        ]
+      },
+      "resume": "next_message"
     }
   ],
   "result": {

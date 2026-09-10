@@ -48,7 +48,7 @@ import {
 } from '../../claudeAgentTurnRunner'
 import { pendingRequests, type RequestResolution } from '../../pendingRequests'
 import { expectGoldenSidecar, type NormaliseOptions } from '../harness'
-import type { AgentStreamEvent } from '../../../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../../../shared/runEvents'
 import type { RunAgentTurnResult } from '../../../a2aStreamingService'
 import type { ClaudeApproval, ClaudeAuthState } from '../../../../../shared/engine'
 
@@ -385,7 +385,7 @@ export function fixtureDeps(
 }
 
 export interface Played {
-  events: AgentStreamEvent[]
+  events: RunEvent[]
   result: RunAgentTurnResult
   boundary: BoundaryCapture
   problems: string[]
@@ -402,7 +402,7 @@ export async function playFixture(fixture: ClaudeFixture): Promise<Played> {
   const deps = fixtureDeps(fixture.deps ?? {}, scripted.query, {
     saveSession: (s) => void savedSessions.push(s)
   })
-  const events: AgentStreamEvent[] = []
+  const events: RunEvent[] = []
   const result = await new ClaudeAgentTurnRunner(deps).runTurn({
     chatId: GOLDEN_CHAT_ID,
     agentId: GOLDEN_AGENT_ID,

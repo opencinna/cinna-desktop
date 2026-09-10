@@ -51,6 +51,7 @@ import {
   QUESTION_TOOL_NAME,
   type LocalPermissionRequest
 } from '../../../shared/localAgentRequests'
+import type { InputQuestion } from '../../../shared/runEvents'
 import { ENGINE_EVENT, type EngineEvent } from './engineEvents'
 
 /** A question or permission the engine is blocked on. */
@@ -66,6 +67,14 @@ export interface PendingRequest {
    * which only this class ever sees.
    */
   request?: LocalPermissionRequest
+  /**
+   * The questions, for a question — already normalised by {@link mapQuestions}.
+   *
+   * Carried for the same reason `request` is: the runner announces the ask on
+   * the stream as `needs_input`, and this class is the only one that has read
+   * the event it came from.
+   */
+  questions?: InputQuestion[]
   /**
    * True when a standing per-agent grant already covers this ask.
    *
@@ -573,7 +582,7 @@ export class TurnStream {
     state.parts[idx] = { ...state.parts[idx], text: narration }
     return {
       message: { messageId, parts: state.parts },
-      asked: { kind: 'question', requestId }
+      asked: { kind: 'question', requestId, questions }
     }
   }
 }
@@ -593,13 +602,8 @@ export class TurnStream {
  * free-text "Other" option, so there is nothing for a `custom: false` to turn
  * off, and carrying a flag nothing honours is worse than not carrying it.
  */
-export function mapQuestions(raw: unknown[]): {
-  question: string
-  header?: string
-  multiSelect: boolean
-  options: { label: string; description?: string }[]
-}[] {
-  const out: ReturnType<typeof mapQuestions> = []
+export function mapQuestions(raw: unknown[]): InputQuestion[] {
+  const out: InputQuestion[] = []
   for (const item of raw) {
     if (!item || typeof item !== 'object') continue
     const obj = item as Record<string, unknown>

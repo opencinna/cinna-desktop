@@ -48,7 +48,7 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 ### No new persistence or transport
 
 - The feature adds no database column, no message role, no IPC channel, and no answer-status flag. The question lives inside the existing `assistant` row's `parts[]`; "answered" is derived from message ordering, not stored. (Contrast cinna-core's own frontend, which persists a `tool_questions_status` flag server-side — the desktop does not need it because it derives the same state locally.)
-- The A2A `input-required` task status is **not** used as the trigger. Detection is the reliably-persisted tool part; the status event remains unhandled.
+- The A2A `input-required` task status is **not** used as the trigger. Detection is the reliably-persisted tool part. The stream does report the state — `status { state: 'needs_input' }` followed by a `needs_input` event with `resume: 'next_message'`, which the chat store records — but a `next_message` ask never makes a block live, and no event is persisted, so a reloaded chat could not rely on it.
 
 ### Rendering placement
 

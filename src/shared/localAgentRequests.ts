@@ -10,8 +10,14 @@
  * widget": Ask-User-Question is detected by pattern-matching a `tool` part
  * whose `cinna.tool_name` normalises to `askuserquestion`. A permission ask is
  * the same thing — a call the agent cannot proceed past until a human answers
- * — so it follows the identical convention with a reserved name, and neither
- * `ContentKind` nor `AgentStreamEvent` gains a variant.
+ * — so it follows the identical convention with a reserved name, and
+ * `ContentKind` gains no variant.
+ *
+ * The part is the **transcript**; it is not how a live ask is announced. A
+ * running turn also posts a `needs_input` stream event (`runEvents.ts`) right
+ * after the part, and `input_resolved` when the ask settles. Persisted rows
+ * carry no event, so everything below still recognises a replayed ask by its
+ * reserved name and its id.
  *
  * ## The request id rides in `cinna.tool_id`
  *
@@ -372,6 +378,29 @@ export function describeGrantScope(
  * renderer to the main process and stops there.
  */
 export type PermissionReply = 'once' | 'always' | 'reject'
+
+/**
+ * How a pending request was settled.
+ *
+ * Shared rather than declared beside the registry in main, because it crosses
+ * the wire: an `input_resolved` stream event carries it to the renderer.
+ */
+export type RequestResolution =
+  | {
+      kind: 'permission'
+      reply: PermissionReply
+      /**
+       * True when the user's *Always allow* was stored against this agent.
+       *
+       * Set by whoever wrote the grant, so the transcript can say "remembered
+       * for this agent" only where a rule actually exists. A failed write still
+       * settles as `once` — the user allowed the action and it goes ahead — and
+       * this stays false, which is what keeps the record honest.
+       */
+      remembered?: boolean
+    }
+  | { kind: 'question'; answers: string[][] }
+  | { kind: 'rejected' }
 
 /**
  * A permission ask, as it reaches the renderer in a tool part's `toolInput`.

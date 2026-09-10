@@ -49,7 +49,7 @@ import { pendingRequests } from './pendingRequests'
 import { turnLock } from '../localAgents/turnLock'
 import type { RunAgentTurnInput } from '../a2aStreamingService'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../shared/runEvents'
 
 interface Call {
   path: string
@@ -179,7 +179,7 @@ interface Harness {
   order: string[]
   saved: { sessionId: string }[]
   input: (over?: Partial<RunAgentTurnInput>) => RunAgentTurnInput
-  events: AgentStreamEvent[]
+  events: RunEvent[]
 }
 
 function harness(
@@ -210,7 +210,7 @@ function harness(
   const engine = opts.engine ?? fakeEngine()
   const order: string[] = []
   const saved: { sessionId: string }[] = []
-  const events: AgentStreamEvent[] = []
+  const events: RunEvent[] = []
   const bus = new EngineEventBus(
     (signal) => engine.request('/api/event', { signal }).then((r) => r.body),
     () => Promise.resolve()
@@ -1421,6 +1421,146 @@ describe('LocalAgentTurnRunner', () => {
     await run
   })
 
+  it('reports an ask settled elsewhere as resolved, with what the engine says was decided', async () => {
+    // Nobody answers in this window: each ask is settled by the engine's own
+    // event, as when another client on the same `opencode serve` answers it.
+    // The renderer must still stop offering the block, and the resolution is
+    // read off the event — a reply this app has no word for is not an allow.
+    //
+    // Mutation: delete the `update.settled && parked.has(…)` report in `ingest`
+    // fails this with no `input_resolved` at all; returning `rejected` for
+    // every engine event fails it on the first and third.
+    const h = harness()
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    const permission = (id: string): string =>
+      frame('permission.v2.asked', {
+        id,
+        action: 'bash',
+        resources: ['ls'],
+        source: { type: 'tool', messageID: 'msg_1', callID: `c_${id}` }
+      })
+    const question = (id: string): string =>
+      frame('question.v2.asked', {
+        id,
+        questions: [{ question: 'Which?', header: 'Pick', options: [{ label: 'A' }] }],
+        tool: { messageID: 'msg_1', callID: `c_${id}` }
+      })
+    h.engine.push(permission('per_20'))
+    h.engine.push(permission('per_21'))
+    h.engine.push(question('que_22'))
+    h.engine.push(question('que_23'))
+    await settle()
+
+    h.engine.push(frame('permission.v2.replied', { requestID: 'per_20', reply: 'always' }))
+    h.engine.push(frame('permission.v2.replied', { requestID: 'per_21', reply: 'allow' }))
+    h.engine.push(frame('question.v2.replied', { requestID: 'que_22', answers: [['A']] }))
+    h.engine.push(frame('question.v2.rejected', { requestID: 'que_23' }))
+    await settle()
+    h.engine.push(endTurn())
+    await run
+
+    expect(h.events.filter((e) => e.type === 'input_resolved')).toEqual([
+      { type: 'input_resolved', requestId: 'per_20', resolution: { kind: 'permission', reply: 'always' } },
+      { type: 'input_resolved', requestId: 'per_21', resolution: { kind: 'rejected' } },
+      { type: 'input_resolved', requestId: 'que_22', resolution: { kind: 'question', answers: [['A']] } },
+      { type: 'input_resolved', requestId: 'que_23', resolution: { kind: 'rejected' } }
+    ])
+    // Said before the decision line, the order an answer from this window has.
+    const resolvedAt = h.events.findIndex((e) => e.type === 'input_resolved' && e.requestId === 'per_20')
+    const decidedAt = h.events.findIndex(
+      (e) => e.type === 'delta' && e.kind === 'tool_result' && e.toolId === 'per_20'
+    )
+    expect(decidedAt).toBeGreaterThan(resolvedAt)
+  })
+
+  it('reports a user’s answer once, though the engine echoes it back while it is still parked', async () => {
+    // The ordinary flow hears of one answer twice: the user's, then the
+    // engine's `permission.v2.replied` for the same id. The reply POST is held
+    // open here so the id is certainly still in `parked` when the echo lands —
+    // otherwise the test would pass without ever reaching the dedupe.
+    //
+    // Mutation: drop the `resolvedIds` check in `report.resolved` fails this
+    // with two events, the second carrying the engine's `once` where the user
+    // chose `always`.
+    const engine = fakeEngine()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => (release = resolve))
+    const request: LocalTurnDeps['request'] = async (path, init) => {
+      if (path.endsWith('/permission/per_24/reply')) await held
+      return engine.request(path, init)
+    }
+    const h = harness({ engine: { ...engine, request } })
+    const run = h.runner.runTurn(h.input())
+    await settle()
+    h.engine.push(
+      frame('permission.v2.asked', {
+        id: 'per_24',
+        action: 'bash',
+        resources: ['ls'],
+        source: { type: 'tool', messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+    const answer = { kind: 'permission', reply: 'always', remembered: true } as const
+    pendingRequests.resolve('per_24', answer)
+    await settle()
+
+    h.engine.push(frame('permission.v2.replied', { requestID: 'per_24', reply: 'once' }))
+    await settle()
+    release()
+    await settle()
+    h.engine.push(endTurn())
+    await run
+
+    expect(h.events.filter((e) => e.type === 'input_resolved')).toEqual([
+      { type: 'input_resolved', requestId: 'per_24', resolution: answer }
+    ])
+  })
+
+  it('reports nothing about a parked ask the engine settles while a stop is being delivered', async () => {
+    // A stop is teardown, and teardown posts no `input_resolved`: the `done`
+    // above the runner already says the park is gone. But the turn is still
+    // subscribed while `POST /interrupt` is in flight, and the engine may settle
+    // the parked ask in exactly that window — so the gate has to close before
+    // the POST, not in `finally`. The golden engine never settles anything on
+    // interrupt, which is why neither the golden nor the contract catches this.
+    //
+    // Mutation: delete `open = false` from the abort branch (leaving only the
+    // one in `finally`) fails this with an `input_resolved {rejected}`.
+    const engine = fakeEngine()
+    const request: LocalTurnDeps['request'] = async (path, init) => {
+      if (path.endsWith('/interrupt')) {
+        engine.push(frame('question.v2.rejected', { requestID: 'que_30' }))
+        await settle()
+      }
+      return engine.request(path, init)
+    }
+    const controller = new AbortController()
+    const h = harness({ engine: { ...engine, request } })
+    const run = h.runner.runTurn(h.input({ signal: controller.signal }))
+    await settle()
+    h.engine.push(
+      frame('question.v2.asked', {
+        id: 'que_30',
+        questions: [{ question: 'Which?', header: 'Pick', options: [{ label: 'A' }] }],
+        tool: { messageID: 'msg_1', callID: 'c1' }
+      })
+    )
+    await settle()
+    expect(h.events.some((e) => e.type === 'needs_input' && e.requestId === 'que_30')).toBe(true)
+
+    controller.abort()
+    await run
+
+    // The window was real: the engine's settle reached the turn and wrote its
+    // decision line — it is only the stream announcement that must not follow.
+    expect(
+      h.events.some((e) => e.type === 'delta' && e.kind === 'tool_result' && e.toolId === 'que_30')
+    ).toBe(true)
+    expect(h.events.filter((e) => e.type === 'input_resolved')).toEqual([])
+  })
+
   it('refuses when the engine did not come up', async () => {
     const h = harness({ engineStatus: 'failed' })
     const result = await h.runner.runTurn(h.input())
@@ -1441,6 +1581,7 @@ describe('LocalAgentTurnRunner', () => {
  * | drop `contextId` from the success return | assembles a turn from deltas and ends on idle |
  * | error branch returns `fail()` (empty parts) | keeps the partial answer when the turn errors… |
  * | delete the `/interrupt` POST on abort | interrupts the engine when the user cancels |
+ * | delete `open = false` from the abort branch (keep the one in `finally`) | reports nothing about a parked ask the engine settles while a stop is being delivered |
  * | question reply body → `{answer}` / flat array | parks a question, and posts the answer… |
  * | permission reply `'always'` → `'allow'` | posts a permission decision as OpenCode's own enum |
  * | delete the parked-request sweep in `finally` | rejects a still-parked question when the turn ends |

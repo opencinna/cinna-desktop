@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { ClaudeAgentTurnRunner, type ClaudeTurnDeps } from './claudeAgentTurnRunner'
 import type { RunAgentTurnInput } from '../a2aStreamingService'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../shared/runEvents'
 
 vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
@@ -110,7 +110,7 @@ beforeEach(() => {
 
 describe('a turn that works', () => {
   it('streams the answer into parts and remembers the session', async () => {
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     const result = await new ClaudeAgentTurnRunner(deps).runTurn(
       turn({ onEvent: (e) => void events.push(e) })
     )
@@ -821,7 +821,7 @@ describe('permissions', () => {
     // No block, no wait. A block that appeared and answered itself milliseconds
     // later would be a widget the user cannot act on, mid-stream.
     const record: { decision?: { behavior: string } } = {}
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     const result = await new ClaudeAgentTurnRunner(
       makeDeps({ isGranted: () => true, query: permissionQuery(record) })
     ).runTurn(turn({ onEvent: (e) => void events.push(e) }))
@@ -1043,7 +1043,7 @@ describe('background work that outlives the model’s turn', () => {
       await tick()
       seen.push(probe.inputClosed())
     })
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(
       turn({ onEvent: (e) => void events.push(e) })
     )

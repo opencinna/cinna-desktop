@@ -37,7 +37,7 @@ import { pendingRequests, type RequestResolution } from '../../pendingRequests'
 import { turnLock } from '../../../localAgents/turnLock'
 import { expectGoldenSidecar } from '../harness'
 import type { RunAgentTurnInput, RunAgentTurnResult } from '../../../a2aStreamingService'
-import type { AgentStreamEvent } from '../../../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../../../shared/runEvents'
 import type { LocalAgentKind } from '../../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../../shared/localAgentRequests'
 import type { EngineModelRef } from '../../../../engine/configGenerator'
@@ -163,7 +163,7 @@ export interface World {
   push(frame: EngineFrame): void
   closeStream(): void
   promptCount(): number
-  input(io: { signal: AbortSignal; onEvent?: (event: AgentStreamEvent) => void }): RunAgentTurnInput
+  input(io: { signal: AbortSignal; onEvent?: (event: RunEvent) => void }): RunAgentTurnInput
 }
 
 const frameText = (frame: EngineFrame): string => `data: ${JSON.stringify(frame)}\n\n`
@@ -357,7 +357,7 @@ export async function admitted(world: World, before = 0): Promise<void> {
 /** Run one fixture to its end and return everything it produced. */
 export async function runFixture(
   fixture: OpenCodeFixture
-): Promise<{ events: AgentStreamEvent[]; result: RunAgentTurnResult; effects: Effects }> {
+): Promise<{ events: RunEvent[]; result: RunAgentTurnResult; effects: Effects }> {
   const setup = fixture.setup ?? {}
   if (setup.fakeTimers) vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
 
@@ -378,7 +378,7 @@ export async function runFixture(
 
   try {
     const world = buildWorld(setup)
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     const checkpoints: Effects['checkpoints'] = []
     const controller = new AbortController()
     let result: RunAgentTurnResult | undefined

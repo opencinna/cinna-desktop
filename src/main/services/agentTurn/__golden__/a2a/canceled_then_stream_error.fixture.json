@@ -1,0 +1,39 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The user stops the turn while it streams (the signal aborts inside the 3rd onEvent call), and the next thing on the wire is not another event but a JSON-RPC `error` frame — a server dropping the stream after `tasks/cancel`. The SDK throws on it, so the turn ends in `runAgentTurn`'s catch with the signal already aborted. A frame after the error is never read.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Check the cluster",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-cstop-1", "contextId": "ctx-cstop-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cstop-1", "contextId": "ctx-cstop-1", "artifact": { "artifactId": "art-s1", "parts": [ { "kind": "text", "text": "First, ", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cstop-1", "contextId": "ctx-cstop-1", "artifact": { "artifactId": "art-s2", "parts": [ { "kind": "text", "text": "checking the ", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "error": { "code": -32603, "message": "Stream closed", "data": { "detail": "connection dropped after tasks/cancel" } } },
+        { "result": { "kind": "status-update", "taskId": "task-cstop-1", "contextId": "ctx-cstop-1", "status": { "state": "canceled" }, "final": true } }
+      ]
+    }
+  },
+  "script": { "abortAfterEmitted": 3 }
+}

@@ -66,14 +66,18 @@ For each event (status-update | artifact-update | message | task):
         toolId     = (kind === 'tool' || kind === 'tool_result')       ? metadata['cinna.tool_id']     : undefined
         toolStream = (kind === 'tool_result')                          ? metadata['cinna.tool_stream'] ?? 'stdout' : undefined
         commandInvocation = metadata['cinna.command_invocation']  # any kind; present iff cinna-core slash command
-        append to internal parts[] (merge with last only if:
-          - text/thinking/command_result: same kind
-          - tool: same kind + toolName
+        append to internal parts[] (merge with last only if continuesPart():
+          - text/thinking/command_result: same kind + toolName (both unset)
+          - tool: same kind + toolName, and not two different toolIds
           - tool_result: same kind + toolId + toolStream)
         port.postMessage({ type: 'delta', kind, text: delta, toolName, toolInput, toolId, toolStream, commandInvocation })
         if first time we see (toolName, toolInput) for this part -> opts.onToolCall({...})
   - Update latestContextId / latestTaskId / latestTaskState from the event
-  - Forward `{ type: 'status', state, taskId, contextId }` to the renderer
+  - status-update only: post `{ type: 'status', state: toRunState(state), taskId, contextId }`
+      input-required / auth-required -> state 'needs_input', then
+      `{ type: 'needs_input', requestId: taskId, request, resume: 'next_message' }`
+      (request = a2aInputRequestOf: one open question from the status message's
+       text parts, or { kind: 'auth', message } for auth-required)
   ↓
 On stream completion:
   - parts   = accumulator.snapshotParts()
@@ -82,7 +86,7 @@ On stream completion:
   - For each notice: messageRepo.saveTransition({ chatId, content, sourceAgentId })
   - messageRepo.saveAssistant({ chatId, content: answer, parts })
   - a2aSessionRepo.upsert(...)
-  - port.postMessage({ type: 'done' })
+  - port.postMessage({ type: 'done', stopReason })   # 'canceled' if the request was aborted, else 'end_turn'
 
 Notices are persisted *before* the assistant message so transcript ordering
 matches the on-the-wire order — startup pings sit above the answer they
@@ -152,17 +156,22 @@ For both live streaming blocks and persisted parts, the renderer routes by `kind
 - `kind: 'file'` → `AgentAttachment` (downloadable badge via `AttachmentList`, left-aligned). The FilePart arrives at finalize, so the badge renders below the reply text (end of the turn) — the mirror of how a user's own attachments render under their message. Click downloads via the Cinna OAuth bearer path. See [Agent Attachments](../../chat/agent_attachments/agent_attachments.md)
 - `kind: 'notice'` → live during streaming via a `notice` block in `chat.store.streamingBlocks`, rendered through `NoticeBlock` with `live` (left-aligned `Info`+text row, no collapse). Persisted as a `role: 'agent_transition'` row that also renders through `NoticeBlock`, with `defaultExpanded={verboseMode}` — compact mode collapses to a small info-toned dot the user clicks to read; verbose mode keeps the row expanded inline. Notices never appear in an assistant message's `parts[]`
 
-Streaming blocks merge consecutive deltas with the same merge rule as the main-process accumulator: `text` / `thinking` / `command_result` merge by kind; `tool` adds `toolName`; `tool_result` requires both `toolId` AND `toolStream` to match.
+Streaming blocks merge consecutive deltas with **the** rule the main-process accumulator persists with — one function, `continuesPart` in `src/shared/partMerge.ts`, called by the accumulator, `chat.store.appendDelta` and the orchestrated sub-thread's `appendAgentDeltaPart`. They used to be three hand-kept copies, and a transcript that streams one way and reloads another is exactly what three copies drift into. The rule:
+
+- Different kinds never merge, and `file` never merges: two attachments are two badges
+- `tool_result` merges only when both `toolId` AND `toolStream` match, so interleaved stdout/stderr keep their chronology
+- Everything else merges on `toolName` — and a `tool` part also refuses to merge when both sides name **different** `toolId`s. Two calls to one tool are two calls. Before this clause, two back-to-back permission asks (the same reserved tool name, different `per_` ids) folded into one block, and the second ask's id — the address its answer is posted to — never reached the renderer, leaving that ask parked until its timeout
+- A fragment with no `toolId` still continues the part before it, because a backend may send `cinna.tool_id` on a part's first frame only
 
 ## File References
 
 - Pipeline implementation: `src/main/agents/streamPartsAccumulator.ts`
-- Shared types: `src/shared/messageParts.ts`
+- Shared types: `src/shared/messageParts.ts`, `src/shared/runEvents.ts` (the `delta` event), `src/shared/partMerge.ts` (the merge rule)
 - IPC integration: `src/main/ipc/agent_a2a.ipc.ts:registerA2AHandlers` <!-- nocheck -->
 - Persistence: `src/main/db/messages.ts:messageRepo.saveAssistant` <!-- nocheck -->, `src/main/db/messages.ts:messageRepo.saveTransition` <!-- nocheck -->
 - DB column: `src/main/db/migrations/messages.ts` (`parts` JSON column)
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
-- Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleAgent` <!-- nocheck -->
+- Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleRun` <!-- nocheck -->
 - Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
 - Characterization: `src/renderer/src/hooks/useChatStream.events.test.tsx` pins what each event does to the chat store, and the per-runner golden streams pin what reaches it. See [Characterization tests](../local_agents/agent_turn_tech.md#characterization-tests)
 - Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`, `src/renderer/src/components/chat/CommandResultBlock.tsx`, `src/renderer/src/components/chat/AgentAttachment.tsx` (`file` kind), `src/renderer/src/components/chat/NoticeBlock.tsx`. Both live and persisted notices route through `NoticeBlock` (live: forced-expanded row; persisted: collapsed dot or expanded row per verbose mode)

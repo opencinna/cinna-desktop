@@ -28,25 +28,30 @@
  *
  * `_notes` in an expectation is free text for the reader and is **not
  * compared** — use it to say why a surprising event is pinned as-is.
+ *
+ * `_phase1_note` is the same kind of key, and is not compared either. The phase
+ * 1 rewrite leaves every `_notes` entry exactly as phase 0 wrote it, so where
+ * one stopped being true — the stream now says something a note says it does
+ * not — the correction goes here, beside the note it corrects.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
-import type { AgentStreamEvent } from '../../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../../shared/runEvents'
 import type { RunAgentTurnResult } from '../../a2aStreamingService'
 
 export type GoldenRunner = 'a2a' | 'opencode' | 'claude'
 
 /** What one golden run produced. */
 export interface GoldenCapture {
-  events: AgentStreamEvent[]
+  events: RunEvent[]
   result: RunAgentTurnResult
 }
 
 /** An expectation file: the capture itself, plus notes that are never compared. */
-type Expectation = { _notes?: string[] } & Record<string, unknown>
+type Expectation = { _notes?: string[]; _phase1_note?: string } & Record<string, unknown>
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
@@ -215,7 +220,8 @@ function compareWithFile(path: string, actual: Record<string, unknown>): void {
     throw new Error(`golden expectation missing (run with GOLDEN_WRITE=1 to create it): ${path}`)
   }
 
-  const { _notes, ...expected } = JSON.parse(readFileSync(path, 'utf8')) as Expectation
+  const { _notes, _phase1_note, ...expected } = JSON.parse(readFileSync(path, 'utf8')) as Expectation
   void _notes
+  void _phase1_note
   expect(actual).toEqual(expected)
 }

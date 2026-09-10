@@ -41,8 +41,7 @@ import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState } from '../shared/localDevS
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
-import { isAgentStreamEvent, type AgentStreamEvent } from '../shared/agentStreamEvents'
-import { isLlmStreamEvent, type LlmStreamEvent } from '../shared/llmStreamEvents'
+import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
 import type {
   JobData,
@@ -568,16 +567,18 @@ const api = {
       agentId: string,
       chatId: string,
       content: string,
-      onEvent: (event: AgentStreamEvent) => void,
+      onEvent: (event: RunEvent) => void,
       extras?: { attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
         // Guard at the IPC trust boundary: drop messages that don't match
         // the contract instead of casting blindly. Logged so a regression
-        // surfaces in dev tools rather than as a silent no-op.
-        if (!isAgentStreamEvent(event.data)) {
-          console.warn('[preload] dropped off-contract agent stream event', event.data)
+        // surfaces in dev tools rather than as a silent no-op. Both send
+        // paths carry the same `RunEvent` vocabulary, so they share the
+        // guard and the message.
+        if (!isRunEvent(event.data)) {
+          console.warn('[preload] dropped off-contract run event', event.data)
           return
         }
         onEvent(event.data)
@@ -739,13 +740,13 @@ const api = {
     sendMessage: (
       chatId: string,
       content: string,
-      onEvent: (event: LlmStreamEvent) => void,
+      onEvent: (event: RunEvent) => void,
       extras?: { attachments?: MessageAttachment[] }
     ): void => {
       const channel = new MessageChannel()
       channel.port1.onmessage = (event) => {
-        if (!isLlmStreamEvent(event.data)) {
-          console.warn('[preload] dropped off-contract llm stream event', event.data)
+        if (!isRunEvent(event.data)) {
+          console.warn('[preload] dropped off-contract run event', event.data)
           return
         }
         onEvent(event.data)

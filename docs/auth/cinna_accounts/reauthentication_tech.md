@@ -8,8 +8,8 @@
 |-------|------|---------|
 | Service | `src/main/services/authService.ts` | `authService.reauthCinna(userId)` — OAuth re-run, identity verification, in-place token write |
 | IPC | `src/main/ipc/auth.ipc.ts` | `auth:cinna-reauth` handler — resolves active profile via `getProfileScopeUserId()`, delegates to service |
-| IPC (consumer) | `src/main/ipc/agent_a2a.ipc.ts` | Detects `CinnaReauthRequired` in `resolveEndpointIfNeeded` / `resolveAccessToken` failure paths; tags both the live `AgentErrorEvent` and the persisted error row with `code: 'cinna_reauth_required'` |
-| Helper | `src/main/ipc/_streamPort.ts` | `postAgentError(port, error, code?)` — optional `code` field on the wire |
+| IPC (consumer) | `src/main/ipc/agent_a2a.ipc.ts` | Detects `CinnaReauthRequired` in `resolveEndpointIfNeeded` / `resolveAccessToken` failure paths; tags both the live `error` event (`RunErrorEvent`) and the persisted error row with `code: 'cinna_reauth_required'` |
+| Helper | `src/main/ipc/_streamPort.ts` | `postRunError(port, error, { code?, errorDetail? })` — the one pre-flight error helper for both send paths; `code` is put on the wire only when given |
 | Service (gateway) | `src/main/services/agentService.ts` | `resolveAccessToken` lets `CinnaReauthRequired` bubble (previously masked all errors as session expiry). `rethrowAsReauthIfCinna401` converts a 401/403 `AgentCardFetchError` into `CinnaReauthRequired` — but only when `agent.source === 'remote'`. Local A2A agents keep the original error |
 | A2A client | `src/main/agents/a2a-client.ts` | Two typed HTTP errors carrying `status: number`: `AgentCardFetchError` (thrown by `fetchRawCard` on non-OK card responses) and `A2aHttpError` (thrown by `buildLoggingFetch` on **any** 401/403 response, intercepting before the SDK wraps the failure into an opaque error shape) |
 | Stream service | `src/main/services/a2aStreamingService.ts` | `streamToAgent` accepts `isCinnaTokenAuth?: boolean`. When true and the caught error is an `A2aHttpError` with status 401/403 (`isAuthRejection` type-guard), the error is replaced with `CINNA_SESSION_EXPIRED_MESSAGE` and tagged with the reauth code. No string-matching — the detection is purely structural |
@@ -23,7 +23,7 @@
 | File | Purpose |
 |------|---------|
 | `src/shared/cinnaErrors.ts` | `CINNA_REAUTH_REQUIRED_CODE` constant + `CINNA_SESSION_EXPIRED_MESSAGE` copy — single source of truth for both wire payloads and renderer branch logic |
-| `src/shared/agentStreamEvents.ts` | `AgentErrorEvent.code?: string` field on the agent stream wire contract |
+| `src/shared/runEvents.ts` | `RunErrorEvent.code?: string` — the `code` field on the stream wire contract every chat's port carries |
 
 ### Preload
 
@@ -81,7 +81,7 @@ The handler returns the standard `{success, error}` discriminated union so rende
 
 - `agent:send-message` listener — Two failure paths (`resolveEndpointIfNeeded`, `resolveAccessToken`) detect `err instanceof CinnaReauthRequired` and:
   1. Use `CINNA_SESSION_EXPIRED_MESSAGE` as the user-facing copy
-  2. Pass `CINNA_REAUTH_REQUIRED_CODE` to both `postAgentError(port, msg, code)` (live wire) and `messageRepo.saveError({ chatId, short, code })` (persisted)
+  2. Pass `CINNA_REAUTH_REQUIRED_CODE` to both `postRunError(port, msg, { code })` (live wire) and `messageRepo.saveError({ chatId, short, code })` (persisted)
 
 ## Renderer Components
 

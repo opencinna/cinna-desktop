@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, ArrowDown, CheckCircle, ChevronRight, RefreshCw } from 'lucide-react'
 import { useChatDetail } from '../../hooks/useChat'
-import { useChatStore } from '../../stores/chat.store'
+import { isLiveInputRequest, isSettledInputRequest, useChatStore } from '../../stores/chat.store'
 import { useUIStore } from '../../stores/ui.store'
 import { useAgents } from '../../hooks/useAgents'
 import { useAuthStore } from '../../stores/auth.store'
@@ -282,9 +282,20 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
-  const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId } = useChatStore()
+  const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
-  const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId)
+  // **While a request block is answerable, new content must not move it.** A
+  // second ask arriving under a pinned view scrolled the first block's buttons
+  // away and put the second's exactly where the pointer was, so a click aimed at
+  // one permission answered another (ux_rules §1). The view stops following and
+  // the jump-to-latest pill says there is more below. Only top-level `reply`
+  // asks count: a nested agent's has no block on screen to protect.
+  const holdForAnswer = inputRequests.some(
+    (r) => r.resume === 'reply' && !r.toolCallId && !settledInputRequestIds.includes(r.requestId)
+  )
+  const { containerRef, contentRef, pinned, scrollToBottom } = useStickToBottom(chatId, {
+    hold: holdForAnswer
+  })
   const agentNameById = useMemo(() => {
     const map = new Map<string, string>()
     for (const a of agents ?? []) map.set(a.id, a.name)
@@ -333,16 +344,24 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     decision?: string
   ): React.JSX.Element | null => {
     // `toolId` carries the engine's own request id (`per_*` / `que_*`), which
-    // is also the address an answer is posted to.
-    const live = part.toolId && isPending(part.toolId) ? part.toolId : undefined
+    // is also the address an answer is posted to. Either source can say it is
+    // open: the stream's `needs_input` arrives with the ask, the registry poll
+    // up to a tick later but also across a reload. The stream's word that it is
+    // settled wins over both, because the poll can lag it by the same tick.
+    const live =
+      part.toolId &&
+      !isSettledInputRequest({ settledInputRequestIds }, part.toolId) &&
+      (isPending(part.toolId) || isLiveInputRequest({ inputRequests }, part.toolId))
+        ? part.toolId
+        : undefined
     // **A block replayed from history must never be live.** These parts are
     // persisted and re-rendered when the chat is reopened, and by then the
     // `per_*` behind them is long dead — the registry that owns it is
     // in-memory and died with the turn. `activeQuestionMsgId` cannot be
     // trusted here: it was written for a *cloud* question, which stays
     // answerable after its turn because the answer is simply the next user
-    // turn. A local request has a live address instead, so the registry is the
-    // only authority on whether it is still open.
+    // turn. A local request has a live address instead, so only the registry
+    // and the current stream's `reply` asks can say it is still open.
     const questionLive = isEngineRequestId(part.toolId) ? !!live : questionInteractive
     if (isPermissionRequestTool(part.toolName)) {
       const request = parsePermissionRequest(part.toolInput)
@@ -351,9 +370,21 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
         <PermissionRequestBlock
           key={key}
           request={request}
-          requestId={live}
+          // The id even when not live: the block holds its buttons while its
+          // own answer is in flight, and the stream can settle the ask first.
+          requestId={part.toolId}
           interactive={!!live}
           decision={decision}
+          // The stream settled it (expired, or answered in another window) and
+          // the outcome line is the next port message: hold the block's height
+          // until it arrives. Only while streaming — a replayed block that
+          // recorded no outcome must not hold forever.
+          awaitingDecision={
+            !live &&
+            !decision &&
+            isStreaming &&
+            isSettledInputRequest({ settledInputRequestIds }, part.toolId)
+          }
           onAnswer={answerPermission}
         />
       )
@@ -892,11 +923,24 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
                 // **local** agent's is the opposite — the agent loop is parked
                 // right now and the answer has to arrive while the turn is
                 // still open — and `renderRequestBlock` tells them apart by
-                // whether the engine still lists the request as pending.
+                // whether the registry still lists the request as pending or
+                // the stream has announced it as a `reply` ask.
+                // The outcome the runner recorded, paired above, goes in as
+                // `decision` exactly as on the persisted path. Without it a
+                // live ask settled by expiry or by another window lost its
+                // buttons and said nothing about what happened, and collapsed
+                // by the height of the button row.
+                const dri = streamPairResultIdx.get(i)
+                const decisionBlock = dri !== undefined ? streamingBlocks[dri] : undefined
                 renderNodes.push({
                   slot: 'plain',
                   key: `stream-askq-${i}`,
-                  node: renderRequestBlock(`stream-askq-${i}`, block, false)
+                  node: renderRequestBlock(
+                    `stream-askq-${i}`,
+                    block,
+                    false,
+                    decisionBlock?.type === 'text' ? decisionBlock.content : undefined
+                  )
                 })
                 return
               }

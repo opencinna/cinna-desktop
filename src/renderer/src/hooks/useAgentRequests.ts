@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { useChatStore } from '../stores/chat.store'
 
 /**
  * The permission and question asks a **local** agent is currently parked on.
@@ -16,14 +17,17 @@ import { useCallback, useEffect, useState } from 'react'
  *
  * So a live request is answered by id, out of band, while the turn streams on.
  *
- * ## Why it polls rather than subscribing
+ * ## Why it still polls
  *
- * The turn's own MessagePort would be the obvious channel and is the wrong one:
- * it exists only for a direct chat, and the identical request can be raised by
- * a folder agent running as an orchestrated tool, where there is no port at
- * all. A short poll while a turn is streaming costs one synchronous main-process
- * map lookup and keeps one code path for both modes. It stops the moment
- * nothing is streaming.
+ * Live asks now also arrive on the turn's own MessagePort as `needs_input`
+ * events, which the chat store keeps in `inputRequests`, so `MessageStream`
+ * makes a block answerable the moment the ask is raised instead of on the next
+ * tick here. The stream cannot replace this list, though: a reloaded renderer
+ * has no port, and re-opens the prompt only because the main-process registry
+ * still holds it; and an ask raised before this renderer subscribed never
+ * reaches it as an event. A short poll while a turn is streaming costs one
+ * synchronous main-process map lookup, and it stops the moment nothing is
+ * streaming.
  */
 /**
  * What a delivered answer says about itself.
@@ -103,8 +107,10 @@ export function useAgentRequests(
       // controls where they were (`ux_rules.md` §6).
       if (!result.ok) throw new Error(result.reason ?? 'That answer could not be delivered.')
       // Optimistic removal, so the block stops offering buttons immediately
-      // rather than at the next poll tick.
+      // rather than at the next poll tick — from both sources that can call it
+      // live, since the stream's `input_resolved` echo is not here yet either.
       setPending((prev) => prev.filter((p) => p.requestId !== data.requestId))
+      useChatStore.getState().resolveInputRequest(data.requestId)
       return { remembered: result.remembered }
     },
     []

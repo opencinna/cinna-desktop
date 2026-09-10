@@ -32,6 +32,27 @@
       "toolId": "per_2"
     },
     {
+      "type": "needs_input",
+      "requestId": "per_2",
+      "request": {
+        "kind": "permission",
+        "action": "bash",
+        "resources": [
+          "rm -rf build"
+        ],
+        "callId": "c1"
+      },
+      "resume": "reply"
+    },
+    {
+      "type": "input_resolved",
+      "requestId": "per_2",
+      "resolution": {
+        "kind": "permission",
+        "reply": "once"
+      }
+    },
+    {
       "type": "delta",
       "kind": "tool_result",
       "text": "Allowed once.",

@@ -15,16 +15,16 @@
  */
 import type { ToolDefinition } from './types'
 import type { MessagePart } from '../../shared/messageParts'
-import type { AgentStreamEvent } from '../../shared/agentStreamEvents'
+import type { RunEvent } from '../../shared/runEvents'
 import { mcpManager } from '../mcp/manager'
 
 export interface ToolCallOptions {
   /**
-   * Live sub-thread sink. Agent providers wrap each `AgentStreamEvent` so the
-   * orchestrator can forward it to the chat port as a `tool_subevent`. MCP
-   * providers ignore this.
+   * Live sub-thread sink. Agent providers hand it each `RunEvent` of the agent's
+   * turn so the orchestrator can forward it to the chat port wrapped in a
+   * `child` event. MCP providers ignore this.
    */
-  onEvent?: (event: AgentStreamEvent) => void
+  onEvent?: (event: RunEvent) => void
   /** Orchestrator abort — cancels an in-flight agent sub-turn. */
   signal?: AbortSignal
 }

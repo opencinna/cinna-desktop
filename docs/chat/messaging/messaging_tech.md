@@ -26,7 +26,7 @@
 ### Renderer
 - `src/renderer/src/stores/chat.store.ts` — activeChatId, streamingBlocks (ephemeral, cleared on stop; text blocks include a `segments: string[]` per-delta array for chunk-level animation), isStreaming, streamedIncrementallyChatId (per-chat flag used by MessageStream to skip the block-level reveal on the DB-saved assistant message when its chunks already animated during streaming)
 - `src/renderer/src/hooks/useChat.ts` — useChatList, useChatDetail, useCreateChat, useDeleteChat, useUpdateChat, trash hooks, `useSendMessage` (looks up A2A session via `agents.getSession`, routes to LLM or agent stream)
-- `src/renderer/src/hooks/useChatStream.ts` — `useChatStream()` — owns the LLM + agent MessagePort event handlers (`startLlm`, `startAgent`, `cancel`); single source of truth for stream-event-to-store fan-out
+- `src/renderer/src/hooks/useChatStream.ts` — `useChatStream()` — owns `handleRun`, the one MessagePort event handler for LLM and agent chats (`startLlm`, `startAgent`, `cancel`); single source of truth for stream-event-to-store fan-out
 - `src/renderer/src/hooks/useNewChatFlow.ts` — `useNewChatFlow()` — orchestrates "create chat → set provider/model/MCPs (or agent) → send first message"; exports `resolveModel()` helper for picking a model that exists for a provider
 - `src/renderer/src/hooks/useChatModes.ts` — `useDefaultChatMode()` — picks the user's default chat mode (the one with `isDefault: true`); replaces the removed `useDefaultProvider` hook
 - `src/renderer/src/hooks/useMcp.ts` — `useChatMcpProviders()`, `useSetChatMcpProviders()` — chat-MCP junction queries/mutations
@@ -79,15 +79,16 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 
 ## Streaming Protocol
 
-Events sent through the MessagePort from main to renderer:
+Events are `RunEvent`s (`src/shared/runEvents.ts`), the one vocabulary every chat's port carries — see [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md). What an LLM chat posts:
 
 1. `{ type: 'request-id', requestId }` — Identifies the stream for cancellation
-2. `{ type: 'delta', text }` — Incremental text chunk
-3. `{ type: 'tool_use', id, name, input, provider }` — LLM requests a tool call (provider = MCP connector display name)
+2. `{ type: 'delta', kind: 'text', text }` — Incremental text chunk
+3. `{ type: 'tool_use', id, name, input, provider, providerType, providerAgentId }` — LLM requests a tool call (`provider` = MCP connector or agent display name; `providerType: 'agent'` renders as a sub-thread)
 4. `{ type: 'tool_result', id, result }` — Tool call completed successfully
 5. `{ type: 'tool_error', id, error }` — Tool call failed
-6. `{ type: 'done' }` — Stream finished
-7. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. Renderer handles by calling `stopStreaming()` and invalidating the chat query.
+6. `{ type: 'child', toolCallId, agentId, event }` — One event of an agent called as a tool, streamed into that call's sub-thread (see [Orchestrated Agents tech](../orchestrated_agents/orchestrated_agents_tech.md))
+7. `{ type: 'done', stopReason }` — Stream finished: `end_turn`, or `canceled` whenever a stop ended the turn, wherever the stop landed (see [Cancellation](#cancellation))
+8. `{ type: 'error', error, errorDetail }` — Error (adapter-parsed short + raw detail). Also persisted to DB as a `role: 'error'` message by `messageRepo.saveError()` so it survives navigation. Renderer handles by calling `stopStreaming()` and invalidating the chat query.
 
 ## Optimistic user-message lifecycle
 
@@ -107,3 +108,16 @@ The persisted user content equals the optimistic `content` verbatim (both `prepa
 - `src/renderer/src/components/chat/MessageBubble.tsx` — Renders a single message with react-markdown + remark-gfm + rehype-highlight; info icon shows metadata popup on hover
 - `src/renderer/src/components/chat/ToolCallBlock.tsx` — Animated collapsible block: provider badge shown first (accent-colored with Plug icon) followed by muted tool name; chevron rotates on expand; CSS grid `gridTemplateRows` animation (150ms); shimmer progress bar on top during pending state; structured JSON input/result view with MCP content block unwrapping
 - `src/renderer/src/components/chat/ChatInput.tsx` — Input textarea; controls row below: [+] config on left, model/MCP center, send on right
+
+## Cancellation
+
+A stop ends the turn the way a finished turn ends: the renderer receives `done { stopReason: 'canceled' }`, the job run (if the chat has one) is finalized `cancelled`, and what the user watched arrive stays in the transcript. Where the stop lands decides only which exit reaches that ending.
+
+- **Between adapter calls** — a tool running, a round just saved — the loop's `if (aborted) break` leaves through the normal ending. Every finished round is already saved.
+- **Tool calls the stop skipped still get a result row.** The round's assistant message is saved with every tool call the model asked for, and both Anthropic and OpenAI refuse a history holding a tool call with no matching result — on every later request in the chat, so a stop would otherwise leave the chat permanently unusable. When the tool loop sees the abort, each call it had not run yet is saved with `saveToolCall` as an error row whose content is `TOOL_NOT_RUN` ("Not run: the user stopped the turn before this tool call was executed."), which the model reads as that call's result next turn. No port event is posted for them; they appear with the refetch `done` triggers.
+- **Mid-reply**, the usual case. Every adapter rejects when its signal fires, so the turn lands in `_runStreamLoop`'s `catch`. The loop keeps `partial`: what the current round has streamed and nothing has saved yet, appended on each delta and cleared once that round's assistant message is saved. The abort branch saves `partial` — unless it is only whitespace, because Anthropic refuses a whitespace-only assistant turn on every later request — as an ordinary assistant message (`messageRepo.saveAssistant({ chatId, content: partial })`, then `touchChat`), then posts `done { stopReason: 'canceled' }`, then calls `jobService.reportRunCompletion(chatId, 'cancelled')`. Earlier rounds were saved as they finished, so only the stopped round comes from `partial`.
+- **Why that branch posts `done`.** The renderer's Stop — `handleCancel` in `src/renderer/src/components/chat/ChatInput.tsx`, calling `useChatStream.cancel` — only asks main to cancel and clears no state of its own; it relies on the port to say the turn ended. This branch used to return having posted nothing, so the chat sat in its streaming state — offering only Stop, with `handleSend` refusing — until the user switched chats.
+- **Why the partial is saved first.** `done` refetches the chat and then clears the live streaming blocks. Posted without the save, it would have made the text the user stopped disappear along with them.
+- **A real failure is not a stop.** A non-abort error still posts `error { error, errorDetail }`, persists it with `saveError`, finalizes the run `failed`, and saves no partial.
+
+The agent path ends a stop the same way, including a stream that throws after the stop, whose streamed parts `runAgentTurn` still returns — see the `done` variant in [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md#variants) and the `a2a/canceled_then_stream_error` golden. Pinned by `src/main/services/chatStreamingService.stop.test.ts`, the first unit test to drive `_runStreamLoop`: the partial reply saved and then `done` canceled; nothing saved when the stop lands before any text, or when only whitespace had streamed; only the stopped round kept, not a round that was already saved; a real failure still reported as an `error`, with no partial saved; and every tool call a stop skipped recorded, so the chat's next request is not refused.

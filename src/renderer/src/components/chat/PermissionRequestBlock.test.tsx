@@ -12,7 +12,7 @@
  * records the outcome of each.
  */
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PermissionRequestBlock } from './PermissionRequestBlock'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 
@@ -278,12 +278,92 @@ describe('PermissionRequestBlock', () => {
     render(
       <PermissionRequestBlock request={request()} interactive={false} onAnswer={async () => {}} />
     )
-    // A persisted block re-rendered from history has no live request id. Offering
+    // A persisted block re-rendered from history is not interactive. Offering
     // buttons there would post an answer to a request the engine has long since
-    // resolved. Mutation: `const live = interactive && !!requestId && !answered`
-    // → `const live = true` fails this.
+    // resolved. Mutation: `const live = (interactive || busy !== null) &&
+    // !!requestId && !answered` → `const live = true` fails this.
     expect(screen.queryByText('Allow once')).toBeNull()
     expect(screen.getByText('Permission to run a command')).toBeTruthy()
+  })
+
+  it('keeps its buttons while its own answer is in flight, even once the stream says it settled', async () => {
+    // The stream's `input_resolved`, and the optimistic store update beside it,
+    // can land before `onAnswer` resolves — so `interactive` turns false first.
+    // Dropping the buttons in that gap collapsed the block for a frame and
+    // jumped everything below it (ux_rules §1).
+    //
+    // Mutation: `const live = interactive && !!requestId && !answered` (no
+    // `busy !== null`) fails this.
+    let release = (): void => {}
+    const onAnswer = (): Promise<void> => new Promise<void>((resolve) => (release = resolve))
+    const view = render(
+      <PermissionRequestBlock request={request()} requestId="per_1" interactive onAnswer={onAnswer} />
+    )
+    fireEvent.click(screen.getByText('Allow once'))
+    expect(await screen.findByText('Allowing…')).toBeTruthy()
+
+    view.rerender(
+      <PermissionRequestBlock request={request()} requestId="per_1" interactive={false} onAnswer={onAnswer} />
+    )
+    expect(screen.getByText('Allowing…')).toBeTruthy()
+
+    await act(async () => release())
+    expect(await screen.findByText('Allowed once.')).toBeTruthy()
+    expect(screen.queryByText('Deny')).toBeNull()
+  })
+
+  it('holds its height, buttons disabled, while a settled ask’s outcome is still in transit', () => {
+    // `input_resolved` and the outcome line are two port messages. Between them
+    // the block is no longer answerable and has no decision to show; dropping
+    // the button row there collapsed it by 43 px and jumped the next ask's
+    // buttons up under the pointer (ux_rules §1). Mutation: render the button
+    // row on `live` alone again fails this.
+    const onAnswer = vi.fn(async () => {})
+    const view = render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive={false}
+        awaitingDecision
+        onAnswer={onAnswer}
+      />
+    )
+    const allow = screen.getByText('Allow once').closest('button') as HTMLButtonElement
+    expect(allow.disabled).toBe(true)
+    expect(screen.getByText('The agent is asking to run a command')).toBeTruthy()
+    fireEvent.click(allow)
+    expect(onAnswer).not.toHaveBeenCalled()
+
+    // The outcome lands in the buttons' place.
+    view.rerender(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive={false}
+        decision="No answer — the request expired."
+        onAnswer={onAnswer}
+      />
+    )
+    expect(screen.getByText('No answer — the request expired.')).toBeTruthy()
+    expect(screen.queryByText('Allow once')).toBeNull()
+  })
+
+  it('shows a refused answer’s error below the buttons, so they stay where the pointer is', async () => {
+    // Mutation: render the error line above the button row again fails this.
+    render(
+      <PermissionRequestBlock
+        request={request()}
+        requestId="per_1"
+        interactive
+        onAnswer={async () => {
+          throw new Error('That answer could not be delivered.')
+        }}
+      />
+    )
+    const deny = screen.getByText('Deny')
+    fireEvent.click(deny)
+    const error = await screen.findByText('That answer could not be delivered.')
+    expect(deny.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 })
 
@@ -300,4 +380,7 @@ describe('PermissionRequestBlock', () => {
  * | Deny closes the block without calling `onAnswer` | maps Deny to reject rather than to a missing answer |
  * | `setAnswered(reply)` moved before/outside the `await` | does not claim the decision landed when delivery failed |
  * | `live` → `true` | renders read-only with no buttons… |
+ * | `busy !== null` dropped from `live` | keeps its buttons while its own answer is in flight… |
+ * | error line rendered above the button row | shows a refused answer’s error below the buttons… |
+ * | button row rendered on `live` alone (no `holding`) | holds its height, buttons disabled, while a settled ask’s outcome… |
  */

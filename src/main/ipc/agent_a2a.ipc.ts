@@ -17,7 +17,7 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
-import { postAgentError } from './_streamPort'
+import { postRunError } from './_streamPort'
 import type { CliCommand } from '../../shared/cliCommands'
 import type { AgentSendPayload } from '../../shared/ipcPayloads'
 import { CINNA_REAUTH_REQUIRED_CODE, CINNA_SESSION_EXPIRED_MESSAGE } from '../../shared/cinnaErrors'
@@ -182,7 +182,7 @@ export function registerA2AHandlers(): void {
     if (!userActivation.isActivated()) {
       logger.error('send-message rejected: session not activated', { agentId, chatId })
       port.start()
-      postAgentError(port, 'Session not activated — user must authenticate first')
+      postRunError(port, 'Session not activated — user must authenticate first')
       port.close()
       return
     }
@@ -194,7 +194,7 @@ export function registerA2AHandlers(): void {
     if (!chatRepo.getOwned(profileUserId, chatId)) {
       const err = 'Chat not found'
       logger.error(err, { agentId, chatId })
-      postAgentError(port, err)
+      postRunError(port, err)
       port.close()
       return
     }
@@ -204,7 +204,7 @@ export function registerA2AHandlers(): void {
     if (!located || !agent) {
       const err = 'Agent not found or not configured'
       logger.error(err, { agentId, chatId })
-      postAgentError(port, err)
+      postRunError(port, err)
       messageRepo.saveError({ chatId, short: err })
       port.close()
       return
@@ -224,7 +224,7 @@ export function registerA2AHandlers(): void {
     if (!isFolder && !agent.cardUrl) {
       const err = 'Agent not found or not configured'
       logger.error(err, { agentId, chatId, cardUrl: agent.cardUrl })
-      postAgentError(port, err)
+      postRunError(port, err)
       messageRepo.saveError({ chatId, short: err })
       port.close()
       return
@@ -247,7 +247,7 @@ export function registerA2AHandlers(): void {
           : `Failed to resolve agent endpoint: ${err instanceof Error ? err.message : String(err)}`
       const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
       logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
-      postAgentError(port, errMsg, code)
+      postRunError(port, errMsg, { code })
       messageRepo.saveError({ chatId, short: errMsg, code })
       port.close()
       return
@@ -257,7 +257,7 @@ export function registerA2AHandlers(): void {
       // kind of agent — say so rather than fail obscurely at the SDK call.
       const errMsg = 'This agent has no endpoint configured.'
       logger.error(errMsg, { agentId, source: agent.source })
-      postAgentError(port, errMsg)
+      postRunError(port, errMsg)
       messageRepo.saveError({ chatId, short: errMsg })
       port.close()
       return
@@ -299,7 +299,7 @@ export function registerA2AHandlers(): void {
         : `Failed to resolve agent access token: ${err instanceof Error ? err.message : String(err)}`
       const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
       logger.error(errMsg, { agentId, reauth: isReauth })
-      postAgentError(port, errMsg, code)
+      postRunError(port, errMsg, { code })
       messageRepo.saveError({ chatId, short: errMsg, code })
       port.close()
       return

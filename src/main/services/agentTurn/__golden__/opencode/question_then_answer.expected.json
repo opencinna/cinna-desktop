@@ -23,6 +23,39 @@
       "toolId": "que_7"
     },
     {
+      "type": "needs_input",
+      "requestId": "que_7",
+      "request": {
+        "kind": "question",
+        "questions": [
+          {
+            "question": "Which?",
+            "header": "Pick",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "A",
+                "description": "a"
+              }
+            ]
+          }
+        ]
+      },
+      "resume": "reply"
+    },
+    {
+      "type": "input_resolved",
+      "requestId": "que_7",
+      "resolution": {
+        "kind": "question",
+        "answers": [
+          [
+            "A"
+          ]
+        ]
+      }
+    },
+    {
       "type": "delta",
       "kind": "tool_result",
       "text": "Answered: A.",

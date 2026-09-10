@@ -43,7 +43,10 @@
  * `message` events, a turn that resumes a remembered session, a JSON-RPC error
  * frame mid-stream, a task that ends `failed`, a 403 on a manually added agent,
  * a refused connection, and the non-streaming `message/send` path returning a
- * Task, a Message, and a JSON-RPC error.
+ * Task, a Message, and a JSON-RPC error. Phase 1 added `auth_required_state`:
+ * the agent parking its task in `auth-required`, which is the only way to
+ * reach the `auth` kind of `needs_input` — `auth_required_401` is a transport
+ * rejection and never gets that far.
  *
  * Several expectations pin behaviour that looks wrong. Each says why in its
  * `_notes`; none is fixed here, because phase 0 records and does not change.
@@ -52,8 +55,8 @@
  *
  * | Mutation | Caught by |
  * |---|---|
- * | Drop the `status` onEvent in the `status-update` branch | 11 goldens (every scenario with a status-update frame) and the abort characterisation, which times out waiting for its first event |
- * | Skip `a2aSessionRepo.upsert` on the success path | 14 effects expectations and the contract's `session` clause — **no** `{ events, result }` golden, which is why effects are pinned separately |
+ * | Drop the `status` onEvent in the `status-update` branch | 12 goldens (every scenario with a status-update frame) and the abort characterisation, which times out waiting for its first event |
+ * | Skip `a2aSessionRepo.upsert` on the success path | 15 effects expectations and the contract's `session` clause — **no** `{ events, result }` golden, which is why effects are pinned separately |
  *
  * Abort breaks both halves of the contract, and each is recorded by how it
  * breaks: `abort.settles` by **timeout** — `hangs()` leaves the stream open and
@@ -94,14 +97,16 @@ import {
 } from './__golden__/runnerContract'
 import { fakeA2aAgent, fakeSessionRepo, type A2aFixture, type FakeAgent } from './__golden__/a2a/fakeAgent'
 import { expectEffects } from './__golden__/a2a/effects'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../shared/runEvents'
 
 const SCENARIOS = [
   'plain_text',
   'tool_roundtrip',
   'input_required',
+  'auth_required_state',
   'auth_required_401',
   'canceled_midway',
+  'canceled_then_stream_error',
   'notice',
   'file_part',
   'command_result',
@@ -190,7 +195,7 @@ describe('golden: a2a (runAgentTurn)', () => {
     const agent = fakeA2aAgent(fixture)
     const repo = seededRepo(fixture)
     const controller = new AbortController()
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     const taskIdsSurfaced: string[] = []
     let clientsSurfaced = 0
     const abortAt = fixture.script?.abortAfterEmitted
@@ -241,7 +246,7 @@ describe('a2a abort, characterised', () => {
     const fixture = heldPlainText()
     const agent = fakeA2aAgent(fixture)
     const controller = new AbortController()
-    const events: AgentStreamEvent[] = []
+    const events: RunEvent[] = []
     let markStarted: () => void = () => {}
     const started = new Promise<void>((resolve) => {
       markStarted = resolve

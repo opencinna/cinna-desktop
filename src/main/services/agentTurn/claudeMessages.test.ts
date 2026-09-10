@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ClaudeMessageStream, describeClaudeToolCall } from './claudeMessages'
 import { StreamPartsAccumulator } from '../../agents/streamPartsAccumulator'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
+import type { RunEvent } from '../../../shared/runEvents'
 
 /**
  * The SDK message stream → A2A-shaped parts.
@@ -25,14 +25,14 @@ import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 function run(messages: unknown[]): {
   answer: string
   parts: ReturnType<StreamPartsAccumulator['snapshotParts']>
-  deltas: AgentStreamEvent[]
+  deltas: RunEvent[]
   ended: { isError: boolean; text: string } | undefined
   apiKeySource: string | undefined
 } {
   const stream = new ClaudeMessageStream()
   const accumulator = new StreamPartsAccumulator()
-  const deltas: AgentStreamEvent[] = []
-  const port = { postMessage: (e: AgentStreamEvent): void => void deltas.push(e) }
+  const deltas: RunEvent[] = []
+  const port = { postMessage: (e: RunEvent): void => void deltas.push(e) }
   let ended: { isError: boolean; text: string } | undefined
   let apiKeySource: string | undefined
 

@@ -10,18 +10,11 @@ import { useAuthStore } from '../stores/auth.store'
 import { useForceRefreshAgentStatus, useRereadAgentStatus } from './useAgentStatus'
 import { isFolderAgentId } from '../../../shared/localAgents'
 import type { MessageAttachment } from '../../../shared/attachments'
-import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
-import type { LlmStreamEvent } from '../../../shared/llmStreamEvents'
-
-// Receiver-side type — defined in `src/shared/llmStreamEvents.ts` and shared
-// with the sender (chatStreamingService) so adding a new event variant or
-// field flags drift at compile time on both sides.
-type LlmEvent = LlmStreamEvent
-
-// Receiver-side type — defined in `src/shared/agentStreamEvents.ts` and shared
-// with the sender (a2aStreamingService + StreamPartsAccumulator) so adding a
-// new event variant or field flags drift at compile time on both sides.
-type AgentEvent = AgentStreamEvent
+// Receiver-side type — defined in `src/shared/runEvents.ts` and shared with
+// every sender (chatStreamingService, a2aStreamingService, the local turn
+// runners) so adding a new event variant or field flags drift at compile time
+// on both sides.
+import type { RunEvent } from '../../../shared/runEvents'
 
 export interface StartLlmOptions {
   attachments?: MessageAttachment[]
@@ -41,20 +34,38 @@ export function useChatStream(): {
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
-  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
+  const { startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage } =
     useChatStore()
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   const forceRefreshAgentStatus = useForceRefreshAgentStatus()
   const rereadAgentStatus = useRereadAgentStatus()
 
-  const handleLlm = useCallback(
-    (chatId: string, event: LlmEvent): void => {
+  // One handler for both send paths: an LLM chat and an agent chat post the
+  // same vocabulary, so a case cannot exist on one path and silently not on
+  // the other.
+  const handleRun = useCallback(
+    (chatId: string, event: RunEvent): void => {
       switch (event.type) {
         case 'request-id':
           startStreaming(event.requestId)
           break
+        case 'status':
+          // Task bookkeeping only. A `needs_input` state is followed by its own
+          // `needs_input` event, which is what the store records.
+          break
         case 'delta':
-          appendDelta(event.text)
+          // An LLM's delta is `kind: 'text'` with every other field unset,
+          // which lands exactly where a bare text append would.
+          appendDelta(
+            event.text,
+            event.kind,
+            event.toolName,
+            event.toolInput,
+            event.toolId,
+            event.toolStream,
+            event.commandInvocation,
+            event.file
+          )
           break
         case 'tool_use':
           addToolCall({
@@ -67,19 +78,49 @@ export function useChatStream(): {
           })
           break
         case 'tool_result':
-          // LLM-side completion event: pairs a tool-use id with its result.
-          // Distinct from the A2A 'tool_result' *content kind* handled by
-          // handleAgent (which streams stdout/stderr text chunks as deltas).
+          // Tool-call completion event: pairs a tool-use id with its result.
+          // Distinct from the `tool_result` *content kind* handled by `delta`
+          // (which streams stdout/stderr text chunks).
           resolveToolCall(event.id, event.result)
+          // The nested agent behind this call has finished, and any ask it
+          // parked went with it.
+          dropInputRequestsFor(event.id)
           break
         case 'tool_error':
           failToolCall(event.id, event.error)
+          dropInputRequestsFor(event.id)
           break
-        case 'tool_subevent':
-          // Nested A2A event from an agent-backed tool call (orchestrated
-          // mode) — accumulate into that tool's live sub-thread.
-          appendToolSubEvent(event.toolCallId, event.event)
+        case 'needs_input':
+          addInputRequest({ requestId: event.requestId, request: event.request, resume: event.resume })
           break
+        case 'input_resolved':
+          resolveInputRequest(event.requestId)
+          break
+        case 'child': {
+          // One event from a nested agent (an agent-backed tool call). Its asks
+          // are recorded in the chat's list, tagged with the tool call that
+          // raised them, and the registry would answer them by id like any
+          // other — but no sub-thread renders a control for one yet, so today a
+          // nested ask still ends at its park timeout. The call's own
+          // `tool_result` / `tool_error` drops them. Everything else
+          // accumulates into that tool's live sub-thread.
+          const inner = event.event
+          if (inner.type === 'needs_input') {
+            addInputRequest({
+              requestId: inner.requestId,
+              request: inner.request,
+              resume: inner.resume,
+              toolCallId: event.toolCallId
+            })
+          } else if (inner.type === 'input_resolved') {
+            resolveInputRequest(inner.requestId)
+          } else if (inner.type !== 'child') {
+            // A `child` inside a `child` is dropped: the sub-thread renders one
+            // level of hierarchy, and nothing sends deeper.
+            appendToolSubEvent(event.toolCallId, inner)
+          }
+          break
+        }
         case 'done':
           // Keep streaming blocks visible (cursor already hidden via isStreaming=false)
           // until the DB message is fetched, then remove them — no visual gap.
@@ -98,63 +139,19 @@ export function useChatStream(): {
           break
         case 'error':
           // The error has already been persisted main-side (`chatStreamingService`
-          // calls `messageRepo.saveError`) and will render as a `SystemMessage`
-          // bubble once `['chat', chatId]` refetches. Don't also call
-          // `setSendError` here — it would duplicate the same text as a
-          // transient banner above the composer.
-          console.error('LLM error:', event.error)
+          // calls `messageRepo.saveError`; agent turns go through `agent_a2a.ipc`
+          // / `a2aStreamingService`, with the typed `code` for the reauth chip)
+          // and will render as a `SystemMessage` bubble once `['chat', chatId]`
+          // refetches. Don't also call `setSendError` here — it would duplicate
+          // the same text as a transient banner above the composer and strip
+          // the inline action button.
+          console.error('Stream error:', event.error)
           stopStreaming()
           queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
           break
       }
     },
-    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, queryClient]
-  )
-
-  const handleAgent = useCallback(
-    (chatId: string, event: AgentEvent): void => {
-      switch (event.type) {
-        case 'request-id':
-          startStreaming(event.requestId)
-          break
-        case 'delta':
-          appendDelta(
-            event.text,
-            event.kind,
-            event.toolName,
-            event.toolInput,
-            event.toolId,
-            event.toolStream,
-            event.commandInvocation,
-            event.file
-          )
-          break
-        case 'done':
-          // Retire the optimistic user bubble alongside the streaming blocks
-          // once the refetch lands — its persisted row is in `messages` by then.
-          finishStreaming()
-          Promise.all([
-            queryClient.invalidateQueries({ queryKey: ['chat', chatId] }),
-            queryClient.invalidateQueries({ queryKey: ['chats'] }),
-            queryClient.invalidateQueries({ queryKey: ['jobs'] })
-          ]).finally(() => {
-            clearStreamingBlocks()
-            setPendingUserMessage(null)
-          })
-          break
-        case 'error':
-          // Agent errors are already persisted by `agent_a2a.ipc` /
-          // `a2aStreamingService` as a `SystemMessage` row (with the typed
-          // `code` for the reauth chip when applicable). Don't also surface
-          // them as a transient banner — that would duplicate the in-bubble
-          // error and strip the inline action button.
-          console.error('Agent error:', event.error)
-          stopStreaming()
-          queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-          break
-      }
-    },
-    [startStreaming, appendDelta, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, queryClient]
+    [startStreaming, appendDelta, addToolCall, resolveToolCall, failToolCall, appendToolSubEvent, addInputRequest, resolveInputRequest, dropInputRequestsFor, finishStreaming, clearStreamingBlocks, stopStreaming, setPendingUserMessage, queryClient]
   )
 
   // Count the user rows already persisted for this chat, so the optimistic
@@ -179,7 +176,7 @@ export function useChatStream(): {
         window.api.llm.sendMessage(
           chatId,
           content,
-          (event) => handleLlm(chatId, event),
+          (event) => handleRun(chatId, event),
           { attachments: opts?.attachments }
         )
       } catch {
@@ -191,7 +188,7 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleLlm, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming]
+    [handleRun, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming]
   )
 
   const startAgent = useCallback(
@@ -207,7 +204,7 @@ export function useChatStream(): {
           chatId,
           content,
           (event) => {
-            handleAgent(chatId, event)
+            handleRun(chatId, event)
             // When the agent finishes (or errors out), it may have updated its
             // STATUS.md during the turn — pull a fresh snapshot so tiles in the
             // status overlay / title-bar dot stay in sync.
@@ -239,7 +236,7 @@ export function useChatStream(): {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleAgent, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus, rereadAgentStatus]
+    [handleRun, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus, rereadAgentStatus]
   )
 
   const cancel = useCallback((requestId: string): void => {

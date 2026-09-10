@@ -1,0 +1,53 @@
+{
+  "_notes": [
+    "The protocol state, not the transport rejection: auth_required_401 is a 401 on message/stream that fails the turn; here the agent itself parks the task in auth-required and the turn completes with no error and taskState auth-required (raw A2A, as sidecars and callers read it).",
+    "The status is posted as state needs_input and is followed immediately by a needs_input event: kind auth, message taken from the text parts of the status message, requestId the task id, resume next_message (the user answers with their next message, as for input_required).",
+    "POSSIBLE BUG, same as input_required: the sign-in text on status.message is also ingested as ordinary answer text, merged into the previous text part with no separator, and its delta is posted before the status that says it was an ask."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-ar-1",
+      "contextId": "ctx-ar-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "I can open that pull request."
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Sign in to GitHub to continue."
+    },
+    {
+      "type": "status",
+      "state": "needs_input",
+      "taskId": "task-ar-1",
+      "contextId": "ctx-ar-1"
+    },
+    {
+      "type": "needs_input",
+      "requestId": "task-ar-1",
+      "request": {
+        "kind": "auth",
+        "message": "Sign in to GitHub to continue."
+      },
+      "resume": "next_message"
+    }
+  ],
+  "result": {
+    "text": "I can open that pull request.Sign in to GitHub to continue.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "I can open that pull request.Sign in to GitHub to continue."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-ar-1",
+    "taskId": "task-ar-1",
+    "taskState": "auth-required"
+  }
+}
