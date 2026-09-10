@@ -17,12 +17,7 @@
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  configuredEnginePath,
-  realBinaryResolverDeps,
-  resolveEngineBinaryWith,
-  type ResolvedEngineBinary
-} from '../../engine/binaryResolver'
+import { engineBinaryService } from '../../engine/engineBinaryService'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { a2aSessionRepo, type AgentRow } from '../../db/agents'
 import { getSettingsScopeUserId } from '../../auth/scope'
@@ -242,44 +237,6 @@ function claudeAdapterEntry(): string {
   return createRequire(import.meta.url).resolve(`${ADAPTER_PACKAGE}/${ADAPTER_ENTRY}`)
 }
 
-/**
- * The resolved `opencode`, resolved once.
- *
- * **Memoised across the app's life on purpose.** On a machine with no install
- * this downloads and verifies the pinned version, which takes a minute; a
- * per-turn resolution would do it again for every agent, and two turns starting
- * together would download it twice into the same directory. The promise is
- * dropped on failure so a user who fixes the path in Settings is not stuck with
- * the old answer for the rest of the session.
- */
-let engineBinary: Promise<ResolvedEngineBinary> | null = null
-/**
- * The configured path the memo above was resolved for.
- *
- * **Keyed, not merely memoised**, and the reason is a setting a user can
- * change: point Settings → Local Agents at a different `opencode` and an
- * unkeyed memo would keep handing out the old one until the app restarted —
- * and because the binary path feeds the launch spec's `key`, the *running*
- * child would not be replaced either, so the change would appear to do nothing
- * at all. `engineManager` kept the same key for the same reason.
- */
-let engineBinaryFor: string | null | undefined
-
-function resolveEngineBinaryOnce(): Promise<ResolvedEngineBinary> {
-  const configured = configuredEnginePath()
-  if (!engineBinary || engineBinaryFor !== configured) {
-    engineBinaryFor = configured
-    engineBinary = resolveEngineBinaryWith(realBinaryResolverDeps(() => configured)).catch(
-      (err: unknown) => {
-        engineBinary = null
-        engineBinaryFor = undefined
-        throw err
-      }
-    )
-  }
-  return engineBinary
-}
-
 /** The `claude` this machine has. A fresh check detects again when there is none. */
 async function claudePath(options?: { fresh?: boolean }): Promise<string | null> {
   const path = (await toolDetectionService.get('claude'))?.path ?? null
@@ -306,7 +263,11 @@ function folderSystemPrompt(userId: string, agentId: string): string {
 
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   opencode: createOpencodeLauncher({
-    binary: resolveEngineBinaryOnce,
+    // Through the service, which memoises per *configured path* and never
+    // caches a failure — so a path the user has just fixed in Settings is tried
+    // on the next turn rather than after a restart, and because the path feeds
+    // the launch spec's key, the running child is replaced too.
+    binary: () => engineBinaryService.ensure(),
     // `refreshModels: false` for the same reason the old reconcile passed it:
     // this runs once per turn, and a per-turn fan-out of provider API calls
     // would put network latency in front of every message the user sends. The

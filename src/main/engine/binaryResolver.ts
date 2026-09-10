@@ -249,7 +249,9 @@ async function runInstall(deps: BinaryResolverDeps): Promise<ResolvedEngineBinar
   if (!asset) {
     throw new EngineBinaryError(
       'unsupported_platform',
-      `Cinna has no verified opencode build for ${key}. Install opencode yourself and it will be picked up, or set the engine path in Settings.`
+      // Remedy first, and short: this is the longest of the three and measured
+      // 1039px problem-first, which clips at every window width.
+      `Install opencode yourself, or set the engine path in Settings: Cinna has no verified build for ${key}.`
     )
   }
 
@@ -302,14 +304,19 @@ export async function resolveEngineBinaryWith(
     if (!(await isFile(configured))) {
       throw new EngineBinaryError(
         'configured_missing',
-        'The engine path in Settings does not point at a file. Fix it, or clear it to let Cinna find one.'
+        // **Remedy first, because this sentence is measured to clip.** It lands
+        // in the Runs-with panel's reserved line, which is 414px at the 800px
+        // minimum; problem-first it needed 667px and lost the half that says
+        // what to do (ux_rules rule 7). The Claude rung beside it leads with its
+        // remedy for the same reason.
+        'Fix the engine path in Settings, or clear it: it does not point at a file.'
       )
     }
     const version = await deps.probeVersion(configured)
     if (version === null) {
       throw new EngineBinaryError(
         'configured_unusable',
-        'The engine path in Settings points at a file that will not run. Fix it, or clear it to let Cinna find one.'
+        'Fix the engine path in Settings, or clear it: that file will not run.'
       )
     }
     return { path: configured, source: 'configured', version }

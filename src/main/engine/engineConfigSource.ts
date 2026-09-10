@@ -216,18 +216,17 @@ export function collectEngineAgents(userId: string): EngineAgentInput[] {
     // rest of the config is built from is what keeps a reconcile from deciding
     // the config changed because a gateway was briefly unreachable.
     const runtime = runtimeService.resolve(agent.runtime, providers, cachedModels)
-    // **An agent on another engine has no entry in this one's config.**
-    // Without this it still gets one, and the config generator skips it as
-    // `credential_unavailable` — because a Claude runtime resolves to no
-    // credential — so the Runs-with panel would explain a perfectly healthy
-    // agent with "its credential is not available to it". That sentence is
-    // about a key; this agent spends none. It is also the sentence a user
-    // would act on by picking a different credential, which would not help.
+    // **Every folder agent is collected, whichever engine it names.** This
+    // used to skip anything but OpenCode, because one shared config served
+    // every agent at once and a Claude runtime resolves to no credential — so
+    // the generator would have reported a perfectly healthy agent as
+    // "its credential is not available to it", a sentence about a key it does
+    // not spend.
     //
-    // Skipping is not merely cosmetic either: `buildEngineConfig` writes the
-    // engine's model as `${providerKey}/${modelId}`, and a Claude runtime's
-    // model is an alias (`sonnet`) that no OpenCode provider lists.
-    if (runtime.engine !== 'opencode') continue
+    // Since phase 3 the caller is the OpenCode *launcher*, planning one turn
+    // for one agent it was chosen for — and it is chosen by reading the folder,
+    // so it is never asked about an agent on another engine. Filtering here
+    // would only decide what a question nobody asks gets answered with.
     out.push({
       agentId: agent.id,
       slug: agent.slug,

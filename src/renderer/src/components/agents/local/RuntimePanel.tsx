@@ -10,7 +10,7 @@ import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
 import { useClaudeAuth, useLocalTools } from '../../../hooks/useLocalTools'
-import { useEngineSkips, useEngineState, useStartEngine } from '../../../hooks/useEngine'
+import { useEngineBinary } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
@@ -26,7 +26,7 @@ import {
 } from '../../../../../shared/runtimeDefaults'
 import {
   describeCredential,
-  describeEngineSkip,
+  
   describeModel,
   NO_CATALOGUE,
   type RuntimeFacts,
@@ -132,11 +132,13 @@ const DANGER = 'text-[10px] text-[var(--color-danger)]'
  * property held only because two independent literals happened to agree, and
  * nothing would have failed if one of them drifted.
  *
- * `dot` and `tone` are passed in rather than derived, because **the two engines
- * mean different things by the same colours** and that difference is the point:
- * on OpenCode a green dot means *the process is running*, and on Claude the
- * only knowable fact is that a binary was found, which is deliberately muted
- * instead. One row, two vocabularies, and both visible in one place.
+ * `dot` and `tone` are passed in rather than derived, because the two engines
+ * report different things through the same row. They used to differ more: a
+ * green dot on OpenCode meant *the shared process is running*, where Claude's
+ * only knowable fact was that a binary had been found. Phase 3 gave both the
+ * same shape — a binary, and where it came from — so both are muted now, and
+ * the colours are still the caller's to pass because the *states* are not the
+ * same set.
  */
 function EngineRow({
   label,
@@ -167,53 +169,72 @@ function EngineRow({
   )
 }
 
-/** The engine's state as a dot and a word, and the button that changes it. */
+/**
+ * Which `opencode` this agent will run on, and nothing about a process.
+ *
+ * **There is no Start button any more, and no "Running".** Before phase 3 of
+ * the agent runtime plan one shared `opencode serve` sat behind every folder
+ * agent, so this row reported a server and offered to start it. A turn now
+ * spawns its own child, speaks ACP to it over stdio and lets the pool reap it
+ * two minutes later — so "running" would be true for a couple of minutes after
+ * a message and false the rest of the time, describing an implementation detail
+ * that appears and disappears on its own. A row like that is the healthy state
+ * wearing a status light (ux_rules rules 2 and 12).
+ *
+ * What is left is the same fact the Claude row reports, which is why the two
+ * now read alike: **a binary was found, and where it came from.** The dot stays
+ * muted for it, because a found file is not an achievement; `failed` is the one
+ * state a user can act on — a path they typed in Settings — and the reserved
+ * line below the grid carries its sentence, exactly as it carries Claude's.
+ */
 function EngineStatus(): React.JSX.Element {
-  const { data: state } = useEngineState()
-  const start = useStartEngine()
-  const status = state?.status ?? 'stopped'
-  const busy = status === 'installing' || status === 'starting' || start.isPending
+  const { data: binary } = useEngineBinary()
+  const state = binary?.state ?? 'unresolved'
 
+  // Short enough for the column that never grows — the same 219px cap that cut
+  // the Claude row's copy down (ux_rules rule 7). The explanation lives in the
+  // reserved line below and in `title`.
   const text =
-    status === 'running'
-      ? `Running${state?.version ? ` · opencode ${state.version}` : ''}`
-      : status === 'installing'
-        ? 'Downloading — once, about a minute'
-        : status === 'starting'
-          ? 'Starting…'
-          : status === 'failed'
-            ? (state?.error ?? 'Could not start')
-            : 'Not running'
-  const dot =
-    status === 'running'
-      ? 'text-[var(--color-success)]'
-      : status === 'failed'
-        ? 'text-[var(--color-danger)]'
-        : 'text-[var(--color-text-muted)]'
+    state === 'ready'
+      ? `opencode${binary?.state === 'ready' && binary.version ? ` ${binary.version}` : ''}`
+      : state === 'resolving'
+        ? 'Downloading…'
+        : state === 'failed'
+          ? 'Not available'
+          : 'On the first message'
+  const title =
+    state === 'ready' && binary?.state === 'ready'
+      ? binary.path
+      : state === 'resolving'
+        ? 'Downloading the pinned opencode build. This happens once and takes about a minute.'
+        : state === 'failed' && binary?.state === 'failed'
+          ? binary.error
+          : 'Cinna resolves an opencode the first time you chat with this agent — yours from PATH if you have one, a verified copy otherwise.'
 
   return (
     <EngineRow
       label="Engine"
-      dot={dot}
+      /*
+        **One light per state.** `failed` was an amber dot over red text — two
+        different claims about the same fact, side by side (ux_rules rule 2).
+        Danger for both: unlike the Claude rung's `awaiting auth` amber, this is
+        not a state one command fixes on a healthy install; there is no engine
+        to run on at all until the user changes something.
+
+        `ready` stays muted, and deliberately differs from Settings' green tick
+        for the same fact: this cell's vocabulary is shared with the Claude rung
+        beside it, where muted means "a binary was found" and green is reserved
+        for something running. Each side matches its own neighbours, which is
+        the rule that wins when two surfaces disagree.
+      */
+      dot={
+        state === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-muted)]'
+      }
       tone={
-        status === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
+        state === 'failed' ? 'text-[var(--color-danger)]' : 'text-[var(--color-text-secondary)]'
       }
       text={text}
-      title={text}
-      action={
-        status !== 'running' ? (
-          <button
-            type="button"
-            onClick={() => start.mutate()}
-            disabled={busy}
-            className="shrink-0 rounded-md bg-[var(--color-bg-tertiary)] px-2 py-0.5 text-[10px] font-medium
-              text-[var(--color-text)] transition-colors hover:bg-[var(--color-bg-hover)]
-              disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            {busy ? <Loader2 size={11} className="animate-spin" /> : 'Start'}
-          </button>
-        ) : undefined
-      }
+      title={title}
     />
   )
 }
@@ -423,7 +444,6 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
   const { data: providers } = useProviders()
   const { data: models, isError: modelsFailed } = useModels()
   const { data: defaultMode } = useDefaultChatMode()
-  const { data: skips } = useEngineSkips()
   const { data: settings } = useAppSettings()
   const setSetting = useSetAppSetting()
   /**
@@ -489,10 +509,10 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
     was: NoteState
     wrote: NoteState
   } | null>(null)
-  const skip = skips?.agents.find((entry) => entry.agentId === agent.id) ?? null
 
   const { data: tools } = useLocalTools()
   const { data: claudeAuth } = useClaudeAuth()
+  const { data: binary } = useEngineBinary()
   const declaredCredential = agent.runtime?.credential ?? null
   const declaredModel = agent.runtime?.model ?? null
   /**
@@ -880,6 +900,26 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       return { text: dropped.text, tone: NOTE }
     }
     /**
+     * **No engine to run on outranks every question about which model.**
+     *
+     * A binary this machine could not get — a path typed into Settings that
+     * does not work, a download that could not reach the network — is the one
+     * engine-level state left that a user can act on, and it sits here for the
+     * same reason the Claude rung below sits above the credential ladder: with
+     * no engine, "your default chat mode uses a switched-off credential" is a
+     * true sentence about something that would not help. It is also what the
+     * Engine column is showing in red at that moment, and a cell whose only
+     * explanation was a hover `title` while the line below talked about a
+     * credential was the mismatch this ordering fixes.
+     *
+     * It replaces the shared config's *skip* list, which used to fill this slot
+     * with `credential_unavailable` / `no_model`. Those are not lost: the
+     * credential and model rungs below say the same things from *this* agent's
+     * resolved runtime, rather than echoing what one global config generation
+     * happened to leave out.
+     */
+    if (!onClaude && binary?.state === 'failed') return { text: binary.error, tone: DANGER }
+    /**
      * **The Claude engine leaves the credential ladder entirely**, above every
      * loading state below it.
      *
@@ -1002,8 +1042,6 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         tone: WARN
       }
     }
-    // The engine's own skip, worded here rather than in `configGenerator`.
-    if (skip) return { text: describeEngineSkip(skip.code), tone: WARN }
     /**
      * Why the Advanced checkbox is not available. Standing rather than fired by
      * a click, so the state is legible before the user tries it.
@@ -1604,12 +1642,13 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
 
         <div className="col-span-2 @2xl:col-span-1">
           {/*
-            **The OpenCode engine's state is not this agent's business.** A
-            Claude agent never starts that process, so reporting "Not running"
-            beside it — with a Start button — would be a fact about something
-            unrelated, offering an action that changes nothing for this agent
-            (ux_rules rule 9). The column keeps its place and its label so the
-            grid does not reflow; only what it reports changes.
+            **Which engine's binary is this agent's business.** A Claude agent
+            has nothing to do with `opencode`, so reporting that binary beside
+            it would be a fact about something unrelated (ux_rules rule 9) — and
+            it used to be worse than unrelated: the row reported the shared
+            server's state and offered a Start button that changed nothing for
+            this agent. The column keeps its place and its label so the grid
+            does not reflow; only what it reports changes.
           */}
           {onClaude ? (
             <ClaudeStatus tool={claudeTool} unknown={toolsUnknown} auth={claudeAuth?.state} />

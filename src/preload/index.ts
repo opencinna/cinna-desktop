@@ -30,11 +30,10 @@ import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type {
   ClaudeApproval,
   ClaudeAuthStatus,
-  EngineSkips,
-  EngineState,
+  EngineBinaryState,
   LocalAgentRuntimeInput
 } from '../shared/engine'
-import { ENGINE_STATE_CHANNEL } from '../shared/engine'
+import { ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState } from '../shared/localDevState'
@@ -1376,31 +1375,29 @@ const api = {
   },
 
   /**
-   * The local engine — the desktop-managed `opencode serve` process folder
-   * agents run on.
+   * The local engine — the `opencode` binary folder agents run on.
    *
-   * There is no `baseUrl` here and there never will be: the engine's address
-   * and its per-start auth password stay in the main process, so a component
-   * cannot be written that talks to it directly instead of through the turn
-   * runner. What crosses is the state a readiness strip renders.
+   * There is nothing to start or stop here any more, and no address: since
+   * phase 3 of the agent runtime plan a turn spawns its own child and speaks
+   * the Agent Client Protocol to it over stdio, so the per-agent processes come
+   * and go between turns and the only lasting question is whether this machine
+   * has a binary at all. What crosses is the state Settings renders — a path as
+   * text, never a handle.
    */
   engine: {
-    status: (): Promise<EngineState> => ipcRenderer.invoke('engine:status'),
+    binary: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:binary'),
     /**
-     * Start it, installing the binary first if this machine has none. Resolves
-     * with the resulting state — including a failed one — rather than
-     * rejecting, because a failure here is something the UI renders, and a
-     * rejection would lose its code crossing the bridge.
+     * Resolve one now, downloading and verifying the pinned build if this
+     * machine has none. Resolves with the resulting state — including a failed
+     * one — rather than rejecting, because a failure here is something the UI
+     * renders, and a rejection would lose its code crossing the bridge.
      */
-    start: (): Promise<EngineState> => ipcRenderer.invoke('engine:start'),
-    stop: (): Promise<EngineState> => ipcRenderer.invoke('engine:stop'),
-    /** Folder agents the running config left out, and why. */
-    skips: (): Promise<EngineSkips> => ipcRenderer.invoke('engine:skips'),
-    /** Fires on every engine state transition. Returns an unsubscribe. */
-    onState: (handler: (state: EngineState) => void): (() => void) => {
-      const listener = (_event: IpcRendererEvent, state: EngineState): void => handler(state)
-      ipcRenderer.on(ENGINE_STATE_CHANNEL, listener)
-      return () => ipcRenderer.off(ENGINE_STATE_CHANNEL, listener)
+    resolve: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:resolve'),
+    /** Fires whenever that state changes. Returns an unsubscribe. */
+    onState: (handler: (state: EngineBinaryState) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)
+      ipcRenderer.on(ENGINE_BINARY_CHANNEL, listener)
+      return () => ipcRenderer.off(ENGINE_BINARY_CHANNEL, listener)
     }
   },
 

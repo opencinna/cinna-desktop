@@ -47,9 +47,6 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { createLogger } from '../logger/logger'
 import { CUSTOM_MODEL_LIMITS, isEngineProviderType, type EngineProviderType } from './modelLimits'
 import { GEMINI_OPENAI_BASE_URL } from './modelTransports'
 import {
@@ -59,8 +56,6 @@ import {
   requiresApiKey
 } from '../../shared/credentials'
 import type { EngineSkipCode } from '../../shared/runtimeMessages'
-
-const logger = createLogger('engine-config')
 
 /**
  * OpenCode's provider key for each of our provider types.
@@ -774,102 +769,4 @@ export function digestEngineConfig(built: BuiltEngineConfig): EngineConfigDigest
 function mergePermissions(overrides?: Record<string, unknown> | null): Record<string, unknown> {
   if (!overrides || typeof overrides !== 'object') return { ...CONVERSATION_PERMISSIONS }
   return { ...CONVERSATION_PERMISSIONS, ...overrides }
-}
-
-export interface WrittenEngineConfig extends BuiltEngineConfig {
-  configPath: string
-  /** False when the bytes on disk already matched — nothing needs restarting. */
-  changed: boolean
-}
-
-/**
- * Write the config and its prompt files into `dir`, atomically, and report
- * whether anything actually changed.
- *
- * `changed` is what makes "restart the engine when the config changes" cheap
- * enough to call on every rescan: a regeneration that produces identical bytes
- * leaves a running engine alone. The comparison covers the prompt files too,
- * because a reworded `WORKFLOW_PROMPT.md` changes what the agent *is* while
- * leaving the config identical.
- */
-export function writeEngineConfig(dir: string, built: BuiltEngineConfig): WrittenEngineConfig {
-  const configPath = join(dir, 'opencode.json')
-  const promptDir = join(dir, 'prompts')
-  mkdirSync(promptDir, { recursive: true })
-
-  const serialised = `${JSON.stringify(built.config, null, 2)}\n`
-  let changed = writeIfDifferent(configPath, serialised)
-  for (const [key, text] of [...built.prompts].sort(([a], [b]) => a.localeCompare(b))) {
-    if (writeIfDifferent(join(promptDir, `${key}.md`), text)) changed = true
-  }
-  if (pruneStalePrompts(promptDir, built.prompts)) changed = true
-
-  if (changed) {
-    // Names and counts only. The config object holds `{env:…}` references
-    // rather than keys, but logging it wholesale would still be one refactor
-    // away from logging a key, and the counts are the whole diagnostic value.
-    logger.info('engine config regenerated', {
-      providers: built.providerKeys.size,
-      agents: built.agentKeys.size,
-      skippedProviders: built.skippedProviders.length,
-      skippedAgents: built.skippedAgents.length
-    })
-  }
-  return { ...built, configPath, changed }
-}
-
-/**
- * Delete generated prompt files for agents that are no longer in the set.
- *
- * A prompt file is this app's own derived copy of the *user's* folder — their
- * `WORKFLOW_PROMPT.md`, their `scripts/README.md`, the topics they wrote — and
- * deleting an agent is the user saying they are done with it. "Nothing reads
- * the leftover" is not a good enough answer to that: the file keeps their
- * material on disk after they asked for it to go, and the directory grows one
- * file per agent ever created.
- *
- * Scoped hard, because this is the only place in the engine that deletes
- * anything. It only ever touches `<userData>/engine/prompts/`, only `.md` files
- * directly inside it, and never a directory — no agent folder is reachable from
- * here even if a key were somehow malformed. A file it cannot delete is
- * skipped, not thrown: a stale prompt is untidy, and failing the config write
- * over one would take the engine down for it.
- */
-function pruneStalePrompts(promptDir: string, prompts: Map<string, string>): boolean {
-  let removed = false
-  let entries: string[]
-  try {
-    entries = readdirSync(promptDir)
-  } catch {
-    return false
-  }
-  for (const name of entries) {
-    if (!name.endsWith('.md')) continue
-    if (prompts.has(name.slice(0, -'.md'.length))) continue
-    try {
-      rmSync(join(promptDir, name), { force: true })
-      removed = true
-    } catch (err) {
-      logger.warn('could not remove a stale engine prompt', { file: name, error: String(err) })
-    }
-  }
-  return removed
-}
-
-/** True when the file was written; false when it already held these bytes. */
-function writeIfDifferent(path: string, contents: string): boolean {
-  try {
-    if (readFileSync(path, 'utf8') === contents) return false
-  } catch {
-    /* missing or unreadable — write it */
-  }
-  const temp = `${path}.${process.pid}.${Date.now()}.tmp`
-  try {
-    writeFileSync(temp, contents, { mode: 0o600 })
-    renameSync(temp, path)
-  } catch (err) {
-    rmSync(temp, { force: true })
-    throw err
-  }
-  return true
 }

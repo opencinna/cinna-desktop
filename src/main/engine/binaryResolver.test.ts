@@ -271,7 +271,10 @@ describe('resolveEngineBinaryWith — the managed install', () => {
   it('says plainly that a platform with no verified build must install its own', async () => {
     await expect(
       resolveEngineBinaryWith(harness({ platformKey: () => 'sunos-sparc' }))
-    ).rejects.toThrow(/no verified opencode build for sunos-sparc/i)
+      // Remedy first, then the platform it has no build for: the sentence lands
+      // in a 414px reserved line and problem-first it lost the half that says
+      // what to do (ux_rules rule 7).
+    ).rejects.toThrow(/Install opencode yourself.*no verified build for sunos-sparc/i)
     expect(downloads).toEqual([])
   })
 })

@@ -30,7 +30,7 @@ import { createAcpDriver, type AcpDriverDeps, type AcpFolderView } from './acpDr
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'
 import type { AcpLauncher, AcpLaunchPlan, AcpPlanResult } from './acpLaunchers'
-import { createFakeAcp, waitFor, type FakeAcp, type FakeAcpScript } from './testSupport/fakeAcp'
+import { createFakeAcp, settle, waitFor, type FakeAcp, type FakeAcpScript } from './testSupport/fakeAcp'
 import { ACP_PROTOCOL_VERSION, type AcpLauncherId, type AcpProcessPool } from './types'
 
 /** The one `needs_input` a turn posted, waited for. */
@@ -703,6 +703,31 @@ describe('the mode the agent actually ran in', () => {
     )
   })
 
+  it('says nothing about the mode a session merely started in', async () => {
+    // A session reports the mode it *starts* in — `session/new` answers with it,
+    // and a loaded one comes back in whatever it was left in. Compared against
+    // the mode we are about to ask for, that put the fallback notice on every
+    // turn: asked for `auto`, told `default` by a notification that predates the
+    // request, while automatic approvals were in fact on.
+    const w = world({
+      launcher: 'claude',
+      setup: { modeId: 'auto' },
+      script: {
+        newSession: {
+          emit: [
+            {
+              kind: 'update',
+              update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' }
+            }
+          ]
+        },
+        ...SAYS_HELLO
+      }
+    })
+    const result = await w.run()
+    expect(result.notices).toEqual([])
+  })
+
   it('says nothing when the agent ran in the mode it was given', async () => {
     const w = world({
       launcher: 'claude',
@@ -813,6 +838,39 @@ describe('a stop', () => {
     const result = await running
     expect(result.error).toBeUndefined()
     expect(w.fake.received('session/prompt')).toEqual([])
+  })
+
+  it('does not tell a parked ask that the user stopped a turn the ceiling ended', async () => {
+    // The ceiling shares `askAgentToStop` with the user's Stop, and a park it
+    // releases genuinely *was* never answered in time — which is what the
+    // expiry wording says. Claiming the user stopped a turn they left running
+    // for twenty minutes is the same kind of wrong the two wordings exist to
+    // keep apart.
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            {
+              kind: 'permission',
+              toolCall: { toolCallId: 'call_1', kind: 'edit', status: 'pending' }
+            }
+          ]
+        }
+      },
+      deps: { turnCeilingMs: 60 }
+    })
+    await w.run()
+    // Asserted on the stream rather than on `result.parts`: a decision written
+    // while the turn is being torn down races the snapshot, which the OpenCode
+    // runner's own golden recorded before this phase
+    // (`abort_with_parked_question`, "the block stays in parts with no decision
+    // record"). The wording is what is under test here, not when it lands.
+    await settle(80)
+    const written = w.events
+      .filter((event): event is Extract<RunEvent, { type: 'delta' }> => event.type === 'delta')
+      .map((event) => event.text)
+    expect(written).toContain('No answer — the request expired.')
+    expect(written).not.toContain('Not answered — the turn was stopped.')
   })
 
   it('gives up on a ceiling the agent never acknowledges, and says so', async () => {

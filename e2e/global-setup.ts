@@ -21,10 +21,13 @@ export default async function globalSetup(): Promise<void> {
     const skip = page.getByRole('button', { name: 'Skip for now' })
     await skip.waitFor({ timeout: 60_000 })
     await skip.click()
-    // Resolves the binary (download + verify + publish) before it touches
-    // config; a failure after that point does not matter here.
-    const state = await page.evaluate(() => window.api.engine.start().catch((err: Error) => ({ error: err.message })))
-    console.log(`[e2e] engine start result: ${JSON.stringify(state)}`)
+    // Resolving the binary is the whole point of this setup: download, verify
+    // and publish it once, into a cache every spec then copies from. There is
+    // nothing else to start — an agent's turn spawns its own child.
+    const state = await page.evaluate(() =>
+      window.api.engine.resolve().catch((err: Error) => ({ error: err.message }))
+    )
+    console.log(`[e2e] engine resolve result: ${JSON.stringify(state)}`)
     cacheEngineFrom(sandbox.userData)
     console.log(`[e2e] engine cached in ${Math.round((Date.now() - started) / 1000)} s`)
   } finally {

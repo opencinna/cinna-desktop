@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { credentialEnvName, type EngineConfigInput } from './configGenerator'
@@ -129,7 +129,7 @@ const { collectEngineAgents, collectEngineConfigInput, collectEngineProviders, r
 // The **real** generator, deliberately not mocked: the question this file has
 // to answer is what happens to a decrypted key on its way to disk, and a mocked
 // generator answers it by assumption.
-const { buildEngineConfig, writeEngineConfig } = await import('./configGenerator')
+const { buildEngineConfig } = await import('./configGenerator')
 
 function dto(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -392,17 +392,24 @@ describe('collectEngineAgents', () => {
     expect(collected.modelId).toBe('')
   })
 
-  it('leaves an agent on another engine out of the OpenCode config entirely', () => {
-    // Not merely tidiness. A Claude runtime resolves to no credential, so
-    // collecting it would make `configGenerator` skip it as
-    // `credential_unavailable` — and the Runs-with panel would explain a
-    // healthy agent with "its credential is not available to it", a sentence
-    // about a key it does not spend and would not be helped by changing.
+  it('collects an agent on another engine too, because nobody asks about it', () => {
+    // This used to skip anything but OpenCode: one shared config served every
+    // agent, and a Claude runtime resolves to no credential, so collecting it
+    // made the generator report a healthy agent as `credential_unavailable` —
+    // a sentence about a key it does not spend.
+    //
+    // Since phase 3 the caller is the OpenCode *launcher*, planning one turn
+    // for the one agent it was chosen for, and it is chosen by reading the
+    // folder — so it is never asked about an agent on another engine. The
+    // filter decided what an unasked question was answered with.
     state.agents = [
       agent({ id: 'folder:claude', runtime: { engine: 'claude' } }),
       agent({ id: 'folder:ok' })
     ]
-    expect(collectEngineAgents('user-1').map((entry) => entry.agentId)).toEqual(['folder:ok'])
+    expect(collectEngineAgents('user-1').map((entry) => entry.agentId)).toEqual([
+      'folder:claude',
+      'folder:ok'
+    ])
   })
 
   it('passes a manifest permission override through, and nothing else', () => {
@@ -557,7 +564,6 @@ describe('a decrypted key, from the keystore to disk', () => {
     state.agents = [agent()]
 
     const built = buildEngineConfig(await collectEngineConfigInput('user-1'))
-    const written = writeEngineConfig(dir, built)
 
     // In the environment handed to spawn, by name — this is the whole point of
     // naming the variable rather than carrying a value, and a generator that
@@ -569,57 +575,25 @@ describe('a decrypted key, from the keystore to disk', () => {
     // nothing about the fields only it has.
     expect(JSON.stringify(built.config)).toContain('@ai-sdk/openai-compatible')
 
-    // Not in the config file, and not in any generated prompt beside it. The
-    // sweep is over **every byte this generation wrote**, not over the one
-    // field a key is expected in: a key that leaks does so through a field
-    // nobody thought to check.
-    for (const name of readdirSync(dir)) {
-      if (name === 'prompts') continue
-      const text = readFileSync(join(dir, name), 'utf8')
-      expect(text, name).not.toContain(SECRET)
-      expect(text, name).not.toContain(GATEWAY_SECRET)
-    }
-    for (const name of readdirSync(join(dir, 'prompts'))) {
-      const text = readFileSync(join(dir, 'prompts', name), 'utf8')
-      expect(text, name).not.toContain(SECRET)
-      expect(text, name).not.toContain(GATEWAY_SECRET)
+    // Not in the config, anywhere in it. The sweep is over **every byte of
+    // what this generation produced**, not over the one field a key is expected
+    // in: a key that leaks does so through a field nobody thought to check.
+    // The bytes rather than a file, since phase 3 — the ACP launcher is what
+    // writes them now, and `acpLaunchers.test.ts` sweeps the file it wrote.
+    const bytes = JSON.stringify(built.config)
+    expect(bytes).not.toContain(SECRET)
+    expect(bytes).not.toContain(GATEWAY_SECRET)
+    for (const prompt of built.prompts.values()) {
+      expect(prompt).not.toContain(SECRET)
+      expect(prompt).not.toContain(GATEWAY_SECRET)
     }
     // The indirection is still *there* — a generator that simply dropped the
-    // credential would also pass the sweep above. It is now the variable's
-    // name in an `env` array rather than an `{env:…}` placeholder, because the
-    // engine's v2 config reader substitutes nothing and would have sent the
-    // placeholder itself as the key.
-    const onDisk = readFileSync(written.configPath, 'utf8')
-    expect(onDisk).toContain(`"${credentialEnvName('p1')}"`)
-    expect(onDisk).not.toContain('{env:')
+    // credential would also pass the sweep above. It is the variable's name in
+    // an `env` array rather than an `{env:…}` placeholder, because the engine's
+    // v2 config reader substitutes nothing and would have sent the placeholder
+    // itself as the key.
+    expect(bytes).toContain(`"${credentialEnvName('p1')}"`)
+    expect(bytes).not.toContain('{env:')
   })
 
-  it('leaves no temp file behind, so the config directory is only ever complete files', () => {
-    // `writeIfDifferent` writes to `<path>.<pid>.<ms>.tmp` and renames, which is
-    // what stops a reader — the engine, reloading — from ever seeing a
-    // half-written config. The rename is not directly observable, but a
-    // leftover temp file is proof it did not happen.
-    const built = buildEngineConfig({
-      providers: [
-        { id: 'p1', type: 'anthropic', name: 'A', apiKey: 'k', baseUrl: null, models: [] }
-      ],
-      agents: [
-        {
-          agentId: 'folder:aaa',
-          slug: 'demo',
-          description: 'd',
-          prompt: 'p',
-          providerId: 'p1',
-          modelId: 'm',
-          permissions: null
-        }
-      ]
-    })
-    writeEngineConfig(dir, built)
-    writeEngineConfig(dir, built)
-    const stray = [...readdirSync(dir), ...readdirSync(join(dir, 'prompts'))].filter((name) =>
-      name.endsWith('.tmp')
-    )
-    expect(stray).toEqual([])
-  })
 })

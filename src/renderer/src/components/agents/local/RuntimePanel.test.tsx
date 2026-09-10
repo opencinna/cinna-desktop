@@ -130,11 +130,20 @@ vi.mock('../../../hooks/useAppSettings', () => ({
   }),
   useSetAppSetting: () => ({ mutate: setSetting })
 }))
-let skip: { agentId: string; code: 'no_model' | 'credential_unavailable' } | null = null
+/**
+ * The engine's *binary* — all the panel knows about the engine since phase 3
+ * of the agent runtime plan. There is no shared server to be running and no
+ * shared config to have skipped this agent; a launcher refuses one agent at the
+ * top of its own turn, and the panel's own credential and model rungs say the
+ * things the skip list used to echo.
+ */
+let binary: { state: string; version?: string | null; path?: string; error?: string } = {
+  state: 'ready',
+  version: '1.0.0',
+  path: '/usr/local/bin/opencode'
+}
 vi.mock('../../../hooks/useEngine', () => ({
-  useEngineSkips: () => ({ data: { agents: skip ? [skip] : [] } }),
-  useEngineState: () => ({ data: { status: 'running', version: '1.0.0' } }),
-  useStartEngine: () => ({ mutate: vi.fn(), isPending: false })
+  useEngineBinary: () => ({ data: binary })
 }))
 
 const { RuntimePanel } = await import('./RuntimePanel')
@@ -176,7 +185,7 @@ beforeEach(() => {
   advanced = false
   settingsLoaded = true
   writeFails = false
-  skip = null
+  binary = { state: 'ready', version: '1.0.0', path: '/usr/local/bin/opencode' }
   providers = PROVIDERS
   models = MODELS
   modelsFailed = false
@@ -700,12 +709,24 @@ describe('RuntimePanel', () => {
       expect(screen.queryByText(/Switched to Medium/)).toBeNull()
     })
 
-    it('words the engine skip itself rather than completing configGenerator’s sentence', () => {
-      skip = { agentId: 'folder:a', code: 'no_model' as const }
+    it('gives the reserved line to a binary this machine could not get', () => {
+      // The one engine-level state left that a user can act on, and it takes
+      // the slot the shared config's skip list used to fill.
+      binary = { state: 'failed', error: 'Fix the engine path in Settings, or clear it.' }
       render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
-      expect(
-        screen.getByText('The engine skipped this agent because its runtime names no model.')
-      ).toBeTruthy()
+      expect(screen.getByText('Fix the engine path in Settings, or clear it.')).toBeTruthy()
+    })
+
+    it('says there is no engine before it says anything about a credential', () => {
+      // With no binary, "your default chat mode uses a switched-off credential"
+      // is a true sentence about something that would not help — and the Engine
+      // column is showing the failure in red at the same moment, so the line
+      // below it talking about a credential left that cell explained only by a
+      // hover title.
+      binary = { state: 'failed', error: 'Fix the engine path in Settings, or clear it.' }
+      render(<RuntimePanel agent={agent({ credential: 'Nonexistent' })} />)
+      expect(screen.getByText('Fix the engine path in Settings, or clear it.')).toBeTruthy()
+      expect(screen.queryByText(/no credential named/i)).toBeNull()
     })
 
     it('resolves a shared name to the same row the engine will, not the switched-off one', () => {
@@ -1063,11 +1084,29 @@ describe('RuntimePanel', () => {
       expect(screen.queryByText(/logged in/)).toBeNull()
     })
 
-    it('does not report the OpenCode engine to an agent that never starts it', () => {
-      // Reporting "Not running", with a Start button, beside an agent with no
-      // relationship to that process is a fact about something unrelated and an
-      // action that changes nothing for it (ux_rules rule 9).
+    it('names the opencode binary it found, and offers nothing to press', () => {
+      // The row reports a *file*, not a process: since phase 3 each agent
+      // spawns its own child per turn and the pool reaps it two minutes later,
+      // so "running" would be true for a couple of minutes after a message and
+      // false the rest of the time (ux_rules rules 2 and 12).
+      render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
+      expect(screen.getByText('opencode 1.0.0')).toBeTruthy()
+      expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
+    })
+
+    it('says what will happen rather than nothing, before anything has looked', () => {
+      binary = { state: 'unresolved' }
+      render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
+      expect(screen.getByText('On the first message')).toBeTruthy()
+    })
+
+    it('does not report the opencode binary to an agent that never runs on it', () => {
+      // A fact about something unrelated (ux_rules rule 9). It used to be worse
+      // than unrelated — the row reported the shared server's state and offered
+      // a Start button that changed nothing for this agent — and there is no
+      // button on either engine now.
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
+      expect(screen.queryByText(/opencode/)).toBeNull()
       expect(screen.queryByRole('button', { name: 'Start' })).toBeNull()
       expect(screen.getByText(/Claude Code 2\.1\.266/)).toBeTruthy()
     })

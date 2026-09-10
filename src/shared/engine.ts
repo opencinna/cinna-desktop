@@ -1,22 +1,21 @@
 /**
- * The wire contract for the **local engine** — the desktop-managed
- * `opencode serve` process that runs folder agents.
+ * The wire contract for the **local engine** — the `opencode` binary folder
+ * agents run on, and which engine each agent runs.
  *
  * Shared between main and renderer, so everything here is type-only or a plain
  * constant. The rule that shapes it is Invariant 4: **nothing key-shaped may be
- * in any of these types.** The engine is handed its credentials as environment
+ * in any of these types.** An engine is handed its credentials as environment
  * variables in the main process; what crosses to the renderer is which
- * credential a runtime *refers to* and whether the engine is up.
+ * credential a runtime *refers to*.
  *
- * The engine's own base URL and the per-run Basic-auth password stay in main
- * too. They are not secrets in the same sense — the port is loopback and the
- * password is regenerated on every start — but the renderer has no use for
- * either, and a base URL on the wire is an invitation for a component to fetch
- * the engine directly and route around the runner.
+ * Phase 3 of the agent runtime plan took the shared `opencode serve` away: an
+ * agent's turn spawns its own child and speaks the Agent Client Protocol to it
+ * over stdio. So there is no base URL, no loopback password and no server
+ * state here any more — only {@link EngineBinaryState}, which is about a file on
+ * disk rather than a process.
  */
 
 import type { ModelOrigin } from './runtimeDefaults'
-import type { EngineSkipCode } from './runtimeMessages'
 import type { WorkComplexity } from './modelFamilies'
 
 /**
@@ -33,63 +32,43 @@ import type { WorkComplexity } from './modelFamilies'
 export type EngineBinarySource = 'configured' | 'path' | 'managed'
 
 /** What the engine is doing right now. */
-export type EngineStatus =
-  /** Never started, or stopped cleanly. */
-  | 'stopped'
-  /** Resolving or downloading the binary. Can take a minute on first use. */
-  | 'installing'
-  /** Process spawned, health check not yet green. */
-  | 'starting'
-  /** Health check green. Turns can run. */
-  | 'running'
-  /** The last start failed, or the process died. {@link EngineState.error} says how. */
-  | 'failed'
-
 /**
- * The engine as the readiness strip and the Runtime card see it.
+ * Whether this machine has a usable `opencode`, and where it came from.
  *
- * No `baseUrl`, no password, no `pid`-adjacent handle a renderer could act on
- * — deliberately. `pid` itself is here because "the engine is running as
- * process 4711" is a diagnosis a user can act on and a number that grants
- * nothing.
+ * All that is left of "the engine" as state the UI shows. Before phase 3 of the
+ * agent runtime plan this was an `EngineState` about a **server** — stopped,
+ * installing, starting, running, failed, with a pid — because one
+ * `opencode serve` sat behind every folder agent. The ACP driver starts a child
+ * per agent and reaps it when it goes idle, so there is nothing for a user to
+ * start and nothing whose being up or down they can act on.
+ *
+ * What survives is the question that outlives every turn: is there a binary,
+ * where is it from, and if there is not, why. `resolving` is worth a state of
+ * its own because the answer can involve downloading and verifying 46 MB, and
+ * `failed` because a path the user typed in Settings is a thing only they can
+ * fix.
+ *
+ * No `baseUrl`, no password, no pid — deliberately, as before: nothing here is
+ * a handle a renderer could act on.
  */
-export interface EngineState {
-  status: EngineStatus
-  /** `opencode --version`, once a binary has been resolved. */
-  version: string | null
-  binarySource: EngineBinarySource | null
-  /** Absolute path of the resolved binary — shown in Settings, never fetched. */
-  binaryPath: string | null
-  pid: number | null
-  /** One sentence explaining a `failed` status. Never carries a secret. */
-  error: string | null
-  /** When the state last changed (epoch ms). */
-  changedAt: number
-}
+export type EngineBinaryState =
+  /** Nobody has looked yet. The first turn, or Settings' *Check again*, looks. */
+  | { state: 'unresolved' }
+  /** Looking now — which may be a download, once, of about a minute. */
+  | { state: 'resolving' }
+  | {
+      state: 'ready'
+      /** Absolute path — shown in Settings, never fetched. */
+      path: string
+      source: EngineBinarySource
+      /** `opencode --version`, or null when the probe failed but the file runs. */
+      version: string | null
+    }
+  /** One sentence explaining it. Never carries a secret. */
+  | { state: 'failed'; error: string }
 
-/**
- * What the last config generation refused to include, and why.
- *
- * A folder agent can be perfectly valid on disk and still be absent from the
- * engine — its credential is one the engine cannot use, or its runtime names no
- * model. Without this the only symptom is an agent that does nothing when
- * chatted with, which is indistinguishable from a bug in this app.
- *
- * Empty until a config has been generated, which is to say until the engine has
- * been started at least once.
- *
- * A **code**, not a phrase. It used to travel as the second half of a sentence
- * the agent page completed, which meant `configGenerator` — a module about
- * OpenCode's config shape — silently owned a line of user-facing copy on a
- * screen at its narrowest supported width, with no test asserting the result.
- * `describeEngineSkip` in `shared/runtimeMessages` now owns the words.
- */
-export interface EngineSkips {
-  agents: { agentId: string; code: EngineSkipCode }[]
-}
-
-/** Main → renderer push whenever {@link EngineState} changes. */
-export const ENGINE_STATE_CHANNEL = 'engine:state'
+/** Main → renderer push whenever {@link EngineBinaryState} changes. */
+export const ENGINE_BINARY_CHANNEL = 'engine:binary-state'
 
 /** The pinned engine version this build downloads when it must manage one. */
 export const PINNED_ENGINE_VERSION = '1.18.27'

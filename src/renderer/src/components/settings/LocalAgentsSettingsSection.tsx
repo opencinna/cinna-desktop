@@ -21,7 +21,7 @@ import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
 import { ManageRootAgentsDialog } from './ManageRootAgentsDialog'
 import { RootRepositoryDialog } from './RootRepositoryDialog'
-import { useEngineState, useStartEngine } from '../../hooks/useEngine'
+import { useEngineBinary, useResolveEngineBinary } from '../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgentsHomeStore } from '../../stores/agentsHome.store'
@@ -99,8 +99,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const rescan = useRescanLocalAgents()
   const refreshTools = useRefreshLocalTools()
   const openIn = useOpenIn()
-  const { data: engine } = useEngineState()
-  const startEngine = useStartEngine()
+  const { data: binary } = useEngineBinary()
+  const resolveBinary = useResolveEngineBinary()
   const { data: appSettings } = useAppSettings()
   const setAppSetting = useSetAppSetting()
   const { tool: defaultTool, launchable } = useDefaultTool()
@@ -130,15 +130,20 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   }, [savedEnginePath])
 
   /**
-   * A saved path only takes effect on the **next** start: the resolved binary
-   * is cached across starts, and the running process is the old one either way.
+   * A saved path is not what the row above is describing yet.
+   *
+   * The resolution is memoised per configured path, so a change takes effect
+   * the next time something asks — the next turn, or *Try again* — and until
+   * then the row still names the binary that was found for the old path.
    * Saying so beats leaving the user to wonder why the version line did not
-   * move.
+   * move. (Under the shared engine this also meant "the running process is
+   * still the old one"; there is no shared process now, and each agent's child
+   * is replaced on its next turn because the path feeds the launch spec's key.)
    */
   const enginePathPending =
-    savedEnginePath !== (engine?.binaryPath ?? '') &&
     savedEnginePath !== '' &&
-    engine?.status === 'running'
+    binary?.state === 'ready' &&
+    savedEnginePath !== binary.path
 
   const commitEnginePath = (): void => {
     const next = enginePath.trim()
@@ -189,7 +194,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const pinnedMissing = pinnedId !== '' && pinnedCredential === null
 
   /**
-   * Not running is **neutral**, not a warning.
+   * Not resolved yet is **neutral**, not a warning.
    *
    * `localDeps.ensureEngineRunning` (`src/main/agents/drivers/index.ts`)
    * starts the engine at the top of a local turn, so a machine that has simply
@@ -199,24 +204,37 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
    * teaches the user to skip the triangle for `failed`, which is the one that
    * does need them (ux_rules rules 2 and 12).
    */
+  /**
+   * **Muted for a binary that is merely not resolved yet.**
+   *
+   * The rule this keeps is the one the old row learned: a machine that has
+   * simply not looked yet is in a state that resolves itself the moment anyone
+   * chats with a folder agent, and greeting every visit with an amber triangle
+   * over a state nobody has to act on is the healthy state wearing an alarm —
+   * which teaches the user to skip the triangle for the one that does need them
+   * (ux_rules rules 2 and 12).
+   *
+   * What changed under it is what "ok" means. There is no shared engine to be
+   * running any more: phase 3 of the agent runtime plan gave each folder agent
+   * its own child process, spawned per turn and reaped when idle, so the only
+   * lasting fact is whether this machine has a binary and where it came from.
+   */
   const engineTone: 'ok' | 'warning' | 'neutral' =
-    engine?.status === 'running' ? 'ok' : engine?.status === 'failed' ? 'warning' : 'neutral'
+    binary?.state === 'ready' ? 'ok' : binary?.state === 'failed' ? 'warning' : 'neutral'
   const engineDetail =
-    engine?.status === 'running'
-      ? `Running${engine.version ? ` — opencode ${engine.version}` : ''}${
-          engine.binarySource === 'path'
+    binary?.state === 'ready'
+      ? `Ready — opencode ${binary.version ?? 'installed'}${
+          binary.source === 'path'
             ? ', your own installation'
-            : engine.binarySource === 'configured'
+            : binary.source === 'configured'
               ? ', the path set under Engine path below'
               : ', downloaded by Cinna'
         }.`
-      : engine?.status === 'installing'
+      : binary?.state === 'resolving'
         ? 'Downloading the engine. This happens once and takes about a minute.'
-        : engine?.status === 'starting'
-          ? 'Starting…'
-          : engine?.status === 'failed'
-            ? (engine.error ?? 'The engine could not start.')
-            : 'Not running — chatting with a folder agent starts it. Cinna uses an opencode on your PATH if you have one, and downloads a verified copy if you do not.'
+        : binary?.state === 'failed'
+          ? binary.error
+          : 'Not resolved yet — chatting with a folder agent resolves it. Cinna uses an opencode on your PATH if you have one, and downloads a verified copy if you do not.'
 
   const forgettingRoot = roots.find((root) => root.id === forgetting) ?? null
   const managingRoot = roots.find((root) => root.id === managing) ?? null
@@ -501,37 +519,118 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       <SettingsSection title="Engine Settings">
         <SettingsCard>
           {/*
-            An indicator, not a control.
-            `localDeps.ensureEngineRunning` starts the engine at the top of
-            every local turn, so Start was a button for doing by hand what
-            chatting with a folder agent does anyway — and Stop was a way to
-            switch off something the next message switches back on. What the
-            user needs from this row is whether the engine is up and which
-            binary it is; that is what is left.
+            An indicator, and one control that only appears when it resolves
+            something.
+
+            There is nothing to start: since phase 3 of the agent runtime plan
+            each folder agent spawns its own child per turn and the pool reaps it
+            when it goes idle, so the row reports a **binary** — is there one,
+            and where from. Start and Stop were buttons for doing by hand what
+            chatting does anyway, and for switching off something the next
+            message switched back on; what is left is *Try again*, on the one
+            state that does not resolve itself.
           */}
           <SettingsStatusRow
             tone={engineTone}
             label="Local engine"
-            detail={engineDetail}
+            /*
+              **Two lines, always.** The detail is one line when a binary is
+              ready and two when there is none, which moved every card below
+              this one by 21.1px the moment *Try again* succeeded — measured:
+              the row goes 65.375px → 44.25px and "Default AI credential" rises
+              from y=485.9 to y=464.8 (ux_rules rule 1). Reserved here rather
+              than in `SettingsStatusRow`, because the other rows that use it do
+              not vary this way and a blank line under them would be a gap
+              nobody asked for. Every state's sentence fits two lines at the
+              800px minimum; the resolver's own failures were reworded remedy-
+              first for the panel, which shortened them here too.
+            */
+            detail={<span className="block min-h-[2.625rem]">{engineDetail}</span>}
             action={
               /*
-                Only on `failed`. Not running resolves itself — the next turn
-                calls `ensureEngineRunning` — but a start that failed does not,
-                and removing the Start button took the retry with it, leaving an
-                amber row with nothing to press (ux_rules rule 12: give the
-                status row the control that resolves it).
+                On `failed`, **and for as long as the retry runs**. An unresolved
+                binary resolves itself — the next turn asks for one — but a
+                resolution that failed does not, and a row with nothing to press
+                is exactly what ux_rules rule 12 is about: give the status row
+                the control that resolves it. There is no Start here and never
+                was; what this retries is the *resolution*, which is what the
+                old Try again did too, one indirection down.
+
+                `|| isPending` is not belt and braces. Pressing the button moves
+                the state to `resolving`, so a condition that named only
+                `failed` **unmounted the control on click** — the user pressed
+                it, it vanished, and for up to a minute of downloading the only
+                feedback was a line of text changing (rule 1). The disabled
+                `Looking…` was unreachable for the same reason: it can only
+                render in a state where its own parent no longer does.
               */
-              engine?.status === 'failed' ? (
+              binary?.state === 'failed' || resolveBinary.isPending ? (
                 <SettingsButton
-                  onClick={() => startEngine.mutate()}
-                  disabled={startEngine.isPending}
+                  onClick={() => resolveBinary.mutate()}
+                  disabled={resolveBinary.isPending}
                 >
-                  {startEngine.isPending ? 'Starting…' : 'Try again'}
+                  {resolveBinary.isPending ? 'Looking…' : 'Try again'}
                 </SettingsButton>
               ) : undefined
             }
           />
         </SettingsCard>
+
+        <SettingsCard>
+          <SettingsLabel htmlFor="local-agents-engine-path">Engine path</SettingsLabel>
+          {/*
+            **Directly under the row that reports on it.** The status row's
+            failure names this field, and it used to sit two cards below with
+            "Default AI credential" wedged between — a message pointing at a
+            control the user has to go and find (ux_rules rule 12). The
+            credential card follows, because it is about which key an agent
+            spends rather than about the engine.
+
+            The hint sits above the field, and every message the field can
+            produce sits below it in a slot that is always there: a save error
+            or the pending note used to appear under the input and push the next
+            card down as the user typed (rule 1).
+          */}
+          <SettingsHint className="mt-0.5 mb-2">
+            Point Cinna at a specific <code className="font-mono">opencode</code> executable. An
+            absolute path, and it overrides both your PATH and the copy Cinna downloads. Leave it
+            empty for the normal behaviour. Whether the file exists is checked the next time an
+            agent runs — or when you press Try again above — not here.
+          </SettingsHint>
+          <input
+            id="local-agents-engine-path"
+            type="text"
+            value={enginePath}
+            spellCheck={false}
+            /* Just the path. The "leave empty" half is in the hint above, and at
+               the 800px minimum window the full sentence measured 462px in a
+               399px box — it fit at the old 11px and does not at 13px, so the
+               instruction was the half that got cut (ux_rules rule 7). */
+            placeholder="/usr/local/bin/opencode"
+            onChange={(event) => setEnginePath(event.target.value)}
+            onBlur={commitEnginePath}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') event.currentTarget.blur()
+              if (event.key === 'Escape') {
+                setEnginePath(savedEnginePath)
+                setEnginePathError(null)
+                event.currentTarget.blur()
+              }
+            }}
+            className={`${settingsInputClass} font-mono`}
+          />
+          <div className="mt-1.5 min-h-[1.125rem]">
+            {enginePathError ? (
+              <p className="text-[13px] text-[var(--color-danger)]">{enginePathError}</p>
+            ) : enginePathPending ? (
+              <p className="text-[13px] text-[var(--color-warning)]">
+                Cinna will use this path the next time an agent runs. The row above still names the
+                binary it found for the old one.
+              </p>
+            ) : null}
+          </div>
+        </SettingsCard>
+      </SettingsSection>
 
         <SettingsCard>
           <SettingsLabel htmlFor="local-agents-default-credential">
@@ -622,56 +721,6 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             ) : null}
           </div>
         </SettingsCard>
-
-        <SettingsCard>
-          <SettingsLabel htmlFor="local-agents-engine-path">Engine path</SettingsLabel>
-          {/*
-            The hint sits above the field, and every message the field can
-            produce sits below it in a slot that is always there: a save error
-            or the restart note used to appear under the input and push the
-            Developer tools card down as the user typed (ux_rules rule 1).
-          */}
-          <SettingsHint className="mt-0.5 mb-2">
-            Point Cinna at a specific <code className="font-mono">opencode</code> executable. An
-            absolute path, and it overrides both your PATH and the copy Cinna downloads. Leave it
-            empty for the normal behaviour. Whether the file exists is checked when the engine
-            starts, not here.
-          </SettingsHint>
-          <input
-            id="local-agents-engine-path"
-            type="text"
-            value={enginePath}
-            spellCheck={false}
-            /* Just the path. The "leave empty" half is in the hint above, and at
-               the 800px minimum window the full sentence measured 462px in a
-               399px box — it fit at the old 11px and does not at 13px, so the
-               instruction was the half that got cut (ux_rules rule 7). */
-            placeholder="/usr/local/bin/opencode"
-            onChange={(event) => setEnginePath(event.target.value)}
-            onBlur={commitEnginePath}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur()
-              if (event.key === 'Escape') {
-                setEnginePath(savedEnginePath)
-                setEnginePathError(null)
-                event.currentTarget.blur()
-              }
-            }}
-            className={`${settingsInputClass} font-mono`}
-          />
-          <div className="mt-1.5 min-h-[1.125rem]">
-            {enginePathError ? (
-              <p className="text-[13px] text-[var(--color-danger)]">{enginePathError}</p>
-            ) : enginePathPending ? (
-              <p className="text-[13px] text-[var(--color-warning)]">
-                The engine is still running the previous binary. It will use this path the next time
-                it starts.
-              </p>
-            ) : null}
-          </div>
-        </SettingsCard>
-      </SettingsSection>
-
       <SettingsSection
         title="Developer Tools"
         action={

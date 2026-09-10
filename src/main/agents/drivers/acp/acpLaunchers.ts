@@ -52,7 +52,7 @@
  * prompt, is the only thing that makes the desktop's approval setting true.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { InitializeRequest, McpServer, NewSessionRequest } from '@agentclientprotocol/sdk'
@@ -249,7 +249,14 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       const configPath = join(dir, 'opencode.json')
       try {
         mkdirSync(dir, { recursive: true })
-        writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+        // **Written to a temp file and renamed**, as the shared server's own
+        // writer did: the engine reads this file at start, and a process that
+        // died halfway through a plain write would leave a truncated config for
+        // the next turn to spawn an agent on. The rename is atomic within the
+        // directory, so a reader sees either the old file or the whole new one.
+        const temp = `${configPath}.tmp`
+        writeFileSync(temp, `${JSON.stringify(config, null, 2)}\n`, 'utf8')
+        renameSync(temp, configPath)
       } catch (err) {
         logger.warn('could not write an ACP agent’s engine config', {
           agentId: ctx.agentId,

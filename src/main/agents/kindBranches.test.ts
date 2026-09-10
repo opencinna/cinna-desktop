@@ -83,10 +83,19 @@ const LIMITS: Record<Category, number> = {
   // The count also includes `source === FOLDER_AGENT_SOURCE`, counted since
   // phase 2: previously unseen, not new.
   source: 4,
-  // The runtime editor, the Permissions card and the OpenCode config
-  // generator; phase 3 rewrites all of them when the engine becomes ACP
-  // `driverConfig`.
-  engine: 5,
+  // **Zero, and the four reads that remain are pinned in `OWNERSHIP`.**
+  //
+  // Phase 3 owned this target and paid it: the config source no longer filters
+  // by engine (the launcher is asked about one agent it was chosen for), and
+  // the shared engine's own state — a row that said Running and offered Start —
+  // went with the server. What is left is not behaviour dispatched on kind. It
+  // is the *manifest's* `runtime.engine`, read by the two places that own that
+  // field (the service that resolves and validates it, the panel that edits it)
+  // and by the one card whose control exists only on one engine. Those are
+  // pinned per file below, for the same reason sync's `source` reads are:
+  // pretending they can be answered by `capabilities()` would mean hiding what
+  // a file says from the code whose job is that file.
+  engine: 0,
   // Phase 2: the `bare` prompt branch moved with the Claude wiring into
   // `agents/drivers/index.ts`.
   kind: 42,
@@ -95,7 +104,7 @@ const LIMITS: Record<Category, number> = {
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
-const LIMIT = 83
+const LIMIT = 78
 
 /**
  * Files where branching on kind is the job, not a leak. Still counted and
@@ -128,6 +137,24 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  {
+    file: 'src/main/services/localAgents/runtimeService.ts',
+    category: 'engine',
+    count: 2,
+    why: "the manifest's own `runtime.engine`, read by the service that resolves it (a Claude runtime has no credential ladder) and refused by the one that validates it (an engine and a credential together)"
+  },
+  {
+    file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx',
+    category: 'engine',
+    count: 1,
+    why: 'the editor for that field: the panel offering the choice has to name the values it writes'
+  },
+  {
+    file: 'src/renderer/src/components/agents/local/PermissionsCard.tsx',
+    category: 'engine',
+    count: 1,
+    why: 'the approvals control exists on one engine only, and the card reads the folder it edits rather than a capability the local-agent DTO does not carry'
+  },
   {
     file: 'src/main/services/agentService.ts',
     category: 'source',

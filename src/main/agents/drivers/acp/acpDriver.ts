@@ -374,7 +374,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    */
   const askAgentToStop = (): void => {
     turn.open = false
-    turn.stopping = true
+    // **Only the user's Stop, not the ceiling.** The ceiling shares this
+    // function, and a park it releases genuinely *was* never answered in time —
+    // which is what the expiry wording says. Claiming the user stopped a turn
+    // they left running for twenty minutes is the same kind of wrong this note
+    // exists to avoid.
+    if (!hitCeiling) turn.stopping = true
     for (const [, cancel] of turn.parked) cancel()
     turn.parked.clear()
     if (sessionId) void connection?.cancel(sessionId).catch(() => {})
@@ -491,6 +496,20 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       unbind = connection.bindSession(sessionId, handlers)
     }
 
+    /**
+     * **The baseline is dropped here, before anything is set.**
+     *
+     * A session reports the mode it *starts* in — `session/new` answers with it,
+     * and a loaded session comes back in whatever it was left in — and comparing
+     * that against the mode we are about to ask for would put the fallback
+     * notice on every single turn: asked for `auto`, told `default` by a
+     * notification that predates the request. Measured exactly that way. Only a
+     * mode reported from the setup onwards is evidence about the setup, and the
+     * reset is before the call rather than after it because the acknowledging
+     * notification can race its own response.
+     */
+    reportedMode = null
+
     try {
       await applySetup(connection, sessionId, plan)
     } catch (err) {
@@ -511,7 +530,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // Through `finish`, so the session this turn *did* create is recorded.
       // A bare failure leaves it behind engine-side and mints another on every
       // retry, and the chat never gets a `contextId` to continue from.
-      return finish(deps, ctx, accumulator, sessionId, `This agent could not be set up for the turn: ${message}`)
+      return finish(
+        deps,
+        ctx,
+        accumulator,
+        sessionId,
+        'This agent could not be set up for the turn.',
+        message
+      )
     }
 
     // **Checked again here.** Everything since the first check awaited — a
@@ -972,7 +998,9 @@ function finish(
   ctx: TurnContext,
   accumulator: StreamPartsAccumulator,
   sessionId: string | null,
-  error: string | undefined
+  error: string | undefined,
+  /** The underlying detail, when the sentence above is not it. Kept apart, as `fail` keeps them. */
+  raw?: string
 ): RunAgentTurnResult {
   if (sessionId) {
     try {
@@ -999,7 +1027,7 @@ function finish(
     parts,
     notices: accumulator.snapshotNotices(),
     ...(sessionId ? { contextId: sessionId } : {}),
-    ...(error ? { error: { message: error, raw: error } } : {})
+    ...(error ? { error: { message: error, raw: raw ?? error } } : {})
   }
 }
 

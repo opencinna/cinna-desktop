@@ -406,6 +406,38 @@ describe('createAcpProcessPool', () => {
     expect(seen).toEqual(['a:starting', 'a:running'])
   })
 
+  it('kills a running process before it yields, because nobody awaits shutdown', async () => {
+    // Electron does not await a `will-quit` handler, so **anything `shutdown`
+    // does after its first await may simply not happen** — and that makes the
+    // ordering inside it a property worth pinning rather than a style. A start
+    // in flight has nothing to kill yet and has to be waited out; a process
+    // that is already running does not, and must not end up behind that wait.
+    //
+    // This holds today whichever way the two passes are written, because
+    // `stopNow` reaches `killTree` before its own first await. What it guards
+    // is the edit that puts an await in front of the kill.
+    const running = stubConnection(1)
+    let stuck = false
+    const { pool } = poolWith([running], {
+      start: (async (spec) => {
+        if (spec.key === 'never') {
+          stuck = true
+          return new Promise<never>(() => {})
+        }
+        return running
+      }) as unknown as StartAcpConnection
+    })
+
+    await pool.acquire('a', spec('k1'), INIT)
+    void pool.acquire('b', spec('never'), INIT)
+    expect(stuck).toBe(true)
+
+    // No await between the call and the assertion: the kill has to have already
+    // happened by the time `shutdown` first yields.
+    void pool.shutdown()
+    expect(running.disposals).toBe(1)
+  })
+
   it('leaves nothing running after shutdown', async () => {
     const [one, two] = [stubConnection(1), stubConnection(2)]
     const { pool } = poolWith([one, two])

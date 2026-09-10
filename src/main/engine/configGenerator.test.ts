@@ -1,22 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync
-} from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { describe, it, expect, vi } from 'vitest'
 import {
   buildEngineConfig,
   CONVERSATION_PERMISSIONS,
   credentialEnvName,
   engineAgentKey,
-  writeEngineConfig,
   type EngineConfigInput
 } from './configGenerator'
 
@@ -725,131 +712,5 @@ describe('buildEngineConfig', () => {
 
   it('does not let two provider ids that sanitise alike share an env name', () => {
     expect(credentialEnvName('a-b')).not.toBe(credentialEnvName('a_b'))
-  })
-})
-
-describe('writeEngineConfig', () => {
-  let dir: string
-
-  beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), 'cinna-engine-config-'))
-  })
-
-  afterEach(() => {
-    rmSync(dir, { recursive: true, force: true })
-  })
-
-  it('writes the config and one prompt file per agent', () => {
-    const built = buildEngineConfig(input())
-    const written = writeEngineConfig(dir, built)
-    expect(written.changed).toBe(true)
-    const key = built.agentKeys.get('folder:11111111-1111-1111-1111-111111111111') as string
-    expect(readFileSync(join(dir, 'prompts', `${key}.md`), 'utf8')).toContain('invoice agent')
-    expect(readFileSync(written.configPath, 'utf8')).not.toContain(ANTHROPIC_KEY)
-  })
-
-  it('reports no change when nothing moved', () => {
-    writeEngineConfig(dir, buildEngineConfig(input()))
-    expect(writeEngineConfig(dir, buildEngineConfig(input())).changed).toBe(false)
-  })
-
-  it('reports a change when only a prompt was reworded', () => {
-    writeEngineConfig(dir, buildEngineConfig(input()))
-    const reworded = buildEngineConfig(
-      input({ agents: [{ ...input().agents[0], prompt: 'Completely different instructions.' }] })
-    )
-    // The config JSON is byte-identical here — same model, same file reference
-    // — so a `changed` computed from the config alone would answer false and a
-    // rewritten WORKFLOW_PROMPT.md would never reach a running engine.
-    expect(writeEngineConfig(dir, reworded).changed).toBe(true)
-  })
-
-  it('removes the prompt file of an agent that is no longer there', () => {
-    const built = writeEngineConfig(dir, buildEngineConfig(input()))
-    const key = [...built.prompts.keys()][0]
-    expect(existsSync(join(dir, 'prompts', `${key}.md`))).toBe(true)
-
-    // The agent is deleted. Its generated prompt is this app's own copy of the
-    // user's folder content — their workflow prompt, their knowledge topics —
-    // and deleting the agent is the user asking for it to go.
-    const after = writeEngineConfig(dir, buildEngineConfig(input({ agents: [] })))
-    expect(existsSync(join(dir, 'prompts', `${key}.md`))).toBe(false)
-    expect(after.changed).toBe(true)
-  })
-
-  it('keeps the prompts of agents that are still there, and anything that is not a prompt', () => {
-    // The delete has to be narrow: it runs in a directory this app owns, but a
-    // rule of "remove what I did not just write" that reached one level wider
-    // would be reaching into the user's own files.
-    writeEngineConfig(dir, buildEngineConfig(input()))
-    writeFileSync(join(dir, 'prompts', 'notes.txt'), 'not ours')
-    mkdirSync(join(dir, 'prompts', 'a-directory'), { recursive: true })
-
-    const built = writeEngineConfig(dir, buildEngineConfig(input()))
-    const key = [...built.prompts.keys()][0]
-    expect(existsSync(join(dir, 'prompts', `${key}.md`))).toBe(true)
-    expect(existsSync(join(dir, 'prompts', 'notes.txt'))).toBe(true)
-    expect(existsSync(join(dir, 'prompts', 'a-directory'))).toBe(true)
-    // Nothing moved, so nothing restarts.
-    expect(built.changed).toBe(false)
-  })
-
-  it('cleans up its temp file and fails loudly when the rename cannot happen', () => {
-    // The failure branch of the atomic write, which nothing reached before.
-    // Making the destination a non-empty **directory** is the one way to make
-    // `renameSync` fail without mocking `fs`: the temp file writes fine and the
-    // rename is refused, which is exactly the shape of a real failure (a full
-    // disk, a permissions change) arriving at the same point.
-    const configPath = join(dir, 'opencode.json')
-    mkdirSync(configPath, { recursive: true })
-    writeFileSync(join(configPath, 'occupied'), 'x')
-
-    expect(() => writeEngineConfig(dir, buildEngineConfig(input()))).toThrow()
-
-    // Two things, and the second is the one that matters. A write that throws
-    // must not leave a `.tmp` behind — the directory is scanned by nothing
-    // today, but a half-written config accumulating next to the real one is how
-    // a later "clean up stale files" change deletes the wrong thing. And the
-    // error must propagate: swallowing it would report a config as written
-    // while the engine loads the previous one forever.
-    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
-    expect(existsSync(configPath)).toBe(true)
-  })
-
-  it('replaces the config file rather than writing through it', () => {
-    // The property that makes the temp-and-rename worth having, expressed as
-    // something a test can actually observe: the existing file is *replaced*,
-    // never opened for writing. A read-only config proves it — `renameSync`
-    // succeeds because the permission that matters is the directory's, while a
-    // direct `writeFileSync` to the same path fails with EACCES.
-    //
-    // This is the closest reachable proxy for atomicity. It rules out the
-    // write-through implementation, which is the one that can leave a
-    // half-written config on disk for the engine to load.
-    const written = writeEngineConfig(dir, buildEngineConfig(input()))
-    chmodSync(written.configPath, 0o444)
-
-    const reworded = buildEngineConfig(
-      input({ agents: [{ ...input().agents[0], slug: 'renamed' }] })
-    )
-    expect(() => writeEngineConfig(dir, reworded)).not.toThrow()
-    expect(readFileSync(written.configPath, 'utf8')).toContain('renamed')
-
-    chmodSync(written.configPath, 0o600)
-  })
-
-  /**
-   * Known gap, narrowed rather than removed: what is still untested is the
-   * *interrupted* case — a writer killed between `writeFileSync` and
-   * `renameSync` must leave the previous config intact. The error branch above
-   * covers a rename that refuses; a process that dies mid-write needs a crash,
-   * not a mock. The property is why the temp-and-rename exists at all, so it is
-   * worth knowing it rests on `renameSync` being atomic on the platform rather
-   * than on anything this suite proves.
-   */
-  it('reports a change when the file on disk was edited by hand', () => {
-    const written = writeEngineConfig(dir, buildEngineConfig(input()))
-    writeFileSync(written.configPath, '{"tampered":true}\n')
-    expect(writeEngineConfig(dir, buildEngineConfig(input())).changed).toBe(true)
   })
 })

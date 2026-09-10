@@ -269,16 +269,47 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
       return () => listeners.delete(listener)
     },
     shutdown: async () => {
-      // Quit is the one caller that may not leave anything behind, so a start
-      // in flight is waited out rather than abandoned: a process that finishes
-      // starting after the app is gone is an orphan holding a session open.
-      const stopping = [...entries.entries()].map(async ([agentId, entry]) => {
+      /**
+       * **Every live process is killed before the first await, and the reason is
+       * that nobody awaits this.**
+       *
+       * The one caller is Electron's `will-quit`, which does not await its
+       * handlers — so anything this function does *after* yielding may simply
+       * not happen. A single pass that waited on each in-flight start before
+       * killing anything therefore left every already-running agent alive too:
+       * the loop yielded on the first entry and the app was gone.
+       *
+       * So the running ones go first, synchronously: `dispose()` reaches
+       * `killTree` before its own first await, which is what makes an unawaited
+       * call enough for them.
+       */
+      const running = [...entries.entries()].filter(([, entry]) => entry.conn !== undefined)
+      const disposed = running.map(([agentId, entry]) => {
         entry.holds = 0
         entry.retireOnRelease = true
-        if (entry.starting) await entry.starting.catch(() => undefined)
-        await stopNow(agentId, entry, 'shutdown')
+        return stopNow(agentId, entry, 'shutdown')
       })
-      await Promise.all(stopping)
+
+      /**
+       * Then the starts in flight, which cannot be killed because there is
+       * nothing to kill yet.
+       *
+       * A process that finishes starting after the app is gone is an orphan
+       * holding a session open, so they are waited out — and this half is the
+       * one an unawaited `will-quit` can lose. It is a ~1 s window per agent,
+       * and the alternative (refusing to start a process while quitting) needs a
+       * quitting flag the pool does not have; noted rather than papered over.
+       */
+      const starting = [...entries.entries()]
+        .filter(([, entry]) => entry.starting !== undefined)
+        .map(async ([agentId, entry]) => {
+          entry.holds = 0
+          entry.retireOnRelease = true
+          await entry.starting?.catch(() => undefined)
+          await stopNow(agentId, entry, 'shutdown')
+        })
+
+      await Promise.all([...disposed, ...starting])
     }
   }
 }

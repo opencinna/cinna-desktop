@@ -89,11 +89,11 @@ vi.mock('../services/a2aStreamingService', () => ({
 }))
 
 // The driver `driverFor` hands back: real capabilities (pure), a recorded run.
-// Pulling in the real drivers — engineManager, turnLock, the event bus — is
-// unnecessary here.
+// Pulling in the real drivers — the ACP process pool, the turn lock, the binary
+// resolver — would be a child process and a database for a test about dispatch.
 const driverRun = vi.fn(async () => ({ text: '', parts: [], notices: [] }))
 const driverFor = vi.fn(() => ({
-  id: 'opencode',
+  id: 'acp',
   capabilities: (row: AgentRow) => capabilitiesFor(row),
   run: driverRun,
   readiness: vi.fn(),

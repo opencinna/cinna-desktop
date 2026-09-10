@@ -124,13 +124,14 @@ test.describe('with the engine', () => {
     await cinna.relaunch()
     await cinna.skipOnboarding()
 
-    await test.step('the engine resolves the managed binary and admits the agent', async () => {
-      const state = await cinna.page.evaluate(() => window.api.engine.start())
-      expect(state.error).toBeNull()
-      expect(state.status).toBe('running')
-      expect(state.binarySource).toBe('managed')
-      const skips = await cinna.page.evaluate(() => window.api.engine.skips())
-      expect(skips.agents.filter((s) => s.agentId === agent.id)).toEqual([])
+    await test.step('the engine resolves the managed binary', async () => {
+      // The binary, and only the binary: since phase 3 there is no server to be
+      // running and no shared config to admit an agent to. Whether *this* agent
+      // can run is decided by its own launcher at the top of its own turn — and
+      // the turn two steps below is what proves it.
+      const state = await cinna.page.evaluate(() => window.api.engine.resolve())
+      expect(state.state).toBe('ready')
+      if (state.state === 'ready') expect(state.source).toBe('managed')
     })
 
     await test.step('a plain model chat first', async () => {

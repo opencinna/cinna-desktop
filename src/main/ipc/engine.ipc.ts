@@ -1,61 +1,47 @@
 import { userActivation } from '../auth/activation'
-import { getSettingsScopeUserId } from '../auth/scope'
-import { engineManager, registerEngineShutdown } from '../engine/engineManager'
+import { engineBinaryService } from '../engine/engineBinaryService'
 import { getMainWindow } from '../index'
 import { ipcHandle } from './_wrap'
-import { ENGINE_STATE_CHANNEL, type EngineSkips, type EngineState } from '../../shared/engine'
+import { ENGINE_BINARY_CHANNEL, type EngineBinaryState } from '../../shared/engine'
 
 /**
- * The local engine: its state, and starting or stopping it.
+ * The local engine's **binary**: whether this machine has one, and asking again.
  *
- * Thin controllers. Three things are deliberately **not** here:
+ * Two channels where there were four. Phase 3 of the agent runtime plan took the
+ * shared `opencode serve` away — an agent's turn spawns its own child and speaks
+ * ACP to it — so `engine:start` and `engine:stop` stopped meaning anything:
+ * there is no server for a user to run, and the per-agent processes come and go
+ * on their own between turns. `engine:skips` went with the shared config it
+ * described.
  *
- * - **No channel returns the engine's base URL or its auth password.** They stay
- *   inside `engineManager`, so a component cannot be written that talks to the
- *   engine directly and routes around the turn runner Phase 6 owns.
- * - **`:start` does not throw on failure.** A failed start is a state the
- *   readiness strip renders, and an `ipcMain.handle` rejection would drop the
+ * What is left is a file on disk, and the same three rules the old module had:
+ *
+ * - **No channel returns a path a renderer could execute or fetch.** It returns
+ *   the resolved path as *text* for Settings to show, which is what it always
+ *   did; nothing here hands over a handle.
+ * - **`:resolve` does not throw on failure.** A failed resolution is a state
+ *   Settings renders, and an `ipcMain.handle` rejection would drop the
  *   failure's code anyway (see `_wrap.ts`) — so the state, error sentence
  *   included, is the return value.
- * - **Nothing starts the engine at app boot.** The first start can mean a 50 MB
- *   download, and a user who never opens the Agents tab should never pay for
- *   it. Starting is an explicit act: Settings, or the first turn (Phase 6).
+ * - **Nothing resolves at app boot.** The first resolution can mean a 46 MB
+ *   download, and a user who never chats with a folder agent should never pay
+ *   for it. It happens at the top of a turn, or when the user asks here.
  */
 export function registerEngineHandlers(): void {
-  registerEngineShutdown()
-
   // One subscription for the app's lifetime, forwarding transitions to whatever
-  // window is open. Registered here rather than in `engineManager` so the
-  // manager keeps no Electron dependency beyond `app`.
-  engineManager.onStateChange((next) => {
-    getMainWindow()?.webContents.send(ENGINE_STATE_CHANNEL, next)
+  // window is open. Registered here rather than in the service so the service
+  // keeps no Electron dependency at all.
+  engineBinaryService.onChange((next) => {
+    getMainWindow()?.webContents.send(ENGINE_BINARY_CHANNEL, next)
   })
 
-  ipcHandle('engine:status', (): EngineState => {
+  ipcHandle('engine:binary', (): EngineBinaryState => {
     userActivation.requireActivated()
-    return engineManager.getState()
+    return engineBinaryService.state()
   })
 
-  ipcHandle('engine:start', (): Promise<EngineState> => {
+  ipcHandle('engine:resolve', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
-    return engineManager.ensureRunning(getSettingsScopeUserId())
-  })
-
-  /**
-   * Which folder agents the running config left out, and why.
-   *
-   * Read on demand rather than pushed: it only ever changes when the config is
-   * regenerated, and every regeneration moves the engine state, which the
-   * renderer is already subscribed to.
-   */
-  ipcHandle('engine:skips', (): EngineSkips => {
-    userActivation.requireActivated()
-    return engineManager.lastSkips()
-  })
-
-  ipcHandle('engine:stop', async (): Promise<EngineState> => {
-    userActivation.requireActivated()
-    await engineManager.stop()
-    return engineManager.getState()
+    return engineBinaryService.refresh()
   })
 }

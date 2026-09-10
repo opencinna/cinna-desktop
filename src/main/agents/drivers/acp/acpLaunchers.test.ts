@@ -11,7 +11,7 @@
  * client sets a mode before the first prompt.
  */
 
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -118,6 +118,20 @@ describe('the OpenCode launcher', () => {
     // …and the key does reach the process, under the name the config referenced.
     const named = Object.entries(p.spec.env).find(([, value]) => value === API_KEY)
     expect(named?.[0]).toMatch(/^CINNA_ENGINE_KEY_/)
+  })
+
+  it('leaves no temp file behind, so the engine only ever reads a whole config', async () => {
+    // The engine reads this file at start. A write interrupted halfway would
+    // leave a truncated config for the next turn to spawn an agent on, which is
+    // why it is a temp file and a rename — the same thing the shared server's
+    // own writer did.
+    const p = plan(await launcher().plan(CTX))
+    const dir = p.spec.env.OPENCODE_CONFIG_DIR
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    // …and a second plan overwrites it without leaving one either.
+    plan(await launcher().plan(CTX))
+    expect(readdirSync(dir).filter((name) => name.endsWith('.tmp'))).toEqual([])
+    expect(readdirSync(dir)).toEqual(['opencode.json'])
   })
 
   it('states the model in the config and again on the session', async () => {
