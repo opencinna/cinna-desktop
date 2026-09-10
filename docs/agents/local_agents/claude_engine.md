@@ -1,6 +1,6 @@
 # The Claude Engine — a folder agent on the user's own Claude Code
 
-> **What the SDK and the binary actually do is recorded in [The Claude Engine Contract](claude_contract.md).** That document is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Five of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it; a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; and read-only tools never reach the permission callback at all. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
+> **What the SDK and the binary actually do is recorded in [The Claude Engine Contract](claude_contract.md).** That document is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Seven of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents`; a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; and a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
 
 ## Purpose
 
@@ -40,6 +40,9 @@ Both were live hazards and the second is the one that actually bit. The child en
 - **Engine credential** — for `engine: 'claude'` there is not one. The runtime carries an engine and a tier, and no credential row and no API key at all
 - **Model alias** — `haiku` / `sonnet` / `opus`, which is how a plan is addressed. Not a catalogue id, because on this path there is no credential and therefore no catalogue to hold one
 - **Translator** — the fold from the SDK's message stream into the A2A-shaped message every consumer downstream of the runner already reads. The only substantial new code in the feature
+- **Background task** — work the CLI runs after the model has ended its own turn: a subagent launched with `run_in_background`, a long shell command. The CLI reports the **live set** as a level signal; the model's `result` does not wait for it
+- **Holding task** — a background task whose completion the desktop's turn waits for. A subagent holds; a background shell does not (it can run for the life of the session). The distinction is the CLI's own idle rule, not the desktop's
+- **Folder subagent** — a `.claude/agents/*.md` definition inside the agent's folder, which a terminal `claude` would offer to the model as a `subagent_type`. The desktop reads the file and hands the SDK the fields that *describe* a subagent, never the ones that would move a permission decision
 
 ## User Stories / Flows
 
@@ -58,6 +61,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
 5. The SDK is asked for a turn in the agent's folder, with the folder's assembled system prompt, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
+7. When the agent hands work to a subagent in the background and answers "I'll report back", the turn **does not end there**. A notice — *"Waiting for background work to finish: …"*, naming the task — appears under the answer, the subagent's tool calls and permission asks keep arriving in the same turn, and when it finishes the agent's own follow-up report streams in and ends the turn. Live, that notice sits between the two pieces of answer text; after a reload it is above the assistant row with every other notice, because notices are persisted as their own rows before the message they belong to
 
 ### Being asked for permission
 1. Mid-turn the agent wants to write a file, run a command, fetch a URL or start a subagent, and the SDK asks this app whether it may
@@ -156,7 +160,37 @@ The answer is **cached for a short window, not for the app's lifetime** the way 
 
 This has a cost worth stating rather than discovering: the user's own skills, `CLAUDE.md`, commands and plugins **do not load**. "Use my whole local setup" and "the desktop decides what this agent is" are in genuine tension, and this resolves it toward the second, because a folder agent's system prompt is assembled from the folder's own files. If a per-agent opt-in is wanted later it is a manifest flag, not a default.
 
+**The option is also wider than the boundary it was drawn for.** It hides the folder's own `.claude/agents/` — the agent's specialists, which are not the user's configuration but part of what the agent *is* — and an agent built as a lead with three of them ran in the desktop with none, improvising a `general-purpose` subagent with the specialist's job pasted into its prompt. Those are handed back by another route; see [the next rule](#the-folders-own-subagents-are-handed-over-and-the-boundary-stays-the-desktops).
+
 The system prompt is that assembled prompt as a plain string, never the SDK's coding-assistant preset — the preset would talk over the folder, which already says what this agent is.
+
+### The folder's own subagents are handed over, and the boundary stays the desktop's
+
+A terminal `claude` discovers `.claude/agents/*.md` in its working directory and offers each as a `subagent_type`. Under `settingSources: []` it does not, so the desktop **reads the files itself** and passes what a terminal would have found through the SDK's `agents` option — the programmatic route to the same registry, which does not reopen the settings boundary. Read fresh on every turn, like the system prompt: a definition edited while the app runs is on the next turn, not the next launch. A folder without the directory passes no option at all, so it hands the SDK exactly what it did before the option existed.
+
+**Read, not trusted.** The fields carried across are the ones that *describe* a subagent — description, prompt, tools, disallowed tools, model, max turns, skills, effort, whether it runs in the background. The ones that would move a permission decision away from the desktop are dropped whatever the file says:
+
+| Dropped | Why |
+|---|---|
+| `permissionMode` | one frontmatter line of `bypassPermissions` would run every tool without `canUseTool` ever being consulted — the grants, the permission block and the audit trail all bypassed by a text file in the folder |
+| `mcpServers` | the same reason `strictMcpConfig` is set: the desktop hands the CLI an empty connector list, and a subagent must not reopen it |
+| `memory` | writes outside the transcript, under `~/.claude/agent-memory/` or the folder, and nothing in Cinna shows or clears it |
+| `observer`, `observerMessage`, `criticalSystemReminder_EXPERIMENTAL`, `initialPrompt` | experimental or side-channel fields with no desktop surface |
+
+**A file the reader cannot represent is skipped, not read as best it can.** The kit's YAML reader turns a block scalar into the literal `"|"` and truncates an unquoted line at its `#` — plausible values, both wrong — and a subagent described to the model as `"|"` is worse than one it is not offered. The file is left out, the reason is logged with the line the reader objected to, and every other file in the directory is still read. The same rule refuses a file with no description (the model would never pick it) and one with no prompt below the frontmatter.
+
+### The turn ends when the CLI's work does, not when the model's answer does
+
+The SDK treats a **string prompt as a single user turn and closes the CLI's stdin at the first `result`**. That was fine until the model, as it does by default, launched a subagent in the background and ended its own turn with "I'll report back" — the subagent outlived the result, asked permission for its first real command over a closed stdin, and the CLI turned that into a denial reading *"Tool permission request failed: AbortError: Stream closed"* before the ask ever reached the desktop. The model retried, and one real session filled with seventeen of them while read-only commands the CLI approves on its own kept working, so it read as intermittent. Nothing the permission gate could have done would have helped: the ask never arrived.
+
+So the prompt is an **iterable that stays open on purpose**, and what ends the turn is a rule rather than the SDK's default:
+
+- **A `result` ends the turn only when nothing is still holding it.** With a holding task live, the runner keeps stdin open, the CLI runs a follow-up turn of its own when the task settles — exactly as it does in a terminal — and the **last** `result` is the one reported. The first was the model saying it launched something
+- **A background shell does not hold a turn.** The CLI's own idle rule counts a session with a running `local_bash`, `in_process_teammate` or `dream` task as idle, and the desktop mirrors that list rather than inventing one: a dev server or a watcher can run for the life of the session, and a turn that waited on it would end only at the ceiling. The CLI's own housekeeping tasks (`ambient`) are excluded by the translator for the same reason
+- **An emptied set starts a short grace, and new activity cancels it.** When a subagent completes, the CLI's follow-up turn began 85 ms later in the probe — but it may run none at all, for a task that was stopped or failed, and without a fallback the turn would sit on the twenty-minute ceiling. So an empty set after a result starts a five-second clock; a new stream event, assistant message or `init` from the child, or work reappearing in the set, stops it. Generous, because the wrong direction is closing stdin under a follow-up turn that was about to start — the very failure this rule exists to end
+- **The wait is said out loud.** The gap between "I'll report back" and the report can be minutes with the streaming indicator on, and a silent gap reads as a hang. A notice — *"Waiting for background work to finish: …"*, naming up to three tasks — is written into the transcript at each wait. A notice rather than answer text, because it is the desktop speaking, not the agent
+- **A ceiling reached after the model answered is a notice, not an error.** What ran out of time was background work the answer said it would report on; calling that "the agent stopped responding" would put an error on a turn the user can read. The transcript says what happened instead: *"Background work was still running when the turn reached its time limit, so it was ended."*
+- **Every exit lets the iterable finish** — a throw, a cancel, a generator that ended without a result — so nothing awaits it for ever
 
 ### No tool is pre-approved, because pre-approving one bypasses the asking
 
@@ -238,6 +272,7 @@ The panel says nothing about which account paid for a turn either, and **that is
 - **It shares no transport with the OpenCode runner.** No event bus, no SSE parsing, no durable cursor, no hole-and-heal recovery, no engine manager — the SDK is an async generator in this process. There is no socket to drop, no stream to fan out to a second agent, and no shared server whose restart could end somebody else's turn. Inventing a common transport abstraction across the two would manufacture a shape only one of them has; the shared shape is the runner seam, one level up
 - **It does not gate an engine restart.** The per-agent lock is still taken, so busy-in-another-chat is unchanged, but a Claude turn neither defers a config change nor is ended by one. That is a genuine simplification and worth naming as one
 - **It reports no cost and no token counts, and both omissions are deliberate.** Cost on a subscription is a shadow price — three probe turns reported dollar figures against a plan that charged nothing — and no wording available in a notice line makes that informative, so it is dropped outright. Token counts are a different argument and land in the same place: the contract says they *may* stay, which is permission rather than instruction, and a token figure in every transcript is noise for a number nobody asked for. The SDK's final message carries both and the translator folds them; nothing reads them, on purpose. The one thing a turn does report about itself is the account that paid for it, and only when that is not the expected one
+- **It does not switch background work off.** `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in the child environment would make the CLI drop `run_in_background` from the `Agent` and `Bash` schemas and offer only synchronous subagents, and a string prompt would then have been correct. It is rejected: the point of this engine is the Claude Code harness as the user has it, and an agent that behaves differently under the desktop than in a terminal is the kind of difference nobody can see from the transcript
 - **It never writes into `~/.claude/`** — no settings, no rules, no credentials, no `apiKeyHelper`
 - **It ships no Claude Code of its own.** The SDK pulls a bundled ~190 MB binary per platform; every installer excludes it. Not executing it is not the same as not shipping it, and shipping it would put a second Claude Code in the app that the user never chose, cannot see and cannot update
 - **It makes no claim about Windows.** Detection, `PATH` resolution and credential storage all differ there and none of it was considered
@@ -254,6 +289,7 @@ These are open:
 - **The installer exclusion is verified on `darwin-arm64` only.** The other seven platform packages are not built here
 - **The Anthropic API SDK moved 0.89 → 0.93** to satisfy the Agent SDK's peer requirement, and the bump lands on the ordinary Anthropic chat adapter, `src/main/llm/anthropic.ts`, not on anything here. That adapter is covered — `src/main/llm/anthropic.test.ts` runs the SDK's real client against a stubbed wire — but nothing in this feature exercises it, so a further bump forced from here is verified there, not here; see [LLM Adapters — Technical Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - **Out-of-plan usage has no good surface.** It arrives mid-turn as an error from the CLI and its message is passed through, which is honest but not helpful. We do not know the user's limits and inventing a sentence about them would be worse than the CLI's own
+- **The grace after an emptied background set is reasoning, not measurement.** The follow-up turn was watched for a subagent that *completed*, once, at 85 ms; whether the CLI runs one at all for a task that was stopped or failed was not observed, and the list of task types that do not hold a turn was read from one binary. A CLI minor bump can change either silently — see [the contract, §8 item 7](claude_contract.md#8-still-unverified--and-one-of-these-can-still-kill-the-feature)
 - **No automated test ever runs a turn on it.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real install read as logged out. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
 
 ## Architecture Overview
@@ -285,11 +321,14 @@ resolveTurnRunner(agent)             dispatch: source → engine
               ┌──────────────────────────────────────┤
               ▼                                      ▼
    query({ prompt, options })              canUseTool ──► standing grants
-     cwd            = the agent folder          │          └ covered → allow, silently
-     systemPrompt   = the folder's own          │
-     pathToClaude…  = the user's binary         └────────► parked request
-     settingSources = []                                    └ transcript block → answered
+     prompt         = an iterable held open     │          └ covered → allow, silently
+                      until the last result     │
+     cwd            = the agent folder          └────────► parked request
+     systemPrompt   = the folder's own                      └ transcript block → answered
+     pathToClaude…  = the user's binary
+     settingSources = []
      strictMcpConfig + no MCP servers
+     agents         = the folder's .claude/agents/*.md, permission fields dropped
      env            = constructed (see rules)
      resume         = the remembered session
      abortController= the turn's own signal
@@ -297,8 +336,10 @@ resolveTurnRunner(agent)             dispatch: source → engine
               ▼
    SDK message stream ──► translator
      stream_event → text and thinking deltas     assistant → tool calls
-     user         → tool results                 result    → the turn ends
-     system/init  → apiKeySource, model, version
+     user         → tool results                 result    → the turn ends, unless a
+     system/init  → apiKeySource, model, version              background task holds it
+     system/background_tasks_changed → the live set (replace, ambient excluded)
+                                       empty after a result → 5 s grace → the turn ends
               │
               ▼
    RunAgentTurnResult { text, parts, notices, contextId }

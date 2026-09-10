@@ -1,4 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import { ClaudeAgentTurnRunner, type ClaudeTurnDeps } from './claudeAgentTurnRunner'
 import type { RunAgentTurnInput } from '../a2aStreamingService'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
@@ -870,5 +873,303 @@ describe('permissions', () => {
     const result = await running
     expect(result.parts.some((p) => p.toolName === 'cinna_permission_request')).toBe(true)
     expect(record.decision?.behavior).toBe('allow')
+  })
+})
+
+describe('background work that outlives the model’s turn', () => {
+  // The shapes are the probe's (`claude_contract.md`, background subagents):
+  // the CLI announces the task before the model's `result`, runs it after,
+  // and — with stdin still open — runs a follow-up turn of its own that ends
+  // in a second `result`. The property under test is the one the string
+  // prompt could not have: **stdin stays open across the first result and
+  // closes after the last.**
+  const changed = (tasks: { task_id: string; description: string; task_type?: string }[]): unknown => ({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks: tasks.map((t) => ({ task_type: 'local_agent', ...t })),
+    session_id: 'sess-new'
+  })
+  /** Block the generator until the runner closes stdin, as the real child would. */
+  const untilClosed = async (probe: { inputClosed: () => boolean }): Promise<void> => {
+    for (let i = 0; i < 400 && !probe.inputClosed(); i++) await tick()
+  }
+  const text = (id: string, body: string): unknown[] => [
+    { type: 'stream_event', session_id: 'sess-new', event: { type: 'message_start', message: { id } } },
+    { type: 'stream_event', event: { type: 'content_block_start', index: 0, content_block: { type: 'text' } } },
+    { type: 'stream_event', event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: body } } }
+  ]
+  const result = (body: string): unknown => ({
+    type: 'result',
+    subtype: 'success',
+    is_error: false,
+    result: body,
+    session_id: 'sess-new'
+  })
+  const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  /**
+   * A stub that consumes the prompt iterable the way the SDK does, and records
+   * whether it had ended at each point the generator checks.
+   */
+  function watchingQuery(
+    script: (probe: { inputClosed: () => boolean }) => AsyncGenerator<unknown>
+  ): { query: ClaudeTurnDeps['query']; sent: () => unknown[]; closed: () => boolean } {
+    const sent: unknown[] = []
+    let closed = false
+    const query = ((args: { prompt: AsyncIterable<unknown> }) => {
+      void (async () => {
+        for await (const m of args.prompt) sent.push(m)
+        closed = true
+      })()
+      return script({ inputClosed: () => closed })
+    }) as unknown as ClaudeTurnDeps['query']
+    return { query, sent: () => sent, closed: () => closed }
+  }
+
+  it('sends the user’s message as the one item of an open iterable', async () => {
+    const stub = watchingQuery(async function* () {
+      yield init
+      for (const m of answer) yield m
+    })
+    await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(turn())
+    await tick()
+    expect(stub.sent()).toEqual([
+      { type: 'user', message: { role: 'user', content: 'what is the secret word?' }, parent_tool_use_id: null }
+    ])
+    expect(stub.closed()).toBe(true)
+  })
+
+  it('closes stdin at the result when nothing is running — the turn as it always was', async () => {
+    const seen: boolean[] = []
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      for (const m of answer.slice(0, 3)) yield m
+      await tick()
+      seen.push(probe.inputClosed())
+      yield answer[3]
+      await tick()
+      seen.push(probe.inputClosed())
+    })
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(turn())
+    expect(seen).toEqual([false, true])
+    expect(out.text).toBe('marzipan')
+    expect(out.notices).toEqual([])
+  })
+
+  it('keeps stdin open across a result while a task is live, and closes it after the last', async () => {
+    const seen: boolean[] = []
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      yield* text('msg_1', 'launched')
+      yield changed([{ task_id: 'a2e85fec', description: 'Queue backlog for vendor bills' }])
+      yield result('launched')
+      await tick()
+      seen.push(probe.inputClosed()) // the old bug: this used to be true
+      // the subagent's completion (its own frames are the translator's
+      // business, covered in claudeMessages.test.ts)
+      yield changed([])
+      yield { type: 'system', subtype: 'task_notification', task_id: 'a2e85fec', status: 'completed', summary: 'probe-ok' }
+      // the follow-up turn the CLI runs on its own
+      yield init
+      yield* text('msg_2', ' 42 bills')
+      yield result('42 bills')
+      await tick()
+      seen.push(probe.inputClosed())
+    })
+    const events: AgentStreamEvent[] = []
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(
+      turn({ onEvent: (e) => void events.push(e) })
+    )
+    expect(seen).toEqual([false, true])
+    expect(out.error).toBeUndefined()
+    // Both turns' text is one answer, in order, each character once.
+    expect(out.text).toBe('launched 42 bills')
+    // The gap between them is named, in the transcript, by the desktop.
+    expect(out.notices.map((n) => n.text)).toEqual([
+      'Waiting for background work to finish: Queue backlog for vendor bills'
+    ])
+    expect(events.some((e) => e.type === 'delta' && e.kind === 'notice')).toBe(true)
+  })
+
+  it('reports the last result, not the first, when there were two', async () => {
+    const stub = watchingQuery(async function* () {
+      yield init
+      yield changed([{ task_id: 't', description: 'work' }])
+      yield result('launched')
+      yield changed([])
+      yield { type: 'result', subtype: 'error_during_execution', is_error: true, result: '', errors: ['it broke'], session_id: 'sess-new' }
+    })
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(turn())
+    expect(out.error?.message).toBe('The agent stopped with an error.')
+  })
+
+  it('ends the turn after a grace when the set empties and no follow-up turn comes', async () => {
+    // A task that was stopped or failed empties the set without a report to
+    // deliver, so the CLI runs no follow-up turn. Without this clock the turn
+    // would sit on the ceiling and then be reported as an error.
+    const seen: boolean[] = []
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      yield* text('msg_1', 'launched')
+      yield changed([{ task_id: 't', description: 'work' }])
+      yield result('launched')
+      await tick()
+      seen.push(probe.inputClosed())
+      yield changed([])
+      await untilClosed(probe)
+      seen.push(probe.inputClosed())
+    })
+    const out = await new ClaudeAgentTurnRunner(
+      makeDeps({ query: stub.query, backgroundGraceMs: 10, turnCeilingMs: 5_000 })
+    ).runTurn(turn())
+    expect(seen).toEqual([false, true])
+    expect(out.error).toBeUndefined()
+    expect(out.text).toBe('launched')
+  })
+
+  it('cancels that grace when the follow-up turn starts, so it is never cut off', async () => {
+    const seen: boolean[] = []
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      yield* text('msg_1', 'launched')
+      yield changed([{ task_id: 't', description: 'work' }])
+      yield result('launched')
+      yield changed([])
+      yield init // the follow-up turn, 85 ms behind the empty set in the probe
+      await new Promise((r) => setTimeout(r, 40)) // well past the 10 ms grace
+      seen.push(probe.inputClosed())
+      yield* text('msg_2', ' done')
+      yield result('done')
+      await untilClosed(probe)
+      seen.push(probe.inputClosed())
+    })
+    const out = await new ClaudeAgentTurnRunner(
+      makeDeps({ query: stub.query, backgroundGraceMs: 10 })
+    ).runTurn(turn())
+    expect(seen).toEqual([false, true])
+    expect(out.text).toBe('launched done')
+  })
+
+  it('does not wait on a background shell, which can run for the life of the session', async () => {
+    // Mirrors the CLI's own idle gate: a dev server or a watcher the model
+    // backgrounded is not a reason to hold the chat.
+    const seen: boolean[] = []
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      yield changed([{ task_id: 'sh', description: 'npm run dev', task_type: 'local_bash' }])
+      yield result('server started')
+      await tick()
+      seen.push(probe.inputClosed())
+    })
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(turn())
+    expect(seen).toEqual([true])
+    expect(out.notices).toEqual([])
+  })
+
+  it('reports a ceiling reached while waiting as a notice, not as an error', async () => {
+    // The model answered. What ran out of time was the work it said it would
+    // report on — the transcript says so, and the answer stands.
+    const stub = watchingQuery(async function* (probe) {
+      yield init
+      yield* text('msg_1', 'launched')
+      yield changed([{ task_id: 't', description: 'a very long job' }])
+      yield result('launched')
+      await untilClosed(probe)
+      throw new Error('Claude Code process aborted by user')
+    })
+    const out = await new ClaudeAgentTurnRunner(
+      makeDeps({ query: stub.query, turnCeilingMs: 20 })
+    ).runTurn(turn())
+    expect(out.error).toBeUndefined()
+    expect(out.text).toBe('launched')
+    expect(out.notices.map((n) => n.text)).toEqual([
+      'Waiting for background work to finish: a very long job',
+      'Background work was still running when the turn reached its time limit, so it was ended.'
+    ])
+  })
+
+  it('lets the iterable finish when the stream throws, so nothing waits for ever', async () => {
+    const stub = watchingQuery(async function* () {
+      yield init
+      yield changed([{ task_id: 't', description: 'work' }])
+      yield result('launched')
+      throw new Error('the child exited with code 1')
+    })
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(turn())
+    await tick()
+    expect(out.error?.message).toBe('the child exited with code 1')
+    expect(stub.closed()).toBe(true)
+  })
+
+  it('lets the iterable finish on a cancel too', async () => {
+    const controller = new AbortController()
+    const stub = watchingQuery(async function* () {
+      yield init
+      yield changed([{ task_id: 't', description: 'work' }])
+      yield result('launched')
+      controller.abort()
+      throw Object.assign(new Error('Claude Code process aborted by user'), { name: 'Error' })
+    })
+    const out = await new ClaudeAgentTurnRunner(makeDeps({ query: stub.query })).runTurn(
+      turn({ signal: controller.signal })
+    )
+    await tick()
+    expect(out.error).toBeUndefined()
+    expect(stub.closed()).toBe(true)
+  })
+})
+
+describe('the folder’s own subagents', () => {
+
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cinna-runner-agents-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const agentAt = (path: string): ClaudeTurnDeps['getAgent'] => () => ({
+    name: 'Invoices',
+    path,
+    kind: 'kit',
+    enabled: true,
+    readiness: 'ok',
+    readinessReason: null
+  })
+
+  it('hands `.claude/agents/*.md` to the SDK, which settingSources: [] would hide', async () => {
+    mkdirSync(join(dir, '.claude', 'agents'), { recursive: true })
+    writeFileSync(
+      join(dir, '.claude', 'agents', 'queue-handler-agent.md'),
+      '---\nname: queue-handler-agent\ndescription: Owns the queue.\ntools: Bash, Read\n---\nYou keep the ledger.\n'
+    )
+    let options: Record<string, unknown> = {}
+    await new ClaudeAgentTurnRunner(
+      makeDeps({
+        getAgent: agentAt(dir),
+        query: stubQuery({ messages: [init, ...answer], onOptions: (o) => (options = o) })
+      })
+    ).runTurn(turn())
+    expect(options.agents).toEqual({
+      'queue-handler-agent': {
+        description: 'Owns the queue.',
+        prompt: 'You keep the ledger.',
+        tools: ['Bash', 'Read']
+      }
+    })
+    // The boundary the option sits inside is unchanged.
+    expect(options.settingSources).toEqual([])
+  })
+
+  it('passes no agents option at all for a folder without them', async () => {
+    let options: Record<string, unknown> = {}
+    await new ClaudeAgentTurnRunner(
+      makeDeps({
+        getAgent: agentAt(dir),
+        query: stubQuery({ messages: [init, ...answer], onOptions: (o) => (options = o) })
+      })
+    ).runTurn(turn())
+    expect(Object.hasOwn(options, 'agents')).toBe(false)
   })
 })

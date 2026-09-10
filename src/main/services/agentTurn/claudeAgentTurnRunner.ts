@@ -39,9 +39,19 @@
  *    the two cannot both express the profile. Phase 4 owns that; this file
  *    passes no `allowedTools` at all, which is the half that has to be true
  *    before the permission wiring can mean anything.
+ * 5. **A string `prompt` closes the CLI's stdin at the first `result`**, and
+ *    a background subagent outlives that result. The model launches subagents
+ *    in the background by default, ends its own turn with "I'll report back",
+ *    and the subagent then asks permission for its first real command — over
+ *    a stdin that is already closed. The CLI turns that into a denial reading
+ *    *"Tool permission request failed: AbortError: Stream closed"*, the model
+ *    retries, and the transcript fills with seventeen of them. So the prompt
+ *    is an async iterable that stays open until the last `result` arrives with
+ *    the background set empty (`drain` below); with stdin open, the CLI runs
+ *    the follow-up turn on its own, exactly as it does in a terminal.
  */
 
-import { query } from '@anthropic-ai/claude-agent-sdk'
+import { query, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { RunAgentTurnInput, RunAgentTurnResult } from '../a2aStreamingService'
 import { StreamPartsAccumulator } from '../../agents/streamPartsAccumulator'
 import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
@@ -50,7 +60,8 @@ import type { AgentTurnRunner } from './runner'
 import type { LocalAgentKind } from '../../../shared/localAgents'
 import { auditClaudeEnv, buildClaudeEnv } from './claudeEnv'
 import type { ClaudeAuthStatus } from './claudeAuth'
-import { ClaudeMessageStream } from './claudeMessages'
+import { ClaudeMessageStream, type ClaudeBackgroundTask } from './claudeMessages'
+import { readFolderAgents } from './claudeAgents'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
 import { pendingRequests } from './pendingRequests'
 import { mintPermissionRequestId, toClaudePermissionRequest } from './claudePermissions'
@@ -68,6 +79,37 @@ const logger = createLogger('claude-agent-turn')
  * ceiling that fires on a working turn is worse than no ceiling.
  */
 export const CLAUDE_TURN_CEILING_MS = 20 * 60 * 1000
+
+/**
+ * How long a turn stays open after the background set empties with no
+ * follow-up turn in sight.
+ *
+ * When a background subagent completes, the CLI runs a follow-up turn of its
+ * own to deliver the report — the probe saw its `init` 85 ms after the set
+ * emptied — and that turn's `result` is what ends ours. But the CLI may run
+ * none: a task that was stopped or failed, or a type it does not report on.
+ * Without a fallback the turn would sit on the ceiling. So an empty set after
+ * a result starts this clock, and any new activity from the child stops it.
+ * Generous, because the wrong direction is closing stdin under a follow-up
+ * turn that was about to start — the very failure this file exists to end.
+ */
+export const CLAUDE_BACKGROUND_GRACE_MS = 5_000
+
+/**
+ * Task types that do **not** keep a turn open.
+ *
+ * Mirrors the CLI's own idle gate, read from the binary: a session with a
+ * running `local_bash`, `in_process_teammate` or `dream` task still counts as
+ * idle there. A background shell command — a dev server, a watcher — can run
+ * for the life of the session, and a turn that waited on it would end only at
+ * the ceiling. `shell` is the SDK's friendly label for the same thing.
+ */
+export const CLAUDE_TURN_FREE_TASK_TYPES: ReadonlySet<string> = new Set([
+  'local_bash',
+  'shell',
+  'in_process_teammate',
+  'dream'
+])
 
 /** What the runner needs from the world, so it is drivable with no child process. */
 export interface ClaudeTurnDeps {
@@ -138,6 +180,8 @@ export interface ClaudeTurnDeps {
   query?: typeof query
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
+  /** Override the grace after the background set empties. Tests only. */
+  backgroundGraceMs?: number
 }
 
 function fail(message: string, raw?: string): RunAgentTurnResult {
@@ -274,6 +318,19 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
     const model = this.deps.model(userId, agentId)
     const systemPrompt = this.deps.systemPrompt(userId, agentId)
     const run = this.deps.query ?? query
+
+    // The folder's own subagents, which `settingSources: []` would otherwise
+    // hide — see `claudeAgents.ts`. Read fresh each turn, like the prompt: a
+    // definition edited while the app runs is on the next turn, not the next
+    // launch.
+    const folderAgents = readFolderAgents(agent.path)
+    for (const { file, reason } of folderAgents.skipped) {
+      logger.warn('a folder subagent was skipped', { agentId, file, reason })
+    }
+    const agentNames = Object.keys(folderAgents.agents)
+    if (agentNames.length > 0) {
+      logger.info('folder subagents offered to the CLI', { agentId, agents: agentNames })
+    }
 
     // The ceiling is armed around the whole iteration rather than settling a
     // promise, because there is nothing else to settle: this loop *is* the
@@ -435,9 +492,41 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
 
     /** One pass over the generator. Returns the error to report, or null. */
     const drain = async (resume: string | null): Promise<string | null> => {
+      /**
+       * **The prompt is an iterable that stays open on purpose** (finding 5
+       * in the header). The SDK closes the CLI's stdin when this iterable
+       * ends — never before, and for a string prompt at the first `result`.
+       * Holding it open past a result is what lets a background subagent's
+       * permission asks reach `canUseTool`, and what lets the CLI run the
+       * follow-up turn that delivers the subagent's report.
+       */
+      let releaseInput: () => void = () => {}
+      const inputReleased = new Promise<void>((resolve) => (releaseInput = resolve))
+      const userMessage: SDKUserMessage = {
+        type: 'user',
+        message: { role: 'user', content: ctx.input.wireContent },
+        parent_tool_use_id: null
+      }
+      const prompt = (async function* (): AsyncGenerator<SDKUserMessage> {
+        yield userMessage
+        await inputReleased
+      })()
+
+      /** The CLI's live background set — replaced whole on every level message. */
+      let liveTasks: ClaudeBackgroundTask[] = []
+      const holding = (): ClaudeBackgroundTask[] =>
+        liveTasks.filter((t) => !CLAUDE_TURN_FREE_TASK_TYPES.has(t.type))
+      /** Set once a result has been seen while work was still holding the turn. */
+      let waiting = false
+      let grace: ReturnType<typeof setTimeout> | null = null
+      const cancelGrace = (): void => {
+        if (grace) clearTimeout(grace)
+        grace = null
+      }
+
       try {
         for await (const message of run({
-          prompt: ctx.input.wireContent,
+          prompt,
           options: {
             cwd: agent.path,
             // The user's binary, never the SDK's bundled one — see the
@@ -470,6 +559,10 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
             // would be bypassed for exactly the tools a profile named.
             canUseTool,
             abortController: ceiling,
+            // The folder's subagents, when it has any. Omitted rather than
+            // passed empty, so a folder without them hands the SDK exactly
+            // what it was handed before this option existed.
+            ...(agentNames.length > 0 ? { agents: folderAgents.agents } : {}),
             ...(resume ? { resume } : {})
           }
         })) {
@@ -479,15 +572,65 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
               : 'unknown'
           kindCounts[kind] = (kindCounts[kind] ?? 0) + 1
 
+          // New activity from the child means a turn is running, and that
+          // turn's `result` decides. It cancels a grace clock that an emptied
+          // set started — the follow-up turn the clock was waiting for.
+          if (kind === 'stream_event' || kind === 'assistant') cancelGrace()
+
           const update = stream.apply(message)
           if (update.sessionId) sessionId = update.sessionId
-          if (update.apiKeySource) apiKeySource = update.apiKeySource
+          if (update.apiKeySource) {
+            apiKeySource = update.apiKeySource
+            cancelGrace() // `init`: the follow-up turn is starting
+          }
+          if (update.backgroundTasks) {
+            liveTasks = update.backgroundTasks
+            // Work that reappears while the clock runs stops it: stdin must
+            // not close under a live task, whatever announced it.
+            if (holding().length > 0) cancelGrace()
+            // The set emptied after a result. Usually the CLI's follow-up turn
+            // is milliseconds away and will cancel this; if it never comes,
+            // this is what ends the turn instead of the ceiling.
+            if (waiting && holding().length === 0 && !grace) {
+              grace = setTimeout(
+                () => releaseInput(),
+                this.deps.backgroundGraceMs ?? CLAUDE_BACKGROUND_GRACE_MS
+              )
+              grace.unref?.()
+            }
+          }
           if (update.message) accumulator.ingestMessage(update.message, deltaPort)
-          if (update.ended) ended = update.ended
+          if (update.ended) {
+            ended = update.ended
+            // **A `result` ends the turn only when nothing is still holding
+            // it.** With work live, the CLI will run another turn when it
+            // settles and send another `result`; the last one is the one
+            // reported. Nothing else settles this: the generator itself ends
+            // only when the child exits, and the child exits only after stdin
+            // closes.
+            const held = holding()
+            if (held.length === 0) {
+              releaseInput()
+            } else {
+              waiting = true
+              logger.info('a Claude turn is waiting on background work', {
+                agentId,
+                chatId,
+                tasks: held.map((t) => `${t.type}: ${t.description}`)
+              })
+              const noted = stream.noteBackgroundWait(held)
+              if (noted.message) accumulator.ingestMessage(noted.message, deltaPort)
+            }
+          }
         }
         return null
       } catch (err) {
         return err instanceof Error ? err.message : String(err)
+      } finally {
+        // Every exit — a throw, an abort, a generator that ended without a
+        // result — lets the iterable finish, so nothing awaits it for ever.
+        cancelGrace()
+        releaseInput()
       }
     }
 
@@ -526,6 +669,21 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
       // did deliberately. An aborted turn is not an error anywhere else either.
       if (signal.aborted) {
         logger.info('a Claude turn was stopped by the user', { agentId, chatId })
+        return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource)
+      }
+      if (hitCeiling && ended) {
+        // The model answered; what ran out of time was background work the
+        // answer said it would report on. That is not "stopped responding",
+        // and telling the user it was would call a turn they can read an
+        // error. The transcript says what actually happened.
+        logger.warn('a Claude turn hit the ceiling with background work still running', {
+          agentId,
+          chatId
+        })
+        const noted = stream.note(
+          'Background work was still running when the turn reached its time limit, so it was ended.'
+        )
+        if (noted.message) accumulator.ingestMessage(noted.message, deltaPort)
         return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource)
       }
       if (hitCeiling) {

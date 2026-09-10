@@ -150,7 +150,7 @@ This must stay identical to the conditional `allOf` in `schema/cinna-agent.schem
 
 - `parseWithIssues(text)` → `{data, issues}` — **use this whenever the values will be executed, published, or otherwise acted on**
 - `parseMiniYaml(text)` → `data` only — **display-only callers**, which is why it still exists
-- `parseFrontmatter(text)` → `{data, body} | null` for `---`-delimited STATUS.md frontmatter
+- `parseFrontmatter(text)` → `{data, body, issues} | null` for `---`-delimited frontmatter (STATUS.md, and a Claude folder subagent's `.claude/agents/*.md`). `issues` is the same list `parseWithIssues` returns, so a caller that acts on the values — [the Claude engine's subagent reader](claude_engine_tech.md#folder-subagents-claudeagentsts) — can refuse the file rather than pass on a value that is plausible and wrong
 - `parseScalar(raw)` — quoted strings, `null`/`~`, booleans, ints, floats, simple `[a, b]` inline sequences
 
 `MiniYamlIssue.code` is one of:

@@ -271,6 +271,14 @@ export interface Frontmatter {
   data: { [key: string]: MiniYamlValue }
   /** Everything after the closing `---`, verbatim. */
   body: string
+  /**
+   * What the block contained that this reader could not represent — the
+   * same list `parseWithIssues` returns. A caller that hands a value on to
+   * something that acts on it (a subagent definition, a command) must treat a
+   * non-empty list as "do not use this file", for the reason in the header:
+   * the value it got is plausible and wrong, not blank.
+   */
+  issues: MiniYamlIssue[]
 }
 
 /**
@@ -285,10 +293,8 @@ export function parseFrontmatter(text: string): Frontmatter | null {
   for (let i = 1; i < lines.length; i++) {
     const line = lines[i].trim()
     if (line === '---' || line === '...') {
-      return {
-        data: parseMiniYaml(lines.slice(1, i).join('\n')),
-        body: lines.slice(i + 1).join('\n')
-      }
+      const { data, issues } = parseWithIssues(lines.slice(1, i).join('\n'))
+      return { data, body: lines.slice(i + 1).join('\n'), issues }
     }
   }
   return null

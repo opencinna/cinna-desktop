@@ -2,7 +2,9 @@
 
 **Status:** verified against the real binary on **9 September 2026**, `claude` **2.1.266**
 (Claude Code), `@anthropic-ai/claude-agent-sdk` **0.3.266**, `darwin-arm64`, on a **native-installer**
-install authenticated with a claude.ai login.
+install authenticated with a claude.ai login. The [background-subagent section](#background-subagents--a-turn-that-outlives-the-models-result)
+was watched a day later, **10 September 2026**, against `claude` **2.1.267** on the same SDK — the
+CLI had moved a patch overnight, and the section says so where a finding could depend on it.
 
 This document exists for the reason [the OpenCode contract](opencode_contract.md) exists: **the
 engine contract is the one part of Local Agents our tests cannot check.** The Claude path has a
@@ -198,6 +200,95 @@ filed into the subagent's message. The runner therefore keys by
 The last row matters for the permission ask: a tool name the desktop's table
 misses renders as itself, and *"The agent is asking to Agent"* is not a sentence.
 
+### Background subagents — a turn that outlives the model's `result`
+
+The sequence above is a **synchronous** subagent: the `Agent` call blocks the main thread until the
+subagent returns, and `result` arrives after everything. That is not the CLI's default. The `Agent`
+tool carries a `run_in_background` parameter, the model uses it freely, and a background subagent
+**outlives the `result` that ends the model's own turn**. Present in 2.1.265, 2.1.266 and 2.1.267
+alike — not a regression in any of them.
+
+**The defect this was watched for.** On 10 September 2026 a real session — an accounting meta-agent
+asked *"what vendor bills you can work with?"* — produced **seventeen** denials reading
+*"Tool permission request failed: AbortError: Stream closed"*, while read-only commands the CLI
+auto-approves kept working, so it read as intermittent. The cause is one line in `sdk.mjs`: a
+**string `prompt` is a single user turn, and the SDK closes the CLI's stdin at the first `result`.**
+The model launched a subagent in the background, ended its turn with "I'll report back", and the
+subagent then asked permission for its first real command over a stdin that was already closed —
+the `can_use_tool` control request threw `Stream closed` *inside the CLI*, before it ever reached
+the desktop's `canUseTool`. No message about it comes down the iterator; the only trace is the
+model relaying the denial.
+
+**What was run.** Two probes, prompt as an `AsyncIterable` that yields one user message and then
+awaits a promise the probe settles later (~0.23 USD and ~0.08 USD reported, on a claude.ai login).
+Timings are from the second:
+
+```
+0.90s  system/init
+3.30s  assistant     tool_use(Agent)                          run_in_background
+3.31s  system/background_tasks_changed   tasks: [{task_id, task_type:'local_agent', description}]
+3.31s  system/task_started
+       user          tool_result  "Async agent launched successfully…"
+       assistant     text         "launched"
+4.20s  result/success  num_turns=2        ← WITH the background set still non-empty
+       assistant     thinking     parent_tool_use_id=toolu_…   ← the subagent's frames begin
+       assistant     tool_use(Bash)  parent_tool_use_id=toolu_…
+       system/task_progress
+5.20s  canUseTool(Bash)                   ← AFTER the first result
+       user          tool_result  parent_tool_use_id=toolu_…
+       assistant     text         parent_tool_use_id=toolu_…
+7.18s  system/background_tasks_changed   tasks: []
+       system/task_updated                (patch: status completed)
+       system/task_notification           status completed, summary
+7.28s  system/init                        ← a SECOND init, 85 ms after the set emptied
+       stream_event  message_start, text deltas…
+       assistant     text
+8.60s  result/success  num_turns=1        ← the CLI's own follow-up turn
+       [iterable ended → SDK calls endInput → CLI exits → for-await completes ~0.5s later]
+```
+
+| Question | Answer |
+|---|---|
+| Does `result` wait for a background subagent? | **No.** It arrives with the set non-empty, `num_turns: 2`, `success` |
+| Does the subagent's permission ask reach `canUseTool`? | **Only while stdin is open.** It fired at 5.2 s, after the first `result`. With a string prompt that ask never arrives anywhere the desktop can see |
+| What ends the child? | **The prompt iterable ending.** The SDK calls `endInput` when it does; the CLI exits; the `for await` completes. Nothing else closes it — a turn that never ends the iterable sits until the ceiling |
+| Does the CLI report the subagent's result on its own? | **Yes, as a whole second turn** — a second `system/init`, a streamed text answer, a second `result`. It happens only because stdin was still open; it is what a terminal user sees |
+| Which `result` is the turn's? | The **last**. The first is the model saying it launched something |
+| Is `background_tasks_changed` an edge or a level? | **A level, with replace semantics** — `sdk.d.ts` says so. Each message carries the whole live set; hosts must swap, never pair it with `task_started` / `task_notification` |
+| Are all tasks in that set the model's? | **No.** Entries flagged `ambient: true` are the CLI's own housekeeping and must be excluded, or the set never empties |
+| Do subagent frames arrive as `stream_event`? | Still no — `assistant` / `user` / `system/task_progress`, with `parent_tool_use_id`, as in the synchronous case above |
+
+**Which task types hold a turn** is not in the SDK's types. The CLI's own idle gate, read from the
+binary, treats a session with a running `local_bash`, `in_process_teammate` or `dream` task as
+**idle** — a background shell command can run for the life of the session, and a host that waited
+on it would end only at its ceiling. `shell` is the SDK's friendly label for `local_bash`. What
+does hold a turn is `local_agent` — a subagent — and anything else the CLI has not said is free.
+
+**The rejected alternative, so it is not proposed again.** `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1`
+in the child environment makes the CLI drop `run_in_background` from the `Agent` and `Bash` schemas
+and offer only synchronous subagents, and a string prompt would then be correct. It is not used:
+the point of this engine is the Claude Code harness *as the user has it*, background work included,
+not a narrowed one that behaves differently from the same agent run in a terminal.
+
+### `settingSources: []` also hides the folder's own subagents
+
+Probed free — a turn started and aborted at `init`, which is where the answer is. In a `cwd` holding
+`.claude/agents/probe-agent.md`:
+
+| `settingSources` | `init.agents` |
+|---|---|
+| `[]` | the built-ins only: `claude`, `Explore`, `general-purpose`, `Plan`, `statusline-setup` |
+| `['project']` | the built-ins **plus `probe-agent`** |
+
+So the isolation table in [§2](#what-the-isolation-options-actually-isolate) has a row it did not
+know about: the boundary the desktop draws around `settings.json`, `CLAUDE.md`, skills and plugins
+also removes **the agent's own specialists**. The accounting meta-agent carries three under
+`.claude/agents/`; run under the desktop it had none, and the model improvised a `general-purpose`
+subagent with the specialist's job description pasted into its prompt. `options.agents` is the
+SDK's programmatic route to the same registry and does not reopen the boundary — see
+[the engine doc](claude_engine.md#the-folders-own-subagents-are-handed-over-and-the-boundary-stays-the-desktops)
+for what is copied across and what is deliberately not.
+
 ### Permissions — `canUseTool`
 
 The signature and resolution shapes are exactly as the plan quotes them. Observed:
@@ -256,6 +347,8 @@ yield a `result`.
 | The `SDKMessage` kinds a translator meets are the six named | 37 in the union; `system/status` and `rate_limit_event` arrive in the first turn (§2) |
 | A failed turn arrives as a message to translate | **error results are thrown**, not yielded (§4) |
 | *"`total_cost_usd` … on a subscription is a shadow price"* | correct, and understated — see §6 |
+| A string `prompt` is one user turn, and `result` ends it | a string prompt **closes the CLI's stdin at the first `result`**, and a background subagent outlives that result. Its permission ask then fails *inside the CLI* as `Stream closed` and is relayed as a denial. The prompt must be an iterable held open until the last `result` (§2) |
+| `settingSources: []` hides settings files, `CLAUDE.md`, project skills and plugins — and nothing else that matters | it also hides **`.claude/agents/*.md`**, the folder's own subagents. Handed back through `options.agents` (§2) |
 
 ## 4. Errors arrive as exceptions, not as messages
 
@@ -465,6 +558,13 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    that one; `linux-*`, `win32-*` and `darwin-x64` are not built here.
 5. **`SDKAuthStatusMessage`** — what emits it (§5).
 6. **Windows.** Unconsidered, as the plan says.
+7. **A background task the CLI never reports on.** The follow-up turn was watched for a subagent
+   that *completed*; the gap between the set emptying and the second `init` was measured once, at
+   85 ms. Whether the CLI runs a follow-up turn at all for a task that was stopped, failed, or is of
+   a type it does not report on was **not observed** — the runner's five-second grace after an empty
+   set exists for that case on reasoning, not on a measurement. The free-task list (`local_bash`,
+   `in_process_teammate`, `dream`) is read from the 2.1.267 binary and is the kind of thing a CLI
+   minor bump can change silently.
 
 ## 9. Runbook — how to re-verify
 
@@ -497,6 +597,25 @@ npm i @anthropic-ai/claude-agent-sdk@0.3.266
 
 # 5. Errors. resume a synthetic UUID → expect a THROW, not a result.
 #    abort() mid-turn → expect a THROW whose .name is 'Error'.
+
+# 6. Background subagents. Pass `prompt` as an async iterable that yields one
+#    {type:'user', message:{role:'user', content}, parent_tool_use_id:null}
+#    and then awaits a promise you settle by hand. Prompt the model to run a
+#    subagent in the background ("launch an agent to … and report back") and
+#    log every message's {type, subtype, parent_tool_use_id} with a timestamp.
+#    Assert: `result` arrives while `background_tasks_changed` still lists a
+#    `local_agent` task; canUseTool fires AFTER that result; the set empties;
+#    a SECOND system/init follows within ~100 ms; a second `result`.
+#    Then settle the promise: the for-await completes ~0.5 s later.
+#    Repeat with a string prompt to see the failure: the subagent's ask never
+#    reaches canUseTool, and the transcript carries "Stream closed" denials.
+#    Two billed turns per run. Budget ~0.1–0.25 USD reported per probe.
+
+# 7. Folder subagents. Free — abort at init. cwd holding
+#    .claude/agents/probe-agent.md with a description; read init.agents with
+#    settingSources: [] (built-ins only) and ['project'] (probe-agent listed).
+#    Then settingSources: [] with options.agents = { 'probe-agent': {…} } and
+#    assert it is listed again.
 ```
 
 Pin whatever version you observe. The values in §1 are `2.1.266` / `0.3.266`; nothing here should be

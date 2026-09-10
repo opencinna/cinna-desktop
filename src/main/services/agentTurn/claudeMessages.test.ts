@@ -525,3 +525,69 @@ describe('describeClaudeToolCall', () => {
     expect(described.endsWith('…')).toBe(true)
   })
 })
+
+describe('background tasks — the level signal the runner keeps stdin open on', () => {
+  // Shapes transcribed from the probe against claude 2.1.267
+  // (`claude_contract.md`, background subagents): the set is non-empty at
+  // spawn, before the model's `result`, and empty right before the
+  // `task_notification` that precedes the follow-up turn.
+  const changed = (tasks: unknown[]): unknown => ({
+    type: 'system',
+    subtype: 'background_tasks_changed',
+    tasks,
+    session_id: 'sess-new'
+  })
+
+  it('reports every live task, by id, with what it is and does', () => {
+    const update = new ClaudeMessageStream().apply(
+      changed([{ task_id: 'a2e85fec', task_type: 'local_agent', description: 'Run echo probe-ok' }])
+    )
+    expect(update.backgroundTasks).toEqual([
+      { id: 'a2e85fec', type: 'local_agent', description: 'Run echo probe-ok' }
+    ])
+  })
+
+  it('reports the empty set as an empty array, not as nothing', () => {
+    // The runner replaces its set with whatever arrives, so "no tasks" has to
+    // be a value it can assign — an absent field would leave the last
+    // non-empty set standing and the turn waiting for ever.
+    expect(new ClaudeMessageStream().apply(changed([])).backgroundTasks).toEqual([])
+  })
+
+  it('leaves ambient tasks out, as the SDK asks hosts to', () => {
+    const update = new ClaudeMessageStream().apply(
+      changed([
+        { task_id: 'watcher', task_type: 'monitor', description: 'live updates', ambient: true },
+        { task_id: 'real', task_type: 'local_agent', description: 'Touch marker file' }
+      ])
+    )
+    expect(update.backgroundTasks?.map((t) => t.id)).toEqual(['real'])
+  })
+
+  it('skips an entry with no id, and tolerates a payload that is not a list', () => {
+    expect(new ClaudeMessageStream().apply(changed([{ description: 'nameless' }])).backgroundTasks).toEqual([])
+    expect(new ClaudeMessageStream().apply({ type: 'system', subtype: 'background_tasks_changed', tasks: 'x' }).backgroundTasks).toEqual([])
+  })
+
+  it('does not touch the init facts, which share the message type', () => {
+    const update = new ClaudeMessageStream().apply(changed([]))
+    expect(update.apiKeySource).toBeUndefined()
+    expect(update.ended).toBeUndefined()
+  })
+
+  it('writes a wait as a notice under the current message, one per wait', () => {
+    const stream = new ClaudeMessageStream()
+    stream.apply({ type: 'stream_event', event: { type: 'message_start', message: { id: 'msg_a' } } })
+    const first = stream.noteBackgroundWait([
+      { id: '1', type: 'local_agent', description: 'Queue backlog for vendor bills' }
+    ])
+    expect(first.message?.messageId).toBe('msg_a')
+    const notice = first.message?.parts.at(-1)
+    expect(notice?.metadata?.['cinna.content_kind']).toBe('notice')
+    expect(notice?.text).toBe('Waiting for background work to finish: Queue backlog for vendor bills')
+
+    const second = stream.noteBackgroundWait([{ id: '2', type: 'local_bash', description: '' }])
+    expect(second.message?.parts.filter((p) => p.metadata?.['cinna.content_kind'] === 'notice')).toHaveLength(2)
+    expect(second.message?.parts.at(-1)?.text).toBe('Waiting for background work to finish: 1 background task(s)')
+  })
+})

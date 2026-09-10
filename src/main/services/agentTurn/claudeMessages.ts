@@ -95,6 +95,19 @@ export interface ClaudeStreamUpdate {
   ended?: { isError: boolean; text: string; usage?: unknown; numTurns?: number }
   /** A readiness signal from `auth_status`, when one ever arrives. */
   authError?: string
+  /**
+   * Every live background task after a `background_tasks_changed`, ambient
+   * ones excluded. **Replace semantics**, as the SDK says: swap the set for
+   * this, never pair it with the `task_started` / `task_notification` edges.
+   */
+  backgroundTasks?: ClaudeBackgroundTask[]
+}
+
+/** One entry of the CLI's live background set. */
+export interface ClaudeBackgroundTask {
+  id: string
+  type: string
+  description: string
 }
 
 /** The subset of an SDK message this translator reads. Structural on purpose. */
@@ -114,6 +127,7 @@ interface RawMessage {
   num_turns?: unknown
   error?: unknown
   isAuthenticating?: unknown
+  tasks?: unknown
 }
 
 function str(value: unknown): string | undefined {
@@ -214,6 +228,26 @@ export class ClaudeMessageStream {
           update.apiKeySource = str(m.apiKeySource) ?? 'unknown'
           update.model = str(m.model)
           update.cliVersion = str(m.claude_code_version)
+        } else if (m.subtype === 'background_tasks_changed') {
+          // The level signal the runner keeps stdin open on. A subagent the
+          // model launched in the background outlives the `result` that ends
+          // the model's turn, and the CLI runs a follow-up turn when it
+          // finishes — but only while stdin is open. Observed in the probe
+          // (`claude_contract.md`): non-empty at spawn, before the result;
+          // empty right before `task_notification` and the second `init`.
+          const tasks = Array.isArray(m.tasks) ? m.tasks : []
+          update.backgroundTasks = tasks.flatMap((t): ClaudeBackgroundTask[] => {
+            const task = record(t)
+            const id = task ? str(task.task_id) : undefined
+            if (!task || !id || task.ambient === true) return []
+            return [
+              {
+                id,
+                type: str(task.task_type) ?? 'task',
+                description: str(task.description) ?? ''
+              }
+            ]
+          })
         }
         return update
 
@@ -513,6 +547,45 @@ export class ClaudeMessageStream {
     state.parts[idx] = { ...state.parts[idx], text }
     return { message: { messageId, parts: state.parts } }
   }
+
+  /**
+   * Say, in the transcript, that the turn is going on because background work
+   * is.
+   *
+   * The model has just ended its turn — typically with "I'll report back" —
+   * and what follows is a gap of anything from seconds to minutes with the
+   * streaming indicator on. Without a line here that gap reads as a hang. A
+   * notice rather than text, because it is the desktop speaking, not the
+   * agent, and notices are the channel for that.
+   *
+   * One notice per wait, keyed by a counter, so a turn that waits twice says
+   * so twice rather than editing the first line.
+   */
+  noteBackgroundWait(tasks: ClaudeBackgroundTask[]): ClaudeStreamUpdate {
+    const named = tasks
+      .map((t) => t.description)
+      .filter(Boolean)
+      .slice(0, 3)
+    const what = named.length > 0 ? named.join('; ') : `${tasks.length} background task(s)`
+    return this.note(`Waiting for background work to finish: ${what}`)
+  }
+
+  /** The desktop speaking in the transcript, as a notice under the current message. */
+  note(text: string): ClaudeStreamUpdate {
+    const messageId = this.owner()
+    const state = this.messageState(messageId)
+    this.notes += 1
+    const idx = this.slot(state, `note:${this.notes}`, () => ({
+      kind: 'text',
+      text: '',
+      metadata: { [KIND_METADATA_KEY]: 'notice' }
+    }))
+    if ((state.parts[idx].text ?? '').length >= text.length) return {}
+    state.parts[idx] = { ...state.parts[idx], text }
+    return { message: { messageId, parts: state.parts } }
+  }
+
+  private notes = 0
 
   private messageOwningTool(toolId: string): string | null {
     for (const [messageId, state] of this.messages) {
