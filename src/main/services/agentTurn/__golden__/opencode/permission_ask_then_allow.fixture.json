@@ -1,0 +1,83 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "localAgentTurnRunner.test.ts › posts a permission decision as OpenCode's own reply enum (ask shape, reply body)",
+    "localAgentTurnRunner.test.ts › drops an engine-settled request from the registry, not just from the turn (permission.v2.replied shape)",
+    "turnStream.test.ts › pairs a tool call with its result by callID (tool frames)"
+  ],
+  "description": "A tool asks permission mid-turn, the ask parks in pendingRequests, the user allows once, the runner posts {reply:'once'}, the engine echoes permission.v2.replied, the tool succeeds and the turn ends. The interleaving of tool.called before the ask is composed by hand, not observed.",
+  "setup": {},
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.tool.called",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "callID": "c1",
+          "tool": "bash",
+          "input": { "command": "rm -rf build" },
+          "provider": { "executed": true }
+        }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "permission.v2.asked",
+        "data": {
+          "sessionID": "ses_new",
+          "id": "per_2",
+          "action": "bash",
+          "resources": ["rm -rf build"],
+          "save": ["bash:rm *"],
+          "source": { "type": "tool", "messageID": "msg_1", "callID": "c1" }
+        }
+      }
+    },
+    { "op": "awaitRegistered", "requestId": "per_2" },
+    { "op": "checkpoint", "name": "parked" },
+    {
+      "op": "resolve",
+      "requestId": "per_2",
+      "resolution": { "kind": "permission", "reply": "once" }
+    },
+    { "op": "checkpoint", "name": "answered" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "permission.v2.replied",
+        "data": { "sessionID": "ses_new", "requestID": "per_2", "reply": "once" }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.tool.success",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "callID": "c1",
+          "structured": {},
+          "content": [{ "type": "text", "text": "removed build/" }],
+          "provider": { "executed": true }
+        }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-cmd-1",
+      "contextId": "ctx-cmd-1"
+    },
+    {
+      "type": "delta",
+      "kind": "command_result",
+      "text": "- docs/\n- src/\n",
+      "commandInvocation": "/files"
+    },
+    {
+      "type": "delta",
+      "kind": "command_result",
+      "text": "- package.json\n",
+      "commandInvocation": "/files"
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-cmd-1",
+      "contextId": "ctx-cmd-1"
+    }
+  ],
+  "result": {
+    "text": "- docs/\n- src/\n- package.json\n",
+    "parts": [
+      {
+        "kind": "command_result",
+        "text": "- docs/\n- src/\n- package.json\n",
+        "commandInvocation": "/files"
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-cmd-1",
+    "taskId": "task-cmd-1",
+    "taskState": "completed"
+  }
+}

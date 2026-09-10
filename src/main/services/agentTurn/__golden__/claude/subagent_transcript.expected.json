@@ -1,0 +1,101 @@
+{
+  "_notes": [
+    "Subagent frames are flattened into the main transcript: the subagent's Read and its result sit between the Agent call and the Agent call's result, with no parent linkage in any event or part — parent_tool_use_id is used only to key the message lane. Phase 1's child event is where that changes.",
+    "The Agent narration shows `prompt`, not `description`: describeClaudeToolCall's field list has no `description` (claudePermissions has one for the ask, the narration does not)."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Asking the ledger agent."
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Agent: Read ledger.txt and report the word.",
+      "toolName": "Agent",
+      "toolInput": {
+        "description": "Read the ledger",
+        "prompt": "Read ledger.txt and report the word.",
+        "subagent_type": "general-purpose"
+      },
+      "toolId": "toolu_agent"
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Read: ledger.txt",
+      "toolName": "Read",
+      "toolInput": {
+        "file_path": "ledger.txt"
+      },
+      "toolId": "toolu_sub_read"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "saffron",
+      "toolId": "toolu_sub_read",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "The word is saffron.",
+      "toolId": "toolu_agent",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "saffron"
+    }
+  ],
+  "result": {
+    "text": "Asking the ledger agent.saffron",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Asking the ledger agent."
+      },
+      {
+        "kind": "tool",
+        "text": "Agent: Read ledger.txt and report the word.",
+        "toolName": "Agent",
+        "toolInput": {
+          "description": "Read the ledger",
+          "prompt": "Read ledger.txt and report the word.",
+          "subagent_type": "general-purpose"
+        },
+        "toolId": "toolu_agent"
+      },
+      {
+        "kind": "tool",
+        "text": "Read: ledger.txt",
+        "toolName": "Read",
+        "toolInput": {
+          "file_path": "ledger.txt"
+        },
+        "toolId": "toolu_sub_read"
+      },
+      {
+        "kind": "tool_result",
+        "text": "saffron",
+        "toolId": "toolu_sub_read",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "tool_result",
+        "text": "The word is saffron.",
+        "toolId": "toolu_agent",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "saffron"
+      }
+    ],
+    "notices": [],
+    "contextId": "sess-new"
+  }
+}

@@ -56,6 +56,7 @@ Preload's `channel.port1.onmessage` runs the guard, `console.warn`'s and drops o
 3. Add its `type` literal to the guard's discriminator list (`is…StreamEvent`)
 4. Emit it from the sender (`StreamPort.postMessage` typecheck enforces the shape)
 5. Handle it in `useChatStream.handle{Agent,Llm}`'s switch (unhandled cases fall through silently — that's the forward-compat contract)
+6. Add its row to `src/renderer/src/hooks/useChatStream.events.test.tsx` — the coverage guards there (`AGENT_EVENT_TYPES`, `LLM_EVENT_TYPES`) are `Record<…['type'], true>`, so `npm run typecheck:web` fails until the new `type` is listed, and a runtime check fails until a table row exercises it
 
 Adding a new field on an existing variant only requires step 1; the compiler flags every sender and receiver that doesn't satisfy the new shape.
 

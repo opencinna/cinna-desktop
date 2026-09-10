@@ -1,0 +1,58 @@
+{
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-notice-1",
+      "contextId": "ctx-notice-1"
+    },
+    {
+      "type": "delta",
+      "kind": "notice",
+      "text": "Starting up the agent environment"
+    },
+    {
+      "type": "delta",
+      "kind": "notice",
+      "text": ", this may take a moment..."
+    },
+    {
+      "type": "delta",
+      "kind": "notice",
+      "text": "Environment ready."
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Ready when you are."
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-notice-1",
+      "contextId": "ctx-notice-1"
+    }
+  ],
+  "result": {
+    "text": "Ready when you are.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Ready when you are."
+      }
+    ],
+    "notices": [
+      {
+        "partKey": "art:art-notice-1:0",
+        "text": "Starting up the agent environment, this may take a moment..."
+      },
+      {
+        "partKey": "art:art-notice-2:0",
+        "text": "Environment ready."
+      }
+    ],
+    "contextId": "ctx-notice-1",
+    "taskId": "task-notice-1",
+    "taskState": "completed"
+  }
+}

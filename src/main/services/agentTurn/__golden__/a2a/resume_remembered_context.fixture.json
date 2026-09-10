@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The chat already has a session row from a turn that ended in `input-required`. The user answers; the request must carry the remembered contextId and taskId, and the server continues the same task.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "staging, please",
+    "isCinnaTokenAuth": true
+  },
+  "session": { "contextId": "ctx-remembered-1", "taskId": "task-remembered-1", "taskState": "input-required" },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-remembered-1", "contextId": "ctx-remembered-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-remembered-1", "contextId": "ctx-remembered-1", "artifact": { "artifactId": "art-resume-1", "parts": [ { "kind": "text", "text": "Deploying to staging.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-remembered-1", "contextId": "ctx-remembered-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

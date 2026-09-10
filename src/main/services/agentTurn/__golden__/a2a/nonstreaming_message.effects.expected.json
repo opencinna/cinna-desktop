@@ -1,0 +1,54 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": null,
+      "signal": false
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": null,
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "ping"
+              }
+            ]
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    null
+  ],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-nsm-1",
+      "taskId": null,
+      "taskState": null
+    }
+  ],
+  "taskIdsSurfaced": [],
+  "clientsSurfaced": 1
+}

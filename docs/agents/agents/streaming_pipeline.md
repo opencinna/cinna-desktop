@@ -164,6 +164,7 @@ Streaming blocks merge consecutive deltas with the same merge rule as the main-p
 - Renderer store: `src/renderer/src/stores/chat.store.ts:appendDelta` <!-- nocheck -->
 - Renderer hook: `src/renderer/src/hooks/useChatStream.ts:handleAgent` <!-- nocheck -->
 - Renderer routing: `src/renderer/src/components/chat/MessageStream.tsx`
+- Characterization: `src/renderer/src/hooks/useChatStream.events.test.tsx` pins what each event does to the chat store, and the per-runner golden streams pin what reaches it. See [Characterization tests](../local_agents/agent_turn_tech.md#characterization-tests)
 - Block components: `src/renderer/src/components/chat/ThinkingBlock.tsx`, `src/renderer/src/components/chat/ToolNarrationBlock.tsx`, `src/renderer/src/components/chat/ToolResultBlock.tsx`, `src/renderer/src/components/chat/CommandResultBlock.tsx`, `src/renderer/src/components/chat/AgentAttachment.tsx` (`file` kind), `src/renderer/src/components/chat/NoticeBlock.tsx`. Both live and persisted notices route through `NoticeBlock` (live: forced-expanded row; persisted: collapsed dot or expanded row per verbose mode)
 
 ## Backward Compatibility

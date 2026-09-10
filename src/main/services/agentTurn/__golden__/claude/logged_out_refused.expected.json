@@ -1,0 +1,12 @@
+{
+  "events": [],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "error": {
+      "message": "This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal.",
+      "raw": "This agent runs on Claude, and that Claude Code install is not logged in. Run `claude` in a terminal."
+    }
+  }
+}

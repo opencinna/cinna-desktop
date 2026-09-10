@@ -1,0 +1,33 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A non-streaming agent answers `message/send` with a JSON-RPC error (-32001 Task not found) for the task the chat remembered. The SDK's `A2AClient.sendMessage` returns the error response as a value rather than throwing it.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Carry on",
+    "isCinnaTokenAuth": true
+  },
+  "session": { "contextId": "ctx-stale-1", "taskId": "task-stale-1", "taskState": "input-required" },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": false },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "rpc": { "error": { "code": -32001, "message": "Task not found", "data": { "taskId": "task-stale-1" } } }
+    }
+  }
+}

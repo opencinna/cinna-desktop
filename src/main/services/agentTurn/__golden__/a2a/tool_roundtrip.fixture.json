@@ -1,0 +1,42 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A Cinna agent thinks, calls a tool, streams its output (two stdout chunks that merge, a stderr chunk, then a stdout chunk with no tool_stream metadata), and answers.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Dry-run the deploy",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-think", "parts": [ { "kind": "text", "text": "Looking at the deploy script first.", "metadata": { "cinna.content_kind": "thinking" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-tool", "parts": [ { "kind": "text", "text": "Running the deploy dry-run", "metadata": { "cinna.content_kind": "tool", "cinna.tool_name": "Bash", "cinna.tool_input": { "command": "./deploy.sh --dry-run", "description": "Dry-run the deploy" }, "cinna.tool_id": "toolu_01" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-out-1", "parts": [ { "kind": "text", "text": "step 1/2 ok\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "toolu_01", "cinna.tool_stream": "stdout" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-out-2", "parts": [ { "kind": "text", "text": "step 2/2 ok\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "toolu_01", "cinna.tool_stream": "stdout" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-err-1", "parts": [ { "kind": "text", "text": "warning: cache cold\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "toolu_01", "cinna.tool_stream": "stderr" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-out-3", "parts": [ { "kind": "text", "text": "done\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "toolu_01" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "artifact": { "artifactId": "art-answer", "parts": [ { "kind": "text", "text": "The dry-run passed with one warning.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-tool-1", "contextId": "ctx-tool-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

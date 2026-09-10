@@ -1,0 +1,75 @@
+{
+  "_notes": [
+    "Every poll checks the agent before the model, and the model catalog is not requested at all while the agent is missing: agent, then agent+model, then agent+model."
+  ],
+  "order": [
+    "ensureRunning",
+    "lock",
+    "unlock"
+  ],
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/agent?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "GET",
+      "path": "/api/model?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "GET",
+      "path": "/api/agent?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "GET",
+      "path": "/api/model?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "body": {
+        "agent": "assistant_ab12",
+        "model": {
+          "providerID": "anthropic",
+          "id": "claude-sonnet-4-6"
+        },
+        "location": {
+          "directory": "/agents/helper"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/event"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_new/prompt",
+      "body": {
+        "prompt": {
+          "text": "hello"
+        }
+      }
+    }
+  ],
+  "registered": [],
+  "saved": [
+    {
+      "chatId": "chat_1",
+      "agentId": "folder:abc",
+      "agentDir": "/agents/helper",
+      "agentKind": "kit",
+      "sessionId": "ses_new"
+    }
+  ],
+  "checkpoints": [],
+  "after": {
+    "pending": [],
+    "locked": false,
+    "busConnected": false
+  }
+}

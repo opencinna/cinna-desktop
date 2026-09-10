@@ -1,0 +1,39 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The user stops the turn while it streams: the signal aborts inside the 3rd onEvent call. The server's remaining frames (one more text chunk, then `canceled`) are already on the wire.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Check the cluster",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-cancel-1", "contextId": "ctx-cancel-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cancel-1", "contextId": "ctx-cancel-1", "artifact": { "artifactId": "art-c1", "parts": [ { "kind": "text", "text": "First, ", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cancel-1", "contextId": "ctx-cancel-1", "artifact": { "artifactId": "art-c2", "parts": [ { "kind": "text", "text": "checking the ", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cancel-1", "contextId": "ctx-cancel-1", "artifact": { "artifactId": "art-c3", "parts": [ { "kind": "text", "text": "cluster state.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-cancel-1", "contextId": "ctx-cancel-1", "status": { "state": "canceled" }, "final": true } }
+      ]
+    }
+  },
+  "script": { "abortAfterEmitted": 3 }
+}

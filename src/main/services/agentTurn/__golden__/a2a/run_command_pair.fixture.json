@@ -1,0 +1,38 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A `/run:rotate_status` execution, synthesized as a tool + tool_result pair carrying `cinna.command_invocation`. The second stdout chunk omits the invocation, so the merge has to keep the one it already captured.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "/run:rotate_status",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-run-1", "contextId": "ctx-run-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-run-1", "contextId": "ctx-run-1", "artifact": { "artifactId": "art-run-tool", "parts": [ { "kind": "text", "text": "rotate_status", "metadata": { "cinna.content_kind": "tool", "cinna.tool_name": "run_script", "cinna.tool_input": { "name": "rotate_status" }, "cinna.tool_id": "exec-run-1", "cinna.command_invocation": "/run:rotate_status" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-run-1", "contextId": "ctx-run-1", "artifact": { "artifactId": "art-run-out-1", "parts": [ { "kind": "text", "text": "rotated 3 keys\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "exec-run-1", "cinna.tool_stream": "stdout", "cinna.command_invocation": "/run:rotate_status" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-run-1", "contextId": "ctx-run-1", "artifact": { "artifactId": "art-run-out-2", "parts": [ { "kind": "text", "text": "ok\n", "metadata": { "cinna.content_kind": "tool_result", "cinna.tool_id": "exec-run-1", "cinna.tool_stream": "stdout" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-run-1", "contextId": "ctx-run-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

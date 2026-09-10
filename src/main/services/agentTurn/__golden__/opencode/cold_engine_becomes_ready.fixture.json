@@ -1,0 +1,58 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "localAgentTurnRunner.test.ts › fakeEngine (the warm /api/agent and /api/model answers)",
+    "localAgentTurnRunner.test.ts › fails the turn when the engine never loads the agent, instead of running it promptless (the not-yet-loaded answer)",
+    "localAgentTurnRunner.ts › awaitEngineReady (the empty → partial → ready progression its header describes; no inline test polls through it)"
+  ],
+  "description": "A cold engine warms up under the turn: first poll has no agent, second has the agent but no model, third has both. Polls are 1 s apart in production; setTimeout is faked so the two sleeps cost nothing. The turn then opens a session and runs normally.",
+  "setup": {
+    "fakeTimers": true,
+    "routes": {
+      "GET /api/agent": [
+        { "status": 200, "body": { "data": [] } },
+        { "status": 200, "body": { "data": [{ "id": "assistant_ab12" }] } }
+      ],
+      "GET /api/model": [
+        { "status": 200, "body": { "data": [] } },
+        {
+          "status": 200,
+          "body": {
+            "data": [
+              {
+                "providerID": "anthropic",
+                "id": "claude-sonnet-4-6",
+                "api": { "type": "aisdk", "package": "@ai-sdk/anthropic" }
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "steps": [
+    { "op": "advance", "ms": 1000 },
+    { "op": "advance", "ms": 1000 },
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Ready now." }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "events": [],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "error": {
+      "message": "Cinna session expired — please re-authenticate.",
+      "raw": "A2aHttpError: A2A request to https://agent.example.test/a2a/ rejected: 401 Unauthorized",
+      "code": "cinna_reauth_required"
+    }
+  }
+}

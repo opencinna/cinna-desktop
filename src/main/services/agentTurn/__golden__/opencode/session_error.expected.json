@@ -1,0 +1,28 @@
+{
+  "_notes": [
+    "POSSIBLE GAP, pinned as-is: error.raw equals error.message ('429'). engineErrorMessage humanises the engine's error object and the original (name 'APIError') is kept nowhere in the result, so raw carries no more detail than message.",
+    "Partial text is kept in parts on the error branch, matching the A2A path."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "part"
+    }
+  ],
+  "result": {
+    "text": "part",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "part"
+      }
+    ],
+    "notices": [],
+    "error": {
+      "message": "429",
+      "raw": "429"
+    },
+    "contextId": "ses_new"
+  }
+}

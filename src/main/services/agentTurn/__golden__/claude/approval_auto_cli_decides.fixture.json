@@ -1,0 +1,117 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "docs/agents/local_agents/claude_contract.md §10 Auto mode (ls -la ran with canUseTool never called)",
+    "claudeAgentTurnRunner.test.ts › automatic approvals the CLI could not honour › says nothing when the CLI ran the mode it was asked for"
+  ],
+  "description": "On \"automatic\" the CLI's own classifier approves a Bash call: it runs with no ask, no block, and no fallback notice.",
+  "deps": {
+    "approval": "auto"
+  },
+  "queries": [
+    [
+      {
+        "yield": {
+          "type": "system",
+          "subtype": "init",
+          "session_id": "sess-new",
+          "apiKeySource": "none",
+          "model": "claude-opus-5",
+          "claude_code_version": "2.1.266",
+          "permissionMode": "auto"
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "session_id": "sess-new",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_1"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "assistant",
+          "message": {
+            "id": "msg_1",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_ls",
+                "name": "Bash",
+                "input": {
+                  "command": "ls -la"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "user",
+          "message": {
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "toolu_ls",
+                "content": "total 0"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "session_id": "sess-new",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_2"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "The folder is empty."
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "result",
+          "subtype": "success",
+          "is_error": false,
+          "result": "The folder is empty.",
+          "session_id": "sess-new",
+          "num_turns": 2
+        }
+      }
+    ]
+  ]
+}

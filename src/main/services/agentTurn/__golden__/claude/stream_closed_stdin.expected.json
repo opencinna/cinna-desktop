@@ -1,0 +1,152 @@
+{
+  "_notes": [
+    "The fixed behaviour: stdin is still open after the first result (boundary stdin) and the background subagent's ask reaches canUseTool. The stub records the CLI's \"Stream closed\" denial instead of calling canUseTool once stdin has closed (script.ts), so closing early changes this file.",
+    "The subagent's permission block is filed under msg_2, the main lane's current message, not the subagent's msg_sub_1 — askPermission() always uses the main lane. Invisible in parts, which the accumulator flattens.",
+    "The wait notice is a live notice delta and in result.notices, never in result.parts."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Agent: Count the vendor bills in the queue.",
+      "toolName": "Agent",
+      "toolInput": {
+        "description": "Queue backlog for vendor bills",
+        "prompt": "Count the vendor bills in the queue.",
+        "run_in_background": true
+      },
+      "toolId": "toolu_bg"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "Async agent launched successfully.",
+      "toolId": "toolu_bg",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "launched"
+    },
+    {
+      "type": "delta",
+      "kind": "notice",
+      "text": "Waiting for background work to finish: Queue backlog for vendor bills"
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Bash: ls bills | wc -l",
+      "toolName": "Bash",
+      "toolInput": {
+        "command": "ls bills | wc -l"
+      },
+      "toolId": "toolu_sub_bash"
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Permission needed to run a command: ls bills | wc -l",
+      "toolName": "cinna_permission_request",
+      "toolInput": {
+        "action": "Bash",
+        "resources": [
+          "ls bills | wc -l"
+        ],
+        "savable": []
+      },
+      "toolId": "<permission-request#1>"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "Allowed once.",
+      "toolId": "<permission-request#1>",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "42",
+      "toolId": "toolu_sub_bash",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": " 42 bills"
+    }
+  ],
+  "result": {
+    "text": "launched 42 bills",
+    "parts": [
+      {
+        "kind": "tool",
+        "text": "Agent: Count the vendor bills in the queue.",
+        "toolName": "Agent",
+        "toolInput": {
+          "description": "Queue backlog for vendor bills",
+          "prompt": "Count the vendor bills in the queue.",
+          "run_in_background": true
+        },
+        "toolId": "toolu_bg"
+      },
+      {
+        "kind": "tool_result",
+        "text": "Async agent launched successfully.",
+        "toolId": "toolu_bg",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "launched"
+      },
+      {
+        "kind": "tool",
+        "text": "Bash: ls bills | wc -l",
+        "toolName": "Bash",
+        "toolInput": {
+          "command": "ls bills | wc -l"
+        },
+        "toolId": "toolu_sub_bash"
+      },
+      {
+        "kind": "tool",
+        "text": "Permission needed to run a command: ls bills | wc -l",
+        "toolName": "cinna_permission_request",
+        "toolInput": {
+          "action": "Bash",
+          "resources": [
+            "ls bills | wc -l"
+          ],
+          "savable": []
+        },
+        "toolId": "<permission-request#1>"
+      },
+      {
+        "kind": "tool_result",
+        "text": "Allowed once.",
+        "toolId": "<permission-request#1>",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "tool_result",
+        "text": "42",
+        "toolId": "toolu_sub_bash",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": " 42 bills"
+      }
+    ],
+    "notices": [
+      {
+        "partKey": "msg:msg_2:1",
+        "text": "Waiting for background work to finish: Queue backlog for vendor bills"
+      }
+    ],
+    "contextId": "sess-new"
+  }
+}

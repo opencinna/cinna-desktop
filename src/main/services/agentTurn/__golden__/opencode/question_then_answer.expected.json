@@ -1,0 +1,76 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Asked a question.",
+      "toolName": "askuserquestion",
+      "toolInput": {
+        "questions": [
+          {
+            "question": "Which?",
+            "header": "Pick",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "A",
+                "description": "a"
+              }
+            ]
+          }
+        ]
+      },
+      "toolId": "que_7"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "Answered: A.",
+      "toolId": "que_7",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Going with A."
+    }
+  ],
+  "result": {
+    "text": "Going with A.",
+    "parts": [
+      {
+        "kind": "tool",
+        "text": "Asked a question.",
+        "toolName": "askuserquestion",
+        "toolInput": {
+          "questions": [
+            {
+              "question": "Which?",
+              "header": "Pick",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "A",
+                  "description": "a"
+                }
+              ]
+            }
+          ]
+        },
+        "toolId": "que_7"
+      },
+      {
+        "kind": "tool_result",
+        "text": "Answered: A.",
+        "toolId": "que_7",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "Going with A."
+      }
+    ],
+    "notices": [],
+    "contextId": "ses_new"
+  }
+}

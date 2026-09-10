@@ -1,0 +1,27 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A minimal agent whose card has no `capabilities` at all (so not streaming): `message/send` returns a bare Message with a contextId and no task.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Echo",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a/.well-known/agent-card.json",
+    "wireContent": "ping"
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Echo",
+        "description": "Hand-written golden fixture agent with a minimal card",
+        "version": "0.0.1"
+      }
+    },
+    "rpc": {
+      "rpc": {
+        "result": { "kind": "message", "role": "agent", "messageId": "msg-nsm-1", "contextId": "ctx-nsm-1", "parts": [ { "kind": "text", "text": "pong" } ] }
+      }
+    }
+  }
+}

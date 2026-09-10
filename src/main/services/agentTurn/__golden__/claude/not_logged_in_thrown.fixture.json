@@ -1,0 +1,17 @@
+{
+  "recorded_from": "hand-written",
+  "source": "claudeAgentTurnRunner.test.ts › readiness, answered before the turn rather than as a failed one › names the remedy when that install is not logged in, without offering to do it",
+  "description": "The login probe said logged in (a cached answer), the CLI then throws its own \"Not logged in · Please run /login\" error result; the runner maps it to the remedy sentence.",
+  "deps": {
+    "approval": "auto"
+  },
+  "queries": [
+    [
+      {
+        "throw": {
+          "message": "Claude Code returned an error result: Not logged in · Please run /login"
+        }
+      }
+    ]
+  ]
+}

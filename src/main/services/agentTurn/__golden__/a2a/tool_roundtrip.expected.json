@@ -1,0 +1,110 @@
+{
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-tool-1",
+      "contextId": "ctx-tool-1"
+    },
+    {
+      "type": "delta",
+      "kind": "thinking",
+      "text": "Looking at the deploy script first."
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Running the deploy dry-run",
+      "toolName": "Bash",
+      "toolInput": {
+        "command": "./deploy.sh --dry-run",
+        "description": "Dry-run the deploy"
+      },
+      "toolId": "toolu_01"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "step 1/2 ok\n",
+      "toolId": "toolu_01",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "step 2/2 ok\n",
+      "toolId": "toolu_01",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "warning: cache cold\n",
+      "toolId": "toolu_01",
+      "toolStream": "stderr"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "done\n",
+      "toolId": "toolu_01",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "The dry-run passed with one warning."
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-tool-1",
+      "contextId": "ctx-tool-1"
+    }
+  ],
+  "result": {
+    "text": "The dry-run passed with one warning.",
+    "parts": [
+      {
+        "kind": "thinking",
+        "text": "Looking at the deploy script first."
+      },
+      {
+        "kind": "tool",
+        "text": "Running the deploy dry-run",
+        "toolName": "Bash",
+        "toolInput": {
+          "command": "./deploy.sh --dry-run",
+          "description": "Dry-run the deploy"
+        },
+        "toolId": "toolu_01"
+      },
+      {
+        "kind": "tool_result",
+        "text": "step 1/2 ok\nstep 2/2 ok\n",
+        "toolId": "toolu_01",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "tool_result",
+        "text": "warning: cache cold\n",
+        "toolId": "toolu_01",
+        "toolStream": "stderr"
+      },
+      {
+        "kind": "tool_result",
+        "text": "done\n",
+        "toolId": "toolu_01",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "The dry-run passed with one warning."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-tool-1",
+    "taskId": "task-tool-1",
+    "taskState": "completed"
+  }
+}

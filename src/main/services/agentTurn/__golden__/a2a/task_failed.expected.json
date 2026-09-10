@@ -1,0 +1,43 @@
+{
+  "_notes": [
+    "POSSIBLE BUG: a task that ends `failed` is returned as a success, with no result.error and taskState failed. The failure reason from status.message merges into the answer text with no separator. streamToAgent then posts `done`, saves the text as an assistant message and reports the job run `succeeded`.",
+    "This is also why the contract's failures() leaves the scenario out (see golden.a2a.test.ts)."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-failed-1",
+      "contextId": "ctx-failed-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Trying the deploy."
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Deploy failed: permission denied on cluster."
+    },
+    {
+      "type": "status",
+      "state": "failed",
+      "taskId": "task-failed-1",
+      "contextId": "ctx-failed-1"
+    }
+  ],
+  "result": {
+    "text": "Trying the deploy.Deploy failed: permission denied on cluster.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Trying the deploy.Deploy failed: permission denied on cluster."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-failed-1",
+    "taskId": "task-failed-1",
+    "taskState": "failed"
+  }
+}

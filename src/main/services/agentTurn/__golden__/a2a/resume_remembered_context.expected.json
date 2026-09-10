@@ -1,0 +1,34 @@
+{
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-remembered-1",
+      "contextId": "ctx-remembered-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Deploying to staging."
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-remembered-1",
+      "contextId": "ctx-remembered-1"
+    }
+  ],
+  "result": {
+    "text": "Deploying to staging.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Deploying to staging."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-remembered-1",
+    "taskId": "task-remembered-1",
+    "taskState": "completed"
+  }
+}

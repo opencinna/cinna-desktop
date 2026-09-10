@@ -1,0 +1,34 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A server that streams bare `message` events and never a task or status-update: a thinking message with no taskId, then a text message that grows snapshot-style under one messageId and carries a taskId. The stream just ends.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "wireContent": "Ping"
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "message", "role": "agent", "messageId": "msg-s-1", "contextId": "ctx-msg-1", "parts": [ { "kind": "text", "text": "Thinking about it", "metadata": { "cinna.content_kind": "thinking" } } ] } },
+        { "result": { "kind": "message", "role": "agent", "messageId": "msg-s-2", "contextId": "ctx-msg-1", "taskId": "task-msg-1", "parts": [ { "kind": "text", "text": "Sure" } ] } },
+        { "result": { "kind": "message", "role": "agent", "messageId": "msg-s-2", "contextId": "ctx-msg-1", "taskId": "task-msg-1", "parts": [ { "kind": "text", "text": "Sure, pong." } ] } }
+      ]
+    }
+  }
+}

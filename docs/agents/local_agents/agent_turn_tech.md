@@ -72,6 +72,7 @@ Emission side: `turnStream.ts:535` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `src/main/services/agentTurn/engineEventBus.test.ts` — fan-out, `ready()` ordering, disconnect/reconnect/close, backoff reset, unattributed errors, a throwing listener, unsubscribe-from-inside-handler, and the parser-`reset()` case
 - `src/main/services/agentTurn/turnStream.test.ts` — the event→part mapping in full, including the cumulative-vs-delta trap, `text.ended` idempotence, never-shrink, request asks and paired decisions
 - `src/main/services/agentTurn/pendingRequests.test.ts`, `sseParser.test.ts`
+- `src/main/services/agentTurn/golden.{a2a,opencode,claude}.test.ts` <!-- nocheck --> with `__golden__/` — golden streams and the runner contract for all three runners. See [Characterization tests](#characterization-tests)
 - `src/renderer/src/components/chat/PermissionRequestBlock.test.tsx`, `src/renderer/src/utils/localAgentRequests.test.ts`
 
 ## Database Schema
@@ -332,3 +333,63 @@ The plan's "Phase 6 debt" entry claiming the reconnect path has **no test** was 
 **The fixture behind that test had to be corrected before the claim could stand**, and the correction is the part worth remembering. It gave its `session.next.text.delta` a fabricated `durable` block, which the verified contract says a real delta never carries — so the fixture contradicted the contract, the same failure mode that made the `session.idle` and `POST /wait` fakes confidently wrong. The cursor now rides `session.next.text.started` (seq 7), matching the observed trace `admitted(1) → prompted(2) → step.started(3) → text.started(4) → deltas (no durable) → text.ended(5) → step.ended(6)`. The test passes with unchanged assertions, still asserting `?after=7`, and all three named mutations still fail it. The old version proved `?after=` works when a cursor happens to sit on a delta — a shape production never emits.
 
 That also split the coverage into two genuinely distinct branches: `heals a mid-turn stream drop from the durable stream alone` is the drop-*after*-`text.started` case, and `replays the whole durable stream when the socket dies before any cursor exists` is the drop-*before*-any-durable-event case. Neither is reachable from the other's input — the `const query = ''` mutation fails the first and **passes** the second, which structurally cannot distinguish it.
+
+## Characterization tests
+
+These pin what the three runners and the renderer's stream handler **currently do**, not what they should do, so the agent runtime refactor can show it changed nothing it did not mean to. Behaviour that looks wrong is pinned as it is, with the reason written beside it; a fix is a separate change that edits the expectation on purpose. The rationale for each file is in its header comment and is not repeated here.
+
+### Golden streams
+
+- **One test file per runner**: `src/main/services/agentTurn/golden.a2a.test.ts`, `golden.opencode.test.ts`, `golden.claude.test.ts`. Not one shared file, because each runner needs its own `vi.mock`s. Each scenario replays one recorded input and compares the **whole** output: every `onEvent` call in order, plus the returned `RunAgentTurnResult`
+- **Data**, under `src/main/services/agentTurn/__golden__/<runner>/`: `<scenario>.fixture.json` (the input), `<scenario>.expected.json` (`{events, result}`), and one sidecar per scenario (below). Every fixture names its origin in `recorded_from`; all are currently `"hand-written"`, and one taken from a real binary would carry `"<binary> <version>"` <!-- nocheck -->
+- **The per-runner driver** is in the same folder: `a2a/fakeAgent.ts` fakes global `fetch` rather than the SDK client, so the card fetch, the 401/403 intercept and the SDK's SSE parser run over real bytes. `opencode/goldenEngine.ts` is a *copy* of the world in `localAgentTurnRunner.test.ts`, because importing a test file registers its tests and would make the count lie; keep the two in step by hand. `claude/script.ts` is a stub SDK that plays a step script, and its header lists which CLI behaviours it reproduces and why
+- **Shared plumbing** is `__golden__/harness.ts`: `readFixture`, `normalise` (wall-clock keys become `<time>`; UUIDs and runner-minted ids become `<label#n>` in order of first appearance, so two fields that carried the same id still match), `expectGolden` and `expectGoldenSidecar`
+
+### The expectation-file rule
+
+- **Expectations are JSON files compared with `toEqual`, never Vitest snapshots.** A snapshot rewrites itself under `-u`, and a refactor that changes the stream is exactly when someone reaches for `-u`. A file only changes when a person edits it, so a difference in the diff is a decision somebody made
+- **`GOLDEN_WRITE=1` writes a *missing* file only, and the test still fails on that run**, naming the path. A first run can never pass silently, and an existing file is never overwritten
+- **To change a scenario on purpose**, edit its expectation, or delete it and re-run with `GOLDEN_WRITE=1`. Then read what was written before re-running: regenerating without reading turns the file back into a snapshot
+- **To add a scenario**, add the fixture *and* its name to the file's `SCENARIOS` list. Only `golden.opencode.test.ts` checks that every fixture on disk is in the list. In the A2A and Claude files, a fixture missing from the list is silently never run
+- **`golden.a2a.test.ts` stops at the first missing file.** A new A2A scenario therefore needs two `GOLDEN_WRITE=1` runs to write both files. The OpenCode and Claude files run both comparisons before throwing
+- **`_notes`** (a string array at the top of any expectation or sidecar) is never compared. It is where a pin that looks wrong says why it was kept
+
+### Sidecar expectations
+
+`expectGolden` sees only `{events, result}`, and half of what a runner does never reaches `onEvent`. So each scenario has a second file, `<scenario>.<name>.expected.json`, compared through `expectGoldenSidecar` under the same rules.
+
+| Runner | Sidecar | Holds | Helper |
+|---|---|---|---|
+| A2A | `effects` | Every HTTP request (including the remembered `contextId`/`taskId`, `cinna_file_ids` and the bearer), session reads and upserts, task ids surfaced through `onTaskId`, the `onClient` count | `__golden__/a2a/effects.ts` |
+| OpenCode | `effects` | Every engine call (an allow is a `POST …/reply`, a stop is `/interrupt` plus a reject), the reconcile/lock order, `pendingRequests` registrations, `saveSession` inputs, and what the turn left behind: parked asks, the lock, the bus | `__golden__/opencode/goldenEngine.ts:Effects` <!-- nocheck --> |
+| Claude | `boundary` | The options and prompt of each `query()`, what `canUseTool` **returned** to the SDK, stdin state where the script probed, `saveSession` inputs, and any `onEvent` that arrived after `runTurn` resolved | `__golden__/claude/script.ts:BoundaryCapture` <!-- nocheck --> |
+
+The sidecars exist because the events golden was measurably blind. According to the mutation table in `golden.a2a.test.ts`'s header, skipping `a2aSessionRepo.upsert` on the success path failed the effects files and the contract's `session` clause, and **no** `{events, result}` golden. The plan expects the next vocabulary change to rewrite `*.expected.json` and leave the sidecars alone, and a transport change to rewrite the sidecars.
+
+### The runner contract
+
+`src/main/services/agentTurn/__golden__/runnerContract.ts:describeRunnerContract(name, makeSubject, options)` <!-- nocheck --> is called once at the bottom of each golden file. The suite owns every assertion and the `pendingRequests` instrumentation. A subject only says how to *reach* a situation (`completes`, `failures`, `hangs`, `parks?`, `session`), so a runner cannot pass by describing its own behaviour back. For the same reason a subject's `run` must return `runTurn`'s promise untouched: a `catch` there would make the never-rejects clause test the subject.
+
+What it asserts for every runner:
+
+- `runTurn` never rejects, and every failure is `result.error` with a non-empty `message` and `raw`
+- The first `onEvent` is never `done` or `error`
+- On abort the turn settles by itself and emits nothing further (`abort.settles`), and carries `error` or `taskState: 'canceled'` (`abort.reports`)
+- A parked ask is registered exactly once and released on answer, reject, abort and timeout. The timeout runs through the registry's real timer, shortened. A2A has no `parks()`, because `input-required` ends its turn instead of parking, so its four parked-ask clauses are skipped
+- A session id the turn produces reaches `saveSession`, and the next turn on the same chat gets it back through `readSession`
+
+**A clause a runner breaks is recorded, never bent.**
+
+- `knownViolations: {clause: reason}` records a clause the runner breaks today. The clause passes only if it fails **the way the entry says** — an assertion, or `{ reason, by: 'timeout' }` for a turn that never settles — and fails outright once the runner keeps it, so whoever fixes the runner deletes the entry in the same change, along with the goldens the fix changes. Deliberately not `it.fails`, which passes on any throw, including the suite's own settle timeout. A wait that fails while *setting the clause up* — the turn never started, the ask was never registered — is a `ContractSetupError` and never matches an entry, so a runner that stops reaching its agent cannot satisfy a recorded `by: 'timeout'`
+- `knownFailureViolations: {scenario: reason}` covers one failure scenario that comes back as a success. It is finer than `knownViolations.failures`, which would mark the whole clause over one bad scenario and stop checking the rest. The scenario is asserted to have *no* `error`, so it fails, and must be removed, once it gets one. Every name must exist in `failures()`, and that is asserted too
+
+Currently recorded:
+
+- **`abort.reports`, on all three runners.** An aborted turn returns success, with neither `error` nor a `canceled` task state. A2A returns the last streamed `taskState` (e.g. `working`); OpenCode and Claude return the parts with neither field. The comment beside each entry names the expectation file that shows it
+- **A2A also does not settle on abort while the agent is silent.** `runAgentTurn` passes its signal to neither the SDK nor `fetch`, so the promise stays pending until the server ends the stream. This is pinned separately in the `a2a abort, characterised` test. It is recorded as `abort.settles` with `by: 'timeout'`: A2A's `hangs()` leaves the stream open, and only `hangsServerAssisted()` — used by `abort.reports` alone — closes it the way a server does after `tasks/cancel`
+- **A2A `failures`:** `task_failed` and `nonstreaming_rpc_error` return success, and the job is reported as succeeded
+
+### Kind-branch ratchet and receiver-side events
+
+- `src/main/agents/kindBranches.test.ts` counts literal comparisons on an agent's `source`, `engine`, `kind`, job `type` and `providerType`, plus `isFolderAgent(` calls, across `src/main`, `src/shared` and `src/renderer/src`. It fails when a category exceeds its entry in `LIMITS`. **A limit only ever goes down.** A change that removes branches lowers the limit in the same commit; raising one needs a comment beside it naming the phase that pays it back, because a limit raised without one is just a ceiling. Limits are per category, so headroom freed in one category cannot be spent in another. The count runs in Node, not shell `grep`, and its blind spots (`switch`/`case`, `.includes`) are listed in the header
+- `src/renderer/src/hooks/useChatStream.events.test.tsx` feeds every `AgentStreamEvent` and `LlmStreamEvent` variant through `useChatStream`. Each row pins exactly which chat-store fields changed and which queries were invalidated, and any field a row does not name is asserted unchanged. `Record<Union, true>` guards make a new variant, content kind or task state fail `npm run typecheck:web` until it has a row. Rows titled `PINNED:` record behaviour that looks wrong and is kept as it is

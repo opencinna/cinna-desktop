@@ -1,0 +1,39 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A Cinna agent cold-starts: a startup notice grows snapshot-style, a second notice follows, then the answer.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Are you there?",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "artifact": { "artifactId": "art-notice-1", "parts": [ { "kind": "text", "text": "Starting up the agent environment", "metadata": { "cinna.content_kind": "notice" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "artifact": { "artifactId": "art-notice-1", "parts": [ { "kind": "text", "text": "Starting up the agent environment, this may take a moment...", "metadata": { "cinna.content_kind": "notice" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "artifact": { "artifactId": "art-notice-2", "parts": [ { "kind": "text", "text": "Environment ready.", "metadata": { "cinna.content_kind": "notice" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "artifact": { "artifactId": "art-notice-answer", "parts": [ { "kind": "text", "text": "Ready when you are.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-notice-1", "contextId": "ctx-notice-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

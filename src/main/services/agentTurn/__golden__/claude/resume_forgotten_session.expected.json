@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "marzipan"
+    }
+  ],
+  "result": {
+    "text": "marzipan",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "marzipan"
+      }
+    ],
+    "notices": [],
+    "contextId": "sess-new"
+  }
+}

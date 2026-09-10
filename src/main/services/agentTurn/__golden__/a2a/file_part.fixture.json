@@ -1,0 +1,41 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The user attaches an uploaded file; the agent replies with a raw `<cinna_attach>` tag in its text, then FileParts: one with full cinna.file_* metadata, the same file id again (deduped), one with no cinna.file_id (skipped), and one whose name/mime come only from the `file` field.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Summarise the attached log into a report",
+    "fileIds": ["file-upload-0001"],
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "artifact": { "artifactId": "art-f-text", "parts": [ { "kind": "text", "text": "Here is the report.<cinna_attach>/workspace/report.pdf</cinna_attach>", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "artifact": { "artifactId": "art-f-file", "parts": [ { "kind": "file", "file": { "uri": "https://agent.example.test/files/report.pdf?token=signed", "name": "report.pdf", "mimeType": "application/pdf" }, "metadata": { "cinna.content_kind": "file", "cinna.file_id": "file-report-0001", "cinna.file_name": "report.pdf", "cinna.file_mime": "application/pdf", "cinna.file_size": 20480 } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "artifact": { "artifactId": "art-f-dup", "parts": [ { "kind": "file", "file": { "uri": "https://agent.example.test/files/report.pdf?token=signed-again", "name": "report.pdf", "mimeType": "application/pdf" }, "metadata": { "cinna.content_kind": "file", "cinna.file_id": "file-report-0001", "cinna.file_name": "report.pdf", "cinna.file_mime": "application/pdf", "cinna.file_size": 20480 } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "artifact": { "artifactId": "art-f-noid", "parts": [ { "kind": "file", "file": { "uri": "https://agent.example.test/files/orphan.txt?token=signed", "name": "orphan.txt", "mimeType": "text/plain" }, "metadata": { "cinna.content_kind": "file" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "artifact": { "artifactId": "art-f-fallback", "parts": [ { "kind": "file", "file": { "uri": "https://agent.example.test/files/chart.png?token=signed", "name": "chart.png", "mimeType": "image/png" }, "metadata": { "cinna.content_kind": "file", "cinna.file_id": "file-chart-0002" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-file-1", "contextId": "ctx-file-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

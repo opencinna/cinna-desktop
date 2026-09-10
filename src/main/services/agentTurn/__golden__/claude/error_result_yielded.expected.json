@@ -1,0 +1,16 @@
+{
+  "_notes": [
+    "A failed turn still saves and returns the session id from init."
+  ],
+  "events": [],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "contextId": "sess-new",
+    "error": {
+      "message": "out of usage",
+      "raw": "out of usage"
+    }
+  }
+}

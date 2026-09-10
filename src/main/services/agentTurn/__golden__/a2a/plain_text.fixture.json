@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A manually added A2A agent (no token) streams one answer. Opens with a `task` frame, grows one text artifact snapshot-style, adds a second artifact with no cinna metadata, then completes.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "wireContent": "Say hello"
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "task", "id": "task-plain-1", "contextId": "ctx-plain-1", "status": { "state": "submitted" }, "history": [] } },
+        { "result": { "kind": "status-update", "taskId": "task-plain-1", "contextId": "ctx-plain-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-plain-1", "contextId": "ctx-plain-1", "artifact": { "artifactId": "art-plain-1", "parts": [ { "kind": "text", "text": "Hello", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-plain-1", "contextId": "ctx-plain-1", "artifact": { "artifactId": "art-plain-1", "parts": [ { "kind": "text", "text": "Hello, world", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-plain-1", "contextId": "ctx-plain-1", "artifact": { "artifactId": "art-plain-2", "parts": [ { "kind": "text", "text": "." } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-plain-1", "contextId": "ctx-plain-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

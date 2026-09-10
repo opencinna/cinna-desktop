@@ -1,0 +1,52 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Read: /tmp/hello.txt",
+      "toolName": "Read",
+      "toolInput": {
+        "file_path": "/tmp/hello.txt"
+      },
+      "toolId": "toolu_read"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "1\tthe-secret-word\n",
+      "toolId": "toolu_read",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "marzipan"
+    }
+  ],
+  "result": {
+    "text": "marzipan",
+    "parts": [
+      {
+        "kind": "tool",
+        "text": "Read: /tmp/hello.txt",
+        "toolName": "Read",
+        "toolInput": {
+          "file_path": "/tmp/hello.txt"
+        },
+        "toolId": "toolu_read"
+      },
+      {
+        "kind": "tool_result",
+        "text": "1\tthe-secret-word\n",
+        "toolId": "toolu_read",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "marzipan"
+      }
+    ],
+    "notices": [],
+    "contextId": "sess-new"
+  }
+}

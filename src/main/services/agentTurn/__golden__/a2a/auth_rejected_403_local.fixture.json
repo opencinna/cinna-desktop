@@ -1,0 +1,30 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A manually added agent with its own token (`isCinnaTokenAuth` false) gets 403 on the `message/stream` POST. Same transport error as auth_required_401, but no reauth code and the raw rejection as the message.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-manual-golden",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": false
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": { "status": 403, "statusText": "Forbidden" }
+  }
+}

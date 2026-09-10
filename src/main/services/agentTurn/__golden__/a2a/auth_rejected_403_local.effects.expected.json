@@ -1,0 +1,46 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-manual-golden",
+      "signal": false
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-manual-golden",
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/stream",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Deploy the app"
+              }
+            ]
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    null
+  ],
+  "sessionUpserts": [],
+  "taskIdsSurfaced": [],
+  "clientsSurfaced": 1
+}

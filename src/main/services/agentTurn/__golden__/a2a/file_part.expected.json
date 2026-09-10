@@ -1,0 +1,81 @@
+{
+  "_notes": [
+    "The live text delta carries the raw `<cinna_attach>…</cinna_attach>` tag. Only the result's parts and text are stripped (snapshotParts / answerText), so a live consumer has to strip it itself (stripCinnaAttachTags has a streaming mode for this).",
+    "The duplicate file id (art-f-dup) and the FilePart with no cinna.file_id (art-f-noid) emit nothing. A skipped attachment shows up only in the log.",
+    "The fallback FilePart takes its name and mime from `file`, and its size defaults to 0."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-file-1",
+      "contextId": "ctx-file-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Here is the report.<cinna_attach>/workspace/report.pdf</cinna_attach>"
+    },
+    {
+      "type": "delta",
+      "kind": "file",
+      "text": "",
+      "file": {
+        "fileId": "file-report-0001",
+        "filename": "report.pdf",
+        "mimeType": "application/pdf",
+        "size": 20480
+      }
+    },
+    {
+      "type": "delta",
+      "kind": "file",
+      "text": "",
+      "file": {
+        "fileId": "file-chart-0002",
+        "filename": "chart.png",
+        "mimeType": "image/png",
+        "size": 0
+      }
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-file-1",
+      "contextId": "ctx-file-1"
+    }
+  ],
+  "result": {
+    "text": "Here is the report.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Here is the report."
+      },
+      {
+        "kind": "file",
+        "text": "",
+        "file": {
+          "fileId": "file-report-0001",
+          "filename": "report.pdf",
+          "mimeType": "application/pdf",
+          "size": 20480
+        }
+      },
+      {
+        "kind": "file",
+        "text": "",
+        "file": {
+          "fileId": "file-chart-0002",
+          "filename": "chart.png",
+          "mimeType": "image/png",
+          "size": 0
+        }
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-file-1",
+    "taskId": "task-file-1",
+    "taskState": "completed"
+  }
+}

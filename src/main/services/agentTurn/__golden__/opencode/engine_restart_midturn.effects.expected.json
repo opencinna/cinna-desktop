@@ -1,0 +1,97 @@
+{
+  "_notes": [
+    "POSSIBLE BUG, pinned as-is: saveSession is called with ses_new although that id died with the engine process. Benign today, because the next turn verifies a remembered id with GET /api/session/{id} and opens a fresh session on a 404, but it still writes an id known to be dead.",
+    "The finally sweep posts {reply:'reject'} for per_5 into the engine that just stopped. The fake answers 200; in production it fails and is logged as a warning. There is no /interrupt, because the outcome is an error rather than an abort."
+  ],
+  "order": [
+    "ensureRunning",
+    "lock",
+    "unlock"
+  ],
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/agent?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "GET",
+      "path": "/api/model?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session",
+      "body": {
+        "agent": "assistant_ab12",
+        "model": {
+          "providerID": "anthropic",
+          "id": "claude-sonnet-4-6"
+        },
+        "location": {
+          "directory": "/agents/helper"
+        }
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/event"
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_new/prompt",
+      "body": {
+        "prompt": {
+          "text": "hello"
+        }
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/session/ses_new/permission/per_5/reply",
+      "body": {
+        "reply": "reject"
+      }
+    }
+  ],
+  "registered": [
+    {
+      "requestId": "per_5",
+      "chatId": "chat_1",
+      "agentId": "folder:abc",
+      "kind": "permission",
+      "request": {
+        "action": "bash",
+        "resources": [
+          "ls"
+        ],
+        "savable": [],
+        "callId": "c1"
+      }
+    }
+  ],
+  "saved": [
+    {
+      "chatId": "chat_1",
+      "agentId": "folder:abc",
+      "agentDir": "/agents/helper",
+      "agentKind": "kit",
+      "sessionId": "ses_new"
+    }
+  ],
+  "checkpoints": [
+    {
+      "name": "parked",
+      "pending": [
+        {
+          "requestId": "per_5",
+          "kind": "permission"
+        }
+      ],
+      "busConnected": true
+    }
+  ],
+  "after": {
+    "pending": [],
+    "locked": false,
+    "busConnected": false
+  }
+}

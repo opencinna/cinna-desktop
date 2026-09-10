@@ -1,0 +1,108 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "claudeAgentTurnRunner.test.ts › a turn that works › streams the answer into parts and remembers the session",
+    "claudeMessages.test.ts › text › carries each character exactly once through the accumulator"
+  ],
+  "description": "One text answer in the wire order watched against claude 2.1.266 (claude_contract.md §2): two deltas, the per-block assistant message repeating the text, block stop, result.",
+  "deps": {
+    "approval": "auto"
+  },
+  "queries": [
+    [
+      {
+        "yield": {
+          "type": "system",
+          "subtype": "init",
+          "session_id": "sess-new",
+          "apiKeySource": "none",
+          "model": "claude-opus-5",
+          "claude_code_version": "2.1.266",
+          "permissionMode": "auto"
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "session_id": "sess-new",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_1"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {
+              "type": "text"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "mar"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_delta",
+            "index": 0,
+            "delta": {
+              "type": "text_delta",
+              "text": "zipan"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "assistant",
+          "message": {
+            "id": "msg_1",
+            "content": [
+              {
+                "type": "text",
+                "text": "marzipan"
+              }
+            ]
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "event": {
+            "type": "content_block_stop",
+            "index": 0
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "result",
+          "subtype": "success",
+          "is_error": false,
+          "result": "marzipan",
+          "session_id": "sess-new"
+        }
+      }
+    ]
+  ]
+}

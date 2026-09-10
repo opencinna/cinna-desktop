@@ -1,0 +1,38 @@
+{
+  "_notes": [
+    "A stream of bare `message` events emits no status event at all and ends with taskState undefined (saved as null). The thinking message has no taskId but still sets the contextId."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "thinking",
+      "text": "Thinking about it"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Sure"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": ", pong."
+    }
+  ],
+  "result": {
+    "text": "Sure, pong.",
+    "parts": [
+      {
+        "kind": "thinking",
+        "text": "Thinking about it"
+      },
+      {
+        "kind": "text",
+        "text": "Sure, pong."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-msg-1",
+    "taskId": "task-msg-1"
+  }
+}

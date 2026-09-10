@@ -1,0 +1,33 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "localAgentTurnRunner.test.ts › interrupts the engine when the user cancels, rather than just walking away",
+    "localAgentTurnRunner.test.ts › rejects a still-parked question when the turn ends, so the session cannot wedge"
+  ],
+  "description": "The user stops the turn after some text streamed and while a question is parked: the runner posts /interrupt, returns what it had, and its finally sweep rejects the parked question through the no-body reject endpoint.",
+  "setup": {},
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Let me check" }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "question.v2.asked",
+        "data": {
+          "sessionID": "ses_new",
+          "id": "que_7",
+          "questions": [{ "question": "Which?", "header": "Pick", "options": [{ "label": "A" }] }]
+        }
+      }
+    },
+    { "op": "awaitRegistered", "requestId": "que_7" },
+    { "op": "checkpoint", "name": "parked" },
+    { "op": "abort" }
+  ]
+}

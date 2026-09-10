@@ -1,0 +1,17 @@
+{
+  "_notes": [
+    "The failure happens at the card fetch, before the session is read and before onClient fires."
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false
+    }
+  ],
+  "sessionReads": [],
+  "sessionUpserts": [],
+  "taskIdsSurfaced": [],
+  "clientsSurfaced": 0
+}

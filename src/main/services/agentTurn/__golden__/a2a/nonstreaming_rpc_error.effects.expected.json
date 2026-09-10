@@ -1,0 +1,65 @@
+{
+  "_notes": [
+    "POSSIBLE BUG: the stale session is saved again unchanged, taskState input-required included, so every later turn resends a taskId the server has just reported as not found."
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Carry on"
+              }
+            ],
+            "contextId": "ctx-stale-1",
+            "taskId": "task-stale-1"
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    {
+      "contextId": "ctx-stale-1",
+      "taskId": "task-stale-1",
+      "taskState": "input-required"
+    }
+  ],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-stale-1",
+      "taskId": "task-stale-1",
+      "taskState": "input-required"
+    }
+  ],
+  "taskIdsSurfaced": [
+    "task-stale-1"
+  ],
+  "clientsSurfaced": 1
+}

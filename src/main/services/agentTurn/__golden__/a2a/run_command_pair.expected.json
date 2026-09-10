@@ -1,0 +1,72 @@
+{
+  "_notes": [
+    "POSSIBLE BUG: with no text or command_result part, answerText is empty and `text` falls back to joining every part's text. The compact result becomes tool plumbing with no separators, \"rotate_statusrotated 3 keys\\nok\\n\", and that string is what messages.content and an orchestrator LLM receive.",
+    "The second tool_result delta has no commandInvocation, but the merged part keeps the one captured from the first chunk."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-run-1",
+      "contextId": "ctx-run-1"
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "rotate_status",
+      "toolName": "run_script",
+      "toolInput": {
+        "name": "rotate_status"
+      },
+      "toolId": "exec-run-1",
+      "commandInvocation": "/run:rotate_status"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "rotated 3 keys\n",
+      "toolId": "exec-run-1",
+      "toolStream": "stdout",
+      "commandInvocation": "/run:rotate_status"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "ok\n",
+      "toolId": "exec-run-1",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-run-1",
+      "contextId": "ctx-run-1"
+    }
+  ],
+  "result": {
+    "text": "rotate_statusrotated 3 keys\nok\n",
+    "parts": [
+      {
+        "kind": "tool",
+        "text": "rotate_status",
+        "toolName": "run_script",
+        "toolInput": {
+          "name": "rotate_status"
+        },
+        "toolId": "exec-run-1",
+        "commandInvocation": "/run:rotate_status"
+      },
+      {
+        "kind": "tool_result",
+        "text": "rotated 3 keys\nok\n",
+        "toolId": "exec-run-1",
+        "toolStream": "stdout",
+        "commandInvocation": "/run:rotate_status"
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-run-1",
+    "taskId": "task-run-1",
+    "taskState": "completed"
+  }
+}

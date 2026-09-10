@@ -1,0 +1,31 @@
+{
+  "recorded_from": "hand-written",
+  "source": "claudeAgentTurnRunner.test.ts › runTurn never throws › reports an error result the SDK yielded rather than threw",
+  "description": "An error result yielded as a message rather than thrown.",
+  "deps": {
+    "approval": "auto"
+  },
+  "queries": [
+    [
+      {
+        "yield": {
+          "type": "system",
+          "subtype": "init",
+          "session_id": "sess-new",
+          "apiKeySource": "none",
+          "model": "claude-opus-5",
+          "claude_code_version": "2.1.266",
+          "permissionMode": "auto"
+        }
+      },
+      {
+        "yield": {
+          "type": "result",
+          "subtype": "error_during_execution",
+          "is_error": true,
+          "result": "out of usage"
+        }
+      }
+    ]
+  ]
+}

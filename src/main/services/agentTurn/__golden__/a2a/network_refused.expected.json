@@ -1,0 +1,12 @@
+{
+  "events": [],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "error": {
+      "message": "Could not reach agent (connection refused).",
+      "raw": "TypeError: fetch failed"
+    }
+  }
+}

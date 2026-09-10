@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The agent streams a sentence, then ends the turn in `input-required` with its question carried on the final status-update's `status.message`.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "task", "id": "task-ir-1", "contextId": "ctx-ir-1", "status": { "state": "submitted" }, "history": [] } },
+        { "result": { "kind": "status-update", "taskId": "task-ir-1", "contextId": "ctx-ir-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-ir-1", "contextId": "ctx-ir-1", "artifact": { "artifactId": "art-ir-1", "parts": [ { "kind": "text", "text": "I can deploy that.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-ir-1", "contextId": "ctx-ir-1", "status": { "state": "input-required", "message": { "kind": "message", "role": "agent", "messageId": "msg-ir-question", "taskId": "task-ir-1", "contextId": "ctx-ir-1", "parts": [ { "kind": "text", "text": "Which environment: staging or production?", "metadata": { "cinna.content_kind": "text" } } ] } }, "final": true } }
+      ]
+    }
+  }
+}

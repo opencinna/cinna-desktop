@@ -1,0 +1,56 @@
+{
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/send",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "Which build is on staging?"
+              }
+            ]
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    null
+  ],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-ns-1",
+      "taskId": "task-ns-1",
+      "taskState": "completed"
+    }
+  ],
+  "taskIdsSurfaced": [
+    "task-ns-1"
+  ],
+  "clientsSurfaced": 1
+}

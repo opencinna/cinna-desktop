@@ -1,0 +1,28 @@
+{
+  "_notes": [
+    "POSSIBLE BUG: the partial answer was streamed live (its delta is in the events), but the error result drops it: parts [] and text \"\". Direct mode then saves only an error row, so text the user watched arrive is gone after a reload.",
+    "The message is the SDK's raw string, because humanizeA2AError has no mapping for a JSON-RPC error frame."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-err-1",
+      "contextId": "ctx-err-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Partial answer"
+    }
+  ],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "error": {
+      "message": "SSE event contained an error: Internal error (Code: -32603) Data: {\"detail\":\"model backend crashed\"}",
+      "raw": "Error: SSE event contained an error: Internal error (Code: -32603) Data: {\"detail\":\"model backend crashed\"}"
+    }
+  }
+}

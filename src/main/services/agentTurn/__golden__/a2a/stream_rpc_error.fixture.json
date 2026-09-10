@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The stream opens, the agent starts answering, then a JSON-RPC `error` frame arrives mid-stream (the SDK throws on it). A frame after the error is never read.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-err-1", "contextId": "ctx-err-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-err-1", "contextId": "ctx-err-1", "artifact": { "artifactId": "art-err-partial", "parts": [ { "kind": "text", "text": "Partial answer", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "error": { "code": -32603, "message": "Internal error", "data": { "detail": "model backend crashed" } } },
+        { "result": { "kind": "status-update", "taskId": "task-err-1", "contextId": "ctx-err-1", "status": { "state": "failed" }, "final": true } }
+      ]
+    }
+  }
+}

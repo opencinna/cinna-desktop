@@ -1,0 +1,15 @@
+{
+  "_notes": [
+    "Without isCinnaTokenAuth a 403 carries no code, and the message is the raw A2aHttpError text, URL included. humanizeA2AError maps network failures but not HTTP rejections."
+  ],
+  "events": [],
+  "result": {
+    "text": "",
+    "parts": [],
+    "notices": [],
+    "error": {
+      "message": "A2A request to https://agent.example.test/a2a/ rejected: 403 Forbidden",
+      "raw": "A2aHttpError: A2A request to https://agent.example.test/a2a/ rejected: 403 Forbidden"
+    }
+  }
+}

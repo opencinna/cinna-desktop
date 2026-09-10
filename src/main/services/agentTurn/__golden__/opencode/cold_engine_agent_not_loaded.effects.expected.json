@@ -1,0 +1,25 @@
+{
+  "_notes": [
+    "The readiness probe runs inside the turn lock (the probe sits between lock and unlock). A cold window therefore holds the per-agent lock and, through turnLock.anyHeld(), defers every engine reconcile. Documented in awaitEngineReady; pinned.",
+    "Only one probe, because engineReadyMs 30 is below the 1 s poll interval, so the window closes on the first miss."
+  ],
+  "order": [
+    "ensureRunning",
+    "lock",
+    "unlock"
+  ],
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/agent?location%5Bdirectory%5D=%2Fagents%2Fhelper"
+    }
+  ],
+  "registered": [],
+  "saved": [],
+  "checkpoints": [],
+  "after": {
+    "pending": [],
+    "locked": false,
+    "busConnected": false
+  }
+}

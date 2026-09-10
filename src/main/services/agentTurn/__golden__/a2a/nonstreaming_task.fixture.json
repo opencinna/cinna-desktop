@@ -1,0 +1,47 @@
+{
+  "recorded_from": "hand-written",
+  "description": "An agent whose card says `streaming: false`: one `message/send` returns a completed Task with a status message and two artifacts (a tool part, then text).",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Which build is on staging?",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": false },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "rpc": {
+        "result": {
+          "kind": "task",
+          "id": "task-ns-1",
+          "contextId": "ctx-ns-1",
+          "status": {
+            "state": "completed",
+            "message": { "kind": "message", "role": "agent", "messageId": "msg-ns-status", "parts": [ { "kind": "text", "text": "Checked.", "metadata": { "cinna.content_kind": "text" } } ] }
+          },
+          "artifacts": [
+            { "artifactId": "art-ns-tool", "parts": [ { "kind": "text", "text": "kubectl get deploy", "metadata": { "cinna.content_kind": "tool", "cinna.tool_name": "Bash", "cinna.tool_input": { "command": "kubectl get deploy -n staging" }, "cinna.tool_id": "toolu_ns_1" } } ] },
+            { "artifactId": "art-ns-text", "parts": [ { "kind": "text", "text": " Staging is on build 42.", "metadata": { "cinna.content_kind": "text" } } ] }
+          ],
+          "history": []
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › keeps the partial answer when the turn errors after streaming",
+  "description": "A provider error after part of the answer streamed: session.error ends the turn as an error, and the partial text stays in parts.",
+  "setup": {},
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "part" }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.error",
+        "data": { "sessionID": "ses_new", "error": { "name": "APIError", "data": { "message": "429" } } }
+      }
+    }
+  ]
+}

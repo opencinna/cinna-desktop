@@ -1,0 +1,44 @@
+{
+  "_notes": [
+    "POSSIBLE BUG: the question on the final status-update's status.message is ingested as an ordinary text part. The previous part is also text, so the two merge with no separator: \"I can deploy that.Which environment: ...\". The persisted answer reads as one run-on sentence.",
+    "The question's delta is posted before the `input-required` status event, so a consumer only learns the text was a question after rendering it as answer text.",
+    "No error and no dedicated event. input-required ends the turn as a normal completion with taskState input-required, and the user's answer travels as the next message (see resume_remembered_context)."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-ir-1",
+      "contextId": "ctx-ir-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "I can deploy that."
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Which environment: staging or production?"
+    },
+    {
+      "type": "status",
+      "state": "input-required",
+      "taskId": "task-ir-1",
+      "contextId": "ctx-ir-1"
+    }
+  ],
+  "result": {
+    "text": "I can deploy that.Which environment: staging or production?",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "I can deploy that.Which environment: staging or production?"
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-ir-1",
+    "taskId": "task-ir-1",
+    "taskState": "input-required"
+  }
+}

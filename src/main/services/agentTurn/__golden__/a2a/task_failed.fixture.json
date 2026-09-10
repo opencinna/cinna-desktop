@@ -1,0 +1,36 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The protocol-level failure: no transport or JSON-RPC error, the task itself ends in `failed` with the reason on `status.message`.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Deploy to production",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-failed-1", "contextId": "ctx-failed-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-failed-1", "contextId": "ctx-failed-1", "artifact": { "artifactId": "art-failed-1", "parts": [ { "kind": "text", "text": "Trying the deploy.", "metadata": { "cinna.content_kind": "text" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-failed-1", "contextId": "ctx-failed-1", "status": { "state": "failed", "message": { "kind": "message", "role": "agent", "messageId": "msg-failed-reason", "taskId": "task-failed-1", "contextId": "ctx-failed-1", "parts": [ { "kind": "text", "text": "Deploy failed: permission denied on cluster." } ] } }, "final": true } }
+      ]
+    }
+  }
+}

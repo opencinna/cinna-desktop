@@ -1,0 +1,60 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "localAgentTurnRunner.test.ts › parks a question, and posts the answer to the question reply endpoint",
+    "turnStream.test.ts › records an answered question with the labels the user chose (question.v2.replied shape)"
+  ],
+  "description": "The agent asks a question, it parks, the user picks A, the runner posts {answers:[['A']]} to the question reply endpoint, the engine echoes question.v2.replied, and the agent answers and ends the turn.",
+  "setup": {},
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "question.v2.asked",
+        "data": {
+          "sessionID": "ses_new",
+          "id": "que_7",
+          "questions": [
+            { "question": "Which?", "header": "Pick", "options": [{ "label": "A", "description": "a" }] }
+          ],
+          "tool": { "messageID": "msg_1", "callID": "c1" }
+        }
+      }
+    },
+    { "op": "awaitRegistered", "requestId": "que_7" },
+    { "op": "checkpoint", "name": "parked" },
+    {
+      "op": "resolve",
+      "requestId": "que_7",
+      "resolution": { "kind": "question", "answers": [["A"]] }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "question.v2.replied",
+        "data": { "sessionID": "ses_new", "requestID": "que_7", "answers": [["A"]] }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Going with A." }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}

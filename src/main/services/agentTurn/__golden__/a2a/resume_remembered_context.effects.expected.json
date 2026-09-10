@@ -1,0 +1,69 @@
+{
+  "_notes": [
+    "The remembered contextId and taskId are both sent on the message.",
+    "POSSIBLE BUG: the remembered taskId is sent whatever the remembered taskState is. Here the state is input-required, which is correct, but a completed or failed task's id is resent the same way (plain_text saves one). A spec-compliant server is likely to reject a message addressed to a terminal task.",
+    "onTaskId fires for the remembered taskId before any request is made, then once per status-update."
+  ],
+  "requests": [
+    {
+      "method": "GET",
+      "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "message/stream",
+        "params": {
+          "message": {
+            "kind": "message",
+            "messageId": "<messageId#1>",
+            "role": "user",
+            "parts": [
+              {
+                "kind": "text",
+                "text": "staging, please"
+              }
+            ],
+            "contextId": "ctx-remembered-1",
+            "taskId": "task-remembered-1"
+          },
+          "configuration": {
+            "acceptedOutputModes": [
+              "text/plain",
+              "application/json"
+            ]
+          }
+        },
+        "id": 1
+      }
+    }
+  ],
+  "sessionReads": [
+    {
+      "contextId": "ctx-remembered-1",
+      "taskId": "task-remembered-1",
+      "taskState": "input-required"
+    }
+  ],
+  "sessionUpserts": [
+    {
+      "chatId": "chat-golden",
+      "agentId": "agent-remote-1",
+      "contextId": "ctx-remembered-1",
+      "taskId": "task-remembered-1",
+      "taskState": "completed"
+    }
+  ],
+  "taskIdsSurfaced": [
+    "task-remembered-1",
+    "task-remembered-1",
+    "task-remembered-1"
+  ],
+  "clientsSurfaced": 1
+}

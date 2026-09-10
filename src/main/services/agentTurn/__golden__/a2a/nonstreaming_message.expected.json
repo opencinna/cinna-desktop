@@ -1,0 +1,23 @@
+{
+  "_notes": [
+    "A minimal card with no capabilities, protocolVersion or skills is patched and treated as non-streaming. A cardUrl ending in .json is fetched as-is. A bare Message has no taskId, so none is surfaced or saved."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "pong"
+    }
+  ],
+  "result": {
+    "text": "pong",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "pong"
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-nsm-1"
+  }
+}

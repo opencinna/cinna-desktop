@@ -1,0 +1,12 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › fails the turn when the engine never loads the agent, instead of running it promptless",
+  "description": "The readiness window closes with the agent still missing from GET /api/agent. The turn fails with the not-loaded message and never opens a session. engineReadyMs is 30 so the window closes on the first poll.",
+  "setup": {
+    "engineReadyMs": 30,
+    "routes": {
+      "GET /api/agent": { "status": 200, "body": { "data": [{ "id": "someone-else" }] } }
+    }
+  },
+  "steps": []
+}

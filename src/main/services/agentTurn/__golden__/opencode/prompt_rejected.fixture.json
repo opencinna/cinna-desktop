@@ -1,0 +1,11 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › surfaces a failed engine POST instead of waiting out the turn ceiling",
+  "description": "The engine answers POST /prompt with a 500. post() throws, the turn fails at once with the generic message and the status in raw, rather than waiting out the ceiling.",
+  "setup": {
+    "routes": {
+      "POST /api/session/ses_new/prompt": { "status": 500, "body": "nope" }
+    }
+  },
+  "steps": []
+}

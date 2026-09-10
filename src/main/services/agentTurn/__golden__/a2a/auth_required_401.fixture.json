@@ -1,0 +1,30 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A Cinna-synced agent: the card loads, then the `message/stream` POST is rejected with 401. With `isCinnaTokenAuth` this is the reauth-required verdict.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-expired",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": { "status": 401, "statusText": "Unauthorized" }
+  }
+}

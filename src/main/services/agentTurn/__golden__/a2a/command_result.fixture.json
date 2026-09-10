@@ -1,0 +1,37 @@
+{
+  "recorded_from": "hand-written",
+  "description": "A platform slash command (`/files`): the whole turn is one `command_result` part, growing snapshot-style, carrying `cinna.command_invocation`.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "/files",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": {
+      "status": 200,
+      "json": {
+        "name": "Deploy Helper",
+        "description": "Hand-written golden fixture agent",
+        "version": "1.0.0",
+        "protocolVersion": "0.3.0",
+        "capabilities": { "streaming": true },
+        "defaultInputModes": ["text/plain"],
+        "defaultOutputModes": ["text/plain"],
+        "skills": []
+      }
+    },
+    "rpc": {
+      "sse": [
+        { "result": { "kind": "status-update", "taskId": "task-cmd-1", "contextId": "ctx-cmd-1", "status": { "state": "working" }, "final": false } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cmd-1", "contextId": "ctx-cmd-1", "artifact": { "artifactId": "art-cmd", "parts": [ { "kind": "text", "text": "- docs/\n- src/\n", "metadata": { "cinna.content_kind": "command_result", "cinna.command_invocation": "/files" } } ] } } },
+        { "result": { "kind": "artifact-update", "taskId": "task-cmd-1", "contextId": "ctx-cmd-1", "artifact": { "artifactId": "art-cmd", "parts": [ { "kind": "text", "text": "- docs/\n- src/\n- package.json\n", "metadata": { "cinna.content_kind": "command_result", "cinna.command_invocation": "/files" } } ] } } },
+        { "result": { "kind": "status-update", "taskId": "task-cmd-1", "contextId": "ctx-cmd-1", "status": { "state": "completed" }, "final": true } }
+      ]
+    }
+  }
+}

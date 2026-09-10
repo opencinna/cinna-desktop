@@ -1,0 +1,25 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Hel"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "lo world"
+    }
+  ],
+  "result": {
+    "text": "Hello world",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Hello world"
+      }
+    ],
+    "notices": [],
+    "contextId": "ses_new"
+  }
+}

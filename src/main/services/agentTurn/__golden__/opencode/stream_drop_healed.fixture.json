@@ -1,0 +1,48 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › heals a mid-turn stream drop from the durable stream alone",
+  "description": "The global socket dies after text.started (seq 7) and one delta. The bus reconnects, the runner replays GET /api/session/ses_new/event?after=7, and that replay carries both the rest of the text and the step.ended that ends the turn.",
+  "setup": {
+    "routes": {
+      "GET /api/session/ses_new/event?after=7": {
+        "sse": [
+          {
+            "type": "session.next.text.ended",
+            "durable": { "aggregateID": "ses_new", "seq": 9, "version": 1 },
+            "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "text": "Hello world" }
+          },
+          {
+            "type": "session.next.step.ended",
+            "durable": { "aggregateID": "ses_new", "seq": 10, "version": 1 },
+            "data": {
+              "sessionID": "ses_new",
+              "assistantMessageID": "msg_1",
+              "finish": "stop",
+              "cost": 0,
+              "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.started",
+        "durable": { "aggregateID": "ses_new", "seq": 7, "version": 1 },
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1" }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Hel" }
+      }
+    },
+    { "op": "closeStream" }
+  ]
+}

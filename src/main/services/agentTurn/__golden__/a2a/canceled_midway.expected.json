@@ -1,0 +1,37 @@
+{
+  "_notes": [
+    "POSSIBLE BUG, and the contract's `abort` known violation: the signal aborts inside the 3rd onEvent, but the pump only checks it when the next frame arrives, then breaks before ingesting that frame. The result has no error and taskState `working`, not `canceled`, so an aborted turn looks exactly like a turn that ended mid-work.",
+    "The server's remaining text chunk and its `canceled` status-update are already on the wire and are never read."
+  ],
+  "events": [
+    {
+      "type": "status",
+      "state": "working",
+      "taskId": "task-cancel-1",
+      "contextId": "ctx-cancel-1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "First, "
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "checking the "
+    }
+  ],
+  "result": {
+    "text": "First, checking the ",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "First, checking the "
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-cancel-1",
+    "taskId": "task-cancel-1",
+    "taskState": "working"
+  }
+}

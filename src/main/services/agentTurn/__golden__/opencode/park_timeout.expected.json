@@ -1,0 +1,74 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "Asked a question.",
+      "toolName": "askuserquestion",
+      "toolInput": {
+        "questions": [
+          {
+            "question": "Which?",
+            "header": "Pick",
+            "multiSelect": false,
+            "options": [
+              {
+                "label": "A"
+              }
+            ]
+          }
+        ]
+      },
+      "toolId": "que_8"
+    },
+    {
+      "type": "delta",
+      "kind": "tool_result",
+      "text": "No answer was given.",
+      "toolId": "que_8",
+      "toolStream": "stdout"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "No answer, so I stopped there."
+    }
+  ],
+  "result": {
+    "text": "No answer, so I stopped there.",
+    "parts": [
+      {
+        "kind": "tool",
+        "text": "Asked a question.",
+        "toolName": "askuserquestion",
+        "toolInput": {
+          "questions": [
+            {
+              "question": "Which?",
+              "header": "Pick",
+              "multiSelect": false,
+              "options": [
+                {
+                  "label": "A"
+                }
+              ]
+            }
+          ]
+        },
+        "toolId": "que_8"
+      },
+      {
+        "kind": "tool_result",
+        "text": "No answer was given.",
+        "toolId": "que_8",
+        "toolStream": "stdout"
+      },
+      {
+        "kind": "text",
+        "text": "No answer, so I stopped there."
+      }
+    ],
+    "notices": [],
+    "contextId": "ses_new"
+  }
+}

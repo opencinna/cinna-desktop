@@ -1,0 +1,54 @@
+{
+  "_notes": [
+    "The non-streaming path emits only deltas and no status event, even though the task has a state.",
+    "POSSIBLE BUG (ordering): status.message is ingested before the artifacts, so the final status text \"Checked.\" lands ahead of the tool part and the artifact text it summarises. The streaming path orders parts by arrival instead."
+  ],
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Checked."
+    },
+    {
+      "type": "delta",
+      "kind": "tool",
+      "text": "kubectl get deploy",
+      "toolName": "Bash",
+      "toolInput": {
+        "command": "kubectl get deploy -n staging"
+      },
+      "toolId": "toolu_ns_1"
+    },
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": " Staging is on build 42."
+    }
+  ],
+  "result": {
+    "text": "Checked. Staging is on build 42.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Checked."
+      },
+      {
+        "kind": "tool",
+        "text": "kubectl get deploy",
+        "toolName": "Bash",
+        "toolInput": {
+          "command": "kubectl get deploy -n staging"
+        },
+        "toolId": "toolu_ns_1"
+      },
+      {
+        "kind": "text",
+        "text": " Staging is on build 42."
+      }
+    ],
+    "notices": [],
+    "contextId": "ctx-ns-1",
+    "taskId": "task-ns-1",
+    "taskState": "completed"
+  }
+}

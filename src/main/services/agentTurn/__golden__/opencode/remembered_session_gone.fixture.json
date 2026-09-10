@@ -1,0 +1,34 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › opens a fresh session when the remembered one is gone from the engine",
+  "description": "The chat remembers ses_old but the engine answers its GET with a 404 (its own storage was cleared): a fresh session is opened and that id replaces the remembered one.",
+  "setup": {
+    "remembered": "ses_old",
+    "routes": {
+      "GET /api/session/ses_old": { "status": 404, "body": {} }
+    }
+  },
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Starting fresh." }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}

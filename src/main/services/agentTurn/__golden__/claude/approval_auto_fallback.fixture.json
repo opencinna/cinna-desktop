@@ -1,0 +1,78 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "claudeAgentTurnRunner.test.ts › automatic approvals the CLI could not honour › says so in the transcript when the CLI ran “default” after being asked for “auto”",
+    "docs/agents/local_agents/claude_contract.md §10 (haiku: init.permissionMode default, canUseTool fired)"
+  ],
+  "description": "Asked for auto on a model without a classifier, the CLI reports permissionMode default at init and hands the Bash call to canUseTool; the user allows once and the turn carries the fallback notice.",
+  "deps": {
+    "approval": "auto"
+  },
+  "queries": [
+    [
+      {
+        "yield": {
+          "type": "system",
+          "subtype": "init",
+          "session_id": "sess-new",
+          "apiKeySource": "none",
+          "model": "claude-haiku-4-5-20251001",
+          "claude_code_version": "2.1.266",
+          "permissionMode": "default"
+        }
+      },
+      {
+        "yield": {
+          "type": "stream_event",
+          "session_id": "sess-new",
+          "event": {
+            "type": "message_start",
+            "message": {
+              "id": "msg_1"
+            }
+          }
+        }
+      },
+      {
+        "yield": {
+          "type": "assistant",
+          "message": {
+            "id": "msg_1",
+            "content": [
+              {
+                "type": "tool_use",
+                "id": "toolu_bash",
+                "name": "Bash",
+                "input": {
+                  "command": "rm -rf /tmp/x"
+                }
+              }
+            ]
+          }
+        }
+      },
+      {
+        "ask": {
+          "toolName": "Bash",
+          "input": {
+            "command": "rm -rf /tmp/x"
+          }
+        },
+        "answer": {
+          "kind": "permission",
+          "reply": "once",
+          "remembered": false
+        }
+      },
+      {
+        "yield": {
+          "type": "result",
+          "subtype": "success",
+          "is_error": false,
+          "result": "ok",
+          "session_id": "sess-new"
+        }
+      }
+    ]
+  ]
+}

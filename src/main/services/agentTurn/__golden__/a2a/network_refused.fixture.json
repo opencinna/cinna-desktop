@@ -1,0 +1,17 @@
+{
+  "recorded_from": "hand-written",
+  "description": "The agent host is down: `fetch` rejects on the very first request (the card GET) the way undici does, `TypeError: fetch failed` with an ECONNREFUSED cause.",
+  "input": {
+    "chatId": "chat-golden",
+    "agentId": "agent-remote-1",
+    "agentName": "Deploy Helper",
+    "endpointUrl": "https://agent.example.test/a2a/",
+    "cardUrl": "https://agent.example.test/a2a",
+    "accessToken": "tok-cinna-golden",
+    "wireContent": "Deploy the app",
+    "isCinnaTokenAuth": true
+  },
+  "http": {
+    "card": { "network": { "message": "fetch failed", "causeCode": "ECONNREFUSED", "causeMessage": "connect ECONNREFUSED 127.0.0.1:443" } }
+  }
+}

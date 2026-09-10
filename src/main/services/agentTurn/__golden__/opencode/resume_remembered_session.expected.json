@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "type": "delta",
+      "kind": "text",
+      "text": "Welcome back."
+    }
+  ],
+  "result": {
+    "text": "Welcome back.",
+    "parts": [
+      {
+        "kind": "text",
+        "text": "Welcome back."
+      }
+    ],
+    "notices": [],
+    "contextId": "ses_old"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "recorded_from": "hand-written",
+  "source": "localAgentTurnRunner.test.ts › resumes a remembered session when the engine still has it",
+  "description": "The chat remembers ses_old and the engine still has it: verified with a GET, re-pointed at the agent key and the model, prompted, and saved again. No session is created.",
+  "setup": {
+    "remembered": "ses_old",
+    "routes": {
+      "GET /api/session/ses_old": { "status": 200, "body": {} }
+    }
+  },
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_old", "assistantMessageID": "msg_1", "textID": "t1", "delta": "Welcome back." }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_old",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}

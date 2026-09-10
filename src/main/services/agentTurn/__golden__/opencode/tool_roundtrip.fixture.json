@@ -1,0 +1,75 @@
+{
+  "recorded_from": "hand-written",
+  "source": [
+    "turnStream.test.ts › pairs a tool call with its result by callID (tool.called / tool.success shapes)",
+    "localAgentTurnRunner.test.ts › endTurn() (step.ended shape)",
+    "opencode_contract.md › Tool calls (finish:'tool-calls' per tool round, then 'stop')"
+  ],
+  "description": "One tool round: tool.called and tool.success paired by callID, a step.ended{finish:'tool-calls'} that must NOT end the turn, then the answer text and step.ended{finish:'stop'}.",
+  "setup": {},
+  "steps": [
+    { "op": "awaitPrompt" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.tool.called",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "callID": "c1",
+          "tool": "bash",
+          "input": { "command": "uv run scripts/x.py" },
+          "provider": { "executed": true }
+        }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.tool.success",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "callID": "c1",
+          "structured": {},
+          "content": [{ "type": "text", "text": "done" }],
+          "provider": { "executed": true }
+        }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "tool-calls",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    },
+    { "op": "checkpoint", "name": "between steps" },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.text.delta",
+        "data": { "sessionID": "ses_new", "assistantMessageID": "msg_1", "textID": "t1", "delta": "The script finished." }
+      }
+    },
+    {
+      "op": "push",
+      "frame": {
+        "type": "session.next.step.ended",
+        "data": {
+          "sessionID": "ses_new",
+          "assistantMessageID": "msg_1",
+          "finish": "stop",
+          "cost": 0,
+          "tokens": { "input": 1, "output": 1, "reasoning": 0, "cache": { "read": 0, "write": 0 } }
+        }
+      }
+    }
+  ]
+}
