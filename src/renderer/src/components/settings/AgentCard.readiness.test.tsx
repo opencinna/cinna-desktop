@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 
@@ -141,6 +141,35 @@ describe('AgentCard readiness', () => {
       })
     )
     expect(dot(container)).toContain('--color-text-muted')
+    expect(screen.queryByText('Could not reach the agent.')).toBeNull()
+  })
+
+  it('keeps the reason, not the raw error, when Test fails on a refused agent', async () => {
+    api.test.mockResolvedValueOnce({ success: false, error: 'fetch failed' } as never)
+    mount(agent({ readiness: { state: 'unreachable', reason: 'Could not reach the agent.' } }))
+    fireEvent.click(screen.getByText('Test Connection'))
+    await waitFor(() => expect(api.test).toHaveBeenCalled())
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(screen.queryByText('Testing...')).toBeNull()
+    expect(screen.queryByText('fetch failed')).toBeNull()
+    expect(screen.getByText('Could not reach the agent.')).toBeTruthy()
+  })
+
+  it('shows a failed test’s error, as its own tooltip too, when readiness has nothing to say', async () => {
+    api.test.mockResolvedValueOnce({ success: false, error: 'fetch failed' } as never)
+    mount(agent({ readiness: null }))
+    fireEvent.click(screen.getByText('Test Connection'))
+    const error = await screen.findByText('fetch failed')
+    expect(error.getAttribute('title')).toBe('fetch failed')
+  })
+
+  it('says Connected when Test passes, over a reason the re-check has not cleared yet', async () => {
+    mount(agent({ readiness: { state: 'unreachable', reason: 'Could not reach the agent.' } }))
+    fireEvent.click(screen.getByText('Test Connection'))
+    expect(await screen.findByText('Connected')).toBeTruthy()
     expect(screen.queryByText('Could not reach the agent.')).toBeNull()
   })
 

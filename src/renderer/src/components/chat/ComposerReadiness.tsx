@@ -163,7 +163,7 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   }
 }
 
-interface ComposerReadinessNoticeProps {
+interface ComposerReadinessLineProps {
   readiness: ComposerReadiness
   /** Id Send points `aria-describedby` at. */
   reasonId: string
@@ -173,56 +173,62 @@ interface ComposerReadinessNoticeProps {
  * Why the composer will not send to this agent, and the one action that might
  * change it.
  *
- * Inline in the composer's controls row, and built to take **only the width
- * left over**: the reason is a zero-basis, growing, truncating span, so it
- * never claims room from the chips on the left (which would wrap them onto a
- * second line and move the textarea) and never pushes Send off the row. The
- * separator and the action keep their size.
+ * **A line of its own under the controls row, at a fixed height, rendered
+ * whenever the composer sends straight to one agent — refused or not.** So a
+ * refusal arriving (a check that lands while the user types) or clearing
+ * (*Check again*) moves nothing, and the reason never competes with the chips
+ * for the row's width. Inline in the row, the action and its separator cost
+ * ~100px: that wrapped two chips at the narrowest window and four at every
+ * width, moved the textarea when the refusal cleared, and squeezed the reason
+ * itself to nothing, leaving "· Check again" with no sentence before it.
  */
-export function ComposerReadinessNotice({
+export function ComposerReadinessLine({
   readiness,
   reasonId
-}: ComposerReadinessNoticeProps): React.JSX.Element | null {
+}: ComposerReadinessLineProps): React.JSX.Element {
   const { refusal, text, title, action } = readiness
-  if (!refusal || !text || !action) return null
 
   return (
-    <div className="flex flex-1 min-w-0 items-center justify-end gap-1.5">
-      <span
-        id={reasonId}
-        role="status"
-        aria-live="polite"
-        title={title ?? undefined}
-        className={`w-0 flex-1 min-w-0 truncate text-right text-[11px] ${readinessTone(refusal)}`}
-      >
-        {text}
-      </span>
-      {/* Keeps an amber sentence and an accent action from reading as one run. */}
-      <span aria-hidden="true" className="shrink-0 text-[11px] text-[var(--color-text-muted)]">
-        ·
-      </span>
-      <button
-        type="button"
-        // `aria-disabled`, not `disabled`: a button that disables itself while
-        // it has focus drops focus to the page body mid-check.
-        aria-disabled={action.pending || undefined}
-        onClick={() => {
-          if (!action.pending) action.run()
-        }}
-        // Wide enough for either of its labels, so the pending swap moves nothing.
-        className={`shrink-0 inline-flex items-center justify-center gap-1 text-[11px] font-medium
-          text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors
-          aria-disabled:cursor-default ${action.label.length > 11 ? 'min-w-[6.5rem]' : 'min-w-[5rem]'}`}
-      >
-        {action.pending ? (
-          <>
-            <Loader2 size={10} className="animate-spin" />
-            {action.pendingLabel}
-          </>
-        ) : (
-          action.label
-        )}
-      </button>
+    <div data-readiness-line="" className="flex h-4 mt-1 px-1 min-w-0 items-center justify-end gap-1.5">
+      {refusal && text && action && (
+        <>
+          <span
+            id={reasonId}
+            role="status"
+            aria-live="polite"
+            title={title ?? undefined}
+            className={`min-w-0 truncate text-right text-[11px] leading-4 ${readinessTone(refusal)}`}
+          >
+            {text}
+          </span>
+          {/* Keeps an amber sentence and an accent action from reading as one run. */}
+          <span aria-hidden="true" className="shrink-0 text-[11px] leading-4 text-[var(--color-text-muted)]">
+            ·
+          </span>
+          <button
+            type="button"
+            // `aria-disabled`, not `disabled`: a button that disables itself while
+            // it has focus drops focus to the page body mid-check.
+            aria-disabled={action.pending || undefined}
+            onClick={() => {
+              if (!action.pending) action.run()
+            }}
+            // Wide enough for either of its labels, so the pending swap moves nothing.
+            className={`shrink-0 inline-flex items-center justify-center gap-1 text-[11px] leading-4 font-medium
+              text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors
+              aria-disabled:cursor-default ${action.label.length > 11 ? 'min-w-[6.5rem]' : 'min-w-[5rem]'}`}
+          >
+            {action.pending ? (
+              <>
+                <Loader2 size={10} className="animate-spin" />
+                {action.pendingLabel}
+              </>
+            ) : (
+              action.label
+            )}
+          </button>
+        </>
+      )}
     </div>
   )
 }

@@ -34,7 +34,7 @@ import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
-import { ComposerReadinessNotice, useComposerReadiness } from './ComposerReadiness'
+import { ComposerReadinessLine, useComposerReadiness } from './ComposerReadiness'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 
@@ -440,6 +440,18 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const blocksSendRef = useRef(readiness.blocksSend)
   blocksSendRef.current = readiness.blocksSend
   const readinessReasonId = useId()
+  // Check again removes itself when its check clears the refusal, and the focus
+  // it held falls to the page body; hand it to the message box, where the user
+  // goes next. Only from the body: a refusal cleared in the background never
+  // takes focus from wherever the user is.
+  const refused = readiness.refusal !== null
+  const wasRefusedRef = useRef(refused)
+  useEffect(() => {
+    if (wasRefusedRef.current && !refused && document.activeElement === document.body) {
+      focusComposer()
+    }
+    wasRefusedRef.current = refused
+  }, [refused, focusComposer])
 
   useEffect(() => {
     if (!targetSupportsAttachments && pendingAttachments.length > 0) {
@@ -1280,14 +1292,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ) : null}
         </div>
 
-        {/* `flex-1` with a zero basis: this group takes only the width the
-            chips leave, so a readiness notice truncates into it instead of
-            wrapping the chips or pushing Send off the row. Its automatic
-            minimum still holds the badge, the notice's action and Send. The
-            notice comes first so the badge and Send stay at the right edge
-            whatever the reason's length. */}
-        <div className="flex flex-1 items-center justify-end gap-1.5">
-          <ComposerReadinessNotice readiness={readiness} reasonId={readinessReasonId} />
+        <div className="flex items-center gap-1.5">
           {!chatId && commPatternInfo && (
             <CommPatternBadge
               pattern={commPatternInfo.pattern}
@@ -1325,6 +1330,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           )}
         </div>
       </div>
+      {/* Rendered for every direct agent, refused or not, so a refusal that
+          arrives or clears moves nothing. */}
+      {directTarget && <ComposerReadinessLine readiness={readiness} reasonId={readinessReasonId} />}
     </div>
   )
 })

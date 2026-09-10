@@ -96,7 +96,7 @@ None. No env vars, no settings. Orchestrated mode is available whenever the sele
 
 ## Security
 
-- Tokens/endpoints stay main-side: `A2AAsMcpProvider` resolves them through `agentService.resolveAccessToken` / `resolveEndpointIfNeeded` at call time; the orchestrator LLM and renderer never see them.
+- Tokens/endpoints stay main-side: `A2AAsMcpProvider` runs the agent's driver (`driverFor(agent).run`). For an A2A agent, the driver's pre-flight resolves the token and endpoint at call time, through `resolveAccessToken` / `resolveEndpointIfNeeded` in `src/main/agents/drivers/a2aConnection.ts`; the orchestrator LLM and renderer never see them.
 - The orchestrator LLM only ever receives `{ message }` for an agent tool — no `context_id`, no credentials. Continuity is injected by the desktop via `a2a_sessions`.
 - Ownership: the on-demand-agent IPC channels call `requireActivated()` then route through `chatService` which calls `requireOwnedChat`; `addOnDemandAgent` rejects unknown agent ids via `agentService.findAgent` before the FK.
 - Cascade deletes (chats → on-demand agent rows, agents → on-demand agent rows) prevent stale rows.

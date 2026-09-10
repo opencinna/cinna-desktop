@@ -17,6 +17,7 @@ Project-specific conventions for the SQLite (better-sqlite3 + Drizzle) schema-mi
 - **`foreign_keys = OFF` for the entire migration pass**, re-enabled (`foreign_keys = ON`) only after `runMigrations()` returns. Reason: SQLite compiles `ON DELETE CASCADE` chains at statement-prepare time, so DML on a table whose FK targets a not-yet-created parent throws `no such table: …` even with zero rows. FK-off makes table-creation order non-fatal; the post-pass re-enable restores runtime enforcement.
 - Do **not** re-enable `foreign_keys = ON` inside a migration, and do not add a pre-migration query that relies on FK enforcement — that re-opens the ordering trap.
 - After migrations, `runConsistencyChecks()` runs idempotent data-healing inside `safeRun` (e.g. `chatModeRepo.pruneDanglingMcpProviderIds()`); each check is try/caught so it can never block startup.
+- `agents-driver-populated` is the consistency check that goes with a backfill. It runs `agentRepo.healMissingDrivers()`, which fills `agents.driver` on any row inserted without one: across every user, by the migration's own rule, leaving a value this build does not recognise alone. It logs `boot-cleanup:filled-missing-agent-drivers` when it filled anything. The migration covers rows that existed before the column; this check covers a writer that forgets. Pair a future "every row has X" backfill with a check like it.
 - Any throw from `runMigrations()` is fatal startup → boot-resilience native dialog + `app.exit(1)`. See [Boot Resilience](../../core/boot_resilience/boot_resilience.md).
 
 ## Current run order (`runAllMigrations`)
@@ -40,7 +41,10 @@ Parents before children; pure table-creation before backfills; legacy-table back
 15. `migrateAppSettings` — app settings
 16. `runSyncMigrations` — `sync_state` / `sync_device_key` / `sync_tombstone` (after notes/jobs)
 17. `runSyncDepsMigrations` — `jobs.sync_deps`, `mcp_providers.created_by_sync`, `agents.created_by_sync`
-18. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
+18. `migrateAgentDrivers` (`migrations/agent-drivers.ts`) — `agents.driver` + `agents.driver_config`, and the backfill: `'a2a'` for `source IN ('local', 'remote')`, `'opencode'` for `source = 'folder'`.
+    - **Placement:** it runs `ALTER` and DML on a table `migrateAgents` created, so it comes after every table-creation migration, returns early without `hasTable('agents')`, and gates each `ADD COLUMN` on `hasColumn`
+    - **Idempotency:** each backfill `UPDATE` carries `driver IS NULL`, so a row that already names a driver is never rewritten on any later boot. That is what keeps the scanner's correction of a Claude folder backfilled as `opencode`. See [Agent Drivers](../../agents/drivers/drivers_tech.md#database-schema)
+19. `migrateUserIdColumns` — backfill `user_id` on legacy tables; **runs last**, every ALTER `hasTable`-guarded
 
 ## Helpers (`migrations/helpers.ts`)
 
@@ -54,6 +58,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 - Drop column/table: `IF EXISTS`, or guard with `hasColumn`/`hasTable` (see `chats.ts` dropping `active_agent_id`, `chat_agent_sessions`).
 - One-time backfill that must not re-run: pair the `INSERT … SELECT` with a state change that makes the source predicate false next boot (see `jobs.ts`: copy `jobs.agent_id` → `job_agents`, then `UPDATE jobs SET agent_id = NULL`). Without the null-out the backfill resurrects rows the user deleted.
 - Backfill INSERT against an FK target uses an existence guard (`… IN (SELECT id FROM parent)`) so a dangling ref can't throw.
+- A backfill whose value a later writer may correct: make `<column> IS NULL` part of the predicate, as `agent-drivers.ts` does. The `UPDATE` then never touches a value set after the first boot — here, the scanner's correction of a Claude folder backfilled as `opencode`.
 
 ## Ordering rules (enforced by review)
 
@@ -72,7 +77,7 @@ Parents before children; pure table-creation before backfills; legacy-table back
 ## Validation (run for any `src/main/db/` change)
 
 - **Build:** `npx electron-vite build` (full main+preload+renderer). Type-check renderer: `npx tsc --noEmit --project tsconfig.web.json`. Never bare `npx tsc --noEmit` (hangs).
-- **Fresh-DB simulation:** extend `src/main/db/migrations/migrations.test.ts`, which drives the real `runAllMigrations()` against an empty `node:sqlite` database (the `better-sqlite3` binding is Electron-ABI-bound and won't load under plain `node`). It already asserts: replay from empty without throwing, a clean `PRAGMA foreign_key_check`, second and third runs as no-ops, and a re-run over a populated DB. Watch for FK-cascade DML hitting a not-yet-created table; model the FK-off-then-on lifecycle if testing cascade behavior.
+- **Fresh-DB simulation:** extend `src/main/db/migrations/migrations.test.ts`, which drives the real `runAllMigrations()` against an empty `node:sqlite` database (the `better-sqlite3` binding is Electron-ABI-bound and won't load under plain `node`). It already asserts: replay from empty without throwing, a clean `PRAGMA foreign_key_check`, second and third runs as no-ops, a re-run over a populated DB, and the `agents.driver` backfill on an install that predates the column (mapped by source, a no-op on replay, never rewriting a row that names a driver). Watch for FK-cascade DML hitting a not-yet-created table; model the FK-off-then-on lifecycle if testing cascade behavior.
 - **Idempotency:** run the migration block a second time against the populated DB; it must not throw.
 - **Real fresh install (definitive):** remove/relocate `userData/cinna.db`, launch, confirm the window opens with no fatal dialog and no `no such table` / `no such column` in `cinna-errors.log`.
 

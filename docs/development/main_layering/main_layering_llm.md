@@ -10,7 +10,7 @@ services/*Service.ts (business)    — orchestration, validation, encryption, re
 db/*.ts              (persistence) — Drizzle queries, all writes scoped by userId
 ```
 
-Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`) sit beside the service layer; services call them directly.
+Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/`) sit beside the service layer; services call them directly. The drivers carry import rules of their own — see "`agents/drivers/`" below.
 
 ## Per-Domain File Map
 
@@ -21,7 +21,7 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`) sit beside the s
 | Chat modes | `db/chatModes.ts` (`chatModeRepo`) | `services/chatModeService.ts` | `ipc/chatmode.ipc.ts` |
 | LLM providers | `db/llmProviders.ts` (`llmProviderRepo`) | `services/providerService.ts` (uses `llm/factory.ts` + `llm/registry.ts`) | `ipc/provider.ipc.ts` |
 | MCP providers | `db/mcpProviders.ts` (`mcpProviderRepo`) | `services/mcpService.ts` (uses `mcp/manager.ts`) | `ipc/mcp.ipc.ts` |
-| Agents | `db/agents.ts` (`agentRepo`, `a2aSessionRepo`) | `services/agentService.ts` | `ipc/agent.ipc.ts` + `ipc/agent_a2a.ipc.ts` |
+| Agents | `db/agents.ts` (`agentRepo`, `a2aSessionRepo` — also exported as `agentSessionRepo`) | `services/agentService.ts` + `services/agentReadinessService.ts`; everything kind-specific in `agents/drivers/` | `ipc/agent.ipc.ts` + `ipc/agent_a2a.ipc.ts` |
 
 ## Layer Rules
 
@@ -38,7 +38,7 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`) sit beside the s
 - Owns: input validation, DomainError throwing, encryption (`encryptApiKey/decryptApiKey`), DTO mapping (`hasApiKey: boolean`, etc.), side effects (registry register/unregister, `mcpManager.connect/disconnect`, logging)
 - Receives `userId` as the first arg (or no userId for "session-less" calls like `fetchCardPreview`)
 - Returns DTOs, never raw rows containing encrypted blobs
-- May call other services directly (e.g. `agentService.resolveAccessToken` calls `getCinnaAccessToken`)
+- May call other services directly (e.g. `agentService.listMerged` calls `agentReadinessService.kick`)
 - Use `createLogger('domain')` for structured logs
 
 ### `ipc/<entity>.ipc.ts`
@@ -47,6 +47,14 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`) sit beside the s
 - For streaming (MessagePort) handlers, use `ipcMain.on` directly and check `userActivation.isActivated()` manually (cannot throw — must post error to port and close)
 - Auth-flow handlers that show inline form errors return a discriminated `{ success: true, ... } | { success: false, error }` shape — wrap the service call in try/catch and use `ipcErrorShape(err).message`
 - All other handlers let DomainError flow through `ipcHandle`. **The renderer's `invoke()` rejects with the message only — the code does NOT survive.** See "Errors" below before writing any renderer branch on `err.code`
+
+### `agents/drivers/` — kind-specific agent logic
+- **Kind decisions live here.** Everything that depends on *what kind of agent* a row is — the turn, readiness, auth, attachments, commands, answering a parked ask — belongs in this folder. Code elsewhere asks `capabilitiesFor(row)` / `AgentDto.capabilities`, and `source` means ownership only. `src/main/agents/kindBranches.test.ts` pins what remains outside by exact count — see [Agent Drivers — Technical Details](../../agents/drivers/drivers_tech.md#the-kind-branch-ratchet)
+- **`drivers/index.ts` is the only file in the folder that imports Electron**, and the only one naming `engineManager`, `localAgentService`, `desktopStateService` or `a2aSessionRepo`. Every driver takes its world by injection, so the golden driver contract runs it with fakes
+- **`capabilities.ts` and `driverOf.ts` are pure and import-light.** `agentService` (DTO mapping), `agentReadinessService` (TTL choice) and `scannerService` (the index row's `driver`) import only these two, so the service layer does not pull in the production wiring
+- **`a2aConnection.ts` imports no Electron directly, but reaches it** through `security/keystore` and `auth/cinna-oauth`. So `a2aDriver.ts` takes endpoint and token resolution and the `CinnaReauthRequired` predicate as deps, and `authRejectionStatus` is split out into `a2aErrors.ts`
+- **A service that needs a driver's answer has it installed from the IPC layer.** `agent.ipc.ts` installs `agentReadinessService`'s probe (`driverFor(row).readiness`) and its broadcast (`webContents.send`), so the service names neither the drivers' wiring nor Electron
+- **Callers that run or answer a turn import `driverFor` from `agents/drivers`** (`agent_a2a.ipc.ts`, `services/a2aAsMcpProvider.ts`). `ipc/local_tools.ipc.ts` imports `claudeAuthProbe` from the same module
 
 ## Errors — `src/main/errors.ts`
 

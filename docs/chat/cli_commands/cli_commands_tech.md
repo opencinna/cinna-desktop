@@ -67,5 +67,5 @@ None. CLI commands are fetched fresh from the agent card every time they are req
 
 ## Security
 
-- Access tokens for the card fetch are resolved via the existing `agentService.resolveAccessToken` path — remote agents use the user's Cinna JWT, local agents use their encrypted per-agent token. No secrets cross the IPC boundary.
+- Access tokens for the card fetch are resolved by `resolveAccessToken` in `src/main/agents/drivers/a2aConnection.ts`, which `agentService.listCliCommands` imports. Which token it returns is decided by the agent's `capabilities.auth`: a synced agent uses the user's Cinna JWT, and a hand-added agent uses its encrypted per-agent token. No secrets cross the IPC boundary.
 - Inserted invocation strings travel as plain text through the normal messaging pipeline; there is no client-side shell execution or expansion.

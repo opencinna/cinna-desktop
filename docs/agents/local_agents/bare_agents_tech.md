@@ -27,7 +27,8 @@ Business logic and the reasoning behind every rule: [Bare Agents & External Root
 - `src/main/engine/engineConfigSource.ts` — the one branch in `collectEngineAgents()`
 - `src/main/engine/configGenerator.ts` — `AGENT.md` in `IDENTITY_FILES`, and the docstring recording why `README.md` is not there and what would change it
 - `src/main/ipc/local_agent.ipc.ts` — `:folder-pick`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden`
-- `src/main/services/agentTurn/index.ts`, `src/main/services/agentTurn/localAgentTurnRunner.ts` — `agentKind` threaded through `saveSession` and `isGranted`
+- `src/main/agents/drivers/index.ts`, `src/main/services/agentTurn/localAgentTurnRunner.ts` — `agentKind` threaded through `saveSession` and `isGranted`
+- `src/main/services/localAgents/localAgentService.ts` — `setBareRuntime()` also points the index row at the engine just chosen (`agentRepo.setFolderDriver`): a bare agent's runtime is not in its folder, so no watcher sees the change and no rescan would correct the row. See [Agent Drivers](../drivers/drivers.md#the-index-says-which-driver-runs-a-row)
 
 ### Preload
 

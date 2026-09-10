@@ -227,7 +227,8 @@ Dynamic half — one ask, mid-turn
              └── otherwise ──► block in the transcript + pendingRequests.register
                                         │
    Renderer  PermissionRequestBlock ── agent:answer-request ──► IPC
-                                        │  always ─► rememberPermissionGrant
+                                        │  driverFor(row).respond
+                                        │  always ─► rememberGrant
                                         │            (app-data/desktop.json)
                                         │            then settle as `once`
                                         └──► runner replies to the engine

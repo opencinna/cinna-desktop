@@ -43,7 +43,8 @@ Universal agent integration that lets users chat with external AI agents through
 
 - **Enable/Disable** — Toggle controls agent visibility in the chat selector
 - **Update Token** — Expand card, enter new token, save
-- **Test Connection** — Re-fetches card, re-runs protocol negotiation, and updates cached metadata (skills, endpoint, protocol version, transport)
+- **Test Connection** — Re-fetches card, re-runs protocol negotiation, and updates cached metadata (skills, endpoint, protocol version, transport). The same press re-asks the agent's readiness, so the status dot and the composer follow the test just run
+- **Readiness** — The status dot is green for an enabled agent its driver has not refused, the refusal's colour when it has (warning for something the user fixes, such as a rejected token; danger for an agent that cannot be reached or has no usable card), and muted for a switched-off agent. Expanded, the reason sits beside Test Connection, with the raw error as its tooltip. **A failed test does not replace it**: the test's own error ("fetch failed") said less than the reason and explained nothing. Only a passing test shows *Connected* in its place, since the re-check the same press started clears the reason moments later. A failed test's error is shown only when readiness has nothing to say. A healthy card shows no line at all. The composer refuses a direct send to a refused agent — see [Agent Drivers & Readiness](../drivers/drivers.md)
 - **Delete** — Removes agent permanently
 
 ### Chatting with an Agent

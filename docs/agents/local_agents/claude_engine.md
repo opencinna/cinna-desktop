@@ -342,10 +342,13 @@ local-agent:update-field  (kit, stamped)  /  local-agent:set-runtime  (bare)
 runtimeService.resolve ──► ResolvedRuntime { engine, credential?, model }
    │                        engine = claude → no credential, model = alias
    ▼
-resolveTurnRunner(agent)             dispatch: source → engine
-   ├── source ≠ folder ────────────────────────► A2A runner
-   ├── engine = opencode ──────────────────────► local (OpenCode) runner
-   └── engine = claude ────────────────────────► Claude runner
+driverFor(agent)                     dispatch: agents.driver (written by the scan
+   │                                           and by the runtime write)
+   ├── a2a ────────────────────────────────────► A2A driver → A2A runner
+   ├── opencode ┐ each turn re-reads the folder's engine;
+   └── claude   ┘ a folder naming the other one runs on the sibling driver
+        opencode driver ───────────────────────► local (OpenCode) runner
+        claude driver ─────────────────────────► Claude runner
                                                      │
    readiness — before the lock, before any turn:     │
      toolDetectionService → no `claude`  ──► refused │  nothing spawned

@@ -46,9 +46,13 @@ Three of the four pieces this feature needs already existed before this slice: t
 
 ### The dispatch point is deliberately outside the runner
 
-`/run:<name>` is recognised in `agent_a2a.ipc.ts`, right after the message's wire content is known and before `a2aStreamingService.streamToAgent` is called — never inside `resolveTurnRunner` or `LocalAgentTurnRunner`. A command is not a model turn: it never touches the local engine, never opens an engine session, and has nothing in common with the streaming lifecycle that seam exists to run. Routing it there would also mean editing the one seam Phase 6's mutation audit spent a dedicated pass hardening, for a feature that doesn't need anything that seam provides. So the interception happens one layer up, and `resolveTurnRunner`'s dispatch — one function, on `agents.source`, used by both call sites — stays exactly as Phase 6 left it.
+`/run:<name>` is recognised in `agent_a2a.ipc.ts`, right after the message's wire content is known and before `a2aStreamingService.streamToAgent` is called — never inside the agent's [driver](../drivers/drivers.md) or `LocalAgentTurnRunner`. A command is not a model turn: it never touches the local engine, never opens an engine session, and has nothing in common with the streaming lifecycle that seam exists to run. Routing it there would also mean editing the seam Phase 6's mutation audit spent a dedicated pass hardening, for a feature that doesn't need anything that seam provides. So the interception happens one layer up: the handler resolves the agent's driver, and the command runner is swapped in for the driver's own turn only when it applies.
 
-A remote agent never reaches this interception at all: for a remote agent, `/run:<name>` is still sent as ordinary chat text and the remote agent's own server recognises it. Nothing in this slice changes that path.
+**Whether it applies is asked of the driver, not of the agent's kind**: the agent's `capabilities.commands` must be `catalog` — the folder drivers' answer — and the message must be a bare reference. An agent whose commands come from its card never reaches this interception: for it, `/run:<name>` is still sent as ordinary chat text and the agent's own server recognises it. Nothing in this slice changes that path.
+
+### A command runs even when the agent is refused
+
+The composer refuses a direct send to an agent its driver says cannot take a turn — but a bare `/run:<name>` to a catalog agent goes through regardless, with the refusal notice left where it is. A command is a script run in the folder on this machine, not a turn on the engine, so the agent's readiness (missing credentials for its model, a logged-out Claude Code) says nothing about whether the script can run. The composer matches with the same `RUN_REFERENCE_PATTERN` main applies, so `/run:check please` — text main hands to the engine — is still refused. See [Agent Drivers & Readiness](../drivers/drivers.md#what-the-composer-refuses-and-what-it-deliberately-does-not).
 
 ### The message has to be exactly a reference
 
@@ -84,12 +88,12 @@ Agent page — Commands card "Run"          Chat composer "/" popup
                                   │
 Renderer ── window.api ──▶ ipcMain.on('agent:send-message')
                               │ persist user message (shared path)
-                              │ resolveTurnRunner(agent)         ── on agents.source, unchanged
-                              │ resolveCommandRunner(isFolder, wireContent, …, fallback)
-                              │   │ not a folder agent, or not a bare /run:<name> → fallback unchanged
-                              │   └ folder agent + /run:<name>  → commandService-backed runner
+                              │ driverFor(agent)
+                              │ resolveCommandRunner(capabilities.commands, wireContent, …, driver.run)
+                              │   │ commands ≠ catalog, or not a bare /run:<name> → the driver's turn
+                              │   └ catalog + bare /run:<name>  → commandService-backed turn
                               ▼
-                        a2aStreamingService.streamToAgent(effectiveRunner, …)
+                        a2aStreamingService.streamToAgent({run, …})
                               ▼
                         commandService.run()
                               │ readCommandCatalog(agentDir)  → entry, or "no such command"
@@ -106,7 +110,8 @@ Renderer ── window.api ──▶ ipcMain.on('agent:send-message')
 
 ## Integration Points
 
-- [The Agent Turn Runner](agent_turn.md) — the dispatch point (`resolveTurnRunner`) this slice deliberately sits beside rather than inside, and the mutation-audited seam it leaves untouched
+- [The Agent Turn Runner](agent_turn.md) — the mutation-audited seam this slice deliberately sits beside rather than inside
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the `capabilities.commands` answer the interception is decided on, and the composer refusal a bare `/run:` is exempt from
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the turn lock a command takes under the `'command'` owner, alongside `'turn'` and `'editor'`
 - [Command Results](../../chat/command_results/command_results.md) — the `command_result` part kind and its rendering, reused verbatim
 - [CLI Commands](../../chat/cli_commands/cli_commands.md) — the `/`-trigger picker, now reachable for a folder agent through the same `useCliCommands` hook that already served remote agents

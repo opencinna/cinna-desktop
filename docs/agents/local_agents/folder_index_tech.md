@@ -16,9 +16,10 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/db/migrations/migrations.test.ts` — fresh-install replay, idempotency, `PRAGMA foreign_key_check`
 - `src/main/db/testSupport/nodeSqlite.ts` — **test support only**; adapts `node:sqlite` to the narrow `better-sqlite3` surface Drizzle and the migrations use
 - `src/main/db/agentRoots.ts` — `agentRootRepo`, `userId`-scoped, no business logic
-- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, and the module-private `pruneFolderRows()`
-- `src/main/db/agents.test.ts` — the index transaction: insert, update-in-place, `enabled` preservation, per-root prune scoping, protected paths, rollback
-- `src/main/db/schema.ts` — `agentRoots` table; `agents.localPath` / `agents.localRootId`
+- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, the module-private `pruneFolderRows()`, plus `FolderIndexEntry.driver` (`:117`), `setFolderDriver()` (`:509`) and `healMissingDrivers()` (`:530`)
+- `src/main/db/agents.test.ts` — the index transaction: insert, update-in-place, `enabled` preservation, per-root prune scoping, protected paths, rollback; and *the driver a row names*
+- `src/main/db/schema.ts` — `agentRoots` table; `agents.localPath` / `agents.localRootId`; `agents.driver` / `agents.driverConfig`
+- `src/main/db/migrations/agent-drivers.ts` — `agents.driver` + `agents.driver_config` and their backfill; owned by [Agent Drivers](../drivers/drivers_tech.md#database-schema)
 - `src/main/db/client.ts` — still owns the connection, the pragmas and `runConsistencyChecks()`; `runMigrations()` now delegates to `runAllMigrations()`
 - `src/main/db/appSettings.ts` — `localAgentsHome: ''` in `DEFAULTS`, plus a per-key `typeof` check on read now that the schema is heterogeneous
 
@@ -38,13 +39,13 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - Tests: `agentsHomeService.test.ts`, `homeAccessService.test.ts`, `scannerService.test.ts`, `localAgentService.test.ts`, `watcherService.test.ts`, `turnLock.test.ts`, `pathRules.test.ts`, and `openInService.test.ts` (Phase 2's merge condition — the open-in allow path only became reachable once this slice registered the real roots provider)
 
 ### Main process — elsewhere
-- `src/main/services/agentService.ts` — the `folder:` scope branch and the endpoint/token short-circuits
+- `src/main/services/agentService.ts` — the `folder:` scope branch. The endpoint/token short-circuits moved to `src/main/agents/drivers/a2aConnection.ts`, where the row's capabilities (`cwd`, `auth`) decide them
 - `src/main/services/appSettingsService.ts` — `VALUE_CHECKS`, the per-key validation hook `localAgentsHome` needs
 - `src/main/services/appSettingsService.test.ts` — accepts a usable home, rejects a system location and a relative path, still enforces types
 - `src/main/errors.ts` — `LocalAgentError` / `LocalAgentErrorCode`, `KitError` / `KitErrorCode`, and `folder_immutable` on `AgentErrorCode`
 - `src/main/ipc/local_agent.ipc.ts` — the handlers, plus the one-time `localAgentService.configure()` call
 - `src/main/ipc/index.ts` — registers `registerLocalAgentHandlers()` (enforced by `src/main/ipc/registration.test.ts`)
-- `src/main/ipc/agent_a2a.ipc.ts` and `src/main/services/a2aAsMcpProvider.ts` — handle the `null` endpoint a folder agent resolves to
+- `src/main/agents/drivers/capabilities.ts` — `hasRunConfig()`, which is why `src/main/services/a2aAsMcpProvider.ts` keeps a folder agent that has no card URL. A folder row never reaches the A2A driver's endpoint pre-flight at all
 
 ### Preload
 - `src/preload/index.ts` — `window.api.localAgents.*`: `list`, `get`, `create`, `updateField`, `rescan`, `validate`, `openPath`, `rootsList`, `rootAdd`, `rootRemove`, `onChanged` (plus `draft`, `delete` and `openCredentials`, which belong to the Agents tab slice, and `folderPick`, `folderAdd`, `rename`, `setRuntime`, `rootRestoreHidden`, `gitStatus`, `gitUpdate`, `homeState`, `homeGrant`, `homeChoose`, which belong to [Bare Agents](bare_agents_tech.md#ipc-channels), [Folder Updates](folder_updates.md#ipc-channels) and [The Agents Folder Question](home_access_tech.md#ipc-channels)). Typed by inference; there is no hand-written interface
@@ -81,6 +82,8 @@ Plus `idx_agent_roots_user_id` and a unique `idx_agent_roots_user_path`. Both in
 | `source` | Third value `'folder'` joins `'local'` (hand-added A2A URL) and `'remote'` (Cinna-synced) |
 | `local_path` | Folder agents only: absolute path of the agent folder. NULL otherwise |
 | `local_root_id` | Folder agents only: the `agent_roots` row it was scanned from. NULL otherwise |
+| `driver` | Which driver runs the row (`a2a` \| `opencode` \| `claude`), added by `src/main/db/migrations/agent-drivers.ts`. For a folder row it is the engine the folder's runtime names, written by every scan — except for an `unresolved` folder, whose row keeps its value. A rescan recovers it from the folder, so it is not one of the values a rebuild cannot recover. See [Agent Drivers](../drivers/drivers_tech.md#database-schema) |
+| `driver_config` | JSON: the driver's own settings. Nothing reads or writes it yet |
 
 Row id is `folder:<manifest uuid>`; `protocol` is `local-folder` — deliberately not `'a2a'`, so the A2A-only paths (`agentService.testAgent`, `listCliCommands`) keep gating themselves out. `local_path` is machine-local and never synced: sync's descriptor resolver already skips rows whose `source` is not `'local'`.
 
@@ -148,6 +151,7 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
 - `markRootDirty(rootId)` / `markAllRootsDirty()` — the cache's **exact** invalidation. Every path that can change a folder marks its root dirty; nothing else serves stale data. Before this cache existed, `local-agent:list` re-walked, parsed, validated and re-indexed every agent in every root synchronously on every call — and the renderer refetches on every change push, so watcher bursts compounded
 - `readEnvKeys(agentDir)` / `readStatus(agentDir, statusFile)` — exported for tests; names-only and frontmatter-only respectively. `readEnvKeys` matches a variable **name** at the head of a line, so any uncommented `KEY=` counts as set whatever follows the `=`
 - `ENV_FILE` (`credentials/.env`) — exported, so the reader above and `localAgentService.openCredentials`, which creates that file, name the path in one place rather than two that can drift apart
+- `folderIndexDriver(dto)` (`:427`) — the `driver` a scanned folder's index row should name: `driverOfFolder(dto.runtime)`, or `null` for an `unresolved` folder, which keeps the row's value. It is passed on both index writes, and by `localAgentService.reindexAgent` and `renameAgent`; `setBareRuntime` calls `agentRepo.setFolderDriver` directly
 
 Duplicate manifest ids: the first folder alphabetically wins the row; later claimants stay in the returned list marked `invalid` with a finding naming the other folder, so the page can say which two folders claim one identity.
 
@@ -190,10 +194,14 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
 - `setEnabled()` — a folder agent updates its row directly, like a hand-added A2A agent
 - `upsert()` — rejects a `folder:` id the way it rejects `remote:`
 - `delete()` — a folder-sourced row throws `folder_immutable`
-- `resolveEndpointIfNeeded()` — returns **`string | null`**, `null` for `source === 'folder'`. Null rather than a throw because "no endpoint" is this agent's normal state, not a misconfiguration; null rather than `''` so the compiler forces every caller to decide
-- `resolveAccessToken()` — returns `undefined` for `source === 'folder'` before touching the keystore
+- **Endpoint and token resolution are no longer here.** They moved to `src/main/agents/drivers/a2aConnection.ts`, where the row's capabilities decide them rather than `source`:
+  - `resolveEndpointIfNeeded()` returns **`string | null`**: `null` for a row whose capabilities say `cwd` (a folder agent). Null rather than a throw, because "no endpoint" is this agent's normal state, not a misconfiguration. Null rather than `''`, so the compiler forces every caller to decide
+  - `resolveAccessToken()` returns `undefined`, before touching the keystore, for any row whose `auth` is neither `cinna` nor `token`
 
-**This cannot regress A2A.** Both branches are guarded on `source`, a column no existing row can hold `'folder'` in — the value is only ever written by `replaceFolderIndex`. The two `null`-handling call sites are `src/main/ipc/agent_a2a.ipc.ts` (posts a user-facing error and closes the port) and `src/main/services/a2aAsMcpProvider.ts` (returns an `isError` tool result); both are net-new branches, not changes to existing ones.
+**This cannot regress A2A, and a folder row never reaches either function on a turn.**
+- `driverFor` sends a folder row to a folder driver
+- Only the A2A driver calls the pre-flight, and it turns a `null` endpoint into a turn error (`NO_ENDPOINT_CONFIGURED`)
+- The orchestrator's tool list skips a row only when `hasRunConfig` says its driver lacks what it needs, and a folder driver needs no card URL
 
 ## Renderer
 

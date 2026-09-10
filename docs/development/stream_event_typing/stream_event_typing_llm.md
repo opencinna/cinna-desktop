@@ -160,5 +160,5 @@ Live blocks and persisted parts split in the same places because one function de
 - IPC error helper: `src/main/ipc/_streamPort.ts`
 - Preload bridge: `src/preload/index.ts`
 - Receiver: `src/renderer/src/hooks/useChatStream.ts`, `src/renderer/src/stores/chat.store.ts`, `src/renderer/src/components/chat/MessageStream.tsx`, `src/renderer/src/hooks/useAgentRequests.ts`
-- Contract tests: `src/main/services/agentTurn/__golden__/runnerContract.ts`, `src/renderer/src/hooks/useChatStream.events.test.tsx`
+- Contract tests: `src/main/services/agentTurn/__golden__/driverContract.ts` (`describeDriverContract`, run through each agent driver), `src/renderer/src/hooks/useChatStream.events.test.tsx`
 - Adjacent: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) (the `cinna.*` metadata behind `delta`), [The Agent Turn Runner](../../agents/local_agents/agent_turn.md) (parking and answering), [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) (`child`), [Messaging](../../chat/messaging/messaging.md) (LLM streaming flow)

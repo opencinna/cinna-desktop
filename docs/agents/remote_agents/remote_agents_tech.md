@@ -77,10 +77,15 @@ Existing channels (`agent:send-message`, `agent:test`, `agent:fetch-card`) work 
 - `startPeriodicSync(userId)` — Starts a 5-minute interval that calls `runSyncOnce()`. Stops any existing interval first.
 - `stopPeriodicSync()` — Clears the periodic sync interval.
 
-### JWT Resolution — `src/main/services/agentService.ts`
+### JWT Resolution — `src/main/agents/drivers/a2aConnection.ts`
 
-- `agentService.resolveAccessToken(userId, agent)` — For `source='remote'`: calls `getCinnaAccessToken(userId)` to get a fresh JWT. For `source='local'`: decrypts `agent.accessTokenEncrypted`. Used by both `agent:send-message` and `agent:test` IPC handlers.
-- `agentService.resolveEndpointIfNeeded(userId, agent)` — When a remote agent has no cached `endpointUrl`, fetches the card to resolve the protocol endpoint, then caches `endpointUrl`, `protocolInterfaceUrl`, and `protocolInterfaceVersion` via `agentRepo.updateResolvedEndpoint()`. Subsequent messages use the cached endpoint.
+- `resolveAccessToken(userId, agent)` — decided by `capabilitiesFor(agent).auth` rather than by `source`:
+  - `cinna` (a synced agent) calls `getCinnaAccessToken(userId)` for a fresh JWT
+  - `token` (a hand-added agent with a stored token) decrypts `agent.accessTokenEncrypted`
+  - anything else returns `undefined`
+
+  It is used by the A2A driver's turn pre-flight and readiness check (so by `agent:send-message`, the orchestrator's agent tool and `agent:check-readiness`), and by `agentService.testAgent` behind `agent:test`.
+- `resolveEndpointIfNeeded(userId, agent)` — When a synced agent has no cached `endpointUrl`, fetches the card to resolve the protocol endpoint, then caches `endpointUrl`, `protocolInterfaceUrl`, and `protocolInterfaceVersion` via `agentRepo.updateResolvedEndpoint()`. Subsequent messages use the cached endpoint. It returns `null` for a folder agent (`capabilities.cwd`), and a hand-added agent with no endpoint must be tested first.
 
 ### Activation — `src/main/auth/activation.ts`
 

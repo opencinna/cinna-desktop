@@ -29,7 +29,7 @@ The corollary is the shape of the work: this slice is a **lift**, not a rewrite.
 ## Core Concepts
 
 - **Runner** — one agent turn, whatever kind of agent it is. Takes the shared turn input, returns the shared turn result, and **never throws**
-- **Runner dispatch** — one function that answers "which runner does this agent's turn go through", used by both call sites. Dispatch is on `agents.source` — never on the absence of a card URL — and then, for a folder agent, on the **engine** its runtime names (see [The Claude Engine](claude_engine.md))
+- **Driver dispatch** — each runner is wrapped, unchanged, by an [Agent Driver](../drivers/drivers.md), and `driverFor(agent)` answers "which driver runs this agent's turn" for every caller. It reads the row's `agents.driver`, never the absence of a card URL; a folder driver then re-reads the **engine** its folder's runtime names on every turn (see [The Claude Engine](claude_engine.md))
 - **Engine session** — an OpenCode `ses_…` created against the agent's folder and its agent key. One per (chat, agent), remembered so a conversation survives a restart
 - **Admission ack** — what the engine answers a prompt with: a receipt saying the input was accepted, carrying an `admittedSeq`. Not the answer. The answer arrives on a *separate* subscription
 - **Event bus** — the one process-wide subscription to the engine's global event stream, fanned out to turns by session id
@@ -87,15 +87,17 @@ If a standing grant already covers the ask, **none of that happens**: the engine
 
 ## Business Rules
 
-### One turn primitive, three implementations, one resolver
+### One turn primitive, three implementations, one dispatch point
 
-`AgentTurnRunner` is a single method: take the shared input, return the shared result. Three implementations exist — the A2A one (which is `runAgentTurn` unchanged, behind the shared shape), the local one described here, and the [Claude](claude_engine.md) one. One resolver picks between them: `agents.source` first, and then, for a folder agent, the engine its runtime names.
+`AgentTurnRunner` is a single method: take the shared input, return the shared result. There are three implementations: the A2A one (`runAgentTurn`, behind the shared shape), the local one described here, and the [Claude](claude_engine.md) one. None of them decides which agents it serves. Each is wrapped, unchanged, by an [Agent Driver](../drivers/drivers.md), and `driverFor(agent)` picks the driver from the row's `agents.driver`.
 
-**The engine branch is second, and reading the folder happens only after `source` has answered.** A remote agent has no folder to read, and reading one for it would be a filesystem hit on every turn of an agent the engine axis has nothing to do with. When that read fails — the row is gone, the folder moved, an assistant is mid-save on the manifest — dispatch falls back to the **default** engine, because this runner renders every one of those states as a readable turn error while the other would replace them all with "no Claude Code was found".
+**Only a folder driver reads a folder.** The dispatch point reads the row and nothing else, so an A2A agent — which has no folder — never costs a filesystem hit on a turn. A folder driver reads its folder at the start of every turn and runs the turn on the engine the folder names. It cannot trust the row alone: the row holds what the last scan saw, and a manifest edited a moment ago can already name the other engine.
 
-**Dispatch is on `source`, never on "has no card URL".** A missing card is a symptom several unrelated states share — a remote agent that has never been tested has no cached card either. This is not hypothetical: a combined `!agent || !agent.cardUrl` guard is what stood at the dispatch seam, and because folder agents are inserted with a null card URL it matched every one of them and answered "Agent not found or not configured" before any local branch could be reached. The friendlier branch below it was unreachable code for the whole of Phase 5.
+The folder cannot always answer: the row is gone, the folder has moved, or the manifest is mid-save and reads `invalid`. **In those cases the driver keeps the engine the row names** rather than guessing. Both runners refuse such a folder with a readable turn error of their own.
 
-**The resolver is the one dispatch point, and both call sites use it** — the direct-chat IPC handler and the orchestrated-tool provider. There is exactly one place to look when asking why an agent took a given path, and exactly one place to change when a third kind of agent arrives — which it since has: the [Claude](claude_engine.md) runner was added there and nowhere else.
+**Dispatch never keys on "has no card URL".** A missing card is a symptom several unrelated states share — a remote agent that has never been tested has no cached card either. This is not hypothetical: a combined `!agent || !agent.cardUrl` guard used to stand at the dispatch seam. Folder agents are inserted with a null card URL, so it matched every one of them and answered "Agent not found or not configured" before any local branch could be reached. The friendlier branch below it was unreachable code for the whole of Phase 5. The card check now lives inside the A2A driver, and only an A2A row reaches that driver.
+
+**Every caller goes through the same dispatch point**: the direct-chat IPC handler, the orchestrated-tool provider, and the answer path for a parked ask. There is one place to look when asking why an agent took a given path, and one place to change when another kind of agent arrives.
 
 ### `runTurn` never throws
 
@@ -105,7 +107,7 @@ This is enforced at both ends. The local runner catches, and the direct-chat wra
 
 ### Widening the shared input did not weaken the A2A path
 
-`endpointUrl` and `cardUrl` became optional on the shared input, because a folder agent has neither. `runAgentTurn` itself still *requires* both, and the A2A runner is the single place that narrows — so the compiler continues to refuse an A2A turn with no card, rather than discovering it at the SDK call mid-stream.
+`endpointUrl` and `cardUrl` became optional on the shared input, because a folder agent has neither. `runAgentTurn` itself still *requires* both, and the A2A driver is the single place that narrows — so the compiler continues to refuse an A2A turn with no card, rather than discovering it at the SDK call mid-stream.
 
 ### Subscribe before prompting. This is not an optimisation
 
@@ -244,14 +246,15 @@ User types in a folder-agent chat
   │
 Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin controller]
   │                          │ persist the user message (shared path)
-  │                          │ resolveTurnRunner(agent)  ── on agents.source, then engine
+  │                          │ driverFor(agent)  ── on agents.driver
   │                          ▼
-  │                        a2aStreamingService.streamToAgent  [direct-chat wrapper,
-  │                          │                                 runner-agnostic]
+  │                        a2aStreamingService.streamToAgent({run})  [direct-chat wrapper,
+  │                          │                                        kind-agnostic]
   │                          ▼
-  │                        AgentTurnRunner.runTurn(input) ──────┐
-  │                          │                                  │
-  │            LocalAgentTurnRunner                   A2ATurnRunner → runAgentTurn
+  │                        driver.run(userId, row, input) ──────┐
+  │                          │ folder driver: re-read the       │
+  │                          │ folder's engine, then runTurn    │
+  │            LocalAgentTurnRunner                   a2a driver: pre-flight → runAgentTurn
   │                          │                                  (unchanged)
   │      ┌───────────────────┴───────────────────┐
   │      │ gate: exists / enabled / readiness    │
@@ -282,7 +285,7 @@ Runner ── settled, turn open ▶ input_resolved              ──▶ chat 
 
 Out of band, while the turn streams:
 Renderer ── agent:pending-requests (poll) ──▶ pendingRequests.listForChat
-Renderer ── agent:answer-request   ────────▶ pendingRequests.resolve
+Renderer ── agent:answer-request   ────────▶ driverFor(row).respond → pendingRequests.resolve
                                               → runner POSTs the reply to the engine
 ```
 
@@ -295,7 +298,8 @@ Renderer ── agent:answer-request   ────────▶ pendingReques
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this runner gates on, the readiness values it refuses, and the per-agent turn lock
 - [Agents Tab & Agent Page](agents_tab.md) — the chat controls that were rendered disabled until this phase landed
 - [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the existing tool-part convention that permission and question blocks follow
-- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — the second call site of the resolver; a folder agent works as an orchestrated tool with no change of its own, because the runner matches the primitive's signature
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the driver that wraps each runner, the one dispatch point, the per-turn folder reconcile, and the readiness the composer refuses a send on
+- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — an orchestrated tool goes through `driverFor` just as a direct chat does. A folder agent works as one with no change of its own, because its driver matches the primitive's signature
 - [Agents (A2A streaming)](../agents/agents.md) — the direct-chat wrapper, the parts accumulator and the session table this slice reuses whole
 
 ## What is not verified

@@ -403,7 +403,12 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               )}
             </button>
 
-            {!testAgent.data && readinessIssue && (
+            {/* A failed test and a refusal describe the same failure, and the
+                refusal says it in the user's words: the test's raw error
+                ("fetch failed") replaced "Can't reach this agent." with nothing
+                to explain it. Only a passing test outranks the reason — the
+                re-check the same press started clears it moments later. */}
+            {readinessIssue && !testAgent.data?.success ? (
               <span className="flex items-center gap-1 text-[12px] min-w-0">
                 <ReadinessIcon
                   size={10}
@@ -418,9 +423,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                   {readinessText(readinessIssue)}
                 </span>
               </span>
-            )}
-
-            {testAgent.data && (
+            ) : testAgent.data ? (
               <span className="flex items-center gap-1 text-[12px]">
                 {testAgent.data.success ? (
                   <>
@@ -430,13 +433,16 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                 ) : (
                   <>
                     <XCircle size={10} className="text-[var(--color-danger)]" />
-                    <span className="text-[var(--color-danger)] truncate max-w-[200px]">
+                    <span
+                      className="text-[var(--color-danger)] truncate max-w-[200px]"
+                      title={testAgent.data.error}
+                    >
                       {testAgent.data.error}
                     </span>
                   </>
                 )}
               </span>
-            )}
+            ) : null}
           </div>
         </div>
       </AnimatedCollapse>

@@ -245,12 +245,29 @@ describe('composer readiness refusal', () => {
     }
   })
 
-  it('puts the notice before the routing badge, so the badge and Send stay at the right edge', () => {
+  it('gives the reason a line of its own under the controls row, so it never takes the chips’ width', () => {
     mountNew(agent(DOWN), 'A2A', vi.fn())
     const reason = screen.getByText('Could not reach the agent.')
-    const badge = screen.getByRole('status', { name: 'Direct A2A connection' })
-    expect(reason.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(badge.compareDocumentPosition(send()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    const line = reason.closest('[data-readiness-line]') as HTMLElement
+    expect(line).toBeTruthy()
+    // The controls row holds the + menu, the chips, the badge and Send.
+    const controlsRow = send().parentElement!.parentElement!
+    expect(controlsRow.contains(screen.getByRole('status', { name: 'Direct A2A connection' }))).toBe(true)
+    expect(controlsRow.contains(reason)).toBe(false)
+    expect(controlsRow.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('keeps the line’s space for a direct agent that is ready, so a refusal arriving moves nothing', () => {
+    mountNew(agent({ state: 'ok', reason: null }), 'A2A', vi.fn())
+    const line = document.querySelector('[data-readiness-line]') as HTMLElement
+    expect(line).toBeTruthy()
+    expect(line.className).toContain('h-4')
+    expect(line.textContent).toBe('')
+  })
+
+  it('reserves no line where nothing can be refused', () => {
+    mountNew(agent(DOWN), 'AI', vi.fn())
+    expect(document.querySelector('[data-readiness-line]')).toBeNull()
   })
 
   it('separates the reason from its action with a mark screen readers skip', () => {
@@ -356,6 +373,36 @@ describe('composer readiness refusal', () => {
     await tick()
     expect(spies.checkReadiness).toHaveBeenCalledTimes(1)
     finish(null)
+  })
+
+  /** Check again that clears the refusal: the next list read answers `ok`. */
+  async function clearingCheck(): Promise<HTMLElement> {
+    mountActive(agent(DOWN))
+    await waitFor(() => expect(spies.list).toHaveBeenCalled())
+    await tick()
+    spies.checkReadiness.mockImplementation(async () => {
+      agentList.current = [agent({ state: 'ok', reason: null })]
+      return { state: 'ok', reason: null }
+    })
+    return screen.getByRole('button', { name: 'Check again' })
+  }
+
+  it('hands focus to the message box when Check again clears the refusal and removes itself', async () => {
+    const action = await clearingCheck()
+    action.focus()
+    fireEvent.click(action)
+    await waitFor(() => expect(screen.queryByText('Could not reach the agent.')).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('combobox'))
+  })
+
+  it('takes no focus from elsewhere when a refusal clears', async () => {
+    const action = await clearingCheck()
+    const elsewhere = document.body.appendChild(document.createElement('input'))
+    fireEvent.click(action)
+    elsewhere.focus()
+    await waitFor(() => expect(screen.queryByText('Could not reach the agent.')).toBeNull())
+    expect(document.activeElement).toBe(elsewhere)
+    elsewhere.remove()
   })
 
   it('keeps the reason when a check fails, and says so in the line and on Send alike', async () => {

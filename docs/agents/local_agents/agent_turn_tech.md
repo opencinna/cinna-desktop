@@ -12,7 +12,7 @@ Six things here produce a silent, green-suite failure if changed carelessly. Eac
 2. **`TurnStream` maintains the *cumulative* message and hands the whole thing back.** `turnStream.ts` — `appendText()` (`:346`) and `setText()` (`:369`). `StreamPartsAccumulator` computes `text.slice(prior.length)` itself; feeding it a raw engine delta duplicates every character from the second chunk onward — and passed 19/19 assertions when it was wrong
 3. **Termination is the default; continuation is the enumerated exception.** `turnStream.ts:141-169`. `finish` is an unconstrained string in the OpenAPI document, so a `=== 'stop'` test hangs the turn on any other terminal value. A hang holds the per-agent lock for the life of the app and blocks engine reconciles for *every* folder agent
 4. **`onClosed` is not `onDisconnect`.** `engineEventBus.ts:79-91`. A close means the session id died with the process; treating it as a disconnect waits for a reconnect that cannot come
-5. **The `enabled` gate exists only at `localAgentTurnRunner.ts:260`.** `collectEngineAgents` (`src/main/engine/engineConfigSource.ts:130`) does not consult it — by design, so a disabled agent still gets a config entry and a prompt file on disk. Delete the check and a disabled agent is chattable. It is an obligation Phase 5 explicitly handed to Phase 6, and it is pinned by the named mutation "remove the `enabled` check" → `localAgentTurnRunner.test.ts:295` (mutation table, `:1575`)
+5. **The `enabled` gate exists only at `localAgentTurnRunner.ts:260`.** `collectEngineAgents` (`src/main/engine/engineConfigSource.ts:130`) does not consult it — by design, so a disabled agent still gets a config entry and a prompt file on disk. Delete the check and a disabled agent is chattable. It is an obligation Phase 5 explicitly handed to Phase 6, and it is pinned by the named mutation "remove the `enabled` check" → `localAgentTurnRunner.test.ts:295` (mutation table, `:1577`)
 6. **No engine response body is ever logged.** `localAgentTurnRunner.ts` — `readList` (`:876`) and `post` (`:965`). `GET /config` returns the *resolved* config with `{env:…}` substituted, and it is not the only endpoint behind that door that can carry a key
 
 ## File Locations
@@ -37,8 +37,8 @@ If you are about to add a `permission` or `question` part kind, these are the sy
 Emission side: `turnStream.ts:544` writes `PERMISSION_TOOL_NAME` into `cinna.tool_name` on the ask's `tool` part, and `turnStream.ts:573` writes `QUESTION_TOOL_NAME`. Both put the engine's request id in `cinna.tool_id`, which is *also* the address a reply is posted to. Asserted at `turnStream.test.ts:390` ("emits a permission ask as a tool part whose toolId is the reply address") and `:488`.
 
 ### Main process — `src/main/services/agentTurn/`
-- `runner.ts` — the seam. `AgentTurnRunner` (`:33`), `isFolderAgent()` (`:45`). No IO, no imports beyond two types
-- `index.ts` — production wiring and the one resolver. `engineEventBus` (`:35`), the engine-stopped hook (`:52`), `a2aTurnRunner` (`:63`), `localDeps` (`:80`), `localAgentTurnRunner` (`:146`), `resolveTurnRunner()` (`:156`). **The only place `engineManager`, `localAgentService`, `desktopStateService`, `turnLock` and `a2aSessionRepo` are named together**, which is what keeps the test files free of them
+- `runner.ts` — the seam. `AgentTurnRunner` (`:37`) and nothing else: no IO, two type imports. It no longer decides which agents a runner serves
+- The production wiring lives in `src/main/agents/drivers/index.ts`, beside the drivers that wrap each runner: `engineEventBus` (`:70`), the engine-stopped hook (`:87`), `localDeps` (`:91`), `localAgentTurnRunner` (`:174`), `claudeAgentTurnRunner`, `driverFor()` (`:365`). **It is the only place `engineManager`, `localAgentService`, `desktopStateService`, `turnLock` and `a2aSessionRepo` are named together**, which is what keeps the test files free of them. See [Agent Drivers — Technical Details](../drivers/drivers_tech.md)
 - `localAgentTurnRunner.ts` — the turn lifecycle. `TURN_CEILING_MS` (20 min), `ENGINE_READY_MS` (60 s), `LocalTurnDeps`, `LocalAgentTurnRunner`. Per turn, `stream()` builds an `AskReporter`: `park()` posts `needs_input` after the registration, and the answer path — or an ask the engine settled while this turn was parked on it, read through `engineResolution` — posts `input_resolved`, deduped by `resolvedIds` because the engine echoes our own reply. Both are gated by `open`, which closes before `/interrupt` on a stop and before the `finally` sweep, so teardown reports nothing
 - `engineEventBus.ts` — the one global SSE subscription. `RECONNECT_DELAYS_MS` (`:53`), `EngineStreamTransport` (`:62`), `SessionEventListener` (`:66`), `EngineEventBus` (`:99`)
 - `engineEvents.ts` — the event vocabulary. `EngineEventDurable` (`:59`), `EngineEvent` (`:73`, open `type: string`), `ENGINE_EVENT` (`:82`), `eventSessionId()` (`:108`), `parseEngineEvent()` (`:114`)
@@ -47,19 +47,25 @@ Emission side: `turnStream.ts:544` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `pendingRequests.ts` — the module-level ask/permission registry. `RequestResolution` (re-exported from `src/shared/localAgentRequests.ts`, whose permission variant carries `remembered?`), `pendingRequests.{register:76, resolve:152, drop:189, owner:208, listForChat:221, clear:230}`. An `Entry` now also holds the engine's own ask, so an answer can be scoped to what the **engine** named rather than to what a renderer sends back with it
 
 ### Main process — elsewhere
-- `src/main/ipc/agent_a2a.ipc.ts:176` — `ipcMain.on('agent:send-message')`, the dispatch seam (seam 4). `resolveTurnRunner(agent)` at `:222`, `isFolderAgent(agent)` at `:223`; `:224-231` is the card check that now runs **after** the source check; `:240` and `:294` short-circuit endpoint and token resolution for a folder agent; `:308` hands the runner to `streamToAgent`
-- `src/main/ipc/agent_a2a.ipc.ts:347` — `agent:answer-request`; `:46` — `rememberIfAlways`, its `always` conversion; `:422` — `agent:pending-requests`
-- `src/main/services/a2aStreamingService.ts` — the A2A runner, and the direct-chat wrapper every runner passes through. It maps A2A task states into `RunState` with `toRunState()` (`:54`). `a2aInputRequestOf()` (`:83`, falling back to `A2A_AUTH_REQUIRED_FALLBACK` at `:72`) turns an `input-required` / `auth-required` status-update into the `needs_input { resume: 'next_message' }` event posted after the `status` (`:352`). `streamToAgent` posts `done` with a `stopReason`. Also `StreamToAgentInput.runner` (`:122`), `RunAgentTurnInput` (`:156`, with `endpointUrl`/`cardUrl` widened to optional at `:171-172`), `RunAgentTurnResult` (`:200`), `A2ARunAgentTurnInput` (`:232`, the re-narrowing), `runAgentTurn()` (`:248`), `streamToAgent()` (`:489`) calling `runner.runTurn` at `:511`, and the `catch` at `:593` that no longer trusts a runner to keep its own contract
-- `src/main/services/a2aAsMcpProvider.ts:134` — the second call site of `resolveTurnRunner`; `:171` — `runner.runTurn`. A folder agent works as an orchestrated tool with no change of its own
+- `src/main/ipc/agent_a2a.ipc.ts:145` — `ipcMain.on('agent:send-message')`, the dispatch seam (seam 4). `driverFor(agent)` at `:188`; `:207` lets `resolveCommandRunner` swap a catalog command in for `driver.run`; `:222` hands the bound `run` to `streamToAgent`. There is no kind-specific pre-flight here any more: the card check and endpoint/token resolution run inside the A2A driver, whose failures come back as `result.error`
+- `src/main/ipc/agent_a2a.ipc.ts:245` — `agent:answer-request`, which answers through `driverFor(row).respond` (or `respondToOrphanedAsk` for a pruned row, `:313`); the `always` conversion is `rememberIfAlways` in `src/main/agents/drivers/folderDriver.ts:244`; `:328` — `agent:pending-requests`
+- `src/main/services/a2aStreamingService.ts` — the A2A runner, and the direct-chat wrapper every turn passes through:
+  - A2A task states become `RunState` in `toRunState()` (`:53`)
+  - `a2aInputRequestOf()` (`:82`, falling back to `A2A_AUTH_REQUIRED_FALLBACK` at `:71`) turns an `input-required` / `auth-required` status-update into the `needs_input { resume: 'next_message' }` event posted after the `status` (`:340`)
+  - `streamToAgent` posts `done` with a `stopReason`
+  - `TurnIO` (`:108`), `TurnRun` (`:114`) and `StreamToAgentInput.run` (`:116`)
+  - `RunAgentTurnInput` (`:141`, with `endpointUrl`/`cardUrl` widened to optional at `:156-157`), `RunAgentTurnResult` (`:185`), `A2ARunAgentTurnInput` (`:218`, the re-narrowing), `runAgentTurn()` (`:234`)
+  - `streamToAgent()` (`:484`) calls `run` at `:493`; its `catch` at `:556` does not trust a turn to keep its own contract
+- `src/main/services/a2aAsMcpProvider.ts:133` — the orchestrated-tool call site: `driverFor(this.agent).run(…)`. A folder agent works as an orchestrated tool with no change of its own
 - `src/main/engine/engineManager.ts` — `ensureRunning`, `agentKey`, `agentModel`, `lastSkips`, `request`, `onStateChange`. See [engine_tech.md](engine_tech.md)
 - `src/main/engine/engineConfigSource.ts:130` — `collectEngineAgents`, which does **not** filter on `enabled`
 - `src/main/services/localAgents/turnLock.ts:98` — `withLock()`; `:117` — `anyHeld()`, the engine-level predicate; `:58` — `isLocked()`, which is **not** the one that gates a restart
 - `src/main/services/localAgents/desktopStateService.ts` — the durable per-folder session copy
-- `src/main/db/agents.ts:703` — `a2aSessionRepo.getByChatAndAgent`; `:711` — `upsert` (seam 9)
+- `src/main/db/agents.ts:786` — `a2aSessionRepo.getByChatAndAgent`; `:794` — `upsert` (seam 9). `agentSessionRepo` (`:846`) is the same object under a driver-neutral name
 - `src/main/agents/streamPartsAccumulator.ts` — reused verbatim (seam 8); this slice only produces `MessageLike`/`PartLike` with its `cinna.*` metadata keys
 
 ### Preload
-- `src/preload/index.ts:609` — `window.api.agents.answerRequest({requestId, reply?, answers?})`; `:618` — `window.api.agents.pendingRequests(chatId)`. Typed by inference (seam 16)
+- `src/preload/index.ts:626` — `window.api.agents.answerRequest({requestId, reply?, answers?})`; `:635` — `window.api.agents.pendingRequests(chatId)`. Typed by inference (seam 16)
 
 ### Renderer
 - `src/renderer/src/hooks/useAgentRequests.ts` — `useAgentRequests(chatId, isStreaming)` → `{pending, isPending, answerPermission, answerQuestion}`, both answer functions resolving with an `AnswerOutcome` (`{remembered?}`). **Polls** (`POLL_MS = 700`) while streaming, with one final read after the stream ends. The poll is not the only source — a `needs_input` on the stream makes a block live at once, and both answer functions also call the chat store's `resolveInputRequest` — but it stays, because a reloaded renderer has no port and an ask raised before the renderer subscribed never arrives as an event; a failed lookup keeps the last known list rather than blanking a prompt mid-answer. **The optimistic removal happens after the refusal check, not before it** — it used to run first, so an answer main refused took the buttons with it: the block greyed out, the error line said the request had expired, and there was no way to answer it any other way
@@ -73,7 +79,7 @@ Emission side: `turnStream.ts:544` writes `PERMISSION_TOOL_NAME` into `cinna.too
 - `src/main/services/agentTurn/engineEventBus.test.ts` — fan-out, `ready()` ordering, disconnect/reconnect/close, backoff reset, unattributed errors, a throwing listener, unsubscribe-from-inside-handler, and the parser-`reset()` case
 - `src/main/services/agentTurn/turnStream.test.ts` — the event→part mapping in full, including the cumulative-vs-delta trap, `text.ended` idempotence, never-shrink, request asks and paired decisions
 - `src/main/services/agentTurn/pendingRequests.test.ts`, `sseParser.test.ts`
-- `src/main/services/agentTurn/golden.{a2a,opencode,claude}.test.ts` <!-- nocheck --> with `__golden__/` — golden streams and the runner contract for all three runners. See [Characterization tests](#characterization-tests)
+- `src/main/services/agentTurn/golden.{a2a,opencode,claude}.test.ts` <!-- nocheck --> with `__golden__/` — golden streams for all three runners, and the driver contract run through the driver that wraps each one. See [Characterization tests](#characterization-tests)
 - `src/renderer/src/components/chat/PermissionRequestBlock.test.tsx`, `src/renderer/src/utils/localAgentRequests.test.ts`
 
 ## Database Schema
@@ -82,13 +88,13 @@ Emission side: `turnStream.ts:544` writes `PERMISSION_TOOL_NAME` into `cinna.too
 
 Uniqueness is enforced in `a2aSessionRepo.upsert` by select-then-insert; there is no unique index.
 
-The second, durable copy is `sessions[chatId] = {sessionId, updatedAt}` in the agent folder's `app-data/desktop.json`, written through `desktopStateService.patch`. Invariant 1 makes the SQLite row a cache, so a failure to write the folder copy is logged and the turn continues (`index.ts:127-140`).
+The second, durable copy is `sessions[chatId] = {sessionId, updatedAt}` in the agent folder's `app-data/desktop.json`, written through `desktopStateService.patch`. Invariant 1 makes the SQLite row a cache, so a failure to write the folder copy is logged and the turn continues (`src/main/agents/drivers/index.ts:145-158`).
 
 ## IPC Channels
 
 | Channel | Signature | Notes |
 |---|---|---|
-| `agent:send-message` | `(AgentSendPayload)` + a MessagePort on `event.ports[0]` | Unchanged shape. The only new work is `resolveTurnRunner(agent)` and skipping endpoint/token resolution for a folder agent |
+| `agent:send-message` | `(AgentSendPayload)` + a MessagePort on `event.ports[0]` | Unchanged shape. The handler resolves `driverFor(agent)` and hands `streamToAgent` a bound `run`. Endpoint and token resolution live inside the A2A driver, so a folder agent never meets them |
 | `agent:cancel-message` | `(requestId) → {success}` | Unchanged. Reaches the runner through the turn's `AbortSignal` |
 | `agent:answer-request` | `({requestId, reply?, answers?}) → {ok, reason?, remembered?}` | Activation-gated, chat-ownership checked **before** the request is consumed, and the answer shape validated against the engine's own enum. `remembered` is present only for a permission answered `always`, and says whether the grant reached disk — see [permissions_tech.md](permissions_tech.md#ordering-constraint-on-the-answer-path) for the synchronous-window constraint that makes writing it before `resolve()` safe |
 | `agent:pending-requests` | `(chatId) → {requestId, kind}[]` | New. Synchronous map read; returns `[]` for a chat the caller does not own |
@@ -103,20 +109,19 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 
 ### `src/main/services/agentTurn/runner.ts`
 
-`AgentTurnRunner.runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult>` — one method, **never throws**; a failed turn is a result carrying `error`.
+`AgentTurnRunner.runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult>` — one method, **never throws**; a failed turn is a result carrying `error`. Which agents a runner serves is not decided here — see [Agent Drivers](../drivers/drivers.md).
 
-`isFolderAgent(agent: Pick<AgentRow,'source'>)` — `source === 'folder'`. The same discriminator `resolveEndpointIfNeeded` and `resolveAccessToken` already branch on.
-
-### `src/main/services/agentTurn/index.ts`
+### `src/main/agents/drivers/index.ts` — the runners' production wiring
 
 | Symbol | Purpose |
 |---|---|
-| `engineEventBus` (`:35`) | The one bus, constructed over `engineManager.request('/api/event', {Accept: 'text/event-stream'})`. Costs nothing at module load — it connects on the first subscriber |
-| `engineManager.onStateChange` (`:52`) | Any non-`running` status calls `engineEventBus.shutdown()`. This is what turns "the engine stopped" into turn errors instead of hangs |
-| `a2aTurnRunner` (`:63`) | `runAgentTurn` behind the shared shape. **The single place that narrows** `endpointUrl`/`cardUrl` back to required; a missing one is returned as a turn error, not thrown |
-| `localDeps` (`:80`) | Every injection point: `ensureEngineRunning`, `agentKey`, `agentModel`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:100-108`), `readSession`, `saveSession` (both stores, `:112-141`), `isGranted` (`:158`, the reading half of *Always allow*), `withLock`, `userId` |
-| `rememberPermissionGrant()` (`:179`) | The writing half, called from `agent_a2a.ipc.ts`. Lives here because this module already names `localAgentService` and the folder's own state together, and because reaching into the local-agent services from the chat IPC module would pull the whole folder stack (Electron `shell`, the scaffolder, the watcher) into its import graph. Returns `false` rather than throwing: the user's action still goes ahead |
-| `resolveTurnRunner(agent)` (`:156`) | The one dispatch point, used by the IPC handler and `A2AAsMcpProvider` |
+| `engineEventBus` (`:70`) | The one bus, constructed over `engineManager.request('/api/event', {Accept: 'text/event-stream'})`. Costs nothing at module load — it connects on the first subscriber |
+| `engineManager.onStateChange` (`:87`) | Any non-`running` status calls `engineEventBus.shutdown()`. This is what turns "the engine stopped" into turn errors instead of hangs |
+| `localDeps` (`:91`) | Every injection point: `ensureEngineRunning`, `agentKey`, `agentModel`, `skipReason`, `request`, `bus`, `getAgent` (`not_found` caught and rendered as a turn error, `:107-127`), `readSession`, `saveSession` (both stores, `:130-159`), `isGranted` (`:168`, the reading half of *Always allow*), `withLock`, `userId` |
+| `rememberGrant()` (`:300`) | The writing half, called from a folder driver's `respond`. It lives here for two reasons: this module already names `localAgentService` and the folder's own state together, and reaching into the local-agent services from the chat IPC module would pull the whole folder stack (Electron `shell`, the scaffolder, the watcher) into its import graph. Returns `false` rather than throwing: the user's action still goes ahead |
+| `driverFor(agent)` (`:365`) | The one dispatch point, used by the direct-chat handler, `A2AAsMcpProvider` and the answer path. Each driver's pre-flight, reconcile and readiness are in [Agent Drivers — Technical Details](../drivers/drivers_tech.md#services--key-methods) |
+
+Narrowing `endpointUrl`/`cardUrl` back to required happens in the A2A driver's `run` (`src/main/agents/drivers/a2aDriver.ts:74`). A missing card or endpoint is returned as a turn error, not thrown.
 
 ### `src/main/services/agentTurn/localAgentTurnRunner.ts`
 
@@ -234,7 +239,7 @@ Nothing in this module speaks HTTP. It holds *resolvers*; the runner owns the re
 
 ### `RunAgentTurnInput` → `RunAgentTurnResult`
 
-The shared turn primitive (`a2aStreamingService.ts:156` and `:200`). Two fields are widened to optional for a folder agent (`endpointUrl`, `cardUrl`), and the `onEvent` sink takes `RunEvent`.
+The shared turn primitive (`a2aStreamingService.ts:141` and `:185`). Two fields are widened to optional for a folder agent (`endpointUrl`, `cardUrl`), and the `onEvent` sink takes `RunEvent`.
 
 **In:** `chatId`, `agentId`, `agentName`, `endpointUrl?`, `cardUrl?`, `accessToken?`, `wireContent`, `fileIds?`, `isCinnaTokenAuth?`, `signal: AbortSignal`, `onEvent?`, `onClient?`, `onTaskId?`.
 
@@ -303,9 +308,9 @@ runTurn(input)
 
 - **Invariant 4 — no secret crosses to the renderer.** The engine's base URL and per-start Basic-auth password stay inside `engineManager`; this slice reaches the engine only through `engineManager.request`, and no IPC channel exposes that seam. What the renderer receives is stream events and message parts, exactly as for a remote agent
 - **No engine response body is ever logged** (`localAgentTurnRunner.ts:876`, `:965`). `GET /config` returns the resolved config with `{env:…}` substituted, so its body contains live API keys — and it is not the only endpoint that can carry one
-- **Chat ownership is checked on both new channels** (`agent_a2a.ipc.ts:358`, `:424`) with `chatRepo.getOwned(getProfileScopeUserId(), chatId)`, and on `answer-request` it is checked **before** the request is consumed
+- **Chat ownership is checked on both new channels** (`agent_a2a.ipc.ts:256`, `:330`) with `chatRepo.getOwned(getProfileScopeUserId(), chatId)`, and on `answer-request` it is checked **before** the request is consumed
 - **Both new channels are activation-gated** (`userActivation.requireActivated()`)
-- **Answer shapes are validated against the engine's own enum**, not against the renderer's word for it — a wrong shape is refused rather than delivered to the wrong endpoint (`agent_a2a.ipc.ts:371-383`, plus the kind check in `pendingRequests.resolve`)
+- **Answer shapes are validated against the engine's own enum**, not against the renderer's word for it — a wrong shape is refused before any driver sees it rather than delivered to the wrong endpoint (`agent_a2a.ipc.ts:269-280`, plus the kind check in `pendingRequests.resolve`)
 - **A persisted request block is read-only.** `isEngineRequestId` (`src/shared/localAgentRequests.ts:70`) separates a live engine address from a cloud agent's question id, and the main-process registry is the only authority on whether it is still answerable — so a reopened chat cannot re-answer a dead request
 - **The permission tool name is reserved and un-model-emittable** (`cinna_permission_request`), so an agent's own call to `bash` or `edit` can never be mistaken for a request to run one
 
@@ -368,11 +373,15 @@ These pin what the three runners and the renderer's stream handler **currently d
 
 The sidecars exist because the events golden was measurably blind. According to the mutation table in `golden.a2a.test.ts`'s header, skipping `a2aSessionRepo.upsert` on the success path failed the effects files and the contract's `session` clause, and **no** `{events, result}` golden. A vocabulary change rewrites `*.expected.json` and leaves the sidecars alone — a sidecar that changes during one is a behaviour change, not a rename. A transport change rewrites the sidecars.
 
-### The runner contract
+### The driver contract
 
-`src/main/services/agentTurn/__golden__/runnerContract.ts:describeRunnerContract(name, makeSubject, options)` <!-- nocheck --> is called once at the bottom of each golden file. The suite owns every assertion and the `pendingRequests` instrumentation. A subject only says how to *reach* a situation (`completes`, `failures`, `hangs`, `parks?`, `session`), so a runner cannot pass by describing its own behaviour back. For the same reason a subject's `run` must return `runTurn`'s promise untouched: a `catch` there would make the never-rejects clause test the subject.
+`src/main/services/agentTurn/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)` is called once at the bottom of each golden file.
+- **Every turn goes through `driver.run(userId, row, input)`**, the call production dispatches to
+- **The subject's driver wraps the same runner the suite's fakes construct**, and its row and small world come from `__golden__/driverWorld.ts` (`goldenRow`, …). A golden therefore pins exactly the stream the runner produced, plus whatever the driver does around it
+- **The suite owns every assertion** and the `pendingRequests` instrumentation. A subject only says how to *reach* a situation (`completes`, `failures`, `hangs`, `hangsServerAssisted?`, `parks?`, `session`), so a driver cannot pass by describing its own behaviour back
+- **A subject's `run` must return the driver's promise untouched.** A `catch` there would make the never-rejects clause test the subject instead of the driver
 
-What it asserts for every runner:
+What it asserts for every driver:
 
 - `runTurn` never rejects, and every failure is `result.error` with a non-empty `message` and `raw`
 - The first `onEvent` is never `done` or `error`
@@ -382,6 +391,9 @@ What it asserts for every runner:
 - A parked ask settled while the turn is open says so **once**: one `input_resolved`, after its `needs_input`, carrying the answer that was posted (`park.input_resolved`), or `{kind: 'rejected'}` on a reject and on a timeout (asserted inside `park.reject` and `park.timeout`). Every `input_resolved` the turn posted is counted, not only this id's, because a runner can hear of one answer twice — its own and the engine's echo. An ask swept away by an abort gets **none** (asserted inside `park.abort`): nobody answered it, and the terminal event posted above the runner already says the park is gone
 - A2A has no `parks()`, because `input-required` ends its turn instead of parking, so its six parked-ask clauses are skipped. Its `needs_input { resume: 'next_message' }` is pinned by the `input_required` and `auth_required_state` goldens instead — the second being the only way to reach the `auth` kind, since `auth_required_401` is a transport rejection that never gets that far
 - A session id the turn produces reaches `saveSession`, and the next turn on the same chat gets it back through `readSession`
+- `capabilities(row)` is the same answer on every call and for every subject built for that row, and a caller editing the object it was handed cannot change the next answer (`capabilities.stable`)
+- `readiness` resolves — never rejects, never throws — with a state this build knows and a sentence when it is not `ok`, whatever its dependencies do (`readiness.never_throws`)
+- `respond` to an ask nothing is waiting on answers `{delivered: false}` and writes no grant; where the driver parks, an ask already answered is one of those (`respond.unknown`)
 
 **A clause a runner breaks is recorded, never bent.**
 
@@ -396,5 +408,12 @@ Currently recorded:
 
 ### Kind-branch ratchet and receiver-side events
 
-- `src/main/agents/kindBranches.test.ts` counts literal comparisons on an agent's `source`, `engine`, `kind`, job `type` and `providerType`, plus `isFolderAgent(` calls, across `src/main`, `src/shared` and `src/renderer/src`. It fails when a category exceeds its entry in `LIMITS`. **A limit only ever goes down.** A change that removes branches lowers the limit in the same commit; raising one needs a comment beside it naming the phase that pays it back, because a limit raised without one is just a ceiling. Limits are per category, so headroom freed in one category cannot be spent in another. The count runs in Node, not shell `grep`, and its blind spots (`switch`/`case`, `.includes`) are listed in the header
+- `src/main/agents/kindBranches.test.ts` counts literal comparisons on an agent's `source`, `engine`, `kind`, job `type` and `providerType` — plus comparisons against `FOLDER_AGENT_SOURCE` and calls of the folder-agent predicates the header names — across `src/main`, `src/shared` and `src/renderer/src`.
+  - **Each category must equal its entry in `LIMITS`, not merely stay under it.** A change that removes branches lowers the limit in the same commit; otherwise a new branch could later fill the freed room unnoticed
+  - Raising a limit needs a comment beside it naming what pays it back
+  - Limits are per category, so headroom freed in one category cannot be spent in another
+  - `src/main/agents/drivers/` and four sync files are allowlisted. Files whose `source` reads are about ownership are pinned to exact counts in `OWNERSHIP` rather than held in `LIMITS`
+  - The count runs in Node, not shell `grep`. Its blind spots (`switch`/`case`, `.includes`, lookups, an unnamed helper) are listed in the header
+
+  Full account: [Agent Drivers — Technical Details](../drivers/drivers_tech.md#the-kind-branch-ratchet)
 - `src/renderer/src/hooks/useChatStream.events.test.tsx` feeds every `RunEvent` variant through `useChatStream.handleRun`, in an agent table and an LLM table. Each row pins exactly which chat-store fields changed — `inputRequests` and `settledInputRequestIds` among them — and which queries were invalidated, and any field a row does not name is asserted unchanged. `Record<Union, true>` guards (`RUN_EVENT_TYPES`, `CONTENT_KINDS`, `ALL_RUN_STATES`) make a new variant, content kind or run state fail `npm run typecheck:web` until it has a row. Rows titled `PINNED:` record behaviour that looks wrong and is kept as it is
