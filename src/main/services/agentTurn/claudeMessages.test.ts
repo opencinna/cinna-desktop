@@ -61,7 +61,8 @@ const init = {
   session_id: 'sess-1',
   apiKeySource: 'none',
   model: 'claude-opus-5',
-  claude_code_version: '2.1.266'
+  claude_code_version: '2.1.266',
+  permissionMode: 'auto'
 }
 const start = (id: string): unknown => ({
   type: 'stream_event',
@@ -591,3 +592,20 @@ describe('background tasks — the level signal the runner keeps stdin open on',
     expect(second.message?.parts.at(-1)?.text).toBe('Waiting for background work to finish: 1 background task(s)')
   })
 })
+
+describe('the init message', () => {
+  it('reports the permission mode the CLI is actually running in', () => {
+    // Asked for `auto` on a model without a classifier, the CLI runs `default`
+    // and says so only here — observed with `haiku` (`claude_contract.md` §10).
+    // The runner needs the fact to tell the user why "automatic" is asking.
+    const stream = new ClaudeMessageStream()
+    expect(stream.apply({ ...init, permissionMode: 'default' }).permissionMode).toBe('default')
+    expect(stream.apply(init).permissionMode).toBe('auto')
+    // Absent is absent, not a mode: an older CLI that does not report it must
+    // not be read as having fallen back.
+    const { permissionMode, ...silent } = init
+    void permissionMode
+    expect(stream.apply(silent).permissionMode).toBeUndefined()
+  })
+})
+

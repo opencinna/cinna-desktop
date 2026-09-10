@@ -52,7 +52,8 @@ function agent(overrides: Partial<LocalAgentDto> = {}): LocalAgentDto {
       localApiBaseUrl: null,
       hasAgentToken: false,
       sessionCount: 0,
-      lastStatusAt: null
+      lastStatusAt: null,
+      claudeApproval: null
     },
     stamps: {},
     scannedAt: 0,

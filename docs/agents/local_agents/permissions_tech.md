@@ -17,29 +17,35 @@ Three of these produce a silent, green-suite failure — and each fails in the d
 ### Shared
 - `src/shared/localAgentRequests.ts` — the whole permission wire contract and every matching rule. `PERMISSION_TOOL_NAME` (`:36`), `PERMISSION_ID_PREFIX`/`QUESTION_ID_PREFIX` (`:42-43`), `isEngineRequestId()` (`:64`), `REQUEST_PARK_TIMEOUT_MS` (`:84`), `PermissionGrantScope` (`:150`), `LocalPermissionGrant` (`:153`), `StoredPermissionGrant` (`:172`), `permissionGrantKey()` (`:183`), `permissionGrantPatterns()` (`:205`), `permissionGrantMatches()` (`:238`), `isPermissionGranted()` (`:264`), `describePermissionAction()` (`:291`), `describeGrantScope()` (`:317`), `PermissionReply` (`:343`), `LocalPermissionRequest` (`:363`), `parsePermissionRequest()` (`:372`). **Type-only plus pure functions** — imported from main and renderer alike, so it must pull in no runtime dependency
 - `src/shared/kit/manifest.ts:84` — `AgentRuntimeRef.permissions`, the manifest's override block; `:183` — `DESKTOP_STATE_FILE`, the file the Permissions card names
+- `src/shared/engine.ts:140` — `ClaudeApproval` (`'auto' | 'ask'`); `:150` — `DEFAULT_CLAUDE_APPROVAL` (`'auto'`); `:153` — `isClaudeApproval()`. Its own type and not the SDK's `PermissionMode`, so the two members that would remove the desktop from the decision are not expressible
+- `src/shared/localAgents.ts:302` — `LocalAgentDesktopSummary.claudeApproval: ClaudeApproval | null`, the field the Permissions card reads
 
 ### Main process
 - `src/main/engine/configGenerator.ts` — the static profile. `SECRET_FILES` (`:218`), `IDENTITY_FILES` (`:239`), `CONVERSATION_PERMISSIONS` (`:244`), `mergePermissions()` (`:667`), applied per agent entry at `:543`
 - `src/main/services/localAgents/permissionGrantService.ts` — the desktop's own store. `list()` (`:56`), `covers()` (`:70`), `remember()` (`:90`), `forget()` (`:110`), `forgetAll()` (`:120`). Reads disk on every call, deliberately uncached
-- `src/main/services/localAgents/desktopStateService.ts:66` — `DesktopState.permissionGrants`; `:107-124` — the coercion, which drops a row naming no action or pattern and reads a missing `scope` as `exact`
+- `src/main/services/localAgents/desktopStateService.ts:66` — `DesktopState.permissionGrants`; `:107-124` — the coercion, which drops a row naming no action or pattern and reads a missing `scope` as `exact`; `:122` — `DesktopState.claudeApproval`; `:213` — its coercion through `isClaudeApproval`, anything else to null; `:429` — copied into `summarize()`
+- `src/main/services/localAgents/localAgentService.ts:1648` — `setClaudeApproval(userId, agentId, approval: unknown)`. `locate()` first, then `invalid_input` for anything that is not `auto`, `ask` or null, then `turnLock.acquire(agentId, 'editor')` around `desktopStateService.patch(agentDir, kindOf(root), {claudeApproval})`, then `scannerService.markRootDirty` and a re-scan of the folder — the watcher acts on neither state file (a bare one is under `userData`, a kit one under `app-data/`, which it ignores by segment), so without the re-read the page would keep rendering the choice it had before the click
+- `src/main/services/agentTurn/index.ts:247` — `claudeDeps.approval`, which reads the setting off the agent's desktop state and applies `DEFAULT_CLAUDE_APPROVAL` there, on null and on any throw
+- `src/main/services/agentTurn/claudeAgentTurnRunner.ts:589` — `permissionMode: approval === 'auto' ? 'auto' : 'default'`, the one place the two vocabularies meet; `:394` — `approvalFallback()`; `:875` — the `claude:approval-fallback` notice
+- `src/main/services/agentTurn/claudeMessages.ts:97` — `ClaudeStreamUpdate.permissionMode`, set once off `system/init` (`:238`)
 - `src/main/services/localAgents/localAgentService.ts:860` — `listPermissionGrants`; `:872` — `forgetPermissionGrant`; `:879` — `forgetAllPermissionGrants`. All three go through `locate()`, which is what proves the agent belongs to this user **before** a folder path is derived — and they pass `kindOf(root)` alongside the path, because where an agent's grants are stored is a property of its root, not of its folder ([Bare Agents](bare_agents.md))
 - `src/main/services/agentTurn/index.ts:159` — `localDeps.isGranted`, the reading half; `:181` — `rememberPermissionGrant()`, which resolves the agent's **DTO** rather than just its path, for the kind, the writing half, placed here so `agent_a2a.ipc.ts` does not pull the folder stack into its import graph
 - `src/main/services/agentTurn/turnStream.ts` — where an ask is either written or auto-answered. `PendingRequest` (`:57`, with `request?` and `auto?`), `TurnStreamOptions` (`:169`), `noteRemembered()` (`:198`), `permissionAsked()` (`:484`), `permissionDecisionText()` (`:647`)
 - `src/main/services/agentTurn/localAgentTurnRunner.ts` — `AUTO_REPLY_RETRY_MS` (`:107`), `LocalTurnDeps.isGranted` (`:153`, now `(agentDir, agentKind, request)`), the `TurnStream` construction that injects it (`:302`), `park()` (`:491`), `autoAllow()` (`:540`), `deliverAutomatic()` (`:570`), `reply()` (`:601`)
 - `src/main/services/agentTurn/pendingRequests.ts` — `Entry.request` carries the engine's ask; `RequestResolution` gains `remembered?` on the permission variant; `owner()` returns the ask alongside the ids
 - `src/main/ipc/agent_a2a.ipc.ts:46` — `rememberIfAlways()`; `:347` — `agent:answer-request`; `:405` — where the conversion happens, between `owner()` and `resolve()`
-- `src/main/ipc/local_agent.ipc.ts:228` — `local-agent:grants-list`; `:234` — `local-agent:grant-forget`; `:248` — `local-agent:grants-clear`
+- `src/main/ipc/local_agent.ipc.ts:228` — `local-agent:grants-list`; `:234` — `local-agent:grant-forget`; `:248` — `local-agent:grants-clear`; `:579` — `local-agent:set-claude-approval`
 
 ### Preload
 - `src/preload/index.ts:564` — `window.api.agents.answerRequest(...)`, whose result widened to `{ok, reason?, remembered?}`
-- `src/preload/index.ts:1190` — `grantsList`; `:1193` — `grantForget`; `:1196` — `grantsClear`
+- `src/preload/index.ts:1190` — `grantsList`; `:1193` — `grantForget`; `:1196` — `grantsClear`; `:1307` — `setClaudeApproval(agentId, approval)`
 
 ### Renderer
 - `src/renderer/src/components/chat/PermissionRequestBlock.tsx` — the transcript widget. Three buttons, per-button in-flight state, the wider-than-the-ask scope line, and the decision record
 - `src/renderer/src/components/chat/MessageStream.tsx:347` — where it is mounted; `:353` — `onAnswer={answerPermission}`
-- `src/renderer/src/components/agents/local/PermissionsCard.tsx` — the agent page's Permissions tab body
+- `src/renderer/src/components/agents/local/PermissionsCard.tsx` — the agent page's Permissions tab body. `:255` — `OpenCodeProfile`, the fixed profile paragraphs; `:351` — `ClaudeApprovals`, the two-setting paragraph, the **Approvals** select and its one-line error slot, rendered instead when `agent.runtime?.engine === 'claude'`
 - `src/renderer/src/components/agents/local/LocalAgentPage.tsx` — `AgentPageTab` now has five members; the Permissions entry carries a count badge
-- `src/renderer/src/hooks/useLocalAgents.ts:73` — `localAgentGrantsKey`; `:200` — `useLocalAgentGrants`; `:219` — `useForgetAgentGrants`
+- `src/renderer/src/hooks/useLocalAgents.ts:73` — `localAgentGrantsKey`; `:200` — `useLocalAgentGrants`; `:219` — `useForgetAgentGrants`; `:485` — `useSetClaudeApproval`, which writes the returned DTO into the agent's own query with `setQueryData` — a refetch would show the old value for the round trip after the click
 - `src/renderer/src/hooks/useAgentRequests.ts` — `AnswerOutcome`; `answerPermission` / `answerQuestion` now resolve with it, and the optimistic removal happens **after** the refusal check
 
 ### Tests
@@ -49,13 +55,17 @@ Three of these produce a silent, green-suite failure — and each fails in the d
 - `src/main/services/agentTurn/turnStream.test.ts` — no block written for an ask a standing grant covers; "says who remembered a decision, and never mixes the two stores up" (the desktop's line vs an engine-side `always` from another client)
 - `src/main/services/agentTurn/localAgentTurnRunner.test.ts` — a permission answer posted as OpenCode's own enum; `always` never posted whatever the runner is settled with; the ask carried into the registry; an ask a standing grant covers answered without parking or rendering; and the automatic allow retried then rejected rather than leaving the turn parked
 - `src/renderer/src/utils/localAgentRequests.test.ts` — every matching rule: a URL remembered by origin and everything else verbatim, an asterisk the model wrote kept as part of the string, the whole-action fallback, a key a URL's colon cannot split, prefix-only origin coverage, exact match including metacharacters, all-resources-not-any, no carry across actions, and what the button promises
-- `src/renderer/src/components/agents/local/PermissionsCard.test.tsx` — the fixed paragraph with nothing remembered, the manifest-override sentence and its absence, "nothing yet" withheld while loading, a listed grant, a row dropped on revoke, and a refusal that survives the row that raised it
+- `src/renderer/src/components/agents/local/PermissionsCard.test.tsx` — the fixed paragraph with nothing remembered, the manifest-override sentence and its absence, "nothing yet" withheld while loading, a listed grant, a row dropped on revoke, and a refusal that survives the row that raised it; for a Claude agent, the profile sentence absent and the reviewer's described bluntly, no choice rendering as `auto`, a stored choice rendered, a pick held through the round trip over a live query, a refusal beside the control with the select back on the stored value, and no select on OpenCode
+- `src/main/services/localAgents/desktopStateService.test.ts`, `localAgentService.test.ts` — the setting round-tripped for either kind of folder and stored where that kind's grants are; null kept as null; `bypassPermissions` on disk read as null; the setter refusing an unknown value and storing nothing
+- `src/main/services/agentTurn/claudeAgentTurnRunner.test.ts`, `claudeMessages.test.ts` — the mapping onto the SDK, `canUseTool` present on both settings, and the fallback notice — see [The Claude Engine — Technical Details](claude_engine_tech.md#tests)
 
 ## Storage
 
 **No table and no column.** Grants live in that agent's desktop-state record under `permissionGrants`, keyed `<action>::<pattern>` — `app-data/desktop.json` inside a kit folder, and a file under `<userData>/external-agents/` for a bare one, whose folder the desktop writes nothing into. Every `permissionGrantService` method therefore takes a `LocalAgentKind` beside the path; see [Bare Agents & External Roots](bare_agents.md#the-state-lives-outside-the-folder-and-the-root-decides-that).
 
 `::` and not `:` because a pattern is very often a URL, which carries a colon of its own — a key that split ambiguously would make "forget this grant" delete a different one.
+
+The Claude engine's **Approvals** setting sits in the same record as `claudeApproval` — `'auto'`, `'ask'` or null — for the reason the grants do: it is the desktop's own decision about a folder, not a fact about the agent, so it is never written into a manifest and never travels in a publication. Null is *no choice made* and is what a record that never had the field reads as; **any other value coerces to null**, so a hand edit reaching for the SDK's `bypassPermissions` reads as the default and not as the more permissive setting. The default itself (`DEFAULT_CLAUDE_APPROVAL`) is applied by the readers, never written in place of null.
 
 Written through `desktopStateService.patch`, which is the same atomic write (temp file, `fsync`, `rename`) the session copy uses. `permissionGrantService.remember` therefore throws `LocalAgentError('write_failed')` on a bad disk; `rememberPermissionGrant` catches it and returns `false`.
 
@@ -67,8 +77,9 @@ Written through `desktopStateService.patch`, which is the same atomic write (tem
 | `local-agent:grants-list` | `(agentId) → StoredPermissionGrant[]` | Newest first |
 | `local-agent:grant-forget` | `({agentId, key}) → StoredPermissionGrant[]` | Answers with the list it leaves, so the card does not refetch to stop showing a removed row |
 | `local-agent:grants-clear` | `(agentId) → StoredPermissionGrant[]` | Always `[]` |
+| `local-agent:set-claude-approval` | `({agentId, approval: ClaudeApproval \| null}) → LocalAgentOutcome<LocalAgentDto>` | Either kind of folder, unstamped. `input?.approval` is passed through **as it arrived**: null is a real answer, so a missing one is not turned into it here, and the service refuses anything that is not one of the two values or null (`invalid_input`). Also `not_found`, `turn_in_progress` |
 
-All three `local-agent:*` channels are activation-gated and derive the folder path in main from the agent id. **The renderer never supplies a path** — the same rule `local-agent:open-credentials` follows, and for the same reason: these read and write a file inside an agent folder, and the only proof that folder is the caller's is `localAgentService.locate`'s ownership check on the id.
+All four `local-agent:*` channels are activation-gated and derive the folder path in main from the agent id. **The renderer never supplies a path** — the same rule `local-agent:open-credentials` follows, and for the same reason: these read and write a file inside an agent folder, and the only proof that folder is the caller's is `localAgentService.locate`'s ownership check on the id.
 
 `local-agent:grant-forget` takes an optional payload (`data?.agentId`) so a payload that never arrived fails as `not_found` from the service, with the code the renderer knows, rather than as a `TypeError` the bridge flattens into an anonymous `Error`.
 
@@ -94,6 +105,7 @@ All three `local-agent:*` channels are activation-gated and derive the folder pa
 | `IDENTITY_FILES` | `configGenerator.ts:247` | `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md`, `AGENT.md` → `ask` | Exact relative paths, because that is what the tools name. One list for both folder shapes, kit and bare | <!-- nocheck -->
 | `AUTO_REPLY_RETRY_MS` | `localAgentTurnRunner.ts:106` | 500 ms | A stutter, not an outage. An outage ends the turn through `onClosed` |
 | `REQUEST_PARK_TIMEOUT_MS` | `src/shared/localAgentRequests.ts:84` | 10 min | Bounds an abandoned dialog. **Does not apply to an auto-answered ask**, which is why that path retries instead |
+| `DEFAULT_CLAUDE_APPROVAL` | `src/shared/engine.ts:150` | `'auto'` | What a Claude agent with no choice made runs on. `auto` because `default` asked for `ls`. Applied at read time, never written |
 
 `write` is kept as the defensive twin of `edit` and is **never consulted today**: the built-in write and apply-patch tools ask under `permission: "edit"` (the engine folds `edit|write|apply_patch` into one visible tool). A tool that did ask under `write` would otherwise land on the bare `'*': 'allow'`. Every assertion about writing a file is load-bearing on the `edit` entry.
 
@@ -103,6 +115,8 @@ All three `local-agent:*` channels are activation-gated and derive the folder pa
 - **A grant is derived from the engine's ask**, held in `pendingRequests`, never from the payload the renderer sends with the answer
 - **Matching is string work.** No regular expression is built from a pattern, so a resource the model wrote cannot widen a rule and no hostile pattern can backtrack on the main thread
 - **A missing `scope` coerces to `exact`**, the narrowest reading — a hand-edited or foreign row cannot widen itself by omission
+- **An unknown `claudeApproval` coerces to null**, and the setter refuses one. The SDK's `bypassPermissions` and `dontAsk` are therefore unreachable from the select, the channel and the file alike; each would run every tool with no grant consulted and nothing in the transcript
+- **On *Automatic* the CLI's reviewer is consulted before `canUseTool`, and across seven probes it declined nothing** — so the grants and the block are a backstop there, not a gate, and the card says so. `canUseTool` is passed on both settings all the same ([Claude contract §10](claude_contract.md#10-auto-mode--the-classifier-in-front-of-canusetool-and-what-it-approved))
 - **A grant covers an ask only when *every* resource is covered**
 - **Folder paths are derived in main from an ownership-checked agent id**, never sent by the renderer
 - **`app-data/` is excluded from a publication** (`cloud_import_excludes`), so a grant cannot arrive pre-approved on another machine
@@ -113,4 +127,5 @@ All three `local-agent:*` channels are activation-gated and derive the folder pa
 - **The profile has never been A/B tested across two agents with different `runtime.permissions` in one config.** What is verified is that a per-agent `permission` block takes effect at all (contract §4.1)
 - **`findLast` and the `Wildcard.match` compilation were read out of the 1.18.27 binary, not exercised against it from the app.** They are the reason for two spellings in this file; a version bump should re-read both. The runbook is [contract §8](opencode_contract.md#8-runbook--how-to-re-verify)
 - **The shell tool's gating** — full command text under `bash`, `external_directory` only for the path arguments of a fixed command list — was likewise read from the binary. Nothing in this repository's tests can fail if it changes
+- **The Claude reviewer handing an ask on to `canUseTool` was never observed.** Every probe on *Automatic* was approved before the callback; the SDK's documentation says the hand-off exists. The block's behaviour behind the reviewer is verified only on *Ask every time*. And which models fall back to `default` is known from `haiku` alone — the notice is driven by what the CLI reports at init, not by a list
 - **Pre-existing grants in OpenCode's own store are not detected.** No start-up read of `GET /api/permission/saved`, so a grant made outside this app allows without asking and nothing here runs (contract §4.2)

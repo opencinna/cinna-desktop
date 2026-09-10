@@ -16,6 +16,7 @@ import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
 import { claudeModelForComplexity, isAgentEngine, type AgentEngine, type ClaudeAuthState } from '../../../../../shared/engine'
+import { FIELD, LABEL } from './fieldClasses'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
 import {
@@ -105,11 +106,6 @@ import {
  * the view, so they cannot happen wordlessly.
  */
 
-const FIELD =
-  'w-full rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2 py-1 text-xs ' +
-  'text-[var(--color-text)] focus:border-[var(--color-accent)] focus:outline-none ' +
-  'disabled:cursor-not-allowed disabled:opacity-50'
-const LABEL = 'mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]'
 /**
  * The Runs-on select's value for the Claude engine.
  *

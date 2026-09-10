@@ -33,7 +33,11 @@ import { app } from 'electron'
 import type { AgentRow } from '../../db/agents'
 import { describeEngineSkip } from '../../../shared/runtimeMessages'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
-import { DEFAULT_AGENT_ENGINE, type AgentEngine } from '../../../shared/engine'
+import {
+  DEFAULT_AGENT_ENGINE,
+  DEFAULT_CLAUDE_APPROVAL,
+  type AgentEngine
+} from '../../../shared/engine'
 
 const logger = createLogger('agent-turn')
 
@@ -236,6 +240,20 @@ const claudeDeps: ClaudeTurnDeps = {
     }
   },
   claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  // The desktop's own decision, beside the grants it governs. The default is
+  // applied here so the runner never has to know that "no choice" exists.
+  // Unreadable state falls to the default too: the turn still runs, and every
+  // ask the classifier declines still reaches the permission block.
+  approval: (userId, agentId) => {
+    try {
+      const agent = localAgentService.get(userId, agentId)
+      return (
+        desktopStateService.read(agent.path, agent.kind).claudeApproval ?? DEFAULT_CLAUDE_APPROVAL
+      )
+    } catch {
+      return DEFAULT_CLAUDE_APPROVAL
+    }
+  },
   claudeAuth: () => claudeAuthProbe.status(),
   shellEnv: () => getShellEnv(),
   appVersion: () => app.getVersion()

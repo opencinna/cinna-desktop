@@ -87,7 +87,7 @@ import {
   type RescanResult,
   type UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
-import type { LocalAgentRuntimeInput } from '../../../shared/engine'
+import { isClaudeApproval, type LocalAgentRuntimeInput } from '../../../shared/engine'
 import { desktopStatePath, desktopStateService } from './desktopStateService'
 import { discoverBareAgents } from './externalScan'
 import { isWithin } from './pathRules'
@@ -1621,6 +1621,46 @@ export const localAgentService = {
     // The state file is not in the folder, so nothing the watcher sees changed.
     // The row has to be re-read here or the page would keep rendering the
     // runtime it had before the click.
+    scannerService.markRootDirty(root.id)
+    const dto = this.scanFolder(root, agentDir)
+    return this.overlayEnabled(userId, [dto])[0]
+  },
+
+  /**
+   * Record who answers this agent's permission asks on the Claude engine.
+   *
+   * For **either** kind of folder, unlike the runtime setters: a kit agent's
+   * runtime is a manifest block and needs the stamped path, but this value is
+   * the desktop's own — it lives in `app-data/desktop.json` beside the grants
+   * for a kit folder and under `userData` for a bare one, and is never part of
+   * what the folder publishes. So there is no stamp to guard and no manifest
+   * to refuse; `desktopStatePath` already decides where it lands.
+   *
+   * Null clears the choice rather than writing the default, so the agent
+   * follows a future default instead of pinning today's.
+   *
+   * The turn lock is taken for the reason the runtime setter takes it: the
+   * runner writes this same file to record a session, and a mid-turn write to
+   * a file it is reading is the one race the lock exists for.
+   *
+   * @throws LocalAgentError `not_found`, `invalid_input`, `turn_in_progress`
+   */
+  setClaudeApproval(userId: string, agentId: string, approval: unknown): LocalAgentDto {
+    const { root, agentDir } = this.locate(userId, agentId)
+    if (approval !== null && !isClaudeApproval(approval)) {
+      throw new LocalAgentError('invalid_input', 'That is not an approval setting this app knows.')
+    }
+    const kind = kindOf(root)
+    const handle = turnLock.acquire(agentId, 'editor')
+    try {
+      desktopStateService.patch(agentDir, kind, { claudeApproval: approval })
+    } finally {
+      handle.release()
+    }
+    // The watcher acts on neither file: a bare agent's is under `userData`,
+    // and a kit folder's is under `app-data/`, which the watcher ignores by
+    // segment. So the row is re-read here, or the page would keep rendering
+    // the choice it had before the click.
     scannerService.markRootDirty(root.id)
     const dto = this.scanFolder(root, agentDir)
     return this.overlayEnabled(userId, [dto])[0]

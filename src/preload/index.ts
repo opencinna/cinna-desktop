@@ -27,7 +27,13 @@ import type {
 } from '../shared/localAgents'
 import { LOCAL_AGENT_CHANGED_CHANNEL } from '../shared/localAgents'
 import type { StoredPermissionGrant } from '../shared/localAgentRequests'
-import type { ClaudeAuthStatus, EngineSkips, EngineState, LocalAgentRuntimeInput } from '../shared/engine'
+import type {
+  ClaudeApproval,
+  ClaudeAuthStatus,
+  EngineSkips,
+  EngineState,
+  LocalAgentRuntimeInput
+} from '../shared/engine'
 import { ENGINE_STATE_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
@@ -1293,6 +1299,16 @@ const api = {
       runtime: LocalAgentRuntimeInput
     ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
       ipcRenderer.invoke('local-agent:set-runtime', { agentId, runtime }),
+    /**
+     * Who answers a Claude agent's permission asks before the desktop does.
+     * Either kind of folder: the value is the desktop's own and sits beside the
+     * grants, never in a manifest. Null clears the choice back to the default.
+     */
+    setClaudeApproval: (
+      agentId: string,
+      approval: ClaudeApproval | null
+    ): Promise<LocalAgentOutcome<LocalAgentDto>> =>
+      ipcRenderer.invoke('local-agent:set-claude-approval', { agentId, approval }),
     /**
      * The agent list of a root that is **already registered**, so its selection
      * can be changed without sending the user back through the OS picker. Only

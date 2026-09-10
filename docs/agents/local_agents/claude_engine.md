@@ -1,6 +1,6 @@
 # The Claude Engine — a folder agent on the user's own Claude Code
 
-> **What the SDK and the binary actually do is recorded in [The Claude Engine Contract](claude_contract.md).** That document is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Seven of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents`; a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; and a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
+> **What the SDK and the binary actually do is recorded in [The Claude Engine Contract](claude_contract.md).** That document is what was watched against `claude` 2.1.266 and `@anthropic-ai/claude-agent-sdk` 0.3.266 — what is verified, what is only assumed, and what was believed and proved false. This document does not restate it. Eight of its findings shape rules below and none of them is visible in the SDK's types: `USER` must be in the child environment or the CLI reports *"Not logged in"* on a logged-in machine; `settingSources: []` does **not** detach the user's MCP connectors, so `strictMcpConfig` and an empty `mcpServers` travel with it — and it **does** hide the folder's own `.claude/agents/`, which are handed back through `options.agents`; a bare tool name in `allowedTools` shadows `canUseTool` entirely, so none is passed; SDK failures arrive as **thrown exceptions**, not as messages; read-only tools never reach the permission callback at all; a string `prompt` **closes the CLI's stdin at the first `result`**, under a background subagent that has not finished, so the prompt is an iterable the runner holds open; and in the CLI's **auto** permission mode the ask-callback was **never reached** across seven probes that included a force push, so the desktop's permission block is a backstop there and every surface that describes the setting says so. Where this document and the contract disagree, the contract is right — it was watched, and this was written.
 
 ## Purpose
 
@@ -43,6 +43,8 @@ Both were live hazards and the second is the one that actually bit. The child en
 - **Background task** — work the CLI runs after the model has ended its own turn: a subagent launched with `run_in_background`, a long shell command. The CLI reports the **live set** as a level signal; the model's `result` does not wait for it
 - **Holding task** — a background task whose completion the desktop's turn waits for. A subagent holds; a background shell does not (it can run for the life of the session). The distinction is the CLI's own idle rule, not the desktop's
 - **Folder subagent** — a `.claude/agents/*.md` definition inside the agent's folder, which a terminal `claude` would offer to the model as a `subagent_type`. The desktop reads the file and hands the SDK the fields that *describe* a subagent, never the ones that would move a permission decision
+- **Approvals** — who answers this agent's permission asks *before* the desktop does. Two settings and no third: **Automatic** (the default) puts Claude Code's own reviewer in front — the same classifier a terminal `claude` runs with auto mode on — and **Ask every time** brings every command, edit, write and fetch to the desktop's permission block. A per-agent choice made on the Permissions tab, kept in the agent's desktop state beside its grants and never in a manifest. The SDK's `bypassPermissions` and `dontAsk` are not settings here and cannot be reached
+- **Approval fallback** — the CLI running *Ask every time* after being asked for *Automatic*, because the model has no reviewer. Observed with `haiku`; reported by the CLI only on its init message, and by the desktop as a notice in the transcript
 
 ## User Stories / Flows
 
@@ -59,16 +61,19 @@ Both were live hazards and the second is the one that actually bit. The child en
 2. Dispatch reads the agent's own engine and sends the turn to the Claude runner
 3. Readiness is answered **before** the turn, on both rungs and for free: no `claude` on this machine, and a `claude` that is not logged in, are each a sentence naming the remedy rather than a turn that fails with the CLI's own words
 4. The per-agent turn lock is taken, so "this agent is busy in another chat" behaves exactly as it does on the other engine
-5. The SDK is asked for a turn in the agent's folder, with the folder's assembled system prompt, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
+5. The SDK is asked for a turn in the agent's folder, with the folder's assembled system prompt and the agent's **Approvals** setting mapped onto the SDK's permission mode, and the answer streams into the transcript token by token — text, thinking, tool calls and their results, as the same part kinds every other agent produces
 6. The session id the CLI reports is remembered for this (chat, agent), so tomorrow's message continues the same conversation
 7. When the agent hands work to a subagent in the background and answers "I'll report back", the turn **does not end there**. A notice — *"Waiting for background work to finish: …"*, naming the task — appears under the answer, the subagent's tool calls and permission asks keep arriving in the same turn, and when it finishes the agent's own follow-up report streams in and ends the turn. Live, that notice sits between the two pieces of answer text; after a reload it is above the assistant row with every other notice, because notices are persisted as their own rows before the message they belong to
 
 ### Being asked for permission
-1. Mid-turn the agent wants to write a file, run a command, fetch a URL or start a subagent, and the SDK asks this app whether it may
-2. If a standing grant for this agent already covers it, it is allowed **silently** — nothing is written to the transcript, exactly as on the other engine. A block that appeared and answered itself milliseconds later is a widget the user cannot act on
-3. Otherwise a permission block appears inside the streaming answer, naming the action as a phrase — "Permission needed to run a command: …" — and the turn blocks on the answer
-4. The decision is recorded beside the ask: *Allowed once*, *Allowed, and remembered for this agent*, *Denied*, or *No answer — the request expired*
-5. **Read-only tools never ask.** With no `allowedTools` and the default permission mode, a `Read` runs with no ask at all. The grants govern the mutating surface, not the whole tool surface, and this is a limit of the mechanism rather than a policy
+1. Mid-turn the agent wants to write a file, run a command, fetch a URL or start a subagent. Who is asked first is the agent's **Approvals** setting on its Permissions tab
+2. On **Automatic** — the default — Claude Code's own reviewer decides, the way a terminal `claude` with auto mode on does: it approves what it judges routine for what the user asked, and only what it declines would reach this app. **It was not seen to decline anything.** Across seven probes it approved a force push, a rewrite of the global git config, a write under the home directory, and — with the user asking only *"What files are in this folder?"* — two commands the *system prompt* had told the model to run first; the desktop's callback never fired, and the one refusal came from the model itself before any tool call ([the contract, §10](claude_contract.md#10-auto-mode--the-classifier-in-front-of-canusetool-and-what-it-approved)). So on this setting the permission block is a **backstop the reviewer was not seen to reach**, and the Permissions tab says so in those words, because a card that promised *"asks for anything unusual"* would describe a gate that was not seen to close
+3. On **Ask every time**, the SDK asks this app for every command, edit, write and fetch — the SDK's own `default` mode, and what every Claude agent ran before the setting existed
+4. Whichever setting asked, if a standing grant for this agent already covers it, it is allowed **silently** — nothing is written to the transcript, exactly as on the other engine. A block that appeared and answered itself milliseconds later is a widget the user cannot act on
+5. Otherwise a permission block appears inside the streaming answer, naming the action as a phrase — "Permission needed to run a command: …" — and the turn blocks on the answer
+6. The decision is recorded beside the ask: *Allowed once*, *Allowed, and remembered for this agent*, *Denied*, or *No answer — the request expired*
+7. **Read-only tools never ask, on either setting.** With no `allowedTools`, a `Read` runs with no ask at all. The grants govern the mutating surface, not the whole tool surface, and this is a limit of the mechanism rather than a policy
+8. **When the model has no reviewer, the CLI asks every time anyway and says so nowhere the user looks.** Asked for *Automatic* on `haiku`, the CLI ran *Ask every time* and reported it only on its init message. The transcript therefore carries a notice — *"Automatic approvals are not available on `<model>`, so this turn asked before each action instead."* — on every exit the turn can take, because a user whose setting says Automatic and who was just asked about `ls` has no other way to tell the setting from a bug. A CLI that reports no mode at all is read as no fallback, not as one
 
 ### Claude Code is there but not logged in
 1. Detection finds the binary, so the option is offered. Whether that install is *logged in* is asked separately, and **for free**: `claude auth status` runs no turn and bills nothing
@@ -77,6 +82,13 @@ Both were live hazards and the second is the one that actually bit. The child en
    - The second half is **word for word the panel's**, because a user meets this condition on two surfaces and two paraphrases of one instruction read as two instructions. The panel's wording is what the skip reason moved to match, not the other way round — that line is measured to the pixel and cannot afford *installation*. The opening clause stays only because a turn error in a transcript has nothing around it naming the engine, while the panel says so two rows up
 4. The remedy is named and nothing offers to perform it. Logging in is something only the user can do, in their own terminal, against their own account
 5. The user goes and does it — which is the reason the panel keeps asking while the answer is *logged out*. Coming back to a red alarm about a machine that is now fine is the failure that rule exists to prevent
+
+### Choosing who approves
+1. On a Claude agent's **Permissions** tab, the paragraph describing the OpenCode profile is not shown — it describes rules that are not in force on this engine. In its place: a sentence that reading and searching never ask, then one paragraph describing **both** settings before the control rather than whichever is chosen under it, so the card does not resize on every toggle and a user choosing reads both anyway
+2. The description of *Automatic* is deliberately blunt — that in testing it approved everything it was shown, including a force push and a change to the global git config, so treat it as running the agent without a gate and give it work you would run yourself. *Ask every time* is described as bringing every command, edit and fetch to a permission block in the chat, where **Always allow** remembers it in the list below
+3. An **Approvals** select offers *Automatic* and *Ask every time*. No choice made reads as *Automatic*, never as a blank option. A change saves at once and the control holds the picked value for the whole round trip — main re-scans the folder before it answers, and rendering the stored value alone snapped the select back to the old setting until the answer landed, then flipped it
+4. A refused save — the agent is mid-turn in another chat — leaves the control on the stored value and puts one line under it: *"Nothing was changed — that agent is busy in a chat."* One line, truncated with the full text on hover, in a slot that is always rendered, because the turn-lock sentence wrapped at the 800 px minimum and moved the grants list down by a line
+5. The footnote under the grants, which on OpenCode says a moved folder starts a new agent *which is asked again*, here says it starts one *on the default setting* — that is Automatic, which the paragraph above has just said approves what it is shown, and "asked again" would promise an ask that setting never makes
 
 ## Business Rules
 
@@ -196,6 +208,24 @@ So the prompt is an **iterable that stays open on purpose**, and what ends the t
 
 A bare tool name in `allowedTools` auto-approves that tool *before* the permission callback is consulted — the SDK says so itself at runtime — so the two mechanisms cancel rather than compose. **No `allowedTools` is passed at all.** This is the half that has to be true before the desktop's grants mean anything.
 
+### Automatic is the default, and the block is a backstop there
+
+A Claude agent that has not been told otherwise runs with the CLI's own reviewer in front of the desktop — the SDK's `auto` mode. Before the setting existed every agent ran the SDK's `default`, which asks for every `Bash`, `Edit` and `Write`; a user whose terminal `claude` runs in auto mode never saw those prompts there, `settingSources: []` keeps their `~/.claude/settings.json` out of the desktop's turns, and an agent that was quiet in the terminal asked for `ls` in the desktop. It read as a bug in the desktop, and it was one.
+
+The default is *Automatic* and not *Ask every time* for that reason, and the cost is said out loud rather than softened: on *Automatic* the callback was never reached across seven probes, so the grants and the block are the backstop for whatever the reviewer declines, and the reviewer was not seen to decline. `canUseTool` is passed on **both** settings — *Automatic* is a classifier in front of the desktop, not instead of it.
+
+### The choice is two-valued, and the SDK's other modes are unreachable
+
+`ClaudeApproval` is `auto | ask`, mapped onto the SDK's `auto` and `default` in one place in the runner. It is deliberately not the SDK's `PermissionMode`, which has six members: `bypassPermissions` and `dontAsk` would each remove `canUseTool` from the decision, and with it the grants, the block and the transcript's record of what was allowed. A value from that vocabulary written into the state file by hand reads as *no choice* — the default — never as the more permissive setting by accident, and the setter refuses it outright.
+
+### The setting is the desktop's, kept beside the grants and never in a manifest
+
+Which engine and model run an agent is what the agent *is* and travels in a kit manifest; how far this machine trusts it is the same kind of fact as a standing grant. So the choice lives in the agent's desktop state — `app-data/desktop.json` in a kit folder, the file under `<userData>` for a bare one — for **either** kind of folder, through one unstamped path that touches no file the folder publishes. Null is a real value meaning *no choice made*, stored as null rather than as today's default, so an agent that never chose follows a future default. The write takes the per-agent turn lock, because the runner writes the same file to record a session and a mid-turn write to a file it is reading is the race the lock exists for.
+
+### A fallback the CLI reports only at init is said in the transcript
+
+The CLI honours `auto` only on a model that carries a reviewer. On one that does not it runs `default` and reports the mode it is actually in on its init message — `haiku` is the observed case; `sonnet` and `opus` held `auto`. The runner reads that field, and when the agent asked for *Automatic* and the CLI ran anything else, the turn ends with a notice naming the model the CLI reported. It is attached on **every** exit — completion, error, cancel and ceiling — for the reason the billing notice is: the observation is made at init, so the path a turn happens to leave by cannot decide whether the user is told. An init message with no mode on it is read as no fallback, so an older CLI is not accused of one.
+
 ### *Always allow* stays the desktop's, on both engines
 
 The SDK offers a way to persist an allow into Claude Code's **own** rules. It is never used. Such a rule would be user-global, shared with the user's personal Claude Code, and would authorise agents this app has nothing to do with — the same reason the other engine's `always` is never forwarded to it. A remembered decision is a row in that agent's desktop state, and what the CLI is told is a plain allow; the transcript records which of the two actually happened.
@@ -274,6 +304,8 @@ The panel says nothing about which account paid for a turn either, and **that is
 - **It reports no cost and no token counts, and both omissions are deliberate.** Cost on a subscription is a shadow price — three probe turns reported dollar figures against a plan that charged nothing — and no wording available in a notice line makes that informative, so it is dropped outright. Token counts are a different argument and land in the same place: the contract says they *may* stay, which is permission rather than instruction, and a token figure in every transcript is noise for a number nobody asked for. The SDK's final message carries both and the translator folds them; nothing reads them, on purpose. The one thing a turn does report about itself is the account that paid for it, and only when that is not the expected one
 - **It does not switch background work off.** `CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1` in the child environment would make the CLI drop `run_in_background` from the `Agent` and `Bash` schemas and offer only synchronous subagents, and a string prompt would then have been correct. It is rejected: the point of this engine is the Claude Code harness as the user has it, and an agent that behaves differently under the desktop than in a terminal is the kind of difference nobody can see from the transcript
 - **It never writes into `~/.claude/`** — no settings, no rules, no credentials, no `apiKeyHelper`
+- **It offers no way to run without the callback.** `bypassPermissions` and `dontAsk` are not on the Approvals select, not accepted by the setter and not read from the state file. Either would take the desktop's grants and the transcript's record out of the decision, and a turn that ran that way would look identical to one that did not
+- **It does not hand the reviewer the user's own environment context.** The `autoMode.environment` lines in `~/.claude/settings.json` are what `settingSources: []` withholds, nothing in the SDK's options carries that block on its own, and the reviewer was seen running with `repoVisibility: unknown` and nothing else. The desktop does not try to pass it: doing so would mean reading a file under `~/.claude/`, which this engine never does
 - **It ships no Claude Code of its own.** The SDK pulls a bundled ~190 MB binary per platform; every installer excludes it. Not executing it is not the same as not shipping it, and shipping it would put a second Claude Code in the app that the user never chose, cannot see and cannot update
 - **It makes no claim about Windows.** Detection, `PATH` resolution and credential storage all differ there and none of it was considered
 - **The engine axis is two-valued on purpose.** Nothing here is built to accommodate a third engine and it should not be until there is one — the abstraction that fits two is not reliably the one that fits three
@@ -290,6 +322,7 @@ These are open:
 - **The Anthropic API SDK moved 0.89 → 0.93** to satisfy the Agent SDK's peer requirement, and the bump lands on the ordinary Anthropic chat adapter, `src/main/llm/anthropic.ts`, not on anything here. That adapter is covered — `src/main/llm/anthropic.test.ts` runs the SDK's real client against a stubbed wire — but nothing in this feature exercises it, so a further bump forced from here is verified there, not here; see [LLM Adapters — Technical Details](../../llm/adapters/adapters_tech.md#sdk-versions-and-one-that-moved-for-a-reason-outside-this-domain)
 - **Out-of-plan usage has no good surface.** It arrives mid-turn as an error from the CLI and its message is passed through, which is honest but not helpful. We do not know the user's limits and inventing a sentence about them would be worse than the CLI's own
 - **The grace after an emptied background set is reasoning, not measurement.** The follow-up turn was watched for a subagent that *completed*, once, at 85 ms; whether the CLI runs one at all for a task that was stopped or failed was not observed, and the list of task types that do not hold a turn was read from one binary. A CLI minor bump can change either silently — see [the contract, §8 item 7](claude_contract.md#8-still-unverified--and-one-of-these-can-still-kill-the-feature)
+- **The reviewer handing an ask on to the desktop was never observed.** The SDK's own documentation implies it can; seven probes, chosen to be declined, were all approved. Everything the block does on *Automatic* is therefore verified only on *Ask every time*, and the description of *Automatic* is written from what was watched rather than from what the SDK says. Which models carry a reviewer is not the desktop's to know either — `haiku` is the one observed to fall back, and the notice is driven by what the CLI reports, not by a list
 - **No automated test ever runs a turn on it.** The E2E scenarios drive the *choice* — the option, the manifest rewritten in both directions, the panel's geometry — and the readiness ladder, which is reachable there because the probe is free and the sandbox `HOME` makes a real install read as logged out. They stop there, because spawning a `claude` **turn** bills a real person's subscription on every developer's machine and in CI. Everything past the picker is covered by unit tests against an injected SDK
 
 ## Architecture Overview
@@ -301,6 +334,10 @@ Agent page → "Runs with" panel
    ▼
 local-agent:update-field  (kit, stamped)  /  local-agent:set-runtime  (bare)
    │  runtime.engine written to cinna-agent.json or to Desktop State
+   │
+   │  Permissions tab → Approvals select
+   │    local-agent:set-claude-approval  (either kind, unstamped)
+   │    claudeApproval written beside the grants in Desktop State
    ▼
 runtimeService.resolve ──► ResolvedRuntime { engine, credential?, model }
    │                        engine = claude → no credential, model = alias
@@ -320,11 +357,15 @@ resolveTurnRunner(agent)             dispatch: source → engine
                                                      │
               ┌──────────────────────────────────────┤
               ▼                                      ▼
-   query({ prompt, options })              canUseTool ──► standing grants
-     prompt         = an iterable held open     │          └ covered → allow, silently
-                      until the last result     │
-     cwd            = the agent folder          └────────► parked request
-     systemPrompt   = the folder's own                      └ transcript block → answered
+   query({ prompt, options })              permissionMode = auto: the CLI's reviewer
+     prompt         = an iterable held open     │  approved everything it was shown;
+                      until the last result     │  only a decline would fall through
+     cwd            = the agent folder          ▼
+     systemPrompt   = the folder's own        canUseTool ──► standing grants
+     permissionMode = auto | default, from      │          └ covered → allow, silently
+                      the Approvals setting     │
+                                                └────────► parked request
+                                                            └ transcript block → answered
      pathToClaude…  = the user's binary
      settingSources = []
      strictMcpConfig + no MCP servers
@@ -337,7 +378,8 @@ resolveTurnRunner(agent)             dispatch: source → engine
    SDK message stream ──► translator
      stream_event → text and thinking deltas     assistant → tool calls
      user         → tool results                 result    → the turn ends, unless a
-     system/init  → apiKeySource, model, version              background task holds it
+     system/init  → apiKeySource, model, version,             background task holds it
+                     permissionMode (≠ asked → notice)
      system/background_tasks_changed → the live set (replace, ambient excluded)
                                        empty after a result → 5 s grace → the turn ends
               │
@@ -353,7 +395,7 @@ resolveTurnRunner(agent)             dispatch: source → engine
 - [The Claude Engine Contract](claude_contract.md) — what was watched against the real binary and the SDK, and the authority for every "why does the code do this" question here
 - [The Agent Turn Runner](agent_turn.md) — the seam this is the third implementation of, and every rule about never throwing, the lock and the ceiling
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the runtime resolution this extends, the prompt assembly it reuses verbatim, and the environment narrowing rule it widens by exactly one variable
-- [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, and why *Always* is never written into a tool's own store
+- [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, the Approvals setting that decides whether the CLI's reviewer stands in front of them, and why *Always* is never written into a tool's own store
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all. The login probe is its sibling and rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings → Local Agents re-asks both

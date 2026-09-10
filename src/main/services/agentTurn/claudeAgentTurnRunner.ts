@@ -58,6 +58,7 @@ import type { AgentStreamEvent } from '../../../shared/agentStreamEvents'
 import { createLogger } from '../../logger/logger'
 import type { AgentTurnRunner } from './runner'
 import type { LocalAgentKind } from '../../../shared/localAgents'
+import type { ClaudeApproval } from '../../../shared/engine'
 import { auditClaudeEnv, buildClaudeEnv } from './claudeEnv'
 import type { ClaudeAuthStatus } from './claudeAuth'
 import { ClaudeMessageStream, type ClaudeBackgroundTask } from './claudeMessages'
@@ -129,6 +130,12 @@ export interface ClaudeTurnDeps {
   systemPrompt(userId: string, agentId: string): string
   /** The model alias this agent's runtime resolved to, or null for the CLI's default. */
   model(userId: string, agentId: string): string | null
+  /**
+   * Who answers this agent's permission asks before the desktop does. Read
+   * from the agent's own desktop state, with the default applied there, so
+   * the runner never sees "no choice made".
+   */
+  approval(userId: string, agentId: string): ClaudeApproval
   /**
    * Absolute path of the `claude` this machine has, or null when there is none.
    *
@@ -316,6 +323,7 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
 
     const remembered = this.deps.readSession(chatId, agentId)
     const model = this.deps.model(userId, agentId)
+    const approval = this.deps.approval(userId, agentId)
     const systemPrompt = this.deps.systemPrompt(userId, agentId)
     const run = this.deps.query ?? query
 
@@ -374,6 +382,19 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
     const startedAt = Date.now()
     let sessionId: string | null = remembered
     let apiKeySource: string | null = null
+    /**
+     * The mode the CLI reported at init, and the model it reported with it.
+     * Asked for `auto` on a model without a classifier — `haiku`, observed —
+     * the CLI runs `default` and says so only here. The user chose "automatic"
+     * and is about to be asked for every command; the transcript has to say
+     * why, or the setting reads as broken.
+     */
+    let permissionMode: string | null = null
+    let reportedModel: string | null = null
+    const approvalFallback = (): string | null =>
+      approval === 'auto' && permissionMode !== null && permissionMode !== 'auto'
+        ? (reportedModel ?? model ?? 'this model')
+        : null
     let ended: { isError: boolean; text: string } | undefined
     const kindCounts: Record<string, number> = {}
 
@@ -558,6 +579,14 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
             // `CLAUDE_SDK_CAN_USE_TOOL_SHADOWED` — so the desktop's grants
             // would be bypassed for exactly the tools a profile named.
             canUseTool,
+            // The desktop's two-valued choice, mapped onto the SDK's here and
+            // nowhere else. `auto` is what a terminal `claude` runs for this
+            // user; `default` is the SDK's own, which asks for every mutating
+            // call — and was what every agent ran before the choice existed.
+            // Never `bypassPermissions` or `dontAsk`: both remove the callback
+            // above from the decision, and with it the grants and the
+            // transcript's record of what was allowed.
+            permissionMode: approval === 'auto' ? 'auto' : 'default',
             abortController: ceiling,
             // The folder's subagents, when it has any. Omitted rather than
             // passed empty, so a folder without them hands the SDK exactly
@@ -582,6 +611,17 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
           if (update.apiKeySource) {
             apiKeySource = update.apiKeySource
             cancelGrace() // `init`: the follow-up turn is starting
+          }
+          if (update.permissionMode) {
+            permissionMode = update.permissionMode
+            reportedModel = update.model ?? reportedModel
+            if (approvalFallback()) {
+              logger.info('the CLI fell back from automatic approvals', {
+                agentId,
+                model: reportedModel,
+                permissionMode
+              })
+            }
           }
           if (update.backgroundTasks) {
             liveTasks = update.backgroundTasks
@@ -669,7 +709,7 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
       // did deliberately. An aborted turn is not an error anywhere else either.
       if (signal.aborted) {
         logger.info('a Claude turn was stopped by the user', { agentId, chatId })
-        return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource)
+        return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource, approvalFallback())
       }
       if (hitCeiling && ended) {
         // The model answered; what ran out of time was background work the
@@ -684,7 +724,7 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
           'Background work was still running when the turn reached its time limit, so it was ended.'
         )
         if (noted.message) accumulator.ingestMessage(noted.message, deltaPort)
-        return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource)
+        return this.finish(ctx, accumulator, sessionId, undefined, apiKeySource, approvalFallback())
       }
       if (hitCeiling) {
         logger.error('a Claude turn hit the ceiling without ending', { agentId, chatId })
@@ -693,7 +733,8 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
           accumulator,
           sessionId,
           'The agent stopped responding and the turn was ended.',
-          apiKeySource
+          apiKeySource,
+          approvalFallback()
         )
       }
       if (error) {
@@ -703,7 +744,8 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
           accumulator,
           sessionId,
           isNotLoggedIn(error) ? describeEngineSkip('claude_not_logged_in') : error,
-          apiKeySource
+          apiKeySource,
+          approvalFallback()
         )
       }
 
@@ -730,7 +772,8 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
         accumulator,
         sessionId,
         ended?.isError ? ended.text || 'The agent stopped with an error.' : undefined,
-        apiKeySource
+        apiKeySource,
+        approvalFallback()
       )
     } finally {
       clearTimeout(timer)
@@ -767,7 +810,13 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
      * it* — the exit path it happened to take cannot be what decides whether
      * the user is told.
      */
-    apiKeySource?: string | null
+    apiKeySource?: string | null,
+    /**
+     * The model the CLI ran `default` on after being asked for `auto`, or
+     * null. Also passed on every exit: the turn that asked for everything
+     * was the one the user saw, whatever ended it.
+     */
+    approvalFallback?: string | null
   ): RunAgentTurnResult {
     if (sessionId) {
       try {
@@ -815,6 +864,18 @@ export class ClaudeAgentTurnRunner implements AgentTurnRunner {
         text:
           `This turn did not run on your Claude Code login — the CLI reported “${apiKeySource}”. ` +
           'It may be billed to that account instead.'
+      })
+    }
+    // The setting said automatic and the turn asked before every action. The
+    // CLI reports the fallback nowhere the user can see, so this is the only
+    // line that tells "automatic approvals are on" and "I was asked for `ls`"
+    // apart from a bug.
+    if (approvalFallback) {
+      notices.push({
+        partKey: 'claude:approval-fallback',
+        text:
+          `Automatic approvals are not available on ${approvalFallback}, ` +
+          'so this turn asked before each action instead.'
       })
     }
     return {

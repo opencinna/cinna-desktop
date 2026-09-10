@@ -1,12 +1,22 @@
 import { useState } from 'react'
 import { Loader2, ShieldCheck, X } from 'lucide-react'
-import { useForgetAgentGrants, useLocalAgentGrants } from '../../../hooks/useLocalAgents'
+import {
+  useForgetAgentGrants,
+  useLocalAgentGrants,
+  useSetClaudeApproval
+} from '../../../hooks/useLocalAgents'
 import { formatRelativeFromDate } from '../../../utils/cinnaTime'
 import { unwrapIpcError } from '../../../utils/ipcError'
 import { DESKTOP_STATE_FILE } from '../../../../../shared/kit/manifest'
 import { describePermissionAction } from '../../../../../shared/localAgentRequests'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
+import {
+  DEFAULT_CLAUDE_APPROVAL,
+  isClaudeApproval,
+  type ClaudeApproval
+} from '../../../../../shared/engine'
 import { AgentCard } from './AgentCard'
+import { FIELD, LABEL } from './fieldClasses'
 
 /** The key `revoking` holds while "Forget all" is the button in flight. */
 const ALL = '\u0000all'
@@ -62,6 +72,13 @@ function sentenceCase(text: string): string {
  */
 export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
   const bare = agent.kind === 'bare'
+  /**
+   * This agent runs on the user's own Claude Code install. Its permission
+   * story is a different one — the CLI's own classifier sits in front of the
+   * desktop's — so the card says that story rather than the OpenCode
+   * profile's, which would describe rules that are not in force.
+   */
+  const onClaude = agent.runtime?.engine === 'claude'
   const { data: grants } = useLocalAgentGrants(agent.id)
   // Owned by the card rather than by a row: a row unmounts the moment the
   // grant it renders is forgotten, and a mutation owned there would drop its
@@ -127,69 +144,10 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         ) : undefined
       }
     >
-      {/*
-        Every example here has to be a file the folder actually has.
-        
-        This card is the user's only statement of what an agent may do to their
-        machine, and they read it about a repository they share with other
-        people. For a bare folder two of the three examples named files that do
-        not exist — `docs/WORKFLOW_PROMPT.md`'s manifest sibling, and
-        `credentials/.env` — and a reader who spots two fictional examples
-        discounts the third. The third is the one that matters: the paragraph
-        below, about a command reaching anything they can.
-      */}
-      <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-        This agent reads, writes and runs commands inside its own folder without asking. It asks
-        first before opening a file outside the folder, fetching a URL, editing{' '}
-        {bare ? (
-          <>
-            its own <span className="font-mono">AGENT.md</span>
-          </>
-        ) : (
-          'its own prompt or manifest'
-        )}
-        , running a command that names a key file, or running{' '}
-        <span className="font-mono">sudo</span> or <span className="font-mono">rm -r</span>. Its
-        file tools can never read or write{' '}
-        {bare ? (
-          'any file that looks like a key file'
-        ) : (
-          <>
-            <span className="font-mono">credentials/.env</span> or any other key file
-          </>
-        )}
-        .
-      </p>
-      {/*
-        **The sentence the review made unavoidable.** The default profile allows
-        the shell tool outright, and the engine gates a command by its *text*,
-        not by what it touches: a command can read a key file, write one, or
-        reach the network without any of the rules above applying. The paragraph
-        above would be a false sense of a boundary without this, and this card
-        is the one place a user goes to find out what their agent may do.
-      */}
-      <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-        A command is not fenced in the way those tools are. The check on key files reads the
-        command, so it catches the obvious spelling and not a path built inside a script: like a
-        terminal left open in this folder, a command can reach anything you can. Give an agent work
-        you would be willing to run yourself.
-      </p>
-
-      {/*
-        The sentence above describes the profile the desktop generates, and a
-        manifest can replace whole entries of it (`runtime.permissions`, merged
-        one permission name at a time in `configGenerator.ts`). Where it does,
-        the sentence is no longer the whole truth and the card says so rather
-        than quietly describing rules that are not in force. Rendered from the
-        manifest the page already holds, so it costs no query and cannot arrive
-        late and move the list.
-      */}
-      {overriddenNames.length > 0 && (
-        <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
-          This folder’s <span className="font-mono">cinna-agent.json</span> replaces the rules for{' '}
-          <span className="font-mono">{overriddenNames.join(', ')}</span> in its{' '}
-          <span className="font-mono">runtime.permissions</span> block.
-        </p>
+      {onClaude ? (
+        <ClaudeApprovals agent={agent} />
+      ) : (
+        <OpenCodeProfile bare={bare} overriddenNames={overriddenNames} />
       )}
 
       <div className="mt-3 text-[10px] font-medium uppercase tracking-wide text-[var(--color-text-muted)]">
@@ -214,7 +172,13 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         <div className="mt-1 text-[10px] italic text-[var(--color-text-muted)]">
           Kept on this machine rather than in the folder, so nothing about a decision you make here
           is written into your repository. They are tied to where the folder sits: moving or
-          renaming it starts a new agent, which is asked again.
+          renaming it starts a new agent{' '}
+          {/*
+            On Claude a new agent starts on the default setting — Automatic —
+            which the paragraph above says approves what it is shown. "Asked
+            again" would promise an ask that setting never makes.
+          */}
+          {onClaude ? 'on the default setting' : 'which is asked again'}.
         </div>
       )}
       {loading || rows.length === 0 ? null : (
@@ -278,5 +242,186 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
       {/* Below the list, so a failure never moves the row whose button raised it. */}
       {error && <div className="mt-2 text-[11px] text-[var(--color-danger)]">{error}</div>}
     </AgentCard>
+  )
+}
+
+/**
+ * What the OpenCode profile lets an agent do without asking.
+ *
+ * The sentence is fixed text because the profile is: it is generated in
+ * `configGenerator.ts` and is the same for every folder agent unless its
+ * manifest overrides it, which the last paragraph reports.
+ */
+function OpenCodeProfile({
+  bare,
+  overriddenNames
+}: {
+  bare: boolean
+  overriddenNames: string[]
+}): React.JSX.Element {
+  return (
+    <>
+    {/*
+      Every example here has to be a file the folder actually has.
+      
+      This card is the user's only statement of what an agent may do to their
+      machine, and they read it about a repository they share with other
+      people. For a bare folder two of the three examples named files that do
+      not exist — `docs/WORKFLOW_PROMPT.md`'s manifest sibling, and
+      `credentials/.env` — and a reader who spots two fictional examples
+      discounts the third. The third is the one that matters: the paragraph
+      below, about a command reaching anything they can.
+    */}
+    <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      This agent reads, writes and runs commands inside its own folder without asking. It asks
+      first before opening a file outside the folder, fetching a URL, editing{' '}
+      {bare ? (
+        <>
+          its own <span className="font-mono">AGENT.md</span>
+        </>
+      ) : (
+        'its own prompt or manifest'
+      )}
+      , running a command that names a key file, or running{' '}
+      <span className="font-mono">sudo</span> or <span className="font-mono">rm -r</span>. Its
+      file tools can never read or write{' '}
+      {bare ? (
+        'any file that looks like a key file'
+      ) : (
+        <>
+          <span className="font-mono">credentials/.env</span> or any other key file
+        </>
+      )}
+      .
+    </p>
+    {/*
+      **The sentence the review made unavoidable.** The default profile allows
+      the shell tool outright, and the engine gates a command by its *text*,
+      not by what it touches: a command can read a key file, write one, or
+      reach the network without any of the rules above applying. The paragraph
+      above would be a false sense of a boundary without this, and this card
+      is the one place a user goes to find out what their agent may do.
+    */}
+    <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+      A command is not fenced in the way those tools are. The check on key files reads the
+      command, so it catches the obvious spelling and not a path built inside a script: like a
+      terminal left open in this folder, a command can reach anything you can. Give an agent work
+      you would be willing to run yourself.
+    </p>
+
+    {/*
+      The sentence above describes the profile the desktop generates, and a
+      manifest can replace whole entries of it (`runtime.permissions`, merged
+      one permission name at a time in `configGenerator.ts`). Where it does,
+      the sentence is no longer the whole truth and the card says so rather
+      than quietly describing rules that are not in force. Rendered from the
+      manifest the page already holds, so it costs no query and cannot arrive
+      late and move the list.
+    */}
+    {overriddenNames.length > 0 && (
+      <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+        This folder’s <span className="font-mono">cinna-agent.json</span> replaces the rules for{' '}
+        <span className="font-mono">{overriddenNames.join(', ')}</span> in its{' '}
+        <span className="font-mono">runtime.permissions</span> block.
+      </p>
+    )}
+    </>
+  )
+}
+
+/**
+ * Who answers a Claude agent's permission asks before the desktop does.
+ *
+ * Two settings, and the paragraph describes both **before** the control rather
+ * than describing whichever is chosen under it — a sentence that changes with
+ * the select would resize the card on every toggle (ux_rules §1), and a user
+ * choosing needs to read both anyway.
+ *
+ * The description of *Automatic* is deliberately blunt. It was watched
+ * against the binary (`claude_contract.md` §10): asked for a force push, a
+ * global git config rewrite and a write under the home directory, the CLI's
+ * classifier approved all of them and the desktop's callback never fired. A
+ * card that called that "asks for anything unusual" would be describing a
+ * gate that was not seen to close.
+ *
+ * The error slot under the control is always there, so a refused save does not
+ * push the grants list down (ux_rules §12, the hint above and the message
+ * below in a slot that is always rendered).
+ */
+function ClaudeApprovals({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+  const setApproval = useSetClaudeApproval()
+  const [error, setError] = useState<string | null>(null)
+  /**
+   * The pick, until main has answered. The select is otherwise controlled by
+   * the DTO, and main re-scans the folder before it answers — so without this
+   * the control snapped back to the old value for the round trip and flipped
+   * to the new one afterwards, which is the jump ux_rules §1 forbids. A
+   * refused save clears it, and the DTO's own value shows through again.
+   */
+  const [pending, setPending] = useState<ClaudeApproval | null>(null)
+  const stored: ClaudeApproval = agent.desktop.claudeApproval ?? DEFAULT_CLAUDE_APPROVAL
+  const current = pending ?? stored
+
+  const change = (value: string): void => {
+    if (!isClaudeApproval(value) || value === current) return
+    setError(null)
+    setPending(value)
+    setApproval.mutate(
+      { agentId: agent.id, approval: value },
+      {
+        // The outcome first, then the reason (ux_rules §6).
+        onError: (err) => setError(`Nothing was changed — ${lowerFirst(unwrapIpcError(err))}`),
+        onSettled: () => setPending(null)
+      }
+    )
+  }
+
+  return (
+    <>
+      <p className="text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+        This agent runs on your own Claude Code install. Reading files and searching never ask.
+        The setting below decides who approves a command, an edit or a fetch.
+      </p>
+      <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-secondary)]">
+        <span className="font-medium text-[var(--color-text)]">Automatic</span> lets Claude Code’s
+        own reviewer approve what it judges routine for what you asked, the way{' '}
+        <span className="font-mono">claude</span> does in a terminal with auto mode on. In testing
+        it approved
+        everything it was shown, including a force push and a change to your global git config, so
+        treat it as running the agent without a gate and give it work you would run yourself.{' '}
+        <span className="font-medium text-[var(--color-text)]">Ask every time</span> brings every
+        command, edit and fetch to a permission block in the chat, where “Always allow” remembers
+        it below. On a model without automatic approvals, such as Haiku, the agent asks every time
+        regardless and the transcript says so.
+      </p>
+
+      <div className="mt-3">
+        <label htmlFor="claude-approval" className={LABEL}>
+          Approvals
+        </label>
+        <select
+          id="claude-approval"
+          className={FIELD}
+          value={current}
+          disabled={setApproval.isPending}
+          onChange={(event) => change(event.target.value)}
+        >
+          <option value="auto">Automatic</option>
+          <option value="ask">Ask every time</option>
+        </select>
+        {/*
+          Always rendered, and one line whatever the message: the turn-lock
+          refusal is 93 characters, which wrapped at the 800px minimum and
+          moved the list below by a line. The page's own action-error slot
+          truncates with the full text on hover, so this does the same.
+        */}
+        <div
+          className="mt-1 h-[15px] truncate text-[11px] leading-[15px] text-[var(--color-danger)]"
+          title={error ?? undefined}
+        >
+          {error}
+        </div>
+      </div>
+    </>
   )
 }

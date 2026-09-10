@@ -4,7 +4,7 @@
 
 ## Purpose
 
-What a folder agent is allowed to do on the user's machine, who decides, and where the decision is kept. Two mechanisms, and they answer different questions: a **static profile** generated into the engine config says what never needs asking, and a **standing grant** stored beside the agent records what the user has since said may stop being asked.
+What a folder agent is allowed to do on the user's machine, who decides, and where the decision is kept. Two mechanisms, and they answer different questions: a **static profile** generated into the engine config says what never needs asking, and a **standing grant** stored beside the agent records what the user has since said may stop being asked. On the [Claude](claude_engine.md) engine there is a third, and it stands in front of both: the agent's **Approvals** setting decides whether Claude Code's own reviewer answers first, and by default it does.
 
 ## Core Concepts
 
@@ -13,7 +13,8 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 - **Action** — the name the engine that raised the ask gave the operation. On the OpenCode engine that is a coarse one (`bash`, `edit`, `write`, `read`, `webfetch`, `external_directory`), coarser than the tool: the `write` tool asks under `edit`. On the [Claude](claude_engine.md) engine it is that engine's own tool name (`Bash`, `Edit`, `WebFetch`). **The two vocabularies are stored as they arrive and are never mapped onto each other**, so a rule written on one engine cannot silently authorise the other; what they share is only the sentence the user reads
 - **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in that agent's desktop state — `app-data/desktop.json` for a kit folder, a file under `<userData>/external-agents/` for a [bare](bare_agents.md) one, since the desktop writes nothing into an adopted folder
 - **Grant Scope** — how widely a grant's pattern reaches: `exact` (the resource character for character), `origin` (a URL prefix the desktop synthesised), `action` (the whole action, from an ask that named no resource). **Recorded, never inferred from the pattern's characters**
-- **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
+- **Approvals** — [Claude](claude_engine.md) engine only: who answers an ask *before* the desktop does. **Automatic** (the default) puts Claude Code's own reviewer in front — the classifier a terminal `claude` runs with auto mode on — and the desktop's block is the backstop for what it declines; **Ask every time** brings every command, edit, write and fetch to the block. A per-agent choice, set on the Permissions tab, stored beside the grants for either kind of folder and never in a manifest; null is *no choice made* and reads as the default. There is no third value: the SDK's `bypassPermissions` and `dontAsk` would take the grants and the block out of the decision and are unreachable
+- **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. For a Claude agent the profile paragraph gives way to the Approvals setting and its control, since the profile describes rules that are not in force on that engine. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
 
 ## User Stories / Flows
 
@@ -45,6 +46,12 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 1. The store refuses the write — the folder has gone away, the disk is read-only
 2. **The action still goes ahead.** The user said yes, and a failed write must not cancel a decision they made
 3. The block says "Allowed once — the rule could not be saved." They are asked again next time
+
+### Choosing who approves, on Claude
+1. On a Claude agent's Permissions tab, the user reads one paragraph describing both settings — *Automatic*, which in testing approved everything it was shown including a force push and a change to the global git config, and *Ask every time* — and picks one from the **Approvals** select. No choice made shows as *Automatic*
+2. The change saves at once and the control stays on the pick for the whole round trip. A refused save (the agent is mid-turn) is one line under the control and the select shows the stored value again
+3. On *Automatic*, the next turn's routine commands run without a block; what the reviewer would decline reaches the grants and the block as on *Ask every time*. On a model without a reviewer the turn asks every time regardless and a notice in the transcript says why
+4. On *Ask every time*, every command, edit, write and fetch is a block — or silent, where a grant already covers it — exactly as on the other engine
 
 ## Business Rules
 
@@ -149,6 +156,16 @@ One retry, because the engine is a local process and the realistic failure is tr
 
 The optimistic removal used to happen before the outcome was read, so an answer main refused took the buttons with it: the block greyed out, the error line said the request had expired, and there was no other way to answer it. A refusal now leaves the block exactly as it was, with the error beside the control that raised it.
 
+### On Claude, Automatic stands in front of both mechanisms, and the block is a backstop there
+
+A Claude agent runs with the CLI's own reviewer in front of the desktop unless told otherwise, and that reviewer was not seen to decline: across seven probes chosen to be declined — a force push, a global git config rewrite, a write under the home directory, commands injected through the system prompt that the user's turn justified none of — the desktop's callback never fired ([the Claude contract, §10](claude_contract.md#10-auto-mode--the-classifier-in-front-of-canusetool-and-what-it-approved)). The callback is still passed, so a grant and the block stand behind whatever it would refuse; but every surface that describes the setting says *backstop* and *without a gate* rather than *asks for anything unusual*, because the second would describe a gate that was not seen to close.
+
+Automatic is the default all the same. Before the setting existed every Claude agent ran the SDK's `default` mode, which asks for every `Bash`, `Edit` and `Write` — including the `ls` and `git status` a terminal `claude` in auto mode runs without a word — and a user who had never seen those prompts in the terminal read the desktop as broken. A prompt that fires on `ls` is the failure this whole document's profile exists to prevent on the other engine, and the same rule holds here.
+
+### The Approvals setting is stored beside the grants, never in a manifest, for either kind of folder
+
+Which engine runs an agent is what the agent *is* and travels in a kit manifest; how far this machine trusts it is the same kind of fact as a standing grant. So the choice lives where the grants do — `app-data/desktop.json` in a kit folder, the file under `<userData>` for a bare one — through one unstamped write that touches nothing the folder publishes, so a kit agent's setting needs no stamp and a bare agent's is not refused. Null means *no choice made* and is stored as null, not as today's default, so a change of default reaches every agent that never chose. A value on disk that is not one of the two settings — a hand edit reaching for the SDK's own vocabulary — reads as null, never as the more permissive setting by accident, and the setter refuses to write one.
+
 ### Grants live in the folder, and that is what makes them the agent's
 
 Deleting the folder takes its grants with it; a folder that moves keeps them. `app-data/` is in the contract's `cloud_import_excludes`, so a grant cannot travel inside a published bundle and arrive pre-approved on somebody else's machine.
@@ -172,7 +189,9 @@ Nothing is lost that the agent cannot ask for again, which is what the empty sta
 - **It does not offer profile editing in the UI.** The profile is generated; the only per-agent override is `runtime.permissions` in the manifest, edited as a file
 - **It does not survive a publish.** A grant is machine-local by construction, like everything else about a folder agent — see [Local Agents Are Not Synced](local_only.md)
 - **It holds no history.** A revoked grant leaves no record that it existed; the list is the current state, not a log
-- **On the [Claude](claude_engine.md) engine it does not govern the whole tool surface.** Read-only tools never reach that engine's permission callback at all — a `Read` runs with no ask — so the grants there cover the mutating surface only. Gating everything would need a different mechanism, and this says so rather than claiming a completeness it does not have
+- **On the [Claude](claude_engine.md) engine it does not govern the whole tool surface.** Read-only tools never reach that engine's permission callback at all — a `Read` runs with no ask — so the grants there cover the mutating surface only, on either Approvals setting. Gating everything would need a different mechanism, and this says so rather than claiming a completeness it does not have
+- **It offers no way to take the desktop out of the decision.** The SDK's `bypassPermissions` and `dontAsk` are not on the Approvals select, are refused by the setter, and read as *no choice* off disk. Either would run every tool with no grant consulted and no record in the transcript, and a turn run that way is indistinguishable afterwards from one that was not
+- **It does not feed the reviewer the user's own environment context.** The `autoMode.environment` lines in `~/.claude/settings.json` are what `settingSources: []` withholds, and the Claude engine never reads that file; the reviewer was seen running with `repoVisibility: unknown` and nothing else
 
 ## Architecture Overview
 
@@ -198,13 +217,25 @@ Dynamic half — one ask, mid-turn
 
   Agent page ── local-agent:grants-list / grant-forget / grants-clear ──►
                 permissionGrantService ──► app-data/desktop.json
+
+Claude engine — the reviewer in front, one ask, mid-turn
+  Agent page ── Approvals select ── local-agent:set-claude-approval ──►
+                desktopStateService.patch {claudeApproval} (beside the grants)
+  runner: permissionMode = auto | default  (from claudeApproval ?? 'auto')
+      auto    ──► the CLI's own reviewer ──► approved (everything, in the probes)
+                                        └─► declined ──┐
+      default ──────────────────────────────────────────┤
+                                                        ▼
+                                             canUseTool ──► standing grant? ──► allow, silently
+                                                        └──► block in the transcript (as above)
+  init.permissionMode ≠ asked ──► notice: "Automatic approvals are not available on <model>…"
 ```
 
 ## Integration Points
 
 - [The Local Engine, Runtimes & Prompt Assembly](engine.md) — generates the profile into the config, and owns the merge with a manifest's `runtime.permissions`
 - [The Agent Turn Runner](agent_turn.md) — where an ask becomes a parked request, how the answer travels out of band, and why there is no `permission` part kind
-- [The Claude Engine](claude_engine.md) — the second engine writing into this same grant store, under its own action vocabulary, and why *Always allow* is never persisted into that tool's own rules either
+- [The Claude Engine](claude_engine.md) — the second engine writing into this same grant store, under its own action vocabulary; the Approvals setting that puts the CLI's reviewer in front of it; and why *Always allow* is never persisted into that tool's own rules either
 - [The OpenCode Engine Contract](opencode_contract.md) — the matcher, the rule-resolution order, the shell tool's gating, and the proof behind §4
 - [Agents Tab & Agent Page](agents_tab.md) — the page the Permissions tab lives on
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.permissions` in the manifest schema, and `cloud_import_excludes` keeping `app-data/` out of a publication

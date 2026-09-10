@@ -37,7 +37,7 @@ import type {
   UpdateLocalAgentFieldInput
 } from '../../shared/localAgents'
 import type { LocalAgentOutcome } from '../../shared/localAgents'
-import type { LocalAgentRuntimeInput } from '../../shared/engine'
+import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../shared/engine'
 import { localAgentFailure } from '../../shared/localAgents'
 import { DomainError } from '../errors'
 
@@ -567,6 +567,31 @@ export function registerLocalAgentHandlers(): void {
       // exactly the change `applyConfigChange` exists for.
       if (outcome.ok) void engineManager.applyConfigChange(userId)
       return outcome
+    }
+  )
+
+  /**
+   * Who answers a Claude agent's permission asks before the desktop does. The
+   * value is the desktop's own and lands beside the grants, so this path
+   * serves both kinds of folder and touches no manifest and no engine config.
+   */
+  ipcHandle(
+    'local-agent:set-claude-approval',
+    (
+      _event,
+      input: { agentId: string; approval: ClaudeApproval | null }
+    ): LocalAgentOutcome<LocalAgentDto> => {
+      userActivation.requireActivated()
+      // The value goes through as it arrived. Null is a real answer — clear
+      // the choice — so a missing one must not be turned into it here; the
+      // service refuses anything that is not one of the two values or null.
+      return withCode(() =>
+        localAgentService.setClaudeApproval(
+          getSettingsScopeUserId(),
+          input?.agentId ?? '',
+          input?.approval
+        )
+      )
     }
   )
 

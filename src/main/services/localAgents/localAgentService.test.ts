@@ -1620,6 +1620,34 @@ describe('removing a bare agent', () => {
     ).toThrow(/manifest/i)
   })
 
+  it('keeps who answers a Claude agent’s asks beside its grants, for either kind of folder', () => {
+    // A bare folder's choice lands under `userData`; the folder is untouched.
+    const bare = localAgentService.setClaudeApproval(USER, bareId, 'ask')
+    expect(bare.desktop.claudeApproval).toBe('ask')
+    expect(existsSync(join(bareDir, 'app-data'))).toBe(false)
+    localAgentService.rescan(USER)
+    expect(localAgentService.get(USER, bareId).desktop.claudeApproval).toBe('ask')
+
+    // A kit folder's lands in its own `app-data/desktop.json` — the desktop's
+    // file, not the manifest, so no stamp and no refusal on this path.
+    const kit = localAgentService.setClaudeApproval(USER, agentId, 'ask')
+    expect(kit.desktop.claudeApproval).toBe('ask')
+    expect(existsSync(join(kit.path, 'app-data', 'desktop.json'))).toBe(true)
+    expect(localAgentService.get(USER, agentId).runtime?.engine).toBeUndefined()
+
+    // Clearing is a real state: back to following the default.
+    expect(localAgentService.setClaudeApproval(USER, agentId, null).desktop.claudeApproval).toBeNull()
+  })
+
+  it('refuses an approval setting it does not know, rather than storing it', () => {
+    // The SDK's own vocabulary has two members that would take the desktop out
+    // of the decision entirely. They are not this setting's values.
+    expect(() =>
+      localAgentService.setClaudeApproval(USER, bareId, 'bypassPermissions')
+    ).toThrow(/approval setting/)
+    expect(localAgentService.get(USER, bareId).desktop.claudeApproval).toBeNull()
+  })
+
   it('refuses to rename a kit agent through this path', () => {
     // A kit agent's name lives in its manifest, and that write is stamp-guarded
     // so an assistant's edit cannot be clobbered. This channel carries no stamp.

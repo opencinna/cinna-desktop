@@ -77,6 +77,7 @@ function makeDeps(over: Partial<ClaudeTurnDeps> = {}): ClaudeTurnDeps {
     }),
     systemPrompt: () => 'You are the invoices agent.',
     model: () => 'sonnet',
+    approval: () => 'auto',
     claudePath: async () => '/usr/local/bin/claude',
     claudeAuth: async () => ({ state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'someone@example.com' }) as const,
     shellEnv: async () => ({ PATH: '/usr/bin', HOME: '/Users/x', USER: 'x' }),
@@ -188,6 +189,27 @@ describe('the options handed to the SDK', () => {
     expect(env.USER).toBe('x')
     expect(Object.hasOwn(env, 'ANTHROPIC_API_KEY')).toBe(false)
     expect(env.CLAUDE_AGENT_SDK_CLIENT_APP).toBe('cinna-desktop/1.2.3')
+  })
+
+  it('runs the CLI’s own classifier when the agent is on automatic approvals', async () => {
+    // The mode a terminal `claude` runs for this user. Without it every `ls`
+    // and `git status` came to the permission block — the SDK's `default`
+    // asks for every mutating call — and the desktop read as broken next to
+    // a terminal that never asked.
+    expect((await capture({ approval: () => 'auto' })).permissionMode).toBe('auto')
+  })
+
+  it('asks for everything when the agent is on “ask every time”', async () => {
+    // `default`, the SDK's own — never `dontAsk`, which would deny what the
+    // grants do not cover without the block ever appearing.
+    expect((await capture({ approval: () => 'ask' })).permissionMode).toBe('default')
+  })
+
+  it('keeps the permission callback on both settings', async () => {
+    // Automatic is a classifier in front of the desktop, not instead of it:
+    // whatever it declines still has to reach the grants and the block.
+    expect(typeof (await capture({ approval: () => 'auto' })).canUseTool).toBe('function')
+    expect(typeof (await capture({ approval: () => 'ask' })).canUseTool).toBe('function')
   })
 
   it('omits the model entirely when the runtime names none', async () => {
@@ -455,6 +477,51 @@ describe('who paid for the turn', () => {
       makeDeps({ query: stubQuery({ throws: new Error('the child exited with code 1') }) })
     ).runTurn(turn())
     expect(result.notices).toEqual([])
+  })
+})
+
+describe('automatic approvals the CLI could not honour', () => {
+  const fellBack = { ...init, permissionMode: 'default', model: 'claude-haiku-4-5-20251001' }
+
+  it('says so in the transcript when the CLI ran “default” after being asked for “auto”', async () => {
+    // Observed with `haiku`: the CLI reports the fallback in the init message
+    // and nowhere the user can see. The setting says automatic and the turn
+    // asks before every command — a notice is the only thing that tells that
+    // apart from a bug.
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({ approval: () => 'auto', query: stubQuery({ messages: [fellBack, ...answer] }) })
+    ).runTurn(turn())
+    expect(result.notices.map((n) => n.text).join('\n')).toMatch(
+      /Automatic approvals are not available on claude-haiku-4-5-20251001/
+    )
+  })
+
+  it('says nothing when the CLI ran the mode it was asked for', async () => {
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({
+        approval: () => 'auto',
+        query: stubQuery({ messages: [{ ...init, permissionMode: 'auto' }, ...answer] })
+      })
+    ).runTurn(turn())
+    expect(result.notices.map((n) => n.text).join('\n')).not.toMatch(/Automatic approvals/)
+  })
+
+  it('says nothing on “ask every time”, where “default” is what was asked for', async () => {
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({ approval: () => 'ask', query: stubQuery({ messages: [fellBack, ...answer] }) })
+    ).runTurn(turn())
+    expect(result.notices.map((n) => n.text).join('\n')).not.toMatch(/Automatic approvals/)
+  })
+
+  it('reports the fallback on a turn that failed after init, which still asked', async () => {
+    const result = await new ClaudeAgentTurnRunner(
+      makeDeps({
+        approval: () => 'auto',
+        query: stubQuery({ messages: [fellBack], throws: new Error('boom') })
+      })
+    ).runTurn(turn())
+    expect(result.error).toBeDefined()
+    expect(result.notices.map((n) => n.text).join('\n')).toMatch(/Automatic approvals/)
   })
 })
 

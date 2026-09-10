@@ -22,7 +22,7 @@ import type {
 } from './kit/manifest'
 import { MANIFEST_FILE, SLUG_PATTERN } from './kit/manifest'
 import type { ContractCompatibilityStatus } from './kit/contractVersion'
-import type { LocalAgentRuntimeInput } from './engine'
+import type { ClaudeApproval, LocalAgentRuntimeInput } from './engine'
 
 /** Id prefix of a folder agent's `agents` row: `folder:<manifest id>`. */
 export const FOLDER_AGENT_ID_PREFIX = 'folder:'
@@ -292,6 +292,14 @@ export interface LocalAgentDesktopSummary {
   hasAgentToken: boolean
   sessionCount: number
   lastStatusAt: number | null
+  /**
+   * Who answers this agent's permission asks on the Claude engine — see
+   * {@link ClaudeApproval}. Null is "no choice made", which the Permissions
+   * card and the runner both read as `DEFAULT_CLAUDE_APPROVAL`; the
+   * null survives the round trip so a future change of default reaches the
+   * agents that never chose.
+   */
+  claudeApproval: ClaudeApproval | null
 }
 
 /**
@@ -322,7 +330,9 @@ export interface LocalAgentDto {
   /**
    * Kit folder or bare folder — see {@link LocalAgentKind}. A `bare` agent
    * carries an empty `manifest`, no credentials, no commands and no
-   * publications, and `runtime` is always null: it has no file that states one.
+   * publications. Its `runtime` is not from a file — it has none that states
+   * one — but from the desktop state the Runs-with panel writes for it, so it
+   * is null only until the user makes a choice.
    */
   kind: LocalAgentKind
   rootId: string

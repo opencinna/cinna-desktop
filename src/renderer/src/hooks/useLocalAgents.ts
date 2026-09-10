@@ -19,7 +19,7 @@ import type {
   LocalAgentFieldUpdate,
   UpdateLocalAgentFieldInput
 } from '../../../shared/localAgents'
-import type { LocalAgentRuntimeInput } from '../../../shared/engine'
+import type { ClaudeApproval, LocalAgentRuntimeInput } from '../../../shared/engine'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../../shared/localAgentRequests'
 import {
@@ -467,6 +467,26 @@ export function useSetBareAgentRuntime() {
   return useMutation<LocalAgentDto, Error, { agentId: string; runtime: LocalAgentRuntimeInput }>({
     mutationFn: async ({ agentId, runtime }) =>
       unwrapLocalAgentOutcome(await window.api.localAgents.setRuntime(agentId, runtime)),
+    onSuccess: (agent) => {
+      queryClient.setQueryData(localAgentKey(agent.id), agent)
+      void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
+    }
+  })
+}
+
+/**
+ * Save who answers a Claude agent's permission asks before the desktop does.
+ *
+ * The DTO comes back with the choice in `desktop.claudeApproval`, and it is
+ * written into the agent's own query rather than invalidated: the Permissions
+ * card renders the select from that field, and a refetch would show the old
+ * value for the round trip after the click (ux_rules §1).
+ */
+export function useSetClaudeApproval() {
+  const queryClient = useQueryClient()
+  return useMutation<LocalAgentDto, Error, { agentId: string; approval: ClaudeApproval | null }>({
+    mutationFn: async ({ agentId, approval }) =>
+      unwrapLocalAgentOutcome(await window.api.localAgents.setClaudeApproval(agentId, approval)),
     onSuccess: (agent) => {
       queryClient.setQueryData(localAgentKey(agent.id), agent)
       void queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })

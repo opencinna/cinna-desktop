@@ -119,6 +119,42 @@ export function isAgentEngine(value: unknown): value is AgentEngine {
 }
 
 /**
+ * Who answers a Claude agent's permission asks before the desktop does.
+ *
+ * - `auto` — the CLI's own classifier, the same one a terminal `claude` runs
+ *   in auto mode. It approves what it judges routine for what the user asked
+ *   and the desktop is consulted only for what it will not approve. Watched
+ *   against the binary (`claude_contract.md` §10): over seven probes, including
+ *   a force push and a global git config rewrite, it approved everything and
+ *   the desktop's callback never fired — so on this setting the permission
+ *   block is a backstop, not a gate.
+ * - `ask` — the SDK's `default` mode: every command, edit, write and fetch
+ *   reaches the desktop, and a standing grant or the permission block answers
+ *   it. Read-only tools never ask on either setting.
+ *
+ * Not the SDK's `PermissionMode`, on purpose. That type has six members and
+ * two of them — `bypassPermissions` and `dontAsk` — would remove the desktop
+ * from the decision entirely; this pair is the whole choice the desktop
+ * offers, and the runner maps it onto the SDK's vocabulary in one place.
+ */
+export type ClaudeApproval = 'auto' | 'ask'
+
+/**
+ * What a Claude agent that has not been told otherwise runs on.
+ *
+ * `auto`, because the alternative asked for every command the agent ran —
+ * including the `ls` and `git status` a terminal `claude` runs without a
+ * word — and a user who had never seen those prompts in the terminal read
+ * the desktop as broken.
+ */
+export const DEFAULT_CLAUDE_APPROVAL: ClaudeApproval = 'auto'
+
+/** Whether a value off disk or the wire is an approval setting this build knows. */
+export function isClaudeApproval(value: unknown): value is ClaudeApproval {
+  return value === 'auto' || value === 'ask'
+}
+
+/**
  * Work Complexity → the model alias the Claude engine asks for.
  *
  * A small table, deliberately **not** `modelFamilies.ts`. That module classifies

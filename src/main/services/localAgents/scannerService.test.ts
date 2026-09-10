@@ -658,7 +658,8 @@ describe('scanning a workshop', () => {
       localApiBaseUrl: 'http://127.0.0.1:4096',
       hasAgentToken: true,
       sessionCount: 1,
-      lastStatusAt: null
+      lastStatusAt: null,
+      claudeApproval: null
     })
     expect(JSON.stringify(agent)).not.toContain('tok_do_not_leak')
   })

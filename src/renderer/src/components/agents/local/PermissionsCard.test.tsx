@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import type { StoredPermissionGrant } from '../../../../../shared/localAgentRequests'
+import { localAgentKey } from '../../../hooks/useLocalAgents'
 import { PermissionsCard } from './PermissionsCard'
 
 /**
@@ -19,11 +20,19 @@ import { PermissionsCard } from './PermissionsCard'
 const grantsList = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantForget = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantsClear = vi.fn<() => Promise<StoredPermissionGrant[]>>()
+const setClaudeApproval = vi.fn<() => Promise<unknown>>()
 ;(window as unknown as { api: unknown }).api = {
-  localAgents: { grantsList, grantForget, grantsClear }
+  localAgents: { grantsList, grantForget, grantsClear, setClaudeApproval }
 }
 
 const agent = { id: 'folder:alpha', name: 'Alpha' } as LocalAgentDto
+
+/** The same agent on the user's own Claude Code install, with no choice made. */
+const claudeAgent = {
+  ...agent,
+  runtime: { engine: 'claude' },
+  desktop: { localApiBaseUrl: null, hasAgentToken: false, sessionCount: 0, lastStatusAt: null, claudeApproval: null }
+} as LocalAgentDto
 
 const grant = (over: Partial<StoredPermissionGrant> = {}): StoredPermissionGrant => ({
   key: 'webfetch::https://docs.example.com/*',
@@ -38,6 +47,24 @@ function renderCard(a: LocalAgentDto = agent): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
     createElement(QueryClientProvider, { client }, createElement(PermissionsCard, { agent: a }))
+  )
+}
+
+/**
+ * The card as the page renders it: over the agent's own query, so a DTO the
+ * save hook writes into the cache reaches the card as a new prop, the way it
+ * does in the app. A static prop would hide the half of the round trip where
+ * the hook's `setQueryData` is what keeps the control on the picked value.
+ */
+function LiveCard({ initial }: { initial: LocalAgentDto }): React.JSX.Element | null {
+  const { data } = useQuery({ queryKey: localAgentKey(initial.id), queryFn: () => initial })
+  return data ? createElement(PermissionsCard, { agent: data }) : null
+}
+
+function renderLiveCard(a: LocalAgentDto): ReturnType<typeof render> {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  return render(
+    createElement(QueryClientProvider, { client }, createElement(LiveCard, { initial: a }))
   )
 }
 
@@ -213,3 +240,73 @@ describe('PermissionsCard — a bare agent', () => {
     expect(screen.queryByText(/Kept on this machine rather than in the folder/)).toBeNull()
   })
 })
+
+/**
+ * The card for an agent on the Claude engine, where the CLI's own classifier
+ * sits in front of the desktop's permission block.
+ */
+describe('PermissionsCard — an agent on Claude', () => {
+  it('describes the classifier rather than the OpenCode profile, and offers the choice', async () => {
+    grantsList.mockResolvedValue([])
+    renderCard(claudeAgent)
+    // The OpenCode profile's sentence describes rules that are not in force
+    // on this engine. Mutation: drop the branch and the card claims the agent
+    // "runs commands inside its own folder without asking", which on `default`
+    // it does not.
+    expect(screen.queryByText(/runs commands inside its own folder without asking/)).toBeNull()
+    // The blunt sentence. It was watched: the classifier approved a force push
+    // and a global git config rewrite, and the callback never fired.
+    expect(screen.getByText(/approved everything it was shown/)).toBeTruthy()
+    const select = screen.getByLabelText('Approvals') as HTMLSelectElement
+    // No choice made reads as the default, not as a blank option.
+    expect(select.value).toBe('auto')
+    await waitFor(() => expect(grantsList).toHaveBeenCalled())
+  })
+
+  it('renders the choice the agent already made', () => {
+    grantsList.mockResolvedValue([])
+    renderCard({
+      ...claudeAgent,
+      desktop: { ...claudeAgent.desktop, claudeApproval: 'ask' }
+    } as LocalAgentDto)
+    expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('ask')
+  })
+
+  it('saves a change against this agent and renders what came back', async () => {
+    grantsList.mockResolvedValue([])
+    setClaudeApproval.mockResolvedValue({
+      ok: true,
+      value: { ...claudeAgent, desktop: { ...claudeAgent.desktop, claudeApproval: 'ask' } }
+    })
+    renderLiveCard(claudeAgent)
+    fireEvent.change(await screen.findByLabelText('Approvals'), { target: { value: 'ask' } })
+    // The pick shows at once, for the whole round trip. The select is
+    // otherwise controlled by the DTO, which main re-scans the folder before
+    // answering — rendering that alone snapped the control back to `auto`
+    // until the answer landed, then flipped it (ux_rules §1). Mutation: render
+    // the stored value alone fails this.
+    expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('ask')
+    await waitFor(() => expect(setClaudeApproval).toHaveBeenCalledWith('folder:alpha', 'ask'))
+    await waitFor(() =>
+      expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('ask')
+    )
+  })
+
+  it('keeps the refusal beside the control, and the control where it was', async () => {
+    grantsList.mockResolvedValue([])
+    setClaudeApproval.mockRejectedValue(new Error('That agent is busy in a chat.'))
+    renderCard(claudeAgent)
+    fireEvent.change(screen.getByLabelText('Approvals'), { target: { value: 'ask' } })
+    // Outcome first, reason second (ux_rules §6). The select renders the DTO,
+    // which a failed save left alone, so it reads `auto` again on its own.
+    expect(await screen.findByText(/Nothing was changed — that agent is busy in a chat\./)).toBeTruthy()
+    expect((screen.getByLabelText('Approvals') as HTMLSelectElement).value).toBe('auto')
+  })
+
+  it('offers no such choice to an agent on OpenCode', () => {
+    grantsList.mockResolvedValue([])
+    renderCard()
+    expect(screen.queryByLabelText('Approvals')).toBeNull()
+  })
+})
+

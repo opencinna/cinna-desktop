@@ -10,7 +10,7 @@
  * differently by two callers.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -191,3 +191,37 @@ describe('bare agent state', () => {
     expect(existsSync(join(dir, 'app-data'))).toBe(false)
   })
 })
+
+describe('who answers a Claude agent’s permission asks', () => {
+  it('round-trips the choice, for either kind of folder', () => {
+    desktopStateService.patch(dir, 'kit', { claudeApproval: 'ask' })
+    expect(desktopStateService.read(dir, 'kit').claudeApproval).toBe('ask')
+    desktopStateService.patch(dir, 'bare', { claudeApproval: 'auto' })
+    expect(desktopStateService.read(dir, 'bare').claudeApproval).toBe('auto')
+    // A kit folder's choice sits in the folder; a bare folder's does not.
+    expect(existsSync(join(dir, 'app-data', 'desktop.json'))).toBe(true)
+    expect(existsSync(barePath)).toBe(true)
+  })
+
+  it('reads no choice as no choice, and anything unknown the same way', () => {
+    // Null survives the round trip rather than being written as today's
+    // default, so an agent that never chose follows a future default.
+    expect(desktopStateService.read(dir, 'kit').claudeApproval).toBeNull()
+    desktopStateService.patch(dir, 'kit', { claudeApproval: null })
+    expect(desktopStateService.read(dir, 'kit').claudeApproval).toBeNull()
+    // A value another build wrote — or a hand edit reaching for the SDK's own
+    // vocabulary — must not become the more permissive reading by accident.
+    mkdirSync(join(dir, 'app-data'), { recursive: true })
+    writeFileSync(
+      join(dir, 'app-data', 'desktop.json'),
+      JSON.stringify({ claudeApproval: 'bypassPermissions' })
+    )
+    expect(desktopStateService.read(dir, 'kit').claudeApproval).toBeNull()
+  })
+
+  it('crosses to the renderer in the summary, unlike the token', () => {
+    const state = { ...desktopStateService.read(dir, 'kit'), claudeApproval: 'ask' as const }
+    expect(desktopStateService.summarize(state).claudeApproval).toBe('ask')
+  })
+})
+

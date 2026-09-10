@@ -23,6 +23,7 @@ import { basename, dirname, join } from 'node:path'
 import { app } from 'electron'
 import { DESKTOP_STATE_FILE } from '../../../shared/kit/manifest'
 import type { AgentRuntimeRef } from '../../../shared/kit/manifest'
+import { isClaudeApproval, type ClaudeApproval } from '../../../shared/engine'
 import type { LocalAgentDesktopSummary, LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionGrant } from '../../../shared/localAgentRequests'
 import { LocalAgentError } from '../../errors'
@@ -106,6 +107,19 @@ export interface DesktopState {
    * otherwise. Null means exactly that — no choice made, use the default.
    */
   runtime: AgentRuntimeRef | null
+  /**
+   * Claude engine only: who answers this agent's permission asks before the
+   * desktop does — see `ClaudeApproval` in `shared/engine.ts`.
+   *
+   * Kept here, beside the grants, rather than in the runtime block: which
+   * engine and model run an agent is what the agent *is* and travels in a kit
+   * manifest, while how far this machine trusts it is the same kind of fact as
+   * a standing grant — the desktop's own decision, kept beside the folder it
+   * was made about and never written into a file that is published. Null is
+   * "no choice made" and reads as the default, so a change of default reaches
+   * every agent that never chose.
+   */
+  claudeApproval: ClaudeApproval | null
 }
 
 const EMPTY_STATE: DesktopState = {
@@ -116,7 +130,8 @@ const EMPTY_STATE: DesktopState = {
   lastStatus: null,
   displayName: null,
   hidden: false,
-  runtime: null
+  runtime: null,
+  claudeApproval: null
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -192,7 +207,10 @@ function coerce(raw: unknown): DesktopState {
     lastStatus,
     displayName: asString(raw.displayName),
     hidden: raw.hidden === true,
-    runtime: coerceRuntime(raw.runtime)
+    runtime: coerceRuntime(raw.runtime),
+    // Anything but the two known values reads as no choice — the default —
+    // never as the more permissive of the two by accident.
+    claudeApproval: isClaudeApproval(raw.claudeApproval) ? raw.claudeApproval : null
   }
 }
 
@@ -407,7 +425,8 @@ export const desktopStateService = {
       localApiBaseUrl: state.localApiBaseUrl,
       hasAgentToken: state.agentToken !== null,
       sessionCount: Object.keys(state.sessions).length,
-      lastStatusAt: state.lastStatus?.at ?? null
+      lastStatusAt: state.lastStatus?.at ?? null,
+      claudeApproval: state.claudeApproval
     }
   }
 }

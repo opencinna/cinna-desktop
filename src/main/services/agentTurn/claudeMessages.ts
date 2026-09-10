@@ -89,6 +89,12 @@ export interface ClaudeStreamUpdate {
   model?: string
   /** Set once, off the init message. */
   cliVersion?: string
+  /**
+   * Set once, off the init message: the permission mode the CLI is actually
+   * running in, which is not always the one it was asked for — `auto` on a
+   * model without a classifier comes back as `default`, with no other signal.
+   */
+  permissionMode?: string
   /** The session id, reported on nearly every message. */
   sessionId?: string
   /** The turn ended. `result` is the only thing that sets this. */
@@ -118,6 +124,7 @@ interface RawMessage {
   apiKeySource?: unknown
   model?: unknown
   claude_code_version?: unknown
+  permissionMode?: unknown
   event?: Record<string, unknown>
   message?: { id?: unknown; content?: unknown }
   parent_tool_use_id?: unknown
@@ -228,6 +235,7 @@ export class ClaudeMessageStream {
           update.apiKeySource = str(m.apiKeySource) ?? 'unknown'
           update.model = str(m.model)
           update.cliVersion = str(m.claude_code_version)
+          update.permissionMode = str(m.permissionMode)
         } else if (m.subtype === 'background_tasks_changed') {
           // The level signal the runner keeps stdin open on. A subagent the
           // model launched in the background outlives the `result` that ends
