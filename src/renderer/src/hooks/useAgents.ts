@@ -1,9 +1,10 @@
 import { useCallback, useEffect } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { createLogger } from '../stores/logger.store'
-import { usePromoteToOrchestrated } from './useChat'
+import { useSetChatRouter } from './useChat'
 import { useChatStore } from '../stores/chat.store'
 import { unwrapIpcError } from '../utils/ipcError'
+import { routerOf } from '../../../shared/chatRouting'
 
 const onDemandLog = createLogger('on-demand-agent')
 
@@ -191,39 +192,52 @@ export function useAddOnDemandAgent() {
 }
 
 /**
- * The in-chat `@`-agent gesture: attach an agent to the current chat as an
- * orchestrated tool. Encapsulates the full sequence so the composer/view stays
- * declarative:
+ * The in-chat `@`-agent gesture: bring another agent into the chat.
  *
- *  - Re-picking the sole bound agent of a direct-A2A chat is a no-op (it's
- *    already the conversation partner — orchestration starts at the *second*
- *    counterparty).
- *  - A chat that isn't orchestrated yet is promoted first (optimistically, so a
- *    fast pick-then-Enter doesn't route the send to the old root agent).
- *  - The agent is then added to the on-demand set.
- *  - Any failure (e.g. promotion refused for lack of a model) surfaces via the
- *    chat send-error banner.
+ * What that means depends on who is already in it, and the difference is the
+ * point of phase 4:
+ *
+ *  - **Re-picking the sole bound agent of a `direct` chat** is a no-op. It is
+ *    already the conversation partner.
+ *  - **A `direct` chat with an agent** becomes `human`: two agents, and the
+ *    user addresses one per message. **No model is involved**, so a user with
+ *    no LLM provider configured can do this — which is exactly what the old
+ *    one-way promotion to orchestrated could not offer.
+ *  - **A `direct` chat with no agent** — a plain LLM chat — becomes
+ *    `coordinator`: the model is the counterparty the user has been talking to,
+ *    and an agent arriving is a tool it can call, not a replacement for it.
+ *    This is the one path that can still be refused for lack of a model, and
+ *    that refusal is now about the model that is already answering.
+ *  - **A chat already on `human` or `coordinator`** just gains the agent.
+ *
+ * The switch is optimistic (see `useSetChatRouter`), so a fast pick-then-Enter
+ * cannot route the send to the old root. Any failure surfaces via the chat
+ * send-error banner.
  */
 export function useAttachAgentToChat(chatId: string | null): (agentId: string) => Promise<void> {
   const queryClient = useQueryClient()
-  const promote = usePromoteToOrchestrated()
+  const setRouter = useSetChatRouter()
   const addAgent = useAddOnDemandAgent()
   const setSendError = useChatStore((s) => s.setSendError)
   return useCallback(
     async (agentId: string): Promise<void> => {
       if (!chatId) return
       const chat = queryClient.getQueryData<CachedChat>(['chat', chatId])
-      if (chat && !chat.orchestrated && chat.agentId === agentId) return
+      const router = chat ? routerOf(chat) : 'direct'
+      if (router === 'direct' && chat?.agentId === agentId) return
       try {
-        if (!chat?.orchestrated) {
-          await promote.mutateAsync(chatId)
+        if (router === 'direct') {
+          await setRouter.mutateAsync({
+            chatId,
+            router: chat?.agentId ? 'human' : 'coordinator'
+          })
         }
         await addAgent.mutateAsync({ chatId, agentId })
       } catch (err) {
         setSendError(unwrapIpcError(err, 'Could not add agent'))
       }
     },
-    [chatId, queryClient, promote, addAgent, setSendError]
+    [chatId, queryClient, setRouter, addAgent, setSendError]
   )
 }
 

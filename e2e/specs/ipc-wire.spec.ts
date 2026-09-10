@@ -135,7 +135,11 @@ const WIRE: unknown[] = ON_CONTRACT.flatMap((event, i) =>
   i < OFF_CONTRACT.length ? [OFF_CONTRACT[i], event] : [event]
 )
 
+// `run.send` is the channel; the other two are the forwards it replaced, kept
+// for one phase (see `src/main/ipc/run.ipc.ts`). All three carry the same
+// vocabulary and the same preload guard, so all three are driven.
 for (const path of [
+  { api: 'run.send', channel: 'run:send' },
   { api: 'llm.sendMessage', channel: 'llm:send-message' },
   { api: 'agents.sendMessage', channel: 'agent:send-message' }
 ] as const) {
@@ -180,7 +184,9 @@ for (const path of [
               resolve(got)
             }
           }
-          if (channel === 'llm:send-message') window.api.llm.sendMessage('e2e-chat', 'hello', onEvent)
+          if (channel === 'run:send') window.api.run.send('e2e-chat', 'hello', onEvent)
+          else if (channel === 'llm:send-message')
+            window.api.llm.sendMessage('e2e-chat', 'hello', onEvent)
           else window.api.agents.sendMessage('folder:e2e', 'e2e-chat', 'hello', onEvent)
         }),
       path.channel

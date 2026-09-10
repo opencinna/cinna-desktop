@@ -41,6 +41,13 @@ import { fileURLToPath } from 'node:url'
  *                    `…Type` suffix, because `remoteTargetType === 'agent'` and
  *                    every `mimeType` would come with it
  * - `providerType` — `providerType` against `'mcp' | 'agent'`
+ * - `routing`      — every read of `.orchestrated`, the boolean that used to say
+ *                    who answers in a chat. `chat.agentId && !chat.orchestrated`
+ *                    was re-derived in five places before phase 4; the column
+ *                    survives one more phase as a mirror of `chats.router`, and
+ *                    the four sites that *write* the mirror are pinned in
+ *                    `OWNERSHIP` rather than counted, because writing it is
+ *                    their job. A read is a re-derivation, and there are none.
  *
  * Comments are blanked before matching: a doc comment quoting
  * `source === 'remote'` is not a branch, and three of them were in the first
@@ -69,9 +76,16 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 
-type Category = 'source' | 'engine' | 'kind' | 'jobType' | 'providerType'
+type Category = 'source' | 'engine' | 'kind' | 'jobType' | 'providerType' | 'routing'
 
-const CATEGORIES: Category[] = ['source', 'engine', 'kind', 'jobType', 'providerType']
+const CATEGORIES: Category[] = [
+  'source',
+  'engine',
+  'kind',
+  'jobType',
+  'providerType',
+  'routing'
+]
 
 /** Non-allowlisted branch sites per category, exactly as measured. Lowered by each phase. */
 const LIMITS: Record<Category, number> = {
@@ -100,7 +114,14 @@ const LIMITS: Record<Category, number> = {
   // `agents/drivers/index.ts`.
   kind: 42,
   jobType: 29,
-  providerType: 3
+  providerType: 3,
+  // **Zero from the day it was added.** Phase 4 replaced every read of
+  // `orchestrated` with `chats.router` behind `src/shared/chatRouting.ts`; what
+  // is left is the four statements that keep the mirror in step with the
+  // router, pinned per file in `OWNERSHIP`. The category exists so the next
+  // read of the column — in the phase before it is dropped — has to be
+  // deliberate.
+  routing: 0
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
@@ -117,6 +138,10 @@ const LIMIT = 78
 const ALLOWLIST: string[] = [
   // A driver is where a kind branch belongs (phase 2).
   'src/main/agents/drivers/',
+  // And the routing helper is where a *routing* branch belongs (phase 4). Its
+  // one read of `orchestrated` is the fallback for a chat DTO that predates
+  // `chats.router` — the whole reason the mirror is still written.
+  'src/shared/chatRouting.ts',
   'src/main/sync/collections.ts',
   'src/main/sync/identity.ts',
   'src/main/sync/manifest.ts',
@@ -256,7 +281,13 @@ const PATTERNS: Record<Category, RegExp[]> = {
   engine: comparisons('(?:engine|\\w*Engine)', ['opencode', 'claude']),
   kind: comparisons('(?:kind|\\w*Kind)', ['kit', 'bare', 'workshop', 'external']),
   jobType: comparisons('type', ['local', 'cinna_task']),
-  providerType: comparisons('providerType', ['mcp', 'agent'])
+  providerType: comparisons('providerType', ['mcp', 'agent']),
+  // Any read of the property, not a comparison: the re-derivations that phase 4
+  // removed were `chat.agentId && !chat.orchestrated` and `chatData?.orchestrated
+  // ? … : …`, neither of which compares it to a literal. A `key: value` write
+  // (`orchestrated: router === 'coordinator'`) is excluded by the `.` — the
+  // writers name the column, they do not read it off an object.
+  routing: [/(?:\.|\?\.)orchestrated\b/g]
 }
 
 /**

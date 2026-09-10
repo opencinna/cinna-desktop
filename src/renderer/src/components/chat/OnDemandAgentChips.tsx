@@ -3,15 +3,29 @@ import { Bot, X } from 'lucide-react'
 import { useAgents, useChatOnDemandAgents, useRemoveOnDemandAgent } from '../../hooks/useAgents'
 import { presetForAgentId } from '../../utils/agentColors'
 
-type OnDemandAgentChipsProps =
+/**
+ * Turns the chips into the chat's address book: clicking one says who the next
+ * message is for. Supplied only in a `human`-routed chat, where that is a
+ * decision the user makes; absent everywhere else, where the chips are only a
+ * list of what is attached.
+ */
+export interface ChipAddressing {
+  /** The agent the next message is addressed to. */
+  addressedId: string | null
+  onAddress: (agentId: string) => void
+}
+
+type OnDemandAgentChipsProps = (
   | { chatId: string; pendingIds?: never; onRemovePending?: never }
   | { chatId?: null; pendingIds: string[]; onRemovePending: (id: string) => void }
+) & { addressing?: ChipAddressing }
 
 /**
- * Renders the on-demand agent set as a strip of removable chips next to the
- * on-demand-MCP chips below the composer. Each chip is an agent the local
- * model calls as an emulated MCP tool in orchestrated mode. Two modes,
- * mirroring [[ActiveMcpChips]]:
+ * Renders the attached agent set as a strip of removable chips next to the
+ * on-demand-MCP chips below the composer. What a chip *is* depends on the
+ * chat's router: an agent the local model calls as a tool (`coordinator`), or
+ * one of the counterparties the user addresses by clicking it (`human`, via
+ * {@link ChipAddressing}). Two data modes, mirroring [[ActiveMcpChips]]:
  *
  *  - **Active chat** (`chatId` set): reads `chat_on_demand_agents` via React
  *    Query; removal hits the DB through `chat:on-demand-agent-remove`.
@@ -58,15 +72,55 @@ export function OnDemandAgentChips(
         // chat window (sub-thread header, bubbles), so the footer chip and the
         // in-transcript rendering match.
         const color = presetForAgentId(a.id)
+        const addressed = props.addressing?.addressedId === a.id
+        const label = props.addressing
+          ? addressed
+            ? `Agent “${a.name}” answers your next message`
+            : `Address your next message to “${a.name}”`
+          : `Agent "${a.name}" attached — the local model will call it as a tool`
         return (
           <div
             key={a.id}
-            className="flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border"
-            style={{ color: color.border, borderColor: color.border, backgroundColor: color.bg }}
-            title={`Agent "${a.name}" attached — the local model will call it as a tool`}
+            // A ring, not a border or a weight change: the addressed chip has to
+            // read differently without occupying a different amount of space, or
+            // every chip beside it would slide when the user picks another one.
+            //
+            // **The ring is the foreground colour, not the agent's.** Two agents
+            // can hash to the same preset — measured, twice in one screen — and
+            // a ring in the chip's own colour then reads as nothing but a
+            // slightly thicker border. The theme's text colour is the one colour
+            // guaranteed to contrast with every chip.
+            className={`flex items-center gap-1 pl-1.5 pr-1 py-1 rounded-lg border transition-shadow${
+              addressed ? ' ring-2 ring-[var(--color-text)]' : ''
+            }`}
+            style={{
+              color: color.border,
+              borderColor: color.border,
+              backgroundColor: color.bg
+            }}
+            title={label}
           >
-            <Bot size={12} className="shrink-0" />
-            <span className="text-[11px] font-medium whitespace-nowrap">{a.name}</span>
+            {props.addressing ? (
+              <button
+                type="button"
+                onClick={() => props.addressing?.onAddress(a.id)}
+                aria-pressed={addressed}
+                aria-label={label}
+                // `cursor-pointer` explicitly: preflight gives every `button` a
+                // default cursor, so a chip that is a control looked exactly as
+                // inert as one that is not.
+                className="flex items-center gap-1 rounded cursor-pointer
+                  hover:bg-black/10 [[data-theme=light]_&]:hover:bg-black/5 transition-colors"
+              >
+                <Bot size={12} className="shrink-0" />
+                <span className="text-[11px] font-medium whitespace-nowrap">{a.name}</span>
+              </button>
+            ) : (
+              <>
+                <Bot size={12} className="shrink-0" />
+                <span className="text-[11px] font-medium whitespace-nowrap">{a.name}</span>
+              </>
+            )}
             <button
               type="button"
               onClick={() => handleRemove(a.id)}

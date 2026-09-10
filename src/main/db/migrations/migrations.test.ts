@@ -235,3 +235,124 @@ describe('agents.driver on an install that predates it', () => {
     raw.close()
   })
 })
+
+describe('chats.router on an install that predates it', () => {
+  /**
+   * The upgrade path for phase 4: an existing `chats` table whose only record of
+   * how a chat routes is the `orchestrated` boolean.
+   *
+   * The migration runs after `migrateChats`, which is what creates the column it
+   * backfills from, so the fixture has to reach back past both: create the chain
+   * once, then drop `router` and reinstate whatever `orchestrated` said.
+   */
+  function chatsWithoutRouter(): DatabaseSync {
+    const raw = freshDatabase()
+    raw.exec('PRAGMA foreign_keys = OFF')
+    raw.exec('ALTER TABLE chats DROP COLUMN router')
+    const now = Date.now()
+    for (const [id, orchestrated, agentId] of [
+      ['c-plain', 0, null],
+      ['c-agent', 0, 'a-1'],
+      ['c-orch', 1, null]
+    ] as Array<[string, number, string | null]>) {
+      raw
+        .prepare(
+          `INSERT INTO chats (id, user_id, title, agent_id, orchestrated, hidden_from_list, created_at, updated_at)
+           VALUES (?, '__default__', 'A chat', ?, ?, 0, ?, ?)`
+        )
+        .run(id, agentId, orchestrated, now, now)
+    }
+    return raw
+  }
+
+  function routers(raw: DatabaseSync): Record<string, string> {
+    const rows = raw.prepare('SELECT id, router FROM chats ORDER BY id').all() as Array<{
+      id: string
+      router: string
+    }>
+    return Object.fromEntries(rows.map((r) => [r.id, r.router]))
+  }
+
+  it('backfills the two values the old flag could say, and invents no third', () => {
+    const raw = chatsWithoutRouter()
+    runAllMigrations(adaptDatabase(raw))
+    expect(routers(raw)).toEqual({
+      // A chat with no agent and no flag is "direct to the local model".
+      'c-plain': 'direct',
+      // A bound agent, answering directly — unchanged.
+      'c-agent': 'direct',
+      'c-orch': 'coordinator'
+    })
+    // `human` is reachable only by a gesture the user makes after the upgrade:
+    // nothing in an old row says which of several agents was being addressed.
+    expect(Object.values(routers(raw))).not.toContain('human')
+    raw.close()
+  })
+
+  it('does not drag a chat back to coordinator on a later boot', () => {
+    // The backfill is guarded by the `ADD COLUMN`, not by a predicate on the
+    // data, so a chat the user has since moved off `coordinator` stays moved —
+    // while `orchestrated` still says what it said before the router existed.
+    const raw = chatsWithoutRouter()
+    runAllMigrations(adaptDatabase(raw))
+    raw.prepare("UPDATE chats SET router = 'human' WHERE id = 'c-orch'").run()
+    runAllMigrations(adaptDatabase(raw))
+    expect(routers(raw)['c-orch']).toBe('human')
+    raw.close()
+  })
+
+  it('creates the per-agent catch-up cursor table', () => {
+    const raw = freshDatabase()
+    expect(tableNames(raw)).toContain('chat_agent_cursors')
+    expect(columnNames(raw, 'chat_agent_cursors')).toEqual(
+      new Set(['chat_id', 'agent_id', 'last_message_id', 'updated_at'])
+    )
+    raw.close()
+  })
+
+  it('cascades a cursor away with the chat — and with the agent — it belongs to', () => {
+    const raw = freshDatabase()
+    const now = Date.now()
+    raw
+      .prepare(
+        `INSERT INTO chats (id, user_id, title, router, orchestrated, hidden_from_list, created_at, updated_at)
+         VALUES ('c-1', '__default__', 'A chat', 'human', 0, 0, ?, ?)`
+      )
+      .run(now, now)
+    raw
+      .prepare(
+        `INSERT INTO agents (id, user_id, name, protocol, enabled, source, created_at)
+         VALUES ('a-1', '__default__', 'A', 'a2a', 1, 'local', ?)`
+      )
+      .run(now)
+    raw
+      .prepare(
+        `INSERT INTO chat_agent_cursors (chat_id, agent_id, last_message_id, updated_at)
+         VALUES ('c-1', 'a-1', 'm-9', ?)`
+      )
+      .run(now)
+
+    // Removing the agent takes its cursor with it. Without that reference a
+    // deleted-then-recreated agent id would inherit a cursor pointing into a
+    // conversation it never had, and be told it had already seen it.
+    raw.prepare("DELETE FROM agents WHERE id = 'a-1'").run()
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM chat_agent_cursors').get()).toEqual({ c: 0 })
+
+    raw
+      .prepare(
+        `INSERT INTO agents (id, user_id, name, protocol, enabled, source, created_at)
+         VALUES ('a-1', '__default__', 'A', 'a2a', 1, 'local', ?)`
+      )
+      .run(now)
+    raw
+      .prepare(
+        `INSERT INTO chat_agent_cursors (chat_id, agent_id, last_message_id, updated_at)
+         VALUES ('c-1', 'a-1', 'm-9', ?)`
+      )
+      .run(now)
+    raw.prepare("DELETE FROM chats WHERE id = 'c-1'").run()
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM chat_agent_cursors').get()).toEqual({ c: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})

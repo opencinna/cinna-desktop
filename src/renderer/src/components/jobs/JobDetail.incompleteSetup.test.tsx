@@ -136,12 +136,12 @@ describe('the job detail view for a job this device cannot run', () => {
   })
 
   it('does not badge a blocked job as a plain local-LLM chat', () => {
-    // `CommPatternBadge` is fed `derivePattern(job.agentIds, job.mcpProviderIds)`,
+    // `RouterBadge` is fed `newChatRouter(job.agentIds, job.mcpProviderIds)`,
     // and `agentIds` holds join rows — which is exactly what the unresolved
-    // dependency does not have. So a blocked job reached `derivePattern([], [])`
-    // and got `'AI'`: the badge announced a local-model chat with no agents,
-    // sitting under a panel saying the job needs an agent. That is the same
-    // wrong answer `executeLocal` now refuses to record.
+    // dependency does not have. So a blocked job reached the router with two
+    // empty arrays and got `'direct'`: the badge announced a chat with the local
+    // model and no agents, sitting under a panel saying the job needs an agent.
+    // That is the same wrong answer `executeLocal` now refuses to record.
     jobState.current = job({ incompleteSetup: true })
     render(<JobDetail />)
     expect(screen.queryByRole('status')).toBeNull()
@@ -164,7 +164,7 @@ describe('the job detail view for a job this device cannot run', () => {
     jobState.current = job({ agentIds: ['a1'] })
     render(<JobDetail />)
     const badge = screen.getByRole('status')
-    expect(badge.getAttribute('aria-label')).toBe('Direct A2A connection')
+    expect(badge.getAttribute('aria-label')).toBe('Direct agent connection')
     expect(screen.queryByText('Agent unavailable')).toBeNull()
     expect(screen.getByText('Invoice Checker')).toBeTruthy()
   })

@@ -190,8 +190,17 @@ interface ChatStore {
   // the registry poll catches up. Cleared only when a stream starts or the chat
   // changes: the poll's last read can land after the stream has ended.
   settledInputRequestIds: string[]
+  // Who the next message in a `human`-routed chat is addressed to, per chat.
+  //
+  // Keyed by chat id and kept out of the composer's own state on purpose: the
+  // gesture that sets it (an `@` pick, a chip click) and the badge that reads it
+  // live in different components, and switching away from a chat and back must
+  // not silently re-point the message at somebody else. `null` — or no entry —
+  // means "whoever answered last", which main resolves from the transcript.
+  addressedAgentByChat: Record<string, string>
 
   setActiveChatId: (id: string | null) => void
+  setAddressedAgent: (chatId: string, agentId: string) => void
   startStreaming: (requestId: string) => void
   setPendingUserMessage: (message: PendingUserMessage | null) => void
   appendDelta: (
@@ -240,6 +249,12 @@ export const useChatStore = create<ChatStore>((set) => ({
   sendError: null,
   inputRequests: [],
   settledInputRequestIds: [],
+  addressedAgentByChat: {},
+
+  setAddressedAgent: (chatId, agentId) =>
+    set((state) => ({
+      addressedAgentByChat: { ...state.addressedAgentByChat, [chatId]: agentId }
+    })),
 
   setActiveChatId: (id) =>
     set({
@@ -450,6 +465,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       streamedIncrementallyChatId: null,
       sendError: null,
       inputRequests: [],
-      settledInputRequestIds: []
+      settledInputRequestIds: [],
+      addressedAgentByChat: {}
     })
 }))

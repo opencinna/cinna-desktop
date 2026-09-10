@@ -3,6 +3,7 @@ import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
 import type { JobSyncManifest } from '../../shared/sync'
+import type { ChatRouter } from '../../shared/chatRouting'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -114,12 +115,18 @@ export const chats = sqliteTable('chats', {
   modeId: text('mode_id'),
   agentId: text('agent_id'),
   /**
-   * True when the local model conducts this chat, calling attached agents/MCPs
-   * as tools. Set at creation (multi-counterparty new chat) or at in-chat
-   * promotion (a second counterparty `@`-mentioned into a direct-A2A or plain
-   * LLM chat). Stable across chip add/remove so the chat never silently reverts
-   * to direct routing. Always false for single-agent (direct A2A) and plain
-   * LLM chats.
+   * Who answers a message in this chat — `direct` (the bound agent, or the
+   * local model when `agentId` is null), `human` (several agents, the user
+   * addresses one per message), or `coordinator` (the local model conducts,
+   * calling agents and MCP servers as tools). See `src/shared/chatRouting.ts`,
+   * which is the only place the value is interpreted.
+   */
+  router: text('router').$type<ChatRouter>().notNull().default('direct'),
+  /**
+   * The previous shape of {@link router}, kept as a **mirror** for one phase:
+   * `orchestrated` is exactly `router === 'coordinator'` and is written by the
+   * same repo call. Nothing decides anything from it any more — a downgrade to
+   * the build before phase 4 is the only reader left, and phase 7 drops it.
    */
   orchestrated: integer('orchestrated', { mode: 'boolean' }).notNull().default(false),
   /**
@@ -540,7 +547,33 @@ export const jobRuns = sqliteTable('job_runs', {
  * Tracks each agent's catch-up cursor per chat — the last message id that has
  * already been replayed to that agent. Catch-up packets start from the next
  * message after this cursor.
+ *
+ * What makes a `human` chat work: when the user addresses agent B after agent A
+ * answered, B's driver is handed the thread it missed ahead of the user's text.
+ * The cursor advances only when a turn **completes**, so a failed or cancelled
+ * turn leaves the same gap for the retry to carry.
+ *
+ * A row exists only once an agent has taken a turn in the chat. No row means
+ * "has seen nothing", which is what the first turn's whole-thread packet is.
  */
+export const chatAgentCursors = sqliteTable(
+  'chat_agent_cursors',
+  {
+    chatId: text('chat_id')
+      .notNull()
+      .references(() => chats.id, { onDelete: 'cascade' }),
+    agentId: text('agent_id')
+      .notNull()
+      .references(() => agents.id, { onDelete: 'cascade' }),
+    /** The last message this agent has been shown. Null while it has seen none. */
+    lastMessageId: text('last_message_id'),
+    updatedAt: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .$defaultFn(() => new Date())
+  },
+  (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
+)
+
 /**
  * Local-store backed attachments. One row per file the user picked into a
  * chat composer where the destination is a raw LLM (no Cinna backend in the

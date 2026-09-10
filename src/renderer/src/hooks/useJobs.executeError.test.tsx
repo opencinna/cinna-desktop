@@ -49,7 +49,7 @@ vi.mock('../stores/chat.store', () => ({
     sel({ setActiveChatId: () => undefined })
 }))
 vi.mock('./useChatStream', () => ({
-  useChatStream: () => ({ startLlm: vi.fn(), startAgent: vi.fn() })
+  useChatStream: () => ({ startRun: vi.fn(), cancel: vi.fn() })
 }))
 vi.mock('./useChatModes', () => ({ useChatModes: () => ({ data: [] }) }))
 vi.mock('./useProviders', () => ({ useProviders: () => ({ data: [] }) }))

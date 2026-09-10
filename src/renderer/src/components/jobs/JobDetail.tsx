@@ -13,8 +13,8 @@ import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useCinnaAgents } from '../../hooks/useCinna'
 import { getPreset } from '../../constants/chatModeColors'
-import { derivePattern } from '../../../../shared/commPattern'
-import { CommPatternBadge } from '../chat/CommPatternBadge'
+import { newChatRouter } from '../../../../shared/chatRouting'
+import { RouterBadge } from '../chat/RouterBadge'
 import { JobRunRow } from './JobRunRow'
 import type { JobDetailData } from '../../../../shared/jobs'
 import type { JobDependencyStatus as JobDependencyStatusDto } from '../../../../shared/sync'
@@ -252,7 +252,7 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
     [cinnaAgents, job.cinnaAgentId]
   )
 
-  const localPattern = derivePattern(job.agentIds, job.mcpProviderIds)
+  const localRouter = newChatRouter({ agentIds: job.agentIds, mcpIds: job.mcpProviderIds })
 
   const chips: React.ReactNode[] = []
 
@@ -310,18 +310,18 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
         <div className="border-t border-[var(--color-border)] pt-3 flex flex-wrap items-center gap-1.5">
           {chips}
           {/*
-            No badge on a blocked job. `derivePattern` reads the same join rows,
-            so for a job whose only agent could not resolve it is called as
-            `derivePattern([], [])` and returns `'AI'` — badging the job as a
-            plain local-LLM chat with no agents. That is the identical wrong
-            answer, from the identical function, on the identical empty array,
-            that `executeLocal` now refuses to *record*; it was still being
-            *displayed*. The honest pattern is unknowable here until the
+            No badge on a blocked job. `newChatRouter` reads the same join rows,
+            so for a job whose only agent could not resolve it is called on two
+            empty arrays and answers `'direct'` — badging the job as a plain
+            local-LLM chat with no agents. That is the identical wrong answer,
+            from the identical function, on the identical empty array, that
+            `executeLocal` now refuses to *record*; it was still being
+            *displayed*. The honest router is unknowable here until the
             dependency resolves, so nothing is claimed.
           */}
           {job.type === 'local' && !job.incompleteSetup && (
             <div className="ml-auto">
-              <CommPatternBadge pattern={localPattern} />
+              <RouterBadge router={localRouter} />
             </div>
           )}
         </div>

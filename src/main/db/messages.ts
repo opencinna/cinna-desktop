@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { and, asc, eq, desc, sql } from 'drizzle-orm'
+import { and, asc, eq, desc, isNotNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { messages, chats } from './schema'
 import type { MessagePart } from '../../shared/messageParts'
@@ -237,5 +237,42 @@ export const messageRepo = {
       .orderBy(asc(messages.sortOrder))
       .limit(1)
       .get()
+  },
+
+  /** The id of the newest message in a chat — where an agent's catch-up cursor lands. */
+  lastId(chatId: string): string | null {
+    const row = getDb()
+      .select({ id: messages.id })
+      .from(messages)
+      .where(eq(messages.chatId, chatId))
+      .orderBy(desc(messages.sortOrder))
+      .limit(1)
+      .get()
+    return row?.id ?? null
+  },
+
+  /**
+   * The agent the most recent user message addressed, or null.
+   *
+   * The sticky default in a `human`-routed chat: a message that names nobody
+   * goes to whoever the user was last talking to. Read from the messages rather
+   * than kept on the chat row, because the transcript is already the record and
+   * a second copy of it could disagree with what the user can see.
+   */
+  lastAddressedAgentId(chatId: string): string | null {
+    const row = getDb()
+      .select({ agentId: messages.addressedAgentId })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.chatId, chatId),
+          eq(messages.role, 'user'),
+          isNotNull(messages.addressedAgentId)
+        )
+      )
+      .orderBy(desc(messages.sortOrder))
+      .limit(1)
+      .get()
+    return row?.agentId ?? null
   }
 }

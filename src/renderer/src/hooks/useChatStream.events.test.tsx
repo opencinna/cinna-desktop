@@ -96,8 +96,7 @@ interface Row<E> {
 // ---------------------------------------------------------------------------
 
 let client: QueryClient
-let llmSend: ReturnType<typeof vi.fn>
-let agentSend: ReturnType<typeof vi.fn>
+let runSend: ReturnType<typeof vi.fn>
 let statusGet: ReturnType<typeof vi.fn>
 let consoleError: ReturnType<typeof vi.spyOn>
 
@@ -105,13 +104,12 @@ beforeEach(() => {
   client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   })
-  llmSend = vi.fn()
-  agentSend = vi.fn()
+  runSend = vi.fn()
   statusGet = vi.fn().mockResolvedValue({ success: true, item: null })
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
-    llm: { sendMessage: llmSend, cancel: vi.fn() },
-    agents: { sendMessage: agentSend, cancelMessage: vi.fn() },
+    run: { send: runSend, cancel: vi.fn() },
+    agents: { checkReadiness: vi.fn().mockResolvedValue(null) },
     agentStatus: { list: vi.fn().mockResolvedValue({ success: true, items: [] }), get: statusGet },
     chat: { get: vi.fn() }
   }
@@ -162,21 +160,33 @@ async function flush(): Promise<void> {
   })
 }
 
-/** Mount the hook, send once, and return the stream callback `window.api` was handed. */
+/**
+ * Mount the hook, send once, and return the stream callback `window.api` was
+ * handed.
+ *
+ * One channel now (`run:send`), so the two paths differ only in who the caller
+ * says will answer — which is what decides whether the post-turn agent
+ * bookkeeping runs. The tables below still drive both, because the claim is
+ * that the vocabulary lands identically either way.
+ */
 function mount(path: 'llm' | 'agent'): (event: RunEvent) => void {
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
   const { result } = renderHook(() => useChatStream(), { wrapper })
 
   act(() => {
-    if (path === 'llm') result.current.startLlm(CHAT_ID, 'hello')
-    else result.current.startAgent(AGENT_ID, CHAT_ID, 'hello')
+    result.current.startRun(
+      CHAT_ID,
+      'hello',
+      path === 'llm'
+        ? { target: { kind: 'model' } }
+        : { target: { kind: 'agent', agentId: AGENT_ID } }
+    )
   })
-  const send = path === 'llm' ? llmSend : agentSend
-  expect(send).toHaveBeenCalledTimes(1)
+  expect(runSend).toHaveBeenCalledTimes(1)
   // The optimistic bubble is set by the send, before any event arrives.
   expect(useChatStore.getState().pendingUserMessage).toEqual(PENDING)
-  return send.mock.calls[0][path === 'llm' ? 2 : 3] as (event: RunEvent) => void
+  return runSend.mock.calls[0][2] as (event: RunEvent) => void
 }
 
 async function runRow(path: 'llm' | 'agent', row: Row<RunEvent>): Promise<void> {
@@ -1023,14 +1033,15 @@ const LLM_ROWS: Row<RunEvent>[] = [
   }
 ]
 
-// Both tables stay: they drive `handleRun` through the two different send paths.
-describe('useChatStream — handleRun via startAgent, one row per event', () => {
+// Both tables stay: they drive `handleRun` for a turn an agent answers and one
+// the model answers, which is what the two used to be.
+describe('useChatStream — handleRun for an agent turn, one row per event', () => {
   it.each(AGENT_ROWS)('$name', async (row) => {
     await runRow('agent', row)
   })
 })
 
-describe('useChatStream — handleRun via startLlm, one row per event', () => {
+describe('useChatStream — handleRun for a model turn, one row per event', () => {
   it.each(LLM_ROWS)('$name', async (row) => {
     await runRow('llm', row)
   })

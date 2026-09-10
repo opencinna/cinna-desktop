@@ -23,7 +23,7 @@ import { useModels } from '../../hooks/useModels'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useNewChatFlow, resolveModel } from '../../hooks/useNewChatFlow'
 import { useApplyChatMode } from '../../hooks/useApplyChatMode'
-import { derivePattern } from '../../../../shared/commPattern'
+import { newChatRouter } from '../../../../shared/chatRouting'
 import { getPreset } from '../../constants/chatModeColors'
 import type { ChatModeData } from '../../constants/chatModeColors'
 import { Sparkles } from 'lucide-react'
@@ -126,24 +126,35 @@ export function MainArea(): React.JSX.Element {
   // both the routing decision and the badge.
   const combinedAgentIds = pendingAgentIds
 
-  const commPatternInfo = useMemo(() => {
+  // The router this selection would create — the same call `startNewChat`
+  // makes, so the badge cannot promise a shape the send does not build.
+  const newRouter = useMemo(
+    () => newChatRouter({ agentIds: combinedAgentIds, mcpIds: pendingMcpIds }),
+    [combinedAgentIds, pendingMcpIds]
+  )
+
+  const routerInfo = useMemo(() => {
     if (combinedAgentIds.length === 0 && pendingMcpIds.length === 0) return undefined
-    const pattern = derivePattern(combinedAgentIds, pendingMcpIds)
-    const agentName =
-      combinedAgentIds.length === 1
-        ? (agentList ?? []).find((a) => a.id === combinedAgentIds[0])?.name
-        : undefined
+    const nameOf = (id: string | undefined): string | undefined =>
+      id ? (agentList ?? []).find((a) => a.id === id)?.name : undefined
     const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
     const modelName = resolvedModelId
       ? (allModels ?? []).find((m) => m.id === resolvedModelId)?.name ?? resolvedModelId
       : undefined
-    return { pattern, agentName, modelName }
-  }, [combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
+    return {
+      router: newRouter,
+      agentName: nameOf(combinedAgentIds[0]),
+      // The first agent picked is who `startNewChat` sends the first message to.
+      answererName: nameOf(combinedAgentIds[0]),
+      modelName
+    }
+  }, [newRouter, combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
   // The refusal an example prompt would meet: the same rule the composer
-  // applies to its single direct agent. Example prompts are never `/run:`.
-  const exampleRefusal =
-    commPatternInfo?.pattern === 'A2A' ? readinessRefusal(selectedAgent) : null
+  // applies to the agent a message goes straight to. Example prompts are never
+  // `/run:`, and a chat the model coordinates refuses nothing here — an
+  // agent's failure comes back to it as a tool result.
+  const exampleRefusal = newRouter !== 'coordinator' ? readinessRefusal(selectedAgent) : null
 
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setModeSelection(mode ? { id: mode.id } : 'none')
@@ -208,22 +219,20 @@ export function MainArea(): React.JSX.Element {
       attachments?: ComposerAttachment[],
       noteIds?: string[]
     ) => {
-      // A2A (one agent, no on-demand MCPs) binds the agent as root and needs
-      // no local model. Everything else — orchestrated (agents + tools) or a
-      // plain LLM chat — runs through the local model, so it requires a
-      // resolvable provider+model.
-      const isA2A = combinedAgentIds.length === 1 && pendingMcpIds.length === 0
+      // A chat an agent answers — `direct` with an agent, or `human` — needs no
+      // local model at all. Only a coordinated chat, or a plain chat with the
+      // model itself, requires a resolvable provider + model.
+      const needsModel = newRouter === 'coordinator' || combinedAgentIds.length === 0
       // No readiness guard here. The composer has already decided — it refuses
       // a send to an agent that is not ready, and lets a catalog `/run:`
       // through — and an example prompt is refused where it is clicked. A guard
       // here once dropped a `/run:` the composer had already cleared, silently.
       const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
       const hasModel = !!effectiveProviderId && !!resolvedModelId
-      const hasDestination = isA2A || hasModel
-      if (!hasDestination) {
+      if (needsModel && !hasModel) {
         setSendError(
           combinedAgentIds.length > 0
-            ? 'Orchestrated mode needs a local model — pick a chat mode or set a default in Settings.'
+            ? 'Letting the model coordinate needs a local model — pick a chat mode or set a default in Settings. Removing the MCP servers lets the agents answer you directly instead.'
             : "Can't send message — no agent, chat mode, or AI credentials are configured. Pick an agent or set a default chat mode in Settings."
         )
         return
@@ -392,7 +401,7 @@ export function MainArea(): React.JSX.Element {
           pendingAgentIds={pendingAgentIds}
           onTogglePendingAgent={togglePendingAgent}
           onRemovePendingAgent={removePendingAgent}
-          commPatternInfo={commPatternInfo}
+          routerInfo={routerInfo}
           onDoubleEscape={() => setPendingAgentIds([])}
           chatModeMenu={
             availableModes.length > 0

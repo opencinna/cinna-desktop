@@ -3,6 +3,7 @@ import { registerChatHandlers } from './chat.ipc'
 import { registerProviderHandlers } from './provider.ipc'
 import { registerMcpHandlers } from './mcp.ipc'
 import { registerLlmHandlers } from './llm.ipc'
+import { registerRunHandlers } from './run.ipc'
 import { registerChatModeHandlers } from './chatmode.ipc'
 import { registerAgentHandlers } from './agent.ipc'
 import { registerAgentStatusHandlers } from './agent_status.ipc'
@@ -31,6 +32,8 @@ export function registerAllIpcHandlers(): void {
   registerProviderHandlers()
   registerMcpHandlers()
   registerLlmHandlers()
+  // The one send channel, plus the two it replaced (kept as forwards for one phase).
+  registerRunHandlers()
   registerChatModeHandlers()
   registerAgentHandlers()
   registerAgentStatusHandlers()

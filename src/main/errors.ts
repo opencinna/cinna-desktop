@@ -37,6 +37,8 @@ export type ChatErrorCode =
   | 'not_configured'
   | 'adapter_unavailable'
   | 'not_activated'
+  /** A `chats.router` value this build does not have. Never reachable from the app's own UI. */
+  | 'invalid_router'
 
 export type ChatModeErrorCode = 'not_found' | 'read_only'
 

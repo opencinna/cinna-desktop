@@ -2,17 +2,19 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { ChatRouter } from '../../../../shared/chatRouting'
 
 /**
  * The composer refuses a send to an agent its driver says is not ready, and
  * says why.
  *
- * Refused: the agent a message goes straight to — the bound agent of a direct
- * agent chat, or a new chat's single agent when the routing badge says `A2A` —
- * when its readiness is an answer that is not `ok`. Not refused: an answer of
- * `null` (never checked, or a check that could not tell), an agent the local
- * model conducts as a tool, and a bare catalog `/run:` (a script on this
- * machine, not a turn). The line never depends on what is typed.
+ * Refused: the agent a message goes straight to — the one the chat's router
+ * answers with, or a new chat's first-picked agent when the router it would
+ * create is not `coordinator` — when its readiness is an answer that is not
+ * `ok`. Not refused: an answer of `null` (never checked, or a check that could
+ * not tell), an agent the local model conducts as a tool, and a bare catalog
+ * `/run:` (a script on this machine, not a turn). The line never depends on
+ * what is typed.
  */
 
 const agentList = vi.hoisted(() => ({ current: [] as unknown[] }))
@@ -116,12 +118,15 @@ function clientWith(chat: Record<string, unknown> | null): QueryClient {
   return client
 }
 
-function mountActive(target: Record<string, unknown>, orchestrated = false): void {
+function mountActive(target: Record<string, unknown>, router: ChatRouter = 'direct'): void {
   agentList.current = [target]
   chatDetail.current = {
     id: 'chat-1',
-    agentId: target.id,
-    orchestrated,
+    // A coordinated chat detaches its root, so the agent under test is only
+    // bound where the router is `direct` — the same shape the row has in the app.
+    agentId: router === 'direct' ? target.id : null,
+    router,
+    orchestrated: router === 'coordinator',
     modeId: null,
     providerId: null,
     modelId: null,
@@ -135,7 +140,7 @@ function mountActive(target: Record<string, unknown>, orchestrated = false): voi
 
 function mountNew(
   target: Record<string, unknown>,
-  pattern: 'A2A' | 'AI',
+  router: ChatRouter,
   onNewChat: (message: string) => void
 ): void {
   agentList.current = [target]
@@ -147,7 +152,7 @@ function mountNew(
       chatId: null,
       selectedAgent: target as never,
       pendingAgentIds: [target.id as string],
-      commPatternInfo: { pattern, agentName: 'Invoices' },
+      routerInfo: { router, agentName: 'Invoices', answererName: 'Invoices' },
       onNewChat
     }),
     { wrapper }
@@ -197,7 +202,7 @@ describe('composer readiness refusal', () => {
 
   it('refuses a new chat going straight to one agent that is not ready', () => {
     const onNewChat = vi.fn()
-    mountNew(agent(DOWN), 'A2A', onNewChat)
+    mountNew(agent(DOWN), 'direct', onNewChat)
     typeAndEnter('hello')
     expect(onNewChat).not.toHaveBeenCalled()
     expect(screen.getByText('Could not reach the agent.')).toBeTruthy()
@@ -206,7 +211,7 @@ describe('composer readiness refusal', () => {
 
   it('never refuses on an answer that has not come yet', () => {
     const onNewChat = vi.fn()
-    mountNew(agent(null), 'A2A', onNewChat)
+    mountNew(agent(null), 'direct', onNewChat)
     expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
     typeAndEnter('hello')
     expect(onNewChat).toHaveBeenCalledWith('hello', undefined, undefined)
@@ -214,7 +219,7 @@ describe('composer readiness refusal', () => {
 
   it('sends to an agent that is ready', () => {
     const onNewChat = vi.fn()
-    mountNew(agent({ state: 'ok', reason: null }), 'A2A', onNewChat)
+    mountNew(agent({ state: 'ok', reason: null }), 'direct', onNewChat)
     expect(screen.queryByRole('button', { name: 'Check again' })).toBeNull()
     typeAndEnter('hello')
     expect(onNewChat).toHaveBeenCalledTimes(1)
@@ -222,14 +227,14 @@ describe('composer readiness refusal', () => {
 
   it('does not refuse when the local model conducts the agent as a tool', () => {
     const onNewChat = vi.fn()
-    mountNew(agent(DOWN), 'AI', onNewChat)
+    mountNew(agent(DOWN), 'coordinator', onNewChat)
     expect(screen.queryByText('Could not reach the agent.')).toBeNull()
     typeAndEnter('hello')
     expect(onNewChat).toHaveBeenCalledTimes(1)
   })
 
-  it('does not refuse an orchestrated chat whose root agent is not ready', () => {
-    mountActive(agent(DOWN), true)
+  it('does not refuse a coordinated chat whose agent is not ready', () => {
+    mountActive(agent(DOWN), 'coordinator')
     expect(screen.queryByText('Could not reach the agent.')).toBeNull()
     fireEvent.change(screen.getByRole('combobox'), { target: { value: 'hello' } })
     expect(send().disabled).toBe(false)
@@ -246,19 +251,19 @@ describe('composer readiness refusal', () => {
   })
 
   it('gives the reason a line of its own under the controls row, so it never takes the chips’ width', () => {
-    mountNew(agent(DOWN), 'A2A', vi.fn())
+    mountNew(agent(DOWN), 'direct', vi.fn())
     const reason = screen.getByText('Could not reach the agent.')
     const line = reason.closest('[data-readiness-line]') as HTMLElement
     expect(line).toBeTruthy()
     // The controls row holds the + menu, the chips, the badge and Send.
     const controlsRow = send().parentElement!.parentElement!
-    expect(controlsRow.contains(screen.getByRole('status', { name: 'Direct A2A connection' }))).toBe(true)
+    expect(controlsRow.contains(screen.getByRole('status', { name: 'Direct agent connection' }))).toBe(true)
     expect(controlsRow.contains(reason)).toBe(false)
     expect(controlsRow.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('keeps the line’s space for a direct agent that is ready, so a refusal arriving moves nothing', () => {
-    mountNew(agent({ state: 'ok', reason: null }), 'A2A', vi.fn())
+    mountNew(agent({ state: 'ok', reason: null }), 'direct', vi.fn())
     const line = document.querySelector('[data-readiness-line]') as HTMLElement
     expect(line).toBeTruthy()
     expect(line.className).toContain('h-4')
@@ -266,7 +271,7 @@ describe('composer readiness refusal', () => {
   })
 
   it('reserves no line where nothing can be refused', () => {
-    mountNew(agent(DOWN), 'AI', vi.fn())
+    mountNew(agent(DOWN), 'coordinator', vi.fn())
     expect(document.querySelector('[data-readiness-line]')).toBeNull()
   })
 
@@ -289,7 +294,7 @@ describe('composer readiness refusal', () => {
   describe('a catalog /run: always runs', () => {
     it('lets a bare /run: through to a folder agent that is not ready', () => {
       const onNewChat = vi.fn()
-      mountNew(catalogAgent(DOWN), 'A2A', onNewChat)
+      mountNew(catalogAgent(DOWN), 'direct', onNewChat)
       typeAndEnter('/run:check')
       expect(onNewChat).toHaveBeenCalledWith('/run:check', undefined, undefined)
     })
@@ -303,7 +308,7 @@ describe('composer readiness refusal', () => {
 
     it('still refuses a message that only starts with /run:', () => {
       const onNewChat = vi.fn()
-      mountNew(catalogAgent(DOWN), 'A2A', onNewChat)
+      mountNew(catalogAgent(DOWN), 'direct', onNewChat)
       typeAndEnter('/run:check please')
       expect(onNewChat).not.toHaveBeenCalled()
       expect(send().disabled).toBe(true)
@@ -311,7 +316,7 @@ describe('composer readiness refusal', () => {
 
     it('still refuses /run: to an agent whose commands are not a folder catalog', () => {
       const onNewChat = vi.fn()
-      mountNew(agent(DOWN), 'A2A', onNewChat)
+      mountNew(agent(DOWN), 'direct', onNewChat)
       typeAndEnter('/run:check')
       expect(onNewChat).not.toHaveBeenCalled()
     })

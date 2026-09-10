@@ -20,7 +20,7 @@ import { chatModeRepo } from '../db/chatModes'
 import { agentRepo } from '../db/agents'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
-import { derivePattern } from '../../shared/commPattern'
+import { newChatRouter, routingOf } from '../../shared/chatRouting'
 import type { JobRunOrigin } from '../../shared/jobs'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
@@ -426,13 +426,22 @@ export const jobService = {
    * up the persisted state so the stream-completion hook can flip the run
    * status when the first assistant turn finishes.
    *
-   * The same `derivePattern` decision the new-chat composer uses routes the
-   * run: exactly one agent and no MCPs → direct A2A (the agent is bound as the
-   * chat root, returned as `agentId` so the renderer calls `startAgent`).
-   * Anything else → an LLM-root chat (agents/MCPs attached on-demand,
-   * `orchestrated` set when agents are present, `agentId` null so the renderer
-   * calls `startLlm`). The return contract is unchanged: a non-null `agentId`
-   * means A2A, null means orchestrated/plain-LLM.
+   * The same `newChatRouter` decision the new-chat composer makes routes the
+   * run. One agent and no MCPs binds that agent as the chat's root (`direct`);
+   * several agents make a chat the user routes by hand (`human`); agents mixed
+   * with MCP servers need the model to coordinate.
+   *
+   * A `human` run addresses **one** of the job's agents — the first of
+   * `jobAgentRepo.listAgentIds`, which is stable but arbitrary, because
+   * `job_agents` records no order (see its own docstring). That is honest
+   * rather than ideal: a run is one prompt, so it has to pick somebody, and the
+   * user routes the rest of the conversation in the chat it spawns. Phase 5
+   * replaces this with a task, which is where a job that means to address a
+   * particular agent will be able to say so.
+   *
+   * `agentId` in the return is who the **first message** goes to, null when
+   * that is the local model. Phase 5 replaces this with a task, so nothing more
+   * elaborate is attempted here.
    */
   executeLocal(
     userId: string,
@@ -460,8 +469,8 @@ export const jobService = {
     // an agent that isn't on this device leaves no row and no trace. The
     // `missing_dependency` throw further down compares those rows against
     // themselves and is therefore blind to it — both sides are `[]` — and the
-    // run went ahead with no agent, `derivePattern` answered `'AI'`, and a
-    // plain-LLM chat reported success. The manifest is the only record that the
+    // run went ahead with no agent, the router answered "a chat with the local
+    // model", and a plain-LLM chat reported success. The manifest is the only record that the
     // agent was ever part of this job, so the manifest is what gets asked.
     //
     // The whole explanation goes in the *message* on purpose. A `DomainError`'s
@@ -529,27 +538,39 @@ export const jobService = {
       }
     }
 
-    const isA2A = derivePattern(existingAgentIds, filteredMcpIds) === 'A2A'
+    const router = newChatRouter({ agentIds: existingAgentIds, mcpIds: filteredMcpIds })
+    const rootAgentId = router === 'direct' ? (existingAgentIds[0] ?? null) : null
+    const answerer = routingOf({ router, agentId: rootAgentId }).answerer()
+    // Who takes the first message: the root, or — in a chat the user routes —
+    // the first agent attached, matching `startNewChat`.
+    const firstAnswerer = router === 'coordinator' ? null : (existingAgentIds[0] ?? null)
 
     const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({
       userId,
       jobId,
       title: job.title,
       prompt: job.prompt,
-      rootAgentId: isA2A ? existingAgentIds[0] : null,
-      orchestrated: !isA2A && existingAgentIds.length > 0,
+      rootAgentId,
+      router,
       modeId: job.modeId,
       providerId: mode?.providerId ?? null,
       modelId: mode?.modelId ?? null,
-      onDemandAgentIds: isA2A ? [] : existingAgentIds,
-      onDemandMcpIds: isA2A ? [] : filteredMcpIds
+      // The root is the chat's own counterparty, not one of its attached
+      // agents; everything else is attached.
+      onDemandAgentIds: existingAgentIds.filter((id) => id !== rootAgentId),
+      // The MCP servers are the **model's** tools; an agent cannot call them.
+      // So they are attached whenever the model is the one answering — which
+      // `router === 'coordinator'` does not cover: a job with connectors and no
+      // agent at all is `direct`, to the model, and dropping its servers there
+      // would run it toolless and report success.
+      onDemandMcpIds: answerer.kind === 'model' ? filteredMcpIds : []
     })
 
     logger.info('job executed (local)', {
       jobId,
       chatId,
       runId,
-      pattern: isA2A ? 'A2A' : 'AI',
+      router,
       agents: existingAgentIds.length,
       mcps: filteredMcpIds.length
     })
@@ -558,7 +579,7 @@ export const jobService = {
       chatId,
       runId,
       prompt: job.prompt,
-      agentId: isA2A ? existingAgentIds[0] : null,
+      agentId: firstAnswerer,
       modeId: job.modeId
     }
   },

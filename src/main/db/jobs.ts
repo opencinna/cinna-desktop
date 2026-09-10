@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid'
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { syncRepo } from './sync'
+import type { ChatRouter } from '../../shared/chatRouting'
 import {
   jobs,
   jobFolders,
@@ -600,11 +601,22 @@ export const jobMcpRepo = {
 }
 
 export const jobAgentRepo = {
+  /**
+   * The job's agents, in a **stable but arbitrary** order.
+   *
+   * `job_agents` records no order — it is a set with a composite primary key
+   * and no timestamp — so there is no "first agent the user picked" to return,
+   * and `executeLocal` addressing "the first" means the first of this list, not
+   * of anything the user did. Sorted explicitly so that at least the same job
+   * runs the same way twice; giving the table a real order belongs with phase
+   * 5, which replaces this path with a task.
+   */
   listAgentIds(jobId: string): string[] {
     return getDb()
       .select({ id: jobAgents.agentId })
       .from(jobAgents)
       .where(eq(jobAgents.jobId, jobId))
+      .orderBy(asc(jobAgents.agentId))
       .all()
       .map((r) => r.id)
   },
@@ -736,18 +748,19 @@ export const jobRunsRepo = {
     title: string
     prompt: string
     /**
-     * Bound root agent for direct-A2A runs (one agent, no MCPs). Null for
-     * orchestrated / plain-LLM runs, where agents are attached on-demand.
+     * Bound root agent for a `direct` run (one agent, no MCPs). Null for every
+     * other router, where the agents are attached rather than bound.
      */
     rootAgentId: string | null
-    /** True when the local model conducts attached agents/MCPs as tools. */
-    orchestrated: boolean
+    /** Who answers in the spawned chat — see `src/shared/chatRouting.ts`. */
+    router: ChatRouter
     modeId: string | null
     providerId: string | null
     modelId: string | null
     /**
-     * Agents the orchestrator should call as tools — written to
-     * `chat_on_demand_agents` (empty in the direct-A2A case).
+     * Agents attached to the chat — written to `chat_on_demand_agents`. The
+     * coordinator calls them as tools; a `human` chat addresses one per
+     * message. Empty when the run's single agent is the chat's root.
      */
     onDemandAgentIds: string[]
     /**
@@ -769,7 +782,10 @@ export const jobRunsRepo = {
           providerId: input.providerId,
           modeId: input.modeId,
           agentId: input.rootAgentId,
-          orchestrated: input.orchestrated,
+          router: input.router,
+          // The mirror, written by the same statement that writes the router —
+          // see the column's comment in `schema.ts`.
+          orchestrated: input.router === 'coordinator',
           originatingJobRunId: null,
           // Job-spawned chats are hidden from the chat list by default; the
           // user can promote them via the "Move to Chats" button on the run.

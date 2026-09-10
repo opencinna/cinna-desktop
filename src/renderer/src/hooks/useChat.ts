@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
-import { useCallback, useEffect } from 'react'
-import { useChatStream } from './useChatStream'
+import { useEffect } from 'react'
+import { routerOf, type ChatRouter } from '../../../shared/chatRouting'
 
 export function useChatList() {
   const queryClient = useQueryClient()
@@ -122,7 +122,7 @@ export function useUpdateChat() {
       updates
     }: {
       chatId: string
-      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; orchestrated?: boolean }
+      updates: { title?: string; modelId?: string; providerId?: string; agentId?: string | null; modeId?: string | null; router?: ChatRouter }
     }) => window.api.chat.update(chatId, updates),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['chats'] })
@@ -131,38 +131,44 @@ export function useUpdateChat() {
 }
 
 /**
- * Promote a chat to orchestrated mode (local model conducts agents-as-tools).
- * Used by the in-chat `@`-agent gesture when adding a second counterparty to a
- * direct-A2A or plain LLM chat. Invalidates the chat detail (root agent detach
- * + orchestrated flag), its on-demand agent set (former root re-added as a
- * tool), and the chat list (model/title surfaces).
+ * Move a chat onto a router — who answers a message here.
+ *
+ * Replaced `usePromoteToOrchestrated`, which went one way to one value. The
+ * in-chat `@`-agent gesture uses it (see `useAttachAgentToChat`), and so will
+ * the composer's coordinate toggle. Invalidates the chat detail (the router,
+ * and the root agent it detaches or binds), its on-demand agent set, and the
+ * chat list.
  */
-export function usePromoteToOrchestrated() {
+export function useSetChatRouter() {
   const queryClient = useQueryClient()
   type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
   return useMutation({
-    mutationFn: (chatId: string) => window.api.chat.promoteToOrchestrated(chatId),
-    // Optimistically flip the cached chat to orchestrated (and detach the root
-    // agent) before the round-trip resolves. Without this, picking an agent
-    // then immediately pressing Enter races the refetch — `composer.submit`
-    // would read the pre-promotion snapshot and route the send to the old root
-    // agent over direct A2A instead of the orchestrator.
-    onMutate: async (chatId) => {
+    mutationFn: ({ chatId, router }: { chatId: string; router: ChatRouter }) =>
+      window.api.chat.setRouter(chatId, router),
+    // Optimistically move the cached chat before the round-trip resolves.
+    // Without this, picking an agent then immediately pressing Enter races the
+    // refetch — the composer would read the pre-switch snapshot and send to the
+    // old root agent rather than to the one the user just addressed.
+    onMutate: async ({ chatId, router }) => {
       await queryClient.cancelQueries({ queryKey: ['chat', chatId] })
       const prev = queryClient.getQueryData<CachedChat>(['chat', chatId])
       if (prev) {
         queryClient.setQueryData<CachedChat>(['chat', chatId], {
           ...prev,
-          orchestrated: true,
-          agentId: null
+          router,
+          orchestrated: router === 'coordinator',
+          // Only the way *out* of `direct` is guessed here. Arriving at it binds
+          // a root the renderer would have to pick, and the settle below is
+          // soon enough for a transition nothing races.
+          agentId: routerOf(prev) === 'direct' ? null : prev.agentId
         })
       }
       return { prev }
     },
-    onError: (_err, chatId, ctx) => {
+    onError: (_err, { chatId }, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(['chat', chatId], ctx.prev)
     },
-    onSettled: (_data, _err, chatId) => {
+    onSettled: (_data, _err, { chatId }) => {
       queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       queryClient.invalidateQueries({ queryKey: ['chat-on-demand-agent', chatId] })
       queryClient.invalidateQueries({ queryKey: ['chats'] })
@@ -170,22 +176,4 @@ export function usePromoteToOrchestrated() {
   })
 }
 
-export function useSendMessage() {
-  const activeChatId = useChatStore((s) => s.activeChatId)
-  const { startLlm, startAgent } = useChatStream()
 
-  return useCallback(
-    async (content: string) => {
-      if (!activeChatId) return
-      const chatId = activeChatId
-
-      const session = await window.api.agents.getSession(chatId)
-      if (session) {
-        startAgent(session.agentId, chatId, content)
-        return
-      }
-      startLlm(chatId, content)
-    },
-    [activeChatId, startAgent, startLlm]
-  )
-}

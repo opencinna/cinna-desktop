@@ -1,6 +1,8 @@
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
 import { chatService } from '../services/chatService'
+import { ChatError } from '../errors'
+import { isChatRouter, type ChatRouter } from '../../shared/chatRouting'
 import { ipcHandle } from './_wrap'
 
 export function registerChatHandlers(): void {
@@ -65,10 +67,18 @@ export function registerChatHandlers(): void {
         providerId?: string
         modeId?: string | null
         agentId?: string | null
-        orchestrated?: boolean
+        router?: ChatRouter
       }
     ) => {
       userActivation.requireActivated()
+      // Validated here as well as on `chat:set-router`, and for the same
+      // reason: this channel writes the column too (a new chat sets several
+      // fields at once), and a value neither guard caught would leave a chat
+      // whose router matches nothing and whose messages route to the model by
+      // the fallback, silently.
+      if (updates.router !== undefined && !isChatRouter(updates.router)) {
+        throw new ChatError('invalid_router', `Unknown chat router: ${String(updates.router)}`)
+      }
       chatService.update(getProfileScopeUserId(), chatId, updates)
       return { success: true }
     }
@@ -152,9 +162,19 @@ export function registerChatHandlers(): void {
     }
   )
 
-  ipcHandle('chat:promote-to-orchestrated', async (_event, chatId: string) => {
+  /**
+   * Move a chat onto a router. The value is validated here rather than trusted:
+   * `chats.router` is read by the send path to decide who answers, and a
+   * renderer bug or a stale preload writing `'orchestrated'` would leave a chat
+   * whose router matches nothing and whose messages route to the model by the
+   * fallback, silently.
+   */
+  ipcHandle('chat:set-router', async (_event, chatId: string, router: string) => {
     userActivation.requireActivated()
-    chatService.promoteToOrchestrated(getProfileScopeUserId(), chatId)
+    if (!isChatRouter(router)) {
+      throw new ChatError('invalid_router', `Unknown chat router: ${String(router)}`)
+    }
+    chatService.setRouter(getProfileScopeUserId(), chatId, router)
     return { success: true }
   })
 }

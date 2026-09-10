@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
-import { useChatDetail } from '../../hooks/useChat'
+import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
+import { useModels } from '../../hooks/useModels'
 import { useChatStream } from '../../hooks/useChatStream'
 import { useChatStore } from '../../stores/chat.store'
 import { useAuthStore } from '../../stores/auth.store'
@@ -11,7 +12,7 @@ import { AgentMcpMentionPopup, type AgentMcpItem } from './AgentMcpMentionPopup'
 import { ExamplePromptPopup } from './ExamplePromptPopup'
 import { CliCommandPopup } from './CliCommandPopup'
 import { NoteMentionPopup } from './NoteMentionPopup'
-import { useAgents, useAttachAgentToChat } from '../../hooks/useAgents'
+import { useAgents, useAttachAgentToChat, useChatOnDemandAgents } from '../../hooks/useAgents'
 import { useHasAttachDestination } from '../../hooks/useAttachDestination'
 import { useCliCommands, type CliCommand } from '../../hooks/useCliCommands'
 import { useMcpProviders, useAddOnDemandMcp, useChatMcpProviders } from '../../hooks/useMcp'
@@ -27,8 +28,9 @@ import { MentionPopup } from './MentionPopup'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { ActiveMcpChips } from './ActiveMcpChips'
 import { OnDemandAgentChips } from './OnDemandAgentChips'
-import { CommPatternBadge } from './CommPatternBadge'
-import type { CommPattern } from '../../../../shared/commPattern'
+import { RouterBadge, type RouterBadgeInfo } from './RouterBadge'
+import { routingOf } from '../../../../shared/chatRouting'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { AttachmentList } from './AttachmentBadge'
 import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
@@ -74,19 +76,20 @@ interface ChatInputProps {
   baselineMcpIds?: string[]
   /**
    * New-chat agent engagement buffer — symmetric to `pendingMcpIds`. The `@`
-   * popup routes *every* agent pick here (orchestrated-mode tool set). The
-   * buffer is flushed onto `chat_on_demand_agents` (or bound as the A2A root
-   * when it's the sole selection with no MCPs) inside `startNewChat`.
+   * popup routes *every* agent pick here. The buffer is flushed onto
+   * `chat_on_demand_agents` (or bound as the chat's root when it's the sole
+   * selection with no MCPs) inside `startNewChat`.
    */
   pendingAgentIds?: string[]
   onTogglePendingAgent?: (agentId: string) => void
   onRemovePendingAgent?: (agentId: string) => void
   /**
-   * Communication-pattern badge state for the new-chat composer (A2A vs
-   * orchestrated AI). Rendered immediately left of the chat-mode Cog. Absent
-   * ⇒ no badge (e.g. nothing selected yet, or an active chat).
+   * Who would answer, for the **new-chat** composer — the router the current
+   * selection resolves to. Rendered at the right end of the controls row, left
+   * of Send. Absent ⇒ no badge (nothing selected yet). An active chat needs no
+   * prop: the composer reads its router off the chat row itself.
    */
-  commPatternInfo?: { pattern: CommPattern; agentName?: string; modelName?: string }
+  routerInfo?: RouterBadgeInfo
   /** Fired when the user presses ESC twice in quick succession with no popup open. */
   onDoubleEscape?: () => void
   /**
@@ -148,7 +151,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     pendingAgentIds,
     onTogglePendingAgent,
     onRemovePendingAgent,
-    commPatternInfo,
+    routerInfo,
     onDoubleEscape,
     tildeModePopup
   },
@@ -177,6 +180,41 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const hasAnyDestination = useHasAttachDestination()
   const listboxId = useId()
 
+  // Who answers in this chat, and who answers *next* — the one routing read the
+  // composer makes, from the shared helper main's send path uses. Everything
+  // downstream (the upload scope, the readiness refusal, the badge, the chips)
+  // reads this rather than asking about `agentId` and `orchestrated` again.
+  const chatRouting = useMemo(() => routingOf(chatData ?? {}), [chatData])
+  const { data: onDemandAgentRows } = useChatOnDemandAgents(chatId)
+  const attachedAgentIds = useMemo(
+    () => (onDemandAgentRows ?? []).map((row) => row.agentId),
+    [onDemandAgentRows]
+  )
+  // The sticky default: whoever the last user message was addressed to. Read
+  // from the transcript, which is what main reads too.
+  const lastAddressedAgentId = useMemo(() => {
+    for (let i = (chatData?.messages ?? []).length - 1; i >= 0; i--) {
+      const message = chatData!.messages[i]
+      if (message.role === 'user' && message.addressedAgentId) return message.addressedAgentId
+    }
+    return null
+  }, [chatData])
+  const addressedAgentId = useChatStore((state) =>
+    chatId ? state.addressedAgentByChat[chatId] : undefined
+  )
+  const setAddressedAgent = useChatStore((state) => state.setAddressedAgent)
+  const setSendError = useChatStore((state) => state.setSendError)
+  const { data: models } = useModels()
+  const answerTarget = useMemo(
+    () =>
+      chatRouting.answerer({
+        addressed: addressedAgentId,
+        lastAddressed: lastAddressedAgentId,
+        attached: attachedAgentIds
+      }),
+    [chatRouting, addressedAgentId, lastAddressedAgentId, attachedAgentIds]
+  )
+
   // Model capability drives both gating (show/hide the [+]) and scope
   // selection for the local-vs-cinna upload split below. Read off the chat
   // detail so a model swap mid-chat re-evaluates immediately.
@@ -189,15 +227,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   // Composer-local attachment buffer + IPC wiring. Hook owns staleness so
   // switching chats mid-upload (or after a clear) won't repopulate state
   // when the upload eventually resolves. See `useChatAttachments` for the
-  // generation-ref trick. `scope` is decided below — Cinna for remote-agent
-  // targets, local for raw LLM chats.
-  const attachScope: 'cinna' | 'local' = useMemo(() => {
-    if (!chatId) return 'cinna'
-    // Direct-A2A chats (agent root, not orchestrated) upload to the Cinna
-    // backend; orchestrated and plain LLM chats use the local store.
-    if (chatData?.agentId && !chatData?.orchestrated) return 'cinna'
-    return 'local'
-  }, [chatId, chatData?.agentId, chatData?.orchestrated])
+  // generation-ref trick.
+  //
+  // The scope: a message an agent answers uploads to the Cinna backend, one the
+  // local model answers uses the local store. Asked of the chat's router rather
+  // than re-derived here — see `src/shared/chatRouting.ts`. Whether an attach
+  // button is offered at all is a separate question, asked of the target
+  // agent's `capabilities.attachments` further down.
+  const attachScope: 'cinna' | 'local' = chatId ? chatRouting.attachmentTarget : 'cinna'
   const {
     attachments: pendingAttachments,
     isUploading,
@@ -208,8 +245,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     clear: clearPendingAttachments,
     setError: setAttachError
   } = useChatAttachments(chatId, attachScope)
-  // Routing chokepoint: decides direct-A2A vs orchestrated/LLM dispatch from a
-  // fresh cache snapshot at submit time.
+  // The send. Who answers is main's decision, from `chats.router`; the composer
+  // only says which agent the user addressed.
   const composer = useChatComposer(chatId)
 
   const clearComposer = useCallback(() => {
@@ -324,9 +361,9 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [allMcps]
   )
   const addOnDemandMcp = useAddOnDemandMcp()
-  // In-chat `@`-agent gesture: attach the agent as an orchestrated tool,
-  // promoting a direct-A2A or plain LLM chat on the first pick. Owns the
-  // promote→add→error sequence so the view stays declarative.
+  // In-chat `@`-agent gesture: bring another agent into the chat, moving it
+  // onto the router that shape needs. Owns the switch→add→error sequence so the
+  // view stays declarative.
   const attachAgent = useAttachAgentToChat(chatId)
 
   const boundAgent = useMemo(
@@ -334,11 +371,102 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     [chatData?.agentId, agents]
   )
 
+  // The agent that would take this message, resolved to a row.
+  const answeringAgent: AgentData | null = useMemo(
+    () =>
+      answerTarget.kind === 'agent'
+        ? (agents ?? []).find((a) => a.id === answerTarget.agentId) ?? null
+        : null,
+    [answerTarget, agents]
+  )
+
+  /**
+   * What the badge says. An active chat reads its own row; the new-chat screen
+   * is told by `MainArea`, which is where the pending selection lives.
+   *
+   * A `direct` chat with no agent — a plain chat with the local model — shows
+   * no badge at all, which is what it has always done: there is no routing
+   * decision to report, and a pill saying so would be chrome for the most
+   * common chat in the app.
+   */
+  /**
+   * In a chat the user routes, a chip is also the address: clicking one says
+   * who the next message is for. Absent everywhere else, where a chip is only a
+   * record of what is attached.
+   *
+   * The ring follows the *resolved* answerer, not the raw click — so before the
+   * user has picked anybody, the chip that would actually answer is the one
+   * marked, rather than none of them.
+   */
+  const chipAddressing = useMemo(
+    () =>
+      chatId && chatRouting.router === 'human'
+        ? {
+            addressedId: answerTarget.kind === 'agent' ? answerTarget.agentId : null,
+            onAddress: (agentId: string) => setAddressedAgent(chatId, agentId)
+          }
+        : undefined,
+    [chatId, chatRouting.router, answerTarget, setAddressedAgent]
+  )
+
+  /**
+   * Handing the chat to the local model, and taking it back. Offered only where
+   * there is something to coordinate — a chat with at least one agent in it —
+   * because in a plain chat with the model it would be a toggle between two
+   * states that behave identically.
+   */
+  const setChatRouter = useSetChatRouter()
+  const coordinateToggle = useMemo(() => {
+    if (!chatId) return undefined
+    const coordinating = chatRouting.router === 'coordinator'
+    const hasAgents = attachedAgentIds.length > 0 || !!chatRouting.rootAgentId
+    if (!coordinating && !hasAgents) return undefined
+    return {
+      coordinating,
+      pending: setChatRouter.isPending,
+      onToggle: (next: boolean) => {
+        // Off lands on `human` when agents remain and `direct` when none do —
+        // a chat with nothing but the model is `direct` to it, not a chat the
+        // user routes between nobody.
+        const router = next ? 'coordinator' : attachedAgentIds.length > 0 ? 'human' : 'direct'
+        // `mutateAsync` with the failure handled here rather than a `mutate`
+        // callback: turning coordination on is the one transition main can
+        // refuse (no model), and a mutate-level `onError` is dropped if the
+        // caller has unmounted — which would swallow the only explanation.
+        // `setSendError` is a store action, so it lands either way.
+        void setChatRouter
+          .mutateAsync({ chatId, router })
+          .catch((err) => setSendError(unwrapIpcError(err, 'Could not change who answers')))
+      }
+    }
+  }, [chatId, chatRouting.router, chatRouting.rootAgentId, attachedAgentIds, setChatRouter, setSendError])
+
+  const badgeInfo: RouterBadgeInfo | null = useMemo(() => {
+    if (!chatId) return routerInfo ?? null
+    if (chatRouting.router === 'direct' && !chatRouting.rootAgentId) return null
+    return {
+      router: chatRouting.router,
+      agentName: boundAgent?.name,
+      answererName: answeringAgent?.name,
+      // The model's **name**, not its id: the new-chat badge resolves one and a
+      // tooltip that bolds `claude-opus-5` beside one that bolds `Opus 5` is
+      // two surfaces describing the same model two ways. Falls back to the id,
+      // and the badge to "your local model", rather than inventing either.
+      modelName: chatData?.modelId
+        ? ((models ?? []).find((m) => m.id === chatData.modelId)?.name ?? chatData.modelId)
+        : undefined
+    }
+  }, [chatId, routerInfo, chatRouting, boundAgent, answeringAgent, chatData?.modelId, models])
+
   // `ChatControls` (model picker + baseline MCP toggle pills) is offered only
-  // on a mode-less LLM chat — that's the chat whose baseline the user manages
-  // by hand. Everywhere else the baseline is mode-owned, and this strip is the
-  // only place it can be seen.
-  const showsChatControls = !boundAgent && !chatData?.modeId
+  // on a mode-less chat **the local model answers** — that's the chat whose
+  // baseline the user manages by hand. Everywhere else the baseline is
+  // mode-owned, and this strip is the only place it can be seen.
+  //
+  // `needsModel`, not `!boundAgent`: a chat the user routes between agents has
+  // no bound root either, and offering it a model picker beside a badge saying
+  // no model is involved is two surfaces disagreeing about the same chat.
+  const showsChatControls = chatRouting.needsModel && !chatData?.modeId
   const { data: chatBaselineLinks } = useChatMcpProviders(chatId)
   const baselineIds = useMemo(() => {
     if (chatId) {
@@ -422,19 +550,29 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     ? canAttachToRemoteAgent || canAttachToLlmModel
     : hasAnyDestination
 
-  // The agent this message goes straight to, if it goes straight to one: the
-  // bound agent of a direct agent chat, or the new chat's single agent when the
-  // routing badge says it will be bound. The composer refuses a send only to
-  // that agent. One attached as a tool of the local model is not refused here:
-  // its failure comes back as a tool call the model can read.
+  // The agent this message goes straight to, if it goes straight to one — the
+  // router's own answer, in an active chat, and the first agent picked on the
+  // new-chat screen (which is who `startNewChat` sends the first message to).
+  // The composer refuses a send only to that agent. One attached as a tool of
+  // the local model is not refused here: its failure comes back as a tool call
+  // the model can read.
   const directTarget: AgentData | null = chatId
-    ? chatData?.orchestrated
-      ? null
-      : boundAgent
-    : commPatternInfo?.pattern === 'A2A'
+    ? answeringAgent
+    : routerInfo && routerInfo.router !== 'coordinator'
       ? selectedAgent ?? null
       : null
   const readiness = useComposerReadiness(directTarget, input)
+  /**
+   * Whether the fixed-height readiness slot is on screen.
+   *
+   * An active chat: whenever it holds an agent at all, so handing it to the
+   * model and taking it back changes nothing about the composer's height. A new
+   * chat: whenever a message would go straight to an agent, which is the only
+   * time there is a readiness to report.
+   */
+  const showsReadinessLine = chatId
+    ? !!chatRouting.rootAgentId || attachedAgentIds.length > 0
+    : !!directTarget
   // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
   // arrived after the callback was built.
   const blocksSendRef = useRef(readiness.blocksSend)
@@ -635,17 +773,42 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       replaceTriggerToken('')
       observeHint('mention-used')
       if (chatId) {
-        // Active chat: attach as an orchestrated tool (promoting + guarding the
-        // sole-bound-agent no-op + error handling are owned by the hook).
-        void attachAgent(agent.id)
+        // Active chat. Two things, and the order matters: an agent already in a
+        // chat the user routes is simply *addressed* — that is what `@` means
+        // once a chat is on `human`, and re-attaching it would be a no-op that
+        // also re-armed its announce flag. An agent that is not in the chat yet
+        // is brought in (the hook owns the router switch, the sole-bound-agent
+        // no-op and the error handling), and addressed, so the message the user
+        // is about to type goes to the agent they just named.
+        // **The router this pick lands on, not the one it started from.** A
+        // `direct` chat with an agent becomes `human` the moment a second one
+        // arrives — and the message the user is about to type is for the agent
+        // they just named, not for whoever the transcript says answered last.
+        // Reading the *current* router here meant the address was never set on
+        // exactly that transition, and every earlier user row carries the old
+        // root, so the sticky default sent it back to the wrong agent.
+        const willRoute =
+          chatRouting.router === 'human' ||
+          (chatRouting.router === 'direct' && !!chatRouting.rootAgentId)
+        if (willRoute) setAddressedAgent(chatId, agent.id)
+        if (!attachedAgentIds.includes(agent.id)) void attachAgent(agent.id)
         return
       }
-      // New-chat agent picker: every pick adds to the orchestrated-mode buffer
-      // (mirror of the MCP buffer). Routing (A2A vs orchestrated) is decided at
-      // send time from the combined selection.
+      // New-chat agent picker: every pick adds to the buffer (mirror of the MCP
+      // buffer). The router is decided at send time from the whole selection.
       onTogglePendingAgent?.(agent.id)
     },
-    [replaceTriggerToken, onTogglePendingAgent, chatId, attachAgent, observeHint]
+    [
+      replaceTriggerToken,
+      onTogglePendingAgent,
+      chatId,
+      attachAgent,
+      observeHint,
+      chatRouting.router,
+      chatRouting.rootAgentId,
+      attachedAgentIds,
+      setAddressedAgent
+    ]
   )
 
   /**
@@ -852,8 +1015,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         }
       }
 
-      // Hand off to the composer hook, which decides direct-A2A vs
-      // orchestrated/LLM dispatch from a fresh cache snapshot. The active-chat
+      // Hand off to the composer hook, which sends on the one channel and lets
+      // main resolve who answers from `chats.router`. The active-chat
       // composer only ever holds already-ingested attachments — `pending` is
       // gated to the new-chat path by `useChatAttachments` — so the type narrow
       // below is safe.
@@ -1256,6 +1419,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             hasCapabilities={hasCapabilities || catalogItems.length > 0}
             onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
             modeMenu={hintedModeMenu}
+            coordinateToggle={coordinateToggle}
             activeModeColor={modeColor ? { border: modeColor.border } : null}
           />
           {chatId && boundAgent ? (
@@ -1274,7 +1438,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             <ChatControls chatId={chatId} inline />
           ) : null}
           {chatId ? (
-            <OnDemandAgentChips chatId={chatId} />
+            <OnDemandAgentChips chatId={chatId} addressing={chipAddressing} />
           ) : pendingAgentIds && onRemovePendingAgent ? (
             <OnDemandAgentChips
               pendingIds={pendingAgentIds}
@@ -1293,11 +1457,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         </div>
 
         <div className="flex items-center gap-1.5">
-          {!chatId && commPatternInfo && (
-            <CommPatternBadge
-              pattern={commPatternInfo.pattern}
-              agentName={commPatternInfo.agentName}
-              modelName={commPatternInfo.modelName}
+          {badgeInfo && (
+            <RouterBadge
+              router={badgeInfo.router}
+              agentName={badgeInfo.agentName}
+              answererName={badgeInfo.answererName}
+              modelName={badgeInfo.modelName}
             />
           )}
           {isStreaming ? (
@@ -1330,9 +1495,15 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           )}
         </div>
       </div>
-      {/* Rendered for every direct agent, refused or not, so a refusal that
-          arrives or clears moves nothing. */}
-      {directTarget && <ComposerReadinessLine readiness={readiness} reasonId={readinessReasonId} />}
+      {/* Rendered whenever an agent is in this chat at all — refused or not,
+          and whoever is answering right now — so neither a refusal arriving nor
+          a **router change** moves anything. Gating it on the agent that would
+          answer lifted the whole composer 21px when the user handed the chat to
+          the model, because the model is not an agent whose readiness there is
+          anything to say about. */}
+      {showsReadinessLine && (
+        <ComposerReadinessLine readiness={readiness} reasonId={readinessReasonId} />
+      )}
     </div>
   )
 })

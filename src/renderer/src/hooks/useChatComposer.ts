@@ -1,30 +1,34 @@
 import { useCallback } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChatStream } from './useChatStream'
+import { useChatStore } from '../stores/chat.store'
+import { routingOf, type RunTarget } from '../../../shared/chatRouting'
 import type { MessageAttachment } from '../../../shared/attachments'
 
 type CachedChat = Awaited<ReturnType<typeof window.api.chat.get>>
+type OnDemandAgents = Awaited<ReturnType<typeof window.api.chat.listOnDemandAgents>>
 
 /**
- * Routing chokepoint for the chat composer. A chat is one of two shapes:
+ * The chat composer's send.
  *
- *  - **Direct A2A** — agent-rooted (`agentId` set) and not orchestrated. The
- *    bound agent is the conversation's voice; the message streams straight to
- *    it over A2A.
- *  - **Orchestrated / plain LLM** — `agentId` null (orchestrated chats detach
- *    their root at promotion) or the `orchestrated` flag set. The local model
- *    conducts, calling any attached agents/MCPs as tools.
+ * **It no longer decides where the message goes.** It used to: `chat.agentId &&
+ * !chat.orchestrated` picked between two IPC channels, and four other places
+ * re-derived the same sentence to answer the same question about the same chat.
+ * Main reads `chats.router` now and resolves the answerer itself.
  *
- * Bringing a second counterparty into a direct-A2A chat (the in-chat `@`-agent
- * gesture) promotes it to orchestrated — handled in `ChatInput`, not here. By
- * the time `submit` runs, the chat row already reflects the final shape, so
- * the routing decision is a single read of the fresh cache snapshot.
+ * What is left here is the one thing main cannot know — which agent the user
+ * addressed — and the renderer's own copy of the answer, used for the
+ * post-turn bookkeeping in `useChatStream` (whose status to re-read). Both come
+ * from the same shared helper main uses, so the two cannot drift into different
+ * rules; they can only differ on a cache that is a moment stale, and main's
+ * answer is the one that runs.
  */
 export function useChatComposer(chatId: string | null): {
   submit: (input: string, attachments?: MessageAttachment[]) => Promise<void>
 } {
   const queryClient = useQueryClient()
-  const { startLlm, startAgent } = useChatStream()
+  const { startRun } = useChatStream()
+  const addressedAgentByChat = useChatStore((s) => s.addressedAgentByChat)
 
   const submit = useCallback(
     async (input: string, attachments?: MessageAttachment[]): Promise<void> => {
@@ -33,16 +37,38 @@ export function useChatComposer(chatId: string | null): {
       const chat = queryClient.getQueryData<CachedChat>(['chat', chatId])
       if (!chat) return
 
-      // Direct A2A: a single bound agent that hasn't been promoted. Everything
-      // else (orchestrated or plain LLM) routes through the local model.
-      if (chat.agentId && !chat.orchestrated) {
-        startAgent(chat.agentId, chatId, trimmed, { attachments })
-        return
-      }
-      startLlm(chatId, trimmed, { attachments })
+      startRun(chatId, trimmed, {
+        attachments,
+        target: answererFor(queryClient, chat, chatId, addressedAgentByChat[chatId])
+      })
     },
-    [chatId, queryClient, startAgent, startLlm]
+    [chatId, queryClient, startRun, addressedAgentByChat]
   )
 
   return { submit }
+}
+
+/**
+ * Who the renderer believes will answer, from the caches it already holds.
+ *
+ * The sticky default (`lastAddressed`) is read out of the chat's own messages
+ * rather than kept anywhere: the transcript is the record, and a second copy of
+ * it could disagree with what the user can see. Main reads the same thing from
+ * the same rows.
+ */
+function answererFor(
+  queryClient: ReturnType<typeof useQueryClient>,
+  chat: NonNullable<CachedChat>,
+  chatId: string,
+  addressed: string | undefined
+): RunTarget {
+  const routing = routingOf(chat)
+  if (routing.router !== 'human') return routing.answerer()
+  const attached = (
+    queryClient.getQueryData<OnDemandAgents>(['chat-on-demand-agent', chatId]) ?? []
+  ).map((row) => row.agentId)
+  const lastAddressed = [...(chat.messages ?? [])]
+    .reverse()
+    .find((m) => m.role === 'user' && m.addressedAgentId)?.addressedAgentId
+  return routing.answerer({ addressed, lastAddressed, attached })
 }

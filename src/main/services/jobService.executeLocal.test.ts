@@ -54,6 +54,9 @@ const { COLLECTION_MAPPERS, newResolveCache } = await import('../sync/collection
 const { agentRepo } = await import('../db/agents')
 const { mcpProviderRepo } = await import('../db/mcpProviders')
 const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
+const { chatOnDemandMcpRepo } = await import('../db/chatOnDemandMcp')
+const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
+const { chatRepo } = await import('../db/chats')
 const { jobService } = await import('./jobService')
 
 const USER = '__default__'
@@ -285,6 +288,46 @@ describe('running a job whose dependencies do resolve', () => {
     expect(shells[0].enabled).toBe(false)
     expect(jobService.getDetail(USER, JOB_ID).needsSetup).toBe(true)
     expect(run().runId).toBeTruthy()
+  })
+
+  it('gives a connectors-only job its connectors', () => {
+    // The router for a job with no agent is `direct` — to the local model —
+    // which is *not* the same question as "does the model conduct". Reading it
+    // as one dropped the servers from `chat_on_demand_mcps` and ran the job
+    // toolless, reporting success: the same shape of silent success the rest of
+    // this file exists to prevent, one column over.
+    applyIncomingJob([mcpDep])
+    const [mcp] = mcpProviderRepo.list(USER)
+    jobService.setMcpProviders(USER, JOB_ID, [mcp.id])
+
+    const res = run()
+    expect(res.agentId).toBeNull()
+    expect(chatOnDemandMcpRepo.list(res.chatId).map((r) => r.mcpProviderId)).toEqual([mcp.id])
+  })
+
+  it('spawns a chat the user routes when the job carries two agents', () => {
+    indexWorkshop()
+    applyIncomingJob([folderDep])
+    const second = agentRepo.create('__default__', {
+      name: 'Second',
+      protocol: 'a2a',
+      cardUrl: 'https://second.example/.well-known/agent.json'
+    })
+    jobService.setAgents(USER, JOB_ID, ['folder:6f1a-uuid', second.id])
+
+    const res = run()
+    const chat = chatRepo.getOwned(USER, res.chatId)!
+    expect(chat.router).toBe('human')
+    // Neither is the root: in a chat the user routes, the agents are peers, and
+    // a bound root would make one of them the chat's voice.
+    expect(chat.agentId).toBeNull()
+    expect(chatOnDemandAgentRepo.listAgentIds(res.chatId).sort()).toEqual(
+      ['folder:6f1a-uuid', second.id].sort()
+    )
+    // The run addresses one of them — `job_agents` records no order, so which
+    // one is stable but arbitrary, and asserting a particular id here would pin
+    // an accident.
+    expect(['folder:6f1a-uuid', second.id]).toContain(res.agentId)
   })
 
   it('runs when the folder agent is here but the user switched it off', () => {

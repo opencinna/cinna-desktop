@@ -1,4 +1,4 @@
-import { and, eq, inArray } from 'drizzle-orm'
+import { and, asc, eq, inArray } from 'drizzle-orm'
 import { getDb } from './client'
 import { chatOnDemandAgents } from './schema'
 
@@ -10,11 +10,23 @@ export type ChatOnDemandAgentRow = typeof chatOnDemandAgents.$inferSelect
  * {@link chatOnDemandMcpRepo} exactly.
  */
 export const chatOnDemandAgentRepo = {
+  /**
+   * The chat's agents, oldest attachment first.
+   *
+   * **Ordered deliberately since phase 4.** Without an `ORDER BY` SQLite
+   * returns composite-primary-key order — by `agent_id`, which is a nanoid —
+   * and a `human` chat's "the first attached answers" fallback was therefore
+   * alphabetical by a random string. `created_at` is stored in whole seconds,
+   * so two agents attached in the same second still tie; `agent_id` breaks it,
+   * which at least makes the answer the *same* answer every time and the same
+   * one in both processes.
+   */
   list(chatId: string): ChatOnDemandAgentRow[] {
     return getDb()
       .select()
       .from(chatOnDemandAgents)
       .where(eq(chatOnDemandAgents.chatId, chatId))
+      .orderBy(asc(chatOnDemandAgents.createdAt), asc(chatOnDemandAgents.agentId))
       .all()
   },
 

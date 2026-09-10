@@ -68,7 +68,7 @@ function startedRun(): { jobId: string; runId: string; chatId: string } {
     title: 'Nightly check',
     prompt: 'Check the invoices',
     rootAgentId: null,
-    orchestrated: false,
+    router: 'direct',
     modeId: null,
     providerId: null,
     modelId: null,

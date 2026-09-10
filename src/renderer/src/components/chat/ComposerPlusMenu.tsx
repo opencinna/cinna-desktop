@@ -1,5 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
-import { Plus, Paperclip, SlidersHorizontal, Boxes, ChevronLeft, Check, Loader2 } from 'lucide-react'
+import {
+  Plus,
+  Paperclip,
+  SlidersHorizontal,
+  Boxes,
+  ChevronLeft,
+  Check,
+  Loader2,
+  Workflow
+} from 'lucide-react'
 import type { ChatModeData } from '../../constants/chatModeColors'
 
 export interface PlusModeMenu {
@@ -9,6 +18,23 @@ export interface PlusModeMenu {
   onSelectMode: (mode: ChatModeData | null) => void
   renderIcon: (mode: ChatModeData) => React.ReactNode
   composeSecondary?: (mode: ChatModeData) => string | null | undefined
+}
+
+/**
+ * The one router transition a user takes deliberately: handing a chat to the
+ * local model, and taking it back.
+ *
+ * Every other transition follows from a gesture that already means something
+ * else — a second agent arriving makes a chat `human`, an agent joining a chat
+ * with the model makes it `coordinated`. Turning coordination *off* has no such
+ * gesture, so it gets a row.
+ */
+export interface PlusCoordinateToggle {
+  /** Whether the local model is conducting this chat right now. */
+  coordinating: boolean
+  /** In flight — the row stays visible and says so rather than disappearing. */
+  pending?: boolean
+  onToggle: (coordinating: boolean) => void
 }
 
 interface ComposerPlusMenuProps {
@@ -21,6 +47,8 @@ interface ComposerPlusMenuProps {
   onOpenCapabilityPicker: () => void
   /** "Chat mode" sub-menu — omitted when mode selection doesn't apply here. */
   modeMenu?: PlusModeMenu
+  /** "Let the model coordinate" — omitted where there is no agent to coordinate. */
+  coordinateToggle?: PlusCoordinateToggle
   /** Tints the [+] button border to the active chat-mode color, if any. */
   activeModeColor?: { border: string } | null
 }
@@ -40,6 +68,7 @@ export function ComposerPlusMenu({
   hasCapabilities,
   onOpenCapabilityPicker,
   modeMenu,
+  coordinateToggle,
   activeModeColor
 }: ComposerPlusMenuProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
@@ -75,7 +104,7 @@ export function ComposerPlusMenu({
 
   const hasModes = !!modeMenu && modeMenu.modes.length > 0
   // Nothing to offer → no button at all.
-  if (!canAttachFiles && !hasCapabilities && !hasModes) return null
+  if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle) return null
 
   const rowCls =
     'w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] ' +
@@ -162,6 +191,32 @@ export function ComposerPlusMenu({
                 >
                   <Boxes size={16} className={iconCls} />
                   <span>Add agents / MCP</span>
+                </button>
+              )}
+
+              {coordinateToggle && (
+                <button
+                  type="button"
+                  role="menuitemcheckbox"
+                  aria-checked={coordinateToggle.coordinating}
+                  // `aria-disabled`, not `disabled`: a row that disables itself
+                  // while it has focus drops focus to the page body mid-switch.
+                  aria-disabled={coordinateToggle.pending || undefined}
+                  onClick={() => {
+                    if (coordinateToggle.pending) return
+                    coordinateToggle.onToggle(!coordinateToggle.coordinating)
+                    setOpen(false)
+                  }}
+                  className={rowCls}
+                >
+                  <Workflow size={16} className={iconCls} />
+                  <span className="flex-1">Let the model coordinate</span>
+                  {/* The tick's slot is always there, so ticking it moves no text. */}
+                  <span className="w-3.5 shrink-0">
+                    {coordinateToggle.coordinating && (
+                      <Check size={14} className="text-[var(--color-accent)]" />
+                    )}
+                  </span>
                 </button>
               )}
             </>

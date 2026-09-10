@@ -12,6 +12,7 @@ import type {
   PendingAttachment
 } from '../../../shared/attachments'
 import { deriveTitleFromMessage } from '../../../shared/chatTitle'
+import { newChatRouter, routingOf, type ChatRouter } from '../../../shared/chatRouting'
 import { pickDefaultModelId } from '../../../shared/modelDefaults'
 import { unwrapIpcError } from '../utils/ipcError'
 
@@ -22,10 +23,10 @@ export interface NewChatOptions {
   message: string
   /**
    * The new-chat agent pick list (`pendingAgentIds`) — populated by the `[+]`
-   * capability picker and the `@` popup. Decides routing: exactly one agent
-   * with no on-demand MCPs binds that agent as the chat root (direct A2A);
-   * anything else creates an LLM-root chat and exposes each agent as an
-   * orchestrated tool.
+   * capability picker and the `@` popup. Feeds `newChatRouter` together with
+   * the on-demand MCP picks: one agent alone is the chat's root (`direct`),
+   * several agents are a chat the user routes by hand (`human`), and agents
+   * mixed with MCP servers need the local model to conduct (`coordinator`).
    */
   agentIds: string[]
   mode: ChatModeData | null
@@ -85,7 +86,7 @@ export function useNewChatFlow(): {
 } {
   const createChat = useCreateChat()
   const updateChat = useUpdateChat()
-  const { startLlm, startAgent } = useChatStream()
+  const { startRun } = useChatStream()
   const setSendError = useChatStore((s) => s.setSendError)
   const { mutateAsync: attachNotesAsync } = useAttachNotesAsFiles()
   // Go through the mutations rather than `window.api.chat.*` directly: they
@@ -181,65 +182,61 @@ export function useNewChatFlow(): {
       const title = deriveTitleFromMessage(message)
       const onDemandMcpSnapshot = onDemandMcpIds ? Array.from(onDemandMcpIds) : []
       const agentSnapshot = agentIds ?? []
-      // The decision rule: exactly one agent and no on-demand MCPs → direct
-      // A2A (bind the agent as root). Anything else → orchestrated/LLM-root.
-      const isA2A = agentSnapshot.length === 1 && onDemandMcpSnapshot.length === 0
+      // The one decision, taken once, in the shared helper both processes read.
+      const router = newChatRouter({
+        agentIds: agentSnapshot,
+        mcpIds: onDemandMcpSnapshot
+      })
+      // A `direct` chat with an agent is the only shape that binds a root; a
+      // `human` chat's agents are all attached, none of them the root.
+      const rootAgentId = router === 'direct' ? (agentSnapshot[0] ?? null) : null
+      // Asked of the helper, not re-derived: `router !== 'coordinator'` is not
+      // the same question. A chat with **no agent at all** is `direct` — to the
+      // local model — and its files belong in the local store, which is where
+      // they have always gone. Sending them to the Cinna backend instead
+      // breaks every attachment in the commonest chat in the app, and breaks it
+      // by deleting the chat row on the way out.
+      const scope = routingOf({ router, agentId: rootAgentId }).attachmentTarget
 
       let chatId: string | null = null
       try {
         const chat = await createChat.mutateAsync()
         chatId = chat.id
 
-        if (isA2A) {
-          // Still flush the on-demand MCP buffer (empty in the A2A case, but
-          // kept for symmetry): the user may later switch to the LLM root via
-          // multi-agent routing, where these MCPs become relevant.
-          for (const mcpId of onDemandMcpSnapshot) {
-            await addOnDemandMcpAsync({ chatId: chat.id, mcpProviderId: mcpId })
-          }
-          await updateChat.mutateAsync({
-            chatId: chat.id,
-            updates: { title, agentId: agentSnapshot[0] }
-          })
-          // Remote and local agents both ingest as Cinna-scoped today —
-          // the cinna upload service is the only A2A-friendly backend,
-          // and a local-A2A agent has no file path of its own.
-          const resolved = await resolvePendingAttachments(chat.id, 'cinna', attachments)
-          const noteAttachments = await ingestPendingNotes(chat.id, 'cinna', noteIds)
-          useChatStore.getState().setActiveChatId(chat.id)
-          startAgent(agentSnapshot[0], chat.id, message, {
-            attachments: [...resolved, ...noteAttachments]
-          })
-          return
-        }
-
-        // Orchestrated or plain LLM: LLM-root chat. Flush on-demand MCPs AND
-        // on-demand agents before the first send so the stream loop reads
-        // both at setup time (and emits the one-shot announce prefix).
+        // Flush the on-demand buffers before the first send so the stream loop
+        // reads both at setup time (and emits the one-shot announce prefix).
+        // The MCP buffer is flushed for every router — empty in the `direct`
+        // and `human` cases, and kept for symmetry with the moment the user
+        // later hands the chat to the model.
         for (const mcpId of onDemandMcpSnapshot) {
           await addOnDemandMcpAsync({ chatId: chat.id, mcpProviderId: mcpId })
         }
         for (const agentId of agentSnapshot) {
-          await addOnDemandAgentAsync({ chatId: chat.id, agentId })
+          if (agentId !== rootAgentId) {
+            await addOnDemandAgentAsync({ chatId: chat.id, agentId })
+          }
         }
 
-        const resolvedModelId = resolveModel(mode, providerId, providers, allModels)
         const updates: {
           title: string
           providerId?: string
           modelId?: string
           modeId?: string
-          orchestrated?: boolean
-        } = { title }
-        if (providerId && resolvedModelId) {
-          updates.providerId = providerId
-          updates.modelId = resolvedModelId
+          agentId?: string
+          router: ChatRouter
+        } = { title, router }
+        if (rootAgentId) updates.agentId = rootAgentId
+        // Only a chat the model answers needs one resolved. A `direct` chat
+        // with an agent, and every `human` chat, talk straight to their agents
+        // — that is what makes a `human` chat work with no LLM configured.
+        if (router === 'coordinator' || !rootAgentId) {
+          const resolvedModelId = resolveModel(mode, providerId, providers, allModels)
+          if (providerId && resolvedModelId) {
+            updates.providerId = providerId
+            updates.modelId = resolvedModelId
+          }
         }
         if (mode) updates.modeId = mode.id
-        // Mark the chat orchestrated when it's created with agents-as-tools, so
-        // the in-chat `@`-agent gesture keeps adding tools even if the user
-        // later removes every agent chip.
-        if (agentSnapshot.length > 0) updates.orchestrated = true
 
         await updateChat.mutateAsync({ chatId: chat.id, updates })
 
@@ -251,13 +248,27 @@ export function useNewChatFlow(): {
           await setChatMcpAsync({ chatId: chat.id, mcpProviderIds: mcpSnapshot })
         }
 
-        // LLM destination: ingest pending into the local store under the
-        // freshly-created chat.
-        const resolved = await resolvePendingAttachments(chat.id, 'local', attachments)
-        const noteAttachments = await ingestPendingNotes(chat.id, 'local', noteIds)
+        // Remote and local agents both ingest as Cinna-scoped: the cinna upload
+        // service is the only A2A-friendly backend, and an agent that runs in a
+        // folder has no file path of its own. Only the model's own chat reads
+        // from the local store.
+        const resolved = await resolvePendingAttachments(chat.id, scope, attachments)
+        const noteAttachments = await ingestPendingNotes(chat.id, scope, noteIds)
 
         useChatStore.getState().setActiveChatId(chat.id)
-        startLlm(chat.id, message, { attachments: [...resolved, ...noteAttachments] })
+        // A `human` chat's first message goes to the first agent the user
+        // picked — the order they picked them in is the only signal there is,
+        // and main applies the same rule if this one is ever absent.
+        const target =
+          router === 'coordinator'
+            ? ({ kind: 'model' } as const)
+            : agentSnapshot[0]
+              ? ({ kind: 'agent', agentId: agentSnapshot[0] } as const)
+              : ({ kind: 'model' } as const)
+        startRun(chat.id, message, {
+          attachments: [...resolved, ...noteAttachments],
+          target
+        })
       } catch (err) {
         // Surface the error so the user knows the send didn't go through
         // — without this, a failed ingest leaves an empty chat row and a
@@ -278,8 +289,7 @@ export function useNewChatFlow(): {
     [
       createChat,
       updateChat,
-      startAgent,
-      startLlm,
+      startRun,
       resolvePendingAttachments,
       ingestPendingNotes,
       setSendError,

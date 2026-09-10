@@ -129,6 +129,16 @@ export interface StreamToAgentInput {
   chatId: string
   agentId: string
   port: StreamPort
+  /**
+   * Fired once, after the turn's rows are persisted, and **only** when the turn
+   * actually finished — not when it errored, not when it was stopped.
+   *
+   * The agent's catch-up cursor rides on this: a turn that failed or was
+   * cancelled must leave the cursor where it was, so the retry carries the same
+   * gap. Anything it throws is logged and swallowed — a bookkeeping write is
+   * not allowed to turn a finished turn into a failed one.
+   */
+  onCompleted?: () => void
 }
 
 /**
@@ -553,6 +563,17 @@ export const a2aStreamingService = {
       // OpenAI adapter used to tell by resolving on abort: the run reads as a
       // job that finished, and nothing distinguishes it from one that did.
       jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
+      if (!abortController.signal.aborted) {
+        try {
+          input.onCompleted?.()
+        } catch (err) {
+          logger.warn('a completed turn could not record its bookkeeping', {
+            chatId,
+            agentId,
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      }
     } catch (err) {
       // **A runner is not trusted to keep its own contract here.**
       // `AgentDriver.run` documents that it never throws, and the A2A

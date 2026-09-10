@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
-import { derivePattern } from '../../shared/commPattern'
+import { newChatRouter } from '../../shared/chatRouting'
 import type { JobDepDescriptor } from '../../shared/sync'
 
 /**
@@ -11,9 +11,9 @@ import type { JobDepDescriptor } from '../../shared/sync'
  * cannot see, because `parseDeps` and the apply dispatch are both private to
  * `collections.ts`. Deleting either branch there restores the original bug in
  * full — the descriptor is dropped on the wire instead of at the row, the job
- * materializes with no agent, `derivePattern` answers `'AI'`, and the run goes
- * ahead as a plain-LLM job reporting success. Nothing else in the suite would
- * notice.
+ * materializes with no agent, the router answers "a chat with the local model",
+ * and the run goes ahead as a plain-LLM job reporting success. Nothing else in
+ * the suite would notice.
  *
  * The second claim is the one that separates a folder agent from its two
  * neighbours in the same dispatch: `resolveLocalAgent` and `resolveMcp` both
@@ -134,7 +134,12 @@ describe('a synced job that depends on a folder agent', () => {
     applyIncomingJob([folderDep])
     const { agentRefs, mcpRefs } = jobsRepo.listRefs(JOB_ID)
     // The damage first: this run must talk to the agent, not to a bare model.
-    expect(derivePattern(agentRefs, mcpRefs)).toBe('A2A')
+    // `newChatRouter` answers `'direct'` for a chat with no agents too, so the
+    // root the run would bind is what the claim rests on.
+    expect({
+      router: newChatRouter({ agentIds: agentRefs, mcpIds: mcpRefs }),
+      rootAgentId: agentRefs[0] ?? null
+    }).toEqual({ router: 'direct', rootAgentId: 'folder:6f1a-uuid' })
     expect(agentRefs).toEqual(['folder:6f1a-uuid'])
   })
 

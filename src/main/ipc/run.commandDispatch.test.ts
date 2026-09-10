@@ -3,9 +3,10 @@ import type { AgentRow } from '../db/agents'
 import { capabilitiesFor } from '../agents/drivers/capabilities'
 
 /**
- * The one line review flagged as untested: `agent_a2a.ipc.ts`'s
- * `agent:send-message` handler hands `streamToAgent` the turn
- * `resolveCommandRunner` returned — not the driver's own. A hand-run mutation
+ * The one line review flagged as untested: the send handler hands
+ * `streamToAgent` the turn `resolveCommandRunner` returned — not the driver's
+ * own. (It moved from `agent:send-message` to `run:send` in phase 4; the
+ * channel changed, the line did not.) A hand-run mutation
  * (pass the driver's turn instead) survived the full suite — confirmed
  * independently twice — because nothing exercised this handler at all. If that
  * line regresses silently, `/run:<name>` no-ops for every folder agent: the
@@ -48,7 +49,22 @@ vi.mock('../db/messages', () => ({
     touchChat: vi.fn()
   }
 }))
-vi.mock('../db/chats', () => ({ chatRepo: { getOwned: vi.fn(() => ({ id: 'chat-1' })) } }))
+// `router: 'direct'` with a bound agent: the shape that sends straight to one
+// agent, which is the only one this file is about. The root is what decides
+// which agent `findAgent` is asked for, so the second test moves it.
+const getOwnedChat = vi.fn(() => ({ id: 'chat-1', router: 'direct', agentId: 'folder:alpha' }))
+vi.mock('../db/chats', () => ({
+  chatRepo: { getOwned: getOwnedChat, listMessages: vi.fn(() => []) }
+}))
+vi.mock('../db/chatAgentCursors', () => ({
+  chatAgentCursorRepo: { get: vi.fn(() => undefined), advance: vi.fn() }
+}))
+vi.mock('../db/chatOnDemandAgent', () => ({
+  chatOnDemandAgentRepo: { listAgentIds: vi.fn(() => []) }
+}))
+vi.mock('../services/chatStreamingService', () => ({
+  chatStreamingService: { stream: vi.fn() }
+}))
 vi.mock('../db/agents', () => ({ a2aSessionRepo: { getByChat: vi.fn() } }))
 
 vi.mock('../auth/activation', () => ({
@@ -76,7 +92,9 @@ const REMOTE_AGENT: AgentRow = {
 } as unknown as AgentRow
 
 const findAgent = vi.fn(() => ({ row: FOLDER_AGENT, userId: 'owner-1' }))
-vi.mock('../services/agentService', () => ({ agentService: { findAgent } }))
+vi.mock('../services/agentService', () => ({
+  agentService: { findAgent, listMerged: vi.fn(() => []) }
+}))
 
 const prepareAgentSend = vi.fn(() => ({ wireContent: '/run:check' }))
 vi.mock('../services/messageRoutingService', () => ({
@@ -105,7 +123,7 @@ const COMMAND_RUN_SENTINEL = vi.fn()
 const resolveCommandRunner = vi.fn((..._args: unknown[]): unknown => COMMAND_RUN_SENTINEL)
 vi.mock('../services/localAgents/commandService', () => ({ resolveCommandRunner }))
 
-const { registerA2AHandlers } = await import('./agent_a2a.ipc')
+const { registerRunHandlers } = await import('./run.ipc')
 
 function fakePort(): { start: () => void; close: () => void; postMessage: (m: unknown) => void } {
   return { start: vi.fn(), close: vi.fn(), postMessage: vi.fn() }
@@ -116,19 +134,20 @@ type BoundTurn = (io: { signal: AbortSignal; onEvent: (e: unknown) => void }) =>
 beforeEach(() => {
   ipcOnHandlers.clear()
   streamToAgent.mockClear()
+  findAgent.mockClear()
   resolveCommandRunner.mockClear()
   driverRun.mockClear()
-  registerA2AHandlers()
+  registerRunHandlers()
 })
 
-describe('agent:send-message — the /run: dispatch call site', () => {
+describe('run:send — the /run: dispatch call site', () => {
   it('hands streamToAgent the resolveCommandRunner turn, not the driver’s own', async () => {
-    const handler = ipcOnHandlers.get('agent:send-message')
+    const handler = ipcOnHandlers.get('run:send')
     expect(handler).toBeDefined()
 
     const port = fakePort()
     const event = { ports: [port] }
-    const payload = { agentId: 'folder:alpha', chatId: 'chat-1', content: '/run:check', attachments: [] }
+    const payload = { chatId: 'chat-1', content: '/run:check', attachments: [] }
 
     await handler?.(event, payload)
 
@@ -161,6 +180,7 @@ describe('agent:send-message — the /run: dispatch call site', () => {
   })
 
   it('asks with the remote agent’s capability, and streams the driver’s turn it gets back', async () => {
+    getOwnedChat.mockReturnValueOnce({ id: 'chat-1', router: 'direct', agentId: 'remote:alpha' })
     findAgent.mockReturnValueOnce({ row: REMOTE_AGENT, userId: 'owner-1' })
     prepareAgentSend.mockReturnValueOnce({ wireContent: 'hello' })
     // A card agent's commands are not intercepted: `resolveCommandRunner` hands
@@ -169,11 +189,12 @@ describe('agent:send-message — the /run: dispatch call site', () => {
     // real turn is what `streamToAgent` actually receives.
     resolveCommandRunner.mockImplementationOnce((...args: unknown[]) => args[4])
 
-    const handler = ipcOnHandlers.get('agent:send-message')
+    const handler = ipcOnHandlers.get('run:send')
     const port = fakePort()
-    const payload = { agentId: 'remote:alpha', chatId: 'chat-1', content: 'hello', attachments: [] }
+    const payload = { chatId: 'chat-1', content: 'hello', attachments: [] }
     await handler?.({ ports: [port] }, payload)
 
+    expect(findAgent).toHaveBeenLastCalledWith('settings-user', 'profile-user', 'remote:alpha')
     expect(resolveCommandRunner.mock.calls[0][0]).toBe('card')
     expect(streamToAgent).toHaveBeenCalledTimes(1)
     const call = streamToAgent.mock.calls[0][0] as { run: BoundTurn }

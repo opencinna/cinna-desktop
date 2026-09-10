@@ -9,6 +9,7 @@ import { agentService } from './agentService'
 import { aiFunctions, AiFunctionError } from './aiFunctionsService'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { ChatError, McpError, AgentError } from '../errors'
+import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('chat')
@@ -157,27 +158,39 @@ export const chatService = {
   },
 
   /**
-   * Promote a chat to orchestrated mode (local model conducts agents-as-tools).
-   * Triggered the moment a chat crosses from one counterparty to two — e.g. the
-   * user `@`-mentions a second agent into a direct-A2A chat.
+   * Move a chat onto a router — who answers a message here.
    *
-   *  - Already orchestrated → no-op.
-   *  - Agent-rooted (direct A2A) → resolve a model (refuse with `not_configured`
-   *    when none is available), move the bound agent into `chat_on_demand_agents`
-   *    so the orchestrator can still call it as a tool (its `a2a_sessions` row is
-   *    preserved, so its prior context survives), and detach it as the root.
-   *  - Plain LLM chat → just flip the flag (it already has a model).
+   * The three transitions the app makes, and what each costs:
+   *
+   *  - **`direct` → `human`**, when the user brings a second agent into a chat
+   *    that already has one. **No model.** This is the whole point of the
+   *    router: two agents in one thread used to force the local model into the
+   *    middle of them, and a user with no LLM provider configured could not
+   *    have two agents talk to them at all. The former root becomes one of the
+   *    attached agents, keeping its session.
+   *  - **→ `coordinator`**, when the user asks the model to conduct. This is
+   *    the one that still needs a model, so it is the only one that can be
+   *    refused (`not_configured`).
+   *  - **`coordinator` → `human` / `direct`**, when they turn it off again. A
+   *    chat with agents lands on `human`; one with none lands back on `direct`,
+   *    where the model answers as it always did.
+   *
+   * Arriving at `direct` with exactly one attached agent binds that agent as
+   * the root, which is what `direct` means. Arriving with more is refused
+   * rather than silently dropping the rest.
    */
-  promoteToOrchestrated(userId: string, chatId: string): void {
+  setRouter(userId: string, chatId: string, router: ChatRouter): void {
     const chat = requireOwnedChat(userId, chatId)
-    if (chat.orchestrated) return
+    const current = routerOf(chat)
+    if (current === router) return
 
     let providerId: string | undefined
     let modelId: string | undefined
 
-    // Agent-rooted chats carry no model (they talk direct A2A); resolve one
-    // before the orchestrator can conduct. Plain LLM chats already have a model.
-    if (chat.agentId && !(chat.providerId && chat.modelId)) {
+    // Only the coordinator runs on the local model. An agent-rooted chat
+    // carries no model of its own (it talks straight to its agent), so one has
+    // to be resolved before the model can conduct.
+    if (router === 'coordinator' && !(chat.providerId && chat.modelId)) {
       try {
         const pair = aiFunctions.resolveProviderModelFromChatMode(userId, chatId)
         providerId = pair.providerId
@@ -186,22 +199,39 @@ export const chatService = {
         if (err instanceof AiFunctionError && err.code === 'no_provider') {
           throw new ChatError(
             'not_configured',
-            'Add an LLM provider or pick a chat mode to bring more than one agent into a chat.'
+            'Add an LLM provider or pick a chat mode to let the model coordinate this chat.'
           )
         }
         throw err
       }
     }
 
-    // The on-demand-agent re-exposure + flag flip happen atomically in the repo.
-    chatRepo.promoteToOrchestrated(userId, chatId, {
-      rootAgentId: chat.agentId,
+    const attached = chatOnDemandAgentRepo.listAgentIds(chatId)
+    let bindRoot: string | null = null
+    if (router === 'direct') {
+      if (attached.length > 1) {
+        throw new ChatError(
+          'not_configured',
+          'A direct chat has one counterparty. Remove the other agents first.'
+        )
+      }
+      bindRoot = attached[0] ?? null
+    }
+
+    chatRepo.setRouter(userId, chatId, router, {
+      // The root is only ever detached on the way *out* of `direct`; the other
+      // routers never have one.
+      detachRoot: current === 'direct' ? chat.agentId : null,
+      bindRoot,
       providerId,
       modelId
     })
-    logger.info('chat promoted to orchestrated', {
+    logger.info('chat router changed', {
       chatId,
+      from: current,
+      to: router,
       hadRootAgent: !!chat.agentId,
+      attached: attached.length,
       resolvedModel: modelId ?? chat.modelId ?? null
     })
   },

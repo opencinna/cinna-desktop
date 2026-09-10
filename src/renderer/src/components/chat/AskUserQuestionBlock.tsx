@@ -113,10 +113,10 @@ function AnswerAffordance({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // Route a cloud agent's answer through the canonical composer — same
-  // A2A-vs-LLM decision (and orchestrated-chat handling) as every other turn;
-  // the answer auto-threads onto the chat's existing context so the agent
-  // resumes.
+  // Route a cloud agent's answer through the canonical composer, so it reaches
+  // whoever the chat's router says answers — the same resolution as every other
+  // turn, including the agent this chat is currently addressed to. The answer
+  // auto-threads onto the chat's existing context so the agent resumes.
   const { submit } = useChatComposer(chatId)
 
   const handleSubmit = (text: string, structured: string[][]): void => {

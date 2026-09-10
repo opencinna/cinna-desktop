@@ -3,6 +3,7 @@ import { and, desc, eq, isNull, isNotNull } from 'drizzle-orm'
 import { getDb } from './client'
 import { chats, chatOnDemandAgents, messages } from './schema'
 import type { MessageRow } from './messages'
+import type { ChatRouter } from '../../shared/chatRouting'
 
 export type ChatRow = typeof chats.$inferSelect
 export type { MessageRow }
@@ -13,10 +14,15 @@ export interface ChatMetaUpdate {
   modelId?: string
   providerId?: string
   modeId?: string | null
-  /** Nullable so promotion to orchestrated can detach a chat's bound root agent. */
+  /** Nullable so a switch to `coordinator` can detach a chat's bound root agent. */
   agentId?: string | null
-  /** Set at creation, or at in-chat promotion, for orchestrated (agents-as-MCP) chats. */
-  orchestrated?: boolean
+  /**
+   * Who answers in this chat. Written through {@link chatRepo.setRouter} rather
+   * than here wherever the caller only means to change the router, so the
+   * `orchestrated` mirror cannot be left behind; accepted here because
+   * `chat:update` is one channel and a new chat sets several fields at once.
+   */
+  router?: ChatRouter
 }
 
 export const chatRepo = {
@@ -70,6 +76,7 @@ export const chatRepo = {
       providerId?: string | null
       modeId?: string | null
       agentId?: string | null
+      router?: ChatRouter
       originatingJobRunId?: string | null
       hiddenFromList?: boolean
     }
@@ -83,7 +90,8 @@ export const chatRepo = {
       providerId: init?.providerId ?? null,
       modeId: init?.modeId ?? null,
       agentId: init?.agentId ?? null,
-      orchestrated: false,
+      router: init?.router ?? 'direct',
+      orchestrated: init?.router === 'coordinator',
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
       deletedAt: null,
@@ -139,44 +147,76 @@ export const chatRepo = {
   },
 
   updateMeta(userId: string, chatId: string, updates: ChatMetaUpdate): boolean {
+    // The `orchestrated` mirror travels with every write of `router`, never on
+    // its own — see the column's comment in `schema.ts`.
+    const mirrored = updates.router
+      ? { ...updates, orchestrated: updates.router === 'coordinator' }
+      : updates
     const result = getDb()
       .update(chats)
-      .set({ ...updates, updatedAt: new Date() })
+      .set({ ...mirrored, updatedAt: new Date() })
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0
   },
 
   /**
-   * Atomically promote a chat to orchestrated mode. When `rootAgentId` is set
-   * (agent-rooted chat) the former root is re-exposed as an on-demand tool and
-   * detached in the same transaction as the flag flip, so a mid-sequence
+   * Atomically move a chat onto a router, carrying its one agent across the
+   * boundary between "the root" and "one of the attached".
+   *
+   * `detachRoot` (an agent-rooted chat leaving `direct`) re-exposes the former
+   * root as an on-demand agent and clears `agent_id`; `bindRoot` (a chat
+   * arriving at `direct` with a single attached agent) does the reverse. Either
+   * happens in the same transaction as the router write, so a mid-sequence
    * failure can't leave the chat agent-rooted *and* carrying its own root in
-   * the on-demand set. `providerId`/`modelId` are applied only when supplied
-   * (resolved by the caller for agent-rooted chats that lacked a model).
+   * the on-demand set — or, the other way, rooted on an agent it has also
+   * forgotten. `providerId`/`modelId` are applied only when supplied (resolved
+   * by the caller for a chat that lacked a model and is moving to
+   * `coordinator`).
+   *
+   * The agent's `a2a_sessions` row is never touched by any of it: switching
+   * routers must not cost an agent the context it has built up in this chat.
    */
-  promoteToOrchestrated(
+  setRouter(
     userId: string,
     chatId: string,
-    opts: { rootAgentId: string | null; providerId?: string; modelId?: string }
+    router: ChatRouter,
+    opts: {
+      detachRoot?: string | null
+      bindRoot?: string | null
+      providerId?: string
+      modelId?: string
+    } = {}
   ): void {
     getDb().transaction((tx) => {
-      if (opts.rootAgentId) {
+      if (opts.detachRoot) {
         // Mirrors `chatOnDemandAgentRepo.add` — inlined so the insert shares
         // this transaction (repo methods use the non-transactional handle).
         tx.insert(chatOnDemandAgents)
-          .values({ chatId, agentId: opts.rootAgentId, pendingAnnounce: true })
+          .values({ chatId, agentId: opts.detachRoot, pendingAnnounce: true })
           .onConflictDoUpdate({
             target: [chatOnDemandAgents.chatId, chatOnDemandAgents.agentId],
             set: { pendingAnnounce: true }
           })
           .run()
       }
+      if (opts.bindRoot) {
+        tx.delete(chatOnDemandAgents)
+          .where(
+            and(
+              eq(chatOnDemandAgents.chatId, chatId),
+              eq(chatOnDemandAgents.agentId, opts.bindRoot)
+            )
+          )
+          .run()
+      }
       const set: Partial<typeof chats.$inferInsert> = {
-        orchestrated: true,
+        router,
+        orchestrated: router === 'coordinator',
         updatedAt: new Date()
       }
-      if (opts.rootAgentId) set.agentId = null
+      if (opts.detachRoot) set.agentId = null
+      if (opts.bindRoot) set.agentId = opts.bindRoot
       if (opts.providerId) set.providerId = opts.providerId
       if (opts.modelId) set.modelId = opts.modelId
       tx.update(chats)

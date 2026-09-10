@@ -31,13 +31,14 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
 function installApi(agents: Record<string, unknown>): void {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
-    agents: {
-      sendMessage: vi.fn((_a: string, _c: string, _t: string, cb: StreamCallback) => {
+    run: {
+      send: vi.fn((_c: string, _t: string, cb: StreamCallback) => {
         cb({ type: 'request-id', requestId: 'req-1' })
         cb(ending)
       }),
-      ...agents
+      cancel: vi.fn()
     },
+    agents,
     agentStatus: {
       list: vi.fn().mockResolvedValue({ success: true, items: [] }),
       get: vi.fn().mockResolvedValue({ success: true, item: null })
@@ -49,7 +50,9 @@ function installApi(agents: Record<string, unknown>): void {
 async function runTurn(): Promise<void> {
   const { result } = renderHook(() => useChatStream(), { wrapper })
   await act(async () => {
-    result.current.startAgent('agent-1', 'chat-1', 'hello')
+    result.current.startRun('chat-1', 'hello', {
+      target: { kind: 'agent', agentId: 'agent-1' }
+    })
   })
 }
 

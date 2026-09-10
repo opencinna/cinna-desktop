@@ -15,22 +15,34 @@ import type { MessageAttachment } from '../../../shared/attachments'
 // runners) so adding a new event variant or field flags drift at compile time
 // on both sides.
 import type { RunEvent } from '../../../shared/runEvents'
+import type { RunTarget } from '../../../shared/chatRouting'
 
-export interface StartLlmOptions {
+export interface StartRunOptions {
   attachments?: MessageAttachment[]
-}
-
-export interface StartAgentOptions {
-  attachments?: MessageAttachment[]
+  /**
+   * Who the caller believes will answer, from `routingOf(chat).answerer(…)`.
+   *
+   * Main resolves this again from the chat row and its own answer is the one
+   * that runs — this is what the *renderer* needs it for: which agent to
+   * address (`human` chats), and whose status and readiness to re-read when the
+   * turn ends. Omit it and main still routes the message; the renderer just
+   * does no per-agent bookkeeping afterwards.
+   */
+  target?: RunTarget
 }
 
 /**
  * Start a chat send and connect the stream to the chat store + query cache.
  * Returns void — callers should not await; streaming is fire-and-forget.
+ *
+ * **One entry point, because there is one channel.** `startLlm` and
+ * `startAgent` were two, and picking between them was the routing decision —
+ * re-derived at every call site from `chat.agentId && !chat.orchestrated`.
+ * Phase 4 moved that decision into main (`run:send` reads `chats.router`), so
+ * what is left here is one send and one handler.
  */
 export function useChatStream(): {
-  startLlm: (chatId: string, content: string, opts?: StartLlmOptions) => void
-  startAgent: (agentId: string, chatId: string, content: string, opts?: StartAgentOptions) => void
+  startRun: (chatId: string, content: string, opts?: StartRunOptions) => void
   cancel: (requestId: string) => void
 } {
   const queryClient = useQueryClient()
@@ -165,46 +177,23 @@ export function useChatStream(): {
     [queryClient]
   )
 
-  const startLlm = useCallback(
-    (chatId: string, content: string, opts?: StartLlmOptions): void => {
+  const startRun = useCallback(
+    (chatId: string, content: string, opts?: StartRunOptions): void => {
+      // Null for a turn the local model answers — the per-agent bookkeeping
+      // below is skipped, which is what it always did for an LLM chat.
+      const agentId = opts?.target?.kind === 'agent' ? opts.target.agentId : null
       setPendingUserMessage({
         content,
         baselineUserCount: snapshotUserCount(chatId),
         attachments: opts?.attachments
       })
       try {
-        window.api.llm.sendMessage(
-          chatId,
-          content,
-          (event) => handleRun(chatId, event),
-          { attachments: opts?.attachments }
-        )
-      } catch {
-        stopStreaming()
-        return
-      }
-      // User message is saved by main before streaming begins — refetch once it settles
-      setTimeout(() => {
-        queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
-      }, 300)
-    },
-    [handleRun, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming]
-  )
-
-  const startAgent = useCallback(
-    (agentId: string, chatId: string, content: string, opts?: StartAgentOptions): void => {
-      setPendingUserMessage({
-        content,
-        baselineUserCount: snapshotUserCount(chatId),
-        attachments: opts?.attachments
-      })
-      try {
-        window.api.agents.sendMessage(
-          agentId,
+        window.api.run.send(
           chatId,
           content,
           (event) => {
             handleRun(chatId, event)
+            if (!agentId) return
             // When the agent finishes (or errors out), it may have updated its
             // STATUS.md during the turn — pull a fresh snapshot so tiles in the
             // status overlay / title-bar dot stay in sync.
@@ -239,23 +228,32 @@ export function useChatStream(): {
               }
             }
           },
-          opts
+          { attachments: opts?.attachments, addressedAgentId: agentId }
         )
       } catch {
         stopStreaming()
         return
       }
+      // User message is saved by main before streaming begins — refetch once it settles
       setTimeout(() => {
         queryClient.invalidateQueries({ queryKey: ['chat', chatId] })
       }, 300)
     },
-    [handleRun, queryClient, setPendingUserMessage, snapshotUserCount, stopStreaming, isCinnaUser, forceRefreshAgentStatus, rereadAgentStatus]
+    [
+      handleRun,
+      queryClient,
+      setPendingUserMessage,
+      snapshotUserCount,
+      stopStreaming,
+      isCinnaUser,
+      forceRefreshAgentStatus,
+      rereadAgentStatus
+    ]
   )
 
   const cancel = useCallback((requestId: string): void => {
-    window.api.llm.cancel(requestId)
-    window.api.agents.cancelMessage(requestId)
+    window.api.run.cancel(requestId)
   }, [])
 
-  return { startLlm, startAgent, cancel }
+  return { startRun, cancel }
 }

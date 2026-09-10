@@ -219,7 +219,7 @@ export function useExecuteJob() {
   const queryClient = useQueryClient()
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
   const setActiveView = useUIStore((s) => s.setActiveView)
-  const { startLlm, startAgent } = useChatStream()
+  const { startRun } = useChatStream()
   const { data: chatModes } = useChatModes()
   const { data: providers } = useProviders()
   const { data: allModels } = useModels()
@@ -287,11 +287,12 @@ export function useExecuteJob() {
       // Always fire the stream — the run is meaningless otherwise, even
       // when we're not navigating to the chat. The chat-stream `done` hook
       // invalidates `['jobs']` so the spinner clears when the run finishes.
-      if (agentId) {
-        startAgent(agentId, chatId, prompt)
-      } else {
-        startLlm(chatId, prompt)
-      }
+      // `executeLocal` says who the seeded chat routes to; the target is passed
+      // through so the run's own agent gets its post-turn status re-read, the
+      // same as a message the user typed.
+      startRun(chatId, prompt, {
+        target: agentId ? { kind: 'agent', agentId } : { kind: 'model' }
+      })
     },
     /*
       There was no `onError` here at all. `JobDetail` reads

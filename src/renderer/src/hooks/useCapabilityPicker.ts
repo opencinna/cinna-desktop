@@ -55,9 +55,10 @@ export interface CapabilityPicker {
  *
  *  - **New chat**: picks buffer in the parent's pending lists (flushed onto the
  *    chat row at creation by `useNewChatFlow`).
- *  - **Active chat**: picks hit the on-demand DB tables — adding an agent
- *    promotes the chat to orchestrated; the bound root agent stays selected and
- *    non-removable from the composer (same as `@`).
+ *  - **Active chat**: picks hit the on-demand DB tables — adding an agent moves
+ *    the chat onto the router that shape needs (see `useAttachAgentToChat`);
+ *    the bound root agent stays selected and non-removable from the composer
+ *    (same as `@`).
  *
  * Lives in a hook so the routing rules stay testable and out of the composer
  * view. Uses its own on-demand mutation instances (React Query dedupes the

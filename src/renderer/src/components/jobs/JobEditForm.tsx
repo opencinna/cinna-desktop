@@ -1,14 +1,14 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { Bot, ChevronDown, Plug, Plus, X } from 'lucide-react'
 import type { JobDetailData, JobPatchDto } from '../../../../shared/jobs'
-import { derivePattern } from '../../../../shared/commPattern'
+import { newChatRouter } from '../../../../shared/chatRouting'
 import { useAgents } from '../../hooks/useAgents'
 import { useChatModes } from '../../hooks/useChatModes'
 import { useMcpProviders } from '../../hooks/useMcp'
 import { useUpdateJob, useSetJobMcps, useSetJobAgents } from '../../hooks/useJobs'
 import { useCinnaAgents } from '../../hooks/useCinna'
 import { AgentPickerModal, type AgentPickerItem } from '../agents/AgentPickerModal'
-import { CommPatternBadge } from '../chat/CommPatternBadge'
+import { RouterBadge } from '../chat/RouterBadge'
 import { presetForAgentId } from '../../utils/agentColors'
 import { getPreset, type ColorPreset } from '../../constants/chatModeColors'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -246,10 +246,11 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
     [mcpProviders]
   )
 
-  // Routing preview: one agent + no MCPs runs direct A2A; anything else is
-  // orchestrated by the chat-mode model — same rule the new-chat composer uses.
-  const pattern = useMemo(
-    () => derivePattern(Array.from(agentIds), Array.from(mcpIds)),
+  // Routing preview — the same call the new-chat composer and `executeLocal`
+  // make: one agent alone answers directly, several agents are a chat the user
+  // routes, and agents mixed with MCP servers need the model to coordinate.
+  const router = useMemo(
+    () => newChatRouter({ agentIds: Array.from(agentIds), mcpIds: Array.from(mcpIds) }),
     [agentIds, mcpIds]
   )
 
@@ -388,9 +389,13 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
               </button>
             </div>
             <p className="mt-1 text-[10px] text-[var(--color-text-muted)]">
-              {pattern === 'A2A'
-                ? 'One agent, no connectors — the run talks directly to the agent.'
-                : 'The chat-mode model orchestrates the selected agents and connectors as it runs.'}
+              {agentIds.size === 0
+                ? 'No agent — the run is a chat with the chat-mode model, which calls any connectors you attach.'
+                : router === 'direct'
+                  ? 'One agent, no connectors — the run talks directly to the agent.'
+                  : router === 'human'
+                    ? 'Several agents, no connectors — the run addresses the first one, and the chat lets you route the rest.'
+                    : 'The chat-mode model coordinates the selected agents and connectors as it runs.'}
             </p>
             <AgentPickerModal
               open={pickerOpen}
@@ -496,7 +501,7 @@ export const JobEditForm = forwardRef<JobEditFormHandle, JobEditFormProps>(funct
           tooltip placement (opens upward) keeps it clear of the form edge. */}
       {type === 'local' && (
         <div className="flex justify-end pt-1">
-          <CommPatternBadge pattern={pattern} />
+          <RouterBadge router={router} />
         </div>
       )}
     </div>

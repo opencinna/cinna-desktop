@@ -2,6 +2,7 @@ import type Database from 'better-sqlite3'
 import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
 import { migrateChats } from './chats'
+import { migrateChatRouter } from './chat-router'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
 import { migrateAgents } from './agents'
@@ -81,6 +82,10 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // …and then the collapse of both engine drivers into `acp`, which reads the
   // value the line above backfills. Order, not preference.
   migrateAcpDriver(sqlite)
+  // `chats.router` + `chat_agent_cursors`. After `agents` and `chats` both
+  // exist (the cursor table references each), and after the driver migrations
+  // so the whole agent-runtime set reads in plan order.
+  migrateChatRouter(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

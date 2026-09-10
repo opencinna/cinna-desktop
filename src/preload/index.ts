@@ -46,7 +46,8 @@ import {
   type AgentReadiness,
   type AgentReadinessChangedPayload
 } from '../shared/agentDrivers'
-import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
+import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../shared/ipcPayloads'
+import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
 import type {
@@ -111,6 +112,9 @@ export interface ChatData {
   providerId: string | null
   modeId: string | null
   agentId: string | null
+  /** Who answers a message here — see `src/shared/chatRouting.ts`. */
+  router: ChatRouter
+  /** The `router === 'coordinator'` mirror, written for one phase. Do not read it. */
   orchestrated: boolean
   /** The job run that spawned this chat, if any (drives the chat-page job-origin banner). */
   originatingJobRunId: string | null
@@ -372,7 +376,7 @@ const api = {
         providerId?: string
         modeId?: string | null
         agentId?: string | null
-        orchestrated?: boolean
+        router?: ChatRouter
       }
     ): Promise<{ success: boolean }> => ipcRenderer.invoke('chat:update', chatId, updates),
     addMessage: (
@@ -422,8 +426,15 @@ const api = {
       agentId: string
     ): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('chat:on-demand-agent-remove', chatId, agentId),
-    promoteToOrchestrated: (chatId: string): Promise<{ success: boolean }> =>
-      ipcRenderer.invoke('chat:promote-to-orchestrated', chatId),
+    /**
+     * Move a chat onto a router — who answers a message here.
+     *
+     * Replaced `promoteToOrchestrated`, which could only ever go one way and
+     * only to one value. Rejects on `not_configured` when the local model is
+     * asked to coordinate and none is resolvable.
+     */
+    setRouter: (chatId: string, router: ChatRouter): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('chat:set-router', chatId, router),
     /**
      * Subscribe to background chat-title autogeneration completions. Fires
      * once per chat (when the auto-title feature is enabled and a first
@@ -765,6 +776,53 @@ const api = {
       const listener = (): void => handler()
       ipcRenderer.on('logger:toggle-overlay', listener)
       return () => ipcRenderer.off('logger:toggle-overlay', listener)
+    }
+  },
+
+  /**
+   * The one send channel. Main reads `chats.router` and decides who answers —
+   * the renderer says only what the user typed, and (in a `human` chat) which
+   * agent they addressed.
+   *
+   * `agents.sendMessage` and `llm.sendMessage` below still work: main keeps both
+   * channels as forwards onto this one for one phase. Nothing new should use
+   * them, because picking a channel *is* deciding the routing, which is the
+   * decision this channel exists to take away from the composer.
+   */
+  run: {
+    send: (
+      chatId: string,
+      content: string,
+      onEvent: (event: RunEvent) => void,
+      extras?: { attachments?: MessageAttachment[]; addressedAgentId?: string | null }
+    ): void => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = (event) => {
+        // Guard at the IPC trust boundary: drop messages that don't match the
+        // contract instead of casting blindly. Logged so a regression surfaces
+        // in dev tools rather than as a silent no-op.
+        if (!isRunEvent(event.data)) {
+          console.warn('[preload] dropped off-contract run event', event.data)
+          return
+        }
+        onEvent(event.data)
+      }
+      const payload: RunSendPayload = {
+        chatId,
+        content,
+        attachments: extras?.attachments,
+        addressedAgentId: extras?.addressedAgentId
+      }
+      ipcRenderer.postMessage('run:send', payload, [channel.port2])
+    },
+    /**
+     * Stop the turn running in this chat, whoever is answering it. Both cancels
+     * go out because one request id belongs to exactly one of them and the
+     * other is a no-op — cheaper than asking who is answering first.
+     */
+    cancel: (requestId: string): void => {
+      void ipcRenderer.invoke('llm:cancel', requestId)
+      void ipcRenderer.invoke('agent:cancel-message', requestId)
     }
   },
 

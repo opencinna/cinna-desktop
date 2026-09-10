@@ -1,23 +1,17 @@
-import { ipcMain } from 'electron'
-import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
 import { a2aSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
-import { messageRoutingService } from '../services/messageRoutingService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
 import { pendingRequests } from '../services/agentTurn/pendingRequests'
-import { resolveCommandRunner } from '../services/localAgents/commandService'
 import type { PermissionReply } from '../../shared/localAgentRequests'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
-import { postRunError } from './_streamPort'
 import type { CliCommand } from '../../shared/cliCommands'
-import type { AgentSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('A2A')
 
@@ -136,90 +130,6 @@ export function registerA2AHandlers(): void {
     userActivation.requireActivated()
     if (!chatRepo.getOwned(getProfileScopeUserId(), chatId)) return null
     return a2aSessionRepo.getByChat(chatId) ?? null
-  })
-
-  // Stream a message to an agent via MessagePort. Thin controller: extract
-  // params, auth/ownership, then hand off to the routing service (persistence
-  // + cursor advance) and the streaming service (the port pump), with the
-  // agent's driver running the turn.
-  ipcMain.on('agent:send-message', async (event, payload: AgentSendPayload) => {
-    const { agentId, chatId, content: userContent, attachments } = payload
-    const fileIds = attachments?.map((a) => a.id)
-    const port = event.ports?.[0]
-    if (!port) return
-
-    if (!userActivation.isActivated()) {
-      logger.error('send-message rejected: session not activated', { agentId, chatId })
-      port.start()
-      postRunError(port, 'Session not activated — user must authenticate first')
-      port.close()
-      return
-    }
-
-    port.start()
-
-    const profileUserId = getProfileScopeUserId()
-
-    if (!chatRepo.getOwned(profileUserId, chatId)) {
-      const err = 'Chat not found'
-      logger.error(err, { agentId, chatId })
-      postRunError(port, err)
-      port.close()
-      return
-    }
-
-    const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
-    if (!located) {
-      const err = 'Agent not found or not configured'
-      logger.error(err, { agentId, chatId })
-      postRunError(port, err)
-      messageRepo.saveError({ chatId, short: err })
-      port.close()
-      return
-    }
-    const { row: agent, userId: agentOwnerId } = located
-
-    // **No kind-specific pre-flight here any more.** The card check, endpoint
-    // and token resolution and the Cinna re-auth mapping all run inside the A2A
-    // driver's `run`, which reports each as `result.error` — so a failure there
-    // arrives after the user's message is persisted, and is finalized by
-    // `streamToAgent` like any failed turn, exactly as a folder agent's always
-    // was.
-    const driver = driverFor(agent)
-
-    // Persist the user message + fire title generation in one place. Service
-    // throws ChatError on ownership mismatch (already re-checked above; this
-    // is defense-in-depth).
-    const { wireContent } = messageRoutingService.prepareAgentSend({
-      userId: profileUserId,
-      chatId,
-      agentId,
-      userContent,
-      attachments
-    })
-
-    // `/run:<name>` for an agent whose commands come from a folder catalog is
-    // intercepted **here**, before the driver is ever reached — OpenCode has no
-    // such convention, so the desktop itself has to recognise the message.
-    // Deliberately not inside the driver: a command is not a model turn. See
-    // `resolveCommandRunner`'s own docstring for why the decision lives there,
-    // tested, rather than inline here.
-    const run = resolveCommandRunner(
-      driver.capabilities(agent).commands,
-      wireContent,
-      agentOwnerId,
-      agentId,
-      (io) =>
-        driver.run(agentOwnerId, agent, {
-          chatId,
-          wireContent,
-          fileIds,
-          signal: io.signal,
-          onEvent: io.onEvent
-        })
-    )
-
-    await a2aStreamingService.streamToAgent({ run, chatId, agentId, port })
   })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {

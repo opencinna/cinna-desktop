@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { agentIdentityKey, agentRowToDescriptor } from './identity'
-import { derivePattern } from '../../shared/commPattern'
+import { newChatRouter } from '../../shared/chatRouting'
 import type { AgentRow } from '../db/agents'
 import type { JobDepDescriptor } from '../../shared/sync'
 
@@ -37,11 +37,12 @@ type ResolveIndex = Awaited<ReturnType<typeof import('./resolvers').buildResolve
  * The consequence was not "the job will not resolve on the second device". It
  * was worse and quieter: the peer rebuilt the job from a deps list with no
  * agent in it, `manifestNeedsSetup` answered `false` — the job presented as
- * fully set up — and the run called `derivePattern([], [])`, which returns
- * `'AI'`. **The job ran as a plain-LLM job with the agent silently missing, and
- * reported success.** That is what the first test here pins, in that order: the
- * pattern first, because a wrong pattern is the damage and the descriptor is
- * only the mechanism.
+ * fully set up — and the run asked the router about two empty arrays, which
+ * answers `'direct'` — a chat with the local model and nothing else. **The job
+ * ran as a plain-LLM job with the agent silently missing, and reported
+ * success.** That is what the first test here pins, in that order: the router
+ * first, because the wrong router is the damage and the descriptor is only the
+ * mechanism.
  */
 
 function folderRow(over: Partial<AgentRow> = {}): AgentRow {
@@ -97,18 +98,28 @@ function index(over: Partial<ResolveIndex> = {}): ResolveIndex {
   }
 }
 
-/** What `collections.ts` apply does with one agent descriptor and no MCPs. */
-function patternFor(descriptors: Array<JobDepDescriptor | null>): string {
+/**
+ * What `executeLocal` would build from these descriptors and no MCPs.
+ *
+ * The **root agent**, not the router alone: since phase 4 a chat with no agents
+ * and a chat with one agent are both `direct` — the difference is who is bound
+ * as the counterparty, and the dropped dependency is exactly what leaves that
+ * null. Asserting the router by itself would be an assertion that cannot fail.
+ */
+function routingFor(
+  descriptors: Array<JobDepDescriptor | null>
+): { router: string; rootAgentId: string | null } {
   const agentIds = descriptors.filter((d) => d !== null).map((_, i) => `resolved-${i}`)
-  return derivePattern(agentIds, [])
+  const router = newChatRouter({ agentIds, mcpIds: [] })
+  return { router, rootAgentId: router === 'direct' ? (agentIds[0] ?? null) : null }
 }
 
 describe('a job dependency on a folder agent', () => {
   it('reaches the peer as a dependency instead of turning the job into a plain-LLM run', () => {
     const descriptors = [agentRowToDescriptor(folderRow())]
-    // The damage first: with the dependency dropped this was 'AI', and the run
-    // went ahead with no agent and no complaint.
-    expect(patternFor(descriptors)).toBe('A2A')
+    // The damage first: with the dependency dropped the run was a chat with the
+    // local model and no agent, and it went ahead with no complaint.
+    expect(routingFor(descriptors)).toEqual({ router: 'direct', rootAgentId: 'resolved-0' })
     expect(descriptors[0]).not.toBeNull()
     expect(descriptors[0]).toEqual({
       kind: 'agent',
