@@ -143,12 +143,32 @@ describe('agents.driver on an install that predates it', () => {
     return Object.fromEntries(rows.map((r) => [r.id, r.driver]))
   }
 
-  it('maps every row to the driver its source runs on', () => {
+  function launchers(raw: DatabaseSync): Record<string, string | null> {
+    const rows = raw.prepare('SELECT id, driver_config FROM agents').all() as Array<{
+      id: string
+      driver_config: string | null
+    }>
+    return Object.fromEntries(
+      rows.map((r) => [
+        r.id,
+        r.driver_config ? ((JSON.parse(r.driver_config).launcher as string) ?? null) : null
+      ])
+    )
+  }
+
+  it('maps every row to the driver its source runs on, and every folder to a launcher', () => {
     const raw = preDriverDatabase()
     runAllMigrations(adaptDatabase(raw))
     expect(drivers(raw)).toEqual({
       'hand-added': 'a2a',
       'remote:agent:u1': 'a2a',
+      // One driver for every folder agent since phase 3; which engine it runs
+      // is a setting of that driver, not an identity.
+      'folder:abc': 'acp'
+    })
+    expect(launchers(raw)).toEqual({
+      'hand-added': null,
+      'remote:agent:u1': null,
       // The default engine; the scanner writes the engine the folder names.
       'folder:abc': 'opencode'
     })
@@ -161,14 +181,17 @@ describe('agents.driver on an install that predates it', () => {
     const sqlite = adaptDatabase(raw)
     runAllMigrations(sqlite)
     const once = drivers(raw)
+    const onceLaunchers = launchers(raw)
     expect(() => runAllMigrations(sqlite)).not.toThrow()
     expect(drivers(raw)).toEqual(once)
+    expect(launchers(raw)).toEqual(onceLaunchers)
     raw.close()
   })
 
-  it('never rewrites a row that already names a driver', () => {
-    // A Claude folder the scanner has already recorded must not be reset to
-    // the default engine by the next boot's backfill.
+  it('carries a Claude row’s engine into its launcher rather than losing it', () => {
+    // The phase-3 collapse: `driver` stops naming the engine, so the engine has
+    // to be somewhere before it is overwritten. A Claude folder that came back
+    // as the default engine would run on the wrong one until its next rescan.
     const raw = freshDatabase()
     raw
       .prepare(
@@ -177,7 +200,38 @@ describe('agents.driver on an install that predates it', () => {
       )
       .run(Date.now())
     runAllMigrations(adaptDatabase(raw))
-    expect(drivers(raw)).toEqual({ 'folder:claude': 'claude' })
+    expect(drivers(raw)).toEqual({ 'folder:claude': 'acp' })
+    expect(launchers(raw)).toEqual({ 'folder:claude': 'claude' })
+    raw.close()
+  })
+
+  it('leaves a driver_config another build wrote alone', () => {
+    // Nothing wrote one before phase 3, so a value here is from a newer build
+    // or a repair — both of which know more than a backfill does.
+    const raw = freshDatabase()
+    raw
+      .prepare(
+        `INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, driver_config, created_at)
+         VALUES ('folder:x', '__default__', 'X', 'local-folder', 1, 'folder', 'opencode', '{"launcher":"gemini"}', ?)`
+      )
+      .run(Date.now())
+    runAllMigrations(adaptDatabase(raw))
+    expect(drivers(raw)).toEqual({ 'folder:x': 'acp' })
+    expect(launchers(raw)).toEqual({ 'folder:x': 'gemini' })
+    raw.close()
+  })
+
+  it('leaves a row already on acp exactly as it is', () => {
+    const raw = freshDatabase()
+    raw
+      .prepare(
+        `INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, driver_config, created_at)
+         VALUES ('folder:acp', '__default__', 'A', 'local-folder', 1, 'folder', 'acp', '{"launcher":"claude"}', ?)`
+      )
+      .run(Date.now())
+    runAllMigrations(adaptDatabase(raw))
+    expect(drivers(raw)).toEqual({ 'folder:acp': 'acp' })
+    expect(launchers(raw)).toEqual({ 'folder:acp': 'claude' })
     raw.close()
   })
 })

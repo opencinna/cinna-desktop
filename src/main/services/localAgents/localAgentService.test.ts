@@ -746,11 +746,11 @@ describe('reindexAgent', () => {
 
     localAgentService.reindexAgent(USER, agentRootRepo.getDefault(USER)!, agentDir)
 
-    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('claude')
+    expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('claude')
   })
 })
 
-describe('the driver follows an engine chosen in the app', () => {
+describe('the launcher follows an engine chosen in the app', () => {
   it('moves a kit agent’s row when its runtime is saved, and back when it is cleared', () => {
     const toClaude = localAgentService.updateField(USER, {
       agentId,
@@ -761,7 +761,7 @@ describe('the driver follows an engine chosen in the app', () => {
       expectedStamp: currentAgent().stamps[MANIFEST]!
     })
     expect(toClaude.runtime?.engine).toBe('claude')
-    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('claude')
+    expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('claude')
 
     localAgentService.updateField(USER, {
       agentId,
@@ -771,7 +771,7 @@ describe('the driver follows an engine chosen in the app', () => {
       },
       expectedStamp: currentAgent().stamps[MANIFEST]!
     })
-    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('opencode')
+    expect(agentRepo.getOwned(USER, agentId)?.driverConfig?.launcher).toBe('opencode')
   })
 })
 
@@ -1638,7 +1638,7 @@ describe('removing a bare agent', () => {
       modelId: null,
       complexity: null
     })
-    expect(agentRepo.getOwned(USER, bareId)?.driver).toBe('claude')
+    expect(agentRepo.getOwned(USER, bareId)?.driverConfig?.launcher).toBe('claude')
   })
 
   it('refuses a runtime naming both a model and a tier, wherever it is stored', () => {

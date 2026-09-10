@@ -34,10 +34,13 @@ import type {
 } from '@agentclientprotocol/sdk'
 import type { MessageLike } from '../../streamPartsAccumulator'
 
-/** Which engine an ACP agent runs. Stored as `agents.driver_config.launcher`. */
-export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex'
-
-export const ACP_LAUNCHER_IDS: readonly AcpLauncherId[] = ['opencode', 'claude', 'gemini', 'codex']
+/**
+ * Which engine an ACP agent runs. Re-exported from `shared/agentDrivers`, where
+ * it lives because it is a **stored row value** (`driver_config.launcher`) and
+ * the row model may not depend on this folder — which imports the ACP SDK.
+ */
+export type { AcpLauncherId } from '../../../../shared/agentDrivers'
+export { ACP_LAUNCHER_IDS } from '../../../../shared/agentDrivers'
 
 /** ACP protocol version this build speaks. Declares no `fs` and no `terminal` (v2-forward). */
 export const ACP_PROTOCOL_VERSION = 1

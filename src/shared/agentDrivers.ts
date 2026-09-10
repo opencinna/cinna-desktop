@@ -29,13 +29,59 @@ import type { InputResumeMode } from './runEvents'
  * which flips every folder row over changes wiring and nothing else. Both
  * values go, together with the two runners behind them, when it does.
  */
-export type AgentDriverId = 'a2a' | 'acp' | 'opencode' | 'claude'
+export type AgentDriverId = 'a2a' | 'acp'
 
-export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp', 'opencode', 'claude']
+export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp']
 
 /** Whether a stored value names a driver this build has. */
 export function isAgentDriverId(value: unknown): value is AgentDriverId {
-  return value === 'a2a' || value === 'acp' || value === 'opencode' || value === 'claude'
+  return value === 'a2a' || value === 'acp'
+}
+
+/** The driver every folder agent runs on. */
+export const FOLDER_AGENT_DRIVER: AgentDriverId = 'acp'
+
+/**
+ * Which engine an ACP agent runs — `driver_config.launcher`.
+ *
+ * **The launcher id is the engine name**, deliberately: it is what the folder's
+ * own `runtime.engine` says, and inventing a second vocabulary for it would put
+ * the manifest and the row one translation table apart. `gemini` and `codex`
+ * are here because a row and a manifest can name them before this build can
+ * run them — the driver refuses such an agent in words, which is a far better
+ * failure than a value that reads as the default engine.
+ */
+export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex'
+
+export const ACP_LAUNCHER_IDS: readonly AcpLauncherId[] = [
+  'opencode',
+  'claude',
+  'gemini',
+  'codex'
+]
+
+/** Whether a stored value names a launcher this build has a name for. */
+export function isAcpLauncherId(value: unknown): value is AcpLauncherId {
+  return (ACP_LAUNCHER_IDS as readonly unknown[]).includes(value)
+}
+
+/** What `driver_config` holds for an ACP row. */
+export function launcherConfig(launcher: AcpLauncherId): Record<string, unknown> {
+  return { launcher }
+}
+
+/**
+ * The launcher a `driver_config` names, or null when it names none this build
+ * knows.
+ *
+ * Null rather than the default, so a caller decides what "could not tell"
+ * means: a row read for a turn falls back to the default engine and reconciles
+ * against the folder, while a writer that is only refreshing a cache leaves
+ * what was there.
+ */
+export function launcherOfConfig(config: Record<string, unknown> | null): AcpLauncherId | null {
+  const raw = config?.launcher
+  return isAcpLauncherId(raw) ? raw : null
 }
 
 export interface AgentCapabilities {

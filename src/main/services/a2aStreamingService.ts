@@ -147,9 +147,9 @@ export interface RunAgentTurnInput {
    *
    * **Optional since the runner seam landed (Phase 6).** A folder agent has no
    * endpoint and no card — it is run by the local engine, not reached over
-   * A2A — and this type is the shared input to `AgentTurnRunner`, so both
-   * shapes have to fit through it. `runAgentTurn` below still requires both
-   * (see {@link A2ARunAgentTurnInput}); `A2ATurnRunner` is the single place
+   * A2A — and this type is the shared input every driver's `run` is built on,
+   * so both shapes have to fit through it. `runAgentTurn` below still requires
+   * both (see {@link A2ARunAgentTurnInput}); the A2A driver is the single place
    * that narrows, so the compiler continues to refuse an A2A turn with no card
    * rather than discovering it at the SDK call.
    */
@@ -209,7 +209,7 @@ function isAuthRejection(err: unknown): err is A2aHttpError {
  * {@link RunAgentTurnInput} with the two fields an A2A turn cannot do without.
  *
  * The shared input widened them to optional so a folder agent — which has
- * neither — fits through `AgentTurnRunner`. This re-narrows for the A2A pump,
+ * neither — fits through the shared driver input. This re-narrows for the A2A pump,
  * so the compiler still refuses a turn with no card at the call site rather
  * than letting it surface as an SDK failure mid-stream. The A2A driver
  * (`src/main/agents/drivers/a2aDriver.ts`) is the single place that does the
@@ -555,12 +555,12 @@ export const a2aStreamingService = {
       jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
     } catch (err) {
       // **A runner is not trusted to keep its own contract here.**
-      // `AgentTurnRunner.runTurn` documents that it never throws, and the A2A
+      // `AgentDriver.run` documents that it never throws, and the A2A
       // one does not — but this `try` had only a `finally`, so the day a runner
       // broke that promise the port closed having posted neither `done` nor
       // `error` and the renderer sat in the streaming state forever. That is
       // exactly what `turnLock.acquire`'s `LocalAgentError` did: it is thrown,
-      // not returned, and it reaches here from `LocalAgentTurnRunner`.
+      // not returned, and it reached here from the folder runners too.
       //
       // Fixed at both ends — the local runner catches it too — because this is
       // the wrapper every future runner will pass through, and a hung chat is

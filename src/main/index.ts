@@ -5,6 +5,7 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
+import { acpProcessPool } from './agents/drivers'
 import { getCurrentUserId, initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
@@ -391,6 +392,15 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', async () => {
+  // **The ACP processes first, and not awaited.** Each folder agent runs in a
+  // child of its own — `opencode acp`, or the Claude adapter and the `claude`
+  // it spawns — in its own process group, so nothing else can reach them once
+  // this window closes. Electron does not await a `will-quit` handler, which is
+  // why this is fired rather than awaited: `shutdown` reaches `killTree`
+  // synchronously for every running process, and the await that follows it is
+  // only the wait for their exits. Without this, quitting mid-turn leaves a
+  // ~260 MB `claude` behind with nobody left to stop it.
+  void acpProcessPool.shutdown()
   await mcpManager.disconnectAll()
 })
 

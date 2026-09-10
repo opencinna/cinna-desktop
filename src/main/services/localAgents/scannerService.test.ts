@@ -808,43 +808,45 @@ describe('the manifest metadata a folder row carries', () => {
  * sits. What has to hold instead is that the DTO is complete enough for every
  * surface that renders one, and that "removed from the list" outlives a rescan.
  */
-describe('the driver a folder row names', () => {
+describe('the launcher a folder row names', () => {
   function setEngine(dir: string, engine: string | null): void {
     const manifest = readManifest(manifestPath(dir))
     if (engine === null) delete manifest.runtime
     else manifest.runtime = { ...(manifest.runtime ?? {}), engine }
     writeManifest(manifestPath(dir), manifest)
   }
-  const driverOf = (id: string): string | null | undefined => agentRepo.getOwned(USER, id)?.driver
+  /** The engine the row's driver launches — `driver_config.launcher`. */
+  const launcherOf = (id: string): unknown =>
+    agentRepo.getOwned(USER, id)?.driverConfig?.launcher ?? null
 
   it('is the engine the manifest names', () => {
     const dir = scaffold('alpha')
     setEngine(dir, 'claude')
     const [agent] = scannerService.scanRoot(USER, root).agents
-    expect(driverOf(agent.id)).toBe('claude')
+    expect(launcherOf(agent.id)).toBe('claude')
   })
 
   it('is the default engine for a manifest that names none, and follows an edit', () => {
     const dir = scaffold('alpha')
     setEngine(dir, null)
     const [agent] = scannerService.scanRoot(USER, root).agents
-    expect(driverOf(agent.id)).toBe('opencode')
+    expect(launcherOf(agent.id)).toBe('opencode')
 
     setEngine(dir, 'claude')
     scannerService.scanRoot(USER, root)
-    expect(driverOf(agent.id)).toBe('claude')
+    expect(launcherOf(agent.id)).toBe('claude')
   })
 
   it('is no answer at all for a folder whose manifest could not be read', async () => {
     // The rule itself, asked directly. Neither index writer reaches such a
     // folder today, so the scan below cannot fail when this breaks — a future
     // writer would, by reading the unread runtime as "the default engine".
-    const { folderIndexDriver } = await import('./scannerService')
+    const { folderIndexLauncher } = await import('./scannerService')
     const dir = scaffold('alpha')
     writeFileSync(manifestPath(dir), '{ "name": "half a fi')
     const dto = scannerService.scanAgentFolder(dir, root)
     expect(dto.identity).toBe('unresolved')
-    expect(folderIndexDriver(dto)).toBeNull()
+    expect(folderIndexLauncher(dto)).toBeNull()
   })
 
   it('stays on Claude while the manifest is unparseable', () => {
@@ -855,7 +857,7 @@ describe('the driver a folder row names', () => {
     const [agent] = scannerService.scanRoot(USER, root).agents
     writeFileSync(manifestPath(dir), '{ "name": "half a fi')
     scannerService.scanRoot(USER, root)
-    expect(driverOf(agent.id)).toBe('claude')
+    expect(launcherOf(agent.id)).toBe('claude')
   })
 
   it('is what a bare folder’s desktop state names', () => {
@@ -871,7 +873,7 @@ describe('the driver a folder row names', () => {
         kind: 'external'
       })
       const [agent] = scannerService.scanRoot(USER, externalRoot).agents
-      expect(driverOf(agent.id)).toBe('claude')
+      expect(launcherOf(agent.id)).toBe('claude')
     } finally {
       rmSync(external, { recursive: true, force: true })
     }

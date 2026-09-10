@@ -25,10 +25,15 @@
  * at all**, so the desktop waits out its own twenty-minute ceiling. That was a
  * real user-facing hang, not a hypothetical.
  *
- * Two conclusions follow, and both are implemented rather than documented:
- * a turn checks this before it opens a session (`localAgentTurnRunner`), and
- * the generator never emits an entry it knows the engine cannot drive
+ * One conclusion follows, and it is implemented rather than documented: the
+ * generator never emits an entry it knows the engine cannot drive
  * (`configGenerator`).
+ *
+ * The other half of the guard went with the HTTP runner in phase 3 of the agent
+ * runtime plan: there is no session to open over an API any more, so nothing
+ * checks this before a turn. A model the engine cannot drive now fails the
+ * `session/prompt` itself, as a JSON-RPC error the driver reports — late, but
+ * as an error rather than a hang, which is what the hang above was about.
  *
  * ## The compatible route
  *

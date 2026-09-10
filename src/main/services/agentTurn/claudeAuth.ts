@@ -8,7 +8,7 @@
  * "There is no `claude` on this machine" comes from `toolDetectionService`
  * without spawning anything. "That install is not logged in" did not: the
  * runner learned it from a **thrown turn error** and told the two apart by
- * matching the CLI's own words (`claudeAgentTurnRunner.isNotLoggedIn`). That
+ * matching the CLI's own words. That
  * works, but it is the wrong shape — the user asks a question, the app spends a
  * turn's worth of latency, and the answer is an error about authentication.
  *

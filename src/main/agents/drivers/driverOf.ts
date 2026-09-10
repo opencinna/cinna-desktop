@@ -4,23 +4,15 @@
  * the drivers' production wiring in.
  */
 import type { AgentRow } from '../../db/agents'
-import { isAgentDriverId, type AgentDriverId } from '../../../shared/agentDrivers'
-import { DEFAULT_AGENT_ENGINE, isAgentEngine } from '../../../shared/engine'
-import { ACP_LAUNCHER_IDS, type AcpLauncherId } from './acp/types'
-
-/**
- * The driver a folder agent runs on, from its runtime block (the manifest's,
- * or a bare folder's desktop state).
- *
- * The same tolerant read `runtimeService` makes: a missing or unrecognised
- * engine is the default engine, so a folder written by a newer tool keeps
- * running. The two folder drivers' ids are the engine names until phase 3
- * collapses them into `acp`.
- */
-export function driverOfFolder(runtime: { engine?: unknown } | null | undefined): AgentDriverId {
-  const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
-  return isAgentEngine(raw) ? raw : DEFAULT_AGENT_ENGINE
-}
+import {
+  FOLDER_AGENT_DRIVER,
+  isAcpLauncherId,
+  isAgentDriverId,
+  launcherOfConfig,
+  type AcpLauncherId,
+  type AgentDriverId
+} from '../../../shared/agentDrivers'
+import { DEFAULT_AGENT_ENGINE } from '../../../shared/engine'
 
 /**
  * The driver a row names, falling back by ownership for a row whose `driver`
@@ -32,7 +24,7 @@ export function driverOfFolder(runtime: { engine?: unknown } | null | undefined)
  */
 export function driverOfRow(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriverId {
   if (isAgentDriverId(agent.driver)) return agent.driver
-  return agent.source === 'folder' ? DEFAULT_AGENT_ENGINE : 'a2a'
+  return agent.source === 'folder' ? FOLDER_AGENT_DRIVER : 'a2a'
 }
 
 /**
@@ -45,28 +37,26 @@ export function driverOfRow(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDr
  * catches up.
  */
 export function launcherOfRow(agent: Pick<AgentRow, 'driverConfig'>): AcpLauncherId {
-  const raw = agent.driverConfig?.launcher
-  return isAcpLauncherId(raw) ? raw : DEFAULT_AGENT_ENGINE
+  return launcherOfConfig(agent.driverConfig ?? null) ?? DEFAULT_AGENT_ENGINE
 }
 
 /**
- * The launcher a folder's runtime block names, or **null when it could not be
- * read**.
+ * The launcher a folder's runtime block names.
  *
- * Null is the same "keep what the row says" signal `folderIndexDriver` has
- * always carried: a scan changes readiness, never identity, and a manifest is
- * unparseable for a moment every time an assistant saves it. An insert with
- * null takes the default engine; there is no earlier value to keep.
+ * The same tolerant read `runtimeService` makes: a runtime that names no engine
+ * — or one this build has no name for — is the default engine, so a folder
+ * written by a newer tool keeps running rather than disappearing from the list.
+ *
+ * **Never null, and that is the distinction that matters.** "The runtime was
+ * read and names nothing" is an answer: the default. "The manifest could not be
+ * read at all" is *not* an answer, and only `folderIndexLauncher` can tell —
+ * it checks the folder's identity first and returns null there, which is what
+ * keeps the row's value. Collapsing the two left a user who cleared the engine
+ * in the Runtime card on the engine they had cleared.
  */
 export function launcherOfFolder(
   runtime: { engine?: unknown } | null | undefined
-): AcpLauncherId | null {
+): AcpLauncherId {
   const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
-  if (raw === '') return null
-  return isAcpLauncherId(raw) ? raw : null
-}
-
-/** Whether a stored value names a launcher this build has. */
-export function isAcpLauncherId(value: unknown): value is AcpLauncherId {
-  return typeof value === 'string' && (ACP_LAUNCHER_IDS as readonly string[]).includes(value)
+  return isAcpLauncherId(raw) ? raw : DEFAULT_AGENT_ENGINE
 }

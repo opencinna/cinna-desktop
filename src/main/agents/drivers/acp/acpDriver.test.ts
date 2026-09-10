@@ -350,6 +350,47 @@ describe('a remembered session', () => {
     expect(result.text).not.toContain('the previous question')
   })
 
+  it('does not let traffic buffered before the bind into this turn either', async () => {
+    // The pre-bind pen holds what arrived for a session nobody was listening
+    // to — the tail of a turn the user stopped, say — and `bindSession` flushes
+    // it *synchronously*. So the replay gate has to be closed before the bind,
+    // not after it, or a stop followed by a resend in the same chat would fold
+    // the stopped turn's last chunks into the new one. Emitted here at
+    // `initialize`, which is the one moment nothing can be bound yet.
+    const w = world({
+      remembered: 'ses_fake',
+      script: {
+        initialize: {
+          emit: [
+            {
+              kind: 'update',
+              sessionId: 'ses_fake',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'TAIL OF A STOPPED TURN' }
+              }
+            }
+          ]
+        },
+        prompt: {
+          emit: [
+            {
+              kind: 'update',
+              sessionId: 'ses_fake',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'the new answer' }
+              }
+            }
+          ]
+        }
+      }
+    })
+    const result = await w.run()
+    expect(result.text).toContain('the new answer')
+    expect(result.text).not.toContain('TAIL OF A STOPPED TURN')
+  })
+
   it('starts a fresh one when the agent has forgotten it, without explaining', async () => {
     const w = world({
       remembered: 'ses_gone',
@@ -477,15 +518,88 @@ describe('a permission ask', () => {
     })
   })
 
+  it('denies when the user says no, in words written for the model', async () => {
+    const w = world({ script: ASKS })
+    const running = w.run()
+    const asked = await askedFor(w)
+    expect(
+      w.driver.respond(
+        { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+        { kind: 'permission', reply: 'reject' }
+      )
+    ).toEqual({ delivered: true })
+    const result = await running
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'reject' }
+    })
+    // The transcript says a person decided, not that the request lapsed.
+    expect(result.parts.map((part) => part.text)).toContain('Denied.')
+  })
+
+  it('answers an ask that arrives after the agent has already replied', async () => {
+    // The regression the whole phase turns on. Under the in-process SDK a
+    // string prompt closed the CLI's stdin at the first result, and a
+    // background subagent's ask then arrived over a closed pipe — reported to
+    // the model as "Tool permission request failed: AbortError: Stream closed",
+    // seventeen times in the transcript that produced the memory note. There is
+    // no stdin to close here: the ask is a request on a live connection,
+    // whenever it comes.
+    const w = world({
+      script: {
+        prompt: {
+          emit: [
+            {
+              kind: 'update',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'I will report back.' }
+              }
+            },
+            {
+              kind: 'permission',
+              toolCall: {
+                toolCallId: 'call_bg',
+                kind: 'execute',
+                status: 'pending',
+                rawInput: { command: 'ledger --sync' }
+              }
+            },
+            {
+              kind: 'update',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: ' Done: 42 bills.' }
+              }
+            }
+          ]
+        }
+      }
+    })
+    const running = w.run()
+    const asked = await askedFor(w)
+    w.driver.respond(
+      { requestId: asked.requestId, chatId: CHAT_ID, agentId: AGENT_ID, kind: 'permission' },
+      { kind: 'permission', reply: 'once' }
+    )
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(w.fake.answers('session/request_permission')[0].result).toEqual({
+      outcome: { outcome: 'selected', optionId: 'once' }
+    })
+    expect(result.text).toContain('Done: 42 bills.')
+  })
+
   it('denies, in words written for the model, when the park expires', async () => {
     const w = world({ script: ASKS })
     const running = w.run()
     const asked = await askedFor(w)
     expect(pendingRequests.resolve(asked.requestId, { kind: 'rejected' })).not.toBeNull()
-    await running
+    const result = await running
     expect(w.fake.answers('session/request_permission')[0].result).toEqual({
       outcome: { outcome: 'selected', optionId: 'reject' }
     })
+    // An expiry, not a stop, and the two read differently.
+    expect(result.parts.map((part) => part.text)).toContain('No answer — the request expired.')
   })
 })
 
@@ -531,12 +645,17 @@ describe('a question', () => {
         }
       ]
     })
-    expect(pendingRequests.resolve(asked.requestId, { kind: 'question', answers: [['Blue']] })).not.toBeNull()
-    await running
+    expect(
+      pendingRequests.resolve(asked.requestId, { kind: 'question', answers: [['Blue']] })
+    ).not.toBeNull()
+    const result = await running
     expect(w.fake.answers('elicitation/create')[0].result).toEqual({
       action: 'accept',
       content: { question_0: 'Blue' }
     })
+    // The decision line reads like every other one in a transcript, full stop
+    // included — the wording the OpenCode runner used before this phase.
+    expect(result.parts.map((part) => part.text)).toContain('Answered: Blue.')
   })
 
   it('declines a form it cannot render, rather than cancelling the tool call', async () => {
@@ -547,6 +666,68 @@ describe('a question', () => {
     await w.run()
     expect(w.fake.answers('elicitation/create')[0].result).toEqual({ action: 'decline' })
     expect(w.events.filter((event) => event.type === 'needs_input')).toEqual([])
+  })
+})
+
+describe('the mode the agent actually ran in', () => {
+  it('says so in the transcript when it is not the one the desktop asked for', async () => {
+    // The setting said automatic and the turn asked before every action. The
+    // in-process runner learned this from the SDK's init message; over ACP the
+    // signal is a mode update naming something else.
+    const w = world({
+      launcher: 'claude',
+      setup: { modeId: 'auto' },
+      script: {
+        prompt: {
+          emit: [
+            {
+              kind: 'update',
+              update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' }
+            },
+            {
+              kind: 'update',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'Done.' }
+              }
+            }
+          ]
+        }
+      }
+    })
+    const result = await w.run()
+    // A notice, not text: it is the desktop speaking about the turn, and
+    // notices are the channel for that.
+    expect(result.notices.map((notice) => notice.text).join('\n')).toContain(
+      'Automatic approvals are not available here'
+    )
+  })
+
+  it('says nothing when the agent ran in the mode it was given', async () => {
+    const w = world({
+      launcher: 'claude',
+      setup: { modeId: 'default' },
+      script: {
+        prompt: {
+          emit: [
+            {
+              kind: 'update',
+              update: { sessionUpdate: 'current_mode_update', currentModeId: 'default' }
+            },
+            {
+              kind: 'update',
+              update: {
+                sessionUpdate: 'agent_message_chunk',
+                content: { type: 'text', text: 'Done.' }
+              }
+            }
+          ]
+        }
+      }
+    })
+    const result = await w.run()
+    expect(result.notices).toEqual([])
+    expect(result.parts.map((part) => part.kind)).toEqual(['text'])
   })
 })
 
@@ -605,8 +786,33 @@ describe('a stop', () => {
     })
     // The turn ended by agreement, so the process is still there for the next one.
     expect(w.pool.status(AGENT_ID).state).toBe('running')
+    // And the transcript says what happened: a park the *stop* released was
+    // not abandoned, and recording "no answer in time" for a decision the user
+    // took would be the same defect as recording "Denied" for an expiry.
+    expect(result.parts.map((part) => part.text)).toContain(
+      'Not answered — the turn was stopped.'
+    )
     // And nobody is told an answer was recorded: the abort swept the ask away.
     expect(w.events.filter((event) => event.type === 'input_resolved')).toEqual([])
+  })
+
+  it('sends no prompt when the stop lands while the session is still being set up', async () => {
+    // A one-to-two-second window — spawn, `session/new`, the setup calls — in
+    // which `sessionId` is still null, so the stop has no `session/cancel` to
+    // send. Without a second check the prompt goes out anyway: the agent starts
+    // on work the user cancelled, and three seconds later the grace kills its
+    // process, leaving an empty reply and a cold start for the next turn.
+    const w = world({
+      script: { setMode: { delayMs: 300 }, ...SAYS_HELLO },
+      setup: { modeId: 'default' }
+    })
+    const controller = new AbortController()
+    const running = w.run({ signal: controller.signal })
+    await waitFor(() => w.fake.received('session/set_mode').length > 0, 'the setup to start')
+    controller.abort()
+    const result = await running
+    expect(result.error).toBeUndefined()
+    expect(w.fake.received('session/prompt')).toEqual([])
   })
 
   it('gives up on a ceiling the agent never acknowledges, and says so', async () => {
@@ -695,7 +901,10 @@ describe('the launcher a turn runs on', () => {
     expect(result.error).toBeUndefined()
   })
 
-  it('is the row’s when the folder cannot speak for itself', async () => {
+  it('is the default engine for a folder whose runtime names none', async () => {
+    // "The runtime was read and names nothing" is an answer — the default —
+    // and it is the same answer the scanner writes into the row, so a turn and
+    // the list beside it cannot disagree about which engine an agent runs.
     const w = world({
       script: SAYS_HELLO,
       launcher: 'opencode',

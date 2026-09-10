@@ -26,8 +26,18 @@ const row = (over: Partial<AgentRow>): AgentRow =>
 const synced = row({ id: 'remote:a', source: 'remote', driver: 'a2a', cardUrl: 'https://x/card' })
 const handAdded = row({ source: 'local', driver: 'a2a', cardUrl: 'https://x/card' })
 const withToken = row({ source: 'local', driver: 'a2a', accessTokenEncrypted: Buffer.from('t') })
-const opencode = row({ id: 'folder:a', source: 'folder', driver: 'opencode' })
-const claude = row({ id: 'folder:b', source: 'folder', driver: 'claude' })
+const opencode = row({
+  id: 'folder:a',
+  source: 'folder',
+  driver: 'acp',
+  driverConfig: { launcher: 'opencode' }
+})
+const claude = row({
+  id: 'folder:b',
+  source: 'folder',
+  driver: 'acp',
+  driverConfig: { launcher: 'claude' }
+})
 
 describe('capabilitiesFor', () => {
   it.each([
@@ -72,7 +82,11 @@ describe('capabilitiesFor', () => {
       streaming: true,
       cancel: true,
       sessions: 'resumable',
-      input: { permission: true, question: true, auth: false, elicitation: false },
+      // **No question path since phase 3**, and it is the engine's doing rather
+      // than the driver's: OpenCode's `question` tool is not registered under
+      // `OPENCODE_CLIENT=acp`, and its ACP layer bridges no question to
+      // `elicitation/create`, so the model asks in prose instead.
+      input: { permission: true, question: false, auth: false, elicitation: false },
       inputResume: 'reply',
       attachments: 'none',
       auth: 'none',
@@ -82,9 +96,12 @@ describe('capabilitiesFor', () => {
     })
   })
 
-  it('says a Claude folder asks permission only, on the CLI’s own login', () => {
+  it('says a Claude folder can ask a question now, on the CLI’s own login', () => {
+    // The capability the transport *gained*: the ACP adapter enables its
+    // `AskUserQuestion` tool because the launcher declares `elicitation.form`,
+    // where the in-process SDK runner had no question path at all.
     expect(capabilitiesFor(claude)).toMatchObject({
-      input: { permission: true, question: false, auth: false, elicitation: false },
+      input: { permission: true, question: true, auth: false, elicitation: false },
       inputResume: 'reply',
       auth: 'cli',
       commands: 'catalog',
@@ -92,14 +109,23 @@ describe('capabilitiesFor', () => {
     })
   })
 
-  it('reads the driver column, falling back by ownership when it is empty or unknown', () => {
-    // The column wins: a folder row names its engine.
+  it('reads the launcher out of driver_config, and falls back by ownership', () => {
+    // The config wins: the row's driver says how it runs, its launcher which
+    // engine.
     expect(capabilitiesFor(claude).auth).toBe('cli')
-    // Not set: a folder row runs on the default engine, anything else on A2A.
+    // No driver set: a folder row runs on the ACP driver, anything else on A2A.
     expect(capabilitiesFor(row({ source: 'folder', driver: null })).commands).toBe('catalog')
     expect(capabilitiesFor(row({ source: 'remote', driver: null })).attachments).toBe('cinna')
-    // A value a newer build wrote is not trusted as one this build has.
+    // An ACP row with no launcher recorded runs on the default engine, which is
+    // the one the desktop pays for rather than the user's own CLI login.
     expect(capabilitiesFor(row({ source: 'folder', driver: 'acp' })).auth).toBe('none')
+    // A launcher a newer build wrote, which this one cannot run: described as
+    // what it is rather than as the default, so the composer and the turn agree
+    // that it takes no credential of ours.
+    expect(
+      capabilitiesFor(row({ source: 'folder', driver: 'acp', driverConfig: { launcher: 'gemini' } }))
+        .auth
+    ).toBe('cli')
   })
 })
 

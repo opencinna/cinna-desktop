@@ -50,7 +50,7 @@ function entry(id: string, name = id): FolderIndexEntry {
     description: null,
     localPath: `/w/Local/${id}`,
     remoteMetadata: meta(id),
-    driver: 'opencode'
+    launcher: 'opencode'
   }
 }
 
@@ -123,7 +123,7 @@ describe('replaceFolderIndex', () => {
         description: 'now described',
         localPath: '/w/Local/a2',
         remoteMetadata: meta('folder:a-rescanned'),
-        driver: 'opencode'
+        launcher: 'opencode'
       }
     ])
 
@@ -207,7 +207,7 @@ describe('replaceFolderIndex', () => {
           description: null,
           localPath: '/w/c',
           remoteMetadata: meta('folder:c'),
-          driver: 'opencode'
+          launcher: 'opencode'
         }
       ])
     ).toThrow()
@@ -282,6 +282,9 @@ describe('the synthesized manifest metadata on a folder row', () => {
  */
 describe('the driver a row names', () => {
   const driverOf = (id: string): string | null | undefined => agentRepo.getOwned(USER, id)?.driver
+  /** The engine under the driver — `driver_config.launcher`. */
+  const launcherOf = (id: string): unknown =>
+    agentRepo.getOwned(USER, id)?.driverConfig?.launcher ?? null
 
   it('is a2a for an agent created by hand or by sync', () => {
     const hand = agentRepo.create(USER, { name: 'Hand', protocol: 'a2a', cardUrl: 'https://a/card' })
@@ -310,43 +313,48 @@ describe('the driver a row names', () => {
     expect(driverOf('remote:agent:11111111-1111-4111-8111-111111111111')).toBe('a2a')
   })
 
-  it('is written on a folder insert and refreshed by a rescan', () => {
-    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'claude' }])
-    expect(driverOf('folder:a')).toBe('claude')
-    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'opencode' }])
-    expect(driverOf('folder:a')).toBe('opencode')
+  it('is one driver for every folder agent, with the engine under it', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), launcher: 'claude' }])
+    expect(driverOf('folder:a')).toBe('acp')
+    expect(launcherOf('folder:a')).toBe('claude')
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), launcher: 'opencode' }])
+    expect(driverOf('folder:a')).toBe('acp')
+    expect(launcherOf('folder:a')).toBe('opencode')
   })
 
-  it('keeps the row’s driver when the entry has none, and inserts the default engine', () => {
-    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'claude' }])
+  it('keeps the row’s launcher when the entry has none, and inserts the default engine', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), launcher: 'claude' }])
     agentRepo.replaceFolderIndex(USER, 'r1', [
-      { ...entry('folder:a'), driver: null },
-      { ...entry('folder:b'), driver: null }
+      { ...entry('folder:a'), launcher: null },
+      { ...entry('folder:b'), launcher: null }
     ])
-    expect(driverOf('folder:a')).toBe('claude')
-    expect(driverOf('folder:b')).toBe('opencode')
+    expect(launcherOf('folder:a')).toBe('claude')
+    expect(launcherOf('folder:b')).toBe('opencode')
   })
 
   it('is written by the single-folder update, and kept when that entry has none', () => {
     agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
-    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), driver: 'claude' }, 'r1')
-    expect(driverOf('folder:a')).toBe('claude')
-    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), driver: null }, 'r1')
-    expect(driverOf('folder:a')).toBe('claude')
+    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), launcher: 'claude' }, 'r1')
+    expect(launcherOf('folder:a')).toBe('claude')
+    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), launcher: null }, 'r1')
+    expect(launcherOf('folder:a')).toBe('claude')
   })
 
   it('follows the row through a rekey', () => {
-    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:legacy:r1:a'), driver: 'claude' }])
+    agentRepo.replaceFolderIndex(USER, 'r1', [
+      { ...entry('folder:legacy:r1:a'), launcher: 'claude' }
+    ])
     agentRepo.rekeyFolderRow(USER, 'folder:legacy:r1:a', 'folder:stamped-uuid')
-    expect(driverOf('folder:stamped-uuid')).toBe('claude')
+    expect(driverOf('folder:stamped-uuid')).toBe('acp')
+    expect(launcherOf('folder:stamped-uuid')).toBe('claude')
   })
 
   it('is set directly only on a folder row', () => {
     agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
     const hand = agentRepo.create(USER, { name: 'Hand', protocol: 'a2a' })
-    expect(agentRepo.setFolderDriver(USER, 'folder:a', 'claude')).toBe(true)
-    expect(agentRepo.setFolderDriver(USER, hand.id, 'claude')).toBe(false)
-    expect(driverOf('folder:a')).toBe('claude')
+    expect(agentRepo.setFolderLauncher(USER, 'folder:a', 'claude')).toBe(true)
+    expect(agentRepo.setFolderLauncher(USER, hand.id, 'claude')).toBe(false)
+    expect(launcherOf('folder:a')).toBe('claude')
     expect(driverOf(hand.id)).toBe('a2a')
   })
 
@@ -359,7 +367,7 @@ describe('the driver a row names', () => {
     insert.run('bare-local', USER, 'L', 'local', null, Date.now())
     insert.run('bare-remote', USER, 'R', 'remote', null, Date.now())
     insert.run('bare-folder', USER, 'F', 'folder', null, Date.now())
-    insert.run('set-claude', USER, 'C', 'folder', 'claude', Date.now())
+    insert.run('set-acp', USER, 'C', 'folder', 'acp', Date.now())
     // A value a newer build wrote: not this build's to "correct".
     insert.run('from-newer-build', USER, 'N', 'local', 'managed', Date.now())
     insert.run('other-user', 'someone-else', 'O', 'local', null, Date.now())
@@ -367,8 +375,9 @@ describe('the driver a row names', () => {
     expect(agentRepo.healMissingDrivers()).toBe(4)
     expect(driverOf('bare-local')).toBe('a2a')
     expect(driverOf('bare-remote')).toBe('a2a')
-    expect(driverOf('bare-folder')).toBe('opencode')
-    expect(driverOf('set-claude')).toBe('claude')
+    expect(driverOf('bare-folder')).toBe('acp')
+    expect(launcherOf('bare-folder')).toBe('opencode')
+    expect(driverOf('set-acp')).toBe('acp')
     expect(driverOf('from-newer-build')).toBe('managed')
     expect(agentRepo.getOwned('someone-else', 'other-user')?.driver).toBe('a2a')
     expect(agentRepo.healMissingDrivers()).toBe(0)

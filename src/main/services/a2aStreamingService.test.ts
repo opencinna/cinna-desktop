@@ -5,12 +5,12 @@
  * `useChatStream` leaves the streaming state on `done` or on `error` and on
  * nothing else, so a port that closes having posted neither leaves the chat
  * spinning until the app restarts. That is not a hypothetical — it is what
- * `LocalAgentTurnRunner` did when `turnLock.acquire` refused a second
+ * the folder runners did when `turnLock.acquire` refused a second
  * concurrent turn, because this `try` had only a `finally`.
  *
  * The runner is fixed at its own end too. This is the wrapper every future
  * runner passes through, and it must not depend on all of them keeping the
- * `AgentTurnRunner.runTurn` contract that says they never throw.
+ * `AgentDriver.run` contract that says it never throws.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { RunEvent } from '../../shared/runEvents'
@@ -102,7 +102,7 @@ describe('a2aStreamingService.streamToAgent', () => {
   it('a runner cancelled cleanly is a stop, not a success — the exit a stop actually takes', async () => {
     // **The common case, and the one the error branches below do not cover.** A
     // cancelled runner returns what it streamed with *no error* — that is the
-    // documented `AgentTurnRunner` contract and what both folder runners do —
+    // documented `AgentDriver.run` contract and what the folder path does —
     // so a stopped turn leaves through the success path. Reporting `succeeded`
     // there is the same lie the OpenAI adapter told by resolving on abort: the
     // job run reads as one that finished, indistinguishable from one that did.

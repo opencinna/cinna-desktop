@@ -49,7 +49,7 @@ vi.mock('../services/a2aStreamingService', () => ({ a2aStreamingService: {} }))
 vi.mock('../services/localAgents/commandService', () => ({ resolveCommandRunner: vi.fn() }))
 
 const findAgent = vi.fn((_s: string, _p: string, agentId: string) => ({
-  row: { id: agentId, name: 'Alpha', source: 'folder', driver: 'opencode' },
+  row: { id: agentId, name: 'Alpha', source: 'folder', driver: 'acp' },
   userId: 'settings-user'
 }))
 vi.mock('../services/agentService', () => ({
@@ -59,20 +59,23 @@ vi.mock('../services/agentService', () => ({
 const remember = vi.fn(() => true)
 const resolve = vi.fn((): unknown => ({ chatId: 'chat-1', agentId: 'folder:alpha' }))
 vi.mock('../agents/drivers', async () => {
-  const { createOpencodeDriver } = await import('../agents/drivers/opencodeDriver')
-  const { respondToParkedAsk } = await import('../agents/drivers/folderDriver')
+  const { respondToAcpAsk } = await import('../agents/drivers/acp/acpDriver')
   const resolveRequest = (...args: unknown[]): boolean => resolve(...(args as [])) !== null
-  const driver = createOpencodeDriver({
-    runner: { runTurn: vi.fn() },
-    readFolder: () => null,
-    rememberGrant: (...args: unknown[]) => remember(...(args as [])),
+  const world = {
+    rememberGrant: (...args: unknown[]) => remember(...(args as [])) as boolean,
     resolveRequest
-  })
+  }
   return {
-    driverFor: () => driver,
+    // The answer path only ever calls `respond`, so the driver here is exactly
+    // that — production's own implementation over the same two writers.
+    driverFor: () => ({
+      respond: (...args: Parameters<typeof respondToAcpAsk> extends [unknown, ...infer R] ? R : never) =>
+        respondToAcpAsk(world, ...args)
+    }),
     // The production shape: the registry, and a grant writer with no agent to write beside.
-    respondToOrphanedAsk: (...args: Parameters<typeof respondToParkedAsk> extends [unknown, ...infer R] ? R : never) =>
-      respondToParkedAsk({ rememberGrant: () => false, resolveRequest }, ...args)
+    respondToOrphanedAsk: (
+      ...args: Parameters<typeof respondToAcpAsk> extends [unknown, ...infer R] ? R : never
+    ) => respondToAcpAsk({ rememberGrant: () => false, resolveRequest }, ...args)
   }
 })
 
@@ -221,7 +224,7 @@ describe('agent:answer-request — what reaches the driver', () => {
       expect(resolve).toHaveBeenLastCalledWith('per_1', { kind: 'permission', reply: 'once' })
     } finally {
       findAgent.mockImplementation((_s: string, _p: string, agentId: string) => ({
-        row: { id: agentId, name: 'Alpha', source: 'folder', driver: 'opencode' },
+        row: { id: agentId, name: 'Alpha', source: 'folder', driver: 'acp' },
         userId: 'settings-user'
       }))
     }

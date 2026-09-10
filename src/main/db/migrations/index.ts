@@ -5,6 +5,7 @@ import { migrateChats } from './chats'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
 import { migrateAgents } from './agents'
+import { migrateAcpDriver } from './acp-driver'
 import { migrateAgentDrivers } from './agent-drivers'
 import { migrateAgentRoots } from './agent-roots'
 import { migrateA2aSessions } from './a2a-sessions'
@@ -77,6 +78,9 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // `agents.driver` + its backfill. DML on a table another migration created,
   // so it runs after every table exists and is `hasTable`-guarded.
   migrateAgentDrivers(sqlite)
+  // …and then the collapse of both engine drivers into `acp`, which reads the
+  // value the line above backfills. Order, not preference.
+  migrateAcpDriver(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

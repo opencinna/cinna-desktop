@@ -64,7 +64,7 @@ function indexFolder(): void {
       name: 'Invoice Checker',
       description: null,
       localPath: '/w/Local/invoice-checker',
-      driver: 'opencode',
+      launcher: 'opencode',
       remoteMetadata: {
         entrypoint_prompt: null,
         example_prompts: [],
@@ -168,7 +168,7 @@ describe('an unstamped folder agent, whose id is positional rather than portable
         name: 'Invoice Checker',
         description: null,
         localPath: '/w/Local/ic',
-        driver: 'opencode',
+        launcher: 'opencode',
         remoteMetadata: {
           entrypoint_prompt: null,
           example_prompts: [],
@@ -193,7 +193,7 @@ describe('an unstamped folder agent, whose id is positional rather than portable
         name: 'Invoice Checker',
         description: null,
         localPath: '/w/Local/ic',
-        driver: 'opencode',
+        launcher: 'opencode',
         remoteMetadata: {
           entrypoint_prompt: null,
           example_prompts: [],

@@ -75,7 +75,7 @@ export const MAX_OUTPUT_BYTES = 200_000
 /**
  * Backstop on top of the turn lock: a hung script must not hold this agent's
  * folder locked for the life of the app. Shorter than `TURN_CEILING_MS`
- * (20 min, `localAgentTurnRunner.ts`) on purpose — a catalog command is a
+ * (20 min, `ACP_TURN_CEILING_MS`) on purpose — a catalog command is a
  * script, not an LLM turn waiting on a model, so a much tighter ceiling is
  * the safe default and still generous for anything that belongs in a
  * one-click "Run" button.

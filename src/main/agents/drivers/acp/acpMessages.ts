@@ -2,9 +2,9 @@
  * Turning an ACP agent's `session/update` notifications into the A2A-shaped
  * message the rest of the pipeline already knows how to read.
  *
- * The third sibling of `turnStream.ts` (OpenCode over HTTP) and
- * `claudeMessages.ts` (the Claude Agent SDK in-process), solving the same
- * problem for one wire that replaces both — and the same trap applies.
+ * The successor to `turnStream.ts` (OpenCode over HTTP) and `claudeMessages.ts`
+ * (the Claude Agent SDK in-process), both deleted with the runners they served:
+ * one wire replaces both, and the same trap applies.
  * `StreamPartsAccumulator` was built for A2A, where every update carries each
  * part's **full text so far** and the accumulator computes the delta itself
  * (`text.slice(prior.length)`). ACP emits **true deltas**: one
@@ -232,7 +232,7 @@ export class AcpMessageStream {
    * would ask through `elicitation/create`, which never fired in the spike
    * because the probe declared no elicitation capability. Either way the driver
    * has already normalised them to {@link InputQuestion}, so this end of the
-   * pipe is the same shape `turnStream.ts` produces.
+   * pipe writes the same shape the HTTP path used to.
    */
   askQuestion(requestId: string, questions: InputQuestion[]): AcpStreamUpdate {
     if (questions.length === 0) return {}

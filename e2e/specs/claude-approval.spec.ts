@@ -14,8 +14,8 @@ import { DESKTOP_STATE_FILE, MANIFEST_FILE } from '../../src/shared/kit/manifest
  * desktop keeps beside the folder's grants, and from the select again after
  * the app has been quit and started. It never runs a turn on the engine, so
  * whether `ask` actually routes a command to the chat's permission block is
- * out of scope here (that is `claudeAgentTurnRunner.test.ts`, against a fake
- * SDK). Nothing here needs a `claude` install either: the card branches on the
+ * out of scope here (that is the ACP driver's own suite, against a fake
+ * ACP agent). Nothing here needs a `claude` install either: the card branches on the
  * **manifest's** engine, not on detection, and the one `claude` invocation the
  * page would otherwise cause — the login probe the Runs-with panel makes — is
  * pinned over `ipcMain` so this file spawns no `claude` at all.

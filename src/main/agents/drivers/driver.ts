@@ -11,8 +11,11 @@
  * reads `source` for ownership), nothing decides behaviour by kind; it asks
  * {@link AgentDriver.capabilities}.
  *
- * The three runners are wrapped, not rewritten: `a2a` over `runAgentTurn`,
- * `opencode` over `LocalAgentTurnRunner`, `claude` over `ClaudeAgentTurnRunner`.
+ * Two implementations: `a2a` over `runAgentTurn`, and `acp` over one child
+ * process per agent speaking the Agent Client Protocol. Phase 2 wrapped three
+ * runners here without rewriting them; phase 3 replaced the two folder runners
+ * with the ACP driver and deleted them, so `AgentTurnRunner` — the seam that
+ * existed to hold three transports — is gone with them.
  *
  * Type-only. `index.ts` is the one file in this folder that names Electron and
  * the production services; each driver takes its world by injection so the

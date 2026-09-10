@@ -14,7 +14,12 @@ import {
 } from './schema'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import { FOLDER_AGENT_PROTOCOL } from '../../shared/localAgents'
-import type { AgentDriverId } from '../../shared/agentDrivers'
+import {
+  FOLDER_AGENT_DRIVER,
+  launcherConfig,
+  launcherOfConfig,
+  type AcpLauncherId
+} from '../../shared/agentDrivers'
 import { DEFAULT_AGENT_ENGINE } from '../../shared/engine'
 
 /** True when `child` is `parent` or sits beneath it, by path segment. */
@@ -105,7 +110,7 @@ export interface FolderIndexEntry {
    */
   remoteMetadata: RemoteAgentMetadata
   /**
-   * The driver the folder's runtime names (`driverOfFolder`), carried on the
+   * The engine the folder's runtime names (`launcherOfFolder`), carried on the
    * entry for the same three-writers reason as `remoteMetadata`.
    *
    * **Null means "the runtime could not be read — keep the row's value"**, never
@@ -113,8 +118,13 @@ export interface FolderIndexEntry {
    * folder whose manifest is unparseable for a moment must not come back as an
    * OpenCode row. An insert with null takes the default engine; there is no
    * earlier value to keep.
+   *
+   * Since phase 3 every folder agent runs on one driver (`acp`) and this is its
+   * **launcher**, stored in `driver_config`. The column and the setting moved
+   * together: `driver` said both things before, and only one of them was ever
+   * about how the turn is carried.
    */
-  driver: AgentDriverId | null
+  launcher: AcpLauncherId | null
 }
 
 /** What {@link agentRepo.rekeyFolderRow} moved. */
@@ -424,9 +434,12 @@ export const agentRepo = {
               localPath: entry.localPath,
               localRootId: rootId,
               remoteMetadata: entry.remoteMetadata,
+              driver: FOLDER_AGENT_DRIVER,
               // Null keeps what the row had; a row that had none takes the
               // default rather than staying unset.
-              driver: entry.driver ?? existing.driver ?? DEFAULT_AGENT_ENGINE
+              driverConfig: launcherConfig(
+                entry.launcher ?? launcherOfConfig(existing.driverConfig) ?? DEFAULT_AGENT_ENGINE
+              )
             })
             .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
             .run()
@@ -461,7 +474,8 @@ export const agentRepo = {
               // `synthesizeFolderAgentMetadata`. It is a cache over the files
               // in exactly the sense `name` and `description` above are.
               remoteMetadata: entry.remoteMetadata,
-              driver: entry.driver ?? DEFAULT_AGENT_ENGINE,
+              driver: FOLDER_AGENT_DRIVER,
+              driverConfig: launcherConfig(entry.launcher ?? DEFAULT_AGENT_ENGINE),
               createdAt: new Date()
             })
             .run()
@@ -493,24 +507,25 @@ export const agentRepo = {
         localPath: entry.localPath,
         localRootId,
         remoteMetadata: entry.remoteMetadata,
-        // Null keeps the row's value — see `FolderIndexEntry.driver`.
-        ...(entry.driver !== null ? { driver: entry.driver } : {})
+        driver: FOLDER_AGENT_DRIVER,
+        // Null keeps the row's value — see `FolderIndexEntry.launcher`.
+        ...(entry.launcher !== null ? { driverConfig: launcherConfig(entry.launcher) } : {})
       })
       .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
       .run()
   },
 
   /**
-   * Point a folder row at a driver, for an engine the user just chose in the
-   * app — the write a watcher never sees (a bare folder's runtime lives outside
-   * it). Folder rows only: an A2A row's driver is not the folder's to change.
-   * Returns whether a row changed.
+   * Point a folder row at an engine the user just chose in the app — the write
+   * a watcher never sees (a bare folder's runtime lives outside it). Folder
+   * rows only: an A2A row runs on no launcher at all. Returns whether a row
+   * changed.
    */
-  setFolderDriver(userId: string, agentId: string, driver: AgentDriverId): boolean {
+  setFolderLauncher(userId: string, agentId: string, launcher: AcpLauncherId): boolean {
     return (
       getDb()
         .update(agents)
-        .set({ driver })
+        .set({ driver: FOLDER_AGENT_DRIVER, driverConfig: launcherConfig(launcher) })
         .where(
           and(eq(agents.id, agentId), eq(agents.userId, userId), eq(agents.source, 'folder'))
         )
@@ -520,9 +535,10 @@ export const agentRepo = {
 
   /**
    * Fill `driver` on any row that has none, with the migration's own rule: a
-   * hand-added or synced row runs on A2A, a folder row on the default engine
-   * (the scanner corrects it on its next pass). A value this build does not
-   * recognise is left alone — a newer build wrote it.
+   * hand-added or synced row runs on A2A, a folder row on the ACP driver with
+   * the default engine as its launcher (the scanner corrects the launcher on
+   * its next pass). A value this build does not recognise is left alone — a
+   * newer build wrote it.
    *
    * Across every user, like the other boot-time consistency checks: it heals
    * the table, not one scope. Returns how many rows it filled.
@@ -536,7 +552,7 @@ export const agentRepo = {
       .run().changes
     const folder = db
       .update(agents)
-      .set({ driver: DEFAULT_AGENT_ENGINE })
+      .set({ driver: FOLDER_AGENT_DRIVER, driverConfig: launcherConfig(DEFAULT_AGENT_ENGINE) })
       .where(and(isNull(agents.driver), eq(agents.source, 'folder')))
       .run().changes
     return a2a + folder

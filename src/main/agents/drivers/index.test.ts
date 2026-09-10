@@ -8,19 +8,22 @@ import type { AgentRow } from '../../db/agents'
  *
  * It replaces `resolveTurnRunner`'s test and keeps every scenario it had,
  * because the failure it guards is silent and permanent. Before the Claude
- * runner existed, a folder agent whose manifest said `engine: "claude"` went to
+ * engine existed, a folder agent whose manifest said `engine: "claude"` went to
  * the OpenCode runner, which looked it up in the running engine's config, did
  * not find it (the config generator skips it deliberately), found no skip
  * reason to explain that, and answered **"This agent is not available in the
  * running engine yet. Try again in a moment."** — every turn, for ever, with
- * nothing anywhere saying why. The row now names a driver, and a stale one is
- * exactly how that failure would come back; so the folder drivers check the
- * folder on every turn, and this file pins it through the real wiring.
+ * nothing anywhere saying why.
+ *
+ * Since phase 3 there is one driver for every folder agent and the engine is a
+ * **launcher** under it, so the same failure would now be a turn planned by the
+ * wrong launcher. That is what these tests watch: the launchers are replaced by
+ * markers that record which one was asked to plan, and each refuses, so the
+ * turn's own error says which engine the driver chose.
  *
  * The whole module graph below `index.ts` is mocked because that module is the
- * production wiring: it names `engineManager`, the database and Electron in one
- * place precisely so nothing else has to. The runners are replaced by markers
- * that say which one ran.
+ * production wiring: it names the binary resolver, the database and Electron in
+ * one place precisely so nothing else has to.
  */
 
 const state = vi.hoisted(() => ({
@@ -32,15 +35,13 @@ const state = vi.hoisted(() => ({
 }))
 
 vi.mock('electron', () => ({ app: { getVersion: () => '0.0.0', getPath: () => '/tmp' } }))
-vi.mock('../../engine/engineManager', () => ({
-  engineManager: {
-    request: vi.fn(),
-    onStateChange: vi.fn(),
-    ensureRunning: vi.fn(),
-    agentKey: vi.fn(),
-    agentModel: vi.fn(),
-    lastSkips: () => ({ agents: [] })
-  }
+vi.mock('../../engine/binaryResolver', () => ({
+  configuredEnginePath: () => null,
+  realBinaryResolverDeps: () => ({}),
+  resolveEngineBinaryWith: async () => ({ path: '/bin/opencode', source: 'path', version: '1.0.0' })
+}))
+vi.mock('../../engine/engineConfigSource', () => ({
+  collectEngineConfigInput: async () => ({ providers: [], agents: [] })
 }))
 vi.mock('../../db/agents', () => ({ a2aSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
@@ -86,21 +87,39 @@ vi.mock('./a2aConnection', () => ({
   resolveEndpointIfNeeded: async () => 'https://agents.example/rpc',
   resolveAccessToken: async () => undefined
 }))
-vi.mock('../../services/agentTurn/localAgentTurnRunner', () => ({
-  LocalAgentTurnRunner: class {
-    async runTurn() {
-      state.ran.push('opencode')
-      return { text: '', parts: [], notices: [] }
+/**
+ * The launchers, as markers.
+ *
+ * Each records that it was asked and then refuses, so a turn never spawns
+ * anything and its error names the engine the driver picked. `plan` is the one
+ * method the driver calls before it touches a process, which is exactly the
+ * decision under test.
+ */
+vi.mock('./acp/acpLaunchers', async (importOriginal) => {
+  const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
+  const marker = (id: string) => () => ({
+    id,
+    plan: async () => {
+      state.ran.push(id)
+      return { error: `refused by the ${id} launcher` }
     }
+  })
+  return {
+    ...original,
+    createOpencodeLauncher: marker('opencode'),
+    createClaudeLauncher: marker('claude')
+  }
+})
+vi.mock('../../services/agentTurn/claudeAgents', () => ({ readFolderAgents: () => ({ agents: {} }) }))
+vi.mock('../../services/agentTurn/claudeAuth', () => ({
+  ClaudeAuthProbe: class {
+    status = async (): Promise<{ state: string }> => ({ state: 'unknown' })
+    refresh = async (): Promise<{ state: string }> => ({ state: 'unknown' })
   }
 }))
-vi.mock('../../services/agentTurn/claudeAgentTurnRunner', () => ({
-  ClaudeAgentTurnRunner: class {
-    async runTurn() {
-      state.ran.push('claude')
-      return { text: '', parts: [], notices: [] }
-    }
-  }
+vi.mock('../../services/agentTurn/claudeEnv', () => ({ buildClaudeEnv: () => ({}) }))
+vi.mock('../../services/localAgents/runtimeService', () => ({
+  runtimeService: { resolve: () => ({ modelId: 'sonnet' }) }
 }))
 vi.mock('../../shell/env', () => ({ getShellEnv: vi.fn(), shellEnvForChild: () => ({}) }))
 vi.mock('../../logger/logger', () => ({
@@ -109,8 +128,15 @@ vi.mock('../../logger/logger', () => ({
 
 const { driverFor } = await import('./index')
 
-const folderRow = (driver: string | null): AgentRow =>
-  ({ id: 'folder:aaa', name: 'A', source: 'folder', driver, cardUrl: null }) as unknown as AgentRow
+const folderRow = (launcher: string | null): AgentRow =>
+  ({
+    id: 'folder:aaa',
+    name: 'A',
+    source: 'folder',
+    driver: 'acp',
+    driverConfig: launcher ? { launcher } : null,
+    cardUrl: null
+  }) as unknown as AgentRow
 const remote = {
   id: 'remote:bbb',
   name: 'B',
@@ -143,42 +169,45 @@ describe('driverFor', () => {
     expect(state.gets).toBe(0)
   })
 
-  it('answers by the row, and the same driver every time', () => {
-    expect(driverFor(folderRow('claude')).id).toBe('claude')
-    expect(driverFor(folderRow('opencode'))).toBe(driverFor(folderRow('opencode')))
-    // Not set: a folder row falls back to the default engine.
-    expect(driverFor(folderRow(null)).id).toBe('opencode')
+  it('sends every folder agent to the one ACP driver, and the same instance every time', () => {
+    expect(driverFor(folderRow('claude')).id).toBe('acp')
+    expect(driverFor(folderRow('opencode'))).toBe(driverFor(folderRow('claude')))
+    // Not set: a folder row still runs on the ACP driver.
+    expect(driverFor(folderRow(null)).id).toBe('acp')
   })
 
-  it('runs a folder agent that names no engine on OpenCode', async () => {
+  it('launches a folder agent that names no engine on OpenCode', async () => {
     state.runtime = null
     expect(await ranFor(folderRow('opencode'))).toEqual(['opencode'])
   })
 
-  it('runs a folder agent on the Claude engine on Claude, even while its row still says OpenCode', async () => {
-    // The line this whole test file exists for. Without the reconcile the turn
-    // goes to the OpenCode runner, which cannot find it in the engine config
-    // and says "try again in a moment" for ever.
+  it('launches a Claude folder on Claude, even while its row still says OpenCode', async () => {
+    // The line this whole test file exists for. The row is a cache of the
+    // folder's own answer, and a stale one used to send the turn to an engine
+    // that could not find the agent and said "try again in a moment" for ever.
     state.runtime = { engine: 'claude' }
     expect(await ranFor(folderRow('opencode'))).toEqual(['claude'])
     state.ran = []
     expect(await ranFor(folderRow('claude'))).toEqual(['claude'])
   })
 
-  it('runs an unrecognised engine on the default runner', async () => {
-    // The contract's tolerant read: a folder written by a newer tool must keep running.
-    state.runtime = { engine: 'codex' }
-    expect(await ranFor(folderRow('claude'))).toEqual(['opencode'])
+  it('refuses an engine this build has no launcher for, in words, launching nothing', async () => {
+    // A folder written by a newer tool. Running it on the default engine would
+    // be worse than saying so: the agent would answer as something it is not.
+    state.runtime = { engine: 'gemini' }
+    const result = await driverFor(folderRow('claude')).run('user-1', folderRow('claude'), turn)
+    expect(result.error?.message).toMatch(/does not support/)
+    expect(state.ran).toEqual([])
   })
 
-  it('keeps the row’s driver when the folder cannot be read', async () => {
+  it('refuses a folder it cannot read, launching nothing', async () => {
     // `localAgentService.get` throws when the row is gone or the folder moved.
-    // Both runners now render that as the same readable turn error, so the row
-    // — the scanner's last good read — decides.
+    // The driver renders that as the runners' own sentence rather than guessing
+    // an engine from a row it can no longer check.
     state.getThrows = true
-    expect(await ranFor(folderRow('claude'))).toEqual(['claude'])
-    state.ran = []
-    expect(await ranFor(folderRow('opencode'))).toEqual(['opencode'])
+    const result = await driverFor(folderRow('claude')).run('user-1', folderRow('claude'), turn)
+    expect(result.error?.message).toMatch(/folder could not be found/)
+    expect(state.ran).toEqual([])
   })
 
   it('answers an unknown request with nothing delivered, through the real registry', () => {

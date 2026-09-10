@@ -1,6 +1,11 @@
 /**
  * What the golden suites need to drive a **driver** rather than a runner.
  *
+ * One helper left: phase 3 replaced the two folder drivers with the ACP driver,
+ * whose own suite builds its rows and its world from the fake agent, so the
+ * `folderReader` and `wrongEngine` stand-ins that existed to keep a golden turn
+ * on the driver under test went with them.
+ *
  * Phase 2 of the agent runtime plan moved every golden subject up one layer: a
  * turn goes through the `AgentDriver` that production dispatches to, and the
  * driver wraps the same runner the suite's fakes construct. So a golden that
@@ -11,11 +16,6 @@
  * both from what each suite already has, and nothing else.
  */
 import type { AgentRow } from '../../../db/agents'
-import type {
-  FolderDriver,
-  FolderDriverId,
-  FolderView
-} from '../../../agents/drivers/folderDriver'
 
 /**
  * A whole `agents` row. Every column is written out, so a column added to the
@@ -45,63 +45,5 @@ export function goldenRow(
     driverConfig: null,
     createdAt: new Date(0),
     ...fields
-  }
-}
-
-/** The part of a runner's own `getAgent` view a folder driver reads. */
-interface AgentView {
-  name: string
-  enabled: boolean
-  readiness: string
-  readinessReason: string | null
-}
-
-/**
- * A folder driver's `readFolder`, answered from the runner's own `getAgent`
- * fake, with a runtime naming `engine` — the driver under test, so the
- * reconcile keeps the turn where the suite put it. A folder that is gone reads
- * as null, as production's does.
- */
-export function folderReader(
-  getAgent: (userId: string, agentId: string) => AgentView | null,
-  engine: FolderDriverId
-): (userId: string, agentId: string) => FolderView | null {
-  return (userId, agentId) => {
-    const agent = getAgent(userId, agentId)
-    return agent
-      ? {
-          name: agent.name,
-          enabled: agent.enabled,
-          readiness: agent.readiness,
-          readinessReason: agent.readinessReason,
-          runtime: { engine }
-        }
-      : null
-  }
-}
-
-/**
- * The sibling a golden folder driver is handed: one that fails loudly if the
- * reconcile ever gives it a turn.
- *
- * Without a sibling the reconcile falls back to the driver itself, so a subject
- * whose folder named the other engine would run here anyway and pass. With
- * this one, that turn rejects — which the goldens and the contract's
- * never-rejects clause both catch.
- */
-export function wrongEngine(underTest: FolderDriverId): (id: FolderDriverId) => FolderDriver {
-  return (id) => {
-    const message = `golden: the ${underTest} driver handed its turn to the ${id} driver`
-    const refuse = (): never => {
-      throw new Error(message)
-    }
-    return {
-      id,
-      capabilities: refuse,
-      respond: refuse,
-      readiness: () => Promise.reject(new Error(message)),
-      run: () => Promise.reject(new Error(message)),
-      runHere: () => Promise.reject(new Error(message))
-    }
   }
 }

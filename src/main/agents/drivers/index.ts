@@ -1,21 +1,22 @@
 /**
  * Production wiring for the drivers, and the one resolver every caller uses.
  *
- * The drivers and the runners they wrap take their world by injection so they
- * can be driven in a test without a process, a port, a database or Electron.
- * This module is where that world is actually supplied — and it is the only
- * file under `agents/drivers/` that names `engineManager`, `localAgentService`,
- * `desktopStateService`, `a2aSessionRepo` or Electron, so the dependency
- * direction stays one-way and the test files stay free of them.
+ * The drivers take their world by injection so they can be driven in a test
+ * without a process, a port, a database or Electron. This module is where that
+ * world is actually supplied — and it is the only file under `agents/drivers/`
+ * that names `localAgentService`, `desktopStateService`, `a2aSessionRepo`, the
+ * engine's binary resolver or Electron, so the dependency direction stays
+ * one-way and the test files stay free of them.
  *
  * Phase 2 of the agent runtime plan moved this here from
- * `services/agentTurn/index.ts`, whose `resolveTurnRunner` it replaces.
+ * `services/agentTurn/index.ts`, whose `resolveTurnRunner` it replaced. Phase 3
+ * took the two folder drivers out again: one `acp` driver runs every local CLI
+ * agent, and which engine it launches is a setting rather than an identity.
  */
 
 import { createRequire } from 'node:module'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { engineManager } from '../../engine/engineManager'
 import {
   configuredEnginePath,
   realBinaryResolverDeps,
@@ -32,15 +33,6 @@ import { permissionGrantService } from '../../services/localAgents/permissionGra
 import { turnLock } from '../../services/localAgents/turnLock'
 import { runAgentTurn } from '../../services/a2aStreamingService'
 import { createLogger } from '../../logger/logger'
-import { EngineEventBus } from '../../services/agentTurn/engineEventBus'
-import {
-  LocalAgentTurnRunner,
-  type LocalTurnDeps
-} from '../../services/agentTurn/localAgentTurnRunner'
-import {
-  ClaudeAgentTurnRunner,
-  type ClaudeTurnDeps
-} from '../../services/agentTurn/claudeAgentTurnRunner'
 import { ClaudeAuthProbe } from '../../services/agentTurn/claudeAuth'
 import { pendingRequests } from '../../services/agentTurn/pendingRequests'
 import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
@@ -56,12 +48,12 @@ import { buildClaudeEnv } from '../../services/agentTurn/claudeEnv'
 import { readFolderAgents } from '../../services/agentTurn/claudeAgents'
 import { app } from 'electron'
 import { fetchAgentCard } from '../a2a-client'
-import { describeEngineSkip } from '../../../shared/runtimeMessages'
+import type { LocalAgentKind } from '../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
-import type { AgentDriverId } from '../../../shared/agentDrivers'
+import type { AcpLauncherId, AgentDriverId } from '../../../shared/agentDrivers'
 import { createA2aDriver } from './a2aDriver'
-import { createAcpDriver, type AcpFolderView } from './acp/acpDriver'
+import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
 import { createAcpProcessPool } from './acp/acpProcessPool'
 import { startAcpConnection } from './acp/acpConnection'
 import {
@@ -69,238 +61,77 @@ import {
   createOpencodeLauncher,
   type AcpLauncher
 } from './acp/acpLaunchers'
-import type { AcpLauncherId } from './acp/types'
-import { createOpencodeDriver } from './opencodeDriver'
-import { createClaudeDriver } from './claudeDriver'
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
-import { respondToParkedAsk, type FolderDriver, type FolderDriverId, type FolderView } from './folderDriver'
 import type { AgentDriver, ParkedAsk, RespondOutcome } from './driver'
 
 const logger = createLogger('agent-driver')
 
+/* -------------------------------------------------------- the shared world */
+
+/** The remembered session id for this (chat, agent), if any. */
+function readSession(chatId: string, agentId: string): string | null {
+  return a2aSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId ?? null
+}
+
 /**
- * The one global subscription to the engine's event stream.
+ * Remember it, in both stores.
  *
- * One `opencode serve` backs every folder agent, so one bus serves every turn.
- * It connects on the first subscriber and disconnects on the last, so an idle
- * desktop holds nothing open — which is why constructing it at module load
- * costs nothing.
+ * **Two stores, and the column names stay A2A-flavoured on purpose.**
+ * `a2a_sessions.context_id` is what `agent:get-session` reads to decide a chat
+ * is an agent chat, so a folder agent's engine session id goes there rather
+ * than into a parallel table every existing reader would have to learn about.
+ * `desktop.json` is the durable copy that travels with the folder — the SQLite
+ * row is a cache, and Invariant 1 says it can be dropped and rebuilt.
  */
-export const engineEventBus = new EngineEventBus(async (signal) => {
-  const res = await engineManager.request('/api/event', {
-    signal,
-    headers: { Accept: 'text/event-stream' }
+function saveSession(input: {
+  chatId: string
+  agentId: string
+  agentDir: string
+  agentKind: LocalAgentKind
+  sessionId: string
+}): void {
+  a2aSessionRepo.upsert({
+    chatId: input.chatId,
+    agentId: input.agentId,
+    contextId: input.sessionId,
+    taskId: null,
+    taskState: null
   })
-  if (!res.ok) throw new Error(`the engine event stream responded ${res.status}`)
-  return res.body
-})
-
-/**
- * Drop every listener when the engine stops.
- *
- * Session ids belong to the process that issued them, so a turn still waiting
- * on `ses_…` after a restart is waiting on something that no longer exists.
- * Telling the listeners is what lets those turns end as an error the user can
- * read instead of hanging.
- */
-engineManager.onStateChange((next) => {
-  if (next.status !== 'running') engineEventBus.shutdown()
-})
-
-const localDeps: LocalTurnDeps = {
-  ensureEngineRunning: async (userId) => {
-    const state = await engineManager.ensureRunning(userId)
-    return { status: state.status, error: state.error }
-  },
-  agentKey: (agentId) => engineManager.agentKey(agentId),
-  agentModel: (agentId) => engineManager.agentModel(agentId),
-  // Through the shared describer: this is shown to the user as a whole turn
-  // error, and the code used to arrive as a sentence fragment ("its runtime
-  // names no model") that read as a non-sentence on its own.
-  skipReason: (agentId) => {
-    const code = engineManager.lastSkips().agents.find((a) => a.agentId === agentId)?.code
-    return code ? describeEngineSkip(code) : null
-  },
-  request: (path, init) => engineManager.request(path, init),
-  bus: engineEventBus,
-  getAgent: (userId, agentId) => {
-    try {
-      const dto = localAgentService.get(userId, agentId)
-      return {
-        name: dto.name,
-        path: dto.path,
-        kind: dto.kind,
-        enabled: dto.enabled,
-        readiness: dto.readiness,
-        readinessReason: dto.readinessReason
-      }
-    } catch (err) {
-      // `get` throws `not_found` when the row is gone or its folder moved. The
-      // runner renders that as a turn error, so it must not escape as one.
-      logger.warn('a folder agent could not be read for a turn', {
-        agentId,
-        error: err instanceof Error ? err.message : String(err)
-      })
-      return null
-    }
-  },
-  readSession: (chatId, agentId) =>
-    a2aSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId ?? null,
-  saveSession: ({ chatId, agentId, agentDir, agentKind, sessionId }) => {
-    // **Two stores, and the column names stay A2A-flavoured on purpose.**
-    // `a2a_sessions.context_id` is what `agent:get-session` reads to decide a
-    // chat is an agent chat, so a folder agent's engine session id goes there
-    // rather than into a parallel table that every existing reader would have
-    // to learn about. `desktop.json` is the durable copy that travels with the
-    // folder — the SQLite row is a cache and Invariant 1 says it can be dropped
-    // and rebuilt.
-    a2aSessionRepo.upsert({
-      chatId,
-      agentId,
-      contextId: sessionId,
-      taskId: null,
-      taskState: null
-    })
-    try {
-      const state = desktopStateService.read(agentDir, agentKind)
-      desktopStateService.patch(agentDir, agentKind, {
-        sessions: { ...state.sessions, [chatId]: { sessionId, updatedAt: Date.now() } }
-      })
-    } catch (err) {
-      // The durable copy failing must not fail the turn: the SQLite row above
-      // already carries continuity for this machine, and the folder copy is a
-      // convenience for a folder that moves.
-      logger.warn('could not record the engine session in desktop.json', {
-        agentId,
-        error: err instanceof Error ? err.message : String(err)
-      })
-    }
-  },
-  // **The reading half of *Always allow*.** The writing half is on the answer
-  // path (`rememberGrant` below, called from a folder driver's `respond`),
-  // where the user is still waiting and can be told whether the rule was
-  // actually saved. Both halves stay out of the engine: OpenCode's own saved
-  // grants are user-global — one row authorising every folder agent, shared
-  // with the user's personal OpenCode install — so the desktop keeps the rule
-  // beside the folder it was granted in and answers `once` from it. See
-  // `permissionGrantService`.
-  isGranted: (agentDir, agentKind, request) =>
-    permissionGrantService.covers(agentDir, agentKind, request),
-  withLock: (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn),
-  userId: () => getSettingsScopeUserId()
-}
-
-export const localAgentTurnRunner = new LocalAgentTurnRunner(localDeps)
-
-/**
- * Whether the user's `claude` is logged in — one probe, shared by the turn path,
- * the `claude` driver's readiness and the "Runs with" panel.
- *
- * **Built on the same environment the turn runs in**, and that is the whole
- * reason it is wired here rather than constructed at either call site. This
- * binary answers differently depending on its child environment — withholding
- * `USER` makes a logged-in install report *"Not logged in"* — so a probe run
- * under the full shell environment would report a login for a child that then
- * cannot authenticate. Readiness would be answering about a different process
- * than the one the turn spawns.
- */
-export const claudeAuthProbe = new ClaudeAuthProbe({
-  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
-  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
-})
-
-/**
- * The world the Claude runner takes, supplied here for the same reason the
- * local one's is: this module is the only place `toolDetectionService`,
- * `promptAssembly`, `runtimeService` and Electron's `app` are named together,
- * so the runner itself stays drivable in a test with no binary and no Electron.
- *
- * `getAgent`, `readSession`, `saveSession`, `withLock` and `userId` are the
- * **same implementations** the OpenCode path uses — deliberately, because
- * "this agent is busy in another chat" and "this chat remembers a session"
- * must not mean two different things depending on which engine answered.
- */
-const claudeDeps: ClaudeTurnDeps = {
-  getAgent: localDeps.getAgent,
-  readSession: localDeps.readSession,
-  saveSession: localDeps.saveSession,
-  withLock: localDeps.withLock,
-  userId: localDeps.userId,
-  // The same grant store the OpenCode path reads. A grant is scoped to a
-  // folder, and the key gains no engine segment — but the *action* it is stored
-  // under is the engine's own vocabulary, so a rule written for OpenCode's
-  // `bash` never silently authorises Claude's `Bash`.
-  isGranted: localDeps.isGranted,
-  // The assembled folder prompt, not the SDK's `claude_code` preset: the preset
-  // is a coding assistant's system prompt and the folder already says what this
-  // agent is. A bare folder has no manifest, so nothing in the kit assembler
-  // applies to it — the same split `collectEngineAgents` makes.
-  systemPrompt: (userId, agentId) => {
-    const agent = localAgentService.get(userId, agentId)
-    const context = resolveDesktopPromptContext()
-    return agent.kind === 'bare'
-      ? assembleBareAgentPrompt(agent.path, agent.name, context)
-      : assembleAgentPrompt(agent.path, agent.manifest, context)
-  },
-  // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a plan
-  // serves what the plan serves, and `runtimeService.resolve` returns the alias
-  // for this engine. Null hands the choice to the CLI's own default.
-  model: (userId, agentId) => {
-    try {
-      const agent = localAgentService.get(userId, agentId)
-      return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId
-    } catch {
-      return null
-    }
-  },
-  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
-  // The desktop's own decision, beside the grants it governs. The default is
-  // applied here so the runner never has to know that "no choice" exists.
-  // Unreadable state falls to the default too: the turn still runs, and every
-  // ask the classifier declines still reaches the permission block.
-  approval: (userId, agentId) => {
-    try {
-      const agent = localAgentService.get(userId, agentId)
-      return (
-        desktopStateService.read(agent.path, agent.kind).claudeApproval ?? DEFAULT_CLAUDE_APPROVAL
-      )
-    } catch {
-      return DEFAULT_CLAUDE_APPROVAL
-    }
-  },
-  claudeAuth: () => claudeAuthProbe.status(),
-  shellEnv: () => getShellEnv(),
-  appVersion: () => app.getVersion()
-}
-
-export const claudeAgentTurnRunner = new ClaudeAgentTurnRunner(claudeDeps)
-
-/**
- * The folder as it is on disk, for the folder drivers' reconcile and readiness.
- *
- * A filesystem read, on the turn path — which is why it is guarded rather than
- * trusted. `localAgentService.get` throws `not_found` when the row is gone or
- * its folder moved; null then makes the turn keep the driver its row names,
- * whose runner renders that state as a readable turn error of its own.
- */
-function readFolder(userId: string, agentId: string): FolderView | null {
   try {
-    const dto = localAgentService.get(userId, agentId)
-    return {
-      name: dto.name,
-      enabled: dto.enabled,
-      readiness: dto.readiness,
-      readinessReason: dto.readinessReason,
-      runtime: dto.runtime
-    }
+    const state = desktopStateService.read(input.agentDir, input.agentKind)
+    desktopStateService.patch(input.agentDir, input.agentKind, {
+      sessions: {
+        ...state.sessions,
+        [input.chatId]: { sessionId: input.sessionId, updatedAt: Date.now() }
+      }
+    })
   } catch (err) {
-    logger.warn('a folder agent could not be read; keeping the driver its row names', {
-      agentId,
+    // The durable copy failing must not fail the turn: the SQLite row above
+    // already carries continuity for this machine, and the folder copy is a
+    // convenience for a folder that moves.
+    logger.warn('could not record the engine session in desktop.json', {
+      agentId: input.agentId,
       error: err instanceof Error ? err.message : String(err)
     })
-    return null
   }
+}
+
+/**
+ * **The reading half of *Always allow*.** The writing half is
+ * {@link rememberGrant}, on the answer path, where the user is still waiting
+ * and can be told whether the rule was actually saved. Both halves stay out of
+ * the engine: OpenCode's own saved grants are per-project rows in a store
+ * shared with the user's personal install, and Claude's live in `~/.claude` —
+ * so the desktop keeps the rule beside the folder it was granted in and answers
+ * the engine `allow_once` from it. See `permissionGrantService`.
+ */
+function isGranted(
+  agentDir: string,
+  agentKind: LocalAgentKind,
+  request: LocalPermissionRequest
+): boolean {
+  return permissionGrantService.covers(agentDir, agentKind, request)
 }
 
 /**
@@ -319,8 +150,8 @@ function readFolder(userId: string, agentId: string): FolderView | null {
  */
 function rememberGrant(agentId: string, request: LocalPermissionRequest): boolean {
   try {
-    // The DTO, not just its path: where an agent's state lives is a property
-    // of the agent, and a probe of the folder for it can be wrong (see
+    // The DTO, not just its path: where an agent's state lives is a property of
+    // the agent, and a probe of the folder for it can be wrong (see
     // `desktopStatePath`).
     const agent = localAgentService.get(getSettingsScopeUserId(), agentId)
     permissionGrantService.remember(agent.path, agent.kind, request)
@@ -334,42 +165,33 @@ function rememberGrant(agentId: string, request: LocalPermissionRequest): boolea
   }
 }
 
-const folderWorld = {
-  readFolder,
-  rememberGrant,
-  resolveRequest: (requestId: string, resolution: Parameters<typeof pendingRequests.resolve>[1]) =>
-    pendingRequests.resolve(requestId, resolution) !== null,
-  sibling: (id: FolderDriverId): FolderDriver | undefined => folderDrivers[id]
+/** Settle a parked ask in the pending-request registry. */
+function resolveRequest(
+  requestId: string,
+  resolution: Parameters<typeof pendingRequests.resolve>[1]
+): boolean {
+  return pendingRequests.resolve(requestId, resolution) !== null
 }
 
-const folderDrivers: Record<FolderDriverId, FolderDriver> = {
-  opencode: createOpencodeDriver({ ...folderWorld, runner: localAgentTurnRunner }),
-  claude: createClaudeDriver({
-    ...folderWorld,
-    runner: claudeAgentTurnRunner,
-    // Detection is memoized for the life of the app, so *Check again* after
-    // installing Claude Code would never see it. A fresh check that finds no
-    // binary detects once more; one that finds a binary costs nothing extra.
-    claudePath: async (options) => {
-      const path = await claudeDeps.claudePath()
-      if (path || !options?.fresh) return path
-      await toolDetectionService.refresh()
-      return claudeDeps.claudePath()
-    },
-    // The login probe holds its answer for a short window; a fresh check asks
-    // the binary now, so a `claude login` the user just ran counts.
-    claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status())
-  })
-}
+/* ----------------------------------------------------------- the ACP world */
 
 /**
- * The ACP world: one process per agent, one driver over both launchers.
+ * Whether the user's `claude` is logged in — one probe, shared by the turn
+ * path, the launcher's readiness and the "Runs with" panel.
  *
- * Wired here for the same reason everything else in this file is — it is the
- * only module under `agents/drivers/` allowed to name Electron, the engine
- * manager's siblings and the local-agent services, so the driver, the pool and
- * the launchers stay drivable in a test with no binary and no `app`.
+ * **Built on the same environment the turn runs in**, and that is the whole
+ * reason it is wired here rather than constructed at either call site. This
+ * binary answers differently depending on its child environment — withholding
+ * `USER` makes a logged-in install report *"Not logged in"* — so a probe run
+ * under the full shell environment would report a login for a child that then
+ * cannot authenticate. Readiness would be answering about a different process
+ * than the one the turn spawns.
  */
+export const claudeAuthProbe = new ClaudeAuthProbe({
+  claudePath: async () => (await toolDetectionService.get('claude'))?.path ?? null,
+  env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
+})
+
 export const acpProcessPool = createAcpProcessPool({ start: startAcpConnection })
 
 /**
@@ -401,14 +223,14 @@ const ADAPTER_PACKAGE = '@agentclientprotocol/claude-agent-acp'
 const ADAPTER_ENTRY = 'dist/index.js'
 
 function claudeAdapterEntry(): string {
-  const packaged = join(
-    process.resourcesPath ?? '',
-    'app.asar.unpacked',
-    'node_modules',
-    ADAPTER_PACKAGE,
-    ADAPTER_ENTRY
-  )
   if (app.isPackaged) {
+    const packaged = join(
+      process.resourcesPath,
+      'app.asar.unpacked',
+      'node_modules',
+      ADAPTER_PACKAGE,
+      ADAPTER_ENTRY
+    )
     if (!existsSync(packaged)) {
       throw new Error(`the Claude ACP adapter is not at ${packaged}`)
     }
@@ -431,12 +253,26 @@ function claudeAdapterEntry(): string {
  * the old answer for the rest of the session.
  */
 let engineBinary: Promise<ResolvedEngineBinary> | null = null
+/**
+ * The configured path the memo above was resolved for.
+ *
+ * **Keyed, not merely memoised**, and the reason is a setting a user can
+ * change: point Settings → Local Agents at a different `opencode` and an
+ * unkeyed memo would keep handing out the old one until the app restarted —
+ * and because the binary path feeds the launch spec's `key`, the *running*
+ * child would not be replaced either, so the change would appear to do nothing
+ * at all. `engineManager` kept the same key for the same reason.
+ */
+let engineBinaryFor: string | null | undefined
 
 function resolveEngineBinaryOnce(): Promise<ResolvedEngineBinary> {
-  if (!engineBinary) {
-    engineBinary = resolveEngineBinaryWith(realBinaryResolverDeps(configuredEnginePath)).catch(
+  const configured = configuredEnginePath()
+  if (!engineBinary || engineBinaryFor !== configured) {
+    engineBinaryFor = configured
+    engineBinary = resolveEngineBinaryWith(realBinaryResolverDeps(() => configured)).catch(
       (err: unknown) => {
         engineBinary = null
+        engineBinaryFor = undefined
         throw err
       }
     )
@@ -444,36 +280,77 @@ function resolveEngineBinaryOnce(): Promise<ResolvedEngineBinary> {
   return engineBinary
 }
 
+/** The `claude` this machine has. A fresh check detects again when there is none. */
+async function claudePath(options?: { fresh?: boolean }): Promise<string | null> {
+  const path = (await toolDetectionService.get('claude'))?.path ?? null
+  if (path || !options?.fresh) return path
+  // Detection is memoized for the life of the app, so *Check again* after
+  // installing Claude Code would never see it.
+  await toolDetectionService.refresh()
+  return (await toolDetectionService.get('claude'))?.path ?? null
+}
+
+/**
+ * The assembled folder prompt, not the SDK's `claude_code` preset: the preset
+ * is a coding assistant's system prompt and the folder already says what this
+ * agent is. A bare folder has no manifest, so nothing in the kit assembler
+ * applies to it — the same split `collectEngineAgents` makes.
+ */
+function folderSystemPrompt(userId: string, agentId: string): string {
+  const agent = localAgentService.get(userId, agentId)
+  const context = resolveDesktopPromptContext()
+  return agent.kind === 'bare'
+    ? assembleBareAgentPrompt(agent.path, agent.name, context)
+    : assembleAgentPrompt(agent.path, agent.manifest, context)
+}
+
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
   opencode: createOpencodeLauncher({
     binary: resolveEngineBinaryOnce,
-    // `refreshModels: false` for the same reason the reconcile passes it: this
-    // runs once per turn, and a per-turn fan-out of provider API calls would
-    // put network latency in front of every message the user sends. The local
-    // credentials are still re-asked, because `ollama pull` happens between
-    // one turn and the next.
+    // `refreshModels: false` for the same reason the old reconcile passed it:
+    // this runs once per turn, and a per-turn fan-out of provider API calls
+    // would put network latency in front of every message the user sends. The
+    // local credentials are still re-asked, because `ollama pull` happens
+    // between one turn and the next.
     configInput: (userId) => collectEngineConfigInput(userId, { refreshModels: false }),
     configRoot: () => join(app.getPath('userData'), 'acp'),
     childEnv: async () => shellEnvForChild(await getShellEnv())
   }),
   claude: createClaudeLauncher({
-    claudePath: async (options) => {
-      const path = await claudeDeps.claudePath()
-      if (path || !options?.fresh) return path
-      // Detection is memoized for the life of the app, so *Check again* after
-      // installing Claude Code would never see it.
-      await toolDetectionService.refresh()
-      return claudeDeps.claudePath()
-    },
-    claudeAuth: (options) =>
-      options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status(),
+    claudePath,
+    // The login probe holds its answer for a short window; a fresh check asks
+    // the binary now, so a `claude login` the user just ran counts.
+    claudeAuth: (options) => (options?.fresh ? claudeAuthProbe.refresh() : claudeAuthProbe.status()),
     adapterEntry: claudeAdapterEntry,
     nodeRuntime: electronNodeRuntime,
     claudeEnv: async () =>
       buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() }),
-    systemPrompt: (userId, agentId) => claudeDeps.systemPrompt(userId, agentId),
-    model: (userId, agentId) => claudeDeps.model(userId, agentId),
-    approval: (userId, agentId) => claudeDeps.approval(userId, agentId),
+    systemPrompt: folderSystemPrompt,
+    // A model **alias** (`haiku` / `sonnet` / `opus`), not a catalogue id: a
+    // plan serves what the plan serves, and `runtimeService.resolve` returns the
+    // alias for this engine. Null hands the choice to the CLI's own default.
+    model: (userId, agentId) => {
+      try {
+        const agent = localAgentService.get(userId, agentId)
+        return runtimeService.resolve(agent.runtime, providerService.listMerged()).modelId
+      } catch {
+        return null
+      }
+    },
+    // The desktop's own decision, beside the grants it governs. The default is
+    // applied here so the launcher never has to know that "no choice" exists.
+    // Unreadable state falls to the default too: the turn still runs, and every
+    // ask the classifier declines still reaches the permission block.
+    approval: (userId, agentId) => {
+      try {
+        const agent = localAgentService.get(userId, agentId)
+        return (
+          desktopStateService.read(agent.path, agent.kind).claudeApproval ?? DEFAULT_CLAUDE_APPROVAL
+        )
+      } catch {
+        return DEFAULT_CLAUDE_APPROVAL
+      }
+    },
     // Read fresh each turn, like the prompt: a subagent definition edited while
     // the app runs takes effect on the next turn, not the next launch.
     folderAgents: (agentPath) => readFolderAgents(agentPath).agents
@@ -481,12 +358,13 @@ const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
 }
 
 /**
- * The folder, widened for the ACP driver.
+ * The folder as it is on disk, for the driver's reconcile, its readiness and
+ * its launcher's plan.
  *
- * The launcher needs the folder's own identity — its slug becomes the engine's
- * agent key, its description the entry's description — which the two folder
- * drivers never had to know, because `configGenerator` collected all of that
- * separately for the shared server.
+ * A filesystem read, on the turn path — which is why it is guarded rather than
+ * trusted. `localAgentService.get` throws `not_found` when the row is gone or
+ * its folder moved; null then makes the turn keep the launcher its row names,
+ * and the driver renders that state as a readable turn error of its own.
  */
 function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
   try {
@@ -515,21 +393,18 @@ export const acpDriver = createAcpDriver({
   pool: acpProcessPool,
   launcher: (id) => acpLaunchers[id],
   readFolder: readAcpFolder,
-  // **The same implementations the two runners used**, deliberately: "this
-  // agent is busy in another chat", "this chat remembers a session" and "you
-  // allowed this always" must not mean two different things depending on which
-  // transport answered.
-  readSession: localDeps.readSession,
-  saveSession: localDeps.saveSession,
-  isGranted: localDeps.isGranted,
+  readSession,
+  saveSession,
+  isGranted,
   rememberGrant,
   registerRequest: (input) => pendingRequests.register(input),
-  resolveRequest: folderWorld.resolveRequest,
-  withLock: localDeps.withLock
+  resolveRequest,
+  withLock: (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn)
 })
 
+/* ------------------------------------------------------------ the resolver */
+
 const drivers: Record<AgentDriverId, AgentDriver> = {
-  acp: acpDriver,
   a2a: createA2aDriver({
     runTurn: runAgentTurn,
     resolveEndpoint: resolveEndpointIfNeeded,
@@ -537,7 +412,7 @@ const drivers: Record<AgentDriverId, AgentDriver> = {
     fetchCard: fetchAgentCard,
     isReauthRequired: (err) => err instanceof CinnaReauthRequired
   }),
-  ...folderDrivers
+  acp: acpDriver
 }
 
 /**
@@ -546,8 +421,9 @@ const drivers: Record<AgentDriverId, AgentDriver> = {
  * The one dispatch point — the direct-chat IPC handler, the orchestrator's
  * agent tool and the answer path all ask it — so there is exactly one place to
  * look when asking "why did this agent take that path", and exactly one place
- * to change when another kind of agent arrives. Reads the row only: a folder
- * driver checks the folder itself when it runs a turn.
+ * to change when another kind of agent arrives. Reads the row only: the ACP
+ * driver checks the folder itself when it runs a turn, and picks its launcher
+ * from what the folder says then.
  */
 export function driverFor(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriver {
   return drivers[driverOfRow(agent)]
@@ -556,20 +432,16 @@ export function driverFor(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriv
 /**
  * Answer a parked ask whose agent row is gone.
  *
- * Removing an agents folder prunes its rows without waiting for the turn
- * lock, so a turn can still be parked on an agent no driver can be found for.
- * Only a folder driver parks, and both share the registry, so the answer is
- * delivered the way they deliver it — with no *Always allow* written, because
- * there is no agent left to keep a rule beside: `always` settles as `once`,
+ * Removing an agents folder prunes its rows without waiting for the turn lock,
+ * so a turn can still be parked on an agent no driver can be found for. Only
+ * the ACP driver parks, and it shares the registry, so the answer is delivered
+ * the way it delivers one — with no *Always allow* written, because there is no
+ * agent left to keep a rule beside: `always` settles as `once`,
  * `remembered: false`. Synchronous, like `respond`.
  */
 export function respondToOrphanedAsk(
   ask: ParkedAsk,
   resolution: Parameters<AgentDriver['respond']>[1]
 ): RespondOutcome {
-  return respondToParkedAsk(
-    { rememberGrant: () => false, resolveRequest: folderWorld.resolveRequest },
-    ask,
-    resolution
-  )
+  return respondToAcpAsk({ rememberGrant: () => false, resolveRequest }, ask, resolution)
 }

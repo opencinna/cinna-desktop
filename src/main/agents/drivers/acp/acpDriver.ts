@@ -68,7 +68,7 @@ import type { AgentCapabilities, AgentReadiness } from '../../../../shared/agent
 import { StreamPartsAccumulator, type MessageLike } from '../../streamPartsAccumulator'
 import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
-import { launcherOfRow } from '../driverOf'
+import { launcherOfFolder } from '../driverOf'
 import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput } from '../driver'
 import { AcpMessageStream } from './acpMessages'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
@@ -178,11 +178,12 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
         const folder = deps.readFolder(userId, agent.id)
         const state = folderReadiness(folder)
         if (state.state !== 'ok') return state
-        // The engine's own rungs, and they are asked about the launcher the
-        // *folder* names rather than the one the row stores: a user who has
-        // just switched an agent to Claude in the Runtime card is asking
-        // "can it run now", and the row may not have been rescanned yet.
-        const launcher = deps.launcher(reconcile(launcherOfRow(agent), folder))
+        // The engine's own rungs, asked about the launcher the **folder** names
+        // rather than the one the row stores: a user who has just switched an
+        // agent to Claude in the Runtime card is asking "can it run now", and
+        // the row may not have been rescanned yet. `folder` is non-null here —
+        // `folderReadiness` refused it above otherwise.
+        const launcher = deps.launcher(launcherOfFolder(folder?.runtime))
         if (!launcher?.readiness) return state
         return await launcher.readiness(options)
       } catch (err) {
@@ -211,7 +212,13 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       // **Which engine, decided from the folder** — the reconcile the two
       // folder drivers used to do by handing the turn to each other. With one
       // driver it is a lookup, which is the whole point of the collapse.
-      const launcherId = reconcile(launcherOfRow(agent), folder)
+      //
+      // The row's own launcher is deliberately not consulted here. It is a
+      // cache of this same read, and every state where the folder cannot speak
+      // for itself — gone, unreadable, `contract_too_new` — was refused above,
+      // in the runners' own words. The one reader left for the stored value is
+      // `capabilities()`, which has only a row to go on.
+      const launcherId = launcherOfFolder(folder.runtime)
       const launcher = deps.launcher(launcherId)
       if (!launcher) {
         logger.warn('an agent names an engine this build cannot run', {
@@ -286,6 +293,16 @@ interface AcpTurn {
   replaying: boolean
   open: boolean
   parked: Map<string, () => void>
+  /**
+   * A stop is in progress, so a park released from here was **not** abandoned.
+   *
+   * The registry settles a released park as `rejected`, which is also what an
+   * expiry looks like — and this file argues at length that a decision nobody
+   * made must not be recorded as one. "Denied" is not written for an expiry;
+   * by the same standard "no answer in time" must not be written for a turn the
+   * user deliberately stopped.
+   */
+  stopping: boolean
 }
 
 async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentTurnResult> {
@@ -301,10 +318,23 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     if (message) accumulator.ingestMessage(message, deltaPort)
   }
 
-  const turn: AcpTurn = { replaying: false, open: true, parked: new Map() }
+  const turn: AcpTurn = { replaying: false, open: true, parked: new Map(), stopping: false }
   let connection: AcpConnection | undefined
   let sessionId: string | null = null
   let hitCeiling = false
+  /**
+   * The mode the session says it is in, when it says anything.
+   *
+   * Watched because the desktop's approval setting is a promise to the user and
+   * the agent can quietly not keep it. The in-process Claude runner learned the
+   * same thing from the SDK's `init` message — asked for `auto` on a model with
+   * no classifier, the CLI ran `default` and said so nowhere else — and told the
+   * user in a notice. Over ACP the equivalent signal is a `current_mode_update`
+   * (or a `config_option_update` for `mode`) naming a mode other than the one
+   * `session/set_mode` was given. Without this line, "automatic approvals are
+   * on" and "I was asked for every command" are indistinguishable from a bug.
+   */
+  let reportedMode: string | null = null
 
   /**
    * Both ways a turn is told to stop, in one signal.
@@ -344,6 +374,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    */
   const askAgentToStop = (): void => {
     turn.open = false
+    turn.stopping = true
     for (const [, cancel] of turn.parked) cancel()
     turn.parked.clear()
     if (sessionId) void connection?.cancel(sessionId).catch(() => {})
@@ -386,11 +417,16 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
 
     const handlers = {
       onUpdate: (notification: SessionNotification): void => {
-        // The load replay, dropped: see the header. The session's *state* is
-        // still worth reading out of it — a loaded session comes back with the
-        // mode it was left in — but nothing goes into the transcript.
+        // The load replay, dropped whole: see the header. Not even the mode
+        // it reports is read, and that is deliberate rather than an oversight —
+        // the mode a *loaded* session comes back in is the one it was left in,
+        // and the setup that follows overwrites it before the first prompt, so
+        // reading it here would only give the fallback notice a stale value to
+        // compare against.
         if (turn.replaying) return
-        emit(stream.apply(notification).message)
+        const update = stream.apply(notification)
+        if (update.modeId) reportedMode = update.modeId
+        emit(update.message)
       },
       onPermission: (params: RequestPermissionRequest): Promise<RequestPermissionResponse> =>
         answerPermission(deps, ctx, { stream, emit, turn }, params),
@@ -407,8 +443,13 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     let unbind: (() => void) | undefined
 
     if (remembered && canLoad) {
-      unbind = connection.bindSession(remembered, handlers)
+      // **The gate closes before the bind, not after it.** `bindSession`
+      // flushes the pre-bind pen *synchronously*, and the pen for this very
+      // session id can be holding the tail of the previous turn — a stop, then
+      // a resend in the same chat inside the pen's window, and the last chunks
+      // of the turn the user stopped would be folded into this one's message.
       turn.replaying = true
+      unbind = connection.bindSession(remembered, handlers)
       try {
         await connection.loadSession({
           sessionId: remembered,
@@ -467,7 +508,25 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         error: message
       })
       unbind?.()
-      return fail('This agent could not be set up for the turn.', message)
+      // Through `finish`, so the session this turn *did* create is recorded.
+      // A bare failure leaves it behind engine-side and mints another on every
+      // retry, and the chat never gets a `contextId` to continue from.
+      return finish(deps, ctx, accumulator, sessionId, `This agent could not be set up for the turn: ${message}`)
+    }
+
+    // **Checked again here.** Everything since the first check awaited — a
+    // spawn, `session/new`, the setup calls — and that is one to two seconds in
+    // which a Stop lands with `sessionId` still null, so `askAgentToStop` had
+    // nothing to cancel. Sending the prompt anyway would start the agent on work
+    // the user cancelled and then kill its process three seconds later, leaving
+    // an empty reply and a cold start for the next turn.
+    if (input.signal.aborted) {
+      logger.info('an ACP turn was stopped before its prompt was sent', {
+        agentId: agent.id,
+        chatId
+      })
+      unbind?.()
+      return finish(deps, ctx, accumulator, sessionId, undefined)
     }
 
     try {
@@ -489,6 +548,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         })
         return finish(deps, ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
       }
+      noteModeFallback(plan, reportedMode, stream, emit)
       logger.info('ACP turn complete', {
         agentId: agent.id,
         chatId,
@@ -569,6 +629,36 @@ async function promptWithCancelGrace(
   void prompt.catch(() => {})
   deps.pool.retire(agentId)
   return null
+}
+
+/**
+ * Say, in the transcript, that the agent did not run in the mode it was given.
+ *
+ * Only for the mode the desktop actually promises something about: `auto` is
+ * "you will not be asked", and an agent that ran in anything else asked. The
+ * other direction — asked for `default`, ran in `auto` — would be far worse,
+ * and is why this does not check for equality only in one direction: any
+ * disagreement is reported, in the words of whichever way it went.
+ *
+ * A notice, not a status line, because it belongs beside the turn it describes:
+ * a panel would say it once, about whichever turn ran last, on a screen the
+ * user may not be looking at.
+ */
+function noteModeFallback(
+  plan: AcpLaunchPlan,
+  reportedMode: string | null,
+  stream: AcpMessageStream,
+  emit: EmitMessage
+): void {
+  const asked = plan.setup.modeId
+  if (!asked || !reportedMode || asked === reportedMode) return
+  emit(
+    stream.note(
+      asked === 'auto'
+        ? `Automatic approvals are not available here, so this turn asked before each action instead (the agent ran in “${reportedMode}”).`
+        : `This agent asked to run in “${asked}” and the engine ran it in “${reportedMode}” instead.`
+    ).message
+  )
 }
 
 /** `session/set_mode` and `session/set_config_option`, in the order the launcher gave. */
@@ -706,7 +796,10 @@ async function answerPermission(
     // Denying is the only safe answer either way, but the transcript must not
     // record "Denied" for a decision nobody made.
     if (resolution.kind === 'rejected') {
-      return settle('No answer — the request expired.', selected('reject'))
+      return settle(
+        world.turn.stopping ? 'Not answered — the turn was stopped.' : 'No answer — the request expired.',
+        selected('reject')
+      )
     }
     if (resolution.kind === 'permission' && resolution.reply !== 'reject') {
       // `always` is answered by the desktop and never sent onward — the grant
@@ -784,15 +877,23 @@ async function answerElicitation(
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
     if (resolution.kind === 'question') {
       const answers = resolution.answers.flat().filter(Boolean)
+      // The old OpenCode runner's own sentence, full stop included: every other
+      // decision line in a transcript ends in one, and this one is read beside
+      // them.
       world.emit(
         world.stream.settleQuestion(
           requestId,
-          answers.length > 0 ? `Answered: ${answers.join(', ')}` : 'Answered.'
+          answers.length > 0 ? `Answered: ${answers.join(', ')}.` : 'Answered.'
         ).message
       )
       return { action: 'accept', content: toElicitationContent(form, resolution.answers) }
     }
-    world.emit(world.stream.settleQuestion(requestId, 'No answer — the request expired.').message)
+    world.emit(
+      world.stream.settleQuestion(
+        requestId,
+        world.turn.stopping ? 'Not answered — the turn was stopped.' : 'No answer — the request expired.'
+      ).message
+    )
     return { action: 'decline' }
   } catch (err) {
     logger.warn('a question failed to settle', {
@@ -963,36 +1064,3 @@ export function folderReadiness(folder: AcpFolderView | null): AgentReadiness {
   }
 }
 
-/**
- * Which launcher the folder names right now.
- *
- * **Keeps the stored launcher whenever the folder cannot speak for itself** —
- * it cannot be read, or it is `invalid` / `contract_too_new`. A manifest is
- * unparseable for a moment every time an assistant saves it, and its runtime
- * then reads as none, which would otherwise hand a Claude agent to the default
- * engine. The turn refuses such a folder with the same sentence anyway, so
- * nothing is gained by moving it.
- */
-function reconcile(stored: AcpLauncherId, folder: AcpFolderView | null): AcpLauncherId {
-  if (!folder || folder.readiness === 'invalid' || folder.readiness === 'contract_too_new') {
-    return stored
-  }
-  return launcherOfFolderRuntime(folder.runtime, stored)
-}
-
-/**
- * The launcher a folder's runtime block names.
- *
- * The same tolerant read `runtimeService` makes: a missing or unrecognised
- * engine keeps what the row already said, rather than silently moving an agent
- * to the default engine because a newer tool wrote a name this build has not
- * heard of.
- */
-function launcherOfFolderRuntime(
-  runtime: { engine?: unknown } | null | undefined,
-  stored: AcpLauncherId
-): AcpLauncherId {
-  const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
-  if (raw === 'opencode' || raw === 'claude' || raw === 'gemini' || raw === 'codex') return raw
-  return stored
-}
