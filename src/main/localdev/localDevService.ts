@@ -63,6 +63,7 @@ import { getLayout } from '../kit/contractStore'
 import { CinnaApiError, ToolchainError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { prefetchEngineBinary } from '../engine/binaryResolver'
+import { engineBinaryService } from '../engine/engineBinaryService'
 import { runCinnaCli, type CliRunOutcome } from './cliRunner'
 import {
   clearCliCapabilityCache,
@@ -399,6 +400,13 @@ function prefetchEngine(generation: number): Promise<void> {
     if (generation !== activeRun) return
     enginePercent = 100
     if (result.ok) {
+      // **Tell the binary service what just happened.** `prefetchEngineBinary`
+      // resolves through the resolver directly, which the service does not
+      // observe — so Settings went on saying "Not resolved yet" after a
+      // localdev setup that had a binary in hand. True of the service, not of
+      // the machine. Fire-and-forget: the row above is already correct, and a
+      // cache refresh that fails must not turn a done step into a failed one.
+      void engineBinaryService.ensure().catch(() => undefined)
       // Where it came from matters on this row: "we did not download 46 MB
       // because you already have one" is the good outcome, and a tick with no
       // explanation reads like the download simply flashed past.

@@ -125,6 +125,10 @@ const prefetchEngineBinary = vi.fn(
   async (_onProgress?: (received: number, total: number | null) => void): Promise<PrefetchResult> =>
     ({ ok: true, source: 'managed' })
 )
+const engineEnsure = vi.hoisted(() => vi.fn(async () => ({ ok: true, source: 'path' })))
+vi.mock('../engine/engineBinaryService', () => ({
+  engineBinaryService: { ensure: engineEnsure }
+}))
 vi.mock('../engine/binaryResolver', () => ({
   prefetchEngineBinary: (onProgress?: (received: number, total: number | null) => void) =>
     prefetchEngineBinary(onProgress)
@@ -183,6 +187,7 @@ beforeEach(() => {
   nextStatusToken = 'valid'
   ensure.mockClear()
   prefetchEngineBinary.mockClear()
+  engineEnsure.mockClear()
 })
 
 describe('what the renderer is told', () => {
@@ -277,6 +282,11 @@ describe('what the renderer is told', () => {
 
     const engine = (sent.at(-1)?.tasks ?? []).find((t) => t.id === 'engine')
     expect(engine).toMatchObject({ status: 'done', detail: 'Already on this machine' })
+    // And the binary service is told. `prefetchEngineBinary` goes through the
+    // resolver directly, which the service does not observe — so without this
+    // Settings went on saying "Not resolved yet" after a setup that had a
+    // binary in hand: true of the service, not of the machine.
+    expect(engineEnsure).toHaveBeenCalled()
   })
 
   it('is still ready when the engine could not be fetched, and does not tick that row', async () => {
@@ -300,6 +310,10 @@ describe('what the renderer is told', () => {
     // closing tick must not claim a download that did not happen.
     expect(engine?.status).toBe('pending')
     expect(engine?.detail).toContain('first time you run an agent')
+    // And nothing is claimed to the binary service either: there is no binary
+    // to tell it about, and a refresh here would only replace one honest
+    // "not resolved" with another.
+    expect(engineEnsure).not.toHaveBeenCalled()
     // And the components that did finish are not dragged down with it.
     expect((sent.at(-1)?.tasks ?? []).find((t) => t.id === 'token')?.status).toBe('done')
   })
