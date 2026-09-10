@@ -38,8 +38,8 @@
  *
  * ## Why the clock and the timers are injected
  *
- * The reap window is five minutes. A test that proved reaping by waiting for it
- * would be five minutes long, so it would not be written, so the reap would
+ * The reap window is two minutes. A test that proved reaping by waiting for it
+ * would be two minutes long, so it would not be written, so the reap would
  * ship untested. Injecting the timer makes the same test instant and lets it
  * assert the *delay* against {@link ACP_IDLE_REAP_MS} rather than against a
  * number copied into the test.

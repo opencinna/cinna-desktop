@@ -26,7 +26,6 @@ import {
 } from '../../../../../shared/runtimeDefaults'
 import {
   describeCredential,
-  
   describeModel,
   NO_CATALOGUE,
   type RuntimeFacts,

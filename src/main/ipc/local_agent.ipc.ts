@@ -11,6 +11,7 @@ import { appSettingsService } from '../services/appSettingsService'
 import { gitService } from '../services/localAgents/gitService'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../../shared/agentGit'
 import type { StoredPermissionGrant } from '../../shared/localAgentRequests'
+import { acpProcessPool } from '../agents/drivers'
 import { getMainWindow } from '../index'
 import { LocalAgentError } from '../errors'
 import { ipcHandle } from './_wrap'
@@ -283,6 +284,20 @@ export function registerLocalAgentHandlers(): void {
       userActivation.requireActivated()
       const userId = getSettingsScopeUserId()
       const outcome = await withCodeAsync(() => localAgentService.delete(userId, input))
+      /**
+       * **Its process goes with it.**
+       *
+       * The pool reaps an idle process after two minutes, and a config change
+       * replaces one by moving the launch spec's key — but a deleted agent has
+       * no next turn to notice either. Without this, a child sits for up to two
+       * minutes with its working directory inside a folder the user has just
+       * had moved to the trash, holding a session for an agent that is gone.
+       *
+       * `retire` is the right verb rather than a kill: a turn still streaming
+       * keeps its process until it finishes, which is the same courtesy every
+       * other config change gets.
+       */
+      if (outcome.ok) acpProcessPool.retire(input.agentId)
       return outcome
     }
   )
@@ -538,7 +553,10 @@ export function registerLocalAgentHandlers(): void {
       const outcome = withCode(() =>
         localAgentService.renameAgent(userId, input?.agentId ?? '', input?.name ?? null)
       )
-      // The name is the OpenCode agent key's readable half, so the engine's
+      // The name is the readable half of the OpenCode agent key, so a rename
+      // moves it — and the launcher's config, and with it the launch spec's
+      // key, so this agent's process is replaced on its next turn. Nothing to
+      // push from here; see the comment on `update-field` above.
       return outcome
     }
   )
@@ -565,7 +583,10 @@ export function registerLocalAgentHandlers(): void {
       const outcome = withCode(() =>
         localAgentService.setBareRuntime(userId, input?.agentId ?? '', input?.runtime)
       )
-      // The engine's config names each agent's provider and model, so this is
+      // A bare agent's runtime is the desktop's own, and the launcher writes
+      // the provider and the model it names into this agent's config — so the
+      // spec key moves and its process is replaced on the next turn. Again,
+      // nothing to push.
       return outcome
     }
   )

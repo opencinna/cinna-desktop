@@ -10,7 +10,7 @@ import { credentialEnvName, type EngineConfigInput } from './configGenerator'
  * This module had **no test at all** when Phase 5 was interrupted, and it is
  * the one its own header calls "the one place a decrypted API key is read".
  * Everything around it was covered: `configGenerator` proves a key never
- * reaches the config file, `engineManager` proves the child's environment is
+ * reaches the config file, `acpLaunchers` proves the child's environment is
  * narrow. Neither says anything about *which* credentials get collected, or
  * what happens to the rest when one of them will not decrypt.
  *
@@ -124,7 +124,13 @@ vi.mock('../services/localAgents/promptAssembly', () => ({
   resolveDesktopPromptContext: () => ({ locale: 'en-GB', timeZone: 'Europe/Berlin' })
 }))
 
-const { collectEngineAgents, collectEngineConfigInput, collectEngineProviders, refreshModelCache } =
+const {
+  collectEngineAgents,
+  collectEngineConfigInput,
+  collectEngineProviders,
+  refreshModelCache,
+  resetModelCacheForTests
+} =
   await import('./engineConfigSource')
 // The **real** generator, deliberately not mocked: the question this file has
 // to answer is what happens to a decrypted key on its way to disk, and a mocked
@@ -184,6 +190,7 @@ beforeEach(() => {
   state.runtimes = { _default: { credentialId: 'p1', modelId: 'claude-sonnet-4-5' } }
   state.decryptFails = new Set()
   state.logged = []
+  resetModelCacheForTests()
 })
 
 describe('collectEngineProviders', () => {
@@ -340,7 +347,10 @@ describe('refreshModelCache', () => {
     await refreshModelCache()
 
     state.modelsThrows = true
-    await expect(refreshModelCache()).resolves.toBeUndefined()
+    // False rather than a throw: the caller has nothing to do about it, and the
+    // one caller that *does* care — the first collection of a session — reads it
+    // to decide whether to ask again next turn.
+    await expect(refreshModelCache()).resolves.toBe(false)
 
     state.dtos = [dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
     state.rows = [row({ id: 'gw', baseUrl: 'https://gw.example.com/v1' })]
@@ -452,21 +462,44 @@ describe('collectEngineConfigInput', () => {
 })
 
 describe('collectEngineConfigInput — the model refresh', () => {
-  it('skips the cloud refresh when the caller asks it to', async () => {
+  it('asks the cloud once a session, and only the local ones after that', async () => {
     // Every *cloud* adapter's `listModels()` is a network request, so this flag
     // is what keeps a per-turn reconcile off the network. The count is the
     // assertion: "the models are still right" would hold either way, because the
     // cache is warm — which is exactly how a flag that is quietly ignored
     // survives.
+    //
+    // **And the first time is not skipped**, which is the half that was lost
+    // when the shared server went: it was the only caller that ever asked for
+    // everything, so the cache ended up with no cloud models in it at all and a
+    // Work Complexity tier on a cloud credential resolved against nothing.
     state.models = [{ id: 'gpt-4o', name: 'GPT-4o', providerId: 'gw' }]
-    await refreshModelCache()
-    const before = state.modelFetches
 
     await collectEngineConfigInput('user-1', { refreshModels: false })
-    expect(state.modelFetches).toBe(before)
+    expect(state.modelFetches).toBe(1)
+
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+    expect(state.modelFetches).toBe(1)
 
     await collectEngineConfigInput('user-1')
-    expect(state.modelFetches).toBe(before + 1)
+    expect(state.modelFetches).toBe(2)
+  })
+
+  it('asks again next turn when the one full refresh failed', async () => {
+    // A machine that was offline at the wrong moment must not spend the rest of
+    // the session with an empty cloud catalogue.
+    state.modelsThrows = true
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+    expect(state.modelFetches).toBe(1)
+
+    state.modelsThrows = false
+    state.models = [{ id: 'gpt-4o', name: 'GPT-4o', providerId: 'gw' }]
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+    expect(state.modelFetches).toBe(2)
+
+    // …and once it has worked, it stops asking.
+    await collectEngineConfigInput('user-1', { refreshModels: false })
+    expect(state.modelFetches).toBe(2)
   })
 
   /**
@@ -489,20 +522,27 @@ describe('collectEngineConfigInput — the model refresh', () => {
     ]
     state.rows = [row({ id: 'gw' }), row({ id: 'ollama', apiKeyEncrypted: null })]
     state.models = [{ id: 'gemma4:latest', name: 'gemma4:latest', providerId: 'ollama' }]
+    // Past the one full refresh a session gets, so what is measured below is the
+    // *reconcile* rather than the first collection.
+    await refreshModelCache()
+    state.adapterFetches = []
+    const before = state.modelFetches
 
     await collectEngineConfigInput('user-1', { refreshModels: false })
 
-    expect(state.modelFetches).toBe(0)
+    expect(state.modelFetches).toBe(before)
     expect(state.adapterFetches).toEqual(['ollama'])
   })
 
   it('asks no adapter directly when there is no local credential', async () => {
     state.dtos = [dto({ id: 'gw', type: 'openai_compatible', name: 'Gateway' })]
     state.rows = [row({ id: 'gw' })]
+    await refreshModelCache()
+    const before = state.modelFetches
 
     await collectEngineConfigInput('user-1', { refreshModels: false })
 
-    expect(state.modelFetches).toBe(0)
+    expect(state.modelFetches).toBe(before)
     expect(state.adapterFetches).toEqual([])
   })
 
@@ -539,7 +579,7 @@ describe('a decrypted key, from the keystore to disk', () => {
    * The seam no other test covers.
    *
    * `configGenerator.test.ts` proves a key never reaches the config — but for
-   * *its own* hand-written input. `engineManager.test.ts` proves the child gets
+   * *its own* hand-written input. `acpLaunchers.test.ts` proves the child gets
    * the key in its environment — but it mocks this module out entirely, so the
    * key it checks is a literal in the test file. Nothing anywhere runs a key
    * that came out of `decryptApiKey` through the real collector, the real

@@ -756,6 +756,63 @@ describe('the mode the agent actually ran in', () => {
   })
 })
 
+describe('which login paid for the turn', () => {
+  const authStatus = (authStatus: Record<string, unknown>): FakeAcpScript => ({
+    prompt: {
+      emit: [
+        { kind: 'notify', method: '_auth/status_update', params: { sessionId: 'ses_fake', authStatus } },
+        {
+          kind: 'update',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'Done.' }
+          }
+        }
+      ]
+    }
+  })
+
+  it('says nothing when the agent ran on its own subscription login', async () => {
+    // The recorded shape: `{kind:'account', label:'Claude Max', account:{…}}`.
+    // This app never asserts a subscription — it only reports when the agent
+    // says otherwise.
+    const w = world({
+      launcher: 'claude',
+      script: authStatus({ kind: 'account', label: 'Claude Max', account: { plan: 'max' } })
+    })
+    const result = await w.run()
+    expect(result.notices).toEqual([])
+  })
+
+  it('says so when the turn was paid for by something else', async () => {
+    // A turn billed to an account the user did not choose looks exactly like a
+    // turn billed to the right one, which is why this is a notice in the
+    // transcript and not a log line.
+    const w = world({
+      launcher: 'claude',
+      script: authStatus({ kind: 'apiKey', label: 'API key' })
+    })
+    const result = await w.run()
+    expect(result.notices.map((notice) => notice.text).join('\n')).toContain(
+      'did not run on the agent’s own login'
+    )
+  })
+
+  it('never repeats the account’s email, whatever the label says', async () => {
+    // The same payload carries the address two fields away, and an adapter
+    // version that decided the label should name the account would otherwise
+    // put it straight into the transcript.
+    const w = world({
+      launcher: 'claude',
+      script: authStatus({ kind: 'apiKey', label: 'key for someone@example.com' })
+    })
+    const result = await w.run()
+    const text = result.notices.map((notice) => notice.text).join('\n')
+    expect(text).toContain('key for …')
+    expect(text).not.toContain('someone@example.com')
+  })
+})
+
 describe('a stop', () => {
   it('cancels the session and reports no error', async () => {
     const w = world({ script: { prompt: { emit: [{ kind: 'awaitCancel' }] } } })

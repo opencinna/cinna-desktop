@@ -7,7 +7,7 @@
  * home belongs to the user: an assistant may have it open, it is very often a
  * git repository, and Invariant 2 says exactly one file inside an agent folder
  * is the desktop's (`app-data/desktop.json`). The engine is pointed at our copy
- * with `OPENCODE_CONFIG_DIR` — see {@link engineManager} for why that variable
+ * with `OPENCODE_CONFIG_DIR` — see `acpLaunchers` for why that variable
  * and not `OPENCODE_CONFIG` — and the generated per-agent prompt files sit
  * beside it.
  *
@@ -667,7 +667,7 @@ export function buildEngineConfig(input: EngineConfigInput): BuiltEngineConfig {
  *
  * Two digests rather than one because the two halves reach the engine by
  * different routes and only one of them is safe to name in a log: `config` is
- * bytes on disk, `env` is live API keys. {@link engineManager} compares them
+ * bytes on disk, `env` is live API keys. The ACP launcher folds both into its
  * separately so it can say "credentials moved" without saying which, or what.
  */
 export interface EngineConfigDigest {
@@ -689,7 +689,7 @@ export interface EngineConfigDigest {
  * **This is not ceremony, and the direction of the failure is why.** A
  * delimiter collision here does not produce a spurious restart — it produces a
  * *false negative*: two genuinely different configs digesting to the same
- * value, so {@link engineManager.applyConfigChange} concludes nothing moved and
+ * value, so a change-detector reading only the config would conclude nothing moved and
  * never restarts. The engine then keeps serving the previous prompt while the
  * app believes it is serving the new one, and **every test still passes**,
  * because a false negative is invisible to anything that is not looking for it.
@@ -713,7 +713,7 @@ function framed(value: string): string {
  * each one sees is invisible to the other.
  *
  * **`config`** covers the serialised config object and the prompt files —
- * exactly the set {@link writeEngineConfig} puts on disk, because that is the
+ * exactly the set the launcher puts on disk, because that is the
  * set the engine reads at load. Serialised the same way it is written, so the
  * digest moves when and only when the bytes would.
  *

@@ -4,6 +4,15 @@
 `darwin-arm64`. Two probe rounds: the first without a model credential (protocol and transport), the
 second with a live OpenAI credential (real turns, real tools, real permissions).
 
+> **The desktop no longer speaks HTTP to this engine.** Since phase 3 of the agent runtime plan a
+> folder agent's turn spawns `opencode acp` and speaks the Agent Client Protocol to it over stdio —
+> see [The ACP Engine Contract](acp_contract.md), which is the live one. This document is kept for
+> two reasons: it is the record of what was measured about the **engine itself** — the config
+> readers, the model catalogue, the provider limits, the transports, and the permission-store defect
+> in §4 that is the whole reason the desktop holds its own grants — and the source cites it by
+> section number in a dozen places. **Sections about the HTTP surface are marked RETIRED in place**,
+> with what replaced them. Nothing unmarked here is stale.
+
 This document exists because **the engine contract is the one part of Local Agents that our tests
 cannot check.** Every test in `src/main/services/agentTurn/**` and `src/main/engine/**` runs against
 a fake at the HTTP boundary. A fake built from the OpenAPI document is faithful to the *document* —
@@ -45,6 +54,8 @@ keeping beside any future probe; it is the only machine-readable description of 
 ---
 
 ## 2. Verified — watched, not inferred
+
+> **RETIRED, in part.** The transport, session, event-stream, tool-call and question findings below describe the HTTP server, which nothing reaches any more; the equivalents over ACP are in [the ACP contract](acp_contract.md) §2–§3. What is *not* retired is the permission material — the ask's own shape informed the ACP mapping, and §4's store defect is unchanged, because it is a property of the engine's database and not of how it was asked.
 
 ### Transport and process
 
@@ -219,6 +230,8 @@ parameter that defaults to the server's cwd — and that filtering proved **unre
 
 ## 3. Disproven — declared but absent, or documented and false
 
+> **RETIRED.** Every item here is about the HTTP/OpenAPI surface (`session.idle`, `POST …/wait`, the cursorless global event stream). None of them exists over ACP, where a turn ends on a stop reason returned by `session/prompt`. Kept because the *lesson* — a fake built from a specification is faithful to the specification — is the reason [the ACP contract](acp_contract.md) exists too.
+
 **These are the ones that pass every test.** Each is in the OpenAPI document or the event schema, so
 a fake built from the document implements them faithfully.
 
@@ -346,9 +359,10 @@ which asterisks look like wildcards.
 ### 4.2 The hole in that plan — pre-existing grants. Still open
 
 **Nothing in the shipped design closes this.** The desktop can only gate what it is **asked** about. If `~/.local/share/opencode/opencode.db`
-already carries a matching grant — from the user's own OpenCode usage, or from another client
-attached to the same `opencode serve` (which **Phase 8 deliberately enables**) — the engine
-**allows without asking**, and no desktop-side policy is consulted. Step 4 above never runs.
+already carries a matching grant — from the user's own OpenCode usage, or from anything else that
+has driven this engine on this machine — the engine **allows without asking**, and no desktop-side
+policy is consulted. Step 4 above never runs. Unchanged by the move to ACP, and one degree harder to
+address: there is no HTTP API left to read that store through.
 
 That store is outside our app data directory and predates our process. So a complete policy needs a
 reconciliation step: at engine start, read `GET /api/permission/saved` and either prune rows
@@ -401,6 +415,8 @@ these were reported to the team before being caught.
 ---
 
 ## 7. Still unverified
+
+> **RETIRED.** These were open questions about the event streams and the HTTP surface. The ones that outlived the transport are in [the ACP contract](acp_contract.md) §6.
 
 Not weaker evidence — **no evidence**. Each is a place to look first when something behaves oddly.
 
@@ -456,6 +472,8 @@ Not weaker evidence — **no evidence**. Each is a place to look first when some
 ---
 
 ## 8. Runbook — how to re-verify
+
+> **RETIRED.** This runbook starts `opencode serve`. The ACP runbook — which is what the desktop now depends on — is [the ACP contract](acp_contract.md) §7. Both still begin by fetching and checking the pinned asset, and that first step is unchanged.
 
 Keep this reproducible; the contract will move when the pinned version does.
 
@@ -544,10 +562,11 @@ supported(m) = m.api.type == "aisdk" && m.api.package in
 Consequences that matter to the desktop:
 
 1. **The session's own `model` is the only per-session input.** The agent's `model` in the config
-   is not read on this path. Opening a session with `agent` but no `model` (what
-   `localAgentTurnRunner.openSession` does today) means "engine's default, or the first supported
-   model in `available()`" — which is how a free OpenCode model, and once a provider with no key,
-   got chosen silently.
+   is not read on this path — re-confirmed over ACP, where selecting a mode never moved the
+   session's model either. Opening a session without stating a model means "engine's default, or
+   the first supported model in `available()`", which is how a free OpenCode model, and once a
+   provider with no key, got chosen silently. The desktop therefore states the model **twice**: as
+   the config's top-level `model` and again on the session.
 2. **`available()` is not the config's provider list.** `google/gemini-3.8-flash` from the config
    *was* in `GET /api/model` (`api.type:"aisdk"`, `api.package:"@ai-sdk/google"`,
    `request.body.apiKey` set), so config providers can reach it — yet `anthropic/claude-sonnet-4-6`
@@ -718,8 +737,10 @@ session.next.prompted
 The engine logs `ERROR message="Failed to drain Session" cause="SessionRunnerModel.ModelUnavailableError: …"`
 **0.4 s** after the prompt — §9's "50–120 s" was time-to-notice, not the engine's. No
 `step.started`, no `step.failed`, no `session.error`, nothing on the durable stream either. So there
-is nothing for `turnStream.ts` to map; the desktop has to ask before it prompts, which is what
-`awaitEngineReady` in `localAgentTurnRunner.ts` now does.
+was nothing for the HTTP runner's stream to map, and it had to ask whether the engine was ready
+before it prompted. **That guard went with the runner**: over ACP a model the engine cannot resolve
+fails the `session/prompt` itself, as a JSON-RPC error the driver reports — late, but as an error
+rather than a silent hang, which is what the guard was protecting against.
 
 **A provider failure is the exact opposite and must not be conflated with it.** With the model
 resolved and a bad key, the same subscription carries:

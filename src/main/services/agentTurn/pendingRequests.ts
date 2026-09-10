@@ -18,7 +18,7 @@
  *
  * This module holds *resolvers*, not HTTP. The runner owns the request that
  * actually posts a reply, because it is the runner that knows the session id
- * and holds `engineManager.request`. Keeping the door in one place is the same
+ * and holds the ACP connection. Keeping the door in one place is the same
  * rule Phase 5 set for the engine's base URL and Basic auth.
  *
  * ## The wedge, and why every path out of a turn clears the registry

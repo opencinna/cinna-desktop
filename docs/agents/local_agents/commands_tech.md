@@ -7,7 +7,7 @@ Implementation reference for [`/run:<name>` — running a folder agent's catalog
 ### Main process
 - `src/main/services/localAgents/commandService.ts` (net-new) — the whole feature: catalog lookup, localisation call, subprocess execution, turn-lock, and shaping into `RunAgentTurnResult`
   - `MAX_OUTPUT_BYTES` (`:73`, `200_000`) — combined stdout+stderr cap, enforced as chunks arrive (`append`, `:205-215`): past it the pipes are still drained so the child never stalls on a full buffer, but nothing more is kept — the bound is on this process's heap, not only on the DB row
-  - `COMMAND_TIMEOUT_MS` (`:83`, 5 min) — per-command ceiling, deliberately shorter than `TURN_CEILING_MS` (20 min, `localAgentTurnRunner.ts`)
+  - `COMMAND_TIMEOUT_MS` (`:83`, 5 min) — per-command ceiling, deliberately shorter than `ACP_TURN_CEILING_MS` (20 min, `agents/drivers/acp/acpDriver.ts`)
   - `killTree(child)` (`:120-146`) — POSIX: `process.kill(-child.pid, 'SIGKILL')` against the process group; win32: `taskkill /pid <pid> /T /F`. Falls back to signalling the child directly if there is no pid or no process group
   - `execute(localCommand, agentDir, env, signal?, timeoutMs?)` (`:149-235`) — spawns under a shell (`shell: true`), `detached: process.platform !== 'win32'` so `killTree` can reach the group, checks `signal?.aborted` *before* spawning (closes the gap between an abort fired while `getShellEnv()` is still pending and the listener being attached)
   - `commandService.matchRunCommand(wireContent)` (`:266-269`) — `RUN_REFERENCE_PATTERN.exec(wireContent.trim())`, anchored to the whole trimmed message
@@ -91,7 +91,7 @@ Success: `{text: '```\n<output>\n```', parts: [{kind:'command_result', text, com
 - **A command runs under the same turn lock a model turn does**, owner `'command'`. This is what stops a `/run:<name>` script's writes racing a concurrent model turn (owner `'turn'`), a page editor save (owner `'editor'`), or a second command for the same agent — all three are proven generically for other owner pairs and specifically for `'command'` in `commandService.test.ts`'s "the turn lock" suite
 - **The command runs cwd'd to the agent's own folder** (`agentDir`), never anywhere else — `spawn(localCommand, {cwd: agentDir, …})`
 - **The environment handed to the subprocess is the narrowed login-shell environment** (`shellEnvForChild`), the same narrowing every other child spawn in this feature uses — see [The Local Engine](engine.md#the-engines-environment-is-narrowed-not-inherited)
-- **`turnLock.anyHeld()` is deliberately not consulted.** A command never touches the shared `opencode serve` process, so there is nothing engine-level to serialize against — using the engine-wide predicate here would block a command on an unrelated agent's model turn for no reason
+- **`turnLock.anyHeld()` is deliberately not consulted.** A command touches no other agent's process — since phase 3 each folder agent has its own, and there was never anything engine-level for a command to serialize against — so using the folder-wide predicate here would block a command on an unrelated agent's model turn for no reason
 - **Output is never a place secrets are assumed absent** — nothing in this slice redacts a command's stdout/stderr. A catalog command that prints a credential prints it into the transcript exactly as it would on any other host; this is unchanged from what running the same script by hand would do, and out of scope for this slice
 
 ## Testing notes

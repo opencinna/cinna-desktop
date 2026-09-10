@@ -16,7 +16,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/db/migrations/migrations.test.ts` — fresh-install replay, idempotency, `PRAGMA foreign_key_check`
 - `src/main/db/testSupport/nodeSqlite.ts` — **test support only**; adapts `node:sqlite` to the narrow `better-sqlite3` surface Drizzle and the migrations use
 - `src/main/db/agentRoots.ts` — `agentRootRepo`, `userId`-scoped, no business logic
-- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, the module-private `pruneFolderRows()`, plus `FolderIndexEntry.driver` (`:117`), `setFolderDriver()` (`:509`) and `healMissingDrivers()` (`:530`)
+- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, the module-private `pruneFolderRows()`, plus `FolderIndexEntry.launcher`, `setFolderLauncher()` and `healMissingDrivers()`
 - `src/main/db/agents.test.ts` — the index transaction: insert, update-in-place, `enabled` preservation, per-root prune scoping, protected paths, rollback; and *the driver a row names*
 - `src/main/db/schema.ts` — `agentRoots` table; `agents.localPath` / `agents.localRootId`; `agents.driver` / `agents.driverConfig`
 - `src/main/db/migrations/agent-drivers.ts` — `agents.driver` + `agents.driver_config` and their backfill; owned by [Agent Drivers](../drivers/drivers_tech.md#database-schema)
@@ -82,8 +82,8 @@ Plus `idx_agent_roots_user_id` and a unique `idx_agent_roots_user_path`. Both in
 | `source` | Third value `'folder'` joins `'local'` (hand-added A2A URL) and `'remote'` (Cinna-synced) |
 | `local_path` | Folder agents only: absolute path of the agent folder. NULL otherwise |
 | `local_root_id` | Folder agents only: the `agent_roots` row it was scanned from. NULL otherwise |
-| `driver` | Which driver runs the row (`a2a` \| `opencode` \| `claude`), added by `src/main/db/migrations/agent-drivers.ts`. For a folder row it is the engine the folder's runtime names, written by every scan — except for an `unresolved` folder, whose row keeps its value. A rescan recovers it from the folder, so it is not one of the values a rebuild cannot recover. See [Agent Drivers](../drivers/drivers_tech.md#database-schema) |
-| `driver_config` | JSON: the driver's own settings. Nothing reads or writes it yet |
+| `driver` | Which driver runs the row (`a2a` \| `acp`), added by `src/main/db/migrations/agent-drivers.ts` and collapsed to those two by `acp-driver.ts`. Every folder row is `acp` |
+| `driver_config` | JSON: the driver's own settings. For a folder row, `{"launcher": "opencode" \| "claude" \| …}` — the engine the folder's runtime names, written by every index write |
 
 Row id is `folder:<manifest uuid>`; `protocol` is `local-folder` — deliberately not `'a2a'`, so the A2A-only paths (`agentService.testAgent`, `listCliCommands`) keep gating themselves out. `local_path` is machine-local and never synced: sync's descriptor resolver already skips rows whose `source` is not `'local'`.
 
@@ -151,7 +151,7 @@ Every handler calls `userActivation.requireActivated()`, resolves its user with 
 - `markRootDirty(rootId)` / `markAllRootsDirty()` — the cache's **exact** invalidation. Every path that can change a folder marks its root dirty; nothing else serves stale data. Before this cache existed, `local-agent:list` re-walked, parsed, validated and re-indexed every agent in every root synchronously on every call — and the renderer refetches on every change push, so watcher bursts compounded
 - `readEnvKeys(agentDir)` / `readStatus(agentDir, statusFile)` — exported for tests; names-only and frontmatter-only respectively. `readEnvKeys` matches a variable **name** at the head of a line, so any uncommented `KEY=` counts as set whatever follows the `=`
 - `ENV_FILE` (`credentials/.env`) — exported, so the reader above and `localAgentService.openCredentials`, which creates that file, name the path in one place rather than two that can drift apart
-- `folderIndexDriver(dto)` (`:427`) — the `driver` a scanned folder's index row should name: `driverOfFolder(dto.runtime)`, or `null` for an `unresolved` folder, which keeps the row's value. It is passed on both index writes, and by `localAgentService.reindexAgent` and `renameAgent`; `setBareRuntime` calls `agentRepo.setFolderDriver` directly
+- `folderIndexLauncher(dto)` — the launcher a scanned folder's index row should name: `launcherOfFolder(dto.runtime)`, or `null` for an `unresolved` folder, which keeps the row's value. It is passed on both index writes, and by `localAgentService.reindexAgent` and `renameAgent`; `setBareRuntime` writes it directly through `agentRepo.setFolderLauncher`, because a bare agent's runtime lives outside the folder and no watcher would see it. **Null is the one state that means "could not tell"** — `launcherOfFolder` itself never returns it
 
 Duplicate manifest ids: the first folder alphabetically wins the row; later claimants stay in the returned list marked `invalid` with a finding naming the other folder, so the page can say which two folders claim one identity.
 
@@ -199,9 +199,9 @@ Duplicate manifest ids: the first folder alphabetically wins the row; later clai
   - `resolveAccessToken()` returns `undefined`, before touching the keystore, for any row whose `auth` is neither `cinna` nor `token`
 
 **This cannot regress A2A, and a folder row never reaches either function on a turn.**
-- `driverFor` sends a folder row to a folder driver
+- `driverFor` sends a folder row to the ACP driver
 - Only the A2A driver calls the pre-flight, and it turns a `null` endpoint into a turn error (`NO_ENDPOINT_CONFIGURED`)
-- The orchestrator's tool list skips a row only when `hasRunConfig` says its driver lacks what it needs, and a folder driver needs no card URL
+- The orchestrator's tool list skips a row only when `hasRunConfig` says its driver lacks what it needs, and the ACP driver needs no card URL
 
 ## Renderer
 

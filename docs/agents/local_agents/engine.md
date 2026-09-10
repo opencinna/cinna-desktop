@@ -1,15 +1,14 @@
 # The Local Engine, Runtimes & Prompt Assembly
 
-> **The engine contract is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was actually watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. **Read §9.5 before changing anything about the generated config:** the engine has two config readers, `OPENCODE_CONFIG` reaches only the older one, and the newer one — which decides what a session can run on and what system prompt it gets — substitutes neither `{env:…}` nor `{file:…}`. Three further things it settles matter to everything below: `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only turn-completion signal is `step.ended` with `finish === 'stop'`; and OpenCode's saved permission grants are **user-global** (`projectID` is always `"global"`), which is why the desktop holds its own — see [Local Agent Permissions](permissions.md). §2 also records how a pattern in the generated `permission` block is actually matched, and which rule wins when two match; **read it before editing that block**, because a pattern that misses fails open.
-
+> **What the engines actually do is verified against the real binaries — see [The ACP Engine Contract](acp_contract.md).** That document records what was watched against `opencode` 1.18.27 over `opencode acp`, and against `@agentclientprotocol/claude-agent-acp` 0.76.0 driving the user's own `claude`; what is only assumed; and what was believed and proved false. **Read §OpenCode/config before changing anything about the generated config:** the engine has two config readers, `OPENCODE_CONFIG` reaches only the older one, and the newer one — which decides what a session can run on and what system prompt it gets — substitutes neither `{env:…}` nor `{file:…}`. Two further findings shape everything below: the agent entry's own `model` is **ignored over ACP**, so the model is stated in the config *and* on the session; and OpenCode's saved permission grants are **user-global**, which is why the desktop holds its own — see [Local Agent Permissions](permissions.md). The contract also records how a pattern in the generated `permission` block is actually matched, and which rule wins when two match; **read it before editing that block**, because a pattern that misses fails open.
 
 ## Purpose
 
-What runs a folder agent by default: one desktop-managed `opencode serve` process bound to loopback, a generated OpenCode configuration derived from this machine's AI credentials and folder agents, the **runtime** (credential + model) each agent resolves to — from a model the manifest names, a work complexity it names instead, or the defaults below it — and the per-agent system prompt assembled out of the agent's own files.
+What runs a folder agent: a **child process per agent**, spawned by the turn that needs it and spoken to over the [Agent Client Protocol](../drivers/drivers.md); the generated OpenCode configuration derived from this machine's AI credentials and that one agent; the **runtime** (engine + credential + model) each agent resolves to — from a model the manifest names, a work complexity it names instead, or the defaults below it — and the per-agent system prompt assembled out of the agent's own files.
 
-**"By default" is now literal.** An agent's runtime carries an **engine**, and an agent that names `claude` runs on the user's own Claude Code instead — no server, no credential, nothing in this config. Everything below is about the OpenCode engine, which is what an agent that names no engine gets; the second one is [The Claude Engine](claude_engine.md), and the prompt assembly and runtime resolution described here are shared with it.
+**Two engines, and the agent's runtime says which.** `opencode` is the default and what every agent naming no engine gets; `claude` is the user's own Claude Code install ([The Claude Engine](claude_engine.md)). Both are run by one driver over one protocol, so the engine is no longer an identity — it is a **launcher**: the thing that knows what command to spawn, what to declare at `initialize`, and what has to be said to the session before the first prompt. Everything about prompt assembly and runtime resolution below is shared by both.
 
-Phase 5 of Local Agents. It builds the machinery a turn will need and stops one step short of a turn: nothing here sends a message. The **runner** — sessions, streaming, permission prompts — is Phase 6, and the seam it attaches to is `engineManager.ensureRunning()` plus `engineManager.agentKey()`.
+**There is no server.** Until phase 3 of the agent runtime plan one desktop-managed `opencode serve` sat on loopback behind a password and backed every folder agent at once, with a state machine around it — resolve, download, spawn, health-check, reconcile, restart, stop at quit. It is gone, and with it every rule that existed because the process was shared: the global lock predicate that gated a restart, the deferral of a config change while any turn streamed, the two digests compared against a running process, and the *skip* list a screen read to explain an agent. What replaced them is smaller and is described here: one process per agent, one config per agent, and a refusal at the top of the turn that belongs to the agent it refuses.
 
 ## A note on paths
 
@@ -19,58 +18,56 @@ Three trees are discussed and their paths look alike, so they are written differ
 |---|---|
 | `src/...`, `docs/...` | A file in **this repository** |
 | `Local/<slug>/...`, `cinna-agent.json`, `credentials/.env`, `app-data/...` | Inside an **agent folder** |
-| `<userData>/engine/...` | Inside the app data directory — the engine's own tree, which **no agent folder ever contains** |
+| `<userData>/acp/...`, `<userData>/engine/...` | Inside the app data directory — the desktop's own tree, which **no agent folder ever contains** |
 
-The distinction is a rule, not a formatting habit: the generated config and every generated prompt file live under `<userData>/engine/`, never in the user's folders (Invariant 2). See [Nothing generated is written into an agent folder](#nothing-generated-is-written-into-an-agent-folder).
+The distinction is a rule, not a formatting habit: every generated config lives under `<userData>`, never in the user's folders (Invariant 2). See [Nothing generated is written into an agent folder](#nothing-generated-is-written-into-an-agent-folder).
 
 ## The governing principle
 
-**One `opencode serve` backs every folder agent, and the manager records facts about the process it started rather than beliefs about the config it generated.**
+**A process belongs to one agent, and the folder decides which engine starts it.**
 
-Both halves are load-bearing, and both were bugs before they were properties.
+Both halves are load-bearing.
 
-*One process* means the blast radius of a restart is the whole app: restarting the engine to pick up agent A's new manifest ends agent B's streaming reply. Every guard in this slice that looks over-broad is over-broad on purpose.
+*One process per agent* is what makes every guard local. A shared server meant the blast radius of a restart was the whole app — restarting to pick up agent A's new manifest ended agent B's streaming reply — so the old design needed `turnLock.anyHeld()`, a deferral, and a promise never to write a config while anyone was streaming. None of that survives, because agent A's config is agent A's process's, and the change reaches it when *that* agent next takes a turn.
 
-*Facts, not beliefs* means "does the engine need restarting" is answered by comparing what we would generate now against a record taken from the process at spawn — not against a stored "a restart is owed" flag, and not against the bytes on disk. A flag nothing reconciles gets paid twice; a comparison of config bytes cannot see a rotated API key, because a key is never in those bytes.
+*The folder decides* means the stored engine is a cache, never the answer. `agents.driver` is `acp` for every folder agent and `driver_config.launcher` names the engine, but that column holds what the last scan read. A turn re-reads the folder, picks the launcher from what it says now, and a stale row cannot send a Claude agent to OpenCode — a defect the two folder drivers had to hand turns to each other to avoid.
 
 ## Core Concepts
 
-- **Engine** — the one desktop-managed `opencode serve` process. Loopback-only, on a port the desktop picks, behind a per-start Basic-auth password. Shared by every folder agent
-- **Engine config** — the OpenCode configuration this app generates into `<userData>/engine/opencode.json`: one provider entry per usable AI credential, one agent entry per runnable folder agent, and a permission profile
-- **Generated prompt** — the per-agent system prompt assembled from the agent's own files. It is **inlined into the agent's config entry**, because the engine's v2 config reader resolves no `{file:…}` reference and would hand the model the placeholder in place of the prompt. A copy is still written to `<userData>/engine/prompts/<agentKey>.md` as the readable artefact the user's own assistant opens; the engine does not read it
-- **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Stable for the life of the agent, and what Phase 6 binds engine sessions to
-- **Loaded config** — the record carried on the running process: a digest of its config-and-prompt bytes, a digest of its credential environment, and the agent keys and skips **that process actually loaded**. Dies with the process
-- **Reconcile** — what `ensureRunning` does when the engine is already up: re-derive the config from current state and restart only if the running process no longer matches
-- **Runtime** — what an agent runs on: `{engine, credential, model}`. On this engine — the default, and every agent that names no engine — the credential and the model are the whole of it, and the manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue. An agent that names `engine: "claude"` instead has no credential at all and is not in this config; see [The Claude Engine](claude_engine.md)
+- **Engine** — what runs a folder agent's turn. Two of them: `opencode`, the default, and `claude` ([The Claude Engine](claude_engine.md)). Both are spawned as a child process and spoken to over ACP
+- **Launcher** — the engine, as the turn path sees it: what command to spawn, what environment it gets, what the client declares at `initialize`, what `session/new` carries, and what must be set on the session before the first prompt. `opencode` and `claude` are built; `gemini` and `codex` are names a folder or a row may carry and this build refuses in words
+- **Launch spec** — one process's command, arguments, whole environment, cwd, and a `key` that moves whenever any of those do. The key is a **digest, never the values** — the environment carries API keys, and the pool logs the key
+- **Process pool** — one process per agent id: started by the first turn that needs it, held for the length of a turn, reaped after two minutes idle, replaced when its spec key moved, killed at app quit. It never restarts a process on its own
+- **Engine config** — the OpenCode configuration this app generates for **one agent**, into `<userData>/acp/opencode/<hash of agent id>/opencode.json`: the provider entry for that agent's credential, that agent's entry with its inlined system prompt, the permission profile, and a top-level `model`
+- **Generated prompt** — the per-agent system prompt assembled from the agent's own files. **Inlined into the agent's config entry**, because the engine's v2 config reader resolves no `{file:…}` reference and would hand the model the placeholder in place of the prompt
+- **Agent key** — the OpenCode agent-entry name a folder agent becomes (`<slug>-<hash of agent id>`). Selected on the session as the `mode` config option, which is what makes the turn run *that* agent rather than OpenCode's stock coding assistant
+- **Engine binary state** — whether this machine has a usable `opencode` and where it came from (`unresolved` / `resolving` / `ready` / `failed`). All that is left of "the engine" as state a screen shows: it is about a file, not a process
+- **Binary source** — where the resolved `opencode` came from: `configured` (a path in Settings), `path` (the user's own install, found on the login-shell PATH), or `managed` (the pinned version this app downloaded and verified)
+- **Runtime** — what an agent runs on: `{engine, credential, model}`. On OpenCode the credential and the model are the whole of it, and the manifest reaches that model two ways: by naming it, or by naming a **work complexity** the desktop resolves against the credential's own catalogue. An agent that names `engine: "claude"` has no credential at all and no entry in any generated config
 - **Work complexity** — `simple` | `medium` | `complex`, written into `cinna-agent.json` in place of a model id. It says how hard the agent's work is and lets the host pick; a model id is the least portable thing that file can carry
 - **Default runtime** — the fallback runtime, derived from the user's default chat mode
 - **Medium floor** — the last step of model resolution: an agent that would otherwise have no model at all runs on the Medium tier of the credential it was already given
-- **Skip** — a folder agent the generated config deliberately left out, with a reason phrase the “Runs with” panel renders in its status line
-- **Binary source** — where the running `opencode` came from: `configured` (a path in Settings), `path` (the user's own install, found on the login-shell PATH), or `managed` (the pinned version this app downloaded and verified)
+- **Refusal** — the sentence a launcher answers with instead of a plan when the agent cannot run: no binary, no credential, no model, no Claude Code, not logged in. It is produced **before the turn lock is taken and before anything is spawned**
 
 ## User Stories / Flows
 
-### Starting the engine for the first time
-1. The user opens Settings → Local Agents (or the “Runs with” panel on an agent page) and presses **Start engine** — the button on the **Local engine** row that leads the Engine Settings section, directly above the engine-path field it may need next
-2. If Settings names an engine path, that file is used — and an unusable one is an error, not a silent fallback. Otherwise `opencode` is looked for on the login-shell PATH
-3. With neither, the pinned build for this platform is downloaded into `<userData>/engine/`, verified against a recorded SHA-256, unpacked and published. The Local engine row says "Downloading the engine. This happens once and takes about a minute."
-4. The config is generated fresh (model lists refreshed), written, and a process is spawned on a freshly-picked loopback port
-5. The engine answers `GET /api/health`; the status becomes `running` and the version line names the binary and where it came from
+### The first message to a folder agent on a machine with no `opencode`
+1. The user sends a message. Nothing has been started in advance, and nothing was started at app boot
+2. The turn reads the folder, sees `opencode`, and asks the launcher to plan. The binary is resolved: a path from Settings, else the user's own install on the login-shell PATH, else the pinned build for this platform, downloaded into `<userData>/engine/`, verified against a recorded SHA-256, unpacked and published. Settings and the "Runs with" panel say *Downloading…* while it happens, because the state is pushed
+3. The config for this one agent is generated and written, the process is spawned with `opencode acp` in the agent's folder, and `initialize` completes
+4. A session is created, the agent key and the model are set on it, the prompt is sent, and text starts arriving
+5. Two minutes after the turn ends, with nothing else asking for it, the process is stopped
 
-### Nothing starts it for you
-1. A user who never opens the Agents tab never pays for a 50 MB download: **nothing starts the engine at app boot**
-2. Starting is an explicit act — the Settings button, the panel's button, or the first local turn, which calls `ensureEngineRunning` itself
-3. So a stopped engine is **not a warning**. The Local engine row reports it with a muted dot and a line opening “Not running — chatting with a folder agent starts it”, and the amber triangle is kept for `failed`. An alarm over a state that resolves itself on the next turn is the healthy state wearing an alarm, and it teaches the user to skip the triangle for the case that does need them ([UX Rules](../../development/ui_guidelines/ux_rules.md), rules 2 and 12)
+### Nothing resolves it for you
+1. A user who never chats with a folder agent never pays for a 46 MB download: **nothing resolves the binary at app boot**, and the state reads `unresolved` until something looks
+2. So an unresolved binary is **not a warning**. Settings shows it with a muted dot and a line opening "Not resolved yet — chatting with a folder agent resolves it", and the amber triangle is kept for `failed`, which is the state only the user can fix (a path they typed that does not work). An alarm over a state that resolves itself on the next turn is the healthy state wearing an alarm ([UX Rules](../../development/ui_guidelines/ux_rules.md), rules 2 and 12)
+3. **There is no Start button, and no "Running".** There is nothing to start: the per-agent processes appear when a message is sent and disappear two minutes later, so a status light for one would be true for a couple of minutes at a time and describe an implementation detail the user has no action for
 
-### Adding a credential while the engine is running
-1. The user adds an AI credential in Settings, or the background account-config sync materialises a managed provider on its timer
-2. Nothing happens immediately, and nothing needs to: the next time anything asks the engine to be running, the config is re-derived and compared against what the process loaded
-3. The config moved, no turn is streaming, so the engine is restarted and comes back knowing the new credential
-
-### Rotating a key
-1. The user replaces the API key on an existing credential
-2. The config file is **byte for byte identical** — the key was never in it, only the *name* of the environment variable it travels in
-3. The credential digest moved, so the reconcile restarts anyway. Without that second digest, every turn would 401 while the UI showed a valid credential and a healthy engine, until the app was quit
+### Adding a credential, or rotating a key
+1. The user adds a credential in Settings, or rotates the key on one, or the background account-config sync materialises a managed provider on its timer
+2. Nothing is pushed anywhere and nothing needs to be. The next turn for an agent on that credential generates its config from current state, and the launch spec's key is a digest of exactly those bytes plus the credential environment
+3. A key moved, so the key moved: the pool retires that agent's process and starts a fresh one before the prompt. A rotation is invisible in the config bytes — the key was never in them, only the name of the environment variable it travels in — which is why the credential environment is digested into the key as well
+4. An agent that is *mid-turn* keeps the process it started with. That is the same guarantee the old deferral bought, now free: a running turn holds its process, and the replacement happens at the next one
 
 ### Choosing a runtime
 1. The “Runs with” panel on the agent page offers the credentials this app can actually call with, and — by default — **how hard the work is** rather than which model does it: Simple, Medium or Complex. The line under the picker names the model the chosen tier resolves to on the chosen credential, because the user is picking what gets billed
@@ -81,83 +78,83 @@ Both halves are load-bearing, and both were bugs before they were properties.
 6. **Changing the credential drops a model the registry attributes to a different catalogue**, and the status line says which model went and why. Keeping it would write a manifest the config turns into `openai/claude-sonnet-4-5`. A model the registry has never listed is *kept*: it is a hand-written id for a catalogue this app cannot see, so calling it wrong would be a guess. **A tier is never dropped** — that is the whole point of one: `medium` means the same thing on the new key, and a key that lists nothing in that tier produces a warning in the status line rather than a choice quietly disappearing. A credential change carries what the manifest actually holds, and only the one manifest that arrives carrying *both* a model and a tier loses one — the key not on screen — because writing both is a refusal and dropping the unseen one silently is how a tier disappeared while the user was following the panel's own advice
 7. A kit agent's write goes through the same stamped `local-agent:update-field` path as every other editable file, so an assistant editing the manifest cannot be clobbered. A bare agent's goes through `local-agent:set-runtime` with **no stamp** — there is no file in the folder for anyone else to have changed, so a stamp there would guard nothing
 8. Clearing the choice removes the `runtime` block entirely — `null` in a bare agent's state, the key gone from the manifest — rather than leaving `{}` behind, so "no choice made" reads the same in storage as it does in the UI, and the agent falls back to the Default runtime and below that to the Medium floor
-9. The save fires a reconcile, which is a no-op unless the generated bytes actually moved
+9. The save pushes nothing at any engine. The agent's next turn generates its config from what the file now says, and the process it had is replaced because the spec key moved
 10. **Which credential of a type it is has a consequence the panel does not show.** The first Anthropic credential becomes the engine's canonical `anthropic` entry and inherits the real context and reply windows of every model. A *second* one becomes a custom entry the engine has no catalog for, so the desktop has to declare those windows itself from a per-type floor — see [A second credential's models have to be told how big they are](#a-second-credentials-models-have-to-be-told-how-big-they-are). An agent on the second key is therefore capped at that floor rather than at what its model actually supports
 
+
 ### An agent that cannot run
-1. An agent whose credential has no key, or whose runtime names no model, still appears everywhere — but the config generation **skips** it and records why
-2. The panel's status line renders that reason: "The engine skipped this agent because its runtime credential is not available to the local engine." It sits below the panel's own warnings, so the one skip reason that would restate a warning already on screen — "its runtime names no model" — never takes the line
+1. An agent whose credential has no key, or whose runtime names no model, still appears everywhere — and the turn is **refused before anything is spawned**, in a sentence naming what is missing
+2. The refusal is the turn's own error in the chat, and the same fact is on the "Runs with" panel before the user sends anything. It is not a list some global config generation left behind: it belongs to the agent, it is computed for that agent's turn, and there is no window in which it describes what a *shared* process happens to have loaded
 3. Without it the only symptom would be an agent that does nothing when chatted with, which is indistinguishable from a bug in this app
 
 ### Editing an agent while another one is answering
-1. The user edits agent A's workflow prompt. The save succeeds and fires a reconcile
-2. Agent B is mid-reply, so a lock is held. The reconcile logs "the engine config changed while a turn is streaming; deferring" and **returns having written nothing at all**
-3. When B's turn ends, the next `ensureRunning` asks the same question of the same process, gets the same answer, and restarts — writing the config and prompts on the way through
+1. The user edits agent A's workflow prompt. The save succeeds
+2. Agent B is mid-reply. **Nothing about that is anyone's concern any more**: B's process was started for B, and A's edit reaches A's own process the next time A takes a turn
+3. This used to be the sharpest constraint in the feature — one process served both, so a restart for A ended B's reply, and every write path had to defer behind a global lock predicate
 
 ## Business Rules
 
-### One engine, so the guards are global
+### One process per agent, started by a turn and reaped when idle
 
-`turnLock.anyHeld()` — not the per-agent `turnLock.isLocked(agentId)` — is the predicate that gates an engine restart. This is the single most consequence-laden rule in the phase, and the wrong version of it **looks correct**: the caller that fires a reconcile is `local-agent:update-field`, which already refuses to write while *that* agent holds a turn, so guarding the restart the same way reads as consistent. It is a live Invariant 3 violation. Editing agent A's manifest would end agent B's reply, because one process serves both.
+The pool starts a process on the first turn that needs it and keeps it while turns keep coming. Both ends of that are measured rather than assumed:
 
-That defect was in the tree before this phase and was found and fixed here. `anyHeld()` exists for exactly this one caller and says so in its own doc comment.
+- **Idle is expensive.** An idle `opencode acp` holding one session is **311 MB of physical footprint** (499 MB RSS, of which the 144 MB binary is mapped). The Claude adapter is lighter — ~100 MB idle, ~400 MB once its `claude` child is up. A dozen folder agents started at boot would be gigabytes of a user's machine spent on nothing, which is why nothing starts at boot and why the reap window is two minutes rather than the five the plan first assumed
+- **A cold start is about a second.** Spawn to `initialize` is 631–695 ms for OpenCode and 181–284 ms for the Claude adapter, plus roughly 300 ms to `session/new`. That second is paid by the turn that asked for it, which can afford it; an idle app holding a gigabyte cannot
 
-### `ensureRunning` is the config choke point
+Two refusals of the obvious follow:
 
-When the engine is already running, `ensureRunning` **reconciles instead of returning early**: it re-derives the whole config from current state and restarts only if the running process no longer matches.
+- **Nothing is respawned automatically.** A process that exits stays exited and shows as `exited` on the agent page; the *next* turn starts a fresh one. An agent that crashes on start would otherwise be a respawn loop burning CPU on a machine whose owner is not even looking at it
+- **Reaping is time-based, so a turn takes a hold rather than being inferred.** A turn can be quiet for minutes — a long command, a model thinking, a permission ask parked waiting for a human — so idle time is the wrong signal for "in use". The clock starts when the last hold is released
 
-That is deliberately not the obvious design. The obvious design is a hook at each site that invalidates a config, and the reason it loses is that the list is incomplete by construction. There are at least five ways to invalidate a generated config today:
+**The whole tree is killed, not the child.** An ACP agent is rarely one process: the Claude adapter spawns `claude`, which spawns whatever the model asks for, and `opencode acp` forks its own workers. Each child is spawned as a process-group leader so the group can be signalled. Without that, quitting mid-turn left a ~260 MB `claude` running in its own process group with nothing left that knew it existed.
 
-1. an AI credential added, deleted or rotated
-2. the **background account-config sync** materialising managed providers on a timer — **with no IPC call to hook at all**
-3. a managed chat mode's model changing
-4. the default chat mode changing (which the Default runtime falls back to)
-5. a per-agent runtime written from the “Runs with” panel
+**Quit kills every live process before it yields, because nobody awaits the shutdown.** Electron does not await a `will-quit` handler, so anything the pool does *after* its first `await` may simply not happen — a single pass that waited on each in-flight start before killing anything left every already-running agent alive too, since the loop yielded on the first entry and the app was gone. So the running processes are disposed first, synchronously as far as the kill; only then are the starts in flight waited out, because a process that finishes starting after the app is gone is an orphan holding a session open. **That second half is the one an unawaited quit can lose** — about a second per agent that happened to be starting — and it is written down rather than papered over: refusing to start a process while quitting would need a flag the pool does not have.
 
-Only two of those have a natural place to put a hook. A sixth input — and this feature has eight more phases — would silently defeat a list. Deriving from current state at the moment the engine is about to be used is correct for inputs nobody has thought of yet.
+### The launch spec's `key` is what "the config changed" means now
 
-**Per-site `applyConfigChange` calls are a latency optimisation, never the mechanism.** Every channel that can change *which agents exist or what they run on* has one — `local-agent:update-field`, `:delete`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden` and `:git-update` — and each is fire-and-forget, never blocks the write it follows, and is a no-op unless the engine is running, the generated digest moved and no turn holds a lock; for `update-field` that is the common case, since most manifest fields the engine never reads. They are there so a runtime change or a removed agent is picked up before the next turn rather than at it. Do not add one in the belief that it is what keeps the engine correct: `ensureRunning` re-deriving the config at the moment of use is, and a site without a call is not a bug. (This paragraph used to say "do not add per-site calls" outright; the delete call was added under review with the reasoning above, and the sentence was reconciled with the code rather than the code with the sentence — a reconciliation the list above has since needed twice more.)
+A running process froze its binary, its arguments, its environment and any config file it read at start. The launcher summarises all of that into one digest, and the pool replaces a process whose key moved before the next turn starts.
 
-### A changed config never restarts a busy engine, and a deferred change writes nothing
+That single mechanism replaces the whole reconcile apparatus: two digests compared against a record taken from a running server, an `ensureRunning` choke point, seven fire-and-forget `applyConfigChange` calls, and a rule about never restarting while a turn streams. The properties survive, by construction rather than by discipline:
 
-`applyConfigChange` restarts only when the running process's record no longer matches what we would generate. When any turn holds a lock, it returns having done **nothing at all**: nothing written, nothing pruned, no state moved, and no debt recorded.
+| Old mechanism | What replaces it |
+|---|---|
+| Config digest compared against the running process | The config bytes are digested into the spec key |
+| Credential digest, because a rotated key leaves the config identical | The credential map is digested into the same key |
+| `turnLock.anyHeld()` gating every restart | A turn holds its own process; the replacement happens at the next turn |
+| Deferring a config change while any turn streams, writing nothing | There is nothing global to write |
+| Per-site `applyConfigChange` calls on seven channels | Nothing to call: the config is generated at the top of the turn that uses it |
 
-There is no debt to record because the next `ensureRunning` asks the same question of the same running process and gets the same answer for as long as it stays true — and stops getting it the moment a restart makes it false, whoever caused that restart. A stored `configRestartDeferred` flag existed and was deleted: it survived a restart that had already loaded the change, buying one spurious restart at a turn boundary and ending every other agent's engine session.
+**The key is a digest and never the values.** The environment behind it carries decrypted API keys; the pool logs the key. `types.ts` promises it holds no secret, and `specKey` is what keeps that promise.
 
-**Writing nothing is what closes the finer hazard.** Because change detection is an in-memory digest comparison rather than a compare-against-disk, a change that is going to be deferred is discovered *before* anything is written. That matters because `writeEngineConfig` also deletes the generated prompt file of an agent that is no longer in the set, and rewrites the config a running engine may re-read. Not writing makes the question moot — and it never had to be answered against the real binary. (The prompt-file half of it has since gone away for a different reason: the prompt is inlined in the config, so no file reference is resolved at any time.) The restart regenerates everything from scratch, which it already did.
+### A config per agent, written where the user's folder is not
 
-### Facts about the process, not beliefs about it
+The generated config is the shared server's config **minus the server, and minus every other agent**: `buildEngineConfig` is reused verbatim for the provider and agent entries, so a folder agent's prompt, model and permission profile are byte-for-byte what the HTTP engine loaded. What changed is the scope — one file, holding one agent and only the provider that agent uses, under `<userData>/acp/opencode/<hash of agent id>/`.
 
-Everything the manager knows about *the engine that is running* is recorded on the process object and dies with it: the config-and-prompt digest, the credential-environment digest, and the agent keys and skips that spawn was built from.
+- **One agent per file** because a process that serves one agent has no reason to be told about the others, and because the config feeds the spec key: a file that changed whenever an unrelated agent was edited would retire this agent's process for nothing
+- **The directory name is a hash of the agent id**, not a sanitised form of it. An agent id is `folder:<uuid>` and not a path component, and two ids differing only in a character the filesystem folds must not share a directory and hand one agent the other's prompt — the same reasoning as the agent key's hash suffix
+- **Written to a temp file and renamed.** The engine reads the file at start, and a process that died halfway through a plain write would leave a truncated config for the next turn to spawn an agent on. The rename is atomic within the directory, so a reader sees either the old file or the whole new one
+- **The model is stated twice**, in the config's top-level `model` and again on the session. The agent entry's own `model` is ignored over ACP — verified: selecting a mode never moved the session's model, and an agent pointing at a non-existent model still ran on the session default — so either statement alone is a way for a turn to run on a model the user did not choose
 
-Two consequences are contract, not detail:
+### Which agents get an entry, and which are refused
 
-- **`agentKey(agentId)` answers from the loaded record, never from the last generated config.** Null means "this agent cannot be addressed right now", covering all three ways that happens: the engine is not running, the generation that produced it skipped the agent, or the agent was added or fixed after this process started and the restart that would load it is still waiting on a streaming turn. **Phase 6 binds engine sessions to `agentKey`**, so answering from the last generation would hand back a real-looking key for an entry the engine has never heard of
-- **`lastSkips()` describes the running engine's config**, not the last generation's. An agent whose credential was deleted a moment ago is still being served perfectly well until the restart lands, and a reason line saying it cannot run would be describing a config nothing has loaded. It follows that the value only moves when the process moves — and every one of those transitions pushes an engine-state change, which is exactly the signal the renderer re-reads it on
-
-### The agent key never moves
-
-An agent's OpenCode key is `<slug>-<short hash of the agent id>`, **always suffixed, even when the slug is unique**. The tempting alternative — bare slug when unique, suffixed on collision — makes an existing agent's key depend on which *other* agents exist, so creating a second `assistant` in another root would rename the first one's entry. Phase 6 binds sessions to this key, so a key that moves is a conversation that loses its agent. The user never types it.
-
-### Two digests, because the two halves travel by different routes
-
-The record is split into a config digest and a credential digest, and they are separate because the change each one sees is invisible to the other:
-
-| Digest | Covers | Sees |
+| Situation | Result | Where the user learns why |
 |---|---|---|
-| `config` | the serialised config object **and** every prompt file written beside it | a new agent, a reworded `WORKFLOW_PROMPT.md`, a changed model, a provider added or removed |
-| `env` | the `CINNA_ENGINE_KEY_…` name→value map and nothing else | a **rotated key**, which leaves the config bytes identical |
+| Readiness `invalid` or `contract_too_new` | **Refused before the launcher is asked at all.** A folder that does not validate has no business being handed to a model: its prompt files may be half-written and its manifest may say anything | The turn error, and the readiness strip on the agent page |
+| The agent is switched off | **Refused**, in the same place. `enabled` is the user's own choice and the turn is the one gate on it | The turn error |
+| The runtime names an engine this build cannot run (`gemini`, `codex`) | **Refused in words** — "This agent runs on an engine this version of Cinna does not support." A launcher that does not exist is never guessed at, and the row's value is never read as the default | The turn error |
+| Runtime resolves to no credential the engine can use, or to no model | **Refused by the OpenCode launcher**, using the same code the config generator produces (`credential_unavailable`, `no_model`) | The turn error, and the "Runs with" panel's status line |
+| No `opencode` could be resolved, or no `claude` is installed / logged in | **Refused by the launcher**, in a sentence naming the remedy | The turn error; Settings and the panel say the same thing standing |
+| Everything resolves | A config with one agent entry, its model, its inlined prompt and the permission profile | — |
 
-The credential digest is taken over `built.env` specifically, and not over the environment the child is actually spawned with. That environment carries a fresh 32-byte password per spawn plus the whole login shell, so a digest of it would differ on every single comparison — and, since one process backs every agent, that would restart the engine and end every streaming turn on every reconcile.
+A credential is offered to the generator when the user has it switched **on** and `isCredentialUsable` says it can make a call at all: it is not flagged `unsupported` (an Anthropic OAuth token is not an API key) and it either has a stored key or is of a **keyless** type, which needs none. That predicate is shared with the "Runs with" panel and every picker on purpose — a hand-written `hasApiKey` here would have made the panel offer a credential the generator then silently refused. Own **and** server-managed credentials both count. A key the keystore refuses to decrypt is skipped with a warning rather than failing the whole plan; the other credentials still work.
 
-Neither digest is ever logged. `whatMoved()` reports the words "config", "credentials" or both; key material has no safe representation in a log, digested or not.
+**A credential the user has switched off is left out, and that is a decision about spending rather than about cataloguing.** The check was missing for as long as the collector existed, and it was worst where it mattered most: a *canonical* type carried a real, decryptable key into the config, so an agent kept running — and kept billing — after the user turned that credential off in Settings. See [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md).
 
-### The digest is length-prefixed, not delimiter-joined
+**Every folder agent is collected now, whichever engine it names.** The collector used to drop everything but OpenCode, because one shared config served every agent at once and a Claude runtime resolves to no credential — so the generator would have reported a healthy agent as "its credential is not available to it", a sentence about a key it does not spend. The caller is now the OpenCode launcher planning one turn for one agent it was chosen for, and it is chosen by reading the folder, so it is never asked about an agent on another engine; filtering here would only decide what a question nobody asks gets answered with.
 
-Each piece fed into the digest is prefixed with its length. This is not ceremony, and **the direction of the failure is why**: a delimiter collision here does not cause a spurious restart, it causes a *false negative* — two genuinely different configs digesting equal, so the reconcile concludes nothing moved and never restarts. The engine keeps serving the previous prompt while the app believes it is serving the new one, and **every test still passes**, because a false negative is invisible to anything not looking for it.
+### `enabled` is the turn's gate, and it exists
 
-The prompt bodies are the one input that is arbitrary user-controlled text — the user's own `WORKFLOW_PROMPT.md` — which makes the collision reachable rather than theoretical. Same shape as the two `isIgnoredPath` defects in `src/main/kit/validator.ts`: both false negatives in a secret check, both survivors of a green suite. Do not simplify it back to a join.
-
+The generated config still does not consult `enabled` — a switched-off agent would get an entry if one were generated for it. What changed is that the obligation is discharged: the ACP driver refuses a disabled agent *before* it plans a launch, in the runners' own sentence ("… is switched off. Turn it back on to chat with it."), so the config never gets the chance to be generated. The gate is in one place; deleting it makes a switched-off agent chattable.
 ### A Gemini credential does not become OpenCode's `google` provider
 
 Every other credential type maps onto the engine's own name for that provider, or onto a custom entry when the canonical name is taken. Gemini is the exception, and the reason is a hard limit rather than a preference: **the engine can build a working model out of three SDK packages, and Google's is not one of them.**
@@ -192,19 +189,13 @@ The environment variable name is derived from the provider id so it is stable ac
 
 **A keyless credential names a variable too, carrying the literal `keyless`, and this does not weaken the invariant** — there is no key involved anywhere on that path, and the placeholder is public by construction (Ollama accepts any bearer token and validates none). It is emitted rather than omitted because of the availability filter rather than tidiness: `env: [...]` is what registers an integration with a live connection, which is the branch every working entry in this config takes, while an entry with **no** `env` would have to fall through to a branch the contract records as transiently false for ~160 ms while the integration list populates. Verified rather than assumed — the entry comes up available, and Ollama receives `Authorization: Bearer keyless` and ignores it.
 
-**A consequence Phase 6 must respect: OpenCode's v1 `/config` endpoint returns the *resolved* configuration, with `{env:…}` already substituted.** Nothing we generate carries a placeholder any more, but that response can still resolve one out of the user's own config, so it must never be logged, echoed into a stream part, or forwarded to the renderer.
-
-### The engine is on loopback, behind a password, on a port we picked
-
-- **The port is chosen by the desktop**, by binding a throwaway server to `127.0.0.1:0` and reading what the OS gave. `--port 0` is not "any free port" to OpenCode: verified against v1.18.27 it falls back to the default 4096. Worse, a second `serve` against a taken 4096 does **not** die — it comes up silently on an unpredictable port, so the collision would be quiet and an engine we never intended to talk to would be reachable at an address we could not guess
-- There is an unavoidable race between closing the probe socket and spawning. It is made harmless rather than eliminated: a start that loses it fails its health check and is retried on a fresh port
-- **`--hostname 127.0.0.1`, always.** This is an LLM with a shell tool; its bind address is an attack surface in its own right. `--mdns` must never be passed — it defaults the hostname to `0.0.0.0` and advertises the server on the local network. The exposure is one word away rather than present, which is why the command line is asserted in a test rather than described in a comment
-- **A fresh 32-byte password per start**, never written to disk, never logged, never sent to the renderer. Without one the server is unsecured, and any process on the machine could drive a loopback server that runs bash
-- **No IPC channel returns the base URL or the password.** They stay inside `engineManager`, which is what keeps "everything talks to the engine through the runner" true by construction rather than by convention
+**That endpoint is gone with the server, and the rule it produced is not.** OpenCode's v1 `/config` returned the *resolved* configuration with `{env:…}` already substituted, which made its response a live copy of every key the engine held; nothing reads it now, because nothing speaks HTTP to an engine at all. What survives is the habit: no engine response is logged wholesale, because the next one to carry a resolved secret will not announce itself either.
 
 ### The engine's environment is narrowed, not inherited
 
-The engine gets **the same narrowed environment a third-party stdio MCP server gets** — `shellEnvForChild` over the resolved login-shell environment — plus an enumerated set of variables added explicitly (`OPENCODE_CONFIG` **and `OPENCODE_CONFIG_DIR`** — the engine has two config readers and they honour different variables, see [the contract](opencode_contract.md) §9.5.3 — the server username and password, `OPENCODE_DISABLE_AUTOUPDATE=1`, and the credential map).
+An OpenCode process gets **the same narrowed environment a third-party stdio MCP server gets** — `shellEnvForChild` over the resolved login-shell environment — plus an enumerated set of variables added explicitly (`OPENCODE_CONFIG` **and `OPENCODE_CONFIG_DIR`** — the engine has two config readers and they honour different variables, see [the contract](acp_contract.md) — `OPENCODE_DISABLE_AUTOUPDATE=1`, and the credential map). There is no server password to add any more, and nothing is inherited: `spawn` is handed the whole environment the launcher built, never `process.env` with additions.
+
+A Claude process gets a *narrower* one still — `buildClaudeEnv`, which strips every API key, auth token, base URL and third-party-provider switch by name before it hands anything over, so a turn cannot be billed to an account the user did not choose. See [The Claude Engine](claude_engine.md).
 
 The instinct is that this should be looser, since the engine is our own binary rather than a third party's. It is the opposite: the thing that *runs inside* the engine is a language model with a bash tool, driven by whatever text arrives in a conversation, and its output goes on screen and into the database. A shell environment handed to it is one prompt injection away from being read aloud, and `ANTHROPIC_API_KEY`, `GITHUB_TOKEN` and `AWS_*` live in exactly the `.zshrc` this app is deliberately sourcing. The narrowing applies with *more* force here than for an MCP server, whose tools at least have fixed schemas.
 
@@ -212,62 +203,63 @@ It also costs nothing: every credential the engine legitimately needs is injecte
 
 `OPENCODE_DISABLE_AUTOUPDATE=1` is part of the same rule: we pin and verify the binary, and an engine that replaces itself underneath that pin is exactly what the checksum exists to prevent.
 
-### The cloud model lists refresh at start; the local ones refresh on every reconcile
-
-`refreshModelCache(scope)` calls registered adapters' `listModels()` **in sequence**. For a cloud credential each call is a real network round trip — Anthropic's SDK, OpenAI's SDK, a `fetch` for Gemini — so a full refresh costs one round trip per configured credential, serially.
-
-Stated precisely, because the flat version of the sentence is wrong:
-
-- **A start refreshes everything** (`scope: 'all'`). A turn that restarts goes through `applyConfigChange` → `halt()` → `ensureRunning` → `startEngine`, which collects with `refreshModels: true` and does the full fan-out
-- **A reconcile refreshes the local credentials only** (`scope: 'local'` — the keyless ones). No cloud provider is re-asked for a turn that does not restart the engine
-
-Skipping the cloud refresh on the reconcile path is safe rather than merely cheap. A running engine's cache was populated by the start that launched it, and the cache keeps its last good list when a refresh fails — so the reconcile compares against the same model list the running config was built from, instead of one that drops out whenever a gateway is briefly unreachable and takes the engine down for a restart it did not need.
-
-**The local exception is there because a local catalogue is not a vendor's line-up.** It is the set of models on this machine, which the user changes with `ollama pull` between one turn and the next, and which is *empty* whenever the local server happened not to be running at the moment the engine started. A custom entry whose `models` map is empty can address nothing, and the resulting failure reaches no engine event at all — so starting Cinna before Ollama meant every folder agent on it hung on its first turn until the desktop's own twenty-minute ceiling expired. The call is loopback and costs about a millisecond, which is why the reason the cloud fan-out is excluded does not apply to it.
-
-**A refresh never shrinks a provider to nothing** (`src/main/engine/modelCache.ts`). `getAllModels` swallows a per-adapter failure and omits that provider, so "the server was down for this one call" and "this credential has no models" arrive identically; a provider that reported nothing therefore keeps what it last reported, while one that *did* answer is replaced outright so a removed model still disappears. The merge is also handed the live credential ids, because that rule cannot otherwise tell silence from **deletion** — and the cache is read as a global ownership index when deciding whether a model belongs to another credential, so a ghost row is an owner. An **empty** live list evicts nothing: it comes from the credential database while the models come from the adapter registry, and before a profile's scopes resolve those two legitimately disagree — treating that as "every credential was deleted" would empty every custom entry at once, which is the same twenty-minute hang.
-
-If Phase 6 ever needs a cloud model list newer than the running engine's, it must ask for one explicitly rather than widening the reconcile's scope.
-
-### A failed start is a state, not an exception
-
-Nothing in this slice throws at the renderer. `ensureRunning` never rejects; a failed start sets `status: 'failed'` with one sentence, and `engine:start` returns that state. Every caller — the readiness strip, a turn about to run — has to render the failure either way, and `ipcMain.handle` would drop the code off a thrown error regardless (see [Agents Tab & Agent Page](agents_tab.md) on that boundary).
-
-The process dying unexpectedly is handled the same way. Nothing polls the engine, so the `exit` handler is what moves the state to `failed` with the exit code; the next caller starts a new process rather than talking to a closed socket.
-
-### A stop the user asked for cannot be undone by a restart we issued
-
-Stops are counted, not flagged. A start captures the count when it begins and treats any later value as "somebody asked for a stop after I started"; an internal restart takes the engine down through a private `halt()` that does **not** bump the count, so it cannot cancel itself — and, symmetrically, cannot hide a user's Stop that lands while it runs.
-
-A boolean could not do this: `ensureRunning` cleared it unconditionally on its way into a start, so a Stop pressed — or a `will-quit` fired — while a reconcile was restarting was erased by the restart it was meant to cancel. The quit variant is the one that reproduces: an `opencode serve` spawning *during* shutdown and left running with no window to stop it from.
-
-Quit is synchronous for the same reason. `will-quit` handlers are not awaited and a spawned child is not reaped when its parent exits, so the handler bumps the epoch and signals the child inside its own body rather than scheduling an async stop.
 
 ### Nothing generated is written into an agent folder
 
-The config and every generated prompt file live under `<userData>/engine/`. The agent folder belongs to the user — an assistant may have it open, it is very often a git repository, and Invariant 2 says exactly one file inside it is the desktop's (`app-data/desktop.json`). A generated prompt written into the folder would also travel to the cloud on publish.
+The generated config lives under `<userData>/acp/`. The agent folder belongs to the user — an assistant may have it open, it is very often a git repository, and Invariant 2 says exactly one file inside it is the desktop's (`app-data/desktop.json`). A generated prompt written into the folder would also travel to the cloud on publish.
 
-The one delete in this slice is scoped hard: stale prompt pruning only ever touches `<userData>/engine/prompts/`, only `.md` files directly inside it, and never a directory — no agent folder is reachable from it even if a key were malformed. A file it cannot remove is skipped rather than thrown, because a stale prompt is untidy and failing the config write over one would take the engine down.
+**The readable prompt artefact is gone with the server, and nothing replaced it.** The shared engine wrote each agent's assembled prompt to `<userData>/engine/prompts/<agentKey>.md` — not for the engine, which reads the copy inlined in the config, but as the file a user's own assistant could open. Per-agent configs carry the prompt inline and write no such file, so the assembled prompt is now visible only in the generated `opencode.json`. The stale-prompt pruning that came with those files went too, and with it the only delete this feature ever performed.
 
-### Which agents get an entry, and which do not
+### The cloud catalogue is asked for once a session; the local one, every turn
 
-Four different outcomes, and only the third is visible as a "skip":
+Every OpenCode turn generates its config from current state, so the model catalogue is consulted once per message. The **first** collection of a session asks every configured credential (`refreshModels` defaults to a full refresh); after that, `refreshModels: false` re-asks the **local** credentials only.
 
-| Situation | Result | Where the user learns why |
-|---|---|---|
-| Readiness `invalid` or `contract_too_new` | **Not offered to the generator at all.** A folder that does not validate has no business being handed to a model: its prompt files may be half-written and its manifest may say anything | The readiness strip on the agent page |
-| The runtime names another engine | **Not offered either, and deliberately not as a skip.** An agent on [Claude](claude_engine.md) resolves to no credential, so an entry for it would be skipped as *credential unavailable* — a sentence about a key it does not spend, and one the user would act on by picking a different credential, which cannot help. The generated model would be wrong too: the config names a runtime as `<credential>/<model>` and a Claude runtime's model is a plan alias no OpenCode provider lists | The panel reports that engine's own state instead |
-| Runtime resolves to no credential the engine can use, or to no model | **Skipped**, with a reason recorded on the generated config | The “Runs with” panel's status line |
-| Everything resolves | An agent entry with its model, prompt file reference and permission profile | — |
+The two halves have different reasons, and stating them separately is what keeps the rule from being simplified into a wrong one:
 
-A credential is offered to the generator when the user has it switched **on** and `isCredentialUsable` says it can make a call at all: it is not flagged `unsupported` (an Anthropic OAuth token is not an API key) and it either has a stored key or is of a **keyless** type, which needs none. The two terms are `isCredentialActive`'s, and this collector spells them out separately rather than calling it, because each refusal carries its own reasoning. That predicate is shared with the "Runs with" panel and every picker on purpose — a hand-written `hasApiKey` here would have made the panel offer a local credential the generator then silently skipped. Own **and** server-managed credentials both count — excluding managed ones would make an account-provisioned machine unable to run a local agent at all. A key the keystore refuses to decrypt is skipped with a warning rather than failing the whole start; the other credentials still work.
+- **A vendor's line-up is stable and expensive to ask about.** Each `listModels()` is a real network round trip, in sequence, one per configured credential — so asking on every turn would put that latency in front of every message the user sends
+- **A local catalogue is not a line-up at all.** It is the set of models on this machine, which the user changes with `ollama pull` between one turn and the next, and which is empty whenever the local server happened not to be running a moment ago. The call is loopback and costs about a millisecond. Without it, starting Cinna before Ollama meant every folder agent on it hung on its first turn until the desktop's own ceiling expired
 
-**A credential the user has switched off is left out, and that is a decision about spending rather than about cataloguing.** `collectEngineProviders` skips a row whose `enabled` is false before it asks anything else, so a folder agent pinned to it has nothing to run on and is reported as a skip with a reason. The check was missing for as long as the collector existed, and it was worst where it mattered most: a *canonical* type carried a real, decryptable key into the config, so an agent kept running — and kept billing — after the user turned that credential off in Settings. A *custom* entry was inert by accident rather than by design, its `models` map coming from the adapter registry, which no longer holds an unregistered credential. The alternative position is the one the paragraph below takes for an **agent**'s own `enabled` — the config is a catalogue of what *can* be addressed and the runner decides what runs — and it was considered and rejected here: a user who switches a credential off has said something about **spending**, and there is no runner gate anywhere that would honour it. See [Switching an AI Credential Off](../../llm/adapters/credential_enablement.md).
+**"Once" is a completed refresh, not an attempt.** The flag is set only when a full refresh finished, so a machine that was offline at the wrong moment asks again on its next turn rather than running the rest of the session on nothing.
 
-**`enabled` is not consulted, and this is an obligation on Phase 6.** A folder agent the user has toggled off still gets a config entry, an agent key and a written prompt file. That is consistent with what the config is — a catalogue of what *can* be addressed, not a decision about what runs — and with `enabled` meaning only the user's own choice, which survives every rescan (see [Agents Home, Scanner & Folder Index](folder_index.md)).
+That precision is written down because losing it broke agents in a way nothing reported. Under the shared server the full refresh happened at engine start and only the reconcile asked for local models; when the server went, so did the only caller that ever asked for everything — leaving a cache with no cloud models in it at all. An agent whose manifest names a **Work Complexity** tier on a cloud credential then resolved that tier against an empty catalogue, took the `no_model` skip and was refused every single turn with "its runtime names no model", while its credential and its key were perfectly fine.
 
-But the design only holds if the other half is built. **The gate does not exist yet.** The config does not enforce `enabled`, nothing else in this slice does either, and `agentKey()` will happily return a key for a disabled agent. If the Phase 6 runner routes a turn without checking `enabled` itself, an agent the user switched off is chattable — and the generated config will *look* as though it had been excluded, because a disabled agent is invisible in every list the user reads. **The runner must gate on `enabled`; the config does not.**
+**A refresh never shrinks a provider to nothing.** `getAllModels` swallows a per-adapter failure and omits that provider, so "the server was down for this one call" and "this credential has no models" arrive identically; a provider that reported nothing keeps what it last reported, while one that *did* answer is replaced outright so a removed model still disappears. An **empty** live credential list evicts nothing either — before a profile's scopes resolve, the credential database and the adapter registry legitimately disagree.
 
+### Binary resolution, and what "verified" means
+
+Three sources, in order: a configured path, the login-shell PATH, the pinned download.
+
+> The staging, verifying and atomic publishing described below lives in `src/main/managed/managedAsset.ts` and is shared with the [local-development toolchain](../local_dev/local_dev.md), which installs uv and Mutagen the same way. `binaryResolver.ts` keeps what is genuinely about the engine: the pin table, the three sources and their precedence, and the `--version` probe. `EngineBinaryError` widens the shared `ManagedAssetError` codes with its two "your configured path is wrong" cases.
+
+- **A configured path that is not a runnable file is an error, not a silent fallback.** The user pointed at something specific; quietly running a different engine than the one they named is worse than saying the path is wrong. No version pin is applied to it — the point of setting it is to run the one you named. **The sentence leads with the remedy** — *"Fix the engine path in Settings, or clear it: it does not point at a file."* — because it lands in the Runs-with panel's reserved line, 414px at the 800px minimum, and problem-first it needed 667px: the half that clipped was the half that said what to do (ux_rules rule 7)
+- **A `which` hit that will not run is not fatal** — it falls through to the managed copy rather than stranding the user on a broken install
+- **The pinned download is verified against a recorded SHA-256 before anything is unpacked.** The digests pin *those exact bytes*: a re-tagged release, a compromised CDN edge or a truncated transfer all fail and nothing is unpacked. They are **not** a signature. Bumping the version means recomputing all six
+- **A failed verification leaves nothing a later run could mistake for a good install.** Everything happens under a per-attempt staging directory and only a fully downloaded, verified, unpacked tree is renamed into place — so the presence of `<userData>/engine/opencode-<version>/opencode` *is* the proof its bytes were checked
+- **Two callers racing resolve to one install.** Whoever renames first wins; the loser keeps the published tree, which passed the same digest check
+- **The resolution is memoised per configured path, and a failure is never cached.** Two turns starting together share one resolution rather than downloading the same 46 MB archive twice into the same directory; a path the user has just corrected in Settings is tried on the next turn rather than after a restart. Because the resolved path feeds the launch spec's key, correcting it also replaces the running children — under the shared server this was the difference between a setting that took effect and one that appeared to do nothing
+- A platform absent from the pin table is not a crash: the error says plainly that the user has to install `opencode` themselves, and source 2 then finds it. musl-only distributions (Alpine) are the known gap
+
+### The binary state is about a file, not a process
+
+`EngineBinaryState` is `unresolved | resolving | ready | failed`, and it is the whole of what the UI knows about "the engine". It carries the resolved path as **text** for Settings to show, the source, and the version; it carries no handle, no address and no pid, exactly as the old `EngineState` did not. Two rules keep it honest:
+
+- **Reading it never starts a resolution.** `engine:binary` answers from memory and says `unresolved` until something has actually looked, so opening Settings cannot trigger a download
+- **A failed resolution is a state, not an exception.** `engine:resolve` returns the failed state with its sentence rather than rejecting — every caller has to render the failure either way, and `ipcMain.handle` would drop the code off a rejection
+
+### What went away with the server, and what took its place
+
+Named plainly, because a reader who knew the old design will look for these:
+
+| Gone | Because |
+|---|---|
+| `engineManager` — spawn, health check, reconcile, stop epoch, request door | There is no shared process to manage |
+| `engine:start`, `engine:stop`, `engine:skips` | Nothing to start or stop; a skip list described a config one shared process had loaded |
+| Loopback port, `--hostname 127.0.0.1`, the per-start Basic-auth password | An ACP process talks over its own stdio and listens on nothing |
+| `writeEngineConfig`, the prompt files and their pruning | A per-agent config is written by its launcher, with the prompt inline |
+| `turnLock.anyHeld()` as an engine guard, and the deferral it protected | A turn holds its own agent's process |
+| The `EngineSkips` list and its IPC channel | A refusal belongs to the turn that was refused, and is worded where it happens |
+
+The one thing that did *not* change is the invariant every one of them existed to serve: an agent never runs on a key, a model or a prompt other than the one the user chose, and a running turn is never disturbed by a change the user made elsewhere.
 ### Runtime resolution: the agent's own runtime, then the Default runtime
 
 A runtime is `{engine, credential, model}`. The credential and the model are resolved from two sources, in order: the agent's own declared runtime, then the **Default runtime** derived from the user's default chat mode. (A runtime naming the Claude engine leaves this ladder before its first step — it has no credential, and running it through branches written about credential rows reports a healthy agent as broken. See [The Claude Engine](claude_engine.md).) It may name the model outright (`runtime.model`) or name a work complexity instead (`runtime.complexity`); both arrive at a model through the one chain below.
@@ -299,7 +291,7 @@ A runtime that names no model takes one from this chain, in order:
 2. **The chosen credential's own default model**, set in Settings → AI Credentials. It is the user's answer to "what should this key run", and it is also the step that covers a default chat mode left on *First available*, which names no model at all
 3. **The default runtime's model again, when the two credentials share a provider *type*.** A model id belongs to a provider's catalogue, not to one row of ours: `claude-sonnet-4-5` is as valid on a second Anthropic key as on the first, so a personal key alongside an account-provisioned one keeps a working agent. **`openai_compatible` and `ollama` are excluded** — two gateways behind that type are two different catalogues that merely share a wire format, and two Ollama hosts are the sharper case still: a catalogue there is literally the set of models pulled onto one machine
 4. **The Medium tier of the chosen credential** — the *Medium floor*. The tier a user who expressed no preference would have picked, resolved against the credential they did choose, and never drifting upward into Complex. Medium and not Simple either: an agent silently downgraded to the cheapest model does poor work and gives no clue why, which costs more to diagnose than the tier saves; the mirror-image failure at the top is a bill
-5. **Nothing**, and the agent is skipped with "its runtime names no model". Better than a model the credential cannot serve: a skip is a state the "Runs with" panel can name and the user can fix from that panel, while a wrong pairing only surfaces as a failed turn
+5. **Nothing**, and the turn is refused with "its runtime names no model". Better than a model the credential cannot serve: a refusal is a sentence the user reads in the chat, and a state the "Runs with" panel names before they ever send one, while a wrong pairing only surfaces as a failed turn
 
 **There is still deliberately no "first model in the catalogue" step, and the floor is not one.** This chain used to end at *nothing*, on the reasoning that an agent must never run on a model the user did not choose — the same reasoning that keeps the service from inventing a *credential*. Work complexity changes what "choose" can mean: a **tier** is a class a user can hold an opinion about, it stays true across model releases, and the desktop can resolve one against any catalogue. So the floor is Medium, resolved against a credential the user *did* pick. What it replaces is a dead end — an agent that named no model at all, could not run, and said so only on a panel the user had to go and find.
 
@@ -394,99 +386,79 @@ The last line is load-bearing: **do not switch to the Builder role.** The same f
 
 The whole profile, each entry with the failure it exists for, plus the matcher rules every pattern in it depends on, is [Local Agent Permissions](permissions.md#business-rules). Two things belong here because they are about generating the config rather than about the policy:
 
-- **`'*': 'ask'` has to be there explicitly.** OpenCode's own base rule is allow-everything — verified by reading `GET /agent` back off a running engine — so a profile that only enumerates `read`/`edit`/`write`/`bash` leaves *every other tool* on allow, which is the opposite of the intent
+- **`'*': 'ask'` has to be there explicitly.** OpenCode's own base rule is allow-everything — verified by reading `GET /agent` back off the engine while it still had an HTTP API — so a profile that only enumerates `read`/`edit`/`write`/`bash` leaves *every other tool* on allow, which is the opposite of the intent
 - **Order inside an entry is the mechanism, not a style choice.** The engine resolves a permission with a `findLast` over the concatenated rules, so `'*': 'allow'` is written first and the narrow shapes after it. Write them the other way round and every narrow entry is dead — and dead in the direction of allow
 
-Answering these prompts is the [runner's](agent_turn.md); a user's *Always allow* is recorded per agent in that folder's `app-data/desktop.json` and never sent to the engine.
+Answering these prompts belongs to [the turn](agent_turn.md); a user's *Always allow* is recorded per agent in that folder's `app-data/desktop.json` and never sent to the engine.
 
 **A manifest's `runtime.permissions` is merged shallowly, one permission name at a time** — replacing a whole entry rather than deep-merging its pattern map, so an override reads as an override instead of quietly widening `bash` from underneath. Its justification is that the folder is the user's own, so this is a legibility boundary rather than a trust one. Where a manifest does override something, the agent page's Permissions tab names which permissions were replaced, because the fixed description it shows above the list is no longer the whole truth.
 
 > **Flagged for Phase 9.** That justification stops being true the moment a folder is installed from the cloud into a shell-capable engine. A manifest can replace `bash` and the `'*': 'ask'` catch-all outright. Revisit before cloud install lands.
 
-### Binary resolution, and what "verified" means
-
-Three sources, in order: a configured path, the login-shell PATH, the pinned download.
-
-> **The staging, verifying and atomic publishing described below is no longer the engine's own.** It now lives in `src/main/managed/managedAsset.ts` and is shared with the [local-development toolchain](../local_dev/local_dev.md), which installs uv and Mutagen the same way — a second copy of that logic would be a second place for "nothing partial is ever published" to be got wrong. `binaryResolver.ts` keeps what is genuinely about the engine: the pin table, the three sources and their precedence, and the `--version` probe. Every guarantee in this section is unchanged, and `EngineBinaryError` still widens the shared `ManagedAssetError` codes with its two "your configured path is wrong" cases.
-
-- **A configured path that is not a runnable file is an error, not a silent fallback.** The user pointed at something specific; quietly running a different engine than the one they named is worse than saying the path is wrong. No version pin is applied to it — the point of setting it is to run the one you named
-- **A `which` hit that will not run is not fatal** — it falls through to the managed copy rather than stranding the user on a broken install
-- **The pinned download is verified against a recorded SHA-256 before anything is unpacked.** The digests pin *those exact bytes*: a re-tagged release, a compromised CDN edge or a truncated transfer all fail and nothing is unpacked. They are **not** a signature — they establish that what arrives is what was pinned, not that what was pinned is trustworthy. Bumping the version means recomputing all six
-- **A failed verification leaves nothing a later run could mistake for a good install.** Everything happens under a per-attempt staging directory and only a fully downloaded, verified, unpacked tree is renamed into place — so the presence of `<userData>/engine/opencode-<version>/opencode` *is* the proof that its bytes were checked. A crash mid-download leaves a `.staging-*` directory: junk, but junk no code path treats as an install
-- **Two callers racing resolve to one install.** Whoever renames first wins; the loser keeps the published tree, which passed the same digest check
-- The resolved binary is **cached across starts** — the download is 46 MB — and invalidated when the configured path in Settings changes. Without that invalidation the user would keep running the old binary until the app restarted, while the Settings field described something else
-- A platform absent from the pin table is not a crash: the error says plainly that the user has to install `opencode` themselves, and source 2 then finds it. musl-only distributions (Alpine) are the known gap
-
-Bundling per-platform binaries inside the signed app is deliberately deferred — it needs an `extraResources` block that does not exist yet, proof that a Bun single-file executable launches from a notarised macOS bundle, and a fourth resolution branch. Until then a bundled copy would be a large untested asset in every installer.
-
-### The engine contract, verified against the real binary
-
-Verified against real `opencode` **1.18.27**, not inferred: the asset SHA-256s, `tar -xf` reading a `.zip` (bsdtar does; that is why one command handles both archive shapes), the binary at the archive root on macOS and Windows, the `--port` / `--hostname` spellings, `GET /api/health` returning exactly `{"healthy":true}`, Basic auth via `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD`, `OPENCODE_CONFIG` pointing the engine at our generated file, and loopback binding confirmed with `lsof`.
-
-Two behaviours recorded because they are counter-intuitive and cost time to establish: **`--port 0` binds 4096** rather than asking the OS for a port, and **a second `serve` against a taken 4096 does not fail** — it comes up silently on an unpredictable port.
 
 ## Known gaps
 
-Carried honestly rather than implied as passing. Nothing here blocks Phase 6, but each is a place to look first if something behaves oddly.
+Carried honestly rather than implied as passing.
 
-- **The download *sequence* has only run against fakes.** Every piece is hand-verified against the real binary — the digests, `tar -xf` on a `.zip`, the archive layout, `--version` — but `downloadToFile` → `extractArchive` → `chmod` → `rename` as the app runs it, including the staging rename and the lost-race branch, has never executed end to end
-- **The engine's own renderer surfaces are typechecked and bundled but never rendered.** The engine-path field and the Start/Stop button went in on the compiler's word alone. The “Runs with” panel is no longer in that list — `RuntimePanel.test.tsx` renders it — but that test pins the engine to `running`, so the panel's own Start button is never on screen in it either
-- **`writeIfDifferent`'s atomicity under interruption is untested.** The observable consequence is covered (no `.tmp` survives), but not the property that matters: a writer killed between the write and the rename must leave the previous config intact. That needs a crash, not a mock
-- **Three pieces of correct-but-unpinned code**, named in the test file's own header rather than implied as covered: `await pending` in `halt()`, the **narrow** window the stop epoch guards, and `resetEngineStateForTests()`. The two tests that read as if they pinned the epoch actually pin the **post-await re-read of `running`** — deleting that re-read in the belief the epoch covers it is the mistake their comments warn against. None of these is known-broken behaviour
+- **The download *sequence* has only ever run against fakes.** Every piece is hand-verified against the real binary — the digests, `tar -xf` on a `.zip`, the archive layout, `--version` — but the staging rename and the lost-race branch have never executed end to end
 - **The `knowledge/` topic sort is unpinned** — pre-existing; `readdirSync` already returns name order on APFS, so removing the sort passes everything
-- **The reconcile's cost is reasoned, not measured.** Per turn it does a keychain decrypt per credential and a full prompt re-assembly per agent (several file reads plus the `knowledge/` walk, since only the folder *scan* is cached). Believed to be a few milliseconds; unproven. **If Phase 6 sees turn latency it cannot explain, look here first**
-- **Whether a restart between two turns of the same chat loses engine session state is not settled here.** That is session continuity, which Phase 6 owns. Invariant 3 is satisfied at engine granularity by the deferral; the finer question is open
+- **The per-turn cost of generating a config is reasoned, not measured.** Every turn does a keychain decrypt per credential and a full prompt re-assembly (several file reads plus the `knowledge/` walk), and now does it on the turn path unconditionally rather than only when a reconcile ran. Believed to be a few milliseconds; unproven
+- **`gemini` and `codex` are names without launchers.** Both are accepted by the row, the manifest and the capability answer, and both are refused in words at the top of a turn. Neither binary is on the machine this was built on and the Codex adapter is not a dependency, so nothing about how they behave over ACP has been measured here
 
 ## Architecture Overview
 
 ```
-Settings → Local Agents          Agent page → “Runs with” panel
-   │  Start / Stop / engine path      │  credential + model pickers, engine line, status line
-   ▼                                  ▼
-useEngine  (useEngineState / useEngineWatch / useEngineSkips / useStart|StopEngine)
-   │            ▲ engine:state push (nothing polls)
-   ▼            │
-engine:status | :start | :stop | :skips          local-agent:update-field
-   │                                                    │ (fire-and-forget reconcile)
-   ▼                                                    ▼
-                        engineManager
-   ┌──────────────────────────┴───────────────────────────┐
-   │  ensureRunning ─ running? ─ yes ─► applyConfigChange  │
-   │        │                              │ turn held? ──► defer, write nothing
-   │        no                             ▼
-   │        ▼                        digest ≠ loaded? ──► halt() ─► start
-   │   startEngine (refreshModels: true)
-   └──────────────────────────┬───────────────────────────┘
-                              ▼
-   binaryResolver          engineConfigSource ──► configGenerator
-   configured │ PATH │      providerService          providers  (keys → env: [NAME])
-   pinned download          runtimeService           agent entries + permissions
-   (SHA-256 verified)       promptAssembly           prompts, digest, key maps
-                              │
-                              ▼
-                    <userData>/engine/opencode.json
-                    <userData>/engine/prompts/<agentKey>.md
-                              │
-                              ▼
-        spawn: opencode serve --port <picked> --hostname 127.0.0.1
+Agent page → “Runs with” panel        Settings → Local Agents
+  credential + model pickers,           engine binary row + engine path
+  engine row (binary, not process)      Try again on `failed`
+        │                                       │
+        ▼                                       ▼
+   useEngineBinary / useEngineWatch / useResolveEngineBinary
+        │  ▲ engine:binary-state push (nothing polls)
+        ▼  │
+   engine:binary | engine:resolve  ──▶ engineBinaryService
+                                        state · ensure() · refresh()
+                                        (memoised per configured path)
+                                              │
+A turn (see agent_turn.md)                     │
+   driver reads the folder → launcherOfFolder  │
+        │                                      ▼
+        ├── claude ──▶ ClaudeLauncher      binaryResolver
+        │                 buildClaudeEnv    configured │ PATH │ pinned download
+        │                 systemPrompt                  (SHA-256 verified)
+        │                 model alias + approval mode
+        │
+        └── opencode ─▶ OpencodeLauncher
+                          engineConfigSource ──▶ configGenerator (buildEngineConfig)
+                            providers (keys → env: [NAME])   agent entry + inlined prompt
+                            runtimeService                    permission profile
+                            promptAssembly                    digest → spec key
+                                    │
+                                    ▼
+                    <userData>/acp/opencode/<hash>/opencode.json   (temp + rename)
+                                    │
+                                    ▼
+        spawn: <opencode> acp        cwd = the agent folder
         env  = narrowed login shell + OPENCODE_CONFIG + OPENCODE_CONFIG_DIR
-               + Basic-auth password
-               + OPENCODE_DISABLE_AUTOUPDATE + CINNA_ENGINE_KEY_* (the keys)
-                              │
-                              ▼
-        RunningEngine { child, baseUrl, authHeader, port,
-                        loaded: { digest, agentKeys, agentModels, skippedAgents } }
-                        ▲ never leaves engineManager (no baseUrl on any IPC channel)
+               + OPENCODE_DISABLE_AUTOUPDATE + CINNA_ENGINE_KEY_*
+                                    │
+                                    ▼
+                    acpProcessPool: one per agent, hold while a turn runs,
+                    reap after 2 min idle, replace when the spec key moves,
+                    kill the tree at will-quit
 ```
 
 ## Integration Points
 
-- [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents the config is generated from, the readiness that decides which are offered at all, and the `turnLock` whose `anyHeld()` gates every restart
-- [The Claude Engine](claude_engine.md) — the second engine a folder agent can name: no server, no credential, no entry in this config. It reuses this document's prompt assembly and the first half of its runtime resolution, and widens the child-environment narrowing rule below by exactly one variable
+- [The Agent Turn](agent_turn.md) — the turn that plans a launch, takes the lock, opens the session and translates what comes back
+- [The ACP Engine Contract](acp_contract.md) — what was actually watched against both engines, per launcher, and what is still unverified
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the one driver behind both engines, the launcher recorded in `driver_config`, and the readiness a list shows
+- [The Claude Engine](claude_engine.md) — the second launcher: no credential, no generated config, the user's own login, and the approval mode set on every session
+- [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents a config is generated from, the readiness that refuses one, the launcher the scanner records, and the per-agent turn lock
 - [Local Agent Permissions](permissions.md) — the profile this generator writes, entry by entry, and the desktop-held grants that answer an ask it produces
-- [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel (its layout, its one reserved status line and the jump rule behind it), the Settings → Local Agents engine controls, and the stamped `update-field` path a runtime write reuses
+- [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel, the Settings → Local Agents engine row, and the stamped `update-field` path a runtime write reuses
 - [Kit Contract & Manifest Layer](kit_contract.md) — the `runtime` block in `cinna-agent.json`, the validator's secret pattern reused on the credential reference, and the templates whose HTML comments the prompt assembly strips
-- [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) — managed credentials are usable runtimes, and the background sync is the config input with nowhere to put a hook
+- [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) — managed credentials are usable runtimes, and the background sync changes what a turn will generate with no hook anywhere
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — the default chat mode *is* the Default runtime
 - [Adapters](../../llm/adapters/adapters.md) — `listModels()` is the network call kept off the per-turn path; the registry supplies the model lists custom provider entries need
 - [Local Models & Keyless Credentials](../../llm/local_models/local_models.md) — the credential type with no key, its host, the `/v1` suffix a custom entry gets, and the local-only model refresh
@@ -495,6 +467,6 @@ engine:status | :start | :stop | :skips          local-agent:update-field
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell `PATH` that finds a user's own `opencode`, and `shellEnvForChild`, the same narrowing a stdio MCP server gets
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — the engine is machine-local; `localAgentsEnginePath` lives in the default scope
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every engine channel requires an activated session
-- [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — thin IPC controllers; the engine's address and password never cross a boundary
+- [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — thin IPC controllers; nothing a renderer could execute crosses the bridge
 
 Sub-doc: [Technical Details](engine_tech.md)

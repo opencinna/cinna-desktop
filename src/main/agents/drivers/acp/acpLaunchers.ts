@@ -268,7 +268,7 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
       const digest = digestEngineConfig({ ...built, config })
       const env: Record<string, string> = {
         ...(await deps.childEnv()),
-        // **Both variables, for the reason `engineManager` documents at
+        // **Both variables, for the reason the shared engine's manager used to
         // length.** `OPENCODE_CONFIG` is read only by the v1 loader; the v2
         // loader — the one behind every session's model resolution — builds its
         // document set from the config *directory* plus a walk up from the

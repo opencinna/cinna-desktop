@@ -1,12 +1,12 @@
-# The Agent Turn Runner — chatting with a folder agent
+# The Agent Turn — chatting with a folder agent
 
-> **The engine contract this slice sits on is verified against the real binary — see [The OpenCode Engine Contract](opencode_contract.md).** That document records what was watched against `opencode` 1.18.27, what is only assumed, and what was believed and proved false. This document does not restate it. Four of its findings shape every rule below: `POST …/prompt` returns an **admission ack**, not the answer; `session.idle` is **never emitted** and `POST …/wait` is **declared but unimplemented**, so the only completion signal is `step.ended`; `GET /api/event` takes **no parameters at all** and therefore cannot be resumed; and saved permission grants are **user-global**, which is why the desktop answers *Always allow* itself and never sends `always` to the engine — see [Local Agent Permissions](permissions.md).
+> **What the engines actually do over this protocol is verified against the real binaries — see [The ACP Engine Contract](acp_contract.md).** This document does not restate it. Four of its findings shape every rule below: `session/load` **replays the whole conversation** before it answers; `session/request_permission` is a *blocking request*, so the answer is the response rather than a separate call; OpenCode registers **no question tool** under ACP while the Claude adapter gains one from a declared client capability; and OpenCode's saved permission grants are **user-global**, which is why the desktop answers *Always allow* itself and never sends `allow_always` — see [Local Agent Permissions](permissions.md).
 
 ## Purpose
 
-What happens when a user types a message into a chat with a folder agent: the message becomes one streaming turn against the local OpenCode engine, at parity with a chat against a remote A2A agent. Same composer, same transcript, same cancel button, same orchestrated-tool behaviour.
+What happens when a user types a message into a chat with a folder agent: the message becomes one streaming turn against a child process running that agent's engine, at parity with a chat against a remote A2A agent. Same composer, same transcript, same cancel button, same orchestrated-tool behaviour.
 
-Phase 6 of Local Agents. Phase 5 built the machinery a turn needs — a running engine, a per-agent OpenCode agent key, an assembled prompt — and stopped one step short of sending anything. This is that step.
+**One implementation serves both engines.** Until phase 3 of the agent runtime plan there were two: `LocalAgentTurnRunner`, which drove a shared `opencode serve` over HTTP with an SSE event bus, a durable cursor and hole-and-heal recovery; and `ClaudeAgentTurnRunner`, which ran the Claude Agent SDK inside this process. Both are gone. With the transport standardised on the [Agent Client Protocol](../drivers/drivers.md) there is nothing left for them to disagree about — what differs between engines is how a process is started, and that is a [launcher](engine.md).
 
 ## A note on paths
 
@@ -16,228 +16,226 @@ Same convention as [The Local Engine](engine.md) and [Agents Home, Scanner & Fol
 |---|---|
 | `src/...`, `docs/...` | A file in **this repository** |
 | `Local/<slug>/...`, `cinna-agent.json`, `app-data/desktop.json` | Inside an **agent folder** |
-| `/api/...` | A path on the local engine, reached only through `engineManager.request` |
+| `session/new`, `session/prompt`, `elicitation/create` | ACP methods, spoken over the child process's stdio |
 
 ## The governing principle
 
 **The turn is the only thing that varies. Everything around it is reused, unchanged.**
 
-The desktop already had a port-free, caller-agnostic single-turn primitive — `runAgentTurn` — and it already served *both* the direct agent chat and orchestrated-tool mode. Its output is exactly what a folder agent has to produce: compact `text` for an orchestrator LLM, full-fidelity `parts[]` for the UI, `notices`, and the session bookkeeping. So the local runner is not a second pipeline; it is a second implementation of one call signature, and every consumer downstream of it — the parts accumulator, the delta sink, the message repository, the session repository, the renderer — is reused verbatim.
-
-The corollary is the shape of the work: this slice is a **lift**, not a rewrite. The A2A path's own body was not touched. The only change on that side is that two fields became optional, because a folder agent has neither of them.
+The desktop already had a port-free, caller-agnostic single-turn primitive whose output is exactly what a folder agent has to produce: compact `text` for an orchestrator LLM, full-fidelity `parts[]` for the UI, `notices`, and the session bookkeeping. So the ACP driver is not a second pipeline; it is a second implementation of one call signature, and every consumer downstream of it — the parts accumulator, the delta sink, the message repository, the session repository, the renderer — is reused verbatim.
 
 ## Core Concepts
 
-- **Runner** — one agent turn, whatever kind of agent it is. Takes the shared turn input, returns the shared turn result, and **never throws**
-- **Driver dispatch** — each runner is wrapped, unchanged, by an [Agent Driver](../drivers/drivers.md), and `driverFor(agent)` answers "which driver runs this agent's turn" for every caller. It reads the row's `agents.driver`, never the absence of a card URL; a folder driver then re-reads the **engine** its folder's runtime names on every turn (see [The Claude Engine](claude_engine.md))
-- **Engine session** — an OpenCode `ses_…` created against the agent's folder and its agent key. One per (chat, agent), remembered so a conversation survives a restart
-- **Admission ack** — what the engine answers a prompt with: a receipt saying the input was accepted, carrying an `admittedSeq`. Not the answer. The answer arrives on a *separate* subscription
-- **Event bus** — the one process-wide subscription to the engine's global event stream, fanned out to turns by session id
-- **Hole** — the events lost between a dropped socket and the next one. Unrecoverable from the global stream, because that stream takes no cursor
-- **Heal** — filling a hole from the durable per-session stream, which *is* resumable
-- **Turn stream** — the per-turn fold that turns one session's engine events into the A2A-shaped message the rest of the pipeline reads
-- **Parked request** — a permission ask or an ask-user question the agent loop is blocked on, mid-turn, waiting for a human
-- **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound
+- **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Two of them, `a2a` and `acp`, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
+- **Launcher** — the engine-specific half of an ACP turn: what to spawn, what to declare, what `session/new` carries, and what must be set on the session before the first prompt. It also answers with a **refusal** in place of a plan
+- **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle ([The Local Engine](engine.md))
+- **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered so a conversation survives a restart
+- **Replay** — the `session/update` notifications `session/load` emits for the *whole* prior conversation before it answers. Dropped, never ingested
+- **Parked request** — a permission ask or a question the agent is blocked on, mid-turn, waiting for a human. Over ACP the agent is blocked on a JSON-RPC request, so the park **is** the unresolved response
+- **Cancel grace** — the bounded wait for an agent to acknowledge a `session/cancel`. Three seconds, after which its process is retired
+- **Turn ceiling** — the backstop that ends a turn which never settles for any reason, found or unfound. Twenty minutes
 
 ## User Stories / Flows
 
 ### Chatting with a folder agent
 1. The user opens a chat bound to a folder agent and sends a message
 2. The message is persisted exactly as it is for a remote agent — one shared path, no local branch
-3. The agent is checked: it must still exist on disk, must be switched **on**, and must not be in a readiness state it cannot run from
-4. The engine is asked to be running. If it is already up it reconciles — re-deriving its config and restarting if the bytes moved — and this happens **before** the turn takes its lock
-5. The engine is asked for this agent's key. No key means the running process does not know this agent, and the skip reason (if there is one) is what the user is told
-6. The per-agent turn lock is taken, an engine session is opened or resumed, the event subscription goes live, and only then is the prompt posted
-7. Text streams into the transcript token by token; tool calls and their results appear as blocks; the turn ends and the assistant message is persisted
+3. The **folder is read**: it must still exist on disk, must be switched on, and must not be in a readiness state it cannot run from. The engine comes from what the folder says now, not from the row
+4. That engine's launcher **plans** the turn, or refuses it in a sentence. Planning may resolve (and download) the `opencode` binary, generate this agent's config, or probe whether Claude Code is logged in — all of it before the turn lock is taken, so a user reads the reason instead of queueing behind another chat to be told
+5. The per-agent turn lock is taken, the agent's process is acquired — started if this is the first turn — and a session is loaded or created
+6. The launcher's setup is applied to the session: the agent definition on OpenCode, the approval mode on Claude
+7. The prompt is sent. Text, thinking, tool calls and their results stream into the transcript as `session/update` notifications arrive; the turn ends on a stop reason and the assistant message is persisted
 
 ### Continuing a conversation the next day
-1. The user reopens the chat. The engine session id was remembered for this (chat, agent) pair
-2. The remembered id is **verified, not trusted** — the engine's own storage can be cleared between runs
-3. If the engine still has it, the session is re-pointed at the agent's current key (the config may have changed and the engine restarted) and the conversation continues
-4. If it is gone, a new session is opened and the user simply carries on — no error, no explanation owed
+1. The user reopens the chat. The session id was remembered for this (chat, agent) pair
+2. The remembered id is **verified by use, not by a probe** — there is nothing to ask. `session/load` either works or it does not
+3. If it works, the whole prior conversation replays as notifications first; the replay is **dropped**, and only what the new prompt produces reaches the transcript
+4. If it fails, a fresh session is created and the user simply carries on — no error, no explanation owed. Nothing has streamed at that point, because the replay gate was closed for exactly this window
 
 ### The agent asks for permission
-1. Mid-turn, the agent wants to reach outside its folder, fetch a URL, edit its own manifest or prompt, or run something the profile flags, and the engine parks it
+1. Mid-turn the agent wants to reach outside its folder, fetch a URL, edit its own manifest or prompt, or run something the profile flags, and it blocks on `session/request_permission`
 2. A permission block appears in the transcript *inside the streaming answer*, with the action and the things it wants to touch
-3. The user answers **Allow once**, **Always allow** or **Deny**. The answer goes to the engine by request id, out of band — the turn is still streaming
-4. The engine reports what it acted on, and the decision is recorded in the transcript beside the ask
-5. The agent loop resumes, or takes the denial and continues
-
-If a standing grant already covers the ask, **none of that happens**: the engine is answered `once` automatically and nothing is written to the transcript at all. What the grants are, where they live and why the engine's own *Always* is never used is [Local Agent Permissions](permissions.md); this document owns only the mechanics of parking, answering and settling.
+3. The user answers **Allow once**, **Always allow** or **Deny**. The answer is delivered by request id, out of band, and settles the blocked request
+4. The decision is recorded in the transcript beside the ask, and the agent continues or takes the denial
+5. If a standing grant already covers the ask, **none of that happens**: the agent is answered `allow_once` automatically and nothing is written to the transcript at all
 
 ### The agent asks a question
-1. Same shape: the engine parks, a question block renders, and the answer is delivered by request id while the turn streams on
-2. Unlike a cloud agent's question, this does **not** end the turn and there is no user message to send
+1. Only on Claude, and only because the client declares `elicitation.form`: the adapter enables its `AskUserQuestion` tool, renders each question as a form field and sends `elicitation/create`
+2. The question block renders, the answer is delivered by request id while the turn streams on, and the turn does **not** end to ask
+3. On OpenCode nothing arrives here — its `question` tool is not registered under ACP — so a model that wants to ask asks in prose
 
 ### Cancelling
-1. The user presses stop mid-answer
-2. The turn settles as aborted, and the engine is **told** — an agent loop nobody is reading keeps running, keeps spending tokens and keeps holding the session
-3. Whatever streamed before the cancel is kept
+1. The user presses Stop mid-answer
+2. Anything parked is answered **first**, so an agent blocked inside a permission request can unwind and read the cancel at all
+3. `session/cancel` goes out and the pending `session/prompt` is expected to come back `cancelled`. It gets three seconds; an agent that never acknowledges has its **process retired**, because a turn is still running inside it and the next prompt on that session would interleave with work the user stopped
+4. Whatever streamed before the cancel is kept, and the stop is not reported as an error
 
-### The engine stops while an agent is answering
-1. The engine process dies, or is stopped from Settings
-2. Every listener is told the stream is **closed**, not merely disconnected, and every in-flight turn ends with "The local engine stopped while the agent was answering."
-3. The session ids belonged to that process and died with it, so there is nothing to reconnect to
-
-### A dropped socket mid-answer
-1. The connection to the event stream drops. The reconnect happens on a capped backoff
-2. When a new socket is live, the turn goes and reads the **durable per-session stream** from the last sequence number it saw
-3. The replay carries both halves of the recovery: the words that were missed, and the event that actually ends a turn
-4. The user sees the answer complete. If the turn had already finished inside the hole, it completes immediately
+### The agent's process dies
+1. The connection closes. The turn ends with the failure the stream reports, and the parts already streamed are kept
+2. Nothing restarts it. The agent page shows `exited`, and the **next** turn starts a fresh process
 
 ## Business Rules
 
-### One turn primitive, three implementations, one dispatch point
+### One turn primitive, two implementations, one dispatch point
 
-`AgentTurnRunner` is a single method: take the shared input, return the shared result. There are three implementations: the A2A one (`runAgentTurn`, behind the shared shape), the local one described here, and the [Claude](claude_engine.md) one. None of them decides which agents it serves. Each is wrapped, unchanged, by an [Agent Driver](../drivers/drivers.md), and `driverFor(agent)` picks the driver from the row's `agents.driver`.
+`AgentDriver.run` is a single method: take the shared input, return the shared result. There are two implementations — A2A, and ACP for every local CLI agent — and neither decides which agents it serves. `driverFor(agent)` reads `agents.driver` and nothing else.
 
-**Only a folder driver reads a folder.** The dispatch point reads the row and nothing else, so an A2A agent — which has no folder — never costs a filesystem hit on a turn. A folder driver reads its folder at the start of every turn and runs the turn on the engine the folder names. It cannot trust the row alone: the row holds what the last scan saw, and a manifest edited a moment ago can already name the other engine.
+**The row is a cache; the folder is the truth.** The dispatch point reads the row, so an A2A agent — which has no folder — never costs a filesystem hit on a turn. The ACP driver then reads the folder at the start of every turn and takes its **launcher** from what the folder's runtime says now. This used to be a reconcile *between drivers*: with one driver per engine, a Claude agent dispatched on a stale `opencode` row had to be handed across, and while that hand-off was missing such an agent answered "try again in a moment" for ever. With one driver it is a lookup, which is the point of the collapse.
 
-The folder cannot always answer: the row is gone, the folder has moved, or the manifest is mid-save and reads `invalid`. **In those cases the driver keeps the engine the row names** rather than guessing. Both runners refuse such a folder with a readable turn error of their own.
+Where the folder cannot answer at all — the row is gone, the folder has moved, the manifest is mid-save — the turn is refused in the runners' own sentence rather than guessed at. The one reader left for the stored launcher is `capabilities()`, which has only a row to go on.
 
-**Dispatch never keys on "has no card URL".** A missing card is a symptom several unrelated states share — a remote agent that has never been tested has no cached card either. This is not hypothetical: a combined `!agent || !agent.cardUrl` guard used to stand at the dispatch seam. Folder agents are inserted with a null card URL, so it matched every one of them and answered "Agent not found or not configured" before any local branch could be reached. The friendlier branch below it was unreachable code for the whole of Phase 5. The card check now lives inside the A2A driver, and only an A2A row reaches that driver.
+**Dispatch never keys on "has no card URL".** A missing card is a symptom several unrelated states share. A combined `!agent || !agent.cardUrl` guard once stood at the dispatch seam, matched every folder agent, and answered "Agent not found or not configured" before any local branch could be reached. The card check lives inside the A2A driver, and only an A2A row reaches it.
 
-**Every caller goes through the same dispatch point**: the direct-chat IPC handler, the orchestrated-tool provider, and the answer path for a parked ask. There is one place to look when asking why an agent took a given path, and one place to change when another kind of agent arrives.
-
-### `runTurn` never throws
+### `run` never throws
 
 A failed turn is a *result carrying an error*, not an exception. Both call sites have to render a failure either way, and an exception crossing the IPC boundary loses its code — `ipcMain.handle` serialises a rejection to message and stack, and `contextBridge` re-clones it, so a renderer guard testing `err.code` silently never fires.
 
-This is enforced at both ends. The local runner catches, and the direct-chat wrapper catches too — because that wrapper is what every future runner passes through, and a runner that breaks the contract used to close the port having posted neither `done` nor `error`, leaving the renderer in the streaming state forever. The live instance of that was the turn lock: it *throws* when the same folder agent is opened in a second chat, and the message is already user-facing ("This agent is busy right now…"), which is exactly why it is worth surfacing rather than swallowing.
+Enforced at both ends. The driver catches — including around `turnLock.acquire`, which *throws* when the same agent is opened in a second chat and whose message is already user-facing ("This agent is busy right now…") — and the direct-chat wrapper catches too, because that wrapper is what every future driver passes through and a driver that breaks the promise used to close the port having posted neither `done` nor `error`, leaving the renderer streaming for ever.
 
-### Widening the shared input did not weaken the A2A path
+### Refuse before the lock, stream inside it
 
-`endpointUrl` and `cardUrl` became optional on the shared input, because a folder agent has neither. `runAgentTurn` itself still *requires* both, and the A2A driver is the single place that narrows — so the compiler continues to refuse an A2A turn with no card, rather than discovering it at the SDK call mid-stream.
+Everything that can be answered without spawning anything is answered first: the folder's own state, `enabled`, the engine this build cannot run, and the launcher's plan — no `opencode` binary, no usable credential, no model, no Claude Code, not logged in. Only then is the lock taken.
 
-### Subscribe before prompting. This is not an optimisation
+The ordering is about what the user reads. A refusal produced *inside* the lock would queue behind another chat's turn on the same agent before saying that this agent cannot run at all.
 
-The prompt call returns an admission ack and the agent loop starts immediately. The global event stream takes **no cursor**, so anything emitted before the socket is live is gone with no way to ask for it again. Connect first, prompt second. The difference is between a turn that streams and one that appears to hang until its first tool call.
+The lock covers the streaming half: acquire the process, load or create the session, apply the setup, prompt, stream, settle. It is the same per-agent lock the page editors and the folder watcher respect — see [Invariant 3](#invariant-3--no-desktop-writes-while-a-turn-streams).
 
-The turn also *waits* for the socket, and the wait **rejects** rather than hanging if the stream cannot be opened — so a turn against a dead engine fails as an error the user can read instead of waiting forever for deltas that will never come.
+### The load replay is dropped, not appended
 
-### One bus, because there is one OpenCode process
+`session/load` replays the entire prior conversation as `session/update` notifications *before* it answers. Ingesting them would append the whole history to this turn's message.
 
-One `opencode serve` backs every folder agent that runs on it, and the global stream carries every session's events. (Nothing in this section applies to the [Claude](claude_engine.md) runner, which is an async generator in this process: no socket, no shared stream, nothing to fan out.) A subscription per turn would open N sockets each receiving all N turns' events and discarding N−1 of them. So there is one process-wide subscription, fanned out by session id, connected lazily on the first subscriber and dropped on the last — an idle desktop holds nothing open.
+So the driver binds its handlers first — there is nowhere else to put traffic that arrives before the bind — and drops every update until `loadSession` resolves. **The gate closes before the bind, not after it**, because binding flushes the connection's pre-bind buffer *synchronously*: a stop and a resend in the same chat inside that window would otherwise fold the stopped turn's tail into the new one.
 
-That sharing has a consequence: **one turn's handler throwing must not take the stream down for everyone**, so every listener callback is run guarded.
+The mode a loaded session reports is deliberately not read either. It is the mode the session was left in, and the setup that follows overwrites it before the first prompt — reading it would only give the fallback notice a stale value to compare against.
 
-An event that names **no** session is logged and dropped, never broadcast. The engine's error event genuinely can arrive attributable to no session at all — its schema declares no required fields — and broadcasting it would end every unrelated turn in flight.
+### Traffic that arrives before a turn binds is kept, not dropped
 
-### A disconnect is a hole; a close is the end of the world
+Messages are *read* in order and *processed* concurrently: the SDK dispatches each incoming message without awaiting the previous one, so a `session/new` response and the notifications written right behind it race each other through the client. Recorded, not hypothesised — an `available_commands_update` follows its `session/new` response with nothing in between.
 
-These are two different notices and the distinction is load-bearing rather than tidy.
+A turn that bound its handlers on `session/new`'s answer would therefore drop the opening of its own turn some fraction of the time. So the connection keeps an unbound session's traffic in a short, bounded holding pen (500 notifications, 10 s) and a bind drains it in order. A permission or elicitation request for a session nobody binds within that window is answered `cancelled`.
 
-- A **disconnect** is a gap in a stream that will come back. The right response is to wait, then heal from the durable stream. Silently carrying on after a reconnect would truncate an answer — the failure mode hardest to notice and worst to debug.
-- A **close** means the engine stopped and no reconnect is coming. The session id died with the process that issued it. A turn that treats this as a disconnect waits forever, holds its per-agent lock for the life of the app and — because a config change refuses to restart the engine while any lock is held — makes the engine permanently un-reconcilable for *every* folder agent.
+### `session/update` is taken off the wire before the SDK validates it
 
-Only a socket that comes back *after* one dropped is a reconnect. The first connection of a stream is not: a turn told "reconnected" there would go and fill a gap that does not exist, from a cursor it has never held.
+The SDK's session-update schema is a **closed union** of the kinds that version knows, installed as a static handler ahead of anything we could register — so an update kind it has not heard of throws there and is dropped with a console error. Nothing in the recordings is outside the schema today, and one `opencode` or adapter bump is all it takes; what would go missing is a chunk of a message.
 
-### The completion signal is `step.ended`, and the test is inverted
+So the connection consumes `session/update` in the transport tap, checks only what routing needs (a session id, an object update), and hands the notification over as it arrived. **Ignoring kinds it does not know belongs at the translation layer**, where it is explicit and silent by design: a turn that was going fine must not die because the agent learned a new trick.
 
-The documented ways a turn ends are both dead — see [the contract](opencode_contract.md). The real terminal signal is `step.ended`, and the rule is deliberately the opposite of the obvious one.
+### `fs/*` and `terminal/*` answer "method not found"
 
-The obvious rule is "end the turn when `finish === 'stop'`". That hangs the turn forever the moment a real turn ends with any other terminal value, and the schema does not constrain the field at all — it is a bare string with no enum. So **termination is the default and continuation is the enumerated exception**: the only value that means "the loop continues" is `tool-calls`, observed on a real tool-calling turn. Ending a turn early is visible, recoverable, and the user can ask again. A hang is none of those.
+The client declares neither capability, which per ACP means an agent must not call them — and draft v2 removes them outright. OpenCode 1.18.27 calls `fs/write_text_file` anyway; on the `-32601` it writes the file itself and the turn continues to a completed tool call. So the error is the *working* answer, and it costs nothing: answering for real would hand the agent a second, unaudited write path, and crashing would break turns that work today.
 
-### Deltas are true deltas; the accumulator expects cumulative text
+### The translator maintains a cumulative message; the accumulator computes the delta
 
-The parts accumulator was built for A2A, where every update carries the message **as it stands** and the accumulator computes the delta itself. OpenCode emits the opposite: true deltas.
+The parts accumulator was built for A2A, where every update carries the message **as it stands**. ACP emits true deltas, so the translator folds each notification into a cumulative message and hands the whole thing back for re-ingestion. Feeding a raw chunk straight through would look correct with one chunk and duplicate every character from the second onwards.
 
-So the turn stream does not translate an event into a part — it maintains the *cumulative* message and hands the whole thing back for re-ingestion. Feeding a raw engine delta straight through would look correct in a test with one chunk and **duplicate every character from the second chunk onwards**. This is not a theoretical trap: the inversion survived a mutation run against nineteen passing assertions.
+Four rules come from watching the wire rather than from the protocol document:
 
-Two related rules follow:
-
-- **Part identity is assigned once and never moves.** The accumulator keys on (message id, index in the parts array), so each engine stream id gets an index on first sight and keeps it. Parts are appended, never spliced
-- **Text never shrinks.** A block-level end event that is somehow shorter than what already streamed is ignored, because a shorter string would make the computed delta the *whole* new text and duplicate everything already rendered
-
-### The block-level end event is idempotent, and that is what makes healing safe
-
-The engine's `text.ended` carries the cumulative text and is the durable stream's *only* text event. Live, it is redundant with the deltas; after a reconnect, it is how the hole gets filled. It **sets** rather than appends, so replaying it over text already streamed is a no-op and replaying one whose deltas were lost restores the block whole.
-
-The same never-shrink / never-shorten guard is applied to tool narrations, tool results and decision records, which is what makes a replay tolerant of re-delivered events regardless of whether the durable cursor turns out to be inclusive or exclusive.
+- **Only a chunk names a message.** `tool_call` and `tool_call_update` carry no message id in either engine, so a tool call is filed under whatever message was current when it arrived. Under the Claude adapter a turn's tool calls arrive *before* its first chunk, so they land in an anonymous message of their own — which is far better than adopting the id of whatever message comes next
+- **The first title wins as the tool name.** OpenCode titles a call `write` and then retitles the *same* call with the file path; the Claude adapter titles a Bash call `Terminal` and then the command. Neither later title is a tool name. What is authoritative is `_meta.claudeCode.toolName`, then the non-standard `name` field, and only then the first title
+- **A tool call ends a run of text.** A turn is text → tool → more text, and the second run must not be appended to the first part, or the renderer shows the tool block after a paragraph it interrupted. No recording *forces* this rule — both engines happen to start a new message id after a call — which is exactly why it is written down: the protocol never promised it
+- **Part identity is assigned once and never moves**, and text never shrinks. A part key gets an index on first sight and keeps it; parts are appended, never spliced
 
 ### Permissions and questions are `tool` parts. There is no `permission` part kind
 
-**This is the convention a future contributor will otherwise break, so it is stated flatly: neither a `permission` nor a `question` stream-part kind exists, and none is to be added** (seam 7 in the plan).
+**This is the convention a future contributor will otherwise break, so it is stated flatly: neither a `permission` nor a `question` stream-part kind exists, and none is to be added.**
 
-The stream vocabulary is a wire contract shared by the main process, the preload guard and the renderer, and it already has a convention for "a tool call the renderer should render as an interactive widget": Ask-User-Question is detected renderer-side by pattern-matching a `tool` part whose `cinna.tool_name` normalises to `askuserquestion` (see [Ask User Question](../../chat/ask_user_question/ask_user_question.md)). A permission ask is the same thing — a call the agent cannot proceed past until a human answers — so it follows the identical convention under a reserved tool name, and the renderer gains a sibling block component. The **part** is the transcript, and it is all a reloaded chat has. A running turn also announces the ask on the stream — `needs_input` right after the part, `input_resolved` when it settles ([Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)) — but those events are never persisted, which is why they cannot replace the part.
+The stream vocabulary is a wire contract shared by the main process, the preload guard and the renderer, and it already has a convention for "a tool call the renderer should render as an interactive widget": Ask-User-Question is detected renderer-side by pattern-matching a `tool` part whose tool name normalises to `askuserquestion` (see [Ask User Question](../../chat/ask_user_question/ask_user_question.md)). A permission ask is the same thing, so it follows the identical convention under a reserved tool name. The **part** is the transcript, and it is all a reloaded chat has. A running turn also announces the ask on the stream — `needs_input` right after the part, `input_resolved` when it settles ([Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md)) — but those events are never persisted, which is why they cannot replace the part.
 
-The reserved permission name is deliberately not a name any model would emit. OpenCode's permission asks are *about* tools (`bash`, `edit`, `webfetch`) and carry the real tool name separately, so naming the request after a tool would make an agent's own call to that tool indistinguishable from a request to run it.
+The reserved permission name is deliberately not a name any model would emit: an ask is *about* a tool (`bash`, `edit`, `webfetch`), so naming the request after a tool would make an agent's own call to that tool indistinguishable from a request to run it.
 
-The request id rides in the part's existing `cinna.tool_id` field, because that field already exists to pair a call with its result — and here it is *also* the address the answer is posted back to. The renderer needs no new field to know where to send an answer.
+The request id rides in the part's existing tool-id field, because that field already exists to pair a call with its result — and here it is *also* the address the answer is posted back to.
 
-### An engine request id is a live address that dies with the turn
+### A request id is a live address that dies with the turn
 
-This is what separates a local agent's question from a cloud agent's, and the separation is load-bearing on the replay path. A cloud agent's question ends its turn and stays answerable afterwards — answering it sends the next user turn. A local agent's request is answerable **only while the engine is still parked on it**, so a persisted block bearing one of those ids must render read-only however recent the message is. Whether it is still live is a question only the main process can answer, and while a turn runs it answers two ways. The stream says so as it happens: the runner posts `needs_input` with `resume: 'reply'` the moment the ask is parked, and `input_resolved` when it is answered, rejected or expires. The renderer also polls the pending-request registry, and the poll is not redundant — a reloaded renderer has no port, so the registry is the only thing that can re-open its prompt, and an ask raised before the renderer subscribed never reaches it as an event. Where the two disagree, *settled* wins: the poll can go on listing an ask for a tick after it expired or was answered elsewhere, and buttons whose answer can only be refused are worse than buttons withdrawn a tick early. The asks a turn's own ending sweeps away get no `input_resolved`; the `done` or `error` above the runner already says nothing is parked.
+Ids are **minted by the desktop** (`per_acp_…` / `que_acp_…`), never taken from the agent's own call id: over ACP the park is an unanswered JSON-RPC request, and the agent has nothing to correlate an out-of-band answer with anyway.
+
+This is what separates a local agent's question from a cloud agent's, and the separation is load-bearing on the replay path. A cloud agent's question ends its turn and stays answerable afterwards; a local agent's request is answerable **only while its turn is still parked on it**, so a persisted block bearing one of those ids renders read-only however recent the message is. While a turn runs, main says so two ways: the stream posts `needs_input` when the ask is parked and `input_resolved` when it settles, and the renderer also polls the pending-request registry — not redundantly, because a reloaded renderer has no port and an ask raised before it subscribed never reaches it as an event. Where the two disagree, *settled* wins.
 
 ### The answer travels out of band, and every exit clears what is parked
 
-The answer could have ridden the turn's message port, but that port exists only for a *direct chat* — the turn primitive is deliberately port-free and orchestrated mode has no port at all. Routing the reply through a registry keyed by request id means one path serves both modes.
+The answer could have ridden the turn's message port, but that port exists only for a *direct chat* — the turn primitive is port-free and orchestrated mode has no port at all. A registry keyed by request id serves both.
 
-A parked request with no answer coming is a session that never goes idle. So:
+A parked request with no answer coming is a turn that never ends. So:
 
-- Every exit from a turn — cancel, error, teardown — **rejects** whatever is still pending, using the engine's own clean exits (a question's reject endpoint, a permission's `reject` reply)
-- An unanswered request also expires on its own timer. Expiry sends a real rejection rather than abandoning the request, so the session goes idle by the same path a deliberate Deny takes
-- A request the **engine** settled (including by a decision made from outside this window) is *dropped* from the registry, not resolved. Resolving it would make the runner post a redundant rejection at a request the engine has already closed. Dropping only the turn's own handle and not the registry entry left it live for the full expiry window — during which a persisted block kept rendering as answerable and answering it reported success while the reply 404'd, telling the user their decision landed when it did not
-- Re-registering the same id settles the first registration as rejected, so a replayed ask cannot leave an orphan promise nothing will ever resolve
+- **Every exit — cancel, error, ceiling, teardown — releases what this turn parked.** A request left registered keeps rendering as answerable, and answering it reports success into a turn that has ended
+- **The turn's own ending closes the ask gate first**, so a park it releases posts no `input_resolved`: the terminal `done` or `error` above the driver already says nothing is parked
+- **A released park is not a decision.** The registry settles a release as `rejected`, which is also what an expiry looks like — so the transcript says "No answer — the request expired." for an expiry, and "Not answered — the turn was stopped." when the user stopped it. Denying is the only safe answer either way; recording a decision nobody made is not
+- An unanswered ask also expires on its own timer, which sends a real rejection rather than abandoning the agent inside a request
 
-### The `enabled` gate lives in the runner, and nowhere else
+### A cancel is bounded, and the parks go first
 
-The engine config generator skips only readiness `invalid` and `contract_too_new`. It does **not** consult `enabled` — so a folder agent the user has switched off still gets an OpenCode agent entry and a written prompt file.
+Stop and the twenty-minute ceiling do the same two things — send `session/cancel` and start the grace that bounds the wait for an acknowledgement — and they **share one signal**, because a grace armed only by the user's abort would leave the ceiling with no way out of a prompt the agent never answers: the timer fires, the notification goes unheard, and the turn holds its lock for the life of the app. Which is the failure the ceiling exists to prevent.
 
-That is coherent as a design: the engine config is a catalogue of what *can* be addressed, and the runner decides what a turn may reach — which also leaves a disabled agent's prompt on disk for the user's own assistant to read. But it means **the gate exists in exactly one place**. Deleting the check in the runner makes a disabled agent chattable.
+Inside that, the order is the point:
 
-The check runs before the engine is touched at all: a turn against a disabled agent starts nothing, reconciles nothing and opens no session.
+1. **The parked asks are answered first.** An agent blocked on `session/request_permission` cannot act on a notification it has not read: it is inside a request, waiting for us. Releasing the parks answers that request with a refusal, the agent unwinds, and the prompt comes back `cancelled` inside the grace — so a Stop pressed while a permission block is on screen ends the turn instead of timing out and killing a perfectly good process
+2. `session/cancel` goes out. It is a notification, so nothing waits on it; a connection that has already died has nothing to tell
+3. Three seconds. An agent that has not acknowledged **loses its process**, because a turn is still running inside it
 
-### Reconcile before the lock, stream inside it
+**The abort is re-checked between acquiring the process and sending the prompt.** Everything before that awaited — a spawn, `session/new`, the setup calls — which is one to two seconds in which a Stop lands with no session to cancel. Sending the prompt anyway would start the agent on work the user cancelled and then kill its process three seconds later. And a listener added to an **already-aborted** signal never fires, so a stop that lands while the launcher is still planning is checked for explicitly — that window used to be dropped entirely, and the turn ran to completion after the user had stopped it.
 
-The engine's `ensureRunning` is the config choke point: it re-derives the config from current state and restarts if the bytes moved. One process backs every folder agent, so that restart ends *every* streaming turn — which is why a config change refuses while any turn lock is held.
+### The setup is a refusal, not a warning
 
-Calling it *after* taking the lock would therefore not be unsafe, merely useless: the change would be deferred past the very turn that asked for it. So it is called **before** the lock, and the lock covers the streaming part only.
+`session/set_mode` and the mandatory `session/set_config_option` calls are what make the desktop's own choices true: OpenCode's `mode` selects the agent definition (without it the turn runs the engine's stock coding agent in the user's folder), and Claude's `session/set_mode` is the only thing that overrides a `defaultMode` from the user's own settings — which can be `bypassPermissions`. A turn that ran anyway would run under a policy nobody chose.
 
-**The engine-level predicate is "is any lock held", not "is this agent locked".** One `opencode serve` backs them all — see [The Local Engine](engine.md), where this is argued at length and where a live Invariant 3 violation of exactly this shape was found and fixed. This slice inherits that rule rather than restating it: the turn holds the per-agent lock, and it is the *global* predicate that keeps the engine from being restarted underneath it.
+The refusal goes out through the same exit every other path takes, so the session this turn *did* create is still recorded: a bare failure leaves it behind engine-side and mints another on every retry, and the chat never gets a session to continue from.
+
+One option is exempt, and only one: OpenCode's `model` set, which the config's top-level `model` has already selected. See [The Local Engine](engine.md#a-config-per-agent-written-where-the-users-folder-is-not).
+
+### The transcript says when an agent did not run in the mode it was given
+
+The desktop's approval setting is a promise to the user, and the agent can quietly not keep it. Over ACP the signal is a `current_mode_update` (or a `config_option_update` for `mode`) naming a mode other than the one `session/set_mode` was given, and **any** disagreement is reported, in the words of whichever way it went — asked for `auto` and ran asking, or asked for `default` and ran automatic, which would be far worse.
+
+A notice, not a status line, because it belongs beside the turn it describes: a panel would say it once, about whichever turn ran last, on a screen the user may not be looking at.
+
+### An error after a partial answer does not blank the answer
+
+Parts already streamed are kept and returned alongside the error, on every exit — including the ceiling and a cancel whose grace expired. The A2A path behaves the same way, so the transcript reads the same for both kinds of agent.
+
+`max_tokens`, `max_turn_requests` and `refusal` stop reasons are reported as errors rather than swallowed: a reply that stops mid-sentence with no explanation reads as a bug in this app.
+
+### *Always* is answered by the desktop, and never reaches the engine
+
+The third permission answer is offered, and it stops in the main process. `allow_always` writes into the *engine's* own store — user-global on OpenCode, `~/.claude/` on Claude — and the measurement was repeated over ACP: answering `allow_always` once in one folder silenced every later ask in that folder, **including in a new session in the same process**. So `pickPermissionOption` cannot return an `allow_always` option at all: it is filtered before the search, not merely deprioritised.
+
+Three obligations follow, and each is a lie to the user if dropped:
+
+- **What the agent is told is a plain allow-once.** The rule is written beside the folder instead
+- **The transcript says which of the two happened** — "Allowed, and remembered for this agent." only where the rule reached disk, "Allowed once." otherwise. A store that refused the write must not cancel the action the user approved: they are asked again next time, and nothing claims a rule that does not exist
+- **An auto-answered ask writes nothing.** The grant is checked *before* any part is created, so no block, no registry entry and no `needs_input` exist for it. A block that appeared and answered itself milliseconds later would be a widget the user cannot act on, mid-stream
+
+The vocabulary is the engine's and stays the engine's: a grant made under OpenCode's `bash` must never silently authorise Claude's `Bash`. The rest of the model is [Local Agent Permissions](permissions.md).
+
+### The `enabled` gate lives in the driver, and nowhere else
+
+The config generator does not consult `enabled`. The driver does, before it plans anything, in the runners' own sentence. Deleting that check makes a switched-off agent chattable.
 
 ### Invariant 3 — no desktop writes while a turn streams
 
 The turn holds the per-agent lock for its whole streaming life, which is what stops the folder being written to underneath a running agent. Assume a rescan can land at any moment, including mid-turn, and rely on the lock rather than on timing: macOS FSEvents replays a backlog of pre-arm changes on *every* watcher arm, so a rescan can fire from a watcher's own recovery with no user action at all.
 
+What is **no longer** part of this invariant: the engine. There is no shared process to be restarted underneath anyone, so `turnLock.anyHeld()` has no engine-level caller left, and a config change is not deferred behind anybody's turn.
+
 ### Invariant 4 — secrets never reach the renderer
 
-Nothing in this slice widens the secret surface, and two rules keep it that way:
+Nothing here widens the secret surface:
 
-- **The engine's base URL and auth password stay inside the engine manager.** Every call this slice makes goes through the manager's request method — there is no IPC channel that hands the renderer a door to the engine, which is exactly what stops a component being written that routes around the runner
-- **No response body from the engine is ever logged.** The engine's config endpoint returns the *resolved* config with environment references substituted, so its response contains live API keys — and it is not the only thing behind that door that can. A helpful debug dump is how a key reaches a log file
+- **A credential travels only as the `CINNA_ENGINE_KEY_…` variable the generated config names**, into the child's environment. Nothing on the turn path holds a key, and the launch spec's key — which *is* logged — is a digest
+- **No engine response is logged wholesale.** The rule outlived the endpoint that produced it: OpenCode's HTTP `/config` returned the resolved config with keys substituted, and the next response to carry a secret will not announce itself either
 
 What the renderer receives is what it has always received for an agent turn: stream events and message parts.
 
 ### Session continuity reuses the A2A column, on purpose
 
-A folder agent's engine session id is stored in the A2A session table's `context_id` column (seam 9), and the column names stay A2A-flavoured deliberately. That column is what the existing session lookup reads to decide a chat is an agent chat, so putting the engine session there means every existing reader keeps working — rather than adding a parallel table each of them would have to learn about.
+A folder agent's session id is stored in the A2A session table's `context_id` column, and the column names stay A2A-flavoured deliberately: that column is what the existing session lookup reads to decide a chat is an agent chat, so putting the session there means every existing reader keeps working.
 
-There are **two stores**, and they answer different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one. For a kit agent that is `app-data/desktop.json`, which travels with the folder; for a [bare](bare_agents.md) agent it is a file under `<userData>` keyed on the folder's path, which does not — the folder is the user's own and nothing is written into it, so a bare agent moved to another machine arrives without its sessions. The runner passes the agent's kind with the path, rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache that can be dropped and rebuilt, so the folder copy failing to write must not fail the turn.
+There are **two stores**, answering different questions. The SQLite row carries continuity on this machine; the copy in the agent's desktop state is the durable one — `app-data/desktop.json` for a kit agent, a file under `<userData>` keyed on the folder's path for a [bare](bare_agents.md) one, whose folder is never written into. The driver passes the agent's kind with the path rather than probing the folder, so the two callers cannot disagree about which store an agent has. Invariant 1 says the row is a cache, so the folder copy failing to write must not fail the turn.
 
 ### A turn always settles
 
-Only four things can end a turn: a terminal engine event, an abort, the engine closing, and a ceiling.
+Only four things can end a turn: a stop reason, an abort, the connection dying, and the ceiling.
 
-The ceiling is the backstop for every door that has not been found yet. Three separate defects in this phase all ended at the same place — a turn that never settles, holding its per-agent lock for the life of the app and, through the global lock predicate, stopping the engine being reconciled for every folder agent. Each was fixed at its own door; the ceiling caps them all, including the doors nobody has opened yet. It turns the worst outcome from "the app is permanently degraded and only a restart fixes it" into "one turn failed with a readable message".
-
-It is generous on purpose. A real agent run doing real work can take minutes, and a ceiling that fires on a working turn is worse than no ceiling.
-
-### An error after a partial answer does not blank the answer
-
-Parts already streamed are kept and returned alongside the error. The A2A path behaves the same way, so the transcript reads the same for both kinds of agent.
-
-### *Always* is answered by the desktop, and never reaches the engine
-
-The third permission answer is offered, and it stops in the main process. One `always` posted to the engine writes a grant naming no directory, no session and no agent into a **user-global** store shared with the user's own OpenCode install — proven, not suspected ([the contract](opencode_contract.md) §4). Replying `once` persists nothing there, so the desktop keeps the rule beside the agent it was granted for and answers a matching ask with `once`.
-
-Three obligations fall on this slice, and each is a lie to the user if dropped:
-
-- **The runner's engine door downgrades any stray `always` to `once`, loudly.** The conversion happens on the answer path; this is the second lock on the same rule, because a caller that settled a request with `always` some other way would write that user-global row and nothing in a test against the HTTP fake would notice
-- **The transcript says what was actually decided.** The engine's `permission.v2.replied` reports `once`, so `permissionDecisionText` takes a `remembered` flag from the desktop's own knowledge: "Allowed, and remembered for this agent." only where the rule reached disk, "Allowed once." otherwise. An `always` arriving from another client on the same `opencode serve` reads "Allowed, and remembered **by the engine**." — that grant will authorise every folder agent and must not be recorded as if it were scoped to one
-- **An auto-answered ask writes nothing.** `TurnStream` consults the grant predicate *before* it creates a message state, so no part, no first-owner entry and no registry entry exist for it. A block that appeared and answered itself milliseconds later would be a widget the user cannot act on, mid-stream
-
-Because an auto-answered ask has no registry entry, it also has no park timer — so the runner retries the automatic reply once and then posts `reject` rather than letting a lost reply hold the turn to the ceiling. The rest of the model is [Local Agent Permissions](permissions.md).
+The ceiling is the backstop for every door that has not been found yet. It turns the worst outcome — a turn that never settles, holding its agent's lock for the life of the app — into "one turn failed with a readable message". It is generous on purpose: a real agent run doing real work can take minutes, and a ceiling that fires on a working turn is worse than no ceiling.
 
 ## Architecture Overview
 
@@ -251,72 +249,63 @@ Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin co
   │                        a2aStreamingService.streamToAgent({run})  [direct-chat wrapper,
   │                          │                                        kind-agnostic]
   │                          ▼
-  │                        driver.run(userId, row, input) ──────┐
-  │                          │ folder driver: re-read the       │
-  │                          │ folder's engine, then runTurn    │
-  │            LocalAgentTurnRunner                   a2a driver: pre-flight → runAgentTurn
-  │                          │                                  (unchanged)
-  │      ┌───────────────────┴───────────────────┐
-  │      │ gate: exists / enabled / readiness    │
-  │      │ ensureRunning  (BEFORE the lock)      │
-  │      │ agentKey                              │
-  │      │ ── withLock ────────────────────────  │
-  │      │    open or resume session             │──▶ POST /api/session
-  │      │    subscribe ── EngineEventBus ───────│◀── GET  /api/event   (global SSE)
-  │      │    await ready()                      │
-  │      │    POST prompt  → admission ack       │──▶ POST /api/session/{id}/prompt
-  │      │    TurnStream.apply(event) per event  │
-  │      │      ├─ cumulative message ──▶ StreamPartsAccumulator ──▶ onEvent sink
-  │      │      ├─ asked   ──▶ pendingRequests.register
-  │      │      │              (asked.auto ──▶ autoAllow, nothing rendered)
-  │      │      ├─ settled ──▶ pendingRequests.drop
-  │      │      └─ idle / error ──▶ settle
-  │      │    heal on reconnect ─────────────────│──▶ GET /api/session/{id}/event?after=
-  │      └───────────────────┬───────────────────┘
+  │                        driver.run(userId, row, input)
+  │      ┌───────────────────┴───────────────────────────────────┐
+  │      │ read the folder: exists / enabled / readiness         │
+  │      │ launcherOfFolder(runtime) → opencode | claude | …     │
+  │      │ launcher.plan()  → spec + init + session + setup      │
+  │      │                  or a refusal, in a sentence          │
+  │      │ ── withLock(agentId, 'turn') ──────────────────────── │
+  │      │    pool.acquire(agentId, spec, init) ────────────────▶│ spawn + initialize
+  │      │    session/load(remembered)  → replay DROPPED         │
+  │      │      or session/new({cwd, mcpServers, _meta})         │
+  │      │    session/set_mode · set_config_option (setup)       │
+  │      │    abort re-checked here                              │
+  │      │    session/prompt ────────────────────────────────────▶
+  │      │      session/update ──▶ AcpMessageStream.apply        │
+  │      │        cumulative message ──▶ StreamPartsAccumulator ──▶ onEvent sink
+  │      │      session/request_permission ──▶ grant? auto-allow │
+  │      │                                   else park + block   │
+  │      │      elicitation/create (Claude) ──▶ park + block     │
+  │      │    stopReason  |  abort → cancel grace  |  ceiling    │
+  │      └───────────────────┬───────────────────────────────────┘
   │                          ▼
   │                   RunAgentTurnResult { text, parts, notices, contextId, error? }
   │                          │ persist assistant row + notices, save the session
   ◀── MessagePort ───────────┘ post `done`, close the port
 
 In band, on the turn's own stream (wrapped in `child` when orchestrated):
-Runner ── park ──────────────▶ needs_input {resume:'reply'} ──▶ chat store inputRequests
-Runner ── settled, turn open ▶ input_resolved              ──▶ chat store settledInputRequestIds
+Driver ── park ──────────────▶ needs_input {resume:'reply'} ──▶ chat store inputRequests
+Driver ── settled, turn open ▶ input_resolved              ──▶ chat store settledInputRequestIds
        (teardown sweep posts nothing)
 
 Out of band, while the turn streams:
 Renderer ── agent:pending-requests (poll) ──▶ pendingRequests.listForChat
-Renderer ── agent:answer-request   ────────▶ driverFor(row).respond → pendingRequests.resolve
-                                              → runner POSTs the reply to the engine
+Renderer ── agent:answer-request   ────────▶ driverFor(row).respond → grant written first,
+                                              then the blocked ACP request is answered
 ```
 
 ## Integration Points
 
-- [The Local Engine, Runtimes & Prompt Assembly](engine.md) — supplies everything this slice consumes: `ensureRunning` as the config choke point, `agentKey()` and the skip reasons, the single request door, and the global lock predicate that keeps the engine from restarting mid-turn
-- [The OpenCode Engine Contract](opencode_contract.md) — what is actually known about the endpoints and events this slice speaks, and what is not
-- [The Claude Engine](claude_engine.md) — the third implementation of this seam, and everything it deliberately does **not** share with this one: no bus, no cursor, no hole-and-heal, no shared process
-- [Local Agent Permissions](permissions.md) — what an ask can be about in the first place, and where a standing grant lives. This slice owns the parking and the reply; that one owns the decision and the store
-- [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this runner gates on, the readiness values it refuses, and the per-agent turn lock
-- [Agents Tab & Agent Page](agents_tab.md) — the chat controls that were rendered disabled until this phase landed
-- [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the existing tool-part convention that permission and question blocks follow
-- [Agent Drivers & Readiness](../drivers/drivers.md) — the driver that wraps each runner, the one dispatch point, the per-turn folder reconcile, and the readiness the composer refuses a send on
-- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — an orchestrated tool goes through `driverFor` just as a direct chat does. A folder agent works as one with no change of its own, because its driver matches the primitive's signature
-- [Agents (A2A streaming)](../agents/agents.md) — the direct-chat wrapper, the parts accumulator and the session table this slice reuses whole
+- [The Local Engine, Runtimes & Prompt Assembly](engine.md) — the launchers this turn plans with, the per-agent config, the process pool and the binary behind it
+- [The ACP Engine Contract](acp_contract.md) — what was actually watched on the wire, per launcher, and what is still unverified
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the dispatch point, the capability answer a composer reads, and the readiness a send is refused on
+- [The Claude Engine](claude_engine.md) — the second launcher: the approval mode set on every session, the question path it gains, and the isolation it is spawned with
+- [Local Agent Permissions](permissions.md) — what an ask can be about, and where a standing grant lives. This document owns the parking and the reply; that one owns the decision and the store
+- [Agents Home, Scanner & Folder Index](folder_index.md) — the `enabled` flag this driver gates on, the readiness values it refuses, and the per-agent turn lock
+- [Ask User Question](../../chat/ask_user_question/ask_user_question.md) — the tool-part convention permission and question blocks follow
+- [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — an orchestrated tool goes through `driverFor` just as a direct chat does
+- [Agents (A2A streaming)](../agents/agents.md) — the direct-chat wrapper, the parts accumulator and the session table this turn reuses whole
 
 ## What is not verified
 
 This project's honesty convention applies: coverage is named, not implied.
 
-**Every test in `agentTurn/**` runs against a fake at the HTTP boundary.** The real event bus, the real turn stream, the real parts accumulator and the real pending-request registry are wired together — what is replaced is the socket to `opencode` and the three things that need a database or a disk. That split is deliberate, because every defect this slice can still have is a defect of *sequence*, and a test that stubs the bus can see none of them.
+**The driver's own suite runs against a scriptable fake ACP agent over real stdio** (`testSupport/fakeAcpAgent.mjs`): a real child process, real ndjson framing, real blocking requests. What it cannot prove is the one thing measured by hand instead — that killing the process group takes the agent's own children with it, checked against the real Claude adapter (node plus its `claude` child before dispose, neither after).
 
-Real turns have since been run against the binary with a live credential, and the fakes were corrected wherever they disagreed with it. Two things the binary contradicted outright were things the fakes had implemented **faithfully from the OpenAPI document** — `session.idle` and `POST …/wait`. A fake can only ever be as right as the contract you believed when you wrote it, which is the argument for [the contract document](opencode_contract.md) existing at all.
+Named gaps:
 
-Named gaps, beyond [`opencode_contract.md` §7 "Still unverified"](opencode_contract.md#7-still-unverified) which covers the engine-side ones:
-
-- **A turn has never been watched through a real reconnect.** The heal path is tested end to end against a fake that drops and restores a stream, but the durable stream's own field set on a replayed event has not been observed. If it can omit the message id, a block is filed under a second identity and the whole answer duplicates into the transcript — which is why the turn stream remembers the first owner of a stream id rather than trusting the event. That defence now covers tool events as well as text, which is **hardening against this unverified field set, not a repair of anything seen**: no duplicated tool block has ever been observed, but tool events are replayed by the heal path exactly as text is, and defending only one of the two was an asymmetry a reader would misread as the question being settled
-- **Whether a sequence number from the global stream is a valid cursor on the per-session stream** is the highest-value target for the next probe, and being wrong is silent. See §7 item 1
-- **Which `finish` values actually occur**, beyond the two observed. The code is built to be terminate-by-default so an unknown value ends the turn rather than hanging it, and the runner logs a per-turn count of every event type it saw so the question can be answered from a user's log rather than another probe session
-- **Where a permission or question falls relative to the text stream** — whether one can arrive before the first text, and how a parked request interleaves with deltas. See §7 item 5
-- **The independent mutation audit has now been run** (3 September), which closes the gap this bullet used to record. 45 mutations against the three core test files, **13 survivors, all fixed** — each with an adversarial input added and the same mutation re-run afterwards to confirm it then fails a named test. A further 13 survivors were **deliberately left uncovered**: each is shielded by a second mechanism, so no input separates the code from its absence and a test there would pass against the code's absence. Each is recorded in its file with the reason and an explicit note that the guard is still load-bearing. What the audit did *not* do is change the picture above: it hardened the tests, not the engine contract, and every one of them still runs against a fake at the HTTP boundary
-- **The shape of what it found is worth more than the count.** Of the 13 fixed, **three** were a test named for a contract whose branch it never executed, **nine** were plain holes with no test and no claim at all, and **one** was a guard reachable only across a seam. The sharpest defect of the audit was in the *plain holes* group — a failed engine POST was swallowed, so the turn hung to the ceiling with nothing shown. The sophisticated failure mode is the one that fools a reader; it is not the one that produced the worst consequence
-
-Two things carry an explicit *honest note* in the source rather than a test, and both say so at the line: the assertion behind the stream-ready promise is currently unreachable and is kept as defence behind the fix that made it so, and the SSE comment-line skip is behaviourally redundant under the current field split and is kept as an explicit statement of the rule. Neither has a test, and neither should get one that claims to cover it.
+- **Gemini and Codex have not been run at all.** Neither binary is on the machine this was built on and the Codex adapter is not a dependency. Both are refused in words, and the capability answer claims no question path for either, because nothing has measured one
+- **A `session/load` against a session an engine has forgotten** is covered by the fake, but the *shape* of what each real engine returns when a session id is stale has been seen only on OpenCode
+- **Whether OpenCode will ever bridge a question to `elicitation/create`** is an open question upstream; today it registers no question tool under ACP, and the desktop claims none for it
+- **The golden suites both engines had are gone**, deliberately. All 32 cases were reduced to their final text, part kinds, tool names, asks and notices before deletion: 26 map straight across to assertions in the ACP suite, three are gone by construction (an SSE drop healed by a durable cursor, a shared server that could be cold), and three that were **missing** are now covered — a user's explicit Deny, a permission ask arriving after the agent has already replied, and the notice that says the CLI fell back from automatic approvals

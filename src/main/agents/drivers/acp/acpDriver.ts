@@ -335,6 +335,24 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * on" and "I was asked for every command" are indistinguishable from a bug.
    */
   let reportedMode: string | null = null
+  /**
+   * What the agent said it authenticated with, when it says anything.
+   *
+   * The in-process Claude runner read this off the SDK's `init` message as
+   * `apiKeySource` and put a **notice** in the transcript whenever it was not
+   * `'none'` — because a turn billed to an account the user did not choose
+   * looks exactly like a turn billed to the right one, and a log line is no use
+   * to somebody who does not already suspect it. That notice was briefly lost
+   * with the runner; the ACP equivalent is the adapter's `_auth/status_update`,
+   * whose `authStatus.kind` is `'account'` for a subscription login (recorded:
+   * `{kind:'account', label:'Claude Max', account:{plan:'max', …}}`).
+   *
+   * Only the kind and the label are kept. The same payload carries the
+   * account's **email address**, unasked and with no way to switch it off short
+   * of refusing subscription use, and {@link scrubbed} is what keeps a future
+   * adapter from smuggling one into the label.
+   */
+  let reportedAuth: { kind: string; label: string | null } | null = null
 
   /**
    * Both ways a turn is told to stop, in one signal.
@@ -439,6 +457,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         answerElicitation(deps, ctx, { stream, emit, turn }, params),
       onExtNotification: (method: string, params: Record<string, unknown>): void => {
         if (turn.replaying) return
+        if (method === AUTH_STATUS_METHOD) reportedAuth = readAuthStatus(params) ?? reportedAuth
         emit(stream.applyExt(method, params).message)
       }
     }
@@ -575,6 +594,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         return finish(deps, ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
       }
       noteModeFallback(plan, reportedMode, stream, emit)
+      noteForeignAuth(reportedAuth, stream, emit)
       logger.info('ACP turn complete', {
         agentId: agent.id,
         chatId,
@@ -683,6 +703,64 @@ function noteModeFallback(
       asked === 'auto'
         ? `Automatic approvals are not available here, so this turn asked before each action instead (the agent ran in “${reportedMode}”).`
         : `This agent asked to run in “${asked}” and the engine ran it in “${reportedMode}” instead.`
+    ).message
+  )
+}
+
+/** The adapter's own notification about which login is paying for the turn. */
+const AUTH_STATUS_METHOD = '_auth/status_update'
+
+/**
+ * The kind of login the agent reported, and its label — never the account.
+ *
+ * Structural, and deliberately narrow: it reads two strings out of a payload
+ * whose third field is an email address. Anything else in there stays where it
+ * is.
+ */
+function readAuthStatus(params: Record<string, unknown>): { kind: string; label: string | null } | null {
+  const status = params.authStatus
+  if (!status || typeof status !== 'object' || Array.isArray(status)) return null
+  const kind = (status as { kind?: unknown }).kind
+  if (typeof kind !== 'string' || kind === '') return null
+  const label = (status as { label?: unknown }).label
+  return { kind, label: typeof label === 'string' && label !== '' ? scrubbed(label) : null }
+}
+
+/**
+ * A string with anything email-shaped taken out of it.
+ *
+ * The label observed is a plan name (`Claude Max`), but the payload it arrives
+ * in carries the account's email two fields away, and the one thing this driver
+ * promises about that payload is that it does not pass the address on. A guard
+ * rather than a comment, because the promise has to survive an adapter version
+ * that decides the label should name the account.
+ */
+function scrubbed(text: string): string {
+  return text.replace(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g, '…')
+}
+
+/**
+ * Say, in the transcript, that the turn was not paid for by the login the user
+ * chose.
+ *
+ * **`account` is the only kind that means "the install's own subscription".**
+ * Anything else — an API key the environment carried in, a gateway — means
+ * something reached the child that this app intended to strip, and the person
+ * is being billed somewhere they did not pick. Silence when the agent reported
+ * nothing: this app never asserts a subscription, it only reports when the
+ * agent says otherwise.
+ */
+function noteForeignAuth(
+  auth: { kind: string; label: string | null } | null,
+  stream: AcpMessageStream,
+  emit: EmitMessage
+): void {
+  if (!auth || auth.kind === 'account') return
+  const what = auth.label ?? auth.kind
+  emit(
+    stream.note(
+      `This turn did not run on the agent’s own login — it reported “${what}”. ` +
+        'It may be billed to that account instead.'
     ).message
   )
 }

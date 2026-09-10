@@ -196,10 +196,10 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   /**
    * Not resolved yet is **neutral**, not a warning.
    *
-   * `localDeps.ensureEngineRunning` (`src/main/agents/drivers/index.ts`)
-   * starts the engine at the top of a local turn, so a machine that has simply
-   * not started it yet is in a state that resolves itself the moment anyone
-   * chats with a folder agent. Greeting every visit with an amber triangle over
+   * The ACP launcher resolves a binary at the top of a local turn
+   * (`engineBinaryService.ensure`), so a machine that has simply not looked yet
+   * is in a state that resolves itself the moment anyone chats with a folder
+   * agent. Greeting every visit with an amber triangle over
    * a state nobody has to act on is the healthy state wearing an alarm, and it
    * teaches the user to skip the triangle for `failed`, which is the one that
    * does need them (ux_rules rules 2 and 12).

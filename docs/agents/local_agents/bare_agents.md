@@ -305,7 +305,9 @@ Agents sidebar "+" ─► NewLocalAgentModal
                                                             scanExternalRoot · watchRoot
 
 Agent page "Runs with" ─► local-agent:set-runtime ─► desktop state (no stamp)
-                                                    ─► engineManager.applyConfigChange
+                                                    ─► agentRepo.setFolderLauncher
+                                                       (the row's engine; no watcher
+                                                        sees a bare agent's runtime)
 
 scanExternalRoot(root)
   discoverBareAgents(root.path, depth 2)
@@ -333,7 +335,7 @@ Files on disk ── truth ──► agents rows ── derived index
 - [Agents Folder Updates](folder_updates.md) — fast-forwarding a registered root that is a git working tree; the reason a repository of agents is worth adopting as a set
 - [Open in Tools](open_in_tools.md) — the registered roots are the allowed area of its path guard, which is why overlap is refused first; and the init prompt's entry-document order for a bare folder
 - [Local Agent Permissions](permissions.md) — the profile is identical for a bare agent; only where its standing grants are stored differs
-- [The Agent Turn Runner](agent_turn.md) — a bare agent runs a turn on the same path as a kit one; the runner passes the agent's kind so its session lands in the right state file
+- [The Agent Turn](agent_turn.md) — a bare agent runs a turn on the same path as a kit one; the driver passes the agent's kind so its session lands in the right state file
 - [Local Agents Are Not Synced](local_only.md) — a bare agent is a directory on one machine, and nothing here changes that
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rules 9, 10 and 11 were written from this feature's review: a surface that names a file asserts that file exists, a control's accessible name is its visible name, and a control must not look like the text beside it. The last came from a "Show more" toggle on this page's `Readme` card, muted grey at the size of the footer note under it; the toggle is gone with the clamp it opened, but the styling mistake is the general one
 

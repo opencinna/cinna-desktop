@@ -6,7 +6,7 @@ Project-specific wire contract for every `MessagePort` that carries a turn. LLM-
 
 | Send path | Posts `RunEvent` from | Receiver |
 |-----------|-----------------------|----------|
-| `agent:send-message` — a direct agent chat (A2A, OpenCode, Claude) | `a2aStreamingService.streamToAgent`, the turn runner's `onEvent` (`runAgentTurn`, `LocalAgentTurnRunner`, `ClaudeAgentTurnRunner`), `StreamPartsAccumulator`, `postRunError` in `agent_a2a.ipc.ts` | `useChatStream.handleRun` |
+| `agent:send-message` — a direct agent chat (A2A, or a folder agent over ACP) | `a2aStreamingService.streamToAgent`, the driver's `onEvent` (`runAgentTurn`, `LocalAgentTurnRunner`, `ClaudeAgentTurnRunner`), `StreamPartsAccumulator`, `postRunError` in `agent_a2a.ipc.ts` | `useChatStream.handleRun` |
 | `llm:send-message` — an LLM chat, orchestrated or not | `chatStreamingService`, `postRunError` in `llm.ipc.ts` | `useChatStream.handleRun` |
 
 One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one handler. The two IPC channels still exist; what differs between them is **which** variants a sender posts, never the shape of one.
@@ -43,7 +43,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 
 ## Variants
 
-- `request-id { requestId }` — first, exactly once, posted by the layer above the runner (`streamToAgent`, `chatStreamingService`). The id `cancel` takes
+- `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, `chatStreamingService`). The id `cancel` takes
 - `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by A2A only. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records
 - `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file? }` — already a true delta. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
 - `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent', providerAgentId? }` — LLM path only, posted before the call resolves
@@ -57,7 +57,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 `InputRequest`:
 
 - `permission { action, resources, callId? }` — OpenCode and Claude asks. `action` is the engine's own word (`bash`, `Bash`, `WebFetch`)
-- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `turnStream.ts:mapQuestions` returns. An A2A question is built from the status message's `text`-kind parts only, as one open question — or none when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
+- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts only, as one open question — or none when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
 - `auth { message, method?, url? }` — A2A `auth-required`; `message` falls back to `A2A_AUTH_REQUIRED_FALLBACK` when the status carries no text
 - `elicitation { message, schema }` — declared, posted by nothing yet
 
@@ -71,12 +71,12 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 | Makes a block answerable | yes | never — the composer is the answer path |
 | Followed by `input_resolved` | when settled while the turn is open | never |
 
-Rules, each pinned by a runner-contract clause (see [Characterization tests](../../agents/local_agents/agent_turn_tech.md#the-runner-contract)):
+Rules, each pinned by a driver-contract clause (see [The driver contract](../../agents/local_agents/agent_turn_tech.md#the-driver-contract)):
 
 - **The part first, then `needs_input`.** The ask's block is streamed and its registration made before the event is posted, so an answer sent the instant the event arrives finds both. `park.needs_input` asserts it arrives before any answer
 - **One `needs_input` per ask**, not repeated on the way out (`park.needs_input`)
 - **One `input_resolved` per ask settled while the turn is open, after its `needs_input`** (`park.input_resolved`). An answer carries what was posted; a reject or a park timeout carries `{ kind: 'rejected' }` (`park.reject`, `park.timeout`). An ask the engine settles itself — answered from another window, or OpenCode echoing our own reply as `permission.v2.replied` — is reported once: `resolvedIds` dedupes, and `engineResolution` reads the resolution off the event, falling back to `rejected` for anything the desktop's vocabulary cannot state. Both runners post it **before** the decision line, so the block stops offering buttons before the transcript says what was decided
-- **Teardown posts nothing.** Each local runner holds an `open` flag and closes it before its `finally` sweeps what is parked — OpenCode also closes it before the `/interrupt` on a stop, because the engine can echo a settle while that POST is in flight. An ask swept away by the turn's own ending was answered by nobody, and the `done` or `error` posted above the runner already says the park is gone (`park.abort` asserts no `input_resolved`)
+- **Teardown posts nothing.** The ACP driver holds an `open` flag and closes it before its `finally` sweeps what is parked, so an ask the turn's own ending settles gets no `input_resolved` — the terminal `done` or `error` already says nothing is parked
 - **A2A posts `needs_input` from the streaming path's `status-update` only**, after the `status` and after the delta that already showed the question's text. A `task` frame that arrives already parked posts no `status` and so no `needs_input`, and neither does the non-streaming `message/send` path
 
 ## Receiver: `handleRun` and the Chat Store
@@ -135,7 +135,7 @@ Three records are typed over `RunEvent['type']`, so a new variant fails the type
 4. Handle it in `useChatStream.handleRun`. An unhandled case falls through silently — that is the forward-compatibility contract — so decide it explicitly, and decide what it means inside a `child` as well
 5. Add a row to `src/renderer/src/hooks/useChatStream.events.test.tsx`. Its own `RUN_EVENT_TYPES` guard makes `npm run typecheck:web` fail until the type is listed, and a runtime check fails until an agent or LLM row exercises it
 6. Add an instance to `EVERY_VARIANT` in `src/shared/runEvents.test.ts`. It is typed `{ [T in RunEvent['type']]: Extract<RunEvent, { type: T }> }` and fed to `it.each`, so the typecheck fails until the new variant has one, and the guard is then tested against it
-7. If a runner posts it, the golden `*.expected.json` files change: edit them on purpose, never regenerate blind (see [The expectation-file rule](../../agents/local_agents/agent_turn_tech.md#the-expectation-file-rule))
+7. If a driver posts it, the A2A golden `*.expected.json` files change: edit them on purpose, never regenerate blind (see [Golden streams](../../agents/local_agents/agent_turn_tech.md#golden-streams))
 
 A new optional field on an existing variant needs only step 1; the compiler flags every sender and receiver that does not satisfy the new shape.
 
@@ -156,7 +156,7 @@ Live blocks and persisted parts split in the same places because one function de
 - Vocabulary and guard: `src/shared/runEvents.ts`, `src/shared/runEvents.test.ts`
 - Merge rule: `src/shared/partMerge.ts`
 - Ask conventions and `RequestResolution`: `src/shared/localAgentRequests.ts`
-- Senders: `src/main/services/a2aStreamingService.ts`, `src/main/services/chatStreamingService.ts`, `src/main/services/agentTurn/localAgentTurnRunner.ts`, `src/main/services/agentTurn/claudeAgentTurnRunner.ts`, `src/main/agents/streamPartsAccumulator.ts`
+- Senders: `src/main/services/a2aStreamingService.ts`, `src/main/services/chatStreamingService.ts`, `src/main/agents/drivers/acp/acpDriver.ts`, `src/main/agents/streamPartsAccumulator.ts`
 - IPC error helper: `src/main/ipc/_streamPort.ts`
 - Preload bridge: `src/preload/index.ts`
 - Receiver: `src/renderer/src/hooks/useChatStream.ts`, `src/renderer/src/stores/chat.store.ts`, `src/renderer/src/components/chat/MessageStream.tsx`, `src/renderer/src/hooks/useAgentRequests.ts`

@@ -2,10 +2,10 @@
  * Turning this desktop's state — credentials, folder agents, runtimes — into
  * the pure input `configGenerator` wants.
  *
- * It sits between `engineManager` (which knows about a process) and
+ * It sits between the ACP launcher (which knows about a process) and
  * `configGenerator` (which knows about OpenCode's config shape) so that neither
  * has to know about `providerService`, `localAgentService` or the manifest. The
- * practical payoff is that `engineManager` can be driven in a test with a
+ * practical payoff is that the launcher can be driven in a test with a
  * three-line fake supplier instead of a database.
  *
  * **This is the one place a decrypted API key is read**, and it hands the key
@@ -149,7 +149,11 @@ function localProviderIds(): string[] {
     .map((provider) => provider.id)
 }
 
-export async function refreshModelCache(scope: ModelRefreshScope = 'all'): Promise<void> {
+/** Whether a full refresh has ever completed. See {@link collectEngineConfigInput}. */
+let cloudCatalogueLoaded = false
+
+/** True when the refresh completed; false when it was swallowed. */
+export async function refreshModelCache(scope: ModelRefreshScope = 'all'): Promise<boolean> {
   try {
     const fresh =
       scope === 'all'
@@ -164,11 +168,20 @@ export async function refreshModelCache(scope: ModelRefreshScope = 'all'): Promi
       fresh,
       providerService.listMerged().map((provider) => provider.id)
     )
+    if (scope === 'all') cloudCatalogueLoaded = true
+    return true
   } catch (err) {
     logger.warn('could not refresh the model list for the engine config', {
       error: err instanceof Error ? err.message : String(err)
     })
+    return false
   }
+}
+
+/** Forget that a full refresh happened. **Tests only.** */
+export function resetModelCacheForTests(): void {
+  cloudCatalogueLoaded = false
+  cachedModels = []
 }
 
 /** Ask each local credential's adapter directly, so no cloud call is made. */
@@ -271,16 +284,33 @@ export async function collectEngineConfigInput(
   userId: string,
   options: { refreshModels?: boolean } = {}
 ): Promise<EngineConfigInput> {
-  // A reconcile still does not re-ask the cloud providers — that is what the
-  // paragraph above is about, and it stands. It *does* re-ask the local ones,
-  // because their catalogue is not a vendor's stable line-up but the set of
-  // models on this machine, which the user changes with `ollama pull` between
-  // one turn and the next, and which is empty whenever the local server happened
-  // not to be running at the moment the engine started. Without this, starting
-  // Cinna before Ollama meant every folder agent on it hung on its first turn
-  // until the desktop's own ceiling expired. The call is loopback and costs
-  // roughly a millisecond; a failure keeps the last good list rather than
-  // emptying the entry (see {@link mergeModelCache}).
-  await refreshModelCache(options.refreshModels === false ? 'local' : 'all')
+  /**
+   * **The cloud catalogue is asked for once, and then never again in this
+   * session; the local one is asked for every time.**
+   *
+   * The two halves have different reasons. A vendor's line-up is stable and
+   * costs a real network round trip per configured credential, so asking on
+   * every turn would put that latency in front of every message the user sends
+   * — which is what `refreshModels: false` has always meant. A *local*
+   * catalogue is not a line-up at all but the set of models on this machine,
+   * which the user changes with `ollama pull` between one turn and the next, and
+   * which is empty whenever the local server happened not to be running a moment
+   * ago. Without re-asking, starting Cinna before Ollama meant every folder
+   * agent on it hung on its first turn until the desktop's own ceiling expired.
+   *
+   * **The once is load-bearing, and it was briefly lost.** Under the shared
+   * server the full refresh happened at engine start (`refreshModels: true`)
+   * and the reconcile asked only for local models. When the server went, so did
+   * the only caller that ever passed `true` — leaving a cache with no cloud
+   * models in it at all, so an agent whose manifest names a Work Complexity
+   * tier on a cloud credential resolved against an empty catalogue, took the
+   * `no_model` skip, and was refused every turn with "its runtime names no
+   * model". Hence the flag rather than a literal: the first collection of a
+   * session asks for everything, and a refresh that *failed* does not count, so
+   * a machine that was offline at the wrong moment tries again on its next turn.
+   */
+  const scope: ModelRefreshScope =
+    options.refreshModels === false && cloudCatalogueLoaded ? 'local' : 'all'
+  await refreshModelCache(scope)
   return { providers: collectEngineProviders(), agents: collectEngineAgents(userId) }
 }

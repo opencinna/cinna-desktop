@@ -27,8 +27,8 @@ Business logic and the reasoning behind every rule: [Bare Agents & External Root
 - `src/main/engine/engineConfigSource.ts` — the one branch in `collectEngineAgents()`
 - `src/main/engine/configGenerator.ts` — `AGENT.md` in `IDENTITY_FILES`, and the docstring recording why `README.md` is not there and what would change it
 - `src/main/ipc/local_agent.ipc.ts` — `:folder-pick`, `:folder-add`, `:rename`, `:set-runtime`, `:root-restore-hidden`
-- `src/main/agents/drivers/index.ts`, `src/main/services/agentTurn/localAgentTurnRunner.ts` — `agentKind` threaded through `saveSession` and `isGranted`
-- `src/main/services/localAgents/localAgentService.ts` — `setBareRuntime()` also points the index row at the engine just chosen (`agentRepo.setFolderDriver`): a bare agent's runtime is not in its folder, so no watcher sees the change and no rescan would correct the row. See [Agent Drivers](../drivers/drivers.md#the-index-says-which-driver-runs-a-row)
+- `src/main/agents/drivers/index.ts`, `src/main/agents/drivers/acp/acpDriver.ts` — `agentKind` threaded through `saveSession` and `isGranted`
+- `src/main/services/localAgents/localAgentService.ts` — `setBareRuntime()` also points the index row at the engine just chosen (`agentRepo.setFolderLauncher`): a bare agent's runtime is not in its folder, so no watcher sees the change and no rescan would correct the row. See [Agent Drivers](../drivers/drivers.md#the-index-says-which-driver-runs-a-row)
 
 ### Preload
 
@@ -68,7 +68,7 @@ No other schema change. A bare agent is an ordinary `agents` row (`source = 'fol
 
 `:folder-add`, `:rename` and `:set-runtime` return outcomes because their failure codes drive renderer behaviour: `invalid_path` (a stale pick), `invalid_input` (nothing ticked on a first adopt, or a kit agent) and `turn_in_progress` (an agent this save would remove is mid-turn) are all explained in place and recovered from, not reasons to close the dialog. See [the outcome convention](agents_tab_tech.md#why-the-outcome-is-unwrapped-in-the-renderer).
 
-`:folder-add`, `:rename`, `:set-runtime` and `:root-restore-hidden` all call `engineManager.applyConfigChange` on success — the engine's config lists every folder agent, its keys carry the agent's name, and the credential and model each one runs on are in it, so one more, one fewer or one changed is a change.
+`:folder-add`, `:rename`, `:set-runtime` and `:root-restore-hidden` push nothing at any engine, and nothing needs to be pushed: since phase 3 each folder agent's config is generated at the top of its own next turn, and the launch spec's key is a digest of exactly those bytes, so a rename or a new runtime replaces that agent's process by construction. `:set-runtime` does one extra write of its own — `agentRepo.setFolderLauncher`, because a bare agent's runtime lives outside its folder and no watcher would see the change.
 
 The git channels are in [Agents Folder Updates](folder_updates.md).
 

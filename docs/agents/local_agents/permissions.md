@@ -114,13 +114,13 @@ The desktop says this on the Permissions card in the user's own words — a comm
 
 ### `always` never reaches the engine
 
-OpenCode's own *Always* writes `{projectID: "global", action, resource: "*"}` into `~/.local/share/opencode/opencode.db`: no directory, no session, no agent, shared with the user's personal OpenCode install, surviving restarts. A grant made in one agent folder was watched authorising a *different* folder agent with no prompt at all. The full observation is [the contract](opencode_contract.md) §4.
+OpenCode's own *Always* writes `{projectID: "global", action, resource: "*"}` into `~/.local/share/opencode/opencode.db`: no directory, no session, no agent, shared with the user's personal OpenCode install, surviving restarts. A grant made in one agent folder was watched authorising a *different* folder agent with no prompt at all. The full observation is [the OpenCode contract](opencode_contract.md) §4, and it was re-taken over ACP — see [the ACP contract](acp_contract.md).
 
 Replying `once` persists nothing there — verified the same way. So the desktop opts out of the engine's store completely: the rule is kept beside the agent, the engine is told `once`, and its saved store stays empty forever. `projectID: "global"` never gets a chance to matter.
 
 This is **finer** granularity than OpenCode offers, not merely equivalent: the engine's own `save` only ever offers `["*"]`, while a desktop-held rule names one command, one path or one origin, for one agent.
 
-There are two locks on that rule, not one. The answer path converts `always` into a stored grant plus `once`; the runner's engine door **downgrades any stray `always` to `once` and logs loudly**, because a caller that settled a request with `always` some other way would otherwise write a user-global row authorising every folder agent, and nothing in a test would notice.
+The lock is now in the option picker, and it is stronger than the two it replaces. The answer path still converts `always` into a stored grant plus `once`, and over ACP `pickPermissionOption` **filters `allow_always` out of the agent's own option list before it searches** — so there is no id to send even by accident, and an agent that offered nothing else usable is answered `cancelled` rather than handed an invented id. The same measurement was re-taken over the new transport: one `allow_always` in one folder silenced every later ask in that folder, **including in a new session in the same process**.
 
 ### A grant is matched by string work, never by a regular expression
 
@@ -162,7 +162,7 @@ An ask can be reported settled before the answer call that settled it has return
 
 ### A block settled elsewhere says how, and keeps its height until it can
 
-A live ask can also be settled without this window's answer: its park expired, or it was answered in another window. The block then shows the runner's own outcome line in place of its buttons — the Claude runner's "No answer — the request expired.", for example — which is the same line a reopened chat shows. The stream says an ask is settled and says how in two separate messages, so between them the block keeps its live look and height with every button disabled. It holds only while the turn is streaming, because a replayed block that recorded no outcome would otherwise hold for ever. Before this, a block settled elsewhere lost its buttons without a word about what had happened and collapsed by the height of the button row, about 43 px, jumping whatever sat below it.
+A live ask can also be settled without this window's answer: its park expired, or it was answered in another window. The block then shows the turn's own outcome line in place of its buttons — "No answer — the request expired.", or "Not answered — the turn was stopped." where the user pressed Stop, which the driver distinguishes because a release it caused is not a decision nobody made — and it is the same line a reopened chat shows. The stream says an ask is settled and says how in two separate messages, so between them the block keeps its live look and height with every button disabled. It holds only while the turn is streaming, because a replayed block that recorded no outcome would otherwise hold for ever. Before this, a block settled elsewhere lost its buttons without a word about what had happened and collapsed by the height of the button row, about 43 px, jumping whatever sat below it.
 
 ### A second ask does not move the first one's buttons
 
@@ -202,52 +202,56 @@ Nothing is lost that the agent cannot ask for again, which is what the empty sta
 
 ## What this deliberately does not do
 
-- **It does not prune OpenCode's own saved store.** If `~/.local/share/opencode/opencode.db` already carries a grant — from the user's personal OpenCode usage, or from another client on the same `opencode serve` — the engine allows without asking and nothing here is consulted. The desktop can only gate what it is *asked* about. Pruning mutates state the user's own install depends on, so it has to be a consented action rather than a silent one, and it is not built. See [the contract](opencode_contract.md) §4.2
+- **It does not prune OpenCode's own saved store.** If `~/.local/share/opencode/opencode.db` already carries a grant — from the user's personal OpenCode usage, or from anything else that has driven this engine on this machine — the engine allows without asking and nothing here is consulted. The desktop can only gate what it is *asked* about. Pruning mutates state the user's own install depends on, so it has to be a consented action rather than a silent one, and it is not built. See [the contract](opencode_contract.md) §4.2
 - **It is not a sandbox, and does not claim to be.** See "The folder is a boundary for the file tools, not for the shell"
 - **It does not offer profile editing in the UI.** The profile is generated; the only per-agent override is `runtime.permissions` in the manifest, edited as a file
 - **It does not survive a publish.** A grant is machine-local by construction, like everything else about a folder agent — see [Local Agents Are Not Synced](local_only.md)
 - **It holds no history.** A revoked grant leaves no record that it existed; the list is the current state, not a log
-- **On the [Claude](claude_engine.md) engine it does not govern the whole tool surface.** Read-only tools never reach that engine's permission callback at all — a `Read` runs with no ask — so the grants there cover the mutating surface only, on either Approvals setting. Gating everything would need a different mechanism, and this says so rather than claiming a completeness it does not have
+- **On the [Claude](claude_engine.md) engine it does not govern the whole tool surface.** Read-only tools never raise a permission request there at all — a `Read` runs with no ask — so the grants there cover the mutating surface only, on either Approvals setting. Gating everything would need a different mechanism, and this says so rather than claiming a completeness it does not have
 - **It offers no way to take the desktop out of the decision.** The SDK's `bypassPermissions` and `dontAsk` are not on the Approvals select, are refused by the setter, and read as *no choice* off disk. Either would run every tool with no grant consulted and no record in the transcript, and a turn run that way is indistinguishable afterwards from one that was not
 - **It does not feed the reviewer the user's own environment context.** The `autoMode.environment` lines in `~/.claude/settings.json` are what `settingSources: []` withholds, and the Claude engine never reads that file; the reviewer was seen running with `repoVisibility: unknown` and nothing else
 
 ## Architecture Overview
 
 ```
-Static half — generated once per config build
+Static half — generated at the top of every OpenCode turn
   configGenerator (CONVERSATION_PERMISSIONS + manifest runtime.permissions)
-      └─► <userData>/engine/opencode.json  ──► opencode serve
+      └─► <userData>/acp/opencode/<hash of agent id>/opencode.json
+             └─► the agent's own `opencode acp` child process
 
-Dynamic half — one ask, mid-turn
-  engine: permission.v2.asked
-      └─► TurnStream.permissionAsked
-             ├── standing grant covers it? ──► asked{auto:true}, nothing written
-             │        └─► runner.autoAllow ──► POST …/permission/{id}/reply {once}
-             │                                  (retry once, then reject)
+Dynamic half — one ask, mid-turn, on either engine
+  agent: session/request_permission        (a BLOCKING request; the park is the
+      └─► acpDriver.answerPermission        unresolved response, so there is no
+             │                              reply endpoint and no id to correlate)
+             ├── standing grant covers it? ──► answered `allow_once` at once,
+             │                                 nothing written to the transcript
              └── otherwise ──► block in the transcript + pendingRequests.register
+                                        │  + needs_input on the turn's stream
                                         │
    Renderer  PermissionRequestBlock ── agent:answer-request ──► IPC
                                         │  driverFor(row).respond
                                         │  always ─► rememberGrant
-                                        │            (app-data/desktop.json)
+                                        │            (app-data/desktop.json, or
+                                        │             <userData> for a bare agent)
                                         │            then settle as `once`
-                                        └──► runner replies to the engine
-                                             (any stray `always` → `once`)
+                                        └──► the blocked request is answered with an
+                                             option id — never `allow_always`, which
+                                             is filtered out of the options entirely
 
   Agent page ── local-agent:grants-list / grant-forget / grants-clear ──►
                 permissionGrantService ──► app-data/desktop.json
 
-Claude engine — the reviewer in front, one ask, mid-turn
+Claude engine — the reviewer in front of all of the above
   Agent page ── Approvals select ── local-agent:set-claude-approval ──►
                 desktopStateService.patch {claudeApproval} (beside the grants)
-  runner: permissionMode = auto | default  (from claudeApproval ?? 'auto')
+  launcher: session/set_mode  auto | default   (from claudeApproval ?? 'auto',
+                                                after EVERY new and load)
       auto    ──► the CLI's own reviewer ──► approved (everything, in the probes)
                                         └─► declined ──┐
       default ──────────────────────────────────────────┤
                                                         ▼
-                                             canUseTool ──► standing grant? ──► allow, silently
-                                                        └──► block in the transcript (as above)
-  init.permissionMode ≠ asked ──► notice: "Automatic approvals are not available on <model>…"
+                                         session/request_permission (as above)
+  current_mode_update ≠ asked ──► notice: "Automatic approvals are not available here…"
 ```
 
 ## Integration Points

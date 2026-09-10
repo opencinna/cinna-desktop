@@ -17,6 +17,17 @@ boundary that leaves the user's Gmail attached.
 **Governing rule, inherited unchanged: an assumption about the engine is unverified until someone
 has watched the binary do it.** Rows marked *unverified* are untested, not weakly tested.
 
+> **The SDK no longer runs in this process.** Since phase 3 of the agent runtime plan a Claude agent's
+> turn spawns `@agentclientprotocol/claude-agent-acp` — which drives the same user-installed `claude`
+> — and speaks the Agent Client Protocol to it over stdio. The live transport contract is [The ACP
+> Engine Contract](acp_contract.md). This document keeps what was measured about **Claude Code
+> itself**: the environment bisect and the corrected table (§2, §7), what the isolation options
+> actually isolate (§2), the login states (§5), the ~190 MB `claude` the SDK ships (§5a), what
+> `total_cost_usd` is not (§6), and the auto-mode probes (§10) — all of which the launcher still
+> depends on, and all of which the source cites by section number. **Sections that describe the
+> in-process SDK's own shape are marked RETIRED in place**, with what replaced them. Nothing unmarked
+> here is stale.
+
 ---
 
 ## 1. Conditions — what was run
@@ -121,6 +132,8 @@ servers are user configuration and are shut off.
 
 ### The message sequence for one tool-calling turn
 
+> **RETIRED in form.** The message sequence below is the SDK's iterator. Over ACP the same turn arrives as `session/update` notifications, and how they are folded into a transcript is [the ACP contract](acp_contract.md) §2 and `acpMessages.ts`. The *content* — one assistant message per content block, tool calls before the reply — is unchanged, and the fixtures in `src/main/agents/drivers/acp/__fixtures__/claude/` are its ACP-era successor.
+
 With `includePartialMessages: true`, `allowedTools: ['Read']`, one Read, `maxTurns: 4`:
 
 ```
@@ -201,6 +214,8 @@ The last row matters for the permission ask: a tool name the desktop's table
 misses renders as itself, and *"The agent is asking to Agent"* is not a sentence.
 
 ### Background subagents — a turn that outlives the model's `result`
+
+> **RETIRED as a hazard, kept as the reason it is one.** The stdin close this section documents is what moving the SDK out of process fixed: re-run over ACP, a background subagent's ask arrived after the parent's reply, was allowed, and completed, with no "Stream closed" anywhere ([the ACP contract](acp_contract.md) §4). The behaviour of the *CLI* — a `result` that arrives while background work is still listed — is unchanged and still worth knowing.
 
 The sequence above is a **synchronous** subagent: the `Agent` call blocks the main thread until the
 subagent returns, and `result` arrives after everything. That is not the CLI's default. The `Agent`
@@ -291,6 +306,8 @@ for what is copied across and what is deliberately not.
 
 ### Permissions — `canUseTool`
 
+> **RETIRED in form.** `canUseTool` is now `session/request_permission`, a blocking JSON-RPC request the desktop answers ([the ACP contract](acp_contract.md) §2). The rule the section establishes — that a bare tool name in `allowedTools` **shadows** the callback, so none is ever passed — is unchanged, and so is the vocabulary the grants are stored under.
+
 The signature and resolution shapes are exactly as the plan quotes them. Observed:
 
 | Behaviour | Evidence |
@@ -326,6 +343,8 @@ The settings-file half of the warning is already closed by `settingSources: []`.
 | A forgotten id fails | `resume` of a synthetic UUID → `No conversation found with session ID: …` |
 
 ### Cancellation
+
+> **RETIRED in form.** Over ACP a cancel is `session/cancel` and the pending prompt answers `cancelled`; the desktop bounds the wait and answers parked asks first ([the ACP contract](acp_contract.md) §2). What is unchanged is the rule below: a cancellation is detected from `signal.aborted`, never from an error's name.
 
 `Options.abortController` aborted mid-turn **throws** out of the async iterator:
 `Error("Claude Code process aborted by user")`. It does not complete the iterator and does not
@@ -567,6 +586,8 @@ Set alongside the env, not in it: `strictMcpConfig: true`, `mcpServers: {}` (§2
    minor bump can change silently.
 
 ## 9. Runbook — how to re-verify
+
+> **PARTLY RETIRED.** Items driving `query()` directly still work — the SDK is a dependency — but they no longer describe how the app runs a turn. The ACP runbook is [the ACP contract](acp_contract.md) §7. Item 1 (the environment bisect) and item 8 (auto mode) are unaffected and remain the two most valuable probes here.
 
 ```bash
 mkdir -p /tmp/claude-probe && cd /tmp/claude-probe && npm init -y

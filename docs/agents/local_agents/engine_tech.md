@@ -1,128 +1,119 @@
 # The Local Engine, Runtimes & Prompt Assembly — Technical Details
 
-Implementation reference for [The Local Engine, Runtimes & Prompt Assembly](engine.md). Path convention as in that doc: `src/...` is this repository; `Local/<slug>/...`, `cinna-agent.json` and `app-data/...` are inside an agent folder; `<userData>/engine/...` is the app data directory.
+Implementation reference for [The Local Engine, Runtimes & Prompt Assembly](engine.md). Path convention as in that doc: `src/...` is this repository; `Local/<slug>/...`, `cinna-agent.json` and `app-data/...` are inside an agent folder; `<userData>/acp/...` and `<userData>/engine/...` are the app data directory.
+
+The turn that uses all of this — the driver, the process pool, the session and the translator — is [The Agent Turn](agent_turn_tech.md). This document stops at the plan a launcher hands over.
 
 ## Read this first if you are working next to the engine
 
-Five things here will produce a silent, green-suite failure if changed carelessly. Each is argued in [engine.md](engine.md); this is the index.
+Four things here will produce a silent, green-suite failure if changed carelessly. Each is argued in [engine.md](engine.md); this is the index.
 
-1. **`turnLock.anyHeld()` gates every restart, never `turnLock.isLocked(agentId)`.** One process backs every folder agent — a per-agent check restarts the engine out from under a turn running in a *different* folder. Live Invariant 3 violation; already fixed once
-2. **`GET /config` on the engine returns the RESOLVED config**, with `{env:…}` substituted — **its response contains live API keys.** Never log it, never put it in a stream part, never forward it to the renderer
-3. **The digest is length-prefixed (`framed()`), not delimiter-joined.** A collision is a *false negative* — the engine keeps serving the old prompt while the app believes otherwise, with every test still passing. Do not simplify it back to a join
-4. **`agentKey()` and `lastSkips()` answer from `RunningEngine.loaded`**, the record taken at spawn — not from the last generated config. Phase 6 binds engine sessions to `agentKey`
-5. **Every model decision goes through `resolveRuntimeModel` in `src/shared/runtimeDefaults.ts`**, called by `runtimeService.resolve` *and* by the “Runs with” panel. A model derived in either caller alone is a label that predicts a runtime the engine will not build — and both sides keep passing their own tests while they disagree
+1. **The launch spec's `key` is the only thing that replaces a running process.** It digests the binary, the arguments, the generated config bytes and the credential map. Drop any one of them and a change the user made — a rotated key most sharply, which leaves the config bytes identical — reaches the agent only after the process happens to be reaped
+2. **The digest is length-prefixed (`framed()`), not delimiter-joined.** A collision is a *false negative*: the key does not move, the process is not replaced, and the agent keeps running on the previous prompt with every test still passing
+3. **The model is stated in the config's top-level `model` *and* on the session.** The agent entry's own `model` is ignored over ACP, so either statement alone lets a session start on whatever the engine picks first — silently
+4. **Every model decision goes through `resolveRuntimeModel` in `src/shared/runtimeDefaults.ts`**, called by `runtimeService.resolve` *and* by the “Runs with” panel. A model derived in either caller alone is a label that predicts a runtime the engine will not build — and both sides keep passing their own tests while they disagree
 
 ## File Locations
 
 ### Shared
-- `src/shared/engine.ts` — the whole wire contract. `EngineBinarySource`, `EngineStatus`, `EngineState`, `EngineSkips`, `ENGINE_STATE_CHANNEL`, `PINNED_ENGINE_VERSION` (`'1.18.27'`), `RuntimeSource`, `ResolvedRuntime` (with `engine`, `modelSource: ModelOrigin` and `replacedModelId`), `LocalAgentRuntimeInput` (`engine`, `credential`, `modelId`, `complexity` — all four required, so no caller can silently drop one the write would then erase), and the `AgentEngine` axis itself (`isAgentEngine`, `DEFAULT_AGENT_ENGINE`, `claudeModelForComplexity` — see [The Claude Engine](claude_engine.md)). Type-only or plain constants; **nothing key-shaped, and no `baseUrl`**
-- `src/shared/runtimeDefaults.ts` — `resolveRuntimeModel(input)` → `{modelId, origin, replaced}`, the one entry point both sides use; plus `inheritedModelId(chosen, fallback)` (steps 1–3 of the chain), `defaultRuntimeModelId(fallbackProvider, modeModelId)` (the Default runtime's model, flattened once), `modelBelongsElsewhere(modelId, chosen, models, providers)`, `COMPLEXITY_FLOOR` (`'medium'`), the `ModelOrigin` union (`declared` / `substituted` / `tier` / `inherited` / `floor` / `none`), and the `RuntimeCredential` / `RuntimeFallback` / `RuntimeModelInput` shapes. Imported by `runtimeService` (main) **and** `RuntimePanel` (renderer): the file exists so the `Default (…)` label and the generated config cannot state different models
-- `src/shared/modelFamilies.ts` — the work-complexity classifier. `WorkComplexity`, `WORK_COMPLEXITIES`, `WORK_COMPLEXITY_LABELS`, `WORK_COMPLEXITY_HINTS`, `isWorkComplexity()`, `classifyModel(modelId, providerType)`, `bestInTier(tier, models, providerType)`, `sameFamilyFallback(modelId, models, providerType)`, plus module-private `RULES`, `token()`, `versionOf()`, `compareClassified()`. **No network, no filesystem** — the catalogue is always passed in, because a tier only means something against what one credential actually lists. Excludes non-chat and access-gated ids through `src/shared/modelDefaults.ts` (`isChatCapableModelId`, `isDefaultEligibleModelId`), the same pair the chat-mode default uses
-- `src/shared/appSettings.ts` — `localAgentsEnginePath: string` and `localAgentsModelAdvanced: boolean` on `AppSettingsSchema`
-- `src/shared/kit/manifest.ts` — `AgentRuntimeRef` (`engine`, `model`, `complexity`, `credential`, `permissions`, plus an index signature for the round-trip rule). `engine` is typed as a loose string, not as `AgentEngine`, because an unrecognised value must read as "no engine" rather than fail the folder
+- `src/shared/engine.ts` — the wire contract. `EngineBinarySource`, `EngineBinaryState` (`unresolved | resolving | ready | failed`), `ENGINE_BINARY_CHANNEL` (`'engine:binary-state'`), `PINNED_ENGINE_VERSION` (`'1.18.27'`), `RuntimeSource`, `ResolvedRuntime` (with `engine`, `modelSource: ModelOrigin` and `replacedModelId`), `LocalAgentRuntimeInput`, and the `AgentEngine` axis itself (`isAgentEngine`, `DEFAULT_AGENT_ENGINE`, `claudeModelForComplexity`, `ClaudeApproval`). **`EngineStatus`, `EngineState` and `EngineSkips` are gone** — there is no server to have a status, and a skip list described one shared config. Type-only or plain constants; nothing key-shaped, no address
+- `src/shared/agentDrivers.ts` — `AcpLauncherId` (`opencode | claude | gemini | codex`), `ACP_LAUNCHER_IDS`, `isAcpLauncherId`, `launcherConfig`, `launcherOfConfig`. The launcher lives here rather than beside the ACP code because it is a **stored row value** and the row model may not import the ACP SDK
+- `src/shared/runtimeDefaults.ts` — `resolveRuntimeModel(input)` → `{modelId, origin, replaced}`, the one entry point both sides use; plus `inheritedModelId`, `defaultRuntimeModelId`, `modelBelongsElsewhere`, `COMPLEXITY_FLOOR` (`'medium'`) and the `ModelOrigin` union
+- `src/shared/modelFamilies.ts` — the work-complexity classifier: `classifyModel`, `bestInTier`, `sameFamilyFallback`, the labels and hints. No network, no filesystem — the catalogue is always passed in
+- `src/shared/runtimeMessages.ts` — `EngineSkipCode` and `describeEngineSkip`. Still a **code, not a sentence**, and still the words a refusal is rendered with; what changed is who renders it — the launcher returns the sentence as the turn's error instead of a screen completing a skip entry
+- `src/shared/appSettings.ts` — `localAgentsEnginePath` and `localAgentsModelAdvanced`
+- `src/shared/kit/manifest.ts` — `AgentRuntimeRef` (`engine`, `model`, `complexity`, `credential`, `permissions`, plus an index signature for the round-trip rule)
 
 ### Main process — `src/main/engine/`
-- `binaryResolver.ts` — the three sources, `ENGINE_ASSETS` (six pinned `{file, sha256}` entries), `assetUrl()`, `resolveEngineBinaryWith(deps)`, `installPinned()`, `findBinary()`, `sha256File()`, `probeEngineVersion()`, `downloadToFile()`, `extractArchive()`, `engineRootDir()`, `realBinaryResolverDeps()`, `EngineBinaryError`, `BinaryResolverDeps`
-- `modelTransports.ts` — `SUPPORTED_MODEL_PACKAGES`, `GEMINI_OPENAI_BASE_URL`, `unsupportedModelApi()`. The three `api.package` values `SessionRunnerModel` can build a model from, and the endpoint a `gemini` credential is routed to because `@ai-sdk/google` is not one of them
-- `modelLimits.ts` — `CUSTOM_MODEL_LIMITS`, `EngineProviderType`, `EngineModelLimit`, `isEngineProviderType()`. The context/output ceilings a **custom** provider entry's models are declared with, and the union every provider-keyed table in `configGenerator` is exhaustive over
-- `engineManager.ts` — the process. `engineManager.{getState, onStateChange, ensureRunning, applyConfigChange, stop, agentKey, lastSkips, request}`, plus module-private `startEngine`, `spawnAttempt`, `halt`, `whatMoved`, `pickLoopbackPort`, `engineEnv`, `healthy`, `waitForHealth`, `killEngine`; exported `ENGINE_TIMEOUTS`, `registerEngineShutdown()`, `resetEngineStateForTests()`
-- `configGenerator.ts` — `buildEngineConfig()` (pure), `digestEngineConfig()`, `writeEngineConfig()`, `CONVERSATION_PERMISSIONS`, `credentialEnvName()`, `engineAgentKey()`, `promptFileRef()`, and module-private `framed`, `mergePermissions`, `pruneStalePrompts`, `writeIfDifferent`
-- `engineConfigSource.ts` — `collectEngineProviders()`, `collectEngineAgents(userId)`, `collectEngineConfigInput(userId, {refreshModels})`, `refreshModelCache()`. **The one place a decrypted API key is read**
+- `engineBinaryService.ts` — `engineBinaryService.{state, ensure, refresh, onChange}` and `createEngineBinaryService(deps)`. All that is left of `engineManager`. `ensure()` is **memoised per configured path**, shares one in-flight resolution between concurrent turns, and never caches a failure; `refresh()` is Settings' *Check again* and resolves the state rather than rejecting
+- `binaryResolver.ts` — the three sources, `ENGINE_ASSETS` (six pinned `{file, sha256}` entries), `resolveEngineBinaryWith(deps)`, `configuredEnginePath()`, `probeEngineVersion()`, `engineRootDir()`, `realBinaryResolverDeps()`, `EngineBinaryError`
+- `configGenerator.ts` — `buildEngineConfig()` (pure), `digestEngineConfig()`, `CONVERSATION_PERMISSIONS`, `credentialEnvName()`, `engineAgentKey()`, and module-private `framed`, `mergePermissions`. **The writer is gone**: no `writeEngineConfig`, no prompt files, no pruning
+- `engineConfigSource.ts` — `collectEngineProviders()`, `collectEngineAgents(userId)`, `collectEngineConfigInput(userId, {refreshModels})`, `refreshModelCache()` (now returning whether it completed) and `resetModelCacheForTests()`. **The one place a decrypted API key is read**
+- `modelTransports.ts`, `modelLimits.ts`, `modelCache.ts` — unchanged: which SDK packages the engine can build a transport from, the ceilings a custom entry's models are declared with, and the merge that never shrinks a provider to nothing
+- **Gone:** `engineManager.ts` (and its test) — the process state machine, the loopback port, the Basic-auth password, `ensureRunning`, `applyConfigChange`, `agentKey`, `lastSkips`, `request`
 
-### Main process — elsewhere
-- `src/main/ipc/engine.ipc.ts` — `registerEngineHandlers()`; four channels plus the state push. Calls `registerEngineShutdown()`
-- `src/main/ipc/index.ts` — `registerEngineHandlers()` in `registerAllIpcHandlers()` (required by the registration guard, seam 15)
-- `src/main/ipc/local_agent.ipc.ts` — the per-site reconciles, every one a fire-and-forget `void engineManager.applyConfigChange(...)` on success: `update-field`, `delete`, `folder-add`, `rename`, `set-runtime`, `root-restore-hidden` and `git-update`. The channels that can change which agents exist or what they run on, and no others
-- `src/main/services/localAgents/runtimeService.ts` — `runtimeService.{resolveDefault, resolve, validate, toRuntimeRef, applyToManifest}`, exported `findCredential()` (a delegate to `findCredentialByReference` in `src/shared/credentials.ts`), module-private `normaliseRef`, `isUsable`, `defaultCredentialProblem`, `catalogueFor`, `declaredComplexity`, `declaredEngine`. `resolve` returns early for the Claude engine, **above** `resolveDefault`, because that lookup means nothing on a path with no credential and a throw in it used to demote such an agent to OpenCode silently. Every model decision goes through `resolveRuntimeModel` (`src/shared/runtimeDefaults.ts`); `resolveDefault` flattens its own model with `defaultRuntimeModelId`
-- `src/main/kit/validator.ts` — `checkRuntime()` also reports `manifest.runtime.complexity` and `manifest.runtime.engine`, as a **warning** in every case (unrecognised complexity; `model` and `complexity` both set; unrecognised engine; `engine: "claude"` together with a `credential`). Never an error — see [Reading is tolerant, writing is strict](kit_contract.md#reading-is-tolerant-writing-is-strict)
-- `src/main/services/localAgents/promptAssembly.ts` — `assembleAgentPrompt()`, `assembleBareAgentPrompt()`, `resolveDesktopPromptContext()`, `stripHtmlComments()`, `listKnowledgeTopics()`, module-private `readTextFile`, `handoverSection`, `desktopContextSection`, `bareDesktopContextSection`
-- `src/main/services/localAgents/turnLock.ts` — `turnLock.anyHeld()` (added for the engine; the rest is Phase 2)
-- `src/main/services/appSettingsService.ts:95` — the `localAgentsEnginePath` value check (absolute or empty; existence deliberately unchecked)
-- `src/main/db/appSettings.ts:25` — the default (`''`)
+### Main process — the launcher that consumes all of it
+- `src/main/agents/drivers/acp/acpLaunchers.ts` — `createOpencodeLauncher(deps)` and `createClaudeLauncher(deps)`. The OpenCode half is what turns everything above into a process: `deps.binary()` → `deps.configInput(userId)` → `buildEngineConfig({providers: [the one this agent uses], agents: [this agent]})` → temp-file write and `renameSync` → `digestEngineConfig` → `specKey`. Also `newSessionParams`, `isRefusal`, and module-private `configDirName` (a SHA-256 of the agent id, because `folder:<uuid>` is not a path component), `specKey`, `envDigest`, `safely`
+- `src/main/agents/drivers/index.ts` — the production wiring: `binary: () => engineBinaryService.ensure()`, `configInput: (userId) => collectEngineConfigInput(userId, {refreshModels: false})`, `configRoot: () => join(app.getPath('userData'), 'acp')`, `childEnv: shellEnvForChild(await getShellEnv())`, and the Claude launcher's own deps
+- `src/main/ipc/engine.ipc.ts` — `registerEngineHandlers()`: **two** channels and one push, and it registers no shutdown hook (the pool's is fired from `will-quit` in `src/main/index.ts`)
+- `src/main/services/localAgents/runtimeService.ts` — unchanged: `{resolveDefault, resolve, validate, toRuntimeRef, applyToManifest}`. `resolve` still returns early for the Claude engine, above `resolveDefault`, because a credential lookup means nothing on a path with no credential
+- `src/main/services/localAgents/promptAssembly.ts` — unchanged: `assembleAgentPrompt()`, `assembleBareAgentPrompt()`, `resolveDesktopPromptContext()`, `stripHtmlComments()`, `listKnowledgeTopics()`
+- `src/main/kit/validator.ts` — `checkRuntime()` reports `runtime.complexity` and `runtime.engine` as **warnings** in every case
 
 ### Preload
-- `src/preload/index.ts:1088` — `window.api.engine.{status, start, stop, skips, onState}`. **No `baseUrl` and no password, by design.** Typed by inference
+- `src/preload/index.ts` — `window.api.engine.{binary, resolve, onState}`. **No address, no handle, and nothing to start or stop.** Typed by inference
 
 ### Renderer
-- `src/renderer/src/hooks/useEngine.ts` — `ENGINE_STATE_KEY`, `ENGINE_SKIPS_KEY`, `useEngineState`, `useEngineWatch`, `useEngineSkips`, `useStartEngine`, `useStopEngine`
-- `src/renderer/src/components/agents/local/RuntimePanel.tsx` — the "Runs with" panel: the `Runs on` picker (credentials *and* the Claude engine), the work-complexity / model picker and its **Advanced** checkbox, the one reserved status line, and the module-private `EngineRow`, `EngineStatus`, `ClaudeStatus` and `SecretsLine`. Calls `resolveRuntimeModel`, `defaultRuntimeModelId` and `modelBelongsElsewhere` from `src/shared/runtimeDefaults.ts`, and `bestInTier` / `classifyModel` / the label and hint tables from `src/shared/modelFamilies.ts`. Replaced `RuntimeCard.tsx` when the agent page was reorganised around its controls (see [Agents Tab & Agent Page](agents_tab.md))
-- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Engine Settings** section: the "Local engine" status row carrying Start/Stop, and the engine-path card below it
-- `src/renderer/src/App.tsx:103` — `useEngineWatch()` mounted once in `Shell`, beside `useLocalAgentWatch()`
+- `src/renderer/src/hooks/useEngine.ts` — `ENGINE_BINARY_KEY`, `useEngineBinary`, `useEngineWatch`, `useResolveEngineBinary`. `useEngineState`, `useEngineSkips` and `useStartEngine` are gone (there was never a `useStopEngine` to remove — Settings' Stop button had already gone)
+- `src/renderer/src/components/agents/local/RuntimePanel.tsx` — the "Runs with" panel: the `Runs on` picker (credentials *and* the Claude engine), the work-complexity / model picker and its **Advanced** checkbox, the one reserved status line, and the module-private `EngineRow`, `EngineStatus`, `ClaudeStatus`, `SecretsLine`. `EngineStatus` now reports the **binary** — `opencode <version>` / `Downloading…` / `Not available` / `On the first message` — with no Start button and no `Running`
+- `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — the **Engine Settings** section: the binary status row (`Ready — opencode <version>, your own installation` / `, the path set under Engine path below` / `, downloaded by Cinna`), *Try again* on `failed` only, and the engine-path card below it
+- `src/renderer/src/App.tsx` — `useEngineWatch()` mounted once in `Shell`, beside `useLocalAgentWatch()`
 
 ### Tests
-- `src/main/engine/engineManager.test.ts` — **spawns real subprocesses**, binds real loopback ports, speaks real HTTP. The stand-in engine is a small node script implementing the two things the manager depends on (`--version`, and `GET /api/health` behind Basic auth). Each spawn dumps `{env, argv, pid}` beside the config it was pointed at, because the port, the hostname and the subcommand are only visible on the command line. See [Testing notes](#testing-notes)
+- `src/main/engine/engineBinaryService.test.ts` — that reading resolves nothing, the shared in-flight resolution, the memo and the path that moves it, the uncached failure, a refresh overtaking a failing resolution, and the pushes (including a listener that throws)
+- `src/main/agents/drivers/acp/acpLaunchers.test.ts` — what the OpenCode launcher writes and refuses, and what the Claude launcher declares and sets
 - `src/main/engine/configGenerator.test.ts`, `binaryResolver.test.ts`, `engineConfigSource.test.ts`
-- `src/main/services/localAgents/runtimeService.test.ts`, `promptAssembly.test.ts` + `__snapshots__/promptAssembly.test.ts.snap`
-- `src/shared/modelFamilies.test.ts` — the classifier on its own: a table of ids per provider type, the version ranking (hyphenated minor, two-digit minor, a pinned date read as a snapshot and not as a version), preview losing to a stable older model, a wholly-preview tier still resolving, the gated tier never auto-selected, non-chat ids dropped, and `sameFamilyFallback` moving up before down and never crossing a family
-- `src/renderer/src/components/agents/local/RuntimePanel.test.tsx` — the panel rendered in the jsdom project with its **six** hook modules mocked (`useLocalAgents`, `useChatModes`, `useModels`, `useProviders`, `useEngine`, `useAppSettings` — the sixth arrived with the remembered Advanced preference). Pins the pairing rules from the user's side: a credential change drops a foreign model and keeps a hand-written one, `Default (…)` names what would run for *this* credential, a foreign model already in the file is called out on open, and the pickers are disabled while the registry loads. It also pins the whole Advanced contract — which picker the manifest opens on, the two conversions and their status lines, the tier that cannot be converted (view moves, file does not), the model that cannot be converted (checkbox unavailable rather than springy, overriding even a sticky view, and released again once the model is cleared), the snapshot round trip, what a credential change forwards from a single-field and from a both-set manifest, and the fact that a refused write moves nothing. The two sides of `runtimeDefaults` are covered here and in `runtimeService.test.ts` rather than by a test of their own — the point of the module is that the two callers agree, which a direct unit test cannot observe
-- `src/main/services/appSettingsService.test.ts` — the engine-path check
+- `src/main/services/localAgents/runtimeService.test.ts`, `promptAssembly.test.ts` + `__snapshots__/`
+- `src/shared/modelFamilies.test.ts`
+- `src/renderer/src/components/agents/local/RuntimePanel.test.tsx` — the panel in the jsdom project with its hook modules mocked, including `useEngine`
 
 ## Database Schema
 
-**None.** This slice adds no table and no column. Its only persisted state is the `localAgentsEnginePath` row in `app_settings` (default scope) and the files under `<userData>/engine/`. Everything else lives in module state that dies with the process — deliberately, see `RunningEngine` below.
+**None.** The only persisted state is `localAgentsEnginePath` in `app_settings` (default scope) and the files under `<userData>`. Which engine an agent runs on is a row value, but it belongs to the drivers — `agents.driver = 'acp'` with `driver_config = {"launcher": …}`; see [Agent Drivers](../drivers/drivers_tech.md).
 
 ## IPC Channels
 
-Every handler is activation-gated (`userActivation.requireActivated()`) and scoped with `getSettingsScopeUserId()` — the engine is machine-local.
+Both handlers are activation-gated (`userActivation.requireActivated()`). The engine is machine-local.
 
 | Channel | Signature | Notes |
 |---|---|---|
-| `engine:status` | `() → EngineState` | Synchronous read of module state |
-| `engine:start` | `() → Promise<EngineState>` | `ensureRunning`. **Never rejects** — a failed start is the returned state, error sentence included. Can run for a minute (download) |
-| `engine:stop` | `() → Promise<EngineState>` | Bumps the stop epoch, then halts |
-| `engine:skips` | `() → EngineSkips` | The **running** config's skips. Read on demand, not pushed |
-| `engine:state` | main → renderer push | Fires on every `EngineState` transition |
+| `engine:binary` | `() → EngineBinaryState` | Synchronous read of module state. **Never resolves anything** — opening Settings must not start a 46 MB download |
+| `engine:resolve` | `() → Promise<EngineBinaryState>` | `refresh()`. **Never rejects** — a failed resolution is the returned state, sentence included. Can run for a minute |
+| `engine:binary-state` | main → renderer push | Fires on every transition, forwarded from `engineBinaryService.onChange` |
 
-Three things are deliberately absent:
-
-- **No channel returns the base URL or the auth password.** They stay inside `engineManager` so a component cannot be written that talks to the engine directly and routes around the Phase 6 runner
-- **Nothing starts the engine at boot.** `registerEngineHandlers()` registers the shutdown hook and the state forwarder only
-- **No channel exposes `engineManager.request()`.** It is a main-process seam for Phase 6
+Deliberately absent: `engine:start`, `engine:stop`, `engine:skips`, and anything returning a base URL or a password. There is no server to start, and the per-agent processes are the turn's business. Nothing resolves the binary at boot.
 
 ## Services & Key Methods
 
-### `src/main/engine/engineManager.ts`
+### `src/main/engine/engineBinaryService.ts`
 
-Module state: `state: EngineState`, `running: RunningEngine | null`, `startInFlight`, `reconcileInFlight`, `stopEpoch: number`, `binary`, `binaryResolvedFor`, `listeners`.
-
-```
-interface RunningEngine { child, baseUrl, authHeader, port, loaded }
-interface LoadedConfig  { digest: EngineConfigDigest, agentKeys: Map, agentModels: Map, skippedAgents: SkippedAgent[] }
-```
-
-`loaded` is carried **on the process object** rather than in a module variable so it cannot outlive the thing it describes: when the process dies the record goes with it, and there is no window in which a stale record claims to describe a running engine.
+Module state: `state: EngineBinaryState`, `pending: Promise<ResolvedEngineBinary> | null`, `pendingFor: string | null | undefined`, `listeners`.
 
 | Method | Behaviour |
 |---|---|
-| `ensureRunning(userId)` | Running → **reconcile** via `applyConfigChange`, shared through `reconcileInFlight`. Not running → `startEngine` behind `startInFlight`. Captures the stop epoch **synchronously**, before the deferring `Promise.resolve().then(...)`, so a `stop()` issued in between is not mistaken for one that happened earlier |
-| `applyConfigChange(userId)` | Rebuild (`refreshModels: false`) → **re-read `running` after the await** → `whatMoved(engine.loaded.digest, digestEngineConfig(built))` → nothing moved: return; `turnLock.anyHeld()`: log and return, **writing nothing**; else `await halt()`, re-check the epoch, `ensureRunning`. **Never starts an engine** |
-| `stop()` | `stopEpoch += 1`, then `halt()` |
-| `halt()` (private) | `stop()` minus the epoch bump. Awaits `startInFlight`, kills, sets `stopped`. An internal restart uses this so it cannot cancel itself, nor hide a user's Stop |
-| `agentKey(agentId)` | `running?.loaded.agentKeys.get(agentId) ?? null` |
-| `agentModel(agentId)` | `running?.loaded.agentModels.get(agentId) ?? null` — `{providerID, id}`, the split form `POST /api/session` takes |
-| `lastSkips()` | `{agents: running?.loaded.skippedAgents ?? []}` |
-| `request(path, init)` | Adds the Basic-auth header and fetches `${baseUrl}${path}`. Throws when not running. The Phase 6 seam |
-| `getState()` / `onStateChange(fn)` | State + a listener set; a throwing listener is caught and warned, never allowed to break a transition |
+| `state()` | The current `EngineBinaryState`. Free, never starts anything |
+| `ensure()` | `pending` when it was started for the *current* configured path, else a fresh resolution. The turn path's entry point |
+| `refresh()` | Drops the memo and resolves again, returning the resulting state — including `failed`. Settings' *Check again* |
+| `onChange(fn)` | A listener set; a throwing listener is caught and warned, never allowed to break a transition |
 
-`startEngine(userId, epoch)` is the only place that generates with `refreshModels: true` and the only place that writes: resolve binary (cache invalidated when the configured path changes) → `installing` → `starting` → `buildEngineConfig(await collectEngineConfigInput(userId, {refreshModels: true}))` → `writeEngineConfig(engineRootDir(), built)` → up to `START_ATTEMPTS` (2) `spawnAttempt`s. `cancelled(epoch)` is checked before the binary step, between attempts, and after a successful spawn.
+Two rules the tests pin because both were bugs in the shape that preceded them:
 
-`spawnAttempt(binaryPath, configPath, built, epoch)`:
-- `pickLoopbackPort()` — bind `127.0.0.1:0`, read the port, close. The close→spawn race is made harmless by the retry, not eliminated
-- `randomBytes(32).toString('hex')` password, fresh per spawn
-- `spawn(binaryPath, ['serve', '--port', String(port), '--hostname', '127.0.0.1'], {cwd: engineRootDir(), env, stdio: ['ignore','pipe','pipe']})`
-- **`logger.info('spawning the engine')` fires *before* the spawn**, not after a successful one: the transition most worth a record is an engine starting when nothing should have started one, and a line written only on success is exactly the line that would be missing then
-- The `RunningEngine` is built here, including `loaded` — the only honest moment to record what a process read is the moment the bytes are handed over
-- `child.on('exit')` moves the state to `failed` (guarded by `running?.child !== child`). Nothing polls, so this handler is the only thing that notices a dead engine
-- `waitForHealth` polls `GET /api/health` every `pollMs`, aborting each request at `requestMs`, and **returns early when the child has exited** — without that, a crashed engine is indistinguishable from a slow one and the caller waits the full 45 s for a process that died in 200 ms
+- **The memo is keyed on the configured path.** An unkeyed memo kept handing out the old binary until the app restarted after a user pointed Settings at another `opencode` — and because the path feeds the launch spec's key, the running children were not replaced either, so the setting appeared to do nothing at all
+- **A failure clears the slot only if that resolution still owns it.** The two failures that happen are a mistyped path and an unreachable network, both fixed by trying again — but a `refresh()` that overtook a failing resolution has already put a newer promise in the slot, and dropping it would cost the caller waiting on it a second resolution for nothing
 
-`ENGINE_TIMEOUTS` is a mutable object rather than four `const`s so a test can shorten the health window; production never writes to it. `healthMs: 45_000`, `pollMs: 250`, `requestMs: 3_000`, `stopGraceMs: 3_000`. `STDERR_KEEP = 4_000`, `ENGINE_USERNAME = 'opencode'`.
+The service holds no Electron dependency: `engine.ipc.ts` subscribes once for the app's lifetime and forwards each transition to whatever window is open.
 
-`stopEngineNow()` (on `will-quit`) is **synchronous**: bump the epoch, null `running`, `SIGTERM` inside the handler body. `will-quit` handlers are not awaited and a child is not reaped when its parent exits, so an async stop would leave an `opencode serve` running with no window to stop it from.
+### `src/main/agents/drivers/acp/acpLaunchers.ts` — the OpenCode half
 
-`engineEnv(configPath, password, credentials)` = `shellEnvForChild(await getShellEnv())` + `OPENCODE_CONFIG`, **`OPENCODE_CONFIG_DIR` (`dirname(configPath)`)**, `OPENCODE_SERVER_PASSWORD`, `OPENCODE_SERVER_USERNAME`, `OPENCODE_DISABLE_AUTOUPDATE='1'`, then the `CINNA_ENGINE_KEY_*` map.
+`plan(ctx)` in order, and every step is a refusal rather than a throw:
 
-**Both config variables, and the second is the one that matters.** `OPENCODE_CONFIG` is read by OpenCode's v1 config service. The v2 service — the one behind `model.available()`, and therefore behind every session's model resolution and every agent's system prompt — never reads it: it takes the *global config directory* (`OPENCODE_CONFIG_DIR ?? ~/.config/opencode`) plus a walk up from the **session's own `location.directory`**. A folder agent's session is located in the user's folder, nowhere near `<userData>/engine`, so without `OPENCODE_CONFIG_DIR` the engine resolved every turn against a catalog that had never heard of our providers — `ModelUnavailableError`, reported on no event at all. Verified as the single sufficient variable: [the contract](opencode_contract.md) §9.5.3. See [Shell Environment Resolution](../../development/shell_environment/shell_environment.md).
+1. `deps.binary()` — `engineBinaryService.ensure()`. `EngineBinaryError`'s messages are already user-facing sentences naming the remedy, so they are passed through rather than replaced
+2. `deps.configInput(userId)` — `collectEngineConfigInput(userId, {refreshModels: false})`
+3. Find this agent in `input.agents`. Absent means the collector and the driver disagree, which happens for the length of one save while a manifest is being rewritten → *"This agent's runtime changed while the turn was starting. Try again in a moment."*
+4. `buildEngineConfig({providers: input.providers.filter(p => p.id === mine.providerId), agents: [mine]})`
+5. `built.skippedAgents` → `describeEngineSkip(code)` as the refusal
+6. `agentKey` / `agentModel` missing where nothing was skipped is logged as an error and refused — the alternative is a session that silently runs OpenCode's own `build` agent in the user's folder
+7. `{...built.config, model: '<providerKey>/<modelId>'}` written to `<userData>/acp/opencode/<sha256(agentId).slice(0,16)>/opencode.json` via `${configPath}.tmp` + `renameSync`
+8. The spec: `command = binary.path`, `args = ['acp']`, `cwd = the agent folder`, `env = childEnv + OPENCODE_CONFIG + OPENCODE_CONFIG_DIR + OPENCODE_DISABLE_AUTOUPDATE + built.env`, `key = specKey([binary.path, binary.version, 'acp', digest.config, digest.env, configPath])`
+9. `init.clientCapabilities = {}` — no `fs`, no `terminal` (both removed in draft v2, so a client that never declared them is forward-compatible), and **no `elicitation`**
+10. `setup.configOptions = [{configId: 'mode', value: agentKey}, {configId: 'model', value: modelRef, optional: true}]`
 
+Two of those carry a measurement:
+
+- **`mode` is mandatory, `model` is optional.** OpenCode populates its model catalogue asynchronously after start, so a `model` set issued milliseconds after `session/new` can be refused — *"Invalid params: model not found"* — for a model the session has **already** selected from the config's top-level `model` (`session/new` reports it as `configOptions.model.currentValue`). Refusing the turn there would refuse it over a race about something already true. A missing `mode`, by contrast, runs the engine's stock coding agent in the user's folder
+- **Neither `OPENCODE_CLIENT` nor `OPENCODE_ENABLE_QUESTION_TOOL` is set, and that is a decision.** `opencode acp` sets `OPENCODE_CLIENT=acp` itself, and the `question` tool is registered only for `app`/`cli`/`desktop` clients or behind that flag. Turning it on hands the model a tool whose answer has no channel over ACP: the probe's question hung for 150 s and had to be cancelled. A model that asks in prose is a degradation; a tool that hangs the turn is a defect
+
+The Claude half is documented with the engine it launches — [The Claude Engine (technical)](claude_engine_tech.md).
 ### `src/main/engine/configGenerator.ts`
 
 `buildEngineConfig(input) → BuiltEngineConfig` is **pure** — no filesystem, no clock, no `app`. That is what makes "does a key ever reach the config" a question a test answers directly rather than by reading.
@@ -149,9 +140,7 @@ BuiltEngineConfig { config, env, providerKeys, agentKeys, agentModels, prompts,
 - Every piece goes through `framed(v)` = `` `${v.length}:${v}` ``. See item 3 of [Read this first](#read-this-first-if-you-are-working-next-to-the-engine)
 - Entries are sorted here rather than trusting `buildEngineConfig`'s sort to stay put — this is the input to a restart decision and should not be one refactor away from restarting on map order
 
-`writeEngineConfig(dir, built) → WrittenEngineConfig` — `opencode.json` plus `prompts/<key>.md` for each agent (**the engine no longer reads those files** — the prompt is inlined in the config; they remain as the readable copy the user's own assistant opens), each through `writeIfDifferent` (read-compare, then `writeFileSync(temp, {mode: 0o600})` + `renameSync`, temp removed on failure), then `pruneStalePrompts`. Logs **counts only**, never the config object. Its `changed` flag is **vestigial**: it *was* the restart decision, before that moved in-memory to the digest comparison in `engineManager`, which now happens before this is ever called. `startEngine` ignores the return value. It is a leftover, not a hook to build on — the question it answers ("do the bytes on disk differ?") is the one that cannot see a rotated key.
-
-`pruneStalePrompts(promptDir, prompts)` — only `<userData>/engine/prompts/`, only `.md` files directly inside it, never a directory; a file it cannot delete is warned about and skipped rather than thrown, because failing the config write over a stale prompt would take the engine down for it.
+**There is no writer here any more.** `writeEngineConfig` and `pruneStalePrompts` went with the shared server: the OpenCode launcher writes its own one-agent config (temp file + `renameSync`) into `<userData>/acp/opencode/<hash>/opencode.json`, and no prompt file is written anywhere. `built.prompts` survives only as an input to the digest — the prompt itself is inlined in the agent entry, because the v2 reader resolves no `{file:…}`.
 
 `CONVERSATION_PERMISSIONS` (`:244`) — `'*': 'ask'` first (OpenCode's base rule is allow-everything, so an enumerated profile without this leaves every other tool on allow), then `read` (`*` allow + `SECRET_FILES`), `edit`/`write` (`*` allow + `IDENTITY_FILES` + `SECRET_FILES`), `bash` (`*` allow, then the `.env` accident guards and `sudo *` / `rm -r *` / `rm -rf *` / `rm -fr *` on ask), `webfetch: 'ask'`, `external_directory: 'ask'`. `SECRET_FILES` (`:218`) is `credentials/.env`, `*.env`, `*.pem`, `*.key` → **deny**; `IDENTITY_FILES` (`:239`) is `cinna-agent.json`, `docs/WORKFLOW_PROMPT.md` → **ask**. <!-- nocheck -->
 
@@ -161,12 +150,12 @@ Two spelling rules, both load-bearing and both explained in [permissions.md](per
 
 ### `src/main/engine/engineConfigSource.ts`
 
-Sits between `engineManager` (processes) and `configGenerator` (OpenCode's config shape) so neither knows about `providerService`, `localAgentService` or the manifest — which is what lets `engineManager` be driven in a test by a three-line fake supplier instead of a database.
+Sits between the OpenCode launcher (which spawns one process for one agent) and `configGenerator` (OpenCode's config shape) so neither knows about `providerService`, `localAgentService` or the manifest — which is what lets the launcher be driven in a test by a three-line fake supplying the same shape.
 
 - `collectEngineProviders()` — `providerService.listMerged()` filtered by `dto.enabled` **and** `isCredentialUsable` (`src/shared/credentials.ts`; the two terms of `isCredentialActive`, spelled out separately because each refusal carries its own reasoning), joined to `llmProviderRepo.listByUserIds(getManagedResourceScopes())` for the ciphertext and `baseUrl`. Decryption is now **conditional** rather than a precondition: a keyless row has no ciphertext and is collected with `apiKey: ''`, while a keyed row with no ciphertext is still skipped. A key that will not decrypt is **skipped with a warning naming only the provider id**, not a failed start
 - `modelsByProvider()` / `cachedModels` / `refreshModelCache(scope)` — `getAllModels()` is awaited explicitly *before* a build rather than from inside the synchronous collector, so a start cannot block on an unreachable gateway. `scope: 'all'` fans out over every adapter; `scope: 'local'` calls `listModels()` directly on the adapters of keyless credentials (`listLocalModels()` / `localProviderIds()`), which is loopback and costs about a millisecond. Both fold into the cache through `mergeModelCache(previous, fresh, known)` in `src/main/engine/modelCache.ts`: a provider that answered is replaced, one that was silent **keeps its last good list**, ids missing from `known` are evicted, and an **empty** `known` evicts nothing (the credential DB and the adapter registry disagree for a moment before a profile's scopes resolve, and mass eviction there empties every custom entry)
-- `collectEngineAgents(userId)` — `localAgentService.list(userId).agents`, skipping readiness `invalid` and `contract_too_new` outright; each remaining agent gets `runtimeService.resolve(agent.runtime, providers, cachedModels)` and `assembleAgentPrompt(agent.path, agent.manifest, context)` — or `assembleBareAgentPrompt(agent.path, agent.name, context)` where `agent.kind === 'bare'`, the one branch [bare agents](bare_agents.md) add to this module. The **cached** catalogue is handed in deliberately, not a fresh fetch: a work-complexity tier resolves against what a credential lists, and comparing a reconcile against a list that drops out whenever a gateway is briefly unreachable would restart the engine for a change nobody made. An agent whose runtime resolves to nothing **is still emitted**, so `configGenerator` can report it as a skip with a reason rather than the agent merely being absent. **`enabled` is not consulted** — a disabled agent gets an entry, a key and a prompt file. That is deliberate (the config is a catalogue of what can be addressed), but it means **the Phase 6 runner must gate on `enabled` itself**; nothing in this slice does, and `agentKey()` returns a key for a disabled agent
-- `collectEngineConfigInput(userId, {refreshModels})` — the only entry point. `refreshModels` defaults to **true** (→ `'all'`); `applyConfigChange` is the only caller that passes `false`, which now means `'local'` rather than no refresh at all: a local catalogue is empty whenever the server was down at engine start, and a custom entry with no models can address none — the failure reaches no engine event, so every agent on it hung for the desktop's twenty-minute ceiling
+- `collectEngineAgents(userId)` — `localAgentService.list(userId).agents`, skipping readiness `invalid` and `contract_too_new` outright, and collecting an agent whichever engine it names (the caller is a launcher chosen from the folder, so it is never asked about an agent on another engine); each remaining agent gets `runtimeService.resolve(agent.runtime, providers, cachedModels)` and `assembleAgentPrompt(agent.path, agent.manifest, context)` — or `assembleBareAgentPrompt(agent.path, agent.name, context)` where `agent.kind === 'bare'`, the one branch [bare agents](bare_agents.md) add to this module. The **cached** catalogue is handed in deliberately, not a fresh fetch: a work-complexity tier resolves against what a credential lists, and comparing a reconcile against a list that drops out whenever a gateway is briefly unreachable would restart the engine for a change nobody made. An agent whose runtime resolves to nothing **is still emitted**, so `configGenerator` can report it as a skip with a reason rather than the agent merely being absent. **`enabled` is not consulted** — a disabled agent gets an entry, a key and a prompt file. That is deliberate (the config is a catalogue of what can be addressed), but it means **the Phase 6 runner must gate on `enabled` itself**; nothing in this slice does, and `agentKey()` returns a key for a disabled agent
+- `collectEngineConfigInput(userId, {refreshModels})` — the only entry point, and since phase 3 it has exactly one production caller: the OpenCode launcher, once per turn, with `refreshModels: false`. That resolves to scope `'all'` for the **first** collection of a session and `'local'` after it, gated on a module flag set only by a refresh that **completed** — so an offline machine tries again next turn instead of running the session on an empty cloud catalogue. `refreshModelCache(scope)` returns that boolean; `resetModelCacheForTests()` clears the flag and the cache
 
 `getAllModels()` (`src/main/llm/registry.ts`) loops adapters **serially** and awaits `listModels()` on each — a real network round trip per configured credential (Anthropic's SDK paginates, OpenAI's SDK, a `fetch` for Gemini).
 
@@ -209,129 +198,68 @@ Timeouts and ceilings: `VERSION_TIMEOUT_MS` 10 s, `DOWNLOAD_TIMEOUT_MS` 10 min, 
 
 Bundling binaries as `extraResources` is deferred with a `TODO(packaging)` in the module header: it needs an `extraResources` block (none exists — seam 14), proof that a Bun single-file executable launches from a notarised macOS bundle, and a fourth resolution branch preferring `process.resourcesPath`.
 
+
 ## Renderer Components
 
 | Component / hook | Renders / manages |
 |---|---|
-| `useEngineState` | `['engine-state']`, seeded from `engine:status`. **Nothing polls** |
-| `useEngineWatch` | One `engine:state` subscription for the app's lifetime; writes the pushed state straight into the cache and invalidates `['engine-skips']`. Mounted in `Shell` |
-| `useEngineSkips` | `['engine-skips']` from `engine:skips`. Only ever recomputed by a config generation, and every generation moves the state — so the push *is* the staleness signal |
-| `useStartEngine` / `useStopEngine` | Mutations that write the returned state into the cache. `isPending` covers the download. **A failed start resolves**, so callers render `data.error`, not a mutation error |
-| `RuntimePanel` | The `Runs on` `<select>` — labelled *Credential* until it started offering engines too — carrying two `optgroup`s: `On this machine` (the Claude engine, when one is detected or the agent already names it — see [The Claude Engine](claude_engine.md)) and `AI credentials` (usable providers, by **name**, a switched-off one suffixed `— inactive` through `credentialOptionLabel`; the list deliberately includes credentials that cannot run, which is what lets an agent pointing at one say so rather than reading as unconfigured). Then **one** of three controls in a single slot: the work-complexity `<select>` (the three tiers, `(none listed)` appended to one this credential cannot serve), the model `<select>` (registry models for the effective provider; `Default (…)` from `resolveRuntimeModel`), or a disabled `Loading…` placeholder (labelled `Model choice`, since `Runs on` is now the first control's name) while neither the manifest nor the remembered preference can yet say which picker this agent gets. An **Advanced** checkbox sits on the label row and is rendered in both views, so switching cannot change the panel's height; on the Claude engine it is removed from inside that fixed-height row, because there is no raw model list to swap to. Then `EngineStatus` — or `ClaudeStatus`, which reports the detected install and offers no Start button — `SecretsLine`, the not-editable note, and **one fixed-height status line** that carries every message the panel has, including the engine's skip reason, which has no component of its own. Reads `useEngineSkips` and `useLocalTools` directly. Writes via `useSetLocalAgentRuntime` → `local-agent:update-field` with the manifest stamp, sending `{engine, credential, modelId, complexity}` — **`engine` is required on that input**, because the write rewrites the whole `runtime` block and an omitted key would delete a choice the manifest already carries |
-| `EngineStatus` (private) | The engine's state as a dot and a word, plus a Start button shown whenever it is not running. Rendered only for an agent on this engine — telling a Claude agent that a process it never starts is "Not running", and offering a Start button that changes nothing for it, is a fact about something unrelated |
-| `EngineRow` / `ClaudeStatus` (private) | The shared fixed-height row both engines render into, and the Claude branch's content. See [The Claude Engine (tech)](claude_engine_tech.md) |
-| `LocalAgentsSettingsSection` | The **Engine Settings** section. A `SettingsStatusRow` for the engine — status, version, which source — with Start/Stop as its `action`, so the state and the control that changes it are one row; its tone is `ok` when `running`, `warning` only when `failed`, and `neutral` otherwise, because a turn starts the engine by itself. Below it the engine-path card: label, hint, input, and a reserved `min-h-[1.125rem]` slot for the save error or the pending-restart note |
+| `useEngineBinary` | `['engine-binary']`, seeded from `engine:binary`. **Nothing polls** |
+| `useEngineWatch` | One `engine:binary-state` subscription for the app's lifetime; writes the pushed state straight into the cache. Mounted once, in `Shell` |
+| `useResolveEngineBinary` | The mutation behind *Try again*. Writes the returned state into the cache; **a failed resolution resolves**, so callers render `data.error` rather than a mutation error. `isPending` covers the download |
+| `RuntimePanel` | The `Runs on` `<select>` carrying two `optgroup`s (credentials on this machine, and the Claude engine), the tier / model picker, the Advanced checkbox, and one reserved status line. **A binary that could not be resolved outranks every question about which model** in that line, above the credential ladder: with no engine, "your default chat mode uses a switched-off credential" is a true sentence about something that would not help — and it is what the Engine cell is showing in red at that moment. It replaces the shared config's *skip* entry that used to fill this slot; `credential_unavailable` and `no_model` are not lost, because the rungs below say the same things from **this** agent's resolved runtime rather than echoing what one global generation left out |
+| `EngineStatus` (private) | Which `opencode` this agent will run on, and nothing about a process: `opencode <version>` / `Downloading…` / `Not available` / `On the first message`, with the path or the failure sentence in `title`. **One light per state**: muted for everything but `failed`, which is danger for both the dot and the text — an amber dot over red text is two claims about one fact. `ready` stays muted here and is a green tick in Settings for the same fact, because this cell's vocabulary is shared with the Claude rung beside it, where muted means *a binary was found*. Rendered only for an agent on that engine |
+| `ClaudeStatus` (private) | The Claude branch of the same fixed-height row — the binary, its version, and the login. See [The Claude Engine (technical)](claude_engine_tech.md) |
+| `LocalAgentsSettingsSection` | The **Engine Settings** section: a `SettingsStatusRow` for the binary — tone `ok` when `ready`, `warning` on `failed`, **neutral** when nothing has looked yet — with *Try again* only on `failed`, and the engine-path card below it |
 
-Renderer rules that are decisions, not styling:
+Two UX rules are load-bearing here and both are argued in the components themselves:
 
-- **A model the manifest names but the registry has never listed is still rendered as an option**, and a credential change keeps it. Without that, opening the panel would silently reset the agent's model to the default the moment the user touched the credential picker, and a hand-written id for a gateway catalogue this app cannot see would be treated as a mistake
-- **A credential change *does* clear a model the registry attributes to another catalogue**, and says so in the status line. The pair would otherwise be written into a manifest the generator turns into `openai/claude-sonnet-4-5` — a config that saves and fails at the agent's first turn. `modelBelongsElsewhere` decides, and it declines in exactly the cases `inheritedModelId` declines to guess in, so the panel can never lend a model in the select while calling it foreign in the warning
-- **The pickers are disabled until `useModels` resolves** (or fails). It is a network round trip per credential, so on a cold page it lands after the provider list — and before it does, a model that belongs elsewhere is indistinguishable from one the registry has not listed yet. The status line says which of the two states it is in
-- **The model select stays enabled with an empty list plus a note once the registry has loaded.** `useModels` is the aggregate registry, and a credential it has nothing for is not a credential that cannot run
-- **The two `Default (…)` labels are lookups, not guesses.** The credential picker's names the resolved Default runtime's credential, looked up across *all* providers rather than the usable ones — `resolveDefault` does the same, and a default mode pointing at a credential with no stored key has to read here as it does to the engine. The model picker's names `resolveRuntimeModel`'s answer for the *chosen* credential, by registry name where there is one and by id otherwise. The panel resolves the manifest's credential reference with the **same function** the engine does, `findCredentialByReference` in `src/shared/credentials.ts` — id, name, then type, across *all* providers — because searching only the usable ones sent the catalogue lookup for a credential with no stored key to the **default** credential instead. It was a hand-written mirror until main's tie-break learned to prefer a credential that is switched on, at which point two rows sharing a name resolved differently on the two sides: the engine ran one and this panel described the other
-- **The manifest decides which picker opens; the remembered preference only breaks a tie.** The view is `true` for an agent that names a model, `false` for one that names a tier, and `localAgentsModelAdvanced` only for one that names neither. After first render it is **sticky per agent** (`{agentId, advanced}`), because both pickers have choices that leave the manifest declaring nothing — selecting `Default`, or moving to a credential that drops the model — and deriving the view from the manifest alone would answer each of those by swapping the control the user is working in
-- **Neither picker is claimed until one is known.** `settings?.x === true` reads `false` in flight, so a user whose preference is Advanced would watch the tier select render and then be replaced. The disabled `Loading…` select holds the same footprint and makes no claim
-- **Two Advanced outcomes reach the toggle, and the third state never does.** A conversion that writes moves the view in the mutation's `onSuccess`, so a refused write never leaves the panel showing a control the file does not back. A conversion with nothing to write — a tier this credential lists no model for — moves the view **immediately**, because it succeeded and simply had nothing to write; routing it through the mutation would spring the checkbox back under the pointer that clicked it. The question separating the two is whether the picker the user asked for can represent this file honestly: a model select sitting on `Default` over a file that still names a tier is not lying, while a tier select sitting on `Default` over a live pinned model would be
-- **A model no family recognises disables the checkbox rather than refusing the click.** `unconvertible` — a declared model `classifyModel` returns null for, the ordinary case for a gateway's `my-private-llm-7b` — forces `advanced` true, **overriding both the sticky per-agent view and the remembered preference**, and disables the control behind a standing status line (`Advanced stays on — “…” matches no work complexity.`, consequence first so the clause explaining the dead control survives the 800px truncation whatever the length of the id, which is the user’s and not ours). A control that snaps back to its old value tells the user nothing and invites the same click again; a disabled one with the reason beside it is a state that can be read once and acted on, and clearing the model re-enables it without anyone being told to retype a hand-written id. `toggleAdvanced` still returns without writing when no tier can be derived — the guarantee is "never convert what cannot be converted", and one that lived only in whether a control is clickable would be one line of JSX from being lost
-- **The model a tier was converted from is remembered** (per agent) and restored when the tier has not moved since. `bestInTier` prefers a stable alias, so re-deriving would trade a deliberately pinned dated snapshot for a floating one — through a control that only claims to change the view
-- **A credential change forwards what the *manifest* holds, and the view breaks only a genuine collision.** Sending both keys of a manifest that legally carries both (a newer tool wrote it; the validator only warns) makes `applyToManifest` throw `A runtime names a model or a work complexity, not both` — a refusal about a key the user cannot see, from a control that has nothing to do with it. Sending only the *visible view's* field went too far the other way and **deleted the other one**, which is reachable and cruel: an agent whose tier resolves to nothing shows the Model picker over a manifest that still says `complexity: complex`, having just advised "pick another complexity or another credential" — and taking the second half of that advice here destroyed the tier. So a single-field manifest keeps its field whichever picker is showing, and only a both-set manifest loses one: the one not on screen. "The desktop never writes both" stays true by construction rather than by a throw at the far end
-- **The engine-path field follows the saved value until the user types in it.** The settings query has not resolved on first render, so without the effect a user with a path already set sees a blank box and reasonably concludes nothing is configured
-- **A saved engine path takes effect on the *next* start** — the resolved binary is cached and the running process is the old one either way — and the section says so rather than leaving the user to wonder why the version line did not move. That note and the save error share one always-present slot **below** the input, with the explanatory hint moved **above** it, so a message arriving after a blur moves nothing the user is about to click
-- **The field's placeholder is the path alone** (`/usr/local/bin/opencode`). It used to carry the "leave empty to let Cinna find one" half too; at the settings type scale that sentence measured 462px in a 399px box at the 800px minimum window, and the half that got cut was the instruction. It lives in the hint instead
-- `canEdit = stamp !== null && readiness !== 'contract_too_new'`; a stale-write refusal renders the reload sentence via `isStaleWriteError`
+- **A binary nobody has resolved yet is neutral, not a warning.** It resolves itself the moment anyone chats with a folder agent; an amber triangle over it is the healthy state wearing an alarm, and it teaches the user to skip the triangle for `failed`, which is the one that needs them (ux_rules 2 and 12)
+- **A status row that can be amber must carry the control that clears it, and must keep carrying it while it works.** *Try again* retries the *resolution*; a condition naming only `failed` **unmounted the button on click**, because pressing it moves the state to `resolving` — so the user pressed a control that vanished, and for up to a minute of downloading the only feedback was a line of text changing. There is no Start, and nothing on either screen starts or stops anything
 
 ## Configuration
 
 | Setting | Scope | Meaning |
 |---|---|---|
-| `localAgentsEnginePath` | `app_settings`, **default (machine-local)** | Absolute path to an `opencode` executable, or `''` for "resolve one". Validated as *absolute or empty only* — whether it exists and runs is answered by `binaryResolver` and surfaced as engine **state**, not as a rejected save |
-| `localAgentsModelAdvanced` | `app_settings`, **default (machine-local)** | `false` (work complexity) or `true` (the raw model list): which picker the “Runs with” panel opens on for an agent whose manifest names **neither**. Written only by the panel — from the Advanced checkbox and from a conversion — and there is no Settings control for it. A `typeof` is the whole validation |
+| `localAgentsEnginePath` | `app_settings`, **default (machine-local)** | Absolute path to an `opencode` executable, or `''` for "resolve one". Validated as *absolute or empty only* — whether the file exists is deliberately the resolver's question, at the moment it is used |
+| `localAgentsModelAdvanced` | `app_settings`, **default (machine-local)** | `false` (work complexity) or `true` (the raw model list): which picker the “Runs with” panel opens on for an agent whose runtime does not decide |
 
-Constants worth knowing: `PINNED_ENGINE_VERSION = '1.18.27'` (`src/shared/engine.ts`); `ENGINE_ASSETS` — six platform entries, `linux-*` on glibc (musl/Alpine is the known gap); release root `assetUrl(version, file)`.
+A saved engine path takes effect **the next time something asks for a binary** — the next turn, or *Try again* — because the resolution is memoised per configured path. Settings says so in place rather than leaving the user to wonder why the version line did not move; the running children are replaced on their own next turns, because the path feeds the spec key.
+
+Constants worth knowing: `PINNED_ENGINE_VERSION = '1.18.27'` (`src/shared/engine.ts`); `ENGINE_ASSETS` — six platform entries, `linux-*` on glibc (musl/Alpine is the known gap); `ACP_IDLE_REAP_MS`, `ACP_START_TIMEOUT_MS` and `ACP_TURN_CEILING_MS` belong to the turn, in `src/main/agents/drivers/acp/types.ts` and `acpDriver.ts`.
 
 Generated files, none of which is ever inside an agent folder:
 
 ```
-<userData>/engine/opencode.json
-<userData>/engine/prompts/<agentKey>.md
-<userData>/engine/opencode-<version>/opencode        (managed install)
-<userData>/engine/.staging-<pid>-<ts>/               (transient; junk after a crash, never an install)
+<userData>/acp/opencode/<hash of agent id>/opencode.json      (one agent, written temp + rename)
+<userData>/engine/opencode-<version>/opencode                 (managed install)
+<userData>/engine/.staging-<pid>-<ts>/                        (transient; junk after a crash, never an install)
 ```
 
-`cwd` for the spawned process is `<userData>/engine/`.
+`cwd` for a spawned OpenCode process is **the agent's folder**, not the engine directory — that is what makes the session's `location.directory` the folder the permission profile is written about.
 
 ## Security
 
-- **Invariant 4, mechanically.** A key exists in exactly two places: `built.env` (a map handed to `spawn`) and the child's environment. The config file carries `{env:CINNA_ENGINE_KEY_…}` references. `engineConfigSource` is the only module that calls `decryptApiKey`, and it hands the value straight to `buildEngineConfig`
-- **`GET /config` on the engine returns keys.** OpenCode resolves `{env:…}` in that response. Never log, echo or forward it
-- **Loopback only.** `--hostname 127.0.0.1`, a port the desktop picked, Basic auth with a fresh `randomBytes(32)` hex password per spawn — never written to disk, never logged, never sent to the renderer. **`--mdns` must never be passed**: it defaults the hostname to `0.0.0.0` and advertises the server. A test asserts the argv, because nothing else in the suite looks at the command line
-- **The address never crosses a boundary.** No IPC channel, no preload method, no field on `EngineState`
-- **The child's environment is narrowed**, not inherited: `shellEnvForChild(await getShellEnv())` — the same allowlist a third-party stdio MCP server gets — plus four named variables and the credential map. The thing running inside is a model with a bash tool, so a leaked `.zshrc` is one prompt injection from being read aloud
+- **Invariant 4, mechanically.** A key exists in exactly two places: `built.env` (a map handed to `spawn`) and the child's environment. The config file carries `env: ["CINNA_ENGINE_KEY_…"]` references and never a value
+- **The spec key is a digest of the environment, never the environment.** It is logged by the pool and compared on every acquire; `envDigest` is what keeps it safe to hold
+- **Nothing is inherited.** The launcher builds the child's whole environment and `spawn` is handed it verbatim — no `process.env` spread anywhere in the ACP code. This main process holds decrypted provider keys and the user's shell environment, and what a coding agent can see of them is a decision, not a default
+- **The child leads its own process group**, so the whole tree can be signalled; the pool's `shutdown()` runs from `will-quit`
 - **`OPENCODE_DISABLE_AUTOUPDATE=1`.** A pinned, checksum-verified binary that replaces itself is exactly what the checksum exists to prevent
-- **Logs never carry key material.** `whatMoved()` returns the words "config" / "credentials"; `writeEngineConfig` logs counts; a refused decrypt logs the provider id only; digests are never logged, digested or not
+- **Logs never carry key material.** A refused decrypt logs the provider id only; digests are never logged as values; no engine response is logged wholesale
 - **`credentials/.env` is `deny` in the permission profile**, not `ask` — see [engine.md](engine.md#the-permission-profile)
 - **The download is verified before it is unpacked**, and only a verified tree is published. The digests pin bytes, not provenance: they are not a signature
 - **Nothing renderer-supplied becomes a path.** The engine path is an `app_settings` value validated as absolute; every other path here is derived from `app.getPath('userData')`
+- **No address, no password, no handle crosses the bridge.** There is no longer an address to hide, which removes the class rather than guarding it
 
 ## Testing notes
 
-**Mutation-checked and pinned:** the loopback hostname and `serve` subcommand (replacing the port picker with a hard-coded 4096 and `--hostname 0.0.0.0` both used to leave the file green); the per-start password; that a key reaches the process environment and never the config on disk (`engineConfigSource.test.ts` drives it end to end, keystore to disk); the deterministic byte-for-byte config output under reordered input; the stable agent key across a same-slug sibling; env-name collision resistance; the checksum-mismatch, no-executable and failed-download branches each leaving nothing behind; the model-refresh flag on both paths.
+**What is covered:** the binary service on its own; `buildEngineConfig` as a pure function (which is what makes "can a key reach the config" a question a test answers directly); the collectors; runtime resolution on both sides of `runtimeDefaults`; prompt assembly by snapshot, because the interesting failures there are *omissions*; and the launcher — what it writes for a fixture agent, which refusals it produces for which inputs, and that the spec key moves when the config, the credential map or the binary path moves.
 
-**Named gaps, deliberately left rather than faked** (all three are in the `engineManager.test.ts` header, and all three are *correct code that happens to be unexercised* — not known-broken behaviour):
+**Not covered:**
 
-1. **The stop epoch is not pinned by the two tests that read as if it were.** Removing the post-`halt()` `cancelled(epoch)` check and the `stopEpoch += 1` in `stopEngineNow` leaves the file green. What actually fails "does not undo an explicit stop…" and "spawns no engine when the app quits…" is the **re-read of `running` after the await** — the fakes park the reconcile before that re-read. Do not delete the re-read believing the epoch covers it. The epoch guards the narrower window (a stop landing *during* `await halt()`), which these fakes cannot open
-2. **`await pending` in `halt()` is not pinned.** `void pending` leaves the whole suite green. Reaching it needs a start parked between its last checkpoint and the `spawn`, i.e. a hold inside `getShellEnv` rather than inside config generation — and even then the observable is a race between continuations
-3. **`resetEngineStateForTests()` is belt-and-braces.** Emptying its body leaves the file green, because every `beforeEach` points the engine path at a fresh temp dir and the production `binaryResolvedFor !== configured` guard already forces re-resolution
-
-**Not covered at all:**
-
-- The download **sequence** (`downloadToFile` → `extractArchive` → `chmod` → `rename`, including the lost-race branch). Every piece is hand-verified against the real binary; the sequence has only run against fakes
-- `writeIfDifferent`'s atomicity under interruption — a writer killed between write and rename must leave the previous config intact. Needs a crash, not a mock. The visible consequence (no surviving `.tmp`) *is* tested
+- The download **sequence** (`downloadToFile` → `extractArchive` → `chmod` → `rename`, including the lost-race branch). Every piece is hand-verified against the real binary; the sequence has never run end to end
+- The config write's atomicity under interruption — a writer killed between write and rename must leave the previous config intact. Needs a crash, not a mock
 - The `knowledge/` topic sort (pre-existing: `readdirSync` already returns name order on APFS)
-- **The engine controls in Settings.** The engine-path field and the Start/Stop button are typechecked and bundled but **never rendered** by a test. `RuntimePanel` is not among them: `RuntimePanel.test.tsx` renders it directly, which the page test cannot — it mocks the panel to a marker. What that suite does not reach is `EngineStatus`, since it pins the engine to `running` and the Start button only exists when it is not
-- The reconcile's cost. Per turn it does a keychain decrypt per credential and a full prompt re-assembly per agent — file reads plus the `knowledge/` walk, since `scannerService.scanRootCached` caches only the folder *scan*. Reasoned to be a few milliseconds, never measured. **If Phase 6 sees unexplained turn latency, look here first**
+- **The engine-path field in Settings.** Typechecked and bundled, never rendered by a test. The binary row beside it is exercised by the e2e UX pass rather than by a unit test
+- The per-turn cost of generating a config
 
-**Test conventions specific to this slice:**
-
-- `engineManager.test.ts` spawns real processes because every question worth asking — does the health check notice a dead process, does an external `kill` get seen, do two concurrent starts produce one engine — is a question about processes, and a mocked `spawn` answers all of them "yes" by construction
-- **Never assert absence by asking the child.** It is SIGTERM'd within a millisecond of a stop, well before a node process finishes booting, so "no dump file appeared" is also satisfied by a process that *was* spawned and died early. Absence is asserted on artefacts the **parent** writes — the generated `opencode.json` — which is synchronous and cannot race
-
-## The engine contract, as verified
-
-Against real `opencode` **1.18.27**:
-
-| Fact | How it was established |
-|---|---|
-| Asset SHA-256 for all six platforms | Downloaded and hashed |
-| `tar -xf` reads the `.zip` assets; binary at archive root on macOS/Windows | Unpacked and run |
-| `--port` / `--hostname` spellings; `serve` subcommand | Run |
-| `GET /api/health` → exactly `{"healthy":true}` | Requested |
-| Basic auth via `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD` | Requested with and without |
-| `CUSTOM_MODEL_LIMITS.anthropic` | `modelLimits.ts` | `{context: 200000, output: 32000}` | A custom entry has no models.dev catalog, so the engine defaults its models to `{0, 0}` and the Anthropic transport sends `output` as `max_tokens` — zero is a provider-side 400. A floor valid across the type's current line-up, **not** per-model truth; a value too high is rejected on the first turn, one too low silently truncates a long answer ([contract](opencode_contract.md) §9.5.9) |
-| `CUSTOM_MODEL_LIMITS.openai` | `modelLimits.ts` | `{context: 128000, output: 16384}` | as above |
-| `CUSTOM_MODEL_LIMITS.gemini` | `modelLimits.ts` | `{context: 1048576, output: 65536}` | as above |
-| `CUSTOM_MODEL_LIMITS.openai_compatible` | `modelLimits.ts` | `{context: 128000, output: 8192}` | as above; a gateway is whatever the user pointed it at, so the cautious pair |
-| `CUSTOM_MODEL_LIMITS.ollama` | `modelLimits.ts` | `{context: 32768, output: 4096}` | a local window is a property of the weights and of `num_ctx`, unknowable from the tag; over-claiming here does **not** fail loudly — Ollama truncates the context silently — so the pair is small enough to be true almost everywhere. `/api/show` would give the real figure per model |
-| `OPENCODE_CONFIG` points the v1 config reader at our generated file | Run |
-| `OPENCODE_CONFIG_DIR` points the **v2** reader at it, for every session location | Contract §9.5.3 |
-| Loopback binding | `lsof` |
-| OpenCode's base permission rule is allow-everything | `GET /agent` read back off a running engine |
-| **`--port 0` binds 4096**, not an OS-assigned port | Run |
-| **A second `serve` against a taken 4096 does not fail** — it comes up silently on an unpredictable port | Run, 3 Sep 2026 |
-
-The last two are why the port is picked here rather than delegated. An earlier note claimed the second instance dies on a SQLite `CREATE TABLE`; that did **not** reproduce, though the re-check shared one config and data directory and did not capture the engine's own logs, so a logged error may still exist.
-
-`GET /config` returning the resolved (key-bearing) config is recorded from OpenCode's documented behaviour and the `{env:…}` substitution the config relies on — it is the one contract item in this table not confirmed by a request in this phase, and Phase 6 should treat it as true until it proves otherwise, not the reverse.
-
-## Phase 6 seam
-
-What Phase 6 attaches to, and the two rules that come with it:
-
-- `engineManager.ensureRunning(userId)` — **call it before the turn, outside the turn lock.** Calling it after the runner has taken the lock is not unsafe, merely useless: the change is written and then deferred past the very turn that asked for it, landing one turn later
-- `engineManager.agentKey(agentId)` — the OpenCode agent entry to open a session against. Null means "not addressable right now"; do not synthesise one
-- `engineManager.agentModel(agentId)` — the `{providerID, id}` to open it *with*. The engine reads a session's model from the session alone; an agent entry's `model` is not consulted on that path
-- `engineManager.request(path, init)` — the only way to reach the engine. Keeping the base URL and password inside the module is what makes "everything goes through the runner" structural
-- `engineManager.lastSkips()` — why an agent is not addressable
-- **Gate on `enabled` in the runner.** The generated config ignores it, so a disabled folder agent has a config entry and a live `agentKey`. Nothing below the runner will refuse the turn
-- **`refreshModels: false` stays false on the reconcile path.** If a newer model list is needed, ask for it explicitly
-- Whether a restart between two turns of the same chat loses engine session state is **open**, and belongs to Phase 6 with session continuity (seam 9). Invariant 3 is satisfied here only at engine granularity
+**Gone with the server, and worth knowing if you are looking for it:** `engineManager.test.ts` spawned real subprocesses, bound real loopback ports and spoke real HTTP, because every question worth asking about a shared server needed one. The equivalent for the ACP era is `acpConnection.test.ts` and the driver's own suite, which drive a scriptable fake ACP agent over real stdio — see [The Agent Turn (technical)](agent_turn_tech.md).

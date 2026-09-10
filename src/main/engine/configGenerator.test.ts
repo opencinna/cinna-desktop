@@ -28,7 +28,7 @@ import {
  *   `name`, a custom provider's `baseURL`, a future key we add — which is
  *   exactly how this kind of leak happens.
  * - byte-equality across two builds, rather than "the same providers appear".
- *   The bytes are what `writeEngineConfig` compares to decide whether to
+ *   The bytes are what the launcher's spec key is a digest of, which decides whether to
  *   restart a running engine, so a build that is *equivalent* but not
  *   *identical* silently kills a live conversation on every rescan.
  */

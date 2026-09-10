@@ -1,12 +1,13 @@
 # Agent Drivers & Readiness — Technical Details
 
-Implementation reference for [Agent Drivers & Readiness](drivers.md). The runners each driver wraps are documented in [The Agent Turn Runner (tech)](../local_agents/agent_turn_tech.md) and [The Claude Engine (tech)](../local_agents/claude_engine_tech.md) and are not restated here.
+Implementation reference for [Agent Drivers & Readiness](drivers.md). What the ACP driver does inside a turn is [The Agent Turn (tech)](../local_agents/agent_turn_tech.md) and [The Claude Engine (tech)](../local_agents/claude_engine_tech.md) and are not restated here.
 
 ## File Locations
 
 ### Shared
 - `src/shared/agentDrivers.ts` — type-only plus one guard, so the renderer can import it (capabilities and readiness cross IPC on the agent DTO). Exports:
-  - `AgentDriverId` (`:23`), `AGENT_DRIVER_IDS` (`:25`), `isAgentDriverId()` (`:28`)
+  - `AgentDriverId` (`'a2a' | 'acp'`), `AGENT_DRIVER_IDS`, `isAgentDriverId()`, `FOLDER_AGENT_DRIVER`
+  - `AcpLauncherId` (`'opencode' | 'claude' | 'gemini' | 'codex'`), `ACP_LAUNCHER_IDS`, `isAcpLauncherId()`, `launcherConfig()`, `launcherOfConfig()` — the launcher lives here, and not beside the ACP code, because it is a **stored row value** and the row model may not import the ACP SDK
   - `AgentCapabilities` (`:32`)
   - `AgentReadinessState` (`:76`), `AgentReadiness` (`:85`)
   - `AGENT_READINESS_CHANGED_CHANNEL` (`:103`), `AgentReadinessChangedPayload` (`:106`)
@@ -18,15 +19,8 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). The runner
   - `ParkedAsk` (`:57`), `RespondOutcome` (`:66`), `ReadinessOptions` (`:76`)
   - `AgentDriver` (`:86`)
 - `capabilities.ts` — `capabilitiesFor()` (`:20`), the private `folderCapabilities()` (`:66`), `hasRunConfig()` (`:90`). Pure and import-light: `agentService` maps it into every DTO and the readiness service picks a TTL with it, so it must not pull the production wiring in `index.ts` into the service layer
-- `driverOf.ts` — `driverOfFolder(runtime)` (`:19`), `driverOfRow(agent)` (`:32`). It imports nothing but shared types, so the scanner and the DTO mapper can use it
-- `folderDriver.ts` — what `opencode` and `claude` share:
-  - `FOLDER_NOT_FOUND` (`:39`), `FolderView`, `FolderDriverDeps`, `FolderDriver`
-  - `createFolderDriver()` (`:82`), with `run` (`:110`) and `runHere` (`:134`)
-  - the private `reconcile()` (`:163`)
-  - `folderReadiness()` (`:171`)
-  - `respondToParkedAsk()` (`:206`) and the private `rememberIfAlways()` (`:244`)
-- `opencodeDriver.ts` — `createOpencodeDriver()`: `createFolderDriver('opencode', deps)`, with no readiness step beyond the folder's
-- `claudeDriver.ts` — `createClaudeDriver()` (`:24`). Its extra readiness step (`:26`) adds `not_installed` and `not_logged_in`
+- `driverOf.ts` — `driverOfRow(agent)`, `launcherOfRow(agent)` and `launcherOfFolder(runtime)`. It imports nothing but shared types, so the scanner and the DTO mapper can use it. **`launcherOfFolder` never returns null**: "the runtime names no engine" is an answer (the default), and only the scanner's `folderIndexLauncher` may say *keep the row's value*, which it does for an `unresolved` folder alone
+- `acp/` — the one driver every local CLI agent runs on: `acpDriver.ts`, `acpConnection.ts`, `acpProcessPool.ts`, `acpMessages.ts`, `acpPermissions.ts`, `acpQuestions.ts`, `acpLaunchers.ts`, `types.ts`, plus `testSupport/` and `__fixtures__/`. Documented in [The Agent Turn (tech)](../local_agents/agent_turn_tech.md#file-locations); `respondToAcpAsk` and `folderReadiness` live in `acpDriver.ts` and are what `respondToOrphanedAsk` and the readiness path reuse
 - `a2aDriver.ts` —
   - `AGENT_NOT_CONFIGURED` (`:33`), `NO_ENDPOINT_CONFIGURED` (`:35`), `A2A_READINESS_TIMEOUT_MS` (`:38`)
   - `createA2aDriver()` (`:68`), with `run` (`:74`), `readiness` (`:188`) and `respond` (`:234`)
@@ -34,14 +28,13 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). The runner
 - `a2aConnection.ts` — `rethrowAsReauthIfCinna401()` (`:41`), `resolveEndpointIfNeeded()` (`:66`), `resolveAccessToken()` (`:114`). Moved here from `agentService`; each decides by `capabilitiesFor(agent).cwd` / `.auth` rather than by `source`. `agentService.testAgent` and `listCliCommands` still use them for a card fetch
 - `a2aErrors.ts` — `authRejectionStatus(err)`: a 401 or 403 from either `A2aHttpError` or `AgentCardFetchError`. It is its own module so the A2A driver can classify a rejection without importing `a2aConnection.ts`, which names the keystore and the Cinna OAuth flow
 - `index.ts` — the production wiring and the resolver:
-  - `engineEventBus` (`:70`) and the engine-stopped hook (`:87`)
-  - `localDeps` (`:91`) and `localAgentTurnRunner` (`:174`)
-  - `claudeAuthProbe` (`:188`), `claudeDeps` (`:204`) and `claudeAgentTurnRunner`
-  - the private `readFolder()` (`:267`) and `rememberGrant()` (`:300`)
-  - `folderDrivers` (`:325`) and `drivers` (`:345`)
-  - `driverFor()` (`:365`) and `respondToOrphanedAsk()` (`:379`)
+  - `acpProcessPool` (exported, so `will-quit` can shut it down) and `startAcpConnection`
+  - `acpLaunchers` — `opencode` and `claude` only; `gemini` and `codex` have no entry, which is what makes the driver's refusal happen
+  - `claudeAuthProbe`, `electronNodeRuntime()`, `claudeAdapterEntry()`
+  - the private `readAcpFolder()`, `readSession` / `saveSession`, `isGranted` / `rememberGrant`
+  - `acpDriver`, `drivers`, `driverFor()` and `respondToOrphanedAsk()`
 
-  **It is the only file in this folder that imports Electron**, and the only one that names `engineManager`, `localAgentService`, `desktopStateService` or `a2aSessionRepo`
+  **It is the only file in this folder that imports Electron**, and the only one that names `engineBinaryService`, `localAgentService`, `desktopStateService` or `a2aSessionRepo`
 
 ### Main process — elsewhere
 - `src/main/services/agentReadinessService.ts` — the cache:
@@ -66,18 +59,18 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). The runner
   - `cancel` (`:598`) only aborts. The A2A driver's abort listener is what sends `tasks/cancel`, so a user's Stop and an orchestrator abort cancel the same way and the request goes out once
 - `src/main/services/a2aAsMcpProvider.ts` — `callTool` runs `driverFor(this.agent).run` (`:133`); `buildAgentToolProviders` skips a row only when `!hasRunConfig(row)` (`:171`)
 - `src/main/services/localAgents/commandService.ts` — `resolveCommandRunner(commands, wireContent, agentOwnerId, agentId, fallback: TurnRun)` (`:473`)
-- `src/main/services/localAgents/scannerService.ts` — `folderIndexDriver(dto)` (`:427`), passed on both index writes (`:752`, `:872`)
+- `src/main/services/localAgents/scannerService.ts` — `folderIndexLauncher(dto)`, passed on both index writes
 - `src/main/services/localAgents/localAgentService.ts` — `reindexAgent` (`:622`, which is how a kit agent's `updateField` runtime save reaches the row) and `renameAgent` (`:1577`) pass `folderIndexDriver(dto)`; `setBareRuntime` calls `agentRepo.setFolderDriver` (`:1630`–`:1631`)
 - `src/main/db/schema.ts` — `agents.driver` (`:251`), `agents.driverConfig` (`:253`)
-- `src/main/db/migrations/agent-drivers.ts` — `migrateAgentDrivers()`, called from `src/main/db/migrations/index.ts:79`
+- `src/main/db/migrations/agent-drivers.ts` — `migrateAgentDrivers()`; `src/main/db/migrations/acp-driver.ts` — `migrateAcpDriver()`, which runs after it. Both are called from `src/main/db/migrations/index.ts`
 - `src/main/db/agents.ts` —
-  - `FolderIndexEntry.driver` (`:117`)
+  - `FolderIndexEntry.launcher`
   - `driver: 'a2a'` on the hand-added insert (`:181`) and the sync insert (`:330`)
   - the folder writes in `replaceFolderIndex` (`:429` update, `:464` insert) and in `updateFolderIndex` (`:497`)
-  - `setFolderDriver()` (`:509`), `healMissingDrivers()` (`:530`)
+  - `setFolderLauncher()`, `healMissingDrivers()`
   - `agentSessionRepo` (`:846`) — the same object as `a2aSessionRepo`, under a driver-neutral name
 - `src/main/db/client.ts` — `runConsistencyChecks()` runs the `agents-driver-populated` check (`:57`)
-- `src/main/services/agentTurn/runner.ts` — `AgentTurnRunner` only. The runner no longer decides which agents it serves
+- `src/main/services/agentTurn/pendingRequests.ts` — the parked-ask registry both the ACP driver and the answer path use. `runner.ts` — the seam that existed to hold three transports — is gone with them
 
 ### Preload
 - `src/preload/index.ts` — `AgentData.driver` (`:219`), `.capabilities` and `.readiness` (`:227`); `window.api.agents.checkReadiness(agentId)` (`:664`); `onReadinessChanged(handler)` (`:667`)
@@ -103,9 +96,11 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). The runner
 | Column | Notes |
 |---|---|
 | `driver` | `TEXT`, an `AgentDriverId`. Nullable in SQLite, but written on every insert and filled for existing rows by the migration's backfill. `driverOfRow` still falls back for a value this build does not recognise, which only a newer build can have written |
-| `driver_config` | `TEXT`, JSON (`mode: 'json'` in Drizzle). The driver's own settings, opaque outside `src/main/agents/drivers/`. Nothing reads or writes it yet |
+| `driver_config` | `TEXT`, JSON (`mode: 'json'` in Drizzle). The driver's own settings, opaque outside `src/main/agents/drivers/`. Since phase 3 it holds `{"launcher": …}` for every folder agent — which engine an ACP row runs |
 
 The migration is placed after every table-creation migration, returns early without `hasTable('agents')`, and gates each `ADD COLUMN` with `hasColumn`. Its backfill is `UPDATE … WHERE driver IS NULL`: `a2a` for `source IN ('local', 'remote')`, and `opencode` for `source = 'folder'`. That predicate is also what makes it idempotent — a row that names a driver is never rewritten, so a scanner's correction of a Claude folder backfilled as `opencode` survives every later launch. See [Database Migrations](../../development/migrations/migrations_llm.md).
+
+A second migration, `src/main/db/migrations/acp-driver.ts`, collapses `driver` from `opencode` / `claude` to `acp` and moves the engine into `driver_config.launcher`. **Idempotent by its predicate**: the launcher is written only where the column still names an engine, and a row already on `acp` is never rewritten, so a second boot cannot overwrite a launcher the scanner has since corrected. The order inside is load-bearing — the config is written *from* `driver` before `driver` is overwritten, both statements selecting on the same predicate, so an interrupted run re-runs cleanly. `json_object` rather than a string literal, because a hand-rolled `'{"launcher":"claude"}'` is one missed brace from a row whose config reads as null — which would put a Claude agent on the default engine until its next rescan. A row that already carries a `driver_config` is left alone: nothing wrote one before this migration, so a value there came from a newer build or a repair.
 
 Who writes the column:
 
@@ -113,13 +108,13 @@ Who writes the column:
 |---|---|
 | `agentRepo` hand-added insert | `a2a` |
 | `agentRepo.syncRemote` insert | `a2a` |
-| `replaceFolderIndex`, insert | `entry.driver ?? DEFAULT_AGENT_ENGINE` |
-| `replaceFolderIndex`, update | `entry.driver ?? existing.driver ?? DEFAULT_AGENT_ENGINE` — a row that had none takes the default rather than staying unset |
-| `updateFolderIndex` | `entry.driver` when it is not null; otherwise the column is left alone |
-| `setFolderDriver(userId, agentId, driver)` | Folder rows only (`source = 'folder'` is in the `WHERE`); returns whether a row changed |
-| `healMissingDrivers()` | Rows where `driver IS NULL`, **across every user**, by the migration's own rule. A value this build does not recognise is left alone. Called by the `agents-driver-populated` boot check, which logs `boot-cleanup:filled-missing-agent-drivers` at `warn` when it fills anything |
+| `replaceFolderIndex`, insert | `driver = 'acp'`, `driver_config = launcherConfig(entry.launcher ?? DEFAULT_AGENT_ENGINE)` |
+| `replaceFolderIndex`, update | `driver = 'acp'`, launcher = `entry.launcher ?? launcherOfConfig(existing.driverConfig) ?? DEFAULT_AGENT_ENGINE` — a row that had none takes the default rather than staying unset |
+| `updateFolderIndex` | `driver = 'acp'`; the launcher is written only when `entry.launcher` is not null, so an unreadable manifest keeps what the row had |
+| `setFolderLauncher(userId, agentId, launcher)` | The write a watcher never sees — a bare agent's runtime lives outside its folder. Folder rows only (`source = 'folder'` is in the `WHERE`); returns whether a row changed |
+| `healMissingDrivers()` | Rows where `driver IS NULL`, **across every user**: a hand-added or synced row gets `a2a`, a folder row `acp` plus the default launcher (the scanner corrects the launcher on its next pass). A value this build does not recognise is left alone. Called by the `agents-driver-populated` boot check, which logs `boot-cleanup:filled-missing-agent-drivers` at `warn` when it fills anything |
 
-`FolderIndexEntry.driver` is `null` for exactly one state: an `unresolved` folder, whose manifest could not be read (`folderIndexDriver`). Neither index writer reaches an `unresolved` folder today — `scanRoot` holds it back, and `reindexAgent` finds no row for its placeholder id — so the null is the rule written down where a future writer will meet it.
+`FolderIndexEntry.launcher` is `null` for exactly one state: an `unresolved` folder, whose manifest could not be read (`folderIndexLauncher`). Neither index writer reaches an `unresolved` folder today — `scanRoot` holds it back, and `reindexAgent` finds no row for its placeholder id — so the null is the rule written down where a future writer will meet it.
 
 ## IPC Channels
 
@@ -149,11 +144,11 @@ Who writes the column:
 
 ### Capabilities per driver
 
-| | `a2a`, Cinna-synced | `a2a`, hand-added | `opencode` | `claude` |
+| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` |
 |---|---|---|---|---|
 | `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes |
 | `sessions` | `context` | `context` | `resumable` | `resumable` |
-| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission`, `question` | `permission` |
+| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` |
 | `inputResume` | `next_message` | `next_message` | `reply` | `reply` |
 | `attachments` | `cinna` | `none` | `none` | `none` |
 | `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` |
@@ -161,31 +156,35 @@ Who writes the column:
 | `mcpInjection` | no | no | no | no |
 | `cwd` | no | no | yes | yes |
 
+**One driver, and still two answers, because a capability is about what the *engine* can do rather than about the protocol.** Both differences are measured and both move opposite to what a transport change would suggest: Claude **gains** questions (the adapter enables `AskUserQuestion` because the launcher declares `elicitation.form`) while OpenCode **loses** them (its `question` tool is not registered under `OPENCODE_CLIENT=acp`, and its ACP layer bridges none to `elicitation/create`). A launcher this build has no implementation for — `gemini`, `codex` — is described as a CLI-authenticated agent **with no question path**, because nothing here has run one and a capability that pretends otherwise would have the composer offer an answer widget for an ask that never arrives.
+
+Capabilities read the **stored** launcher (`launcherOfRow`), because a row is all they have and the answer must be the same on every call.
+
 "Synced" means `source === 'remote'` on an `a2a` row. That check lives here, which is where the kind branch belongs. `hasRunConfig(row)` is `driverOfRow(row) !== 'a2a' || !!row.cardUrl`: a folder agent legitimately has no card URL.
 
 ### `driverOf.ts`
-- `driverOfRow(agent)` returns `agents.driver` when `isAgentDriverId` accepts it. Otherwise it falls back by ownership: a `folder` row gets `DEFAULT_AGENT_ENGINE`, anything else gets `a2a`. The fallback exists for a database a newer build touched; it is not a reason to leave the column empty
-- `driverOfFolder(runtime)` trims a string `runtime.engine`; an unrecognised or missing engine becomes the default engine. This is the same tolerant read `runtimeService` makes, so a folder written by a newer tool keeps running
+- `driverOfRow(agent)` returns `agents.driver` when `isAgentDriverId` accepts it. Otherwise it falls back by ownership: a `folder` row gets `FOLDER_AGENT_DRIVER` (`acp`), anything else `a2a`. The migration backfills every row and every insert writes one, so the fallback is for a database touched by a newer build
+- `launcherOfRow(agent)` reads `driver_config.launcher`, falling back to the **default engine** rather than refusing: the value is a cache of what the folder said, and a stricter read would only produce a broken agent list while a rescan caught up
+- `launcherOfFolder(runtime)` trims a string `runtime.engine`; an unrecognised or missing engine is the default engine. The same tolerant read `runtimeService` makes — and **never null**, which is the distinction `folderIndexLauncher` exists to keep
 
-### Folder drivers (`folderDriver.ts`)
-- **`run`** calls `reconcile(id, deps.readFolder(userId, agent.id))`. When the target differs from `id` and `deps.sibling(target)` exists, it runs `other.runHere(…)` and logs at `info` with both `stored` and `folder`. Otherwise it runs `runHere`
-- **`reconcile`** keeps the stored driver when the folder is `null`, `invalid` or `contract_too_new`. Otherwise it returns `'claude'` when `driverOfFolder(runtime)` is `'claude'`, and `'opencode'` in every other case
-- **`runHere`** maps `RunInput` onto the wrapped runner's `runTurn({chatId, agentId, agentName, wireContent, fileIds, signal, onEvent})`
-- **`readiness`** is `folderReadiness(readFolder(…))`. Only an `ok` folder goes on to the driver's extra readiness steps. Any throw becomes `invalid` with `FOLDER_NOT_FOUND`, logged
+### The `acp` driver (`acp/acpDriver.ts`)
+
+- **`run`** reads the folder (`readAcpFolder`), refuses on gone / switched off / `invalid` / `contract_too_new`, takes the launcher from `launcherOfFolder(folder.runtime)`, refuses a launcher this build does not have, asks the launcher to `plan()` — a refusal there is the turn's error — and only then takes the turn lock. Everything after the lock is [the turn](../local_agents/agent_turn_tech.md)
+- **The stored launcher is not consulted by `run` at all.** It is a cache of the same read, and every state where the folder cannot speak for itself was already refused above. The one reader left for it is `capabilities()`
+- **`readiness`** is `folderReadiness(readAcpFolder(…))`, then — only for an `ok` folder — the rungs of the launcher the **folder** names. Any throw becomes `invalid` with `ACP_FOLDER_NOT_FOUND`
 - **`folderReadiness`**:
-  - `null` → `invalid` with `FOLDER_NOT_FOUND`
+  - `null` → `invalid` with `ACP_FOLDER_NOT_FOUND`
   - `ok` → `ok`
   - the three folder states → that state, with the folder's `readinessReason` or a generic sentence
   - a readiness this build does not know → `invalid`, because it is not one this build can vouch for
-- **`respond`** calls `respondToParkedAsk`. `rememberIfAlways` runs first: an `always` becomes `once`, with `remembered` taken from `rememberGrant` — or `remembered: false` when no ask was recorded. Then `resolveRequest` runs. The outcome is `{delivered: false}` when nothing is waiting; `remembered` is present only for a permission answered `always`
-- **The production `readFolder`** (`index.ts:267`) turns `localAgentService.get` into a `FolderView`, and returns `null` (logged) when it throws
-- **`sibling`** is `folderDrivers[id]`
-- **`respondToOrphanedAsk`** uses the same registry with `rememberGrant: () => false`. An `always` for a row that was pruned mid-turn settles as `once`, `remembered: false`
+- **`respond`** calls `respondToAcpAsk`, which writes an *Always allow* **first** and then settles the park — the resolution has to carry `remembered` into the transcript, so the write cannot move after the resolve. An `always` becomes `once` with `remembered` taken from `rememberGrant`, or `remembered: false` when the store refused: the user allowed the action, so a failed write must not cancel it
+- **`respondToOrphanedAsk`** uses the same function with `rememberGrant: () => false`. An `always` for a row pruned mid-turn settles as `once`, `remembered: false` — there is no agent left to keep a rule beside
 
-### The `claude` driver
-- **`claudePath(options)`** (`index.ts:333`) — tool detection is memoized for the life of the app. A fresh check that finds no binary calls `toolDetectionService.refresh()` and looks again; a check that finds a binary costs nothing extra
-- **`claudeAuth(options)`** (`index.ts:341`) — `claudeAuthProbe.refresh()` when fresh, otherwise `.status()`
-- **The steps.** No path → `not_installed`, with `describeEngineSkip('claude_not_installed')`. `logged_out` → `not_logged_in`, with `describeEngineSkip('claude_not_logged_in')`. Anything else → `ok`. A rejection from either probe is caught and read as no answer
+### The launchers (`acp/acpLaunchers.ts`)
+- **`claudePath(options)`** — tool detection is memoized for the life of the app. A fresh check that finds no binary calls `toolDetectionService.refresh()` first, so a Claude Code installed a minute ago counts
+- **`claudeAuth(options)`** — `claudeAuthProbe.refresh()` when fresh, otherwise `.status()`
+- **The Claude rungs.** No path → `not_installed`, with `describeEngineSkip('claude_not_installed')`. A definite `logged_out` → `not_logged_in`, with `describeEngineSkip('claude_not_logged_in')`. Anything else, including a probe that could not answer, is `ok`
+- **The OpenCode launcher has no `readiness`**, deliberately: its binary is one this app will download, so its absence is not a state a user has to fix, and a list must never start a download to answer a question about a row
 
 ### The `a2a` driver
 `run`, in order:
@@ -283,7 +282,7 @@ It also counts comparisons against `FOLDER_AGENT_SOURCE` and calls of the two fo
   - `AgentCard.tsx`, `CatalogSettingsSection.tsx`, `JobEditForm.tsx`, `JobDetail.tsx` — 1 each
 
   These files are not allowlisted, because a whole-file pass would hide the next behavioural branch added beside them. A count that moves in either direction fails until someone reads the branch and decides which kind it is; a behavioural one moves into a driver
-- **`LIMITS`** (`:77`) — `source` 4, `engine` 5, `kind` 42, `jobType` 29, `providerType` 3, and `LIMIT` 83. **Each is asserted by equality, not as a ceiling**: a branch removed without lowering its limit would leave room for a new one to arrive unnoticed. Raising a limit needs a comment beside it naming what pays it back. The `source` branches that remain are how agent status refreshes (`agentStatusService`, `statusViews`, `useAgentStatus`, `useChatStream`), which no driver owns
+- **`LIMITS`** — `source` 4, **`engine` 0**, `kind` 42, `jobType` 29, `providerType` 3, and `LIMIT` 78. **Each is asserted by equality, not as a ceiling**: a branch removed without lowering its limit would leave room for a new one to arrive unnoticed, and raising one needs a comment beside it naming what pays it back. `engine` reaching **zero** is what phase 3 paid for: the config source no longer filters by engine (the launcher is asked about one agent it was chosen for), and the shared engine's own state — the row that said *Running* and offered *Start* — went with the server. What remains of `runtime.engine` is read by the two places that own that field (the service that resolves and validates it, the panel that edits it) and by the one card whose control exists on one engine only; those are pinned per file rather than held against `LIMITS`, for the same reason sync's `source` reads are. The `source` branches that remain are how agent status refreshes, which no driver owns
 - **`NOT_A_KIND_BRANCH`** (`:182`) — drops three named comparisons on unrelated `'local' | 'cinna'` unions
 - **Blind spots**, listed in the file's header — none of these are counted:
   - a `switch` / `case` on a kind
@@ -309,33 +308,25 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
 
 - **No secret joins the DTO.** `capabilities.auth` says `token` when an access token is stored, never what the token is; token resolution stays in main (`a2aConnection.ts`)
 - **`agent:check-readiness` takes an id, never a URL.** It is activation-gated and finds the row with `findAgent` in the caller's own scopes
-- **A list never starts a process to answer readiness.** OpenCode readiness does not start the engine. Claude readiness spawns only `claude auth status`, through the shared probe, which runs no turn and bills nothing
-- **A grant is built only from the engine's recorded ask.** The folder driver's `respond` builds it from the ask held in the pending registry, never from the renderer's payload. An answer for a row that has gone writes no rule
+- **A list never starts a process to answer readiness.** The OpenCode launcher has no readiness rungs at all, so nothing downloads or spawns. Claude readiness spawns only `claude auth status`, through the shared probe, which runs no turn and bills nothing
+- **A grant is built only from the engine's recorded ask.** The ACP driver's `respond` builds it from the ask held in the pending registry, never from the renderer's payload. An answer for a row that has gone writes no rule
 
 ## Tests
 
-- `src/main/agents/drivers/index.test.ts` — `driverFor` through the real wiring, with the module graph below it mocked. It replaced the resolver's dispatch test and keeps its scenarios:
+- `src/main/agents/drivers/index.test.ts` — `driverFor` through the real wiring, with the module graph below it mocked:
   - an A2A row reaches the A2A driver without any folder being read
   - the same driver on every call
-  - a folder that names no engine runs on OpenCode
-  - a folder that names Claude runs on Claude **while its row still says OpenCode**
-  - an unrecognised engine runs on the default runner
-  - the row's driver is kept when the folder cannot be read
+  - every folder row reaches the ACP driver, whatever its stored launcher
   - an unknown request is answered with nothing delivered, through the real registry
-- `src/main/agents/drivers/capabilities.test.ts` — every assertion stands in for a `source` comparison that used to live elsewhere: the attach gate, the re-auth flag, the `/run:` interception, the catalog dispatch
-- `src/main/agents/drivers/folderDriver.test.ts` —
-  - reconcile, in both directions and back
-  - the stored driver kept when the folder is unreadable or invalid
-  - an unknown engine, and a driver with no sibling
-  - folder readiness in the runners' own words, and never throwing
-  - the Claude steps asked only after the folder is `ok`; OpenCode never asks them
-  - `respond`: nothing waiting; *Always* stored first, then `once`; a refusing store still allowing, with `remembered: false`; no grant without a recorded ask; `once`, reject and answers passed through; both folder drivers answering alike
-- `src/main/agents/drivers/claudeDriver.test.ts` —
-  - `ok`
-  - not installed, without asking the login probe
-  - `not_logged_in` only on a definite logout; an `unknown` probe never refuses
-  - the folder asked first
-  - `fresh` reaching both probes
+- `src/main/agents/drivers/capabilities.test.ts` — every assertion stands in for a `source` comparison that used to live elsewhere: the attach gate, the re-auth flag, the `/run:` interception, and the two per-launcher differences (Claude has a question path, OpenCode does not; an unbuilt launcher claims none)
+- `src/main/agents/drivers/acp/acpDriver.test.ts` —
+  - the launcher taken from the folder while the row still says the other engine, and a folder that names no engine running on the default
+  - the refusals, in order and in their own words: folder gone, switched off, `invalid`, an engine this build cannot run, a launcher that refused
+  - folder readiness never throwing, and the launcher's rungs asked only after the folder is `ok`
+  - `respond`: nothing waiting; *Always* stored **first**, then `once`; a refusing store still allowing, with `remembered: false`; no grant without a recorded ask
+  - the whole turn against the fake ACP agent, plus `describeDriverContract('acp', …)`
+- `src/main/agents/drivers/acp/acpLaunchers.test.ts` — what each launcher writes, declares and refuses
+- `src/main/agents/drivers/acp/shutdown.test.ts` — that `will-quit` really reaches the pool, read from the entry point the way `registration.test.ts` reads the IPC modules. The hook had no caller at all when it was first written, and every test passed
 - `src/main/agents/drivers/a2aDriver.test.ts` —
   - `run`: the pre-flight handed through; a stream 401 treated as a re-auth only for a synced agent; a missing card refused before anything is resolved; no endpoint; a token failure; a stop during the pre-flight sending nothing; cancel sent once, and not before a task exists; `respond` never delivering
   - `readiness`: `ok`; a disabled row probed like any other; no card; an expired session as a state; a 401 for synced versus hand-added agents; unreachable, with `detail`; `null` when the card times out and when the token hangs; 4xx versus 5xx; an unusable card; never throwing, even synchronously
@@ -355,7 +346,7 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
   - `src/main/db/migrations/migrations.test.ts` — *adds the driver columns*, and *agents.driver on an install that predates it*: mapped by source, a no-op on replay, never rewriting a row that names a driver
   - `src/main/services/localAgents/scannerService.test.ts` — *the driver a folder row names*: the manifest's engine; the default engine, following an edit; no answer for an unreadable manifest; staying on Claude while the manifest is unparseable; a bare folder's desktop state
   - `src/main/services/localAgents/localAgentService.test.ts` — *the driver follows an engine chosen in the app*, and moving the row to the engine an edit on disk names
-- **Golden:** `src/main/services/agentTurn/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)` runs every turn through `driver.run`. Its three driver clauses are `capabilities.stable`, `readiness.never_throws` and `respond.unknown`, and its subjects are built with `__golden__/driverWorld.ts`. See [the driver contract](../local_agents/agent_turn_tech.md#the-driver-contract)
+- **Contract:** `src/main/services/agentTurn/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. It runs every turn through `driver.run`. Its three driver clauses are `capabilities.stable`, `readiness.never_throws` and `respond.unknown`, and its subjects are built with `__golden__/driverWorld.ts`. See [the driver contract](../local_agents/agent_turn_tech.md#the-driver-contract)
 - **Renderer:**
   - `ChatInput.readiness.test.tsx` —
     - refused and not refused; the reason never moving while the user types; the tooltip

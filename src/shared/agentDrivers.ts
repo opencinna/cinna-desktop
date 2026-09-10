@@ -20,14 +20,12 @@ import type { InputResumeMode } from './runEvents'
  * sync may touch it); `driver` says how it runs. They were one column and are
  * two concerns.
  *
- * **`opencode` and `claude` are on their way out.** Phase 3 of the agent
- * runtime plan replaces both with `acp` — one driver speaking the Agent Client
+ * **`opencode` and `claude` were driver ids until phase 3 of the agent runtime
+ * plan**, which replaced both with `acp` — one driver speaking the Agent Client
  * Protocol to a child process, with the engine recorded as
- * `driver_config.launcher` instead of as an identity. They are still here
- * because the switch is the *next* commit: the ACP driver and its process pool
- * land first, tested on their own against a fake agent, so that the commit
- * which flips every folder row over changes wiring and nothing else. Both
- * values go, together with the two runners behind them, when it does.
+ * `driver_config.launcher` below instead of as an identity. A row still holding
+ * either value is rewritten by `migrations/acp-driver.ts`, which carries the
+ * engine into the config before it overwrites the column.
  */
 export type AgentDriverId = 'a2a' | 'acp'
 

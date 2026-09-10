@@ -127,7 +127,9 @@ Settings → Local Agents → RootRepositoryDialog (opened from a folder row)
                             gitService.updateGitRepo(dir)
                               readGitStatus(fetch) → merge --ff-only → readGitStatus
                                      │
-                            localAgentService.rescan(root) + engineManager.applyConfigChange
+                            localAgentService.rescan(root)
+                              (nothing is pushed at an engine: each agent's config is
+                               generated at the top of its own next turn)
 ```
 
 ## Technical Details

@@ -26,7 +26,7 @@ The third is the one that catches people: an agent folder has its own `docs/`, `
 
 The reason the exception list is short and enumerated is that each entry costs something: it is a value a rebuild cannot recover, so it has to be stored somewhere that survives, and every such place is a second source of truth to keep honest. Four is the whole list.
 
-**`agents.driver` is not a fifth.** It names the engine the folder's runtime declares, and a rescan reads that back — from the manifest for a kit agent, and from the bare agent's own state (already where `runtime` lives) for a bare one. It is written by the index like `name` and `description`; see [The row names the engine its folder's runtime names](#the-row-names-the-engine-its-folders-runtime-names).
+**The launcher recorded on the row is not a fifth.** `driver_config.launcher` names the engine the folder's runtime declares, and a rescan reads that back — from the manifest for a kit agent, and from the bare agent's own state (already where `runtime` lives) for a bare one. It is written by the index like `name` and `description`; see [The row names the engine its folder's runtime names](#the-row-names-the-engine-its-folders-runtime-names). (`agents.driver` itself is `acp` for every folder agent and says nothing about the folder at all.)
 
 Its corollary is the rule the pruning code is written around: **a scan can only speak for the folder it walked.** A scan has evidence about the agents under a root's *current* path at *this* moment, and about nothing else — not about a folder it could not parse, and not about a location the root used to have.
 
@@ -189,12 +189,12 @@ Every other consumer of the agents list looks an agent up by id for display, whi
 
 ### The row names the engine its folder's runtime names
 
-For a folder agent, `agents.driver` names the [driver](../drivers/drivers.md) that runs the row: the engine its runtime names. It is index data like `name` — written by the scan, never the source of truth.
+For a folder agent, `agents.driver` is always `acp` — every local CLI agent runs on one [driver](../drivers/drivers.md) — and `driver_config.launcher` names the **engine** its runtime names. The launcher is index data like `name`: written by the scan, never the source of truth.
 
 - **Every scan writes it**, both when a whole root is rebuilt and when a single folder is updated. For a kit agent the engine comes from the manifest's runtime; for a bare agent, from its desktop state. A folder that names no engine, or one this build does not know, gets the default engine
 - **A folder whose manifest cannot be read keeps the row's value.** This is the identity rule above, applied to one more column: a scan changes readiness, never identity. A Claude folder whose manifest is unparseable for the second an assistant saves it must not come back as an OpenCode row. A new row with no readable engine takes the default, because there is no earlier value to keep
 - **An engine chosen in the app is written at once.** A kit agent's runtime save re-reads the folder and updates the row. A bare agent's runtime lives in its desktop state, which no watcher sees, so its runtime write sets the row directly
-- **No turn trusts the column.** A folder driver re-reads the folder's engine when a turn starts, because the row can still lag an edit an assistant made a moment ago
+- **No turn trusts the column.** The driver re-reads the folder's engine when a turn starts, because the row can still lag an edit an assistant made a moment ago. This used to matter more than it does: with a driver per engine, an agent dispatched on a stale value had to be handed to its sibling, and while that hand-off was missing it answered "try again in a moment" for ever
 
 ### Watching a folder
 
@@ -305,7 +305,7 @@ Files on disk  ── truth ──►  agents rows + agent_roots rows  ── de
 - [Agents Folder Updates](folder_updates.md) — fast-forwarding a registered root that is a git working tree, and the rescan that follows
 - [Open in… (Local Agent Tools)](open_in_tools.md) — the registered roots are exactly the allowed area of its path guard, registered by this slice at IPC registration. Until that runs, open-in refuses everything
 - [Agents](../agents/agents.md) — folder agents join the same merged agents list, the same id-prefix scope resolution, and the same `enabled` toggle
-- [Agent Drivers & Readiness](../drivers/drivers.md) — the `driver` column the scan writes, the folder drivers that re-read the folder's engine on every turn, and folder readiness as the first rung of an agent's readiness
+- [Agent Drivers & Readiness](../drivers/drivers.md) — the `driver` and `driver_config` columns the scan writes, the driver that re-reads the folder's engine on every turn, and folder readiness as the first rung of an agent's readiness
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — folder agents are machine-local and live in the default (settings) scope
 - [Database Migrations](../../development/migrations/migrations_llm.md) — `agent_roots`, the `agents` columns, and why the chain moved into its own module
 - [Resource Activation](../../core/resource_activation/resource_activation.md) — every channel here requires an activated user session, except `local-agent:home-state`, which the onboarding copy needs before there is one

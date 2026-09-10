@@ -6,7 +6,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 
 ## Core Concepts
 
-- **Driver** — `AgentDriver`: the kind-specific half of running an agent. There are three: `a2a` (a hand-added or Cinna-synced agent reached over A2A), `opencode` (a folder agent on the desktop-managed engine) and `claude` (a folder agent on the user's own Claude Code). Each wraps the turn runner of the same kind, unchanged
+- **Driver** — `AgentDriver`: the kind-specific half of running an agent. There are **two**: `a2a` (a hand-added or Cinna-synced agent reached over A2A) and `acp` (every local CLI agent, run as a child process speaking the Agent Client Protocol). There were four for the length of one commit while the ACP driver landed switched off, and three before that — `opencode` and `claude` were separate drivers wrapping separate runners
 - **Driver id** — `agents.driver`, stored on every row. **`source` still says who owns a row** (`local` / `remote` / `folder`: whether sync may touch it, which settings tab lists it, whether it can be deleted). **`driver` says how the agent runs.** One column used to carry both, and they are separate concerns
 - **Capabilities** — what a driver can do for a given row: stream, cancel, keep a session, which asks it raises and how they are answered, whether a file can be attached, who authenticates the turn, where `/` commands come from, whether it runs in a folder. Answered from the row alone
 - **Agent readiness** — whether an agent can take a turn now. The answer is `ok`, or one of:
@@ -18,7 +18,8 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Not known** — a readiness of `null`: never checked, or a check that could not tell. **It never refuses anything**
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered something other than `ok`
 - **Check again** — the composer's action on a refusal; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
-- **Reconcile** — a folder driver re-reading its folder's engine at the start of every turn. If the folder now names the other engine, the turn goes to the other folder driver
+- **Launcher** — which engine an ACP agent runs: `driver_config.launcher`, one of `opencode` / `claude` / `gemini` / `codex`. **The launcher id is the engine name**, deliberately — it is what the folder's own `runtime.engine` says, and a second vocabulary would put the manifest and the row one translation table apart. Only the first two are built; an agent naming either of the others is refused in words, which is a far better failure than a value that reads as the default engine
+- **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
 
 ## User Stories / Flows
 
@@ -75,7 +76,7 @@ What is still allowed, and where, is enforced by a test, not by review — see [
 - the orchestrator's agent tool
 - the answer path
 
-It reads no folder and makes no network call. A folder driver checks its folder itself when it runs a turn.
+It reads no folder and makes no network call. The ACP driver checks its folder itself when it runs a turn, and picks its launcher from what the folder says then.
 
 ### The row is a cache; the folder decides a folder agent's engine
 
@@ -110,8 +111,8 @@ Every driver answers `readiness()` without throwing, and **null means "could not
 - **A2A** fetches the agent's card with the agent's token, with a five-second bound around the whole check.
   - A card that does not answer within the bound gives `null`, not `unreachable`. A turn's own card fetch has no bound and simply waits longer, so refusing a slow agent would make readiness stricter than the turn it predicts
   - The bound includes the token. A token endpoint that accepted the connection and never answered once held a list-time slot for ever, and every check queued behind it waited too
-- **OpenCode** readiness is the folder's alone. Whether the engine is running is not part of it: the turn starts the engine, and a list must never start a process to answer "can this agent run"
-- **Claude** checks the folder first, then whether a `claude` is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn
+- **OpenCode** readiness is the folder's alone, and that launcher deliberately has no rungs of its own: whether the binary is resolved is not part of it, because the turn resolves it (downloading it if it must), and a list must never start a download to answer "can this agent run"
+- **Claude** — the launcher's rungs, asked about the engine the **folder** names rather than the one the row stores, so an agent just switched over in the Runtime card is answered about where it is going. The folder first, then whether a `claude` is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn
 
 A failure reason is a short sentence that leads with what helps: the status, and where to fix it. It sits beside a disabled Send, cut to whatever width is left. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
 
@@ -162,9 +163,10 @@ Renderer
      │                                            │ enabled only; one start per macrotask, ≤ 4 at once
      │                                            ▼
      │                                     driverFor(row).readiness(userId, row, {fresh?})
-     │                                        a2a      → token + card fetch, 5 s bound
-     │                                        opencode → folder
-     │                                        claude   → folder → install → login
+     │                                        a2a → token + card fetch, 5 s bound
+     │                                        acp → folder, then the launcher the FOLDER names:
+     │                                                opencode → nothing further
+     │                                                claude   → install → login
      │                                            │ a refusal arrived, left or changed?
      └── agent:readiness-changed ◄────────────────┘ push; the renderer re-reads the list
 
@@ -177,9 +179,10 @@ Renderer
                                    ├─ resolveCommandRunner(capabilities.commands, …)
                                    │     bare /run: to a catalog agent → commandService
                                    └─ driver.run(userId, row, {chatId, wireContent, …})
-                                        a2a      → pre-flight → runAgentTurn (+ tasks/cancel)
-                                        opencode ┐ reconcile against the folder:
-                                        claude   ┘ other engine named? → sibling.runHere
+                                        a2a → pre-flight → runAgentTurn (+ tasks/cancel)
+                                        acp → read the folder → launcherOfFolder →
+                                                launcher.plan() (or a refusal, in a sentence)
+                                                → pool.acquire → session → prompt
                                    ▼
                                  a2aStreamingService.streamToAgent({run, port})
 
@@ -190,12 +193,13 @@ Renderer
 
 ## Integration Points
 
-- [The Agent Turn Runner](../local_agents/agent_turn.md) — the three runners the drivers wrap unchanged, and the parked-ask registry a folder driver answers through
-- [The Claude Engine](../local_agents/claude_engine.md) — the install and login probes the `claude` driver's readiness asks, and the runner it wraps
-- [The Local Engine](../local_agents/engine.md) — why OpenCode readiness is the folder alone: the turn starts the engine
-- [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the folder readiness that is the first rung of a folder driver's answer, and the scanner that writes `driver`
+- [The Agent Turn](../local_agents/agent_turn.md) — what the ACP driver does inside `run`, and the parked-ask registry it answers through
+- [The Claude Engine](../local_agents/claude_engine.md) — the install and login probes the Claude launcher's readiness asks, and what it declares at `initialize`
+- [The Local Engine](../local_agents/engine.md) — why OpenCode readiness is the folder alone: the turn resolves the binary, and the process is the turn's own
+- [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — the folder readiness that is the first rung of the ACP driver's answer, and the scanner that writes the launcher
+- [The ACP Engine Contract](../local_agents/acp_contract.md) — what each engine actually does over this protocol
 - [`/run:<name>` — Catalog Commands](../local_agents/commands.md) — decided on `capabilities.commands`, and never refused on readiness
-- [Local Agent Permissions](../local_agents/permissions.md) — *Always allow* is written by a folder driver's `respond`
+- [Local Agent Permissions](../local_agents/permissions.md) — *Always allow* is written by the ACP driver's `respond`, before the park is settled
 - [Agents](../agents/agents.md) — the Settings → Agents card that shows readiness beside Test Connection
 - [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — the flow the composer's Re-authenticate runs
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — the agent tool goes through `driverFor` too, and is never refused on readiness
