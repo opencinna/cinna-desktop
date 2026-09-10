@@ -100,11 +100,84 @@ describe('the migration chain on a fresh install', () => {
     raw.close()
   })
 
+  it('adds the driver columns', () => {
+    const cols = columnNames(freshDatabase(), 'agents')
+    expect(cols).toContain('driver')
+    expect(cols).toContain('driver_config')
+  })
+
   it('starts a fresh install with only the default user and no agent rows', () => {
     const raw = freshDatabase()
     const users = raw.prepare('SELECT id FROM users').all() as Array<{ id: string }>
     expect(users.map((u) => u.id)).toEqual(['__default__'])
     expect(raw.prepare('SELECT COUNT(*) AS c FROM agent_roots').get()).toEqual({ c: 0 })
+    raw.close()
+  })
+})
+
+describe('agents.driver on an install that predates it', () => {
+  /**
+   * The upgrade path, not the fresh one: an existing `agents` table with rows of
+   * all three sources and no `driver` column. Dropping the columns from a fresh
+   * database is the closest node:sqlite gets to a pre-phase-2 file.
+   */
+  function preDriverDatabase(): DatabaseSync {
+    const raw = freshDatabase()
+    raw.exec('ALTER TABLE agents DROP COLUMN driver')
+    raw.exec('ALTER TABLE agents DROP COLUMN driver_config')
+    const insert = raw.prepare(
+      `INSERT INTO agents (id, user_id, name, protocol, enabled, source, created_at)
+       VALUES (?, '__default__', ?, ?, 1, ?, ?)`
+    )
+    insert.run('hand-added', 'Hand added', 'a2a', 'local', Date.now())
+    insert.run('remote:agent:u1', 'Synced', 'a2a', 'remote', Date.now())
+    insert.run('folder:abc', 'Folder', 'local-folder', 'folder', Date.now())
+    return raw
+  }
+
+  function drivers(raw: DatabaseSync): Record<string, string | null> {
+    const rows = raw.prepare('SELECT id, driver FROM agents').all() as Array<{
+      id: string
+      driver: string | null
+    }>
+    return Object.fromEntries(rows.map((r) => [r.id, r.driver]))
+  }
+
+  it('maps every row to the driver its source runs on', () => {
+    const raw = preDriverDatabase()
+    runAllMigrations(adaptDatabase(raw))
+    expect(drivers(raw)).toEqual({
+      'hand-added': 'a2a',
+      'remote:agent:u1': 'a2a',
+      // The default engine; the scanner writes the engine the folder names.
+      'folder:abc': 'opencode'
+    })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+
+  it('is a no-op on replay', () => {
+    const raw = preDriverDatabase()
+    const sqlite = adaptDatabase(raw)
+    runAllMigrations(sqlite)
+    const once = drivers(raw)
+    expect(() => runAllMigrations(sqlite)).not.toThrow()
+    expect(drivers(raw)).toEqual(once)
+    raw.close()
+  })
+
+  it('never rewrites a row that already names a driver', () => {
+    // A Claude folder the scanner has already recorded must not be reset to
+    // the default engine by the next boot's backfill.
+    const raw = freshDatabase()
+    raw
+      .prepare(
+        `INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at)
+         VALUES ('folder:claude', '__default__', 'C', 'local-folder', 1, 'folder', 'claude', ?)`
+      )
+      .run(Date.now())
+    runAllMigrations(adaptDatabase(raw))
+    expect(drivers(raw)).toEqual({ 'folder:claude': 'claude' })
     raw.close()
   })
 })

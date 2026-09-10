@@ -10,11 +10,16 @@
  * client construction and the session store behind a driver; both are moments
  * when a quiet change to the sequence would otherwise go unnoticed.
  *
- * **`runAgentTurn`, not `a2aTurnRunner`.** The runner in `agentTurn/index.ts`
- * adds one thing — a missing-endpoint guard that returns before any I/O — and
- * importing `index.ts` pulls in the engine manager, the folder-agent services
- * and Electron, which is why `dispatch.test.ts` needs over a dozen mocks. The
- * guard is not what phases 1 and 2 put at risk; the pump is.
+ * **Through the `a2a` driver, since phase 2.** Every scenario runs
+ * `createA2aDriver(…).run` over the real `runAgentTurn`, with the connection
+ * resolved the way `resolveEndpointIfNeeded` / `resolveAccessToken` would
+ * answer for the fixture (its endpoint and token) and the row's owner saying
+ * what `isCinnaTokenAuth` used to. So the driver's own pre-flight, its re-auth
+ * flag and its cancel-on-abort are part of what is pinned. The factory takes
+ * its world by injection, so none of `agents/drivers/index.ts`'s production
+ * wiring — the engine manager, the folder services, Electron — is loaded. The
+ * abort characterisation below still calls `runAgentTurn` alone: it is
+ * evidence about the pump, not the driver.
  *
  * **The fake is `fetch`, not the SDK client** (`__golden__/a2a/fakeAgent.ts`
  * says why at length). The card fetch, the bearer header, the 401/403
@@ -57,6 +62,9 @@
  * |---|---|
  * | Drop the `status` onEvent in the `status-update` branch | 12 goldens (every scenario with a status-update frame) and the abort characterisation, which times out waiting for its first event |
  * | Skip `a2aSessionRepo.upsert` on the success path | 15 effects expectations and the contract's `session` clause — **no** `{ events, result }` golden, which is why effects are pinned separately |
+ * | (phase 2, `a2aDriver.ts`) `respond` answers `delivered: true` | the contract's `respond.unknown` |
+ * | (phase 2, `a2aDriver.ts`) readiness rethrows a card-fetch failure | the contract's `readiness.never_throws` |
+ * | (phase 2, `capabilities.ts`) every row of a driver shares one capabilities object | the contract's `capabilities.stable` on all three drivers, and `auth_required_401` — the re-auth flag read the object that clause had edited |
  *
  * Abort breaks both halves of the contract, and each is recorded by how it
  * breaks: `abort.settles` by **timeout** — `hangs()` leaves the stream open and
@@ -88,13 +96,19 @@ vi.mock('../../db/messages', () => ({ messageRepo: {} }))
 vi.mock('../jobService', () => ({ jobService: {} }))
 
 import { runAgentTurn, type RunAgentTurnResult } from '../a2aStreamingService'
+import { fetchAgentCard } from '../../agents/a2a-client'
+import { createA2aDriver, type A2aDriverDeps } from '../../agents/drivers/a2aDriver'
+import type { AgentDriver } from '../../agents/drivers/driver'
+import type { AgentRow } from '../../db/agents'
 import { expectGolden, listScenarios, readFixture, type NormaliseOptions } from './__golden__/harness'
 import {
-  describeRunnerContract,
+  describeDriverContract,
   type ContractTurn,
-  type RunnerContractSubject,
+  type DriverContractSubject,
+  type DriverUnderTest,
   type TurnIO
-} from './__golden__/runnerContract'
+} from './__golden__/driverContract'
+import { goldenRow } from './__golden__/driverWorld'
 import { fakeA2aAgent, fakeSessionRepo, type A2aFixture, type FakeAgent } from './__golden__/a2a/fakeAgent'
 import { expectEffects } from './__golden__/a2a/effects'
 import type { RunEvent } from '../../../shared/runEvents'
@@ -141,12 +155,84 @@ interface TurnHooks extends TurnIO {
   onTaskId?: (taskId: string) => void
 }
 
+/** The scope that owns every golden row. */
+const OWNER = 'user-golden'
+
 /**
- * Start one turn: install the fakes, call `runAgentTurn` exactly once, and
+ * The row a fixture's agent is. Its owner stands for what the fixture used to
+ * say with `isCinnaTokenAuth`: a Cinna-synced row is what makes a stream-level
+ * 401 a re-auth.
+ */
+function rowOf(fixture: A2aFixture): AgentRow {
+  const { input } = fixture
+  return goldenRow({
+    id: input.agentId,
+    name: input.agentName,
+    driver: 'a2a',
+    source: input.isCinnaTokenAuth ? 'remote' : 'local',
+    cardUrl: input.cardUrl,
+    endpointUrl: input.endpointUrl,
+    protocolInterfaceUrl: input.endpointUrl,
+    accessTokenEncrypted: input.accessToken ? Buffer.from('golden-token') : null
+  })
+}
+
+/**
+ * The `a2a` driver over the real `runAgentTurn`, with the connection resolved
+ * as `resolveEndpointIfNeeded` / `resolveAccessToken` would answer for this
+ * fixture. `hooks` taps the two callbacks the driver hands the runner — that is
+ * how the effects still count them — and passes each on to the driver.
+ */
+function a2aDriverFor(
+  fixture: A2aFixture,
+  hooks: Pick<TurnHooks, 'onClient' | 'onTaskId'> = {},
+  over: Partial<A2aDriverDeps> = {}
+): AgentDriver {
+  return createA2aDriver({
+    runTurn: (input) =>
+      runAgentTurn({
+        ...input,
+        onClient: (client) => {
+          hooks.onClient?.()
+          input.onClient?.(client)
+        },
+        onTaskId: (taskId) => {
+          hooks.onTaskId?.(taskId)
+          input.onTaskId?.(taskId)
+        }
+      }),
+    resolveEndpoint: async () => fixture.input.endpointUrl,
+    resolveAccessToken: async () => fixture.input.accessToken,
+    fetchCard: (cardUrl, accessToken) => fetchAgentCard(cardUrl, accessToken),
+    isReauthRequired: () => false,
+    ...over
+  })
+}
+
+/**
+ * Start one turn: install the fakes, call the driver's `run` exactly once, and
  * return its promise untouched — no `catch`, so the contract's never-rejects
- * clause tests the runner and not this function.
+ * clause tests the driver and not this function.
  */
 function startTurn(
+  fixture: A2aFixture,
+  agent: FakeAgent,
+  repo: FakeSessionRepo,
+  hooks: TurnHooks
+): Promise<RunAgentTurnResult> {
+  sessions.current = repo
+  vi.stubGlobal('fetch', agent.fetch)
+  return a2aDriverFor(fixture, hooks).run(OWNER, rowOf(fixture), {
+    chatId: fixture.input.chatId,
+    wireContent: fixture.input.wireContent,
+    fileIds: fixture.input.fileIds,
+    signal: hooks.signal,
+    onEvent: hooks.onEvent
+  })
+}
+
+/** `runAgentTurn` alone — for the characterisation that is evidence about the pump itself. */
+function startPumpTurn(
   fixture: A2aFixture,
   agent: FakeAgent,
   repo: FakeSessionRepo,
@@ -189,7 +275,7 @@ function heldPlainText(): A2aFixture {
   return { ...fixture, http: { ...fixture.http, rpc: { sse: rpc.sse.slice(0, 2), hold: true } } }
 }
 
-describe('golden: a2a (runAgentTurn)', () => {
+describe('golden: a2a (driver over runAgentTurn)', () => {
   it.each(SCENARIOS)('%s', async (scenario) => {
     const fixture = fixtureOf(scenario)
     const agent = fakeA2aAgent(fixture)
@@ -241,7 +327,7 @@ describe('a2a abort, characterised', () => {
     // looks at its signal only when the next stream event arrives, and hands
     // it to neither the SDK nor `fetch` — so a stopped turn on a quiet agent
     // stays pending until the *server* ends the stream. In direct chat that
-    // happens because `streamToAgent.cancel` also sends `tasks/cancel`; a
+    // happens because the `a2a` driver also sends `tasks/cancel` on abort; a
     // caller holding only the signal has no way to end it.
     const fixture = heldPlainText()
     const agent = fakeA2aAgent(fixture)
@@ -252,7 +338,7 @@ describe('a2a abort, characterised', () => {
       markStarted = resolve
     })
 
-    const promise = startTurn(fixture, agent, fakeSessionRepo(), {
+    const promise = startPumpTurn(fixture, agent, fakeSessionRepo(), {
       signal: controller.signal,
       onEvent: (event) => {
         events.push(event)
@@ -287,7 +373,7 @@ function fixtureTurn(fixture: A2aFixture, repo: FakeSessionRepo = seededRepo(fix
   return { run: (io) => startTurn(fixture, fakeA2aAgent(fixture), repo, io) }
 }
 
-function makeSubject(): RunnerContractSubject {
+function makeSubject(): DriverContractSubject {
   return {
     completes: () => fixtureTurn(fixtureOf('plain_text')),
 
@@ -309,6 +395,48 @@ function makeSubject(): RunnerContractSubject {
     // What a server does once the turn is cancelled — it ends the stream — so
     // `abort.reports` can see what the result says instead of timing out.
     hangsServerAssisted: () => heldTurn({ serverEndsStreamOnAbort: true }),
+
+    underTest: () => {
+      const fixture = fixtureOf('plain_text')
+      return { driver: a2aDriverFor(fixture), row: rowOf(fixture), grantsWritten: () => 0 }
+    },
+
+    readinessWorlds: () => {
+      // Readiness resolves a token, then fetches the card. Each world breaks
+      // one of those before any real request could go out.
+      const fixture = fixtureOf('plain_text')
+      const world = (over: Partial<A2aDriverDeps>, row: AgentRow = rowOf(fixture)): DriverUnderTest => ({
+        driver: a2aDriverFor(fixture, {}, over),
+        row,
+        grantsWritten: () => 0
+      })
+      return {
+        'the token resolution rejects': world({
+          resolveAccessToken: () => Promise.reject(new Error('the keystore is locked'))
+        }),
+        'the token resolution throws synchronously': world({
+          resolveAccessToken: () => {
+            throw new Error('safeStorage is not available')
+          }
+        }),
+        'the card fetch rejects with an Error': world({
+          fetchCard: () => Promise.reject(new Error('Unexpected token < in JSON at position 0'))
+        }),
+        'the card fetch rejects with a TypeError (the socket never opened)': world({
+          fetchCard: () => Promise.reject(new TypeError('fetch failed'))
+        }),
+        'the card fetch throws synchronously': world({
+          fetchCard: () => {
+            throw new TypeError('fetch is not a function')
+          }
+        }),
+        'the card never answers': world({
+          fetchCard: () => new Promise<never>(() => {}),
+          readinessTimeoutMs: 20
+        }),
+        'the row has no card URL': world({}, { ...rowOf(fixture), cardUrl: null })
+      }
+    },
 
     session: () => {
       // One store for both turns. `resume_remembered_context`'s own seeded row
@@ -340,7 +468,7 @@ function heldTurn({
   serverEndsStreamOnAbort
 }: {
   serverEndsStreamOnAbort: boolean
-}): ReturnType<RunnerContractSubject['hangs']> {
+}): ReturnType<DriverContractSubject['hangs']> {
   const fixture = heldPlainText()
   let markStarted: () => void = () => {}
   const started = new Promise<void>((resolve) => {
@@ -362,7 +490,7 @@ function heldTurn({
   }
 }
 
-describeRunnerContract('a2a', makeSubject, {
+describeDriverContract('a2a', makeSubject, {
   knownViolations: {
     'abort.settles': {
       reason:

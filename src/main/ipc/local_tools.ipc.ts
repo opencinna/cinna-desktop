@@ -1,6 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { toolDetectionService } from '../services/localAgents/toolDetectionService'
-import { claudeAuthProbe } from '../services/agentTurn'
+import { claudeAuthProbe } from '../agents/drivers'
 import { openInService } from '../services/localAgents/openInService'
 import { ipcHandle } from './_wrap'
 import type { DetectedTool, OpenInRequest } from '../../shared/localTools'

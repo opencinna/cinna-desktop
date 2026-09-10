@@ -241,6 +241,16 @@ export const agents = sqliteTable('agents', {
   /** Folder agents only: the {@link agentRoots} row this folder was scanned
    *  from. No SQL FK on purpose — see `migrations/agent-roots.ts`. */
   localRootId: text('local_root_id'),
+  /**
+   * Which driver runs this agent — an `AgentDriverId` (`'a2a' | 'opencode' |
+   * 'claude'`), see `src/main/agents/drivers/`. `source` above still says who
+   * owns the row; this says how it runs. Written on every insert, backfilled by
+   * `migrations/agent-drivers.ts`; a folder row's value is the engine its
+   * runtime names, rewritten by the scanner.
+   */
+  driver: text('driver'),
+  /** The driver's own settings, JSON, opaque outside `src/main/agents/drivers/`. Unused until phase 3. */
+  driverConfig: text('driver_config', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())

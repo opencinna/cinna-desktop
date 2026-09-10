@@ -1,5 +1,5 @@
 /**
- * The runner seam: one turn, two implementations, one resolver.
+ * The runner seam: one turn, whatever transport carries it.
  *
  * ## Why this is a lift and not a new interface
  *
@@ -16,15 +16,19 @@
  * become optional, because a folder agent has neither. `runAgentTurn` itself
  * keeps requiring both — see {@link A2ARunAgentTurnInput} in
  * `a2aStreamingService` — so the compiler still refuses an A2A turn without a
- * card, and {@link A2ATurnRunner} is the one place that narrows. Nothing inside
- * `runAgentTurn` was touched.
+ * card. Nothing inside `runAgentTurn` was touched.
+ *
+ * **Which runner an agent uses is no longer decided here.** Phase 2 of the
+ * agent runtime plan wrapped each runner in an `AgentDriver`
+ * (`src/main/agents/drivers/`), which owns the dispatch and everything
+ * kind-specific around the turn; `resolveTurnRunner` and `isFolderAgent` are
+ * gone. The runner classes still implement this interface.
  */
 
-import type { AgentRow } from '../../db/agents'
 import type { RunAgentTurnInput, RunAgentTurnResult } from '../a2aStreamingService'
 
 /**
- * One agent turn, whatever kind of agent it is.
+ * One agent turn over one transport.
  *
  * `runTurn` never throws: a failed turn is a `RunAgentTurnResult` carrying
  * `error`, because both call sites have to render a failure either way and an
@@ -32,16 +36,4 @@ import type { RunAgentTurnInput, RunAgentTurnResult } from '../a2aStreamingServi
  */
 export interface AgentTurnRunner {
   runTurn(input: RunAgentTurnInput): Promise<RunAgentTurnResult>
-}
-
-/**
- * Which runner an agent uses.
- *
- * Dispatch is on `source`, the same discriminator `resolveEndpointIfNeeded` and
- * `resolveAccessToken` already branch on — not on the *absence* of a card URL,
- * which is a symptom several unrelated states share (a remote agent that has
- * never been tested has no cached card either).
- */
-export function isFolderAgent(agent: Pick<AgentRow, 'source'>): boolean {
-  return agent.source === 'folder'
 }

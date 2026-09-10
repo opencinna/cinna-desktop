@@ -56,8 +56,8 @@ import { LocalAgentError } from '../../errors'
 import { createLogger } from '../../logger/logger'
 import { localAgentService } from './localAgentService'
 import { turnLock } from './turnLock'
-import type { RunAgentTurnResult } from '../a2aStreamingService'
-import type { AgentTurnRunner } from '../agentTurn/runner'
+import type { RunAgentTurnResult, TurnRun } from '../a2aStreamingService'
+import type { AgentCapabilities } from '../../../shared/agentDrivers'
 import type { MessagePart } from '../../../shared/messageParts'
 import { RUN_REFERENCE_PATTERN } from '../../../shared/kit/manifest'
 
@@ -464,21 +464,21 @@ export const commandService = {
  * catch it, and the IPC handler itself is not unit-testable without spinning
  * up `ipcMain`.
  *
- * Never touches `resolveTurnRunner` or anything under `agentTurn/**` — a
- * non-folder agent, or a folder-agent message that is not a bare
- * `/run:<name>`, returns `fallback` unchanged.
+ * Never touches the agent's driver or anything under `agentTurn/**` — an
+ * agent whose commands do not come from a folder catalog, or a catalog
+ * agent's message that is not a bare `/run:<name>`, returns `fallback`
+ * unchanged. Decided on the driver's `capabilities.commands`, not on what kind
+ * of agent it is.
  */
 export function resolveCommandRunner(
-  isFolder: boolean,
+  commands: AgentCapabilities['commands'],
   wireContent: string,
   agentOwnerId: string,
   agentId: string,
-  fallback: AgentTurnRunner
-): AgentTurnRunner {
-  if (!isFolder) return fallback
+  fallback: TurnRun
+): TurnRun {
+  if (commands !== 'catalog') return fallback
   const name = commandService.matchRunCommand(wireContent)
   if (!name) return fallback
-  return {
-    runTurn: (input) => commandService.runForTurn(agentOwnerId, agentId, name, input.signal)
-  }
+  return (io) => commandService.runForTurn(agentOwnerId, agentId, name, io.signal)
 }

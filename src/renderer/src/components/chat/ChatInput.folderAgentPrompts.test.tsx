@@ -42,6 +42,8 @@ const api: Record<string, unknown> = new Proxy(
         return {
           list: async () => [],
           onRemoteSyncComplete: () => () => undefined,
+          onReadinessChanged: () => () => undefined,
+          checkReadiness: async () => null,
           listCliCommands: async () => []
         }
       }
@@ -91,6 +93,9 @@ function folderAgent(examplePrompts: unknown): Record<string, unknown> {
           },
     localPath: '/w/Local/invoice-checker',
     localRootId: 'r1',
+    driver: 'opencode',
+    capabilities: { attachments: 'none', commands: 'catalog' },
+    readiness: null,
     createdAt: new Date('2026-01-01T00:00:00Z')
   }
 }

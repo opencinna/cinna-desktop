@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { sep } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
@@ -14,6 +14,8 @@ import {
 } from './schema'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import { FOLDER_AGENT_PROTOCOL } from '../../shared/localAgents'
+import type { AgentDriverId } from '../../shared/agentDrivers'
+import { DEFAULT_AGENT_ENGINE } from '../../shared/engine'
 
 /** True when `child` is `parent` or sits beneath it, by path segment. */
 function isUnder(parent: string, child: string): boolean {
@@ -102,6 +104,17 @@ export interface FolderIndexEntry {
    * good value at the one moment a rescan should be refreshing it.
    */
   remoteMetadata: RemoteAgentMetadata
+  /**
+   * The driver the folder's runtime names (`driverOfFolder`), carried on the
+   * entry for the same three-writers reason as `remoteMetadata`.
+   *
+   * **Null means "the runtime could not be read — keep the row's value"**, never
+   * "the default engine". A scan changes readiness, never identity, and a Claude
+   * folder whose manifest is unparseable for a moment must not come back as an
+   * OpenCode row. An insert with null takes the default engine; there is no
+   * earlier value to keep.
+   */
+  driver: AgentDriverId | null
 }
 
 /** What {@link agentRepo.rekeyFolderRow} moved. */
@@ -164,6 +177,8 @@ export const agentRepo = {
         skills: input.skills ?? null,
         enabled: input.enabled ?? true,
         source: 'local',
+        // Every row this creates is reached over a card URL.
+        driver: 'a2a',
         createdBySync: input.createdBySync ?? false,
         createdAt: new Date()
       })
@@ -312,6 +327,7 @@ export const agentRepo = {
               skills: target.skills,
               enabled: true,
               source: 'remote',
+              driver: 'a2a',
               remoteTargetType: target.targetType,
               remoteTargetId: target.targetId,
               remoteMetadata: target.metadata,
@@ -407,7 +423,10 @@ export const agentRepo = {
               source: 'folder',
               localPath: entry.localPath,
               localRootId: rootId,
-              remoteMetadata: entry.remoteMetadata
+              remoteMetadata: entry.remoteMetadata,
+              // Null keeps what the row had; a row that had none takes the
+              // default rather than staying unset.
+              driver: entry.driver ?? existing.driver ?? DEFAULT_AGENT_ENGINE
             })
             .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
             .run()
@@ -442,6 +461,7 @@ export const agentRepo = {
               // `synthesizeFolderAgentMetadata`. It is a cache over the files
               // in exactly the sense `name` and `description` above are.
               remoteMetadata: entry.remoteMetadata,
+              driver: entry.driver ?? DEFAULT_AGENT_ENGINE,
               createdAt: new Date()
             })
             .run()
@@ -472,10 +492,54 @@ export const agentRepo = {
         description: entry.description,
         localPath: entry.localPath,
         localRootId,
-        remoteMetadata: entry.remoteMetadata
+        remoteMetadata: entry.remoteMetadata,
+        // Null keeps the row's value — see `FolderIndexEntry.driver`.
+        ...(entry.driver !== null ? { driver: entry.driver } : {})
       })
       .where(and(eq(agents.id, entry.id), eq(agents.userId, userId)))
       .run()
+  },
+
+  /**
+   * Point a folder row at a driver, for an engine the user just chose in the
+   * app — the write a watcher never sees (a bare folder's runtime lives outside
+   * it). Folder rows only: an A2A row's driver is not the folder's to change.
+   * Returns whether a row changed.
+   */
+  setFolderDriver(userId: string, agentId: string, driver: AgentDriverId): boolean {
+    return (
+      getDb()
+        .update(agents)
+        .set({ driver })
+        .where(
+          and(eq(agents.id, agentId), eq(agents.userId, userId), eq(agents.source, 'folder'))
+        )
+        .run().changes > 0
+    )
+  },
+
+  /**
+   * Fill `driver` on any row that has none, with the migration's own rule: a
+   * hand-added or synced row runs on A2A, a folder row on the default engine
+   * (the scanner corrects it on its next pass). A value this build does not
+   * recognise is left alone — a newer build wrote it.
+   *
+   * Across every user, like the other boot-time consistency checks: it heals
+   * the table, not one scope. Returns how many rows it filled.
+   */
+  healMissingDrivers(): number {
+    const db = getDb()
+    const a2a = db
+      .update(agents)
+      .set({ driver: 'a2a' })
+      .where(and(isNull(agents.driver), inArray(agents.source, ['local', 'remote'])))
+      .run().changes
+    const folder = db
+      .update(agents)
+      .set({ driver: DEFAULT_AGENT_ENGINE })
+      .where(and(isNull(agents.driver), eq(agents.source, 'folder')))
+      .run().changes
+    return a2a + folder
   },
 
   /**
@@ -769,3 +833,14 @@ export const a2aSessionRepo = {
     }
   }
 }
+
+/**
+ * The session a driver keeps with an agent for one chat — the same object as
+ * {@link a2aSessionRepo}, under the name phase 2 of the agent runtime plan gives
+ * it. Both names are exported for that phase; call sites move over later.
+ *
+ * The table keeps its name, `a2a_sessions`. `contextId` is the driver's primary
+ * session id (an A2A context, an engine or CLI session); `taskId` and
+ * `taskState` stay A2A's.
+ */
+export const agentSessionRepo = a2aSessionRepo

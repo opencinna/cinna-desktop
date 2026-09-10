@@ -4,6 +4,7 @@ import { useChatStore } from '../../stores/chat.store'
 import { useAgents } from '../../hooks/useAgents'
 import { MessageStream } from '../chat/MessageStream'
 import { ChatInput, type ChatInputHandle } from '../chat/ChatInput'
+import { RefusableExamplePrompts, readinessRefusal } from '../chat/ComposerReadiness'
 import { SettingsPage } from '../settings/SettingsPage'
 import { JobDetail } from '../jobs/JobDetail'
 import { JobEditPage } from '../jobs/JobEditPage'
@@ -139,6 +140,11 @@ export function MainArea(): React.JSX.Element {
     return { pattern, agentName, modelName }
   }, [combinedAgentIds, pendingMcpIds, agentList, activeMode, effectiveProviderId, providers, allModels])
 
+  // The refusal an example prompt would meet: the same rule the composer
+  // applies to its single direct agent. Example prompts are never `/run:`.
+  const exampleRefusal =
+    commPatternInfo?.pattern === 'A2A' ? readinessRefusal(selectedAgent) : null
+
   const handleSelectMode = useCallback((mode: ChatModeData | null) => {
     setModeSelection(mode ? { id: mode.id } : 'none')
     setSendError(null)
@@ -207,6 +213,10 @@ export function MainArea(): React.JSX.Element {
       // plain LLM chat — runs through the local model, so it requires a
       // resolvable provider+model.
       const isA2A = combinedAgentIds.length === 1 && pendingMcpIds.length === 0
+      // No readiness guard here. The composer has already decided — it refuses
+      // a send to an agent that is not ready, and lets a catalog `/run:`
+      // through — and an example prompt is refused where it is clicked. A guard
+      // here once dropped a `/run:` the composer had already cleared, silently.
       const resolvedModelId = resolveModel(activeMode, effectiveProviderId, providers, allModels)
       const hasModel = !!effectiveProviderId && !!resolvedModelId
       const hasDestination = isA2A || hasModel
@@ -357,11 +367,17 @@ export function MainArea(): React.JSX.Element {
           <Sparkles size={32} className="mx-auto mb-3 text-[var(--color-accent)] opacity-60" />
           <h1 className="text-lg font-semibold text-[var(--color-text)]">What can I help with?</h1>
         </div>
-        <ExamplePromptTags
-          prompts={examplePrompts}
-          animationKey={selectedAgent?.id ?? 'none'}
-          onSelect={(p) => handleNewChat(p.full)}
-        />
+        <RefusableExamplePrompts refusal={exampleRefusal}>
+          <ExamplePromptTags
+            prompts={examplePrompts}
+            animationKey={selectedAgent?.id ?? 'none'}
+            // An example prompt sends past the composer, so its refusal is
+            // applied here, where it is clicked (the tags are also inert).
+            onSelect={(p) => {
+              if (!exampleRefusal) void handleNewChat(p.full)
+            }}
+          />
+        </RefusableExamplePrompts>
         {sendErrorBanner}
         <ChatInput
           ref={chatInputRef}

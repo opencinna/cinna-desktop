@@ -6,13 +6,45 @@ import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { notifyRemoteSyncComplete } from '../agents/remote-sync'
 import { registerA2AHandlers } from './agent_a2a.ipc'
 import { ipcHandle } from './_wrap'
+import { driverFor } from '../agents/drivers'
+import { agentReadinessService } from '../services/agentReadinessService'
+import { getMainWindow } from '../index'
+import { AGENT_READINESS_CHANGED_CHANNEL } from '../../shared/agentDrivers'
 
 export function registerAgentHandlers(): void {
+  // Readiness is asked of the agent's driver and pushed to the renderer when it
+  // changes. Installed here, beside the channels that read it, so the service
+  // itself names neither the drivers' production wiring nor Electron.
+  agentReadinessService.install({
+    probe: (userId, row, options) => driverFor(row).readiness(userId, row, options),
+    broadcast: (payload) => {
+      const win = getMainWindow()
+      if (win && !win.isDestroyed()) win.webContents.send(AGENT_READINESS_CHANGED_CHANNEL, payload)
+    }
+  })
+
   // Local agents live in the shared default scope; remote agents stay tied to
   // the active profile (Cinna sync owns them).
   ipcHandle('agent:list', async () => {
     userActivation.requireActivated()
     return agentService.listMerged(getSettingsScopeUserId(), getProfileScopeUserId())
+  })
+
+  // Re-check one agent now — the composer's "Check again" and the Settings
+  // card's Test. Answers with data: null when the agent is not found or the
+  // check could not run, which the renderer reads as "not known" and never as
+  // a refusal.
+  ipcHandle('agent:check-readiness', async (_event, agentId: string) => {
+    userActivation.requireActivated()
+    const located = agentService.findAgent(
+      getSettingsScopeUserId(),
+      getProfileScopeUserId(),
+      agentId
+    )
+    if (!located) return null
+    // Fresh: the user asked, so a probe's own cache (the Claude login window,
+    // the tool detection memo) must not answer for a fix they just made.
+    return agentReadinessService.refresh(located.userId, located.row, { fresh: true })
   })
 
   // agent:upsert/delete/sync-remote return inline errors so the settings UI

@@ -29,10 +29,13 @@
  * `_notes` in an expectation is free text for the reader and is **not
  * compared** — use it to say why a surprising event is pinned as-is.
  *
- * `_phase1_note` is the same kind of key, and is not compared either. The phase
- * 1 rewrite leaves every `_notes` entry exactly as phase 0 wrote it, so where
- * one stopped being true — the stream now says something a note says it does
- * not — the correction goes here, beside the note it corrects.
+ * `_phase1_note`, `_phase2_note` — any `_phase<N>_note` — is the same kind of
+ * key, and is not compared either. A later phase leaves every `_notes` entry
+ * exactly as an earlier one wrote it, so where one stopped being true — the
+ * stream now says something a note says it does not — the correction goes
+ * here, beside the note it corrects. A fixture is never compared, so a stale
+ * sentence in one gets the same sibling key without the harness needing to
+ * know.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, type Dirent } from 'node:fs'
@@ -51,7 +54,10 @@ export interface GoldenCapture {
 }
 
 /** An expectation file: the capture itself, plus notes that are never compared. */
-type Expectation = { _notes?: string[]; _phase1_note?: string } & Record<string, unknown>
+type Expectation = { _notes?: string[] } & Record<string, unknown>
+
+/** Keys a reader writes for the next reader: `_notes`, `_phase1_note`, `_phase2_note`, … */
+const NOTE_KEY = /^_(?:notes|phase\d+_note)$/
 
 const ROOT = dirname(fileURLToPath(import.meta.url))
 
@@ -220,8 +226,7 @@ function compareWithFile(path: string, actual: Record<string, unknown>): void {
     throw new Error(`golden expectation missing (run with GOLDEN_WRITE=1 to create it): ${path}`)
   }
 
-  const { _notes, _phase1_note, ...expected } = JSON.parse(readFileSync(path, 'utf8')) as Expectation
-  void _notes
-  void _phase1_note
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as Expectation
+  const expected = Object.fromEntries(Object.entries(parsed).filter(([key]) => !NOTE_KEY.test(key)))
   expect(actual).toEqual(expected)
 }

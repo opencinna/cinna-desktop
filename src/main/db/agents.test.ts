@@ -44,7 +44,14 @@ function meta(id: string): RemoteAgentMetadata {
 }
 
 function entry(id: string, name = id): FolderIndexEntry {
-  return { id, name, description: null, localPath: `/w/Local/${id}`, remoteMetadata: meta(id) }
+  return {
+    id,
+    name,
+    description: null,
+    localPath: `/w/Local/${id}`,
+    remoteMetadata: meta(id),
+    driver: 'opencode'
+  }
 }
 
 function ids(rows: Array<{ id: string }>): string[] {
@@ -115,7 +122,8 @@ describe('replaceFolderIndex', () => {
         name: 'Renamed',
         description: 'now described',
         localPath: '/w/Local/a2',
-        remoteMetadata: meta('folder:a-rescanned')
+        remoteMetadata: meta('folder:a-rescanned'),
+        driver: 'opencode'
       }
     ])
 
@@ -198,7 +206,8 @@ describe('replaceFolderIndex', () => {
           name: null as unknown as string,
           description: null,
           localPath: '/w/c',
-          remoteMetadata: meta('folder:c')
+          remoteMetadata: meta('folder:c'),
+          driver: 'opencode'
         }
       ])
     ).toThrow()
@@ -264,5 +273,104 @@ describe('the synthesized manifest metadata on a folder row', () => {
     agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a'), entry('folder:b')])
     expect(agentRepo.getOwned(USER, 'folder:a')?.remoteMetadata).toEqual(meta('folder:a'))
     expect(agentRepo.getOwned(USER, 'folder:b')?.remoteMetadata).toEqual(meta('folder:b'))
+  })
+})
+
+/**
+ * `agents.driver` — which driver runs a row. Every writer of a row names one,
+ * and a folder row's follows its runtime except when the scan could not read it.
+ */
+describe('the driver a row names', () => {
+  const driverOf = (id: string): string | null | undefined => agentRepo.getOwned(USER, id)?.driver
+
+  it('is a2a for an agent created by hand or by sync', () => {
+    const hand = agentRepo.create(USER, { name: 'Hand', protocol: 'a2a', cardUrl: 'https://a/card' })
+    const shell = agentRepo.create(USER, {
+      name: 'Shell',
+      protocol: 'a2a',
+      cardUrl: 'https://b/card',
+      createdBySync: true
+    })
+    expect(driverOf(hand.id)).toBe('a2a')
+    expect(driverOf(shell.id)).toBe('a2a')
+  })
+
+  it('is a2a for a Cinna-synced agent', () => {
+    agentRepo.syncRemote(USER, [
+      {
+        targetType: 'agent',
+        targetId: '11111111-1111-4111-8111-111111111111',
+        name: 'Synced',
+        description: null,
+        cardUrl: 'https://cinna/card',
+        skills: null,
+        metadata: meta('remote')
+      }
+    ])
+    expect(driverOf('remote:agent:11111111-1111-4111-8111-111111111111')).toBe('a2a')
+  })
+
+  it('is written on a folder insert and refreshed by a rescan', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'claude' }])
+    expect(driverOf('folder:a')).toBe('claude')
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'opencode' }])
+    expect(driverOf('folder:a')).toBe('opencode')
+  })
+
+  it('keeps the row’s driver when the entry has none, and inserts the default engine', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:a'), driver: 'claude' }])
+    agentRepo.replaceFolderIndex(USER, 'r1', [
+      { ...entry('folder:a'), driver: null },
+      { ...entry('folder:b'), driver: null }
+    ])
+    expect(driverOf('folder:a')).toBe('claude')
+    expect(driverOf('folder:b')).toBe('opencode')
+  })
+
+  it('is written by the single-folder update, and kept when that entry has none', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
+    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), driver: 'claude' }, 'r1')
+    expect(driverOf('folder:a')).toBe('claude')
+    agentRepo.updateFolderIndex(USER, { ...entry('folder:a'), driver: null }, 'r1')
+    expect(driverOf('folder:a')).toBe('claude')
+  })
+
+  it('follows the row through a rekey', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [{ ...entry('folder:legacy:r1:a'), driver: 'claude' }])
+    agentRepo.rekeyFolderRow(USER, 'folder:legacy:r1:a', 'folder:stamped-uuid')
+    expect(driverOf('folder:stamped-uuid')).toBe('claude')
+  })
+
+  it('is set directly only on a folder row', () => {
+    agentRepo.replaceFolderIndex(USER, 'r1', [entry('folder:a')])
+    const hand = agentRepo.create(USER, { name: 'Hand', protocol: 'a2a' })
+    expect(agentRepo.setFolderDriver(USER, 'folder:a', 'claude')).toBe(true)
+    expect(agentRepo.setFolderDriver(USER, hand.id, 'claude')).toBe(false)
+    expect(driverOf('folder:a')).toBe('claude')
+    expect(driverOf(hand.id)).toBe('a2a')
+  })
+
+  it('is filled at boot for a row something inserted without one, and only for those', () => {
+    const raw = holder.current!.raw
+    const insert = raw.prepare(
+      `INSERT INTO agents (id, user_id, name, protocol, enabled, source, driver, created_at)
+       VALUES (?, ?, ?, 'a2a', 1, ?, ?, ?)`
+    )
+    insert.run('bare-local', USER, 'L', 'local', null, Date.now())
+    insert.run('bare-remote', USER, 'R', 'remote', null, Date.now())
+    insert.run('bare-folder', USER, 'F', 'folder', null, Date.now())
+    insert.run('set-claude', USER, 'C', 'folder', 'claude', Date.now())
+    // A value a newer build wrote: not this build's to "correct".
+    insert.run('from-newer-build', USER, 'N', 'local', 'managed', Date.now())
+    insert.run('other-user', 'someone-else', 'O', 'local', null, Date.now())
+
+    expect(agentRepo.healMissingDrivers()).toBe(4)
+    expect(driverOf('bare-local')).toBe('a2a')
+    expect(driverOf('bare-remote')).toBe('a2a')
+    expect(driverOf('bare-folder')).toBe('opencode')
+    expect(driverOf('set-claude')).toBe('claude')
+    expect(driverOf('from-newer-build')).toBe('managed')
+    expect(agentRepo.getOwned('someone-else', 'other-user')?.driver).toBe('a2a')
+    expect(agentRepo.healMissingDrivers()).toBe(0)
   })
 })

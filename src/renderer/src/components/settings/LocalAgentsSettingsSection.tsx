@@ -191,7 +191,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   /**
    * Not running is **neutral**, not a warning.
    *
-   * `localDeps.ensureEngineRunning` (`src/main/services/agentTurn/index.ts`)
+   * `localDeps.ensureEngineRunning` (`src/main/agents/drivers/index.ts`)
    * starts the engine at the top of a local turn, so a machine that has simply
    * not started it yet is in a state that resolves itself the moment anyone
    * chats with a folder agent. Greeting every visit with an amber triangle over

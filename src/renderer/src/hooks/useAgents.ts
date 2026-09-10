@@ -28,9 +28,39 @@ export function useAgents() {
     })
   }, [queryClient])
 
+  // An agent's readiness changed in main (a background check, or one the user
+  // asked for). The list carries it, so re-read the list — once. Every mounted
+  // `useAgents` hears the same push, and a plain invalidate cancels the fetch
+  // the previous listener just started and starts its own: one push, one
+  // `agent:list` per mounted hook. `cancelRefetch: false` joins the fetch
+  // already running instead.
+  useEffect(() => {
+    return window.api.agents.onReadinessChanged(() => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] }, { cancelRefetch: false })
+    })
+  }, [queryClient])
+
   return useQuery({
     queryKey: ['agents'],
     queryFn: () => window.api.agents.list()
+  })
+}
+
+/**
+ * Ask one agent's driver again whether it can take a turn — "Check again" in
+ * the composer, and the Settings card's Test.
+ *
+ * Re-reads the list when it settles, whatever the answer: the push fires only
+ * when an answer *changed*, and a check the user asked for should visibly
+ * settle even when it did not.
+ */
+export function useCheckAgentReadiness() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (agentId: string) => window.api.agents.checkReadiness(agentId),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
   })
 }
 

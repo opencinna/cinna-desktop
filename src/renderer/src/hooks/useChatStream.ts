@@ -225,6 +225,19 @@ export function useChatStream(): {
               if (isFolderAgentId(agentId)) rereadAgentStatus.mutate(agentId)
               else if (isCinnaUser) forceRefreshAgentStatus.mutate(agentId)
             }
+            // A failed turn is the first sign that an agent the composer
+            // thought ready is not — ask its driver again, so the next send is
+            // refused with the reason instead of failing the same way. A
+            // change arrives as a readiness push, which re-reads the list.
+            // Fire-and-forget: a re-check that cannot run leaves the last
+            // answer where it was.
+            if (event.type === 'error') {
+              try {
+                void window.api.agents.checkReadiness(agentId).catch(() => undefined)
+              } catch {
+                // Nothing to undo — see above.
+              }
+            }
           },
           opts
         )

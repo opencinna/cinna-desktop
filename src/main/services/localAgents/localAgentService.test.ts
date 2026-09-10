@@ -738,6 +738,41 @@ describe('reindexAgent', () => {
       'ask about last quarter'
     ])
   })
+
+  it('moves the row to the engine an edit on disk names', () => {
+    const manifest = readManifest(manifestPath(agentDir))
+    manifest.runtime = { engine: 'claude' }
+    writeFileSync(manifestPath(agentDir), `${JSON.stringify(manifest, null, 2)}\n`)
+
+    localAgentService.reindexAgent(USER, agentRootRepo.getDefault(USER)!, agentDir)
+
+    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('claude')
+  })
+})
+
+describe('the driver follows an engine chosen in the app', () => {
+  it('moves a kit agent’s row when its runtime is saved, and back when it is cleared', () => {
+    const toClaude = localAgentService.updateField(USER, {
+      agentId,
+      update: {
+        field: 'runtime',
+        value: { engine: 'claude', credential: null, modelId: null, complexity: null }
+      },
+      expectedStamp: currentAgent().stamps[MANIFEST]!
+    })
+    expect(toClaude.runtime?.engine).toBe('claude')
+    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('claude')
+
+    localAgentService.updateField(USER, {
+      agentId,
+      update: {
+        field: 'runtime',
+        value: { engine: null, credential: null, modelId: null, complexity: null }
+      },
+      expectedStamp: currentAgent().stamps[MANIFEST]!
+    })
+    expect(agentRepo.getOwned(USER, agentId)?.driver).toBe('opencode')
+  })
 })
 
 describe('openPath', () => {
@@ -1592,6 +1627,18 @@ describe('removing a bare agent', () => {
       complexity: null
     })
     expect(cleared.runtime).toBeNull()
+  })
+
+  it('moves a bare agent’s row to the engine chosen for it', () => {
+    // The state file is outside the folder, so no watcher event follows the
+    // click; the row has to be written on the way out.
+    localAgentService.setBareRuntime(USER, bareId, {
+      engine: 'claude',
+      credential: null,
+      modelId: null,
+      complexity: null
+    })
+    expect(agentRepo.getOwned(USER, bareId)?.driver).toBe('claude')
   })
 
   it('refuses a runtime naming both a model and a tier, wherever it is stored', () => {

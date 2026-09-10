@@ -538,7 +538,7 @@ describe('EngineEventBus', () => {
     // `engineManager.onStateChange` fires `shutdown()` for **every** non-running
     // state — `stopped`, then `starting`, then `failed` — so back-to-back
     // shutdowns are the normal case rather than a defensive one
-    // (`agentTurn/index.ts`: `if (next.status !== 'running') engineEventBus.shutdown()`).
+    // (`agents/drivers/index.ts`: `if (next.status !== 'running') engineEventBus.shutdown()`).
     const s = controllableStream()
     const bus = new EngineEventBus(async () => s.stream, noSleep)
     const a = recorder()

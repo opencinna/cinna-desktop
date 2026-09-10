@@ -27,7 +27,6 @@ import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
 import type { InputRequest, RunEvent, RunState } from '../../shared/runEvents'
 import type { MessagePart } from '../../shared/messageParts'
-import type { AgentTurnRunner } from './agentTurn/runner'
 
 const logger = createLogger('A2A')
 
@@ -101,49 +100,35 @@ export function a2aInputRequestOf(
 
 interface ActiveRequest {
   controller: AbortController
-  client?: A2AClient
-  taskId?: string
 }
 
 const activeRequests = new Map<string, ActiveRequest>()
 
+/** The sink and signal {@link a2aStreamingService.streamToAgent} hands a turn. */
+export interface TurnIO {
+  signal: AbortSignal
+  onEvent: (event: RunEvent) => void
+}
+
+/** One turn, already bound to its agent. Never throws by contract — and is not trusted to. */
+export type TurnRun = (io: TurnIO) => Promise<RunAgentTurnResult>
+
 export interface StreamToAgentInput {
   /**
-   * Which runner drives this turn — chosen by `resolveTurnRunner(agent)` in the
-   * IPC handler, not decided here.
+   * The turn itself — the agent's driver, bound by the IPC handler (or a
+   * `/run:` command in its place), not decided here.
    *
    * `streamToAgent` is the *direct-chat wrapper*: register for cancellation,
    * run one turn, persist the assistant row and its notices, pump the port. All
-   * of that is identical for an A2A agent and a folder agent, so the only thing
-   * that varies is the turn itself. Passing the runner in rather than branching
-   * on `source` here keeps this function ignorant of what kinds of agent exist,
-   * which is what makes it a lift rather than a rewrite.
+   * of that is identical for every kind of agent, so the only thing that varies
+   * is the turn. Taking it as a function rather than branching on what the
+   * agent is keeps this function ignorant of what kinds of agent exist — and
+   * of their endpoints, tokens and files, which the driver resolves.
    */
-  runner: AgentTurnRunner
+  run: TurnRun
   chatId: string
   agentId: string
-  agentName: string
-  endpointUrl?: string | null
-  cardUrl?: string | null
-  accessToken?: string
-  wireContent: string
-  /**
-   * Cinna file IDs (UUIDs) to attach to this turn — forwarded as
-   * `metadata.cinna_file_ids` on the A2A message. The cinna-backend reads
-   * this and transfers the uploaded files into the agent environment under
-   * `./uploads/` before the agent receives the message.
-   */
-  fileIds?: string[]
   port: StreamPort
-  /**
-   * True when the access token is a Cinna-issued JWT (remote agents synced
-   * from the user's Cinna account). When set, an SDK-level 401/403 mid-stream
-   * is treated as a reauth-required signal — the user gets a clickable
-   * "Re-authenticate" chip rather than a generic auth error. Manually-added
-   * local A2A agents pass `false` here so a 401 stays a plain "token rejected"
-   * (no in-app reauth flow exists for them).
-   */
-  isCinnaTokenAuth?: boolean
 }
 
 /**
@@ -226,8 +211,9 @@ function isAuthRejection(err: unknown): err is A2aHttpError {
  * The shared input widened them to optional so a folder agent — which has
  * neither — fits through `AgentTurnRunner`. This re-narrows for the A2A pump,
  * so the compiler still refuses a turn with no card at the call site rather
- * than letting it surface as an SDK failure mid-stream. `A2ATurnRunner` in
- * `agentTurn/index.ts` is the single place that does the narrowing.
+ * than letting it surface as an SDK failure mid-stream. The A2A driver
+ * (`src/main/agents/drivers/a2aDriver.ts`) is the single place that does the
+ * narrowing.
  */
 export type A2ARunAgentTurnInput = RunAgentTurnInput & {
   endpointUrl: string
@@ -496,45 +482,17 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
  */
 export const a2aStreamingService = {
   async streamToAgent(input: StreamToAgentInput): Promise<void> {
-    const {
-      runner,
-      chatId,
-      agentId,
-      agentName,
-      endpointUrl,
-      cardUrl,
-      accessToken,
-      wireContent,
-      fileIds,
-      port,
-      isCinnaTokenAuth = false
-    } = input
+    const { run, chatId, agentId, port } = input
 
     const abortController = new AbortController()
     const requestId = nanoid()
-    const activeRequest: ActiveRequest = { controller: abortController }
-    activeRequests.set(requestId, activeRequest)
+    activeRequests.set(requestId, { controller: abortController })
     port.postMessage({ type: 'request-id', requestId })
 
     try {
-      const result = await runner.runTurn({
-        chatId,
-        agentId,
-        agentName,
-        endpointUrl,
-        cardUrl,
-        accessToken,
-        wireContent,
-        fileIds,
-        isCinnaTokenAuth,
+      const result = await run({
         signal: abortController.signal,
-        onEvent: (event) => port.postMessage(event),
-        onClient: (client) => {
-          activeRequest.client = client
-        },
-        onTaskId: (taskId) => {
-          activeRequest.taskId = taskId
-        }
+        onEvent: (event) => port.postMessage(event)
       })
 
       // **A stopped turn that also carries an error is a stop, not a failure.**
@@ -631,20 +589,18 @@ export const a2aStreamingService = {
     }
   },
 
+  /**
+   * Stop a direct-chat turn. Only aborts: the driver that runs the turn tells
+   * the agent itself to stop (the A2A driver sends `tasks/cancel` from its own
+   * abort listener), so the orchestrator's agent tool and this Stop cancel the
+   * same way and the request goes out once.
+   */
   cancel(requestId: string): boolean {
     const request = activeRequests.get(requestId)
     if (!request) return false
 
     request.controller.abort()
     activeRequests.delete(requestId)
-
-    if (request.client && request.taskId) {
-      const taskId = request.taskId
-      logger.info('Sending cancelTask to agent', { taskId })
-      request.client.cancelTask({ id: taskId }).catch((err) =>
-        logger.warn('cancelTask failed', { taskId, error: String(err) })
-      )
-    }
     return true
   }
 }

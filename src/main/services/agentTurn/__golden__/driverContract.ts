@@ -1,24 +1,27 @@
 /**
- * The runner contract — what every `AgentTurnRunner` promises its callers,
+ * The driver contract — what every `AgentDriver` promises its callers,
  * asserted the same way for each implementation.
  *
- * Phase 0 of the agent runtime plan. Each runner's golden test file invokes
- * {@link describeRunnerContract} once with a subject built from its own fakes;
- * phase 2 renames this to the driver contract and keeps every assertion.
+ * Phase 0 of the agent runtime plan wrote this as the runner contract, over
+ * `AgentTurnRunner.runTurn`. Phase 2 moved every subject up to the driver that
+ * wraps the runner — a turn is now `driver.run(userId, row, input)`, which is
+ * what production dispatches — kept every assertion and every known violation
+ * exactly, and added three clauses about the driver itself: stable
+ * capabilities, readiness that never throws, and an answer to nothing.
  *
  * The suite owns the assertions and the `pendingRequests` instrumentation. A
- * subject only says how to build a turn in each situation — so a runner cannot
+ * subject only says how to build a turn in each situation — so a driver cannot
  * pass by describing its own behaviour back to the suite.
  *
  * What is asserted, for every implementation:
  *
- * - `runTurn` never rejects; every failure is `result.error` with a non-empty
+ * - `run` never rejects; every failure is `result.error` with a non-empty
  *   `message` and `raw`.
  * - The first `onEvent` is never `done` or `error`.
  * - After `signal.abort()` the promise settles and no further `onEvent`
  *   arrives (`abort.settles`), and the result carries `error` or a `canceled`
  *   task state (`abort.reports`).
- * - A parked ask (where the runner parks) is the turn's only registration in
+ * - A parked ask (where the driver parks) is the turn's only registration in
  *   `pendingRequests` and is gone on every exit: answer, reject, abort, timeout.
  * - A parked ask is announced: exactly one `needs_input` for the registered id,
  *   `resume: 'reply'`, of the registration's kind, before any answer is posted
@@ -27,15 +30,27 @@
  *   `input_resolved`, after its `needs_input`, carrying the answer that was
  *   posted (`park.input_resolved`) — or `{kind: 'rejected'}` when it was
  *   rejected or timed out. An ask swept away by an abort gets none: the
- *   terminal event posted above the runner already says the park is gone.
+ *   terminal event posted above the driver already says the park is gone.
  * - A session id the turn produces reaches `saveSession`, and the next turn on
  *   the same chat receives it through `readSession`.
+ * - `capabilities(row)` is the same answer on every call and for every subject
+ *   built for that row, and no caller can change the next answer by editing
+ *   the one it was handed (`capabilities.stable`, phase 2).
+ * - `readiness` resolves — never rejects, never throws — with a state this build
+ *   knows and a sentence when it is not `ok`, whatever its dependencies do
+ *   (`readiness.never_throws`, phase 2).
+ * - `respond` to an ask nothing is waiting on answers `{delivered: false}` and
+ *   writes no grant; where the driver parks, an ask already answered is one of
+ *   those (`respond.unknown`, phase 2).
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type TestFunction } from 'vitest'
 import { pendingRequests, type RequestResolution } from '../pendingRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
+import type { AgentReadinessState } from '../../../../shared/agentDrivers'
 import type { RunAgentTurnResult } from '../../a2aStreamingService'
+import type { AgentDriver, AgentReadiness } from '../../../agents/drivers/driver'
+import type { AgentRow } from '../../../db/agents'
 
 /** The sink and signal the suite hands a turn. */
 export interface TurnIO {
@@ -45,16 +60,16 @@ export interface TurnIO {
 
 export interface ContractTurn {
   /**
-   * Start the turn with the suite's sink and signal. Calls the runner's
-   * `runTurn` exactly once and returns its promise untouched — no `catch`, or
-   * the never-rejects assertion is testing the subject instead of the runner.
+   * Start the turn with the suite's sink and signal. Calls the driver's `run`
+   * exactly once and returns its promise untouched — no `catch`, or the
+   * never-rejects assertion is testing the subject instead of the driver.
    */
   run(io: TurnIO): Promise<RunAgentTurnResult>
 }
 
 export interface HangingTurn extends ContractTurn {
   /**
-   * Resolves once the runner is mid-turn — past its readiness checks and
+   * Resolves once the driver is mid-turn — past its readiness checks and
    * waiting on the agent — so the abort lands inside the stream, not before it.
    */
   started(): Promise<void>
@@ -76,47 +91,77 @@ export interface SessionPair {
   first: ContractTurn
   /** A turn on the same chat, sharing `first`'s session store. */
   second: ContractTurn
-  /** Session ids the runner handed to `saveSession`, in order. */
+  /** Session ids the driver handed to `saveSession`, in order. */
   saved(): string[]
   /** What `readSession` returned to the second turn; null if it was never read. */
   readBySecond(): string | null
 }
 
-export interface RunnerContractSubject {
+/** A driver and a row it runs, for the clauses about the driver rather than a turn. */
+export interface DriverUnderTest {
+  driver: AgentDriver
+  row: AgentRow
+  /** How many *Always allow* rules the driver has asked its world to write so far. */
+  grantsWritten(): number
+}
+
+export interface DriverContractSubject {
   /** A turn that ends normally. */
   completes(): ContractTurn
-  /** Every failure scenario this runner has, by name. At least one. */
+  /** Every failure scenario this driver has, by name. At least one. */
   failures(): Record<string, ContractTurn>
   /**
    * A turn that stays open until its signal aborts. Nothing on the far side
-   * reacts to the abort: `abort.settles` judges the runner on its own.
+   * reacts to the abort: `abort.settles` judges the driver on its own.
    */
   hangs(): HangingTurn
   /**
    * The same hanging turn, with its far side ending the stream once the signal
-   * aborts — what a server does after `tasks/cancel`. Only for a runner that
+   * aborts — what a server does after `tasks/cancel`. Only for a driver that
    * cannot end an aborted turn by itself, so that `abort.reports` can still see
    * what the result says. Never used by `abort.settles`.
    */
   hangsServerAssisted?(): HangingTurn
   /**
-   * A turn that parks on an ask. Omit for runners whose asks end the turn
+   * A turn that parks on an ask. Omit for drivers whose asks end the turn
    * instead (A2A `input-required`); the parked-ask cases are then skipped.
    */
   parks?(): ParkedTurn
   session(): SessionPair
+  /** The driver and a row it runs. Fresh on every call: two calls are two subjects for one row. */
+  underTest(): DriverUnderTest
+  /**
+   * Worlds whose dependencies fail — throw, reject with an `Error` or a
+   * `TypeError`, never answer — by name. At least one.
+   */
+  readinessWorlds(): Record<string, DriverUnderTest>
 }
 
 const SETTLE_MS = 2_000
 /** Long enough for a stray event loop turn to post something it should not. */
 const QUIET_MS = 30
 
+/** The user and chat the driver-level clauses speak as. */
+const CONTRACT_USER = 'user-contract'
+const CONTRACT_CHAT = 'chat-contract'
+
+/** Every state readiness may answer — a `Record`, so a new state fails the typecheck here. */
+const READINESS_STATES: Record<AgentReadinessState, true> = {
+  ok: true,
+  credentials_needed: true,
+  invalid: true,
+  contract_too_new: true,
+  not_installed: true,
+  not_logged_in: true,
+  unreachable: true
+}
+
 /**
  * A wait that failed **before** the clause reached what it asserts — the turn
  * never started, the ask was never registered.
  *
  * Its own class so the known-violation wrapper can refuse it outright. A
- * recorded `by: 'timeout'` means "the aborted turn never settles", and a runner
+ * recorded `by: 'timeout'` means "the aborted turn never settles", and a driver
  * that never reaches the agent at all must not satisfy that entry by timing out
  * one step earlier.
  */
@@ -145,7 +190,7 @@ async function until(cond: () => boolean, what: string, { setup = false }: WaitO
   }
 }
 
-/** Fail rather than hang when a runner never settles. */
+/** Fail rather than hang when a driver never settles. */
 async function settled<T>(promise: Promise<T>, what: string, { setup = false }: WaitOptions = {}): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
@@ -208,24 +253,27 @@ export type ContractClause =
   | 'park.reject'
   | 'park.abort'
   | 'park.timeout'
+  | 'capabilities.stable'
+  | 'readiness.never_throws'
+  | 'respond.unknown'
 
 /**
- * A clause a runner breaks today: the reason, and — when it is not an ordinary
+ * A clause a driver breaks today: the reason, and — when it is not an ordinary
  * assertion — how it breaks. `by: 'timeout'` is a turn that never settles.
  */
 export type KnownViolation = string | { reason: string; by: 'timeout' | 'assertion' }
 
-export interface RunnerContractOptions {
+export interface DriverContractOptions {
   /**
-   * Clauses this runner breaks **today**. Phase 0 pins behaviour rather than
+   * Clauses this driver breaks **today**. Phase 0 pins behaviour rather than
    * fixing it, so a real violation is recorded here instead of bent to pass.
    *
    * The clause then passes only if it fails **the way the entry says** — an
-   * assertion unless `by: 'timeout'` — and fails outright once the runner keeps
+   * assertion unless `by: 'timeout'` — and fails outright once the driver keeps
    * it, so the entry has to be deleted by whoever fixed it. A failure while
    * setting the clause up (the turn never started, the ask never registered)
    * never matches an entry. Deliberately not `it.fails`, which passes on *any*
-   * throw: a runner that started hanging on abort would have kept a
+   * throw: a driver that started hanging on abort would have kept a
    * result-shape violation green.
    */
   knownViolations?: Partial<Record<ContractClause, KnownViolation>>
@@ -238,10 +286,10 @@ export interface RunnerContractOptions {
   knownFailureViolations?: Record<string, string>
 }
 
-export function describeRunnerContract(
+export function describeDriverContract(
   name: string,
-  makeSubject: () => RunnerContractSubject,
-  options: RunnerContractOptions = {}
+  makeSubject: () => DriverContractSubject,
+  options: DriverContractOptions = {}
 ): void {
   const clause = (key: ContractClause, title: string, fn: TestFunction): void => {
     const known = options.knownViolations?.[key]
@@ -278,7 +326,7 @@ export function describeRunnerContract(
    */
   const hasParks = typeof makeSubject().parks === 'function'
 
-  describe(`runner contract: ${name}`, () => {
+  describe(`driver contract: ${name}`, () => {
     /** Every `register` call this test made, in order. */
     let registered: { requestId: string; kind: 'permission' | 'question'; timeoutMs?: number }[]
     /** Set by a test to force the park timeout through the real timer path. */
@@ -368,6 +416,101 @@ export function describeRunnerContract(
       expect(pair.readBySecond()).toBe(first.contextId)
     })
 
+    clause(
+      'capabilities.stable',
+      'answers the same capabilities for the same row, and hands out none a caller can change',
+      async () => {
+        const a = makeSubject().underTest()
+        const b = makeSubject().underTest()
+        expect(a.driver.id, 'the driver the row names').toBe(a.row.driver)
+
+        const first = a.driver.capabilities(a.row)
+        const snapshot = structuredClone(first)
+        expect(a.driver.capabilities(a.row), 'a second call for the same row').toEqual(snapshot)
+        expect(b.driver.capabilities(b.row), 'a second subject for the same row').toEqual(snapshot)
+
+        // A caller that edits what it was handed must not change the next
+        // answer — the composer and the send path both read these, and a
+        // shared object edited by one would put them into disagreement.
+        try {
+          const edited = first as unknown as {
+            streaming: boolean
+            attachments: string
+            input: { permission: boolean }
+          }
+          edited.streaming = !edited.streaming
+          edited.attachments = 'edited by a caller'
+          edited.input.permission = !edited.input.permission
+        } catch {
+          // A frozen answer refuses the edit, which is the other way to keep this.
+        }
+        expect(a.driver.capabilities(a.row), 'capabilities after a caller edited an earlier answer').toEqual(
+          snapshot
+        )
+      }
+    )
+
+    clause(
+      'readiness.never_throws',
+      'resolves readiness with a known state and a reason, whatever its dependencies do',
+      async () => {
+        const worlds = Object.entries(makeSubject().readinessWorlds())
+        expect(worlds.length).toBeGreaterThan(0)
+        for (const [world, { driver, row }] of worlds) {
+          // Through a promise executor, so a synchronous throw is a rejection
+          // here rather than an exception that escapes the clause unlabelled.
+          const readiness = await settled(
+            new Promise<AgentReadiness | null>((resolve) =>
+              resolve(driver.readiness(CONTRACT_USER, row))
+            ).catch((err: unknown) => {
+              throw new Error(
+                `readiness rejected in "${world}": ${err instanceof Error ? err.message : String(err)}`
+              )
+            }),
+            `readiness in "${world}"`
+          )
+          // Null is an answer: the driver could not tell (a check that timed
+          // out), which refuses nothing. It is not a throw in disguise.
+          if (readiness === null) continue
+          expect(Object.keys(READINESS_STATES), `the state readiness answered in "${world}"`).toContain(
+            readiness.state
+          )
+          if (readiness.state === 'ok') {
+            expect(readiness.reason, world).toBeNull()
+          } else {
+            expect(readiness.reason, world).toEqual(expect.any(String))
+            expect(readiness.reason?.length, world).toBeGreaterThan(0)
+          }
+        }
+      }
+    )
+
+    clause('respond.unknown', 'answers an ask nothing is waiting on with delivered: false, and writes no grant', async () => {
+      const { driver, row, grantsWritten } = makeSubject().underTest()
+      const nobody = {
+        requestId: 'per_contract_nobody',
+        chatId: CONTRACT_CHAT,
+        agentId: row.id,
+        kind: 'permission' as const
+      }
+      expect(driver.respond(nobody, { kind: 'permission', reply: 'once' })).toEqual({ delivered: false })
+      expect(grantsWritten(), 'grants written for an ask nothing was waiting on').toBe(0)
+      if (!hasParks) return
+
+      // An ask that was waiting and has been answered is nothing waiting any
+      // more: a second answer — a double click, a stale block — lands nowhere.
+      const answered = { ...nobody, requestId: 'per_contract_answered' }
+      pendingRequests.register({
+        requestId: answered.requestId,
+        chatId: answered.chatId,
+        agentId: answered.agentId,
+        kind: answered.kind
+      })
+      expect(driver.respond(answered, { kind: 'permission', reply: 'once' })).toEqual({ delivered: true })
+      expect(driver.respond(answered, { kind: 'permission', reply: 'once' })).toEqual({ delivered: false })
+      expect(grantsWritten(), 'grants written for a once answer').toBe(0)
+    })
+
     ;(hasParks ? describe : describe.skip)('a parked ask', () => {
       /** Drive a parking turn up to the point its ask is registered. */
       async function park(): Promise<{ turn: ParkedTurn; d: Driven; requestId: string }> {
@@ -423,7 +566,7 @@ export function describeRunnerContract(
         expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'an answered turn')
-        // Once, although a runner may hear of the same answer twice — its own
+        // Once, although a driver may hear of the same answer twice — its own
         // and the engine's echo of it.
         expectResolvedOnce(p.d.events, p.requestId, p.turn.answer)
         const asked = p.d.events.findIndex((e) => e.type === 'needs_input' && e.requestId === p.requestId)

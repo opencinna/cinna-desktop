@@ -1,5 +1,14 @@
 /**
- * Golden streams and the runner contract for the OpenCode runner.
+ * Golden streams and the driver contract for the `opencode` driver over the
+ * OpenCode runner.
+ *
+ * ## Through the driver (phase 2)
+ *
+ * Every scenario and every contract turn goes through `createOpencodeDriver`
+ * over the same runner, as production's does — see "Through the driver" in
+ * `__golden__/opencode/goldenEngine.ts`. The expectations are the ones phase 0
+ * pinned, byte for byte: around an OpenCode turn the driver adds only the
+ * reconcile against the folder, and a golden cannot see that.
  *
  * Phase 0 of the agent runtime plan
  * (`drafts/agent_runtime/phase_0_characterization.md`). What
@@ -56,10 +65,13 @@ import { pendingRequests } from './pendingRequests'
 import { turnLock } from '../localAgents/turnLock'
 import { expectGolden, readFixture, type NormaliseOptions } from './__golden__/harness'
 import {
-  describeRunnerContract,
+  describeDriverContract,
   type ContractTurn,
-  type RunnerContractSubject
-} from './__golden__/runnerContract'
+  type DriverContractSubject,
+  type DriverUnderTest
+} from './__golden__/driverContract'
+import { createOpencodeDriver } from '../../agents/drivers/opencodeDriver'
+import type { FolderDriverDeps } from '../../agents/drivers/folderDriver'
 import {
   admitted,
   buildWorld,
@@ -176,8 +188,8 @@ const stepEnded = (sessionID: string): EngineFrame =>
 /**
  * A turn on `world`, with the engine's side of it scripted.
  *
- * `run` returns `runTurn`'s promise untouched, as the contract requires. The
- * script runs beside it; if it cannot reach its point (the runner failed
+ * `run` returns the driver's `run` promise untouched, as the contract requires.
+ * The script runs beside it; if it cannot reach its point (the driver failed
  * earlier than the script expected) it gives up quietly and the suite's own
  * assertion reports what actually happened.
  */
@@ -188,7 +200,7 @@ function contractTurn(
   return {
     run(io) {
       const before = world.promptCount()
-      const promise = world.runner.runTurn(world.input(io))
+      const promise = world.driver.run('settings-user', world.row, world.runInput(io))
       if (script) {
         void script(world, before).catch((err) => logged.push(`contract script: ${String(err)}`))
       }
@@ -197,7 +209,7 @@ function contractTurn(
   }
 }
 
-function makeSubject(): RunnerContractSubject {
+function makeSubject(): DriverContractSubject {
   return {
     completes: () =>
       contractTurn(buildWorld(), async (w, before) => {
@@ -239,8 +251,10 @@ function makeSubject(): RunnerContractSubject {
       return {
         run(io) {
           before = w.promptCount()
-          return w.runner.runTurn(
-            w.input({
+          return w.driver.run(
+            'settings-user',
+            w.row,
+            w.runInput({
               signal: io.signal,
               onEvent: (event) => {
                 seen += 1
@@ -292,6 +306,45 @@ function makeSubject(): RunnerContractSubject {
       }
     },
 
+    underTest: () => {
+      const w = buildWorld()
+      return { driver: w.driver, row: w.row, grantsWritten: () => w.grants.length }
+    },
+
+    readinessWorlds: () => {
+      // The folder read is this driver's only readiness dependency. It
+      // promises not to throw; these break that promise and the others it has.
+      const world = (readFolder: FolderDriverDeps['readFolder']): DriverUnderTest => {
+        const w = buildWorld()
+        return {
+          driver: createOpencodeDriver({
+            runner: w.runner,
+            readFolder,
+            rememberGrant: () => false,
+            resolveRequest: () => false
+          }),
+          row: w.row,
+          grantsWritten: () => 0
+        }
+      }
+      return {
+        'the folder read throws': world(() => {
+          throw new Error('EACCES: permission denied')
+        }),
+        'the folder read throws a TypeError': world(() => {
+          throw new TypeError("Cannot read properties of undefined (reading 'runtime')")
+        }),
+        'the folder is gone': world(() => null),
+        'the folder reports a readiness this build does not know': world(() => ({
+          name: 'Helper',
+          enabled: true,
+          readiness: 'from_a_newer_build',
+          readinessReason: null,
+          runtime: { engine: 'opencode' }
+        }))
+      }
+    },
+
     session: () => {
       const sessionId = 'ses_contract'
       let phase: 'first' | 'second' = 'first'
@@ -328,7 +381,7 @@ function makeSubject(): RunnerContractSubject {
   }
 }
 
-describeRunnerContract('opencode', makeSubject, {
+describeDriverContract('opencode', makeSubject, {
   knownViolations: {
     // Evidence: `abort_with_parked_question.expected.json`. `stream()` returns
     // the parts with no `error` and no `taskState` on an aborted outcome, and

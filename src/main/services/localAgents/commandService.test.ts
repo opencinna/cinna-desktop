@@ -113,29 +113,29 @@ afterEach(() => {
 })
 
 describe('resolveCommandRunner — the actual dispatch point `agent_a2a.ipc.ts` calls', () => {
-  const fallback = { runTurn: async () => ({ text: 'fallback', parts: [], notices: [] }) }
+  const fallback = async (): Promise<{ text: string; parts: []; notices: [] }> => ({
+    text: 'fallback',
+    parts: [],
+    notices: []
+  })
 
-  it('leaves a non-folder agent’s runner untouched, even if the text looks like a command', () => {
-    const result = resolveCommandRunner(false, '/run:check', USER, AGENT_ID, fallback)
+  it('leaves an agent without a command catalog untouched, even if the text looks like a command', () => {
+    // A card's commands are the agent's own business: `/run:check` goes to it
+    // as a message, exactly as an A2A agent received it before.
+    expect(resolveCommandRunner('card', '/run:check', USER, AGENT_ID, fallback)).toBe(fallback)
+    expect(resolveCommandRunner('none', '/run:check', USER, AGENT_ID, fallback)).toBe(fallback)
+  })
+
+  it('leaves a catalog agent’s turn untouched when the message is not a bare /run:', () => {
+    const result = resolveCommandRunner('catalog', 'run check please', USER, AGENT_ID, fallback)
     expect(result).toBe(fallback)
   })
 
-  it('leaves a folder agent’s runner untouched when the message is not a bare /run:', () => {
-    const result = resolveCommandRunner(true, 'run check please', USER, AGENT_ID, fallback)
-    expect(result).toBe(fallback)
-  })
-
-  it('swaps in a command-backed runner for a folder agent’s /run:<name> message', async () => {
+  it('swaps in a command-backed turn for a catalog agent’s /run:<name> message', async () => {
     writeCatalog('commands:\n  - name: greet\n    description: x\n    command: echo dispatched\n')
-    const result = resolveCommandRunner(true, '/run:greet', USER, AGENT_ID, fallback)
+    const result = resolveCommandRunner('catalog', '/run:greet', USER, AGENT_ID, fallback)
     expect(result).not.toBe(fallback)
-    const turn = await result.runTurn({
-      chatId: 'chat-1',
-      agentId: AGENT_ID,
-      agentName: 'alpha',
-      wireContent: '/run:greet',
-      signal: new AbortController().signal
-    })
+    const turn = await result({ signal: new AbortController().signal, onEvent: () => {} })
     expect(turn.parts[0]?.commandInvocation).toBe('/run:greet')
     expect(turn.parts[0]?.text).toContain('dispatched')
   })

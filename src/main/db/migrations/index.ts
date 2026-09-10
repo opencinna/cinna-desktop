@@ -5,6 +5,7 @@ import { migrateChats } from './chats'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
 import { migrateAgents } from './agents'
+import { migrateAgentDrivers } from './agent-drivers'
 import { migrateAgentRoots } from './agent-roots'
 import { migrateA2aSessions } from './a2a-sessions'
 import { migrateAgentOverrides } from './agent-overrides'
@@ -73,6 +74,9 @@ export function runAllMigrations(sqlite: Database.Database): void {
   runSyncMigrations(sqlite)
   // Portable-dependency-sync columns (jobs.sync_deps + created_by_sync flags).
   runSyncDepsMigrations(sqlite)
+  // `agents.driver` + its backfill. DML on a table another migration created,
+  // so it runs after every table exists and is `hasTable`-guarded.
+  migrateAgentDrivers(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

@@ -6,59 +6,27 @@ import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { messageRoutingService } from '../services/messageRoutingService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
-import { rememberPermissionGrant, resolveTurnRunner } from '../services/agentTurn'
-import { isFolderAgent } from '../services/agentTurn/runner'
-import { pendingRequests, type RequestResolution } from '../services/agentTurn/pendingRequests'
+import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
+import { pendingRequests } from '../services/agentTurn/pendingRequests'
 import { resolveCommandRunner } from '../services/localAgents/commandService'
-import type { LocalPermissionRequest, PermissionReply } from '../../shared/localAgentRequests'
+import type { PermissionReply } from '../../shared/localAgentRequests'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
-import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
 import { postRunError } from './_streamPort'
 import type { CliCommand } from '../../shared/cliCommands'
 import type { AgentSendPayload } from '../../shared/ipcPayloads'
-import { CINNA_REAUTH_REQUIRED_CODE, CINNA_SESSION_EXPIRED_MESSAGE } from '../../shared/cinnaErrors'
 
 const logger = createLogger('A2A')
+
+/** An answer to an ask whose turn has since ended — a stale block, not a fault. */
+const NO_LONGER_WAITING = 'This request is no longer waiting for an answer.'
 
 /** OpenCode's `PermissionV2Reply`, checked at the boundary rather than cast. */
 function isPermissionReply(value: unknown): value is PermissionReply {
   return value === 'once' || value === 'always' || value === 'reject'
-}
-
-/**
- * Turn a user's *Always allow* into a rule stored beside the agent, and into
- * the `once` the engine is actually told.
- *
- * Returns the resolution to settle with. `remembered` says whether the rule is
- * on disk, and it is deliberately allowed to be false: the user allowed this
- * action, so a store that refused the write must not cancel the action they
- * approved. They are asked again next time, and the block and the transcript
- * both say "allowed once" rather than claiming a rule that does not exist.
- *
- * Everything the grant is built from comes from the **engine's** ask, held in
- * the pending registry — never from the payload the renderer sent with the
- * answer.
- */
-function rememberIfAlways(
-  parsed: RequestResolution,
-  owner: { agentId: string; request?: LocalPermissionRequest }
-): RequestResolution {
-  if (parsed.kind !== 'permission' || parsed.reply !== 'always') return parsed
-  if (!owner.request) {
-    logger.warn('an always answer arrived for a request with no recorded ask', {
-      agentId: owner.agentId
-    })
-    return { kind: 'permission', reply: 'once', remembered: false }
-  }
-  return {
-    kind: 'permission',
-    reply: 'once',
-    remembered: rememberPermissionGrant(owner.agentId, owner.request)
-  }
 }
 
 /** `QuestionV2Reply.answers` — one array of selected labels **per question**. */
@@ -170,9 +138,10 @@ export function registerA2AHandlers(): void {
     return a2aSessionRepo.getByChat(chatId) ?? null
   })
 
-  // Stream a message to an A2A agent via MessagePort. Thin controller: extract
-  // params, auth/ownership/endpoint resolution, then hand off to the routing
-  // service (persistence + cursor advance) and the streaming service (A2A pump).
+  // Stream a message to an agent via MessagePort. Thin controller: extract
+  // params, auth/ownership, then hand off to the routing service (persistence
+  // + cursor advance) and the streaming service (the port pump), with the
+  // agent's driver running the turn.
   ipcMain.on('agent:send-message', async (event, payload: AgentSendPayload) => {
     const { agentId, chatId, content: userContent, attachments } = payload
     const fileIds = attachments?.map((a) => a.id)
@@ -200,8 +169,7 @@ export function registerA2AHandlers(): void {
     }
 
     const located = agentService.findAgent(getSettingsScopeUserId(), profileUserId, agentId)
-    const agent = located?.row
-    if (!located || !agent) {
+    if (!located) {
       const err = 'Agent not found or not configured'
       logger.error(err, { agentId, chatId })
       postRunError(port, err)
@@ -209,59 +177,15 @@ export function registerA2AHandlers(): void {
       port.close()
       return
     }
+    const { row: agent, userId: agentOwnerId } = located
 
-    // **The card-URL check comes after the source check, and the order is
-    // load-bearing.** Folder agents are inserted with `cardUrl: null`
-    // (`src/main/db/agents.ts`), so a combined `!agent || !agent.cardUrl`
-    // guard — which is what stood here — matched every folder agent and
-    // returned "Agent not found or not configured" before any local branch
-    // could be reached. The friendlier branch further down was unreachable
-    // code for the whole of Phase 5. Dispatch on `source`, which is the
-    // discriminator that actually says what kind of agent this is; a missing
-    // card is a symptom several unrelated states share.
-    const runner = resolveTurnRunner(agent)
-    const isFolder = isFolderAgent(agent)
-    if (!isFolder && !agent.cardUrl) {
-      const err = 'Agent not found or not configured'
-      logger.error(err, { agentId, chatId, cardUrl: agent.cardUrl })
-      postRunError(port, err)
-      messageRepo.saveError({ chatId, short: err })
-      port.close()
-      return
-    }
-    const agentOwnerId = located.userId
-
-    let endpointUrl: string | null = null
-    try {
-      // A folder agent has no endpoint at all — it is run by the local
-      // engine — and `resolveEndpointIfNeeded` short-circuits to null for
-      // it. Skipping the call entirely keeps the local path free of a
-      // resolution step that can only ever answer "there isn't one".
-      if (!isFolder) endpointUrl = await agentService.resolveEndpointIfNeeded(agentOwnerId, agent)
-    } catch (err) {
-      const isReauth = err instanceof CinnaReauthRequired
-      const errMsg = isReauth
-        ? CINNA_SESSION_EXPIRED_MESSAGE
-        : err instanceof AgentError
-          ? err.message
-          : `Failed to resolve agent endpoint: ${err instanceof Error ? err.message : String(err)}`
-      const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
-      logger.error(errMsg, { agentId, cardUrl: agent.cardUrl, reauth: isReauth })
-      postRunError(port, errMsg, { code })
-      messageRepo.saveError({ chatId, short: errMsg, code })
-      port.close()
-      return
-    }
-    if (!isFolder && endpointUrl === null) {
-      // A non-folder agent with no endpoint is a misconfiguration, not a
-      // kind of agent — say so rather than fail obscurely at the SDK call.
-      const errMsg = 'This agent has no endpoint configured.'
-      logger.error(errMsg, { agentId, source: agent.source })
-      postRunError(port, errMsg)
-      messageRepo.saveError({ chatId, short: errMsg })
-      port.close()
-      return
-    }
+    // **No kind-specific pre-flight here any more.** The card check, endpoint
+    // and token resolution and the Cinna re-auth mapping all run inside the A2A
+    // driver's `run`, which reports each as `result.error` — so a failure there
+    // arrives after the user's message is persisted, and is finalized by
+    // `streamToAgent` like any failed turn, exactly as a folder agent's always
+    // was.
+    const driver = driverFor(agent)
 
     // Persist the user message + fire title generation in one place. Service
     // throws ChatError on ownership mismatch (already re-checked above; this
@@ -274,54 +198,28 @@ export function registerA2AHandlers(): void {
       attachments
     })
 
-    // `/run:<name>` for a folder agent is intercepted **here**, before the
-    // runner is ever reached — OpenCode has no such convention, so the
-    // desktop itself has to recognise the message. Deliberately not inside
-    // `resolveTurnRunner`/`LocalAgentTurnRunner`: those are the seam Phase
-    // 6's mutation audit hardened, and a command is not a model turn. See
-    // `resolveCommandRunner`'s own docstring for why the decision lives
-    // there, tested, rather than inline here.
-    const effectiveRunner = resolveCommandRunner(
-      isFolder,
+    // `/run:<name>` for an agent whose commands come from a folder catalog is
+    // intercepted **here**, before the driver is ever reached — OpenCode has no
+    // such convention, so the desktop itself has to recognise the message.
+    // Deliberately not inside the driver: a command is not a model turn. See
+    // `resolveCommandRunner`'s own docstring for why the decision lives there,
+    // tested, rather than inline here.
+    const run = resolveCommandRunner(
+      driver.capabilities(agent).commands,
       wireContent,
       agentOwnerId,
       agentId,
-      runner
+      (io) =>
+        driver.run(agentOwnerId, agent, {
+          chatId,
+          wireContent,
+          fileIds,
+          signal: io.signal,
+          onEvent: io.onEvent
+        })
     )
 
-    let accessToken: string | undefined
-    try {
-      if (!isFolder) accessToken = await agentService.resolveAccessToken(agentOwnerId, agent)
-    } catch (err) {
-      const isReauth = err instanceof CinnaReauthRequired
-      const errMsg = isReauth
-        ? CINNA_SESSION_EXPIRED_MESSAGE
-        : `Failed to resolve agent access token: ${err instanceof Error ? err.message : String(err)}`
-      const code = isReauth ? CINNA_REAUTH_REQUIRED_CODE : undefined
-      logger.error(errMsg, { agentId, reauth: isReauth })
-      postRunError(port, errMsg, { code })
-      messageRepo.saveError({ chatId, short: errMsg, code })
-      port.close()
-      return
-    }
-
-    await a2aStreamingService.streamToAgent({
-      runner: effectiveRunner,
-      chatId,
-      agentId,
-      agentName: agent.name,
-      endpointUrl,
-      cardUrl: agent.cardUrl,
-      accessToken,
-      wireContent,
-      fileIds,
-      port,
-      // Remote agents authenticate with a Cinna-issued JWT — a stream-level
-      // 401/403 means the server revoked the session and the user needs to
-      // re-auth. Local A2A agents use a user-supplied static token so a
-      // 401 there is just a wrong-token error, not a reauth signal.
-      isCinnaTokenAuth: agent.source === 'remote'
-    })
+    await a2aStreamingService.streamToAgent({ run, chatId, agentId, port })
   })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {
@@ -334,9 +232,9 @@ export function registerA2AHandlers(): void {
    *
    * These arrive **out of band** rather than down the turn's MessagePort. The
    * turn is still streaming when the answer is needed, and the port belongs to
-   * a direct chat — `runAgentTurn` is port-free by design and orchestrated mode
-   * has no port at all — so routing the answer through a registry keyed by the
-   * engine's own request id is what lets both modes use one path.
+   * a direct chat — a driver's `run` is port-free by design and orchestrated
+   * mode has no port at all — so routing the answer through a registry keyed by
+   * the engine's own request id is what lets both modes use one path.
    *
    * The result is returned **as data, never thrown**: `ipcMain.handle`
    * serialises a rejection to message + stack and `contextBridge` re-clones it,
@@ -354,7 +252,7 @@ export function registerA2AHandlers(): void {
       // An unknown request is the ordinary outcome of answering a dialog whose
       // turn has since been cancelled — the user sees a stale block, not a
       // fault — so it is reported plainly rather than logged as an error.
-      if (!owner) return { ok: false, reason: 'This request is no longer waiting for an answer.' }
+      if (!owner) return { ok: false, reason: NO_LONGER_WAITING }
       if (!chatRepo.getOwned(getProfileScopeUserId(), owner.chatId)) {
         logger.warn('answer rejected: the caller does not own that chat', {
           requestId: data.requestId
@@ -382,39 +280,47 @@ export function registerA2AHandlers(): void {
         return { ok: false, reason: 'Malformed answer' }
       }
 
-      // **Always is answered here, and never forwarded to the engine.**
-      // OpenCode's own `always` writes `{projectID: "global", resource: "*"}`
-      // into a store shared with the user's personal OpenCode install — no
-      // directory, no session, no agent — so one click would authorise every
-      // folder agent, permanently (`opencode_contract.md` §4). Replying `once`
-      // persists nothing there, so the rule is kept beside the agent instead
-      // and matching asks are auto-answered from it.
+      // The driver that parked the ask answers it — for a folder agent that is
+      // where *Always allow* becomes a rule beside the agent and a `once` for
+      // the engine.
       //
-      // It happens *here*, on the path the user is still waiting on, rather
-      // than in the runner: a store that refuses the write has to change what
-      // the user is told, and by the time the runner posts the reply the
-      // renderer has already been answered.
-      // **The rule is written before the answer is delivered, and that order
-      // is only safe because everything from `owner()` to `resolve()` below is
-      // synchronous.** `resolve` can still answer null — the turn was cancelled
-      // between the two — and a grant would then have been written for an
-      // answer the user is told did not land. Nothing can interleave today; an
-      // `await` inserted anywhere between here and `resolve` makes it real, and
-      // the write cannot simply move after `resolve` because the resolution has
-      // to carry `remembered` into the transcript.
-      const resolution = rememberIfAlways(parsed, owner)
+      // **A turn can outlive its row.** Removing an agents folder prunes the
+      // rows of every agent in it without waiting for the turn lock, so an ask
+      // can still be parked on an agent `findAgent` no longer knows. The answer
+      // is delivered anyway — refusing it would leave the turn stuck until the
+      // park times out — with no rule written, since there is no agent left to
+      // keep one beside: `always` goes through as `once`, `remembered: false`.
+      const located = agentService.findAgent(
+        getSettingsScopeUserId(),
+        getProfileScopeUserId(),
+        owner.agentId
+      )
+      if (!located) {
+        logger.warn('an answer arrived for an agent whose row is gone; delivering it without a rule', {
+          requestId: data.requestId,
+          agentId: owner.agentId
+        })
+      }
 
-      return pendingRequests.resolve(data.requestId, resolution)
+      // **Everything from `owner()` above to `respond()` is synchronous, and it
+      // has to stay so.** `respond` writes the rule before it resolves the
+      // park, and the resolve can still find nothing waiting — the turn was
+      // cancelled in between. Nothing can interleave today; an `await`
+      // inserted anywhere on this path makes it real. See `respondToParkedAsk`.
+      const ask = { requestId: data.requestId, ...owner }
+      const outcome = located
+        ? driverFor(located.row).respond(ask, parsed)
+        : respondToOrphanedAsk(ask, parsed)
+
+      return outcome.delivered
         ? {
             ok: true,
             // Present only for a permission answered *always*: the block reads
             // it to decide between "remembered for this agent" and "allowed
             // once — the rule could not be saved".
-            ...(resolution.kind === 'permission' && data.reply === 'always'
-              ? { remembered: resolution.remembered === true }
-              : {})
+            ...(outcome.remembered !== undefined ? { remembered: outcome.remembered } : {})
           }
-        : { ok: false, reason: 'This request is no longer waiting for an answer.' }
+        : { ok: false, reason: NO_LONGER_WAITING }
     }
   )
 

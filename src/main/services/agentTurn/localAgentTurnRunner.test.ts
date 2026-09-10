@@ -1138,7 +1138,7 @@ describe('LocalAgentTurnRunner', () => {
     await settle()
     expect(settled).toBe(false)
 
-    // What `agentTurn/index.ts` does on a non-running engine state.
+    // What `agents/drivers/index.ts` does on a non-running engine state.
     h.engineBus.shutdown()
     const result = await run
 

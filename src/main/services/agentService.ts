@@ -1,14 +1,13 @@
 import { net } from 'electron'
 import { agentRepo, agentOverrideRepo, AgentRow, RemoteTarget } from '../db/agents'
 import { userRepo } from '../db/users'
-import { encryptApiKey, decryptApiKey } from '../security/keystore'
-import {
-  fetchAgentCard,
-  resolveProtocol,
-  AgentCardFetchError,
-  A2aHttpError,
-  type ProtocolResolution
-} from '../agents/a2a-client'
+import { encryptApiKey } from '../security/keystore'
+import { fetchAgentCard, resolveProtocol, type ProtocolResolution } from '../agents/a2a-client'
+import { resolveAccessToken, rethrowAsReauthIfCinna401 } from '../agents/drivers/a2aConnection'
+import { capabilitiesFor } from '../agents/drivers/capabilities'
+import { driverOfRow } from '../agents/drivers/driverOf'
+import type { AgentCapabilities, AgentDriverId, AgentReadiness } from '../../shared/agentDrivers'
+import { agentReadinessService } from './agentReadinessService'
 import { AgentError, CinnaApiError } from '../errors'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
@@ -68,6 +67,23 @@ export interface AgentDto {
   localPath: string | null
   /** Folder agents only: the `agent_roots` row the folder was scanned from. */
   localRootId: string | null
+  /**
+   * Which driver runs this agent. `source` above says who owns the row; this
+   * says how it runs.
+   */
+  driver: AgentDriverId
+  /**
+   * What the agent can do, from its driver. A surface that needs to decide
+   * behaviour — whether to offer an attach, where `/` commands come from —
+   * asks this rather than comparing `source`.
+   */
+  capabilities: AgentCapabilities
+  /**
+   * Whether the agent can take a turn right now — its driver's last answer, or
+   * null when it has not been checked yet (which never blocks a send). Merged
+   * at mapping time from `agentReadinessService`; a list never waits on a probe.
+   */
+  readiness: AgentReadiness | null
   createdAt: Date
 }
 
@@ -116,6 +132,9 @@ function toDto(row: AgentRow): AgentDto {
     remoteMetadata: row.remoteMetadata,
     localPath: row.localPath,
     localRootId: row.localRootId,
+    driver: driverOfRow(row),
+    capabilities: capabilitiesFor(row),
+    readiness: agentReadinessService.peek(row.id),
     createdAt: row.createdAt
   }
 }
@@ -129,42 +148,6 @@ function skillsFromCard(
     name: s.name,
     description: s.description
   }))
-}
-
-/**
- * Remote (Cinna-backed) agents authenticate against the agent card endpoint
- * with a Cinna-issued JWT. A 401/403 means the server has invalidated that
- * JWT (token revoked, replay detected, account suspended) even though the
- * desktop's local copy may still appear valid — surface this as a
- * `CinnaReauthRequired` so the renderer's reauth chip kicks in.
- *
- * Two paths can produce the typed status:
- *  - `A2aHttpError` from `buildLoggingFetch` (intercepts 401/403 before
- *    the SDK / `fetchRawCard` wraps the response)
- *  - `AgentCardFetchError` from `fetchRawCard` (other non-OK statuses on
- *    the card endpoint — kept for symmetry; 401/403 won't reach it because
- *    the fetch layer throws `A2aHttpError` first)
- *
- * Local (manually-added) A2A agents use a user-supplied static token; a
- * 401/403 from them just means the configured token is wrong, with no
- * in-app reauth flow — propagate the original error unchanged.
- */
-function rethrowAsReauthIfCinna401(err: unknown, agent: AgentRow): never {
-  if (agent.source === 'remote') {
-    const status =
-      err instanceof A2aHttpError
-        ? err.status
-        : err instanceof AgentCardFetchError
-          ? err.status
-          : undefined
-    if (status === 401 || status === 403) {
-      throw new CinnaReauthRequired(
-        `Cinna server rejected the agent card request (${status}). Re-authentication required.`,
-        { cause: err as Error }
-      )
-    }
-  }
-  throw err
 }
 
 function synthesizeRemoteSkills(
@@ -225,6 +208,14 @@ export const agentService = {
       return override === undefined ? row : { ...row, enabled: override }
     })
 
+    // The list answers with what readiness already knows and asks for the rest
+    // in the background: an A2A agent's answer is a card fetch, and a list must
+    // never wait on one. Each row is checked in the scope it was listed from.
+    agentReadinessService.kick([
+      ...local.map((row) => ({ userId: defaultUserId, row })),
+      ...remote.map((row) => ({ userId: profileUserId, row }))
+    ])
+
     return [...local, ...remote].map(toDto)
   },
 
@@ -268,12 +259,15 @@ export const agentService = {
       const row = agentRepo.getOwned(profileUserId, agentId)
       if (!row) throw new AgentError('not_found', 'Agent not found')
       agentOverrideRepo.set(profileUserId, agentId, enabled)
+      // A switched-off agent is not probed; its last answer would only go stale.
+      if (!enabled) agentReadinessService.forget(agentId)
       logger.info('agent enabled flag set', { agentId, enabled, scope: 'override' })
       return
     }
     const existing = agentRepo.getOwned(defaultUserId, agentId)
     if (!existing) throw new AgentError('not_found', 'Agent not found')
     agentRepo.update(defaultUserId, agentId, { enabled })
+    if (!enabled) agentReadinessService.forget(agentId)
     logger.info('agent enabled flag set', {
       agentId,
       enabled,
@@ -363,6 +357,7 @@ export const agentService = {
       )
     }
     agentRepo.delete(userId, agentId)
+    agentReadinessService.forget(agentId)
     logger.info('agent deleted', { agentId })
   },
 
@@ -390,7 +385,7 @@ export const agentService = {
       throw new AgentError('no_card_url', 'No card URL configured')
     }
 
-    const accessToken = await this.resolveAccessToken(userId, agent)
+    const accessToken = await resolveAccessToken(userId, agent)
     let card: AgentCard
     let protocol: ProtocolResolution
     try {
@@ -409,70 +404,6 @@ export const agentService = {
 
     logger.info('agent test ok', { agentId, protocolVersion: protocol.version })
     return { card, protocol }
-  },
-
-  /**
-   * If the agent has no resolved endpoint, auto-resolve one for remote agents
-   * by fetching the card. Local agents must be tested first — their card URL
-   * may require a user-supplied access token we haven't been given yet.
-   * Caches the resolution so subsequent messages skip this step.
-   *
-   * Returns **null** for a folder agent, which has no endpoint at all: it is
-   * run by the local engine, not reached over HTTP. Null rather than a throw
-   * because "there is no endpoint" is this agent's normal state, not a
-   * misconfiguration — and null rather than `''` so the compiler makes every
-   * caller decide what to do about it.
-   */
-  async resolveEndpointIfNeeded(userId: string, agent: AgentRow): Promise<string | null> {
-    if (agent.source === 'folder') return null
-
-    const existing = agent.protocolInterfaceUrl ?? agent.endpointUrl
-    if (existing) return existing
-
-    if (agent.source !== 'remote' || !agent.cardUrl) {
-      throw new AgentError(
-        'no_endpoint',
-        'No compatible protocol endpoint resolved. Test the agent connection first.'
-      )
-    }
-
-    const accessToken = await this.resolveAccessToken(userId, agent)
-    let protocol: ProtocolResolution
-    try {
-      ;({ protocol } = await fetchAgentCard(agent.cardUrl, accessToken))
-    } catch (err) {
-      rethrowAsReauthIfCinna401(err, agent)
-    }
-    agentRepo.updateResolvedEndpoint(userId, agent.id, {
-      endpointUrl: protocol.url,
-      protocolInterfaceUrl: protocol.url,
-      protocolInterfaceVersion: protocol.version
-    })
-    logger.info('agent endpoint auto-resolved', {
-      agentId: agent.id,
-      endpointUrl: protocol.url
-    })
-    return protocol.url
-  },
-
-  /**
-   * Resolve the access token for an agent.
-   * Remote agents use the user's Cinna JWT; local agents use the decrypted stored token.
-   *
-   * A folder agent has neither: nothing authenticates to it over the network,
-   * and the token it *does* have (for its own callbacks) lives in the folder's
-   * `app-data/desktop.json` and is the local runner's business, not this
-   * method's. Short-circuit before touching the keystore.
-   *
-   * Lets `CinnaReauthRequired` bubble so callers can render an actionable
-   * "Re-authenticate" affordance instead of a generic error string.
-   */
-  async resolveAccessToken(userId: string, agent: AgentRow): Promise<string | undefined> {
-    if (agent.source === 'folder') return undefined
-    if (agent.source === 'remote') {
-      return getCinnaAccessToken(userId)
-    }
-    return agent.accessTokenEncrypted ? decryptApiKey(agent.accessTokenEncrypted) : undefined
   },
 
   /**
@@ -522,9 +453,10 @@ export const agentService = {
   async listCliCommands(userId: string, agentId: string): Promise<CliCommand[]> {
     const agent = agentRepo.getOwned(userId, agentId)
     if (!agent) throw new AgentError('not_found', 'Agent not found')
-    if (agent.source === 'folder') return this.listFolderCliCommands(userId, agentId)
-    if (agent.protocol !== 'a2a' || !agent.cardUrl) return []
-    const accessToken = await this.resolveAccessToken(userId, agent)
+    const { commands: source } = capabilitiesFor(agent)
+    if (source === 'catalog') return this.listFolderCliCommands(userId, agentId)
+    if (source !== 'card' || agent.protocol !== 'a2a' || !agent.cardUrl) return []
+    const accessToken = await resolveAccessToken(userId, agent)
     const started = Date.now()
     let card: AgentCard
     try {

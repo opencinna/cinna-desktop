@@ -16,6 +16,15 @@
  * {@link runFixture} interprets in order. Frames are the engine's own JSON as it
  * crosses the socket inside `data: …`; nothing here builds them.
  *
+ * ## Through the driver
+ *
+ * Since phase 2 a golden turn goes through the `opencode` driver over this
+ * runner, as production's does ({@link World.driver}). The driver reconciles
+ * against the folder the fake's `getAgent` describes, with a runtime naming
+ * `opencode`; the sibling it is handed for `claude` rejects any turn it is
+ * given, so a subject whose folder named the other engine cannot pass by
+ * running here anyway.
+ *
  * ## Why a second expectation file
  *
  * `expectGolden` compares `{events, result}` and nothing else. For this runner
@@ -41,6 +50,11 @@ import type { RunEvent } from '../../../../../shared/runEvents'
 import type { LocalAgentKind } from '../../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../../shared/localAgentRequests'
 import type { EngineModelRef } from '../../../../engine/configGenerator'
+import { createOpencodeDriver } from '../../../../agents/drivers/opencodeDriver'
+import type { FolderDriver } from '../../../../agents/drivers/folderDriver'
+import type { RunInput } from '../../../../agents/drivers/driver'
+import type { AgentRow } from '../../../../db/agents'
+import { folderReader, goldenRow, wrongEngine } from '../driverWorld'
 
 export const CHAT_ID = 'chat_1'
 export const AGENT_ID = 'folder:abc'
@@ -109,7 +123,7 @@ export type Step =
   | { op: 'awaitReleased'; requestId: string }
   /** End the global socket's body — a drop the bus will reconnect from. */
   | { op: 'closeStream' }
-  /** What `agentTurn/index.ts` does when the engine leaves `running`. */
+  /** What `agents/drivers/index.ts` does when the engine leaves `running`. */
   | { op: 'shutdownBus' }
   | { op: 'abort' }
   /** Advance fake timers once one is armed. Needs `setup.fakeTimers`. */
@@ -156,6 +170,15 @@ export interface Effects {
 
 export interface World {
   runner: LocalAgentTurnRunner
+  /**
+   * The `opencode` driver over {@link runner} — what every golden turn goes
+   * through since phase 2, as production's does.
+   */
+  driver: FolderDriver
+  /** The agent row the driver is handed. */
+  row: AgentRow
+  /** Every *Always allow* the driver was asked to write. */
+  grants: LocalPermissionRequest[]
   bus: EngineEventBus
   calls: EngineCall[]
   order: string[]
@@ -164,6 +187,8 @@ export interface World {
   closeStream(): void
   promptCount(): number
   input(io: { signal: AbortSignal; onEvent?: (event: RunEvent) => void }): RunAgentTurnInput
+  /** The same turn, as {@link driver} takes it. */
+  runInput(io: { signal: AbortSignal; onEvent?: (event: RunEvent) => void }): RunInput
 }
 
 const frameText = (frame: EngineFrame): string => `data: ${JSON.stringify(frame)}\n\n`
@@ -309,8 +334,32 @@ export function buildWorld(
     autoReplyRetryMs: 0
   }
 
+  const runner = new LocalAgentTurnRunner(deps)
+  const grants: LocalPermissionRequest[] = []
+  const driver = createOpencodeDriver({
+    runner,
+    readFolder: folderReader(deps.getAgent, 'opencode'),
+    rememberGrant: (_agentId, request) => {
+      grants.push(request)
+      return true
+    },
+    resolveRequest: (requestId, resolution) =>
+      pendingRequests.resolve(requestId, resolution) !== null,
+    sibling: wrongEngine('opencode')
+  })
+
   return {
-    runner: new LocalAgentTurnRunner(deps),
+    runner,
+    driver,
+    row: goldenRow({
+      id: AGENT_ID,
+      name: 'Helper',
+      driver: 'opencode',
+      source: 'folder',
+      protocol: 'local-folder',
+      localPath: '/agents/helper'
+    }),
+    grants,
     bus,
     calls,
     order,
@@ -322,6 +371,12 @@ export function buildWorld(
       chatId: CHAT_ID,
       agentId: AGENT_ID,
       agentName: 'Helper',
+      wireContent: 'hello',
+      signal: io.signal,
+      onEvent: io.onEvent
+    }),
+    runInput: (io) => ({
+      chatId: CHAT_ID,
       wireContent: 'hello',
       signal: io.signal,
       onEvent: io.onEvent
@@ -383,8 +438,12 @@ export async function runFixture(
     const controller = new AbortController()
     let result: RunAgentTurnResult | undefined
 
-    void world.runner
-      .runTurn(world.input({ signal: controller.signal, onEvent: (e) => void events.push(e) }))
+    void world.driver
+      .run(
+        'settings-user',
+        world.row,
+        world.runInput({ signal: controller.signal, onEvent: (e) => void events.push(e) })
+      )
       .then((r) => {
         result = r
       })

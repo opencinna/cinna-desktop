@@ -18,6 +18,8 @@
 import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { basename, join } from 'node:path'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
+import { driverOfFolder } from '../../agents/drivers/driverOf'
+import type { AgentDriverId } from '../../../shared/agentDrivers'
 import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
 import { getLayoutView, resolveContract } from '../../kit/contractStore'
@@ -407,6 +409,25 @@ function bareValidation(agentDir: string, promptText: string | null): LocalAgent
   return { errors, warnings, infos }
 }
 
+/**
+ * The driver a scanned folder's index row should name, or null to keep the
+ * row's own value.
+ *
+ * Null for exactly one state: an `unresolved` folder, whose manifest could not
+ * be read, so its `runtime` is not the folder's answer but the absence of one.
+ * Reading that as "the default engine" would flip a Claude agent to OpenCode for
+ * the second an assistant saves its manifest. Every other folder's runtime was
+ * read — a parsed manifest with no `runtime`, or a bare folder's desktop state
+ * — and names the driver its turns run on, the default included.
+ *
+ * Neither index writer reaches an `unresolved` folder today (`scanRoot` holds
+ * it back; `reindexAgent` finds no row for its placeholder id), so this null is
+ * the rule written down where a future writer will meet it.
+ */
+export function folderIndexDriver(dto: LocalAgentDto): AgentDriverId | null {
+  return dto.identity === 'unresolved' ? null : driverOfFolder(dto.runtime)
+}
+
 export const scannerService = {
   markRootDirty,
   markAllRootsDirty,
@@ -727,7 +748,8 @@ export const scannerService = {
         localPath: dto.path,
         // Free here: the manifest is already parsed on the DTO, so the row's
         // copy is built at the one moment the files have just been read.
-        remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest)
+        remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest),
+        driver: folderIndexDriver(dto)
       })
     }
 
@@ -846,7 +868,8 @@ export const scannerService = {
         // Nothing to synthesize from: a bare folder declares no example
         // prompts, so the `#` list and the agents-as-MCP tool description fall
         // back to their own framing rather than to an invented one.
-        remoteMetadata: synthesizeFolderAgentMetadata({})
+        remoteMetadata: synthesizeFolderAgentMetadata({}),
+        driver: folderIndexDriver(dto)
       })
     }
 

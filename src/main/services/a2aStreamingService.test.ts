@@ -72,17 +72,13 @@ describe('a2aStreamingService.streamToAgent', () => {
   it('posts an error when a runner throws instead of returning', async () => {
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
-      // A runner that breaks the "never throws" contract — which is exactly
+      // A turn that breaks the "never throws" contract — which is exactly
       // what the local runner did via `turnLock.acquire`.
-      runner: {
-        runTurn: async () => {
-          throw new Error('This agent is busy right now. Try again when the current run finishes.')
-        }
+      run: async () => {
+        throw new Error('This agent is busy right now. Try again when the current run finishes.')
       },
       chatId: 'chat_1',
       agentId: 'folder:abc',
-      agentName: 'Helper',
-      wireContent: 'hi',
       port: p.port
     })
 
@@ -112,18 +108,14 @@ describe('a2aStreamingService.streamToAgent', () => {
     // job run reads as one that finished, indistinguishable from one that did.
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
-      runner: {
-        runTurn: async () => {
-          const requestId = p.posted.find((e) => e.type === 'request-id')
-          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
-          // Exactly what a cancelled runner returns: whatever streamed, no error.
-          return { text: 'half an ans', parts: [{ kind: 'text' as const, text: 'half an ans' }], notices: [] }
-        }
+      run: async () => {
+        const requestId = p.posted.find((e) => e.type === 'request-id')
+        a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+        // Exactly what a cancelled runner returns: whatever streamed, no error.
+        return { text: 'half an ans', parts: [{ kind: 'text' as const, text: 'half an ans' }], notices: [] }
       },
       chatId: 'chat_1',
       agentId: 'folder:abc',
-      agentName: 'Helper',
-      wireContent: 'hi',
       port: p.port
     })
 
@@ -153,7 +145,7 @@ describe('a2aStreamingService.streamToAgent', () => {
         throw new Error('aborted')
       }
     ]
-  ])('finalizes a stopped run as cancelled when %s', async (_label, runTurn) => {
+  ])('finalizes a stopped run as cancelled when %s', async (_label, endTurn) => {
     // **Suppressing the error surface is not the same as reporting nothing.**
     // Both branches below correctly refuse to post or save a cancel as a
     // failure — and both used to return without finalizing the run at all, so a
@@ -162,20 +154,15 @@ describe('a2aStreamingService.streamToAgent', () => {
     // the same hole on the LLM path; this is the other half of that fix.
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
-      runner: {
-        runTurn: async (input) => {
-          // Stop it the way the user does: through the service's own cancel,
-          // keyed by the request id it just posted.
-          const requestId = p.posted.find((e) => e.type === 'request-id')
-          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
-          void input
-          return runTurn()
-        }
+      run: async () => {
+        // Stop it the way the user does: through the service's own cancel,
+        // keyed by the request id it just posted.
+        const requestId = p.posted.find((e) => e.type === 'request-id')
+        a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+        return endTurn()
       },
       chatId: 'chat_1',
       agentId: 'folder:abc',
-      agentName: 'Helper',
-      wireContent: 'hi',
       port: p.port
     })
 
@@ -198,22 +185,18 @@ describe('a2aStreamingService.streamToAgent', () => {
     // would otherwise clear text the user watched arrive.
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
-      runner: {
-        runTurn: async () => {
-          const requestId = p.posted.find((e) => e.type === 'request-id')
-          a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
-          return {
-            text: 'half',
-            parts: [{ kind: 'text' as const, text: 'half' }],
-            notices: [],
-            error: { message: 'aborted', raw: 'aborted' }
-          }
+      run: async () => {
+        const requestId = p.posted.find((e) => e.type === 'request-id')
+        a2aStreamingService.cancel((requestId as { requestId: string }).requestId)
+        return {
+          text: 'half',
+          parts: [{ kind: 'text' as const, text: 'half' }],
+          notices: [],
+          error: { message: 'aborted', raw: 'aborted' }
         }
       },
       chatId: 'chat_1',
       agentId: 'folder:abc',
-      agentName: 'Helper',
-      wireContent: 'hi',
       port: p.port
     })
 
@@ -227,11 +210,9 @@ describe('a2aStreamingService.streamToAgent', () => {
   it('still posts done on the ordinary path', async () => {
     const p = fakePort()
     await a2aStreamingService.streamToAgent({
-      runner: { runTurn: async () => ({ text: 'hello', parts: [{ kind: 'text', text: 'hello' }], notices: [] }) },
+      run: async () => ({ text: 'hello', parts: [{ kind: 'text', text: 'hello' }], notices: [] }),
       chatId: 'chat_1',
       agentId: 'folder:abc',
-      agentName: 'Helper',
-      wireContent: 'hi',
       port: p.port
     })
     // Guards against a `catch` written so broadly it swallows success.

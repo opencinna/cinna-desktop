@@ -40,6 +40,13 @@ import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectInt
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState } from '../shared/localDevState'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
+import {
+  AGENT_READINESS_CHANGED_CHANNEL,
+  type AgentCapabilities,
+  type AgentDriverId,
+  type AgentReadiness,
+  type AgentReadinessChangedPayload
+} from '../shared/agentDrivers'
 import type { AgentSendPayload, LlmSendPayload } from '../shared/ipcPayloads'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
@@ -204,10 +211,20 @@ export interface AgentData {
   cardData: Record<string, unknown> | null
   skills: Array<{ id: string; name: string; description?: string }> | null
   enabled: boolean
-  source: string // 'local' | 'remote'
+  source: string // 'local' | 'remote' | 'folder' — who owns the row, not how it runs
   remoteTargetType: string | null // 'agent' | 'app_mcp_route' | 'identity'
   remoteTargetId: string | null
   remoteMetadata: RemoteAgentMetadata | null
+  /** Which driver runs this agent. */
+  driver: AgentDriverId
+  /** What the agent can do — ask this, not `source`, to decide behaviour. */
+  capabilities: AgentCapabilities
+  /**
+   * Whether the agent can take a turn right now — its driver's last answer, or
+   * null when not checked yet. The composer refuses a send only on a non-`ok`
+   * answer; null never blocks.
+   */
+  readiness: AgentReadiness | null
   createdAt: Date
 }
 
@@ -638,6 +655,22 @@ const api = {
       ): void => handler(payload ?? {})
       ipcRenderer.on('agents:remote-sync-complete', listener)
       return () => ipcRenderer.off('agents:remote-sync-complete', listener)
+    },
+    /**
+     * Ask one agent's driver whether it can take a turn, now, and return the
+     * answer. Null when the agent is not found or the check could not run —
+     * the same "not known" the list reports, which never blocks a send.
+     */
+    checkReadiness: (agentId: string): Promise<AgentReadiness | null> =>
+      ipcRenderer.invoke('agent:check-readiness', agentId),
+    /** An agent's readiness changed; re-read the list to see it. */
+    onReadinessChanged: (
+      handler: (payload: AgentReadinessChangedPayload) => void
+    ): (() => void) => {
+      const listener = (_event: IpcRendererEvent, payload: AgentReadinessChangedPayload): void =>
+        handler(payload)
+      ipcRenderer.on(AGENT_READINESS_CHANGED_CHANNEL, listener)
+      return () => ipcRenderer.off(AGENT_READINESS_CHANGED_CHANNEL, listener)
     }
   },
 

@@ -73,4 +73,22 @@ describe('IPC handler registration', () => {
     const orphans = registrars.map((r) => r.name).filter((n) => !reachable.has(n))
     expect(orphans, `unreachable from registerAllIpcHandlers: ${orphans.join(', ')}`).toEqual([])
   })
+
+  it('handles every channel the preload invokes', () => {
+    // The other half of the same failure: a registrar that is wired, but a
+    // preload method whose channel no handler answers — `invoke` then rejects
+    // with "No handler registered" at the first call, which a renderer that
+    // fires and forgets (a readiness re-check, say) never shows anyone.
+    const preload = readFileSync(join(ipcDir, '../../preload/index.ts'), 'utf8')
+    const invoked = new Set(
+      [...preload.matchAll(/ipcRenderer\.invoke\(\s*'([^']+)'/g)].map((m) => m[1])
+    )
+    const handled = new Set(
+      [...sources.values()].flatMap((src) =>
+        [...src.matchAll(/(?:ipcHandle|ipcMain\.handle)\(\s*'([^']+)'/g)].map((m) => m[1])
+      )
+    )
+    expect(invoked.size).toBeGreaterThan(20)
+    expect([...invoked].filter((c) => !handled.has(c))).toEqual([])
+  })
 })

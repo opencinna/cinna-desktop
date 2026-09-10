@@ -1,0 +1,92 @@
+/**
+ * What each driver can do, answered from the row alone.
+ *
+ * Pure and import-light on purpose: `agentService` maps it into every agent
+ * DTO, so it may not pull the drivers' production wiring (`index.ts`) into the
+ * service layer, and it must answer the same thing for the same row every time
+ * — a capability that changed between the list and the send would put the
+ * composer and the turn into disagreement.
+ *
+ * This is one of the files a kind branch is allowed in (`kindBranches.test.ts`
+ * allowlists the drivers folder): the whole point is that the branch happens
+ * here, once, instead of at every call site that used to ask.
+ */
+import type { AgentRow } from '../../db/agents'
+import type { AgentCapabilities } from '../../../shared/agentDrivers'
+import { driverOfRow } from './driverOf'
+
+type CapabilityRow = Pick<AgentRow, 'driver' | 'source' | 'accessTokenEncrypted'>
+
+export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
+  switch (driverOfRow(agent)) {
+    case 'opencode':
+      return {
+        ...folderCapabilities(),
+        // OpenCode raises both kinds of ask through its own event stream.
+        input: { permission: true, question: true, auth: false, elicitation: false },
+        auth: 'none'
+      }
+    case 'claude':
+      return {
+        ...folderCapabilities(),
+        // The Claude runner parks on `canUseTool` only: a permission ask. It
+        // has no question path today.
+        input: { permission: true, question: false, auth: false, elicitation: false },
+        // The user's own `claude` login pays for the turn; the desktop holds
+        // no key for it.
+        auth: 'cli'
+      }
+    case 'a2a': {
+      const synced = agent.source === 'remote'
+      return {
+        streaming: true,
+        cancel: true,
+        sessions: 'context',
+        // A2A ends the turn to ask, as a question or as an auth demand, and
+        // the answer is the user's next message.
+        input: { permission: false, question: true, auth: true, elicitation: false },
+        inputResume: 'next_message',
+        // **Only a Cinna-synced agent takes a file.** Its bytes go to the Cinna
+        // backend and the message carries the id; a hand-added A2A agent has
+        // no such backend behind it, so the composer offers no attach at all.
+        attachments: synced ? 'cinna' : 'none',
+        // A synced agent authenticates with the account's Cinna JWT, so a
+        // 401/403 there means the session is gone and the user can re-auth; a
+        // hand-added agent's token is one the user typed, and a rejection is
+        // just a wrong token.
+        auth: synced ? 'cinna' : agent.accessTokenEncrypted ? 'token' : 'none',
+        commands: 'card',
+        mcpInjection: false,
+        cwd: false
+      }
+    }
+  }
+}
+
+function folderCapabilities(): Omit<AgentCapabilities, 'input' | 'auth'> {
+  return {
+    streaming: true,
+    cancel: true,
+    // The desktop remembers the engine session per chat and reopens it.
+    sessions: 'resumable',
+    // Parked on the ask, answered while the turn is still open.
+    inputResume: 'reply',
+    attachments: 'none',
+    // `docs/CLI_COMMANDS.yaml`, run on this machine as `/run:<name>`.
+    commands: 'catalog',
+    mcpInjection: false,
+    cwd: true
+  }
+}
+
+/**
+ * Whether a row carries what its driver needs before a turn can even be tried.
+ *
+ * An A2A agent is reached through its card, so a row with no card URL cannot
+ * run; a folder agent legitimately has none (`cardUrl: null` at insert). This
+ * used to be `!isFolderAgent(row) && !row.cardUrl` at each call site — and
+ * before that a bare `!row.cardUrl`, which skipped every folder agent.
+ */
+export function hasRunConfig(agent: Pick<AgentRow, 'driver' | 'source' | 'cardUrl'>): boolean {
+  return driverOfRow(agent) !== 'a2a' || !!agent.cardUrl
+}

@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ClaudeAgentTurnRunner, type ClaudeTurnDeps } from './claudeAgentTurnRunner'
+import type { ClaudeTurnDeps } from './claudeAgentTurnRunner'
 import { pendingRequests } from './pendingRequests'
 import { expectGolden, listScenarios, readFixture, type NormaliseOptions } from './__golden__/harness'
 import {
-  describeRunnerContract,
+  describeDriverContract,
   type ContractTurn,
-  type RunnerContractSubject,
+  type DriverContractSubject,
+  type DriverUnderTest,
   type TurnIO
-} from './__golden__/runnerContract'
+} from './__golden__/driverContract'
+import { goldenRow } from './__golden__/driverWorld'
+import type { AgentRow } from '../../db/agents'
+import type { LocalPermissionRequest } from '../../../shared/localAgentRequests'
 import {
+  GOLDEN_AGENT_DIR,
   expectBoundaryGolden,
   fixtureDeps,
+  goldenClaudeDriver,
   playFixture,
   scriptedQuery,
   type ClaudeFixture,
@@ -23,9 +29,15 @@ vi.mock('../../logger/logger', () => ({
 }))
 
 /**
- * Golden streams and the runner contract for `ClaudeAgentTurnRunner` — phase 0
- * of the agent runtime plan (`drafts/agent_runtime/
- * phase_0_characterization.md`).
+ * Golden streams and the driver contract for the `claude` driver over
+ * `ClaudeAgentTurnRunner` — phase 0 of the agent runtime plan
+ * (`drafts/agent_runtime/phase_0_characterization.md`).
+ *
+ * Since phase 2 every scenario and every contract turn goes through
+ * `goldenClaudeDriver` (`__golden__/claude/script.ts`) over the same runner, as
+ * production's does. The expectations are the ones phase 0 pinned, byte for
+ * byte: around a Claude turn the driver adds only the reconcile against the
+ * folder, and a golden cannot see that.
  *
  * **These pin what the runner does today, not what it should do.** A surprise
  * in an expectation file is recorded in its `_notes` and left as it is; the
@@ -122,6 +134,18 @@ const result = (sessionId = 'sess-contract'): unknown => ({
   session_id: sessionId
 })
 
+/** The folder row every contract turn runs as — the id the contract has always used. */
+function contractRow(): AgentRow {
+  return goldenRow({
+    id: 'folder:contract',
+    name: 'Invoices',
+    driver: 'claude',
+    source: 'folder',
+    protocol: 'local-folder',
+    localPath: GOLDEN_AGENT_DIR
+  })
+}
+
 function contractTurn(
   scripts: ScriptStep[][],
   over: Partial<ClaudeTurnDeps> = {},
@@ -130,19 +154,16 @@ function contractTurn(
   return {
     run(io: TurnIO) {
       const scripted = scriptedQuery(scripts, { chatId: CONTRACT_CHAT, ...hooks })
-      return new ClaudeAgentTurnRunner(fixtureDeps({ approval: 'ask' }, scripted.query, over)).runTurn({
-        chatId: CONTRACT_CHAT,
-        agentId: 'folder:contract',
-        agentName: 'Invoices',
-        wireContent: 'hello',
-        signal: io.signal,
-        onEvent: io.onEvent
-      })
+      return goldenClaudeDriver(fixtureDeps({ approval: 'ask' }, scripted.query, over)).run(
+        'user-1',
+        contractRow(),
+        { chatId: CONTRACT_CHAT, wireContent: 'hello', signal: io.signal, onEvent: io.onEvent }
+      )
     }
   }
 }
 
-function makeSubject(): RunnerContractSubject {
+function makeSubject(): DriverContractSubject {
   return {
     completes: () => contractTurn(readFixture<ClaudeFixture>('claude', 'plain_text').queries),
 
@@ -200,6 +221,48 @@ function makeSubject(): RunnerContractSubject {
       return { ...turn, answer: { kind: 'permission', reply: 'once' }, afterSettle: () => openGate() }
     },
 
+    underTest: () => {
+      const grants: LocalPermissionRequest[] = []
+      return {
+        driver: goldenClaudeDriver(
+          fixtureDeps({ approval: 'ask' }, scriptedQuery([], { chatId: CONTRACT_CHAT }).query),
+          grants
+        ),
+        row: contractRow(),
+        grantsWritten: () => grants.length
+      }
+    },
+
+    readinessWorlds: () => {
+      // This driver's readiness asks the folder, then detection, then the login
+      // probe. Each promises to answer; these break those promises.
+      const world = (over: Partial<ClaudeTurnDeps>): DriverUnderTest => ({
+        driver: goldenClaudeDriver(
+          fixtureDeps({}, scriptedQuery([], { chatId: CONTRACT_CHAT }).query, over)
+        ),
+        row: contractRow(),
+        grantsWritten: () => 0
+      })
+      return {
+        'claude detection rejects': world({
+          claudePath: () => Promise.reject(new Error('which: permission denied'))
+        }),
+        'claude detection throws synchronously': world({
+          claudePath: () => {
+            throw new TypeError('toolDetectionService.get is not a function')
+          }
+        }),
+        'the login probe rejects': world({
+          claudeAuth: () => Promise.reject(new Error('the login probe timed out'))
+        }),
+        'the folder read throws': world({
+          getAgent: () => {
+            throw new Error('EACCES: permission denied')
+          }
+        })
+      }
+    },
+
     session: () => {
       const store = new Map<string, string>()
       const saved: string[] = []
@@ -228,7 +291,7 @@ function makeSubject(): RunnerContractSubject {
   }
 }
 
-describeRunnerContract('claude', makeSubject, {
+describeDriverContract('claude', makeSubject, {
   knownViolations: {
     // Evidence: `canceled_midway.expected.json` — the `signal.aborted` exit
     // calls `finish(…, undefined)`, so a stop is reported as a quiet success.

@@ -31,8 +31,9 @@ import { fileURLToPath } from 'node:url'
  * on a bare identifier or a property access (`agent.source`, `row?.kind`), and
  * with the operands either way round (`'folder' === agent.source`):
  *
- * - `source`       — `source` / `…Source` against `'local' | 'remote' | 'folder'`,
- *                    plus every `isFolderAgent(` / `isFolderAgentId(` call (definitions excluded)
+ * - `source`       — `source` / `…Source` against `'local' | 'remote' | 'folder'` or
+ *                    the `FOLDER_AGENT_SOURCE` constant, plus every `isFolderAgent(` /
+ *                    `isFolderAgentId(` call (definitions excluded)
  * - `engine`       — `engine` / `…Engine` against `'opencode' | 'claude'`
  *                    (`declaredEngine` in the runtime panel is one)
  * - `kind`         — `kind` / `…Kind` against `'kit' | 'bare' | 'workshop' | 'external'`
@@ -74,17 +75,27 @@ const CATEGORIES: Category[] = ['source', 'engine', 'kind', 'jobType', 'provider
 
 /** Non-allowlisted branch sites per category, exactly as measured. Lowered by each phase. */
 const LIMITS: Record<Category, number> = {
-  // 31 comparisons + 5 `isFolderAgentId(` calls, counted since the phase 0
-  // review widened the pattern: not new branches, previously unseen ones.
-  source: 36,
+  // Phase 2: 36 → 4. The turn, readiness, auth, attachment and command
+  // branches moved into `agents/drivers/` (allowlisted); the ownership reads
+  // that remain are pinned in `OWNERSHIP` instead of held here. What is left is
+  // how *agent status* refreshes — `agentStatusService`, `statusViews`,
+  // `useAgentStatus`, `useChatStream` — which no driver owns yet (phase 7).
+  // The count also includes `source === FOLDER_AGENT_SOURCE`, counted since
+  // phase 2: previously unseen, not new.
+  source: 4,
+  // The runtime editor, the Permissions card and the OpenCode config
+  // generator; phase 3 rewrites all of them when the engine becomes ACP
+  // `driverConfig`.
   engine: 5,
-  kind: 43,
+  // Phase 2: the `bare` prompt branch moved with the Claude wiring into
+  // `agents/drivers/index.ts`.
+  kind: 42,
   jobType: 29,
   providerType: 3
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
-const LIMIT = 116
+const LIMIT = 83
 
 /**
  * Files where branching on kind is the job, not a leak. Still counted and
@@ -95,11 +106,76 @@ const LIMIT = 116
  * `source` keeps that meaning after the plan; it only stops meaning "how it runs".
  */
 const ALLOWLIST: string[] = [
+  // A driver is where a kind branch belongs (phase 2).
+  'src/main/agents/drivers/',
   'src/main/sync/collections.ts',
   'src/main/sync/identity.ts',
   'src/main/sync/manifest.ts',
   'src/main/sync/resolvers.ts'
-  // Phase 2 adds 'src/main/agents/drivers/': a driver is where a kind branch belongs.
+]
+
+/**
+ * Files outside sync whose `source` reads are about **ownership** — who may
+ * edit or delete a row, which settings page lists it, which account a synced
+ * job's dependency belongs to — and not about how the agent runs.
+ *
+ * `source` keeps exactly that meaning after the plan, so these are not debt a
+ * later phase pays back. They are not allowlisted either: a file-wide pass
+ * would hide the next *behavioural* branch added beside them. Each entry pins
+ * the file's count for its category **exactly**; the rows it covers are
+ * printed and kept out of `LIMITS`, and a count that moves either way fails
+ * until someone reads the new or vanished branch and decides which kind it is.
+ * A behavioural one moves into a driver.
+ */
+const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  {
+    file: 'src/main/services/agentService.ts',
+    category: 'source',
+    count: 7,
+    why: 'listMerged picks each scope by owner (4), setEnabled logs which scope it wrote (1), delete refuses a row sync or a folder owns (2)'
+  },
+  {
+    file: 'src/main/services/localAgents/localAgentService.ts',
+    category: 'source',
+    count: 3,
+    why: '`locate` refuses an id or row that is not a folder agent (2), and a rekey drops the stale folder descriptor from a synced job (1)'
+  },
+  {
+    file: 'src/main/services/jobService.ts',
+    category: 'source',
+    count: 4,
+    why: "a synced job manifest's dependency descriptors name the account or workshop that owns them"
+  },
+  {
+    file: 'src/renderer/src/components/settings/AgentsSettingsSection.tsx',
+    category: 'source',
+    count: 2,
+    why: 'which settings tab lists, and lets the user edit, a row'
+  },
+  {
+    file: 'src/renderer/src/components/settings/AgentCard.tsx',
+    category: 'source',
+    count: 1,
+    why: 'the bundle-install pill and update belong to a Cinna-synced install'
+  },
+  {
+    file: 'src/renderer/src/components/settings/CatalogSettingsSection.tsx',
+    category: 'source',
+    count: 1,
+    why: "a synced install's bundle version, keyed by its Cinna install id"
+  },
+  {
+    file: 'src/renderer/src/components/jobs/JobEditForm.tsx',
+    category: 'source',
+    count: 1,
+    why: 'the agent picker is grouped by owner (My Agents, Shared with Me, People, Local)'
+  },
+  {
+    file: 'src/renderer/src/components/jobs/JobDetail.tsx',
+    category: 'source',
+    count: 1,
+    why: '"Set up" opens the settings tab that owns the dependency'
+  }
 ]
 
 /** Comparisons that match a pattern but are not about agents or jobs. See the header. */
@@ -144,7 +220,11 @@ const PATTERNS: Record<Category, RegExp[]> = {
   source: [
     ...comparisons('(?:source|\\w*Source)', ['local', 'remote', 'folder']),
     /(?<!function\s+)\bisFolderAgent\s*\(/g,
-    /(?<!function\s+)\bisFolderAgentId\s*\(/g
+    /(?<!function\s+)\bisFolderAgentId\s*\(/g,
+    // The same comparison against the constant for `'folder'`. Unseen until
+    // phase 2 read the tree by hand and found two outside sync.
+    new RegExp(`\\b(?:source|\\w*Source)\\s*${OP}\\s*FOLDER_AGENT_SOURCE\\b`, 'g'),
+    new RegExp(`\\bFOLDER_AGENT_SOURCE\\s*${OP}\\s*${RECEIVER}\\b(?:source|\\w*Source)\\b`, 'g')
   ],
   engine: comparisons('(?:engine|\\w*Engine)', ['opencode', 'claude']),
   kind: comparisons('(?:kind|\\w*Kind)', ['kit', 'bare', 'workshop', 'external']),
@@ -244,6 +324,8 @@ interface Row {
   category: Category
   count: number
   allowlisted: boolean
+  /** Covered by an {@link OWNERSHIP} entry: printed and pinned there, not held against `LIMITS`. */
+  ownership: boolean
 }
 
 function countFile(file: string, code: string): Row[] {
@@ -259,7 +341,15 @@ function countFile(file: string, code: string): Row[] {
         if (!noise) count++
       }
     }
-    if (count > 0) rows.push({ file, category, count, allowlisted: isAllowlisted(file) })
+    if (count > 0) {
+      rows.push({
+        file,
+        category,
+        count,
+        allowlisted: isAllowlisted(file),
+        ownership: OWNERSHIP.some((o) => o.file === file && o.category === category)
+      })
+    }
   }
   return rows
 }
@@ -270,22 +360,21 @@ function sum(rows: Row[]): number {
 
 function report(rows: Row[]): string {
   const pad = (s: string | number, n: number): string => String(s).padStart(n)
+  const held = (r: Row): boolean => !r.allowlisted && !r.ownership
+  const columns = (subset: Row[], limit: number): string =>
+    `${pad(sum(subset.filter(held)), 8)}${pad(limit, 7)}` +
+    `${pad(sum(subset.filter((r) => r.allowlisted)), 13)}${pad(sum(subset.filter((r) => r.ownership)), 11)}`
   const lines = [
     'Kind branches over the limit. Remove the branch, or raise the limit with a comment',
     'naming the phase that pays it back.',
     '',
-    `${'category'.padEnd(14)}${pad('counted', 8)}${pad('limit', 7)}${pad('allowlisted', 13)}`
+    `${'category'.padEnd(14)}${pad('counted', 8)}${pad('limit', 7)}${pad('allowlisted', 13)}${pad('ownership', 11)}`
   ]
   for (const category of CATEGORIES) {
-    const inCategory = rows.filter((r) => r.category === category)
-    lines.push(
-      `${category.padEnd(14)}${pad(sum(inCategory.filter((r) => !r.allowlisted)), 8)}` +
-        `${pad(LIMITS[category], 7)}${pad(sum(inCategory.filter((r) => r.allowlisted)), 13)}`
-    )
+    lines.push(`${category.padEnd(14)}${columns(rows.filter((r) => r.category === category), LIMITS[category])}`)
   }
   lines.push(
-    `${'total'.padEnd(14)}${pad(sum(rows.filter((r) => !r.allowlisted)), 8)}` +
-      `${pad(LIMIT, 7)}${pad(sum(rows.filter((r) => r.allowlisted)), 13)}`,
+    `${'total'.padEnd(14)}${columns(rows, LIMIT)}`,
     '',
     `${pad('count', 5)}  ${'category'.padEnd(14)}file`
   )
@@ -297,7 +386,8 @@ function report(rows: Row[]): string {
   )
   for (const row of sorted) {
     lines.push(
-      `${pad(row.count, 5)}  ${row.category.padEnd(14)}${row.file}${row.allowlisted ? '  (allowlisted)' : ''}`
+      `${pad(row.count, 5)}  ${row.category.padEnd(14)}${row.file}` +
+        `${row.allowlisted ? '  (allowlisted)' : ''}${row.ownership ? '  (ownership)' : ''}`
     )
   }
   // Vitest appends ": expected [...]" to the message; give it a line of its own.
@@ -311,7 +401,11 @@ describe('kind-branch ratchet', () => {
     countFile(file, stripComments(readFileSync(join(repoRoot, file), 'utf8')))
   )
   const counted = (category?: Category): number =>
-    sum(rows.filter((r) => !r.allowlisted && (category === undefined || r.category === category)))
+    sum(
+      rows.filter(
+        (r) => !r.allowlisted && !r.ownership && (category === undefined || r.category === category)
+      )
+    )
 
   it('walks the source tree', () => {
     // A wrong root counts zero branches and passes every limit.
@@ -334,9 +428,24 @@ describe('kind-branch ratchet', () => {
     expect(LIMIT).toBe(CATEGORIES.reduce((total, c) => total + LIMITS[c], 0))
   })
 
+  it('every ownership file branches on ownership exactly as often as its entry says', () => {
+    // Pinned both ways, like `LIMITS`: a new read in one of these files may be
+    // behaviour, and a vanished one leaves room for one to arrive unread.
+    const off = OWNERSHIP.flatMap((o) => {
+      const actual = sum(rows.filter((r) => r.file === o.file && r.category === o.category))
+      return actual === o.count
+        ? []
+        : [
+            `${o.file} ${o.category}: ${actual}, entry says ${o.count} — read the branch that ` +
+              'moved; a behavioural one belongs in a driver'
+          ]
+    })
+    expect(off, report(rows)).toEqual([])
+  })
+
   it('every allowlist and exclusion entry names a path that exists', () => {
     // A renamed file leaves a stale entry behind; delete it rather than carry it.
-    const paths = [...ALLOWLIST, ...NOT_A_KIND_BRANCH.map((n) => n.file)]
+    const paths = [...ALLOWLIST, ...NOT_A_KIND_BRANCH.map((n) => n.file), ...OWNERSHIP.map((o) => o.file)]
     expect(paths.filter((p) => !existsSync(join(repoRoot, p)))).toEqual([])
   })
 })

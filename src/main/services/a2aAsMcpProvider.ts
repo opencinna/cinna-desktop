@@ -1,23 +1,22 @@
 /**
- * Exposes a remote A2A agent to the orchestrator LLM as an *emulated* MCP tool
+ * Exposes an agent to the orchestrator LLM as an *emulated* MCP tool
  * (agents-as-MCP wrapper). One provider per attached agent. `getTools()`
  * synthesizes a single `<slug>` tool from the agent's stored `cinna.mcp`
  * descriptor (or a fallback built from name/description/example_prompts);
- * `callTool()` runs a port-free A2A turn via `runAgentTurn` and returns the
- * agent's **compact** text to the orchestrator while forwarding the
+ * `callTool()` runs a port-free turn through the agent's driver and returns
+ * the agent's **compact** text to the orchestrator while forwarding the
  * full-fidelity `parts[]` + live stream events to the UI sub-thread.
  *
- * Continuity is the desktop's own concern — `runAgentTurn` reuses the
+ * Continuity is the desktop's own concern — the driver reuses the
  * `a2a_sessions` row per (chat, agent). The orchestrator LLM only ever passes
  * `{ message }`; it never sees a `context_id`.
  */
 import type { ToolDefinition } from '../llm/types'
 import type { ToolProvider, ToolCallOptions, ToolExecutionResult } from '../llm/toolProvider'
 import type { AgentRow } from '../db/agents'
-import type { A2AClient } from '@a2a-js/sdk/client'
 import { agentService } from './agentService'
-import { resolveTurnRunner } from './agentTurn'
-import { isFolderAgent } from './agentTurn/runner'
+import { driverFor } from '../agents/drivers'
+import { hasRunConfig } from '../agents/drivers/capabilities'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { createLogger } from '../logger/logger'
 
@@ -127,74 +126,22 @@ export class A2AAsMcpProvider implements ToolProvider {
 
     const signal = opts?.signal ?? new AbortController().signal
 
-    // A folder agent has no endpoint and no token — it is run by the local
-    // engine — so the pre-flight is skipped for it rather than asked a question
-    // it can only answer with null. Dispatch is on `source`, the same
-    // discriminator the direct-chat handler uses.
-    const runner = resolveTurnRunner(this.agent)
-    const isFolder = isFolderAgent(this.agent)
+    // The same driver the direct chat uses, so the pre-flight (endpoint, token,
+    // an expired Cinna session) fails with the same sentence here, and an
+    // orchestrator abort tells a remote agent to cancel its task the same way a
+    // user's Stop does — both live in the driver now, not beside each caller.
+    const result = await driverFor(this.agent).run(this.ownerId, this.agent, {
+      chatId: this.chatId,
+      wireContent: message,
+      signal,
+      onEvent: opts?.onEvent
+    })
 
-    let endpointUrl: string | null = null
-    let accessToken: string | undefined
-    if (!isFolder) {
-      try {
-        endpointUrl = await agentService.resolveEndpointIfNeeded(this.ownerId, this.agent)
-        accessToken = await agentService.resolveAccessToken(this.ownerId, this.agent)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        logger.error('agent tool pre-flight failed', { agentId: this.agent.id, error: message })
-        return { content: `Agent unavailable: ${message}`, parts: [], isError: true }
-      }
-
-      if (endpointUrl === null || !this.agent.cardUrl) {
-        return { content: 'Agent has no endpoint configured', parts: [], isError: true }
-      }
+    if (result.error) {
+      return { content: result.error.message, parts: result.parts, isError: true }
     }
-
-    // When the orchestrator aborts, also tell the remote agent to cancel its
-    // task — otherwise it keeps running server-side after we stop reading the
-    // stream. We capture the client + live task id via the turn callbacks.
-    let client: A2AClient | undefined
-    let taskId: string | undefined
-    const onAbort = (): void => {
-      if (client && taskId) {
-        client
-          .cancelTask({ id: taskId })
-          .catch((err) =>
-            logger.warn('cancelTask failed', { agentId: this.agent.id, error: String(err) })
-          )
-      }
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-
-    try {
-      const result = await runner.runTurn({
-        chatId: this.chatId,
-        agentId: this.agent.id,
-        agentName: this.agent.name,
-        endpointUrl,
-        cardUrl: this.agent.cardUrl,
-        accessToken,
-        wireContent: message,
-        isCinnaTokenAuth: this.agent.source === 'remote',
-        signal,
-        onEvent: opts?.onEvent,
-        onClient: (c) => {
-          client = c
-        },
-        onTaskId: (id) => {
-          taskId = id
-        }
-      })
-
-      if (result.error) {
-        return { content: result.error.message, parts: result.parts, isError: true }
-      }
-      // Compact text to the orchestrator; rich parts ride along for the UI.
-      return { content: result.text, parts: result.parts }
-    } finally {
-      signal.removeEventListener('abort', onAbort)
-    }
+    // Compact text to the orchestrator; rich parts ride along for the UI.
+    return { content: result.text, parts: result.parts }
   }
 }
 
@@ -217,11 +164,11 @@ export function buildAgentToolProviders(
 
   for (const agentId of agentIds) {
     const located = agentService.findAgent(defaultUserId, profileUserId, agentId)
-    // A folder agent legitimately has no card URL (`cardUrl: null` at insert),
-    // so the card check has to come *after* the source check or every folder
-    // agent is skipped here exactly as it was skipped in the direct-chat
-    // handler. Same defect, same shape, second site.
-    if (!located || (!isFolderAgent(located.row) && !located.row.cardUrl)) {
+    // Skipped only when the row lacks what its driver needs. A folder agent
+    // legitimately has no card URL (`cardUrl: null` at insert), so a bare
+    // card check here once skipped every folder agent exactly as it was
+    // skipped in the direct-chat handler — see `hasRunConfig`.
+    if (!located || !hasRunConfig(located.row)) {
       logger.warn('on-demand agent skipped (unresolved or no card URL)', { agentId })
       continue
     }

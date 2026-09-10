@@ -1,4 +1,5 @@
 {
+  "_phase2_note": "Phase 2 drives this scenario through the a2a driver instead of runAgentTurn, so the third request — `tasks/cancel` for the live task, sent once from the driver's abort listener — is now pinned. It is not new behaviour: before phase 2 `streamToAgent.cancel` (direct chat) and `A2AAsMcpProvider` (orchestrated) each sent it, one layer above what phase 0 recorded.",
   "requests": [
     {
       "method": "GET",
@@ -32,6 +33,20 @@
               "application/json"
             ]
           }
+        },
+        "id": 1
+      }
+    },
+    {
+      "method": "POST",
+      "url": "https://agent.example.test/a2a/",
+      "authorization": "Bearer tok-cinna-golden",
+      "signal": false,
+      "body": {
+        "jsonrpc": "2.0",
+        "method": "tasks/cancel",
+        "params": {
+          "id": "task-cstop-1"
         },
         "id": 1
       }

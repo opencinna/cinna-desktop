@@ -34,6 +34,7 @@ import { NoteBadgeList } from './NoteBadge'
 import { ComposerPlusMenu, type PlusModeMenu } from './ComposerPlusMenu'
 import { AgentPickerModal } from '../agents/AgentPickerModal'
 import { NotePreviewModal } from '../notes/NotePreviewModal'
+import { ComposerReadinessNotice, useComposerReadiness } from './ComposerReadiness'
 import type { ComposerAttachment, MessageAttachment } from '../../../../shared/attachments'
 import type { NoteData } from '../../../../shared/notes'
 
@@ -399,10 +400,12 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const attachmentTargetAgent: AgentData | null = chatId
     ? boundAgent ?? null
     : selectedAgent ?? null
-  const targetIsRemote = attachmentTargetAgent?.source === 'remote'
+  // Asked of the agent's driver, not its kind: only an agent whose files go to
+  // the Cinna backend takes one.
+  const targetTakesCinnaFiles = attachmentTargetAgent?.capabilities.attachments === 'cinna'
 
   // Active-chat gates: split by destination so the wrong scope never queues.
-  const canAttachToRemoteAgent = isCinnaUser && targetIsRemote
+  const canAttachToRemoteAgent = isCinnaUser && targetTakesCinnaFiles
   const canAttachToLlmModel =
     chatId !== null && !attachmentTargetAgent && modelSupportsMedia
 
@@ -418,6 +421,25 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   const targetSupportsAttachments = chatId
     ? canAttachToRemoteAgent || canAttachToLlmModel
     : hasAnyDestination
+
+  // The agent this message goes straight to, if it goes straight to one: the
+  // bound agent of a direct agent chat, or the new chat's single agent when the
+  // routing badge says it will be bound. The composer refuses a send only to
+  // that agent. One attached as a tool of the local model is not refused here:
+  // its failure comes back as a tool call the model can read.
+  const directTarget: AgentData | null = chatId
+    ? chatData?.orchestrated
+      ? null
+      : boundAgent
+    : commPatternInfo?.pattern === 'A2A'
+      ? selectedAgent ?? null
+      : null
+  const readiness = useComposerReadiness(directTarget, input)
+  // Read by `handleSend` at call time, so Enter cannot slip past a refusal that
+  // arrived after the callback was built.
+  const blocksSendRef = useRef(readiness.blocksSend)
+  blocksSendRef.current = readiness.blocksSend
+  const readinessReasonId = useId()
 
   useEffect(() => {
     if (!targetSupportsAttachments && pendingAttachments.length > 0) {
@@ -759,6 +781,13 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
       }
       return
     }
+
+    // Refused: the agent is not ready, and the reason and its action are
+    // already beside the disabled Send. Enter does nothing further — nothing
+    // is cleared, so the message is still there when the agent is. Below the
+    // note paste above on purpose: that sends nothing, so a refusal must not
+    // stop it.
+    if (blocksSendRef.current) return
 
     // Allow attachment-only sends (no text) so users can drop a file in and
     // hit send with a quick "look at this" — only for active chats where the
@@ -1251,7 +1280,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ) : null}
         </div>
 
-        <div className="flex items-center gap-1.5">
+        {/* `flex-1` with a zero basis: this group takes only the width the
+            chips leave, so a readiness notice truncates into it instead of
+            wrapping the chips or pushing Send off the row. Its automatic
+            minimum still holds the badge, the notice's action and Send. The
+            notice comes first so the badge and Send stay at the right edge
+            whatever the reason's length. */}
+        <div className="flex flex-1 items-center justify-end gap-1.5">
+          <ComposerReadinessNotice readiness={readiness} reasonId={readinessReasonId} />
           {!chatId && commPatternInfo && (
             <CommPatternBadge
               pattern={commPatternInfo.pattern}
@@ -1269,13 +1305,17 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           ) : (
             <button
               onClick={handleSend}
+              aria-label="Send"
+              aria-describedby={readiness.text ? readinessReasonId : undefined}
+              title={readiness.title ?? undefined}
               disabled={
-                !input.trim() &&
-                !(
-                  chatId !== null &&
-                  ((targetSupportsAttachments && pendingAttachments.length > 0) ||
-                    pendingNotes.length > 0)
-                )
+                readiness.blocksSend ||
+                (!input.trim() &&
+                  !(
+                    chatId !== null &&
+                    ((targetSupportsAttachments && pendingAttachments.length > 0) ||
+                      pendingNotes.length > 0)
+                  ))
               }
               className="p-1.5 rounded-lg bg-[var(--color-success)] hover:opacity-80 text-white
                 disabled:opacity-20 disabled:cursor-not-allowed transition-opacity"

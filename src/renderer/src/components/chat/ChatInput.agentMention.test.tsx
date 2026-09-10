@@ -36,6 +36,8 @@ const api: Record<string, unknown> = new Proxy(
         return {
           list: async () => agentList.current,
           onRemoteSyncComplete: () => () => undefined,
+          onReadinessChanged: () => () => undefined,
+          checkReadiness: async () => null,
           listCliCommands: async () => []
         }
       }
@@ -76,6 +78,9 @@ function agent(over: Record<string, unknown>): Record<string, unknown> {
     remoteMetadata: null,
     localPath: null,
     localRootId: null,
+    driver: 'a2a',
+    capabilities: { attachments: 'none', commands: 'card' },
+    readiness: null,
     createdAt: new Date('2026-01-01T00:00:00Z'),
     ...over
   }

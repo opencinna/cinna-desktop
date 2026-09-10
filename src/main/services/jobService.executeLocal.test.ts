@@ -116,6 +116,7 @@ function indexWorkshop(): void {
       name: 'Invoice Checker',
       description: null,
       localPath: '/w/Local/invoice-checker',
+      driver: 'opencode',
       remoteMetadata: {
         entrypoint_prompt: null,
         example_prompts: [],

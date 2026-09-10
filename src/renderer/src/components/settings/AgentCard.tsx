@@ -5,6 +5,7 @@ import {
   Circle,
   CheckCircle,
   XCircle,
+  AlertTriangle,
   Loader2,
   Eye,
   EyeOff,
@@ -15,8 +16,15 @@ import {
   useDeleteAgent,
   useTestAgent,
   useSetAgentEnabled,
-  useApplyBundleUpdate
+  useApplyBundleUpdate,
+  useCheckAgentReadiness
 } from '../../hooks/useAgents'
+import {
+  readinessSeverity,
+  readinessText,
+  readinessTitle,
+  readinessTone
+} from '../chat/ComposerReadiness'
 import { deriveBundleUpdate } from '../../utils/bundleVersion'
 import { AnimatedCollapse } from '../ui/AnimatedCollapse'
 
@@ -66,9 +74,18 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
     )
   }
 
+  const checkReadiness = useCheckAgentReadiness()
+
   const handleTest = (): void => {
     testAgent.mutate(agent.id)
+    // The same press re-asks readiness, so the dot and the composer's refusal
+    // follow a test the user just ran rather than waiting for the next check.
+    checkReadiness.mutate(agent.id)
   }
+
+  // A switched-off agent is not checked, and its dot already says it is off.
+  const readinessIssue =
+    agent.enabled && agent.readiness && agent.readiness.state !== 'ok' ? agent.readiness : null
 
   const isRemote = agent.source === 'remote'
   // For remote agents originating from a catalog bundle install. Publisher
@@ -106,10 +123,15 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
     })
   }
 
-  const statusColor =
-    agent.enabled
-      ? 'text-[var(--color-success)]'
-      : 'text-[var(--color-text-muted)]'
+  const statusColor = !agent.enabled
+    ? 'text-[var(--color-text-muted)]'
+    : readinessIssue
+      ? readinessTone(readinessIssue)
+      : 'text-[var(--color-success)]'
+  // A warning glyph for something the user fixes (a token, a login), a cross
+  // for an agent that cannot be reached at all.
+  const ReadinessIcon =
+    readinessIssue && readinessSeverity(readinessIssue) === 'warning' ? AlertTriangle : XCircle
 
   const inputClass =
     'w-full bg-[var(--color-bg)] text-[var(--color-text)] px-2.5 py-1.5 rounded-md text-[14px] border border-[var(--color-border)] focus:border-[var(--color-accent)] focus:outline-none'
@@ -368,7 +390,9 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               type="button"
               onClick={handleTest}
               disabled={testAgent.isPending}
-              className="text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
+              // Wide enough for "Test Connection", so "Testing..." does not
+              // narrow the button and slide the reason beside it.
+              className="min-w-[6.5rem] text-left text-[12px] text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] font-medium transition-colors"
             >
               {testAgent.isPending ? (
                 <span className="flex items-center gap-1">
@@ -378,6 +402,23 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                 'Test Connection'
               )}
             </button>
+
+            {!testAgent.data && readinessIssue && (
+              <span className="flex items-center gap-1 text-[12px] min-w-0">
+                <ReadinessIcon
+                  size={10}
+                  aria-hidden="true"
+                  data-readiness-icon={readinessSeverity(readinessIssue)}
+                  className={`shrink-0 ${readinessTone(readinessIssue)}`}
+                />
+                <span
+                  className={`truncate max-w-[260px] ${readinessTone(readinessIssue)}`}
+                  title={readinessTitle(readinessIssue)}
+                >
+                  {readinessText(readinessIssue)}
+                </span>
+              </span>
+            )}
 
             {testAgent.data && (
               <span className="flex items-center gap-1 text-[12px]">

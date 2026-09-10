@@ -106,6 +106,7 @@ function indexWorkshop(): void {
       name: 'Invoice Checker',
       description: null,
       localPath: '/w/Local/invoice-checker',
+      driver: 'opencode',
       remoteMetadata: {
         entrypoint_prompt: null,
         example_prompts: [],
@@ -270,6 +271,7 @@ describe('what gets said when a folder dependency goes missing', () => {
         name: 'Nameless',
         description: null,
         localPath: '/w/Local/nameless',
+        driver: 'opencode',
         remoteMetadata: {
           entrypoint_prompt: null,
           example_prompts: [],

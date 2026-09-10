@@ -94,7 +94,7 @@ import { isWithin } from './pathRules'
 import { setAllowedRootsProvider } from './openInService'
 import { agentsHomeService } from './agentsHomeService'
 import { scaffoldService } from './scaffoldService'
-import { ENV_FILE, scannerService } from './scannerService'
+import { ENV_FILE, folderIndexDriver, scannerService } from './scannerService'
 import { turnLock } from './turnLock'
 import { watcherService } from './watcherService'
 import { resolveWithinRoot } from './pathRules'
@@ -618,7 +618,8 @@ export const localAgentService = {
       name: dto.name,
       description: describedAs(dto) || null,
       localPath: dto.path,
-      remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest)
+      remoteMetadata: synthesizeFolderAgentMetadata(dto.manifest),
+      driver: folderIndexDriver(dto)
     }
     if (existing) {
       // `localPath` and `localRootId` are refreshed too, not just the display
@@ -1572,7 +1573,8 @@ export const localAgentService = {
         name: dto.name,
         description: describedAs(dto) || null,
         localPath: dto.path,
-        remoteMetadata: synthesizeFolderAgentMetadata({})
+        remoteMetadata: synthesizeFolderAgentMetadata({}),
+        driver: folderIndexDriver(dto)
       },
       root.id
     )
@@ -1623,6 +1625,10 @@ export const localAgentService = {
     // runtime it had before the click.
     scannerService.markRootDirty(root.id)
     const dto = this.scanFolder(root, agentDir)
+    // The row's driver follows the click too, not the next scan: the agent
+    // DTO's capabilities are read from it.
+    const driver = folderIndexDriver(dto)
+    if (driver !== null) agentRepo.setFolderDriver(userId, agentId, driver)
     return this.overlayEnabled(userId, [dto])[0]
   },
 

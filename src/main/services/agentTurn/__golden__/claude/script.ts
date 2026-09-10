@@ -1,6 +1,8 @@
 /**
- * Plays a Claude golden fixture through `ClaudeAgentTurnRunner` — the
- * interpreter behind `golden.claude.test.ts`.
+ * Plays a Claude golden fixture through the `claude` driver over
+ * `ClaudeAgentTurnRunner` — the interpreter behind `golden.claude.test.ts`.
+ * (Through the driver since phase 2; the runner and every expectation are the
+ * ones phase 0 pinned.)
  *
  * A fixture is **data**: one step script per `query()` call the runner makes,
  * plus the few deps that change what the runner does (`approval`, a remembered
@@ -48,6 +50,11 @@ import {
 } from '../../claudeAgentTurnRunner'
 import { pendingRequests, type RequestResolution } from '../../pendingRequests'
 import { expectGoldenSidecar, type NormaliseOptions } from '../harness'
+import { folderReader, goldenRow, wrongEngine } from '../driverWorld'
+import { createClaudeDriver } from '../../../../agents/drivers/claudeDriver'
+import type { FolderDriver } from '../../../../agents/drivers/folderDriver'
+import type { AgentRow } from '../../../../db/agents'
+import type { LocalPermissionRequest } from '../../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../../shared/runEvents'
 import type { RunAgentTurnResult } from '../../../a2aStreamingService'
 import type { ClaudeApproval, ClaudeAuthState } from '../../../../../shared/engine'
@@ -384,6 +391,44 @@ export function fixtureDeps(
   }
 }
 
+/**
+ * The `claude` driver over a runner built from `deps` — what every golden turn
+ * goes through since phase 2, as production's does. The folder it reconciles
+ * against is the runner's own `getAgent` view with a runtime naming `claude`;
+ * the `opencode` sibling rejects any turn it is handed. `grants` collects every
+ * *Always allow* the driver is asked to write.
+ */
+export function goldenClaudeDriver(
+  deps: ClaudeTurnDeps,
+  grants: LocalPermissionRequest[] = []
+): FolderDriver {
+  return createClaudeDriver({
+    runner: new ClaudeAgentTurnRunner(deps),
+    readFolder: folderReader(deps.getAgent, 'claude'),
+    rememberGrant: (_agentId, request) => {
+      grants.push(request)
+      return true
+    },
+    resolveRequest: (requestId, resolution) =>
+      pendingRequests.resolve(requestId, resolution) !== null,
+    sibling: wrongEngine('claude'),
+    claudePath: deps.claudePath,
+    claudeAuth: deps.claudeAuth
+  })
+}
+
+/** The folder row the golden Claude turns run as. */
+export function goldenClaudeRow(): AgentRow {
+  return goldenRow({
+    id: GOLDEN_AGENT_ID,
+    name: 'Invoices',
+    driver: 'claude',
+    source: 'folder',
+    protocol: 'local-folder',
+    localPath: GOLDEN_AGENT_DIR
+  })
+}
+
 export interface Played {
   events: RunEvent[]
   result: RunAgentTurnResult
@@ -403,10 +448,8 @@ export async function playFixture(fixture: ClaudeFixture): Promise<Played> {
     saveSession: (s) => void savedSessions.push(s)
   })
   const events: RunEvent[] = []
-  const result = await new ClaudeAgentTurnRunner(deps).runTurn({
+  const result = await goldenClaudeDriver(deps).run('user-1', goldenClaudeRow(), {
     chatId: GOLDEN_CHAT_ID,
-    agentId: GOLDEN_AGENT_ID,
-    agentName: 'Invoices',
     wireContent: fixture.input?.wireContent ?? GOLDEN_WIRE_CONTENT,
     signal: controller.signal,
     onEvent: (e) => void events.push(e)
