@@ -140,8 +140,17 @@ const cursors = new Map<string, CursorState>()
  */
 const pushesInFlight = new Map<string, Promise<void>>()
 
+/**
+ * A profile id never contains a space (nanoid's alphabet, or `__default__`), so
+ * the prefix up to the first one is the profile and `resetCursors(userId)` can
+ * select a profile's keys without a second map.
+ */
+function cursorKey(userId: string, adapterId: string): string {
+  return `${userId} ${adapterId}`
+}
+
 function stateFor(userId: string, adapterId: string): CursorState {
-  const key = `${userId} ${adapterId}`
+  const key = cursorKey(userId, adapterId)
   const existing = cursors.get(key)
   if (existing) return existing
   const created: CursorState = { cursor: null, pulls: 0 }
@@ -781,23 +790,44 @@ export const taskSyncService = {
   },
 
   /**
-   * Forget every cursor.
+   * Forget a profile's cursors, or every cursor when no profile is named.
    *
-   * **This has no production caller yet, and the commit that first calls
-   * {@link taskSyncService.pull} owes it one** — on unlink and re-link, not on
-   * sign-out. The map is keyed per `(profile, adapter)`, so switching between
-   * profiles is already safe; the hazard is that a profile id is *this
-   * device's*, not the cinna account's. Unlink a profile from one account and
-   * link it to another and the old cursor survives, so the new account's first
-   * pull is a **delta rather than the active set** — every task older than that
-   * cursor is never fetched, and `dropMissing` does not run either because the
-   * pass count is no longer zero. The profile looks half-empty and nothing on
-   * screen explains why.
+   * A cursor is the claim "for this profile, I have seen everything on this
+   * service up to time T". `authService` calls this from the two places that
+   * can falsify it, and only one of them is a live bug:
    *
-   * Also used by tests that want two passes to be two first passes.
+   * 1. **A profile is re-linked to a different account** — the real one. A
+   *    profile id is *this device's*, not the account's. `registerCinna`'s
+   *    rebind branch finds the row by **email** and refreshes `cinnaServerUrl`
+   *    from the flow that just completed, so the same address on a different
+   *    cinna server (cloud to self-hosted, or between two self-hosted ones)
+   *    lands on the same profile row, keeping its id, its tasks *and* its
+   *    cursor. The next pull is then a **delta rather than the active set**:
+   *    nothing on the new account older than T is ever fetched, and the
+   *    reconcile does not run either because the pass count is no longer zero.
+   *    The profile looks half-empty with nothing on screen to explain it, and
+   *    stays that way until the app restarts.
+   * 2. **The profile's tasks are deleted** (`deleteAccount`, both branches).
+   *    Hygiene, not a fix: `deleteWithCascade` drops the `users` row too, so a
+   *    later sign-in mints a fresh id and nothing could read the stale entry
+   *    anyway. Resetting there keeps "a cursor never outlives the tasks it
+   *    describes" an invariant rather than a consequence of how ids are minted.
+   *
+   * A profile *switch* is on neither list and deliberately does not reset: the
+   * data is still there, the claim is still true, and re-pulling the whole
+   * active set on every switch would cost a request to learn nothing.
+   *
+   * Called with no argument by tests that want two passes to be two first
+   * passes.
    */
-  resetCursors(): void {
-    cursors.clear()
+  resetCursors(userId?: string): void {
+    if (userId === undefined) {
+      cursors.clear()
+      return
+    }
+    for (const key of [...cursors.keys()]) {
+      if (key.startsWith(`${userId} `)) cursors.delete(key)
+    }
   }
 }
 

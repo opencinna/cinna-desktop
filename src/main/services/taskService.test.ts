@@ -805,6 +805,22 @@ describe('reads and deletes', () => {
     expect(taskRepo.getById(USER, task.id)?.deletedAt).toBeInstanceOf(Date)
   })
 
+  it('refuses to write a deleted task at the repo, not only at the service', () => {
+    // The service refuses through `requireTask`; this is the second lock, for
+    // the caller that is not a service method — a sync-apply path writing a row
+    // that arrived from another device. Going round the service there would
+    // also rewrite the task's exported note, so a file would reappear under
+    // `<userData>/tasks/` for a task the user deleted.
+    const task = makeTask({ title: 'before' })
+    taskService.remove(USER, task.id)
+
+    expect(taskRepo.update(USER, task.id, { title: 'after' })).toBeUndefined()
+
+    const row = taskRepo.getById(USER, task.id)
+    expect(row?.title).toBe('before')
+    expect(row?.deletedAt).toBeInstanceOf(Date)
+  })
+
   it('keeps the opaque remote state out of the DTO', () => {
     const task = makeTask({
       remoteAdapter: 'fake',

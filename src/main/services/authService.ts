@@ -9,6 +9,7 @@ import {
 } from '../auth/cinna-oauth'
 import { storeCinnaTokens, clearCinnaTokens } from '../auth/cinna-tokens'
 import { syncService } from './syncService'
+import { taskSyncService } from './taskSyncService'
 import { AuthError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { focusMainWindow } from '../window/focus'
@@ -77,10 +78,14 @@ export interface DeleteAccountInput {
   password?: string
   /**
    * Non-destructive sign-out (UserMenu) vs. full account removal (Settings →
-   * User Accounts). When true, a Cinna profile's row is KEPT (tokens cleared)
-   * so a later re-login rebinds to it; only local profile-scoped data is wiped.
-   * When false/absent, the profile is fully deleted. Ignored for local
-   * profiles, which are always fully deleted (no server copy to restore from).
+   * User Accounts). Both values delete the local profile row and everything
+   * scoped to it — see the comment inside `deleteAccount`, which is what the
+   * two branches actually do, and note that the profile therefore leaves the
+   * account switcher either way. What `signOut` changes is the *server* side: a
+   * sign-out leaves the account and its synced records alone and only revokes
+   * this device, so a later sign-in restores from the cloud into a **fresh
+   * local row**; a full delete always removes the device.
+   * Ignored for local profiles, which have no server copy either way.
    */
   signOut?: boolean
   /**
@@ -213,6 +218,13 @@ export const authService = {
         cinnaServerUrl: serverUrl,
         cinnaHostingType: input.hostingType ?? 'cloud'
       })
+      // The row id is this device's, not the account's, and `cinnaServerUrl` was
+      // just refreshed from the flow that completed — so the same address on a
+      // different cinna server rebinds here with a remote-task cursor that
+      // belongs to the previous one. A stale cursor makes the next pull a delta
+      // instead of the active set, and nothing on screen would explain the
+      // half-empty result.
+      taskSyncService.resetCursors(existing.id)
       storeCinnaTokens(existing.id, tokens)
       await userActivation.activate(existing.id)
       logger.info('user.rebound', { userId: existing.id, username, type: 'cinna_user' })
@@ -458,6 +470,15 @@ export const authService = {
       userRepo.deleteWithCascade(input.userId)
       logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
     }
+
+    // Both branches ran `deleteWithCascade`, which takes the profile's `tasks`
+    // rows — and the `users` row — with it. Releasing the in-memory pull cursor
+    // is hygiene rather than a fix: because the row goes too, a later sign-in
+    // mints a fresh id and nothing can ever read the stale entry. It is here so
+    // that "a cursor never outlives the tasks it describes" holds as a rule,
+    // instead of holding by accident of how ids are minted. The case where it
+    // does matter is `registerCinna`'s rebind, which keeps the id.
+    taskSyncService.resetCursors(input.userId)
 
     if (wasCurrent) {
       await userActivation.activate(DEFAULT_USER_ID)

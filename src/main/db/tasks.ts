@@ -275,12 +275,22 @@ export const taskRepo = {
    * It returns the row rather than a boolean (the shape `jobsRepo.update` uses)
    * because every caller in `taskService` needs the new state — to decide what
    * to push to a bound remote, and to hand back to the renderer.
+   *
+   * **A soft-deleted row is not updatable.** Every caller inside `taskService`
+   * already goes through `requireTask`, which filters `deletedAt` — so this
+   * clause changes nothing today and exists for the caller that does not: a
+   * sync-apply path writing rows that arrived from another device. Such a path
+   * is not a `taskService` method, so the classification guard in
+   * `taskService.test.ts` cannot see it, and going round the service would both
+   * skip `written()` and **resurrect the deleted task's exported note** — a file
+   * reappearing under `<userData>/tasks/` for a task the user deleted. Two
+   * places now have to be wrong for that to happen instead of one.
    */
   update(userId: string, taskId: string, patch: TaskPatch): TaskRow | undefined {
     const result = getDb()
       .update(tasks)
       .set({ ...patch, updatedAt: patch.updatedAt ?? new Date() })
-      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId), isNull(tasks.deletedAt)))
       .run()
     if (result.changes === 0) return undefined
     return this.getById(userId, taskId)

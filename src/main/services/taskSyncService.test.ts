@@ -764,6 +764,60 @@ describe('pulling what changed there', () => {
   })
 })
 
+describe('forgetting a profile’s cursors', () => {
+  /** The query the last task-list request carried. `status=active` is a first pass. */
+  function lastListQuery(): string {
+    const lists = cinna.calls().filter((c) => c.method === 'GET' && c.path.startsWith('/api/v1/tasks/?'))
+    return lists[lists.length - 1]?.path ?? ''
+  }
+
+  it('makes the next pull a first pass again, and only for the profile named', async () => {
+    cinna.seed({ title: 'Raised on the web' })
+
+    await taskSyncService.pull(USER)
+    expect(lastListQuery()).toContain('status=active')
+
+    // With a cursor, a pass is a delta — which is the whole point of the
+    // cursor, and the thing that goes wrong when it outlives its account.
+    await taskSyncService.pull(USER)
+    expect(lastListQuery()).toContain('updated_since=')
+
+    // Another profile's reset must not touch this one. The map is keyed
+    // `<profile> <adapter>`, so this is the assertion that a prefix match
+    // cannot be a substring match.
+    taskSyncService.resetCursors('some-other-profile')
+    await taskSyncService.pull(USER)
+    expect(lastListQuery()).toContain('updated_since=')
+
+    // The re-link case: the profile keeps its id and gets a different account.
+    taskSyncService.resetCursors(USER)
+    await taskSyncService.pull(USER)
+    expect(lastListQuery()).toContain('status=active')
+  })
+
+  it('brings in a task older than the cursor, which is what the re-link needs', async () => {
+    // The account the profile had.
+    const old = cinna.seed({ title: 'From the old account' })
+    await taskSyncService.pull(USER)
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['From the old account'])
+
+    // `registerCinna`'s rebind: same profile row, same id, a different account
+    // behind it. Its tasks are older than the cursor this profile is still
+    // carrying, so a delta can never mention them.
+    for (const task of taskService.list(USER)) taskService.remove(USER, task.id)
+    cinna.forget(old.id)
+    const fresh = cinna.seed({ title: 'From the new account' })
+    cinna.touch(fresh.id, { updated_at: new Date(Date.now() - 60 * 60 * 1000) })
+
+    await taskSyncService.pull(USER)
+    expect(taskService.list(USER)).toEqual([])
+
+    taskSyncService.resetCursors(USER)
+    await taskSyncService.pull(USER)
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['From the new account'])
+  })
+})
+
 describe('pulling one task', () => {
   it('takes the service’s view of it', async () => {
     const taskId = await bound()
