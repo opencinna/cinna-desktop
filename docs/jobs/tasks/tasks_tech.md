@@ -6,7 +6,7 @@
 |---|---|
 | Shared | `src/shared/tasks.ts`, `src/shared/taskStatus.ts`, `src/shared/inbox.ts`, `src/shared/runEvents.ts` |
 | Database | `src/main/db/schema.ts`, `src/main/db/client.ts`, `src/main/db/tasks.ts`, `src/main/db/taskInputRequests.ts` |
-| Services | `src/main/services/taskService.ts`, `src/main/services/inboxService.ts`, `src/main/services/remoteInboxService.ts`, `src/main/services/taskSyncService.ts`, `src/main/services/taskFileService.ts` |
+| Services | `src/main/services/taskService.ts`, `src/main/services/inboxService.ts`, `src/main/services/remoteInboxService.ts`, `src/main/services/taskSyncService.ts`, `src/main/services/taskSyncScheduler.ts`, `src/main/services/taskFileService.ts` |
 | Adapters | `src/main/tasks/adapters/adapter.ts`, `src/main/tasks/adapters/index.ts`, `src/main/tasks/adapters/nullAdapter.ts`, `src/main/tasks/adapters/cinnaTaskAdapter.ts`, `src/main/tasks/adapters/cinnaTaskAdapter.wiring.ts` |
 | IPC / preload | `src/main/ipc/task.ipc.ts`, `src/preload/index.ts` |
 | Renderer | `src/renderer/src/hooks/useTasks.ts`, `src/renderer/src/hooks/useInbox.ts`, `src/renderer/src/components/tasks/TaskView.tsx`, `src/renderer/src/components/tasks/TaskStatusPill.tsx`, `src/renderer/src/components/inbox/InboxView.tsx`, `src/renderer/src/components/inbox/InboxButton.tsx` |
@@ -27,7 +27,7 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 | Channel | Request → response |
 |---|---|
 | `task:list` | optional `TaskListQuery` → `TaskDto[]`; renderer filters are rebuilt field by field |
-| `task:get` | task id → `TaskDto` from local storage |
+| `task:get` | task id → saved `TaskDto` immediately; `getWatched` starts a bound-task refresh and carries any previous ephemeral refresh error |
 | `task:update` | task id, `TaskFieldPatch` → updated task; title, description, priority and router |
 | `task:set-status` | task id, `TaskStatus` → updated task after ownership/transition validation |
 | `task:remote-live` | task id → `boolean \| null`; unknown differs from stopped |
@@ -36,27 +36,28 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 | `inbox:list` | no arguments → asynchronous complete `InboxEntry[]`; remote failure rejects |
 | `inbox:answer` | `AskAnswerPayload` → asynchronous `InboxAnswerResult`; refusal codes remain result data |
 
-`parseAnswerPayload` accepts exactly one of permission reply or question answers. Task IPC mutations nudge device sync; stream bookkeeping uses its normal periodic device cycle. That device-sync cycle is distinct from the not-yet-scheduled remote-adapter coordinator.
+`parseAnswerPayload` accepts exactly one of permission reply or question answers. Task IPC mutations nudge device sync; stream bookkeeping uses its normal periodic device cycle. That encrypted device-sync cycle is distinct from the active-profile remote-adapter scheduler, which also runs while app-sync is locked.
 
 ## Services and Key Methods
 
 - `taskService.create`, `getById`, `list`, `update`, `setStatus`, `applyRunState`, `acceptRemoteStatus`, `start`, `takeOver` and `remove` own task validation and lifecycle. `written` keeps the handoff export current. `start` currently associates an existing chat; it is not a renderer-facing conversation factory.
 - `inboxService.recordRunEvent`, `openAsk`, `closeAsk` and `endTurn` record local asks and complete chat-owned tasks without throwing into a stream. `taskForChat` lazily creates their parent. See [chat task lifecycle](chat_tasks.md).
 - `inboxService.list` merges local records with `remoteInboxService.list`; `answer` dispatches local versus namespaced remote addresses. See [Inbox mechanics](inbox.md) for the ten-second UI deadline, thirty-second Cinna transport abort, all-settled read coalescing and resolution-aware answer coalescing.
-- `taskSyncService.push`, `pushAll`, `pull`, `pullOne`, `reconcile`, `handOff`, `takeOver`, `liveSession` and `remoteWork` coordinate adapters. Dirty status pushes use `src/main/tasks/taskStatusPath.ts`; they send legal steps, never a guessed direct destination. See [remote coordination](remote_sync.md) for reconciliation, cursors, failure classification and production callers.
+- `taskSyncScheduler.start`, `stop`, `setSuspended` and `refresh` own lifecycle and completion-based polling; activation and main-window/power/quit hooks call them. See [scheduling and read ordering](remote_sync.md#scheduling-and-watched-reads).
+- `taskSyncService.getWatched`, `invalidatePending`, `push`, `pushAll`, `pull`, `pullOne`, `reconcile`, `handOff`, `takeOver`, `liveSession` and `remoteWork` coordinate adapters. Dirty status pushes use `src/main/tasks/taskStatusPath.ts`; they send legal steps, never a guessed direct destination. See [remote coordination](remote_sync.md) for reconciliation, cursors, failure classification and production callers.
 - `taskFileService.exportHandoff` writes the local file view. It never imports edits back into the database.
 
 ## Renderer Components
 
 - `TaskView` renders persisted work, description, status and actions. Attention branches distinguish work on this device, another device and a remote service. The remote banner probes liveness and keeps **Open the Inbox** separate from takeover. The conversation and service views remain their own navigation targets.
-- `useTask` polls non-settled local records every five seconds; a task read does not itself refresh the bound service. `useRemoteLiveSession` is a separate query with its own liveness deadline/cache.
+- `useTask` polls bound tasks every five seconds even after completion; unbound tasks poll only while non-settled. Each `task:get` returns local data and starts a coalesced remote detail refresh. `TaskRemoteRef.refreshError` carries the last watched failure into the existing stale footer without persisting or syncing it. `useRemoteLiveSession` is a separate query with its own liveness deadline/cache.
 - `useInboxList` shares one five-second query between the badge, task page and Inbox. Read errors override cached-count claims; the task page uses success before offering an empty-Inbox re-run.
 - `InboxView` retains acted-on cards for the mount and appends new arrivals below known cards. `PermissionRequestBlock` and `AskUserQuestionBlock` are the same components used in the transcript. `AnswerQuestionsModal` keeps the draft through failed delivery and disables mutation/dismissal while pending.
 - The task and Inbox are tabless views in `src/renderer/src/stores/ui.store.ts`; reselecting the active sidebar tab returns from them through `src/renderer/src/components/layout/SidebarTabs.tsx`.
 
 ## Configuration
 
-There is no separate task database, Inbox enablement setting or service token in renderer state. The Inbox poll uses five seconds, remote list/answer UI waits use ten seconds, and the production Cinna JSON fetch aborts after thirty seconds, including body reads. Adapter availability uses the profile's service configuration. Handoff exports use the application's user-data directory. Remote periodic scheduling remains a completion gap rather than a configurable timer already running.
+There is no separate task database, Inbox enablement setting or service token in renderer state. The Inbox poll uses five seconds, remote list/answer UI waits use ten seconds, and the production Cinna JSON fetch aborts after thirty seconds, including body reads. Adapter availability uses the profile's service configuration. Handoff exports use the application's user-data directory. The active-profile scheduler waits five seconds between completed push/pull passes, catches up on focus/resume and invalidates pending generations on stop/profile replacement/suspend. No new user setting controls that timer.
 
 ## Security
 
@@ -68,9 +69,9 @@ The authority is [Remote Task Adapters](remote_adapters.md): capability-gated op
 
 ## Current Gap List
 
-- No periodic production caller invokes adapter `pull`, `pushAll` or `reconcile`; Inbox polling cannot discover unknown remote task rows.
 - Takeover claims but does not create/start a local conversation; general task hand-off IPC and an assignee picker are absent.
 - `next_message` has no reply-address Inbox entry, and its task continuation/completion behavior still needs the desktop-start/lifecycle work described in [Tasks](tasks.md#current-completion-gaps).
+- The later orchestration phase still owns headless execution, handback, script routing and attach/replay; subsequent cleanup/protocol/new-driver work is separate from this scheduler.
 - A failed remote enumeration rejects the complete Inbox array, delaying new local entries too. Partial-result completeness must be carried explicitly before changing that policy.
 - Service-specific limitations, including recent-history bounds and the absence of a subscription, remain in the [Cinna mapping](cinna_adapter.md) and [remote coordination](remote_sync.md) documents.
 

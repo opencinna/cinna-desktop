@@ -132,7 +132,7 @@ export function TaskView(): React.JSX.Element {
     )
   }
 
-  return <TaskPage task={task.data} isStale={task.isError} />
+  return <TaskPage task={task.data} isStale={task.isError || !!task.data.remote?.refreshError} />
 }
 
 function TaskPage({

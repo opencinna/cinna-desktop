@@ -94,7 +94,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 
 ## What this deliberately does not do
 
-- **It ships one adapter, with no periodic scheduler.** The registry holds `cinna`; a test asserts its registration so the null adapter cannot hide a missing import. Job handover, run refresh and take-over controls reach adapters through [the sync service](remote_sync.md). Nothing schedules `pull`, `pushAll` or `reconcile`.
+- **It ships one adapter.** The registry holds `cinna`; a test asserts its registration so the null adapter cannot hide a missing import. Job handover, run refresh and take-over controls reach adapters through [the sync service](remote_sync.md). The active-profile scheduler also runs dirty push, pull and periodic reconciliation; the adapter does not own those timers.
 - **No read half for artifacts.** `putArtifact` is the seam's only write-only channel — comments and asks both have a `list*`, and a snapshot carries no artifacts — so a replica's remote attachments are invisible here. The capability is named `writeArtifactKinds` so the absence is a statement in the type rather than a gap in a docstring; a `listArtifacts` is additive when a surface needs one.
 - **No push subscription.** Every adapter is polled. A later adapter may expose a subscription and be preferred over polling; nothing here builds one.
 - **The renderer never sees which service a task is on beyond its display fields.** `TaskListQuery` has no `remoteAdapter` arm, and `TaskDto.remote` omits `state`.
@@ -105,7 +105,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 taskService (SQLite write, committed)
         |
         v
- taskSyncService (job execution / refresh; take-over IPC)
+ taskSyncService (scheduled push/pull; watched refresh; handover IPC)
         |
         v
  adapterFor(binding.adapter) -> RemoteTaskAdapter

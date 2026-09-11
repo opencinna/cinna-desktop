@@ -59,7 +59,7 @@ export function registerTaskHandlers(): void {
 
   ipcHandle('task:get', async (_event, taskId: string): Promise<TaskDto> => {
     userActivation.requireActivated()
-    return taskService.getById(getProfileScopeUserId(), taskId)
+    return taskSyncService.getWatched(getProfileScopeUserId(), taskId)
   })
 
   /** Title, description, priority, router — writable whoever is running the task. */

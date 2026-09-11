@@ -55,17 +55,16 @@
  * `task:remote-live` reach {@link taskSyncService.takeOver} and {@link
  * taskSyncService.liveSession}.
  *
- * **What still has no scheduler** is the periodic half: nothing calls `pull`,
- * `pushAll` or `reconcile` on a timer. A bound task therefore syncs when
- * something asks about it — a task page open, a job run refreshed — and not
- * otherwise. That is the shape step 11 stops at deliberately: `pull` has no
- * in-flight dedupe (unlike push's `pushesInFlight`), and the step that first
- * schedules one is the step that owes it, because two overlapping passes both
- * reading `pulls === 0` is only reachable once something can start two.
+ * `taskSyncScheduler` pushes then pulls at profile activation, focus, resume,
+ * and five seconds after each completed pass. Profile changes, suspend and
+ * stop invalidate in-flight generations without discarding account cursors;
+ * account re-linking also resets cursors and bindings. Watched task reads use
+ * `getWatched` to return SQLite immediately and refresh in the background.
  *
- * `authService` calls {@link taskSyncService.resetCursors} alone — that hazard
- * does not wait for a scheduler, because it is about a cursor outliving the
- * account it describes.
+ * Full reads coalesce per profile, detail reads per task, and pushes serialize
+ * per task. Binding revisions discard snapshots overtaken by another read or
+ * push without comparing clocks across devices. Detail polling waits behind an
+ * active full read; a contended full pass retains its cursor/history window.
  *
  * The cursor is deliberately in memory for the same reason §5.7 wants a full
  * reconcile on start: a restart costs one active-set pull, which is the pass
@@ -237,6 +236,37 @@ const cursors = new Map<string, CursorState>()
  * would serialise a whole `pushAll` behind one slow upload.
  */
 const pushesInFlight = new Map<string, Promise<void>>()
+const pullsInFlight = new Map<string, Promise<void>>()
+const readsInFlight = new Map<string, Promise<TaskDto | null>>()
+let globalEpoch = 0
+const profileEpochs = new Map<string, number>()
+// Revisions order local read/write operations without comparing clocks across devices.
+const revisions = new Map<string, number>()
+const refreshErrors = new Map<string, string>()
+
+function bindingKey(userId: string, binding: Pick<RemoteBinding, 'adapter' | 'id'>): string {
+  return JSON.stringify([userId, binding.adapter, binding.id])
+}
+
+function bump(key: string): void {
+  revisions.set(key, (revisions.get(key) ?? 0) + 1)
+}
+
+function readIsCurrent(userId: string, binding: RemoteBinding, revision: number): boolean {
+  const row = taskRepo.getByRemote(userId, binding.adapter, binding.id)
+  return (revisions.get(bindingKey(userId, binding)) ?? 0) === revision &&
+    (!row || !pushesInFlight.has(cursorKey(userId, row.id)))
+}
+
+function generation(userId: string): string {
+  return `${globalEpoch}:${profileEpochs.get(userId) ?? 0}`
+}
+
+function bindingIsCurrent(userId: string, taskId: string, binding: RemoteBinding, started: string): boolean {
+  const current = taskRepo.getById(userId, taskId)
+  return generation(userId) === started && !!current && !current.deletedAt &&
+    current.remoteAdapter === binding.adapter && current.remoteId === binding.id
+}
 
 /**
  * A profile id never contains a space (nanoid's alphabet, or `__default__`), so
@@ -535,17 +565,30 @@ export interface RemoteWork {
  * interleaving costs.
  */
 async function pushOne(userId: string, taskId: string): Promise<void> {
+  const started = generation(userId)
   const row = taskRepo.getById(userId, taskId)
   if (!row || row.deletedAt) return
   const bound = bindingOf(row)
   if (!bound) return
+  const valid = (): boolean => {
+    const current = taskRepo.getById(userId, taskId)
+    return bindingIsCurrent(userId, taskId, bound, started) &&
+      current?.executor === row.executor && current?.executorDevice === row.executorDevice
+  }
+  const stale = new Error('The task binding changed during sync')
+  const call = async <T>(operation: () => Promise<T>): Promise<T> => {
+    if (!valid()) throw stale
+    const value = await operation()
+    if (!valid()) throw stale
+    return value
+  }
 
   const owed = (row.remoteDirty ?? []).filter(isRemoteDirtyField)
   if (owed.length === 0) return
 
   const adapter = adapterFor(bound.adapter)
   const availability = await adapter.availability(userId)
-  if (!availability.ready) return
+  if (!availability.ready || !valid()) return
 
   const caps = adapter.capabilities()
   const remaining = new Set<RemoteDirtyField>(owed)
@@ -558,6 +601,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 
   /** Returns false when the binding is gone and there is nothing left to do. */
   const settle = (err: unknown, what: string, markers: RemoteDirtyField[]): boolean => {
+    if (err === stale || !valid()) return false
     const consequence = consequenceOf(err, what)
     if (consequence !== 'retry') contacted = true
     if (consequence === 'unbind') {
@@ -584,11 +628,12 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
       batch: RemoteWritableField[]
     ): Promise<'sent' | 'refused' | 'retry' | 'unbound'> => {
       try {
-        binding = await adapter.pushFields(userId, binding, fieldPatch(row, batch))
+        binding = await call(() => adapter.pushFields(userId, binding, fieldPatch(row, batch)))
         contacted = true
         for (const field of batch) remaining.delete(field)
         return 'sent'
       } catch (err) {
+        if (err === stale || !valid()) return 'unbound'
         const consequence = consequenceOf(err, 'pushing fields')
         if (consequence !== 'retry') contacted = true
         if (consequence === 'unbind') {
@@ -630,7 +675,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
       remaining.delete('handoffNote')
     } else {
       try {
-        await adapter.putHandoffNote(userId, binding, row.handoffNote)
+        await call(() => adapter.putHandoffNote(userId, binding, row.handoffNote!))
         contacted = true
         remaining.delete('handoffNote')
       } catch (err) {
@@ -651,7 +696,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
       if (!caps.archive) remaining.delete('status')
       else {
         try {
-          binding = await adapter.archive(userId, binding)
+          binding = await call(() => adapter.archive(userId, binding))
           contacted = true
           remaining.delete('status')
         } catch (err) {
@@ -664,7 +709,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
       try {
         // What the remote thinks, asked rather than remembered: it may have
         // moved on its own, and the path depends on where it actually is.
-        const there = await adapter.fetch(userId, binding)
+        const there = await call(() => adapter.fetch(userId, binding))
         contacted = true
         binding = there.binding
         const path = taskStatusPath(there.status, status)
@@ -682,7 +727,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
         } else {
           for (const [index, step] of path.entries()) {
             const reason = index === path.length - 1 ? PUSH_REASON : CATCH_UP_REASON
-            binding = await adapter.pushStatus(userId, binding, step, reason)
+            binding = await call(() => adapter.pushStatus(userId, binding, step, reason))
           }
           remaining.delete('status')
         }
@@ -705,7 +750,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
   // closes both.
   const attempted = owed.filter((field) => !remaining.has(field))
   const current = taskRepo.getById(userId, taskId)
-  if (!current || current.deletedAt) return
+  if (!current || current.deletedAt || !valid()) return
   const stillOwed = (current.remoteDirty ?? [])
     .filter(isRemoteDirtyField)
     .filter((field) => !(attempted.includes(field) && sameValue(row, current, field)))
@@ -717,6 +762,18 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 }
 
 export const taskSyncService = {
+  /** Read SQLite immediately; refresh a watched binding without blocking its page. */
+  getWatched(userId: string, taskId: string): TaskDto {
+    const task = taskService.getById(userId, taskId)
+    if (task.remote) {
+      const error = refreshErrors.get(bindingKey(userId, task.remote))
+      if (error) task.remote.refreshError = error
+      void this.pullOne(userId, taskId).catch((error) => {
+        logger.warn('watched task could not be refreshed', { taskId, error: describe(error) })
+      })
+    }
+    return task
+  },
   /**
    * Which service this profile would hand a task to, by id, or null for none.
    *
@@ -1026,12 +1083,21 @@ export const taskSyncService = {
    */
   async push(userId: string, taskId: string): Promise<void> {
     const key = `${userId} ${taskId}`
+    const started = generation(userId)
     // Chained rather than rejected: a caller that asked for a push wants one,
     // and the second pass starting from the first's finished state is exactly
     // right. `catch` before chaining so one failure does not poison the queue.
     const queued = (pushesInFlight.get(key) ?? Promise.resolve())
       .catch(() => {})
-      .then(() => pushOne(userId, taskId))
+      .then(async () => {
+        if (generation(userId) !== started) return
+        const row = taskRepo.getById(userId, taskId)
+        const binding = row && bindingOf(row)
+        if (!binding) return
+        const revisionKey = bindingKey(userId, binding)
+        bump(revisionKey)
+        try { await pushOne(userId, taskId) } finally { bump(revisionKey) }
+      })
       .finally(() => {
         if (pushesInFlight.get(key) === queued) pushesInFlight.delete(key)
       })
@@ -1051,10 +1117,12 @@ export const taskSyncService = {
    * after it in the list.
    */
   async pushAll(userId: string): Promise<void> {
+    const started = generation(userId)
     const rows = taskRepo
       .list(userId, { includeArchived: true })
       .filter((row) => row.remoteAdapter && (row.remoteDirty ?? []).length > 0)
     for (const row of rows) {
+      if (generation(userId) !== started) return
       try {
         await this.push(userId, row.id)
       } catch (err) {
@@ -1072,29 +1140,15 @@ export const taskSyncService = {
    * This is what a task page open on a remote replica asks for, and what
    * `refreshCinnaRun` becomes in step 11.
    */
-  async pullOne(userId: string, taskId: string): Promise<TaskDto | null> {
-    const row = taskRepo.getById(userId, taskId)
-    if (!row || row.deletedAt) return null
-    const binding = bindingOf(row)
-    if (!binding) return null
-
-    const adapter = adapterFor(binding.adapter)
-    if (!(await adapter.availability(userId)).ready) return null
-
-    let snapshot: RemoteTaskSnapshot
-    try {
-      snapshot = await adapter.fetch(userId, binding)
-    } catch (err) {
-      if (consequenceOf(err, 'fetching the task') === 'unbind') {
-        taskService.unbindRemote(userId, taskId, `fetching the task: ${describe(err)}`)
-      }
-      return null
-    }
-    return taskService.applyRemoteSnapshot(
-      userId,
-      taskId,
-      patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId))
-    )
+  pullOne(userId: string, taskId: string): Promise<TaskDto | null> {
+    const key = cursorKey(userId, taskId)
+    const existing = readsInFlight.get(key)
+    if (existing) return existing
+    const pending = pullSingleTask(userId, taskId).finally(() => {
+      if (readsInFlight.get(key) === pending) readsInFlight.delete(key)
+    })
+    readsInFlight.set(key, pending)
+    return pending
   },
 
   /**
@@ -1104,105 +1158,14 @@ export const taskSyncService = {
    * not stop another from syncing — and its cursor is left where it was, so
    * nothing is missed when it comes back.
    */
-  async pull(userId: string): Promise<void> {
-    for (const adapter of allAdapters()) {
-      try {
-        if (!(await adapter.availability(userId)).ready) continue
-        const state = stateFor(userId, adapter.id)
-        const firstPass = state.pulls === 0
-        const active = await adapter.list(userId, state.cursor)
-        // On the first pass there is no cursor, so `active` is the adapter's
-        // *active* set — which on cinna excludes everything completed,
-        // cancelled and archived. Left at that, a task that had already
-        // finished when this profile linked would never arrive by any route:
-        // the first pass filters it out by status, and every later pass is a
-        // delta that mentions it only if somebody touches it again. The result
-        // is a visible seam at the moment of linking — work finished ten
-        // minutes before is missing while work finished ten minutes after is
-        // there — so the first pass also asks for a bounded window of recent
-        // history, where a cursor carries no status filter at all.
-        const snapshots = firstPass ? mergeById(active, await history(userId, adapter)) : active
-
-        // Two passes, and the second one is not belt-and-braces.
-        //
-        // A parent is resolved by looking it up **locally**, and cinna returns
-        // an uncursored list `created_at DESC` — newest first — so a subtask
-        // arrives *before* the parent it hangs off and there is nothing to
-        // resolve against yet. One pass leaves every pulled subtask at top
-        // level, reading as unrelated work nobody asked for, with the parent's
-        // counts at zero. Nor does it heal: the next pass is a delta, and the
-        // child is only in it if it changed on the server.
-        const orphaned: { taskId: string; parentId: string }[] = []
-        for (const snapshot of snapshots) {
-          const taskId = upsert(userId, adapter, snapshot)
-          if (taskId && snapshot.parentId) orphaned.push({ taskId, parentId: snapshot.parentId })
-        }
-        // Depth is decided from the **batch**, not from the rows as they are
-        // being written. `resolveParent` refuses a parent that is itself a
-        // subtask, but in the second pass the parent's own link may not have
-        // been written yet — so a grandchild consulted a parent that still
-        // looked like a root and produced the two-level tree the one-level rule
-        // exists to prevent. Whether the parent is a child is a fact about the
-        // remote's tree, and the snapshots carry it.
-        const childrenOfChildren = new Set(
-          snapshots.filter((s) => s.parentId !== null).map((s) => s.binding.id)
-        )
-        for (const { taskId, parentId } of orphaned) {
-          if (childrenOfChildren.has(parentId)) continue
-          const row = taskRepo.getById(userId, taskId)
-          if (!row || row.parentTaskId) continue
-          const resolved = resolveParent(userId, adapter.id, parentId)
-          if (resolved) {
-            // `updatedAt` carried over deliberately: re-parenting is this
-            // device catching up with what the remote already said, not a
-            // change to the task, and `taskRepo.list` orders by that column.
-            taskService.applyRemoteSnapshot(userId, taskId, {
-              parentTaskId: resolved,
-              updatedAt: row.updatedAt
-            })
-          }
-        }
-        const newest = snapshots.reduce<Date | null>(
-          (latest, snapshot) =>
-            latest === null || snapshot.updatedAt > latest ? snapshot.updatedAt : latest,
-          state.cursor
-        )
-        state.pulls += 1
-        // **Before the reconcile, not after.** The pull's own work — every
-        // upsert — is finished at this point, and the reconcile below is a
-        // separate concern that can throw (`dropMissing`'s `taskService.remove`
-        // is not individually guarded). With the order reversed, that throw
-        // landed after `pulls` had been incremented and before the cursor was
-        // written: the session was then never a first pass again, so it got no
-        // history window and no reconcile until pass twenty, while still
-        // holding a null cursor — which means re-fetching the entire active set
-        // on every poll for the life of the process.
-        //
-        // **Only on a new maximum.** Applying the rewind unconditionally has
-        // two costs that are invisible until they are not: an idle profile
-        // widens its own window by a second per poll, because `newest` falls
-        // back to the cursor it is about to move; and the newest row is
-        // re-read on every single pass for ever, which is an upsert that ends
-        // in `written(row)` and therefore a **filesystem write per poll**. An
-        // idle cursor stays parked instead.
-        if (newest !== null && (state.cursor === null || newest > state.cursor)) {
-          state.cursor = new Date(newest.getTime() - CURSOR_OVERLAP_MS)
-        }
-        if (firstPass || state.pulls % RECONCILE_EVERY === 0) {
-          // `active`, not `snapshots`: on the first pass the cursor was null, so
-          // `active` *is* the active set and asking for it again would be the
-          // same request twice — but the history merged into `snapshots` is
-          // mostly terminal tasks, and handing those to `dropMissing` as "still
-          // listed as active" is a claim about the service that is not true.
-          await dropMissing(userId, adapter, firstPass ? active : null)
-        }
-      } catch (err) {
-        logger.warn('pull failed for a service', {
-          adapter: adapter.id,
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
+  pull(userId: string): Promise<void> {
+    const existing = pullsInFlight.get(userId)
+    if (existing) return existing
+    const pending = pullRemoteTasks(userId).finally(() => {
+      if (pullsInFlight.get(userId) === pending) pullsInFlight.delete(userId)
+    })
+    pullsInFlight.set(userId, pending)
+    return pending
   },
 
   /**
@@ -1213,10 +1176,13 @@ export const taskSyncService = {
    * amount of polling will ever mention it again.
    */
   async reconcile(userId: string): Promise<void> {
+    const started = generation(userId)
     for (const adapter of allAdapters()) {
+      if (generation(userId) !== started) return
       try {
         if (!(await adapter.availability(userId)).ready) continue
-        await dropMissing(userId, adapter, null)
+        if (generation(userId) !== started) return
+        await dropMissing(userId, adapter, null, started)
       } catch (err) {
         logger.warn('reconcile failed for a service', {
           adapter: adapter.id,
@@ -1325,10 +1291,29 @@ export const taskSyncService = {
     this.resetCursors(userId)
   },
 
+  /** Cancel pending work without discarding a valid account cursor. */
+  invalidatePending(userId: string): void {
+    profileEpochs.set(userId, (profileEpochs.get(userId) ?? 0) + 1)
+    pullsInFlight.delete(userId)
+    for (const key of readsInFlight.keys()) {
+      if (key.startsWith(`${userId} `)) readsInFlight.delete(key)
+    }
+  },
+
   resetCursors(userId?: string): void {
     if (userId === undefined) {
+      globalEpoch += 1
+      profileEpochs.clear()
+      pullsInFlight.clear()
+      readsInFlight.clear()
       cursors.clear()
+      revisions.clear()
+      refreshErrors.clear()
       return
+    }
+    this.invalidatePending(userId)
+    for (const key of refreshErrors.keys()) {
+      if (JSON.parse(key)[0] === userId) refreshErrors.delete(key)
     }
     for (const key of [...cursors.keys()]) {
       if (key.startsWith(`${userId} `)) cursors.delete(key)
@@ -1440,9 +1425,11 @@ function resolveParent(userId: string, adapterId: string, parentId: string | nul
 async function dropMissing(
   userId: string,
   adapter: RemoteTaskAdapter,
-  active: RemoteTaskSnapshot[] | null
+  active: RemoteTaskSnapshot[] | null,
+  started = generation(userId)
 ): Promise<void> {
   const live = active ?? (await adapter.list(userId, null))
+  if (generation(userId) !== started) return
   const seen = new Set(live.map((snapshot) => snapshot.binding.id))
   const locals = taskRepo.list(userId, { remoteAdapter: adapter.id, includeArchived: true })
 
@@ -1464,8 +1451,15 @@ async function dropMissing(
     if (isTerminalStatus(parseTaskStatus(row.status))) continue
     const binding = bindingOf(row)
     if (!binding) continue
+    if (!bindingIsCurrent(userId, row.id, binding, started)) continue
+    const revisionKey = bindingKey(userId, binding)
+    const revision = revisions.get(revisionKey) ?? 0
+    if (!readIsCurrent(userId, binding, revision)) continue
     try {
       const snapshot = await adapter.fetch(userId, binding)
+      if (!bindingIsCurrent(userId, row.id, binding, started) ||
+        !readIsCurrent(userId, binding, revision)) continue
+      bump(revisionKey)
       // It is still there, and the desktop's copy said otherwise. The delta
       // that would have told us was missed; this request tells us instead.
       taskService.applyRemoteSnapshot(
@@ -1474,11 +1468,14 @@ async function dropMissing(
         patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId))
       )
     } catch (err) {
+      if (!bindingIsCurrent(userId, row.id, binding, started) ||
+        !readIsCurrent(userId, binding, revision)) continue
       if (err instanceof RemoteTaskError && err.code === 'not_ours') {
         logger.info('dropping a replica the service no longer has', {
           taskId: row.id,
           adapter: adapter.id
         })
+        bump(revisionKey)
         taskService.remove(userId, row.id)
       }
     }
@@ -1488,4 +1485,167 @@ async function dropMissing(
 function describe(err: unknown): string {
   if (err instanceof RemoteTaskError) return err.detail ?? err.message
   return err instanceof Error ? err.message : String(err)
+}
+
+/** One serialized adapter pull pass for a profile. */
+async function pullRemoteTasks(userId: string): Promise<void> {
+  const started = generation(userId)
+  for (const adapter of allAdapters()) {
+    if (generation(userId) !== started) return
+    try {
+      if (!(await adapter.availability(userId)).ready) continue
+      if (generation(userId) !== started) return
+      const state = stateFor(userId, adapter.id)
+      const firstPass = state.pulls === 0
+      const beforeRead = new Map(revisions)
+      let contended = false
+      const active = await adapter.list(userId, state.cursor)
+      if (generation(userId) !== started) return
+      // On the first pass there is no cursor, so `active` is the adapter's
+      // *active* set — which on cinna excludes everything completed,
+      // cancelled and archived. Left at that, a task that had already
+      // finished when this profile linked would never arrive by any route:
+      // the first pass filters it out by status, and every later pass is a
+      // delta that mentions it only if somebody touches it again. The result
+      // is a visible seam at the moment of linking — work finished ten
+      // minutes before is missing while work finished ten minutes after is
+      // there — so the first pass also asks for a bounded window of recent
+      // history, where a cursor carries no status filter at all.
+      const snapshots = firstPass ? mergeById(active, await history(userId, adapter)) : active
+      if (generation(userId) !== started) return
+
+      // Two passes, and the second one is not belt-and-braces.
+      //
+      // A parent is resolved by looking it up **locally**, and cinna returns
+      // an uncursored list `created_at DESC` — newest first — so a subtask
+      // arrives *before* the parent it hangs off and there is nothing to
+      // resolve against yet. One pass leaves every pulled subtask at top
+      // level, reading as unrelated work nobody asked for, with the parent's
+      // counts at zero. Nor does it heal: the next pass is a delta, and the
+      // child is only in it if it changed on the server.
+      const orphaned: { taskId: string; parentId: string }[] = []
+      for (const snapshot of snapshots) {
+        const revisionKey = bindingKey(userId, snapshot.binding)
+        if (!readIsCurrent(userId, snapshot.binding, beforeRead.get(revisionKey) ?? 0)) {
+          contended = true
+          continue
+        }
+        bump(revisionKey)
+        const taskId = upsert(userId, adapter, snapshot)
+        if (taskId && snapshot.parentId) orphaned.push({ taskId, parentId: snapshot.parentId })
+      }
+      // Depth is decided from the **batch**, not from the rows as they are
+      // being written. `resolveParent` refuses a parent that is itself a
+      // subtask, but in the second pass the parent's own link may not have
+      // been written yet — so a grandchild consulted a parent that still
+      // looked like a root and produced the two-level tree the one-level rule
+      // exists to prevent. Whether the parent is a child is a fact about the
+      // remote's tree, and the snapshots carry it.
+      const childrenOfChildren = new Set(
+        snapshots.filter((s) => s.parentId !== null).map((s) => s.binding.id)
+      )
+      for (const { taskId, parentId } of orphaned) {
+        if (childrenOfChildren.has(parentId)) continue
+        const row = taskRepo.getById(userId, taskId)
+        if (!row || row.parentTaskId) continue
+        const resolved = resolveParent(userId, adapter.id, parentId)
+        if (resolved) {
+          // `updatedAt` carried over deliberately: re-parenting is this
+          // device catching up with what the remote already said, not a
+          // change to the task, and `taskRepo.list` orders by that column.
+          taskService.applyRemoteSnapshot(userId, taskId, {
+            parentTaskId: resolved,
+            updatedAt: row.updatedAt
+          })
+        }
+      }
+      const newest = snapshots.reduce<Date | null>(
+        (latest, snapshot) =>
+          latest === null || snapshot.updatedAt > latest ? snapshot.updatedAt : latest,
+        state.cursor
+      )
+      // A skipped row may precede another row's maximum timestamp. Retain the
+      // cursor (and first-pass history) until every result can be consumed.
+      if (!contended) state.pulls += 1
+      // **Before the reconcile, not after.** The pull's own work — every
+      // upsert — is finished at this point, and the reconcile below is a
+      // separate concern that can throw (`dropMissing`'s `taskService.remove`
+      // is not individually guarded). With the order reversed, that throw
+      // landed after `pulls` had been incremented and before the cursor was
+      // written: the session was then never a first pass again, so it got no
+      // history window and no reconcile until pass twenty, while still
+      // holding a null cursor — which means re-fetching the entire active set
+      // on every poll for the life of the process.
+      //
+      // **Only on a new maximum.** Applying the rewind unconditionally has
+      // two costs that are invisible until they are not: an idle profile
+      // widens its own window by a second per poll, because `newest` falls
+      // back to the cursor it is about to move; and the newest row is
+      // re-read on every single pass for ever, which is an upsert that ends
+      // in `written(row)` and therefore a **filesystem write per poll**. An
+      // idle cursor stays parked instead.
+      if (!contended && newest !== null && (state.cursor === null || newest > state.cursor)) {
+        state.cursor = new Date(newest.getTime() - CURSOR_OVERLAP_MS)
+      }
+      if (firstPass || state.pulls % RECONCILE_EVERY === 0) {
+        // `active`, not `snapshots`: on the first pass the cursor was null, so
+        // `active` *is* the active set and asking for it again would be the
+        // same request twice — but the history merged into `snapshots` is
+        // mostly terminal tasks, and handing those to `dropMissing` as "still
+        // listed as active" is a claim about the service that is not true.
+        await dropMissing(userId, adapter, firstPass ? active : null, started)
+      }
+    } catch (err) {
+      logger.warn('pull failed for a service', {
+        adapter: adapter.id,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    }
+  }
+}
+
+async function pullSingleTask(userId: string, taskId: string): Promise<TaskDto | null> {
+  const started = generation(userId)
+  // Let an already-running discovery pass finish before another watched read.
+  // Otherwise a five-second page poll can repeatedly invalidate a slow history
+  // pass and keep its cursor at the first window indefinitely.
+  await pullsInFlight.get(userId)?.catch(() => {})
+  await pushesInFlight.get(cursorKey(userId, taskId))?.catch(() => {})
+  if (generation(userId) !== started) return null
+  const row = taskRepo.getById(userId, taskId)
+  if (!row || row.deletedAt) return null
+  const binding = bindingOf(row)
+  if (!binding) return null
+  const key = bindingKey(userId, binding)
+  const revision = revisions.get(key) ?? 0
+  const valid = (): boolean => bindingIsCurrent(userId, taskId, binding, started) &&
+    readIsCurrent(userId, binding, revision)
+  const adapter = adapterFor(binding.adapter)
+  try {
+    const availability = await adapter.availability(userId)
+    if (!valid()) return null
+    if (!availability.ready) {
+      refreshErrors.set(key, 'The remote service is unavailable. Showing the saved task.')
+      return null
+    }
+    const snapshot = await adapter.fetch(userId, binding)
+    if (!valid()) return null
+    bump(key)
+    refreshErrors.delete(key)
+    return taskService.applyRemoteSnapshot(
+      userId,
+      taskId,
+      patchFrom(snapshot, resolveParent(userId, adapter.id, snapshot.parentId))
+    )
+  } catch (err) {
+    if (!valid()) return null
+    if (consequenceOf(err, 'fetching the task') === 'unbind') {
+      bump(key)
+      refreshErrors.delete(key)
+      taskService.unbindRemote(userId, taskId, `fetching the task: ${describe(err)}`)
+    } else {
+      refreshErrors.set(key, 'Could not refresh from the remote service. Showing the saved task.')
+    }
+    return null
+  }
 }

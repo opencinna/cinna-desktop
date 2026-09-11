@@ -40,6 +40,7 @@ const service = vi.hoisted(() => ({
  * of a task an agent is working on right now) costs a request.
  */
 const sync = vi.hoisted(() => ({
+  getWatched: vi.fn(() => ({ id: 't1' })),
   takeOver: vi.fn(async () => ({ id: 't1' })),
   handOff: vi.fn(async () => ({ id: 't1' })),
   liveSession: vi.fn(async () => false)

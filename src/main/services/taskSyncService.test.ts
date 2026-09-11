@@ -1259,3 +1259,152 @@ describe('moving the work across the seam (§5.10)', () => {
     })
   })
 })
+
+describe('scheduled sync races', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((done) => { resolve = done })
+    return { promise, resolve }
+  }
+
+  it('discards an older detail response after a full pull has applied newer data', async () => {
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const snapshot = await adapter.fetch(USER, {
+      adapter: 'cinna', id: remoteIdOf(id), key: null, url: null, state: {}
+    })
+    const gate = deferred<typeof snapshot>()
+    const entered = deferred<void>()
+    vi.spyOn(adapter, 'fetch').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const read = taskSyncService.pullOne(USER, id)
+    await entered.promise
+    cinna.touch(remoteIdOf(id), { title: 'Newer full pull' })
+    await taskSyncService.pull(USER)
+    gate.resolve({ ...snapshot, title: 'Older detail' })
+    await read
+    expect(taskService.getById(USER, id).title).toBe('Newer full pull')
+  })
+
+  it('does not overwrite a successfully pushed edit with an earlier detail response', async () => {
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const snapshot = await adapter.fetch(USER, {
+      adapter: 'cinna', id: remoteIdOf(id), key: null, url: null, state: {}
+    })
+    const gate = deferred<typeof snapshot>()
+    const entered = deferred<void>()
+    vi.spyOn(adapter, 'fetch').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const read = taskSyncService.pullOne(USER, id)
+    await entered.promise
+    taskService.update(USER, id, { title: 'Pushed edit' })
+    await taskSyncService.push(USER, id)
+    gate.resolve(snapshot)
+    await read
+    expect(dirtyOf(id)).not.toContain('title')
+    expect(taskService.getById(USER, id).title).toBe('Pushed edit')
+  })
+
+  it('retries the full history window when a contended row was skipped', async () => {
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const originalList = adapter.list.bind(adapter)
+    const active = await originalList(USER, null)
+    const detailGate = deferred<(typeof active)[number]>()
+    const detailEntered = deferred<void>()
+    vi.spyOn(adapter, 'fetch').mockImplementationOnce(() => {
+      detailEntered.resolve(); return detailGate.promise
+    })
+    const detail = taskSyncService.pullOne(USER, id)
+    await detailEntered.promise
+    const gate = deferred<typeof active>()
+    const entered = deferred<void>()
+    const list = vi.spyOn(adapter, 'list').mockImplementationOnce(() => {
+      entered.resolve(); return gate.promise
+    })
+    const pull = taskSyncService.pull(USER)
+    await entered.promise
+    cinna.touch(remoteIdOf(id), { title: 'Newer watched value' })
+    detailGate.resolve({ ...active[0], title: 'Newer watched value' })
+    await detail
+    cinna.seed({ title: 'Another remote task' })
+    gate.resolve(active)
+    await pull
+    list.mockClear()
+    await taskSyncService.pull(USER)
+    expect(list.mock.calls[0][1]).toBeNull()
+    expect(list.mock.calls.length).toBeGreaterThanOrEqual(2)
+    expect(taskService.getById(USER, id).title).toBe('Newer watched value')
+  })
+
+  it('lets an active full pass finish before a watched detail poll', async () => {
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const active = await adapter.list(USER, null)
+    const gate = deferred<typeof active>()
+    const entered = deferred<void>()
+    vi.spyOn(adapter, 'list').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const fetch = vi.spyOn(adapter, 'fetch')
+    const pull = taskSyncService.pull(USER)
+    await entered.promise
+    const first = taskSyncService.pullOne(USER, id)
+    const second = taskSyncService.pullOne(USER, id)
+    await Promise.resolve()
+    const callsWhilePulling = fetch.mock.calls.length
+    gate.resolve(active)
+    await Promise.all([pull, first, second])
+    expect(callsWhilePulling).toBe(0)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('stops an old batch after its in-flight request and leaves dirty markers intact', async () => {
+    const first = await bound()
+    const second = await bound()
+    taskService.update(USER, first, { title: 'First edit' })
+    taskService.update(USER, second, { title: 'Second edit' })
+    const adapter = holder.adapters[0]
+    const original = adapter.pushFields.bind(adapter)
+    const entered = deferred<void>()
+    const release = deferred<void>()
+    const push = vi.spyOn(adapter, 'pushFields').mockImplementationOnce(async (...args) => {
+      entered.resolve()
+      await release.promise
+      return original(...args)
+    })
+    const batch = taskSyncService.pushAll(USER)
+    await entered.promise
+    taskSyncService.invalidatePending(USER)
+    release.resolve()
+    await batch
+    expect(push).toHaveBeenCalledTimes(1)
+    expect(dirtyOf(first)).toContain('title')
+    expect(dirtyOf(second)).toContain('title')
+  })
+
+  it('ignores a late response from the account a profile used to be linked to', async () => {
+    const id = await bound()
+    const adapter = holder.adapters[0]
+    const active = await adapter.list(USER, null)
+    const gate = deferred<typeof active>()
+    const entered = deferred<void>()
+    vi.spyOn(adapter, 'list').mockImplementationOnce(() => { entered.resolve(); return gate.promise })
+    const pending = taskSyncService.pull(USER)
+    await entered.promise
+    taskSyncService.forgetBindings(USER)
+    gate.resolve(active)
+    await pending
+    expect(taskService.list(USER)).toHaveLength(1)
+    expect(taskService.getById(USER, id).remote).toBeNull()
+  })
+
+  it('keeps a watched failure visible until a later read succeeds', async () => {
+    const id = await bound()
+    cinna.behave('transport')
+    await taskSyncService.pullOne(USER, id)
+    expect(taskSyncService.getWatched(USER, id).remote?.refreshError).toContain('Could not refresh')
+    await taskSyncService.pullOne(USER, id)
+    cinna.behave(null)
+    await taskSyncService.pullOne(USER, id)
+    expect(taskSyncService.getWatched(USER, id).remote?.refreshError).toBeUndefined()
+    await taskSyncService.pullOne(USER, id)
+  })
+})

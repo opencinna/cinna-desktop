@@ -193,6 +193,8 @@ export interface TaskBudget {
  * `src/main/tasks/adapters/` may read it.
  */
 export interface TaskRemoteRef {
+  /** Ephemeral watched-refresh failure; never persisted or synced. */
+  refreshError?: string
   /** The adapter's id. Opaque — a caller asks the adapter for capabilities, never branches on this. */
   adapter: string
   /** The remote's id for this task. */

@@ -19,6 +19,7 @@ const MODEL = 'qwen3:8b'
 const ANSWER = 'Teal with high contrast labels'
 
 interface RemoteState {
+  createdAt: string
   answered: boolean
   failRead: boolean
   failAnswer: boolean
@@ -45,6 +46,24 @@ function serve(): Server {
     }
     if (url.pathname.startsWith('/api/v1/')) {
       state.authorized &&= req.headers.authorization === 'Bearer remote-inbox-fixture-token'
+    }
+    // The active scheduler and task:get's background detail refresh use the
+    // same task as the explicit fixture binding. A fake 404 here would unbind
+    // a healthy task and quietly weaken the answer assertions below.
+    const task = {
+      id: 'remote-task', title: REMOTE_TITLE, original_message: REMOTE_TITLE,
+      status: 'blocked', priority: 'normal', updated_at: state.createdAt
+    }
+    if (url.pathname === '/api/v1/tasks/remote-task/detail') {
+      send(task)
+      return
+    }
+    if (url.pathname === '/api/v1/tasks/') {
+      const since = url.searchParams.get('updated_since')
+      const include = url.searchParams.get('status') === 'active' ||
+        (!!since && Date.parse(task.updated_at) > Date.parse(since))
+      send({ data: include ? [task] : [], count: include ? 1 : 0 })
+      return
     }
     if (url.pathname === '/api/v1/tasks/remote-task/sessions') {
       if (state.failRead) {
@@ -95,7 +114,7 @@ test.beforeAll(async () => {
   host = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
 })
 test.beforeEach(() => {
-  state = { answered: false, failRead: false, failAnswer: false, posts: [], authorized: true }
+  state = { createdAt: new Date().toISOString(), answered: false, failRead: false, failAnswer: false, posts: [], authorized: true }
 })
 test.afterAll(async () => {
   await new Promise<void>((resolve) => server.close(() => resolve()))

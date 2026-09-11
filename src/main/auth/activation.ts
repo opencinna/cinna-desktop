@@ -9,6 +9,7 @@ import {
   stopAccountConfigPeriodicSync
 } from '../services/account-config-sync'
 import { syncService } from '../services/syncService'
+import { taskSyncScheduler } from '../services/taskSyncScheduler'
 import { localDevService } from '../localdev/localDevService'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
@@ -74,9 +75,11 @@ class UserActivation {
   }
 
   private async _activate(userId: string): Promise<void> {
+    taskSyncScheduler.stop()
     setCurrentUser(userId)
     await reloadUserProviders()
     this._activated = true
+    taskSyncScheduler.start(userId)
 
     // Sync remote agents for Cinna users (non-blocking)
     this._startRemoteSync(userId)
@@ -107,6 +110,7 @@ class UserActivation {
   /** Tear down the active session without loading any providers. */
   async deactivate(): Promise<void> {
     this._activated = false
+    taskSyncScheduler.stop()
     // The local-dev state names a host and a folder belonging to the profile
     // that is going away; leaving it up would show the next profile someone
     // else's workspace path.

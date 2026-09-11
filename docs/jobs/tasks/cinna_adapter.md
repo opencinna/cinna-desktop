@@ -100,7 +100,7 @@ Uploads are classified in the wiring rather than in the adapter, because they do
 - **It does not read attachments back.** The seam has no read half for artifacts, so a task's remote files are invisible here
 - **It does not decide what a failure costs.** It classifies and rejects; whether that means a retry, a dropped marker or an unbind is [the sync service's](remote_sync.md) decision
 - **It does not walk a status path.** It sends one step per call. Walking belongs one layer up, where the desktop's own view of the task is
-- **Nothing schedules the periodic half.** Job execution, run refresh and the task page’s take-over probe call it through [the sync service](remote_sync.md); no timer calls `pull`, `pushAll` or `reconcile`.
+- **Scheduling belongs to the coordinator.** The active-profile scheduler, job execution/run refresh and watched task pages call this adapter through [the sync service](remote_sync.md). The adapter owns mapping and transport behavior, not activation or timers.
 
 ## Architecture Overview
 
@@ -129,7 +129,7 @@ taskSyncService  ->  adapterFor('cinna')  ->  cinnaTaskAdapter.wiring.ts
 ## Integration Points
 
 - [Remote Task Adapters](remote_adapters.md) — the seam, its capability set, and the contract suite this adapter is a subject of
-- [Keeping a Bound Task in Step](remote_sync.md) — job handover, run refresh, take-over checks and the unscheduled periodic half
+- [Keeping a Bound Task in Step](remote_sync.md) — scheduled push/pull/reconcile, watched refresh, job handover and take-over checks
 - [The Handoff Note, Exported](handoff_note_export.md) — the local half of the same note
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — the older, read-only path to the same server for a `cinna_task` job run
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — where the bearer and the server URL come from

@@ -53,4 +53,4 @@ Shared request block → `useAnswerAsk` → `inbox:answer` → parsed resolution
 
 ## Integration Points
 
-See [Tasks](tasks.md), [chat-owned tasks](chat_tasks.md), [adapter contract](remote_adapters.md), [Cinna asks](cinna_adapter.md) and [remote coordination](remote_sync.md). Inbox polling enumerates already-known blocked tasks; it does not replace a remote task pull or subscribe to the service's conversation stream.
+See [Tasks](tasks.md), [chat-owned tasks](chat_tasks.md), [adapter contract](remote_adapters.md), [Cinna asks](cinna_adapter.md) and [remote coordination](remote_sync.md). Inbox polling enumerates already-known blocked tasks; the separate active-profile task scheduler discovers and refreshes those task rows. The Inbox neither replaces that pull nor subscribes to the service's conversation stream.

@@ -10,6 +10,7 @@ import { getCurrentUserId, initSession } from './auth/session'
 import { initAutoUpdater, checkForUpdatesManual } from './updater/updater'
 import { appIconService } from './services/appIconService'
 import { syncService } from './services/syncService'
+import { taskSyncScheduler } from './services/taskSyncScheduler'
 import { trayService } from './services/trayService'
 import { syncTrayFromSettings } from './services/traySync'
 import { createLogger } from './logger/logger'
@@ -203,7 +204,10 @@ function createWindow(): void {
   // Sync auto-discovery (P4): poll the pairing inbox only while the window is
   // focused, so a trusted, foregrounded device surfaces incoming pairing
   // requests without the user transferring a routing code. Stops on blur.
-  mainWindow.on('focus', () => syncService.setWindowFocused(true))
+  mainWindow.on('focus', () => {
+    syncService.setWindowFocused(true)
+    void taskSyncScheduler.refresh()
+  })
   mainWindow.on('blur', () => syncService.setWindowFocused(false))
 
   // The menu-bar tray lives only while a main window exists AND the user has
@@ -366,9 +370,13 @@ function startup(): void {
   // Pause periodic sync around OS sleep so a token refresh can't be suspended
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +
   // catch up on resume. `powerMonitor` is only available after the app is ready.
-  powerMonitor.on('suspend', () => syncService.setSystemSuspended(true))
+  powerMonitor.on('suspend', () => {
+    syncService.setSystemSuspended(true)
+    taskSyncScheduler.setSuspended(true)
+  })
   powerMonitor.on('resume', () => {
     syncService.setSystemSuspended(false)
+    taskSyncScheduler.setSuspended(false)
     // A laptop that was closed for a week wakes with an expired account token
     // and possibly a server that has bumped its pins. The reconciler is
     // idempotent and single-flight, so this is a cheap check that costs nothing
@@ -392,6 +400,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', async () => {
+  taskSyncScheduler.stop()
   // **The ACP processes first, and not awaited.** Each folder agent runs in a
   // child of its own — `opencode acp`, or the Claude adapter and the `claude`
   // it spawns — in its own process group, so nothing else can reach them once

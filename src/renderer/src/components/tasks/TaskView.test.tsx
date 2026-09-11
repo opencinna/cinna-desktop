@@ -303,6 +303,14 @@ describe('the other states', () => {
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Check the invoices')
   })
 
+  it('shows a remote refresh failure while the cached task IPC read succeeds', async () => {
+    await renderTask({
+      remote: { adapter: 'fake', id: 'x1', key: null, url: null, refreshError: 'Offline' }
+    })
+    await screen.findByText('Showing the last read — this task could not be refreshed.')
+    expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('Check the invoices')
+  })
+
   it('shows no banner at all when the task is healthy', async () => {
     await renderTask({ status: 'completed', finishedAt: new Date('2026-09-11T10:00:00Z') })
     await waitFor(() => expect(screen.queryByRole('status')).toBeNull())

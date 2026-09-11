@@ -45,7 +45,7 @@ export function useTask(taskId: string | null): UseQueryResult<TaskDto> {
     refetchInterval: (query) => {
       const data = query.state.data
       if (!data) return POLL_MS
-      return isSettled(data.status) ? false : POLL_MS
+      return data.remote || !isSettled(data.status) ? POLL_MS : false
     },
     // One retry, not three: the page polls anyway, and three silent retries
     // only delay the sentence that tells the user the read failed.

@@ -18,7 +18,8 @@ A task is the durable record of work: its original goal, current status, assigne
 1. **Run saved work.** Execute a job; its attempt receives a task. Open the task from the run history to see the goal, status and available actions, then open its conversation or service view when needed. Deleting the run does not delete the task's record of the work.
 2. **Answer a local agent.** A parked question or permission in a chat appears in the Inbox. A hand-opened chat acquires a task at its first persisted ask. Answer from the Inbox, keep the outcome visible, and return to the task or conversation.
 3. **Answer remote work.** A locally known blocked task on an ask-capable adapter contributes its live questions to the same Inbox. Its task page offers **Open the Inbox** separately from takeover. A failed delivery keeps the question dialog and draft available for retry.
-4. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. See the current completion gaps below.
+4. **Keep remote work current.** The active profile pushes local edits and discovers remote tasks automatically, with five seconds between completed passes. Focus and wake catch up. A bound task page opens its saved record immediately, refreshes in the background and marks failed remote refreshes as stale.
+5. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. See the current completion gaps below.
 
 ## Business Rules
 
@@ -33,9 +34,9 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- The adapter coordinator implements pull, dirty push and reconciliation, but no periodic runtime schedules them. Job refresh can pull a known task; Inbox polling only asks about locally known blocked tasks. Remote-created work is not automatically discovered by the Inbox poll.
 - Taking over a task without a local conversation has no desktop-start control yet. There is no general task hand-off IPC/picker; jobs are the production handover entry point.
 - A `next_message` ask has no parked reply address and writes no Inbox row. A hand-opened chat does not acquire a task for it; a job's completion path can still finish a task whose A2A agent requested the user's next message. This continuation lifecycle remains separate from the completed `reply` ask path.
+- Headless execution, coordinator handback, the script router and attach/replay remain later runtime work; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.
@@ -46,7 +47,7 @@ Job or chat → task service → SQLite task → task page.
 
 Run input event → persisted local request; blocked bound task → remote adapter asks; both → Inbox → shared request block → local driver or remote adapter answer.
 
-Task writes → device sync and handoff export; remote adapter coordinator → bound service.
+Task writes → device sync and handoff export; activated profile / focus / wake → task sync scheduler → dirty push then remote pull/reconcile → bound service.
 
 ## Integration Points
 
