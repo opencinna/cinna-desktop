@@ -12,9 +12,11 @@ import { driverFor } from '../agents/drivers'
 import { resolveCommandRunner } from '../services/localAgents/commandService'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
+import { inboxService } from '../services/inboxService'
 import { routingOf } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
 import { postRunError } from './_streamPort'
+import type { StreamPort } from '../services/a2aStreamingService'
 import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('run')
@@ -135,6 +137,18 @@ async function resolveAndRun(port: Port, payload: RunSendPayload): Promise<void>
       : undefined
   const target = routing.answerer(addressing)
 
+  // **Where an ask becomes an inbox row.** Every event of every turn passes
+  // through here on its way to the renderer, which makes this the one place
+  // that sees a `needs_input` from any driver, in any router — including one a
+  // nested agent raised, which arrives wrapped in a `child`. The alternative
+  // was a hook in each streaming service, which is two places that would have
+  // to agree about a third (the orchestrated path) forever.
+  const observed = observeAsks(port, {
+    userId: profileUserId,
+    chatId,
+    agentId: target.kind === 'model' ? null : target.agentId
+  })
+
   if (target.kind === 'model') {
     const { wireContent } = messageRoutingService.prepareLlmSend({
       userId: profileUserId,
@@ -143,12 +157,12 @@ async function resolveAndRun(port: Port, payload: RunSendPayload): Promise<void>
       attachments
     })
     await handOff(() =>
-      chatStreamingService.stream({ userId: profileUserId, chatId, wireContent, port })
+      chatStreamingService.stream({ userId: profileUserId, chatId, wireContent, port: observed })
     )
     return
   }
 
-  await runAgentTurn(port, {
+  await runAgentTurn(observed, {
     chatId,
     profileUserId,
     agentId: target.agentId,
@@ -160,6 +174,25 @@ async function resolveAndRun(port: Port, payload: RunSendPayload): Promise<void>
   })
 }
 
+/**
+ * The same port, with every event mirrored into the inbox on the way past.
+ *
+ * Recording happens **before** the event is forwarded, so an ask the renderer
+ * answers the instant it renders finds its row already there. It cannot fail
+ * the turn: `recordRunEvent` swallows its own errors, by contract.
+ */
+function observeAsks(port: Port, ctx: Parameters<typeof inboxService.recordRunEvent>[0]): StreamPort {
+  return {
+    postMessage(msg) {
+      inboxService.recordRunEvent(ctx, msg)
+      port.postMessage(msg)
+    },
+    close() {
+      port.close()
+    }
+  }
+}
+
 interface AgentTurnInput {
   chatId: string
   profileUserId: string
@@ -169,7 +202,7 @@ interface AgentTurnInput {
   catchUp: boolean
 }
 
-async function runAgentTurn(port: Port, input: AgentTurnInput): Promise<void> {
+async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<void> {
   const { chatId, profileUserId, agentId, userContent, attachments, catchUp } = input
   const fileIds = attachments?.map((a) => a.id)
 

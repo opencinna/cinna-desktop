@@ -1,5 +1,17 @@
-import type { MessagePortMain } from 'electron'
-import type { RunErrorEvent } from '../../shared/runEvents'
+import type { RunErrorEvent, RunEvent } from '../../shared/runEvents'
+
+/**
+ * Anything a run event can be posted to: the raw `MessagePortMain`, or a
+ * wrapper around one (`run.ipc.ts` observes the stream on its way past). The
+ * error helper does not care which, and typing it to the Electron class would
+ * make the wrapper the only sender that could not report a pre-flight failure.
+ *
+ * Deliberately narrower than the services' `StreamPort`, which also closes:
+ * this helper posts one frame and never owns the ending.
+ */
+export interface RunEventSink {
+  postMessage(msg: RunEvent): void
+}
 
 /**
  * Typed wrapper around the raw `MessagePortMain.postMessage(any)` surface used
@@ -21,7 +33,7 @@ import type { RunErrorEvent } from '../../shared/runEvents'
  */
 
 export function postRunError(
-  port: MessagePortMain,
+  port: RunEventSink,
   error: string,
   extras?: { code?: string; errorDetail?: string }
 ): void {

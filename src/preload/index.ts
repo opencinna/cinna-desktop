@@ -72,6 +72,9 @@ import type {
   NoteAttachAsFilesResultDto
 } from '../shared/notes'
 import type { CinnaTaskViewDto } from '../shared/cinnaTaskView'
+import type { TaskDto, TaskListQuery } from '../shared/tasks'
+import type { TaskStatus } from '../shared/taskStatus'
+import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../shared/inbox'
 import type {
   CatalogEntryDto,
   CatalogInstallResultDto,
@@ -633,14 +636,15 @@ const api = {
      * `ipcMain.handle` and again across `contextBridge`, so a renderer branch on
      * `err.code` would silently never fire.
      */
-    answerRequest: (data: {
-      requestId: string
-      reply?: 'once' | 'always' | 'reject'
-      answers?: string[][]
-      // `remembered` on the result comes back only for a permission answered
-      // `always`: main writes the grant while the user waits and says whether
-      // it landed, so the block can avoid claiming a rule the store refused.
-    }): Promise<{ ok: boolean; reason?: string; remembered?: boolean }> =>
+    // The same payload and the same result as `inbox.answer`, because both
+    // land in the same delivery function: the block answers an ask while the
+    // chat is open, the inbox answers it when the chat is closed.
+    //
+    // `remembered` on the result comes back only for a permission answered
+    // `always`: main writes the grant while the user waits and says whether it
+    // landed, so the block can avoid claiming a rule the store refused. `code`
+    // is the refusal, for a branch that must not be written against copy.
+    answerRequest: (data: AskAnswerPayload): Promise<InboxAnswerResult> =>
       ipcRenderer.invoke('agent:answer-request', data),
     pendingRequests: (
       chatId: string
@@ -1108,6 +1112,44 @@ const api = {
       ipcRenderer.invoke('noteFolder:delete', folderId),
     reorder: (orderedIds: string[]): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('noteFolder:reorder', orderedIds)
+  },
+
+  /**
+   * Tasks — the unit of work that outlives a chat view.
+   *
+   * Read and edit only. Starting a task is still the job path (`jobs.execute`)
+   * until step 11 of the phase makes `taskService.start` one dispatch for both
+   * executors; exposing a half-wired Run here would be a button that sometimes
+   * does nothing.
+   */
+  tasks: {
+    list: (query?: TaskListQuery): Promise<TaskDto[]> =>
+      ipcRenderer.invoke('task:list', query),
+    get: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:get', taskId),
+    update: (
+      taskId: string,
+      patch: { title?: string; description?: string | null; priority?: TaskDto['priority']; router?: TaskDto['router'] }
+    ): Promise<TaskDto> => ipcRenderer.invoke('task:update', taskId, patch),
+    /** Cancel, archive, or reopen. Refused when the task is running elsewhere. */
+    setStatus: (taskId: string, status: TaskStatus): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:set-status', taskId, status),
+    /** Continue the task on this device. */
+    takeOver: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:take-over', taskId),
+    delete: (taskId: string): Promise<{ success: boolean }> =>
+      ipcRenderer.invoke('task:delete', taskId)
+  },
+
+  /**
+   * The inbox — every ask waiting on a human, answerable with its chat closed.
+   *
+   * `answer` takes the same payload the transcript's own block sends through
+   * `agents.answerRequest`, and lands in the same place; the difference is only
+   * that this one does not need the turn's chat to be on screen.
+   */
+  inbox: {
+    list: (): Promise<InboxEntry[]> => ipcRenderer.invoke('inbox:list'),
+    answer: (data: AskAnswerPayload): Promise<InboxAnswerResult> =>
+      ipcRenderer.invoke('inbox:answer', data)
   },
 
   cinna: {

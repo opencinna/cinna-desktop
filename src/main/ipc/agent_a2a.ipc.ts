@@ -3,9 +3,9 @@ import { a2aSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
-import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
 import { pendingRequests } from '../services/agentTurn/pendingRequests'
-import type { PermissionReply } from '../../shared/localAgentRequests'
+import { deliverAnswer, parseAnswerPayload } from '../services/askDelivery'
+import type { AskAnswerPayload, InboxAnswerResult } from '../../shared/inbox'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { AgentError, ipcErrorShape } from '../errors'
@@ -14,22 +14,6 @@ import { ipcHandle } from './_wrap'
 import type { CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('A2A')
-
-/** An answer to an ask whose turn has since ended — a stale block, not a fault. */
-const NO_LONGER_WAITING = 'This request is no longer waiting for an answer.'
-
-/** OpenCode's `PermissionV2Reply`, checked at the boundary rather than cast. */
-function isPermissionReply(value: unknown): value is PermissionReply {
-  return value === 'once' || value === 'always' || value === 'reject'
-}
-
-/** `QuestionV2Reply.answers` — one array of selected labels **per question**. */
-function isAnswerMatrix(value: unknown): value is string[][] {
-  return (
-    Array.isArray(value) &&
-    value.every((row) => Array.isArray(row) && row.every((s) => typeof s === 'string'))
-  )
-}
 
 export function registerA2AHandlers(): void {
   // Fetch agent card from URL (for testing / adding a new agent)
@@ -155,82 +139,20 @@ export function registerA2AHandlers(): void {
     'agent:answer-request',
     async (
       _event,
-      data: { requestId: string; reply?: PermissionReply; answers?: string[][] }
-    ): Promise<{ ok: boolean; reason?: string; remembered?: boolean }> => {
+      data: AskAnswerPayload
+    ): Promise<InboxAnswerResult> => {
       userActivation.requireActivated()
-      const owner = pendingRequests.owner(data.requestId)
-      // An unknown request is the ordinary outcome of answering a dialog whose
-      // turn has since been cancelled — the user sees a stale block, not a
-      // fault — so it is reported plainly rather than logged as an error.
-      if (!owner) return { ok: false, reason: NO_LONGER_WAITING }
-      if (!chatRepo.getOwned(getProfileScopeUserId(), owner.chatId)) {
-        logger.warn('answer rejected: the caller does not own that chat', {
-          requestId: data.requestId
-        })
-        return { ok: false, reason: 'Chat not found' }
+
+      const parsed = parseAnswerPayload(data)
+      if (!parsed) {
+        logger.warn('an answer was rejected as malformed', { requestId: data.requestId })
+        return { ok: false, reason: 'Malformed answer', code: 'malformed' }
       }
 
-      // Validated here rather than trusted, and against the *engine's* enum
-      // rather than against TypeScript's belief about it. A renderer bug or a
-      // stale preload would otherwise send `'allow'`, or a flat `string[]`,
-      // and the first anyone would know is a 400 the runner logs at warn while
-      // the dialog has already told the user their answer landed — the same
-      // shape of lie the permission block's own tests exist to prevent.
-      const parsed = isPermissionReply(data.reply)
-        ? ({ kind: 'permission', reply: data.reply } as const)
-        : isAnswerMatrix(data.answers)
-          ? ({ kind: 'question', answers: data.answers } as const)
-          : null
-      if (!parsed || parsed.kind !== owner.kind) {
-        logger.warn('an answer was rejected as malformed or mismatched', {
-          requestId: data.requestId,
-          expected: owner.kind,
-          got: parsed?.kind ?? 'none'
-        })
-        return { ok: false, reason: 'Malformed answer' }
-      }
-
-      // The driver that parked the ask answers it — for a folder agent that is
-      // where *Always allow* becomes a rule beside the agent and a `once` for
-      // the engine.
-      //
-      // **A turn can outlive its row.** Removing an agents folder prunes the
-      // rows of every agent in it without waiting for the turn lock, so an ask
-      // can still be parked on an agent `findAgent` no longer knows. The answer
-      // is delivered anyway — refusing it would leave the turn stuck until the
-      // park times out — with no rule written, since there is no agent left to
-      // keep one beside: `always` goes through as `once`, `remembered: false`.
-      const located = agentService.findAgent(
-        getSettingsScopeUserId(),
-        getProfileScopeUserId(),
-        owner.agentId
-      )
-      if (!located) {
-        logger.warn('an answer arrived for an agent whose row is gone; delivering it without a rule', {
-          requestId: data.requestId,
-          agentId: owner.agentId
-        })
-      }
-
-      // **Everything from `owner()` above to `respond()` is synchronous, and it
-      // has to stay so.** `respond` writes the rule before it resolves the
-      // park, and the resolve can still find nothing waiting — the turn was
-      // cancelled in between. Nothing can interleave today; an `await`
-      // inserted anywhere on this path makes it real. See `respondToParkedAsk`.
-      const ask = { requestId: data.requestId, ...owner }
-      const outcome = located
-        ? driverFor(located.row).respond(ask, parsed)
-        : respondToOrphanedAsk(ask, parsed)
-
-      return outcome.delivered
-        ? {
-            ok: true,
-            // Present only for a permission answered *always*: the block reads
-            // it to decide between "remembered for this agent" and "allowed
-            // once — the rule could not be saved".
-            ...(outcome.remembered !== undefined ? { remembered: outcome.remembered } : {})
-          }
-        : { ok: false, reason: NO_LONGER_WAITING }
+      // Ownership, the kind check and the driver call live in `askDelivery`,
+      // because the inbox answers the same ask with the chat closed and the two
+      // must not drift — above all on what *Always allow* means.
+      return deliverAnswer(getProfileScopeUserId(), data.requestId, parsed)
     }
   )
 

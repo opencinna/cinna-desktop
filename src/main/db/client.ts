@@ -6,6 +6,7 @@ import * as schema from './schema'
 import { runAllMigrations } from './migrations'
 import { chatModeRepo } from './chatModes'
 import { agentRepo } from './agents'
+import { taskInputRequestRepo } from './taskInputRequests'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('db')
@@ -58,6 +59,15 @@ function runConsistencyChecks(): void {
     const filled = agentRepo.healMissingDrivers()
     if (filled > 0) {
       logger.warn('boot-cleanup:filled-missing-agent-drivers', { filled })
+    }
+  })
+  // An open ask is an address inside a driver process, and no driver process
+  // survived the restart that got us here. Without this the inbox would offer
+  // buttons whose only possible outcome is "no longer waiting for an answer".
+  safeRun('expire-orphaned-input-requests', () => {
+    const expired = taskInputRequestRepo.expireOpen()
+    if (expired > 0) {
+      logger.info('boot-cleanup:expired-orphaned-input-requests', { expired })
     }
   })
 }

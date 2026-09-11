@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'
+import type { RunEvent } from '../../shared/runEvents'
 
 /**
  * `run:send` resolves who answers, and hands an agent the thread it missed.
@@ -108,6 +109,11 @@ vi.mock('../agents/drivers', () => ({
   })
 }))
 
+const recordRunEvent = vi.fn()
+vi.mock('../services/inboxService', () => ({
+  inboxService: { recordRunEvent: (...args: unknown[]) => recordRunEvent(...args) }
+}))
+
 // The real command dispatch short-circuits for a `card` agent by handing the
 // fallback straight back — which is what this file wants: the driver's own turn.
 vi.mock('../services/localAgents/commandService', () => ({
@@ -161,6 +167,19 @@ async function wireContent(): Promise<string> {
 /** Which agent the turn was routed to. */
 function routedTo(): string {
   return (streamToAgent.mock.calls.at(-1)![0] as { agentId: string }).agentId
+}
+
+/** The port the turn was actually handed — the inbox-observing wrapper, not the raw one. */
+function portGivenToTheStream(): { postMessage: (msg: RunEvent) => void; close: () => void } {
+  const call = (streamToAgent.mock.calls.at(-1) ?? llmStream.mock.calls.at(-1))![0]
+  return (call as { port: { postMessage: (msg: RunEvent) => void; close: () => void } }).port
+}
+
+const ASK: RunEvent = {
+  type: 'needs_input',
+  requestId: 'per_1',
+  request: { kind: 'permission', action: 'bash', resources: ['ls'] },
+  resume: 'reply'
 }
 
 beforeEach(() => {
@@ -366,5 +385,42 @@ describe('run:send — refusals and the channels it replaced', () => {
     await send({ chatId: 'chat-1', content: 'hello' }, 'llm:send-message')
     expect(routedTo()).toBe('a-1')
     expect(llmStream).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Every turn's events pass through the send path on their way to the renderer,
+ * which is what makes this one hook enough to catch an ask from any driver, in
+ * any router. What it must not do is get between the stream and the port.
+ */
+describe('run:send — the inbox tap', () => {
+  it('mirrors an agent turn’s events into the inbox and still forwards them', async () => {
+    const port = await send({ chatId: 'chat-1', content: 'hello' })
+    portGivenToTheStream().postMessage(ASK)
+
+    expect(recordRunEvent).toHaveBeenCalledWith(
+      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-1' },
+      ASK
+    )
+    expect(port.postMessage).toHaveBeenCalledWith(ASK)
+  })
+
+  it('names no agent on the model’s own turn', async () => {
+    // A coordinated chat's turn belongs to the model; an ask inside it comes
+    // from a nested agent, and the `child` wrapper is what names that one.
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
+    await send({ chatId: 'chat-1', content: 'hello' })
+    portGivenToTheStream().postMessage(ASK)
+
+    expect(recordRunEvent).toHaveBeenCalledWith(
+      { userId: 'profile-user', chatId: 'chat-1', agentId: null },
+      ASK
+    )
+  })
+
+  it('closes the real port when the stream closes the one it was given', async () => {
+    const port = await send({ chatId: 'chat-1', content: 'hello' })
+    portGivenToTheStream().close()
+    expect(port.close).toHaveBeenCalled()
   })
 })

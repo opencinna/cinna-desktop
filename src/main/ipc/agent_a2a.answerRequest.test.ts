@@ -187,7 +187,8 @@ describe('agent:answer-request — what reaches the driver', () => {
     owner.mockReturnValueOnce(undefined)
     expect(await answer('once')).toEqual({
       ok: false,
-      reason: 'This request is no longer waiting for an answer.'
+      reason: 'This request is no longer waiting for an answer.',
+      code: 'no_longer_waiting'
     })
     expect(findAgent).not.toHaveBeenCalled()
   })
@@ -196,7 +197,8 @@ describe('agent:answer-request — what reaches the driver', () => {
     resolve.mockReturnValueOnce(null)
     expect(await answer('once')).toEqual({
       ok: false,
-      reason: 'This request is no longer waiting for an answer.'
+      reason: 'This request is no longer waiting for an answer.',
+      code: 'no_longer_waiting'
     })
   })
 
@@ -233,8 +235,14 @@ describe('agent:answer-request — what reaches the driver', () => {
   it('refuses an answer of the wrong kind before any driver sees it', async () => {
     const result = (await handlers
       .get('agent:answer-request')
-      ?.({}, { requestId: 'per_1', answers: [['Teal']] })) as { ok: boolean; reason?: string }
-    expect(result).toEqual({ ok: false, reason: 'Malformed answer' })
+      ?.({}, { requestId: 'per_1', answers: [['Teal']] })) as {
+      ok: boolean
+      reason?: string
+      code?: string
+    }
+    // The refusal carries a code beside the sentence, so the inbox and the
+    // block can branch on intent rather than on copy.
+    expect(result).toEqual({ ok: false, reason: 'Malformed answer', code: 'malformed' })
     expect(findAgent).not.toHaveBeenCalled()
     expect(resolve).not.toHaveBeenCalled()
   })

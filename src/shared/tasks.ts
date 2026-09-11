@@ -248,6 +248,26 @@ export interface TaskDto {
 }
 
 /**
+ * What a surface may ask a task list for.
+ *
+ * The renderer-facing subset of the repo's own filter: no `remoteAdapter` arm,
+ * because which service a task is bound to is a question only the adapters and
+ * `taskSyncService` ask, and nothing outside `src/main/tasks/adapters/` may
+ * branch on the answer.
+ */
+export interface TaskListQuery {
+  /** Only these statuses. Omitted = every status the other filters allow. */
+  statuses?: readonly TaskStatus[]
+  executor?: TaskExecutor
+  /** Children of this task. Mutually exclusive with `rootOnly`. */
+  parentTaskId?: string
+  /** Only tasks with no parent. */
+  rootOnly?: boolean
+  /** Archived tasks are excluded unless asked for — they are the filed-away pile. */
+  includeArchived?: boolean
+}
+
+/**
  * Where an entry in the inbox stands.
  *
  *  - `open` — waiting for a human. This is what the badge counts.

@@ -91,4 +91,24 @@ describe('IPC handler registration', () => {
     expect(invoked.size).toBeGreaterThan(20)
     expect([...invoked].filter((c) => !handled.has(c))).toEqual([])
   })
+
+  it('keeps both ways of answering an ask on the wire', () => {
+    // A parked ask is answerable from two places on purpose: the block in the
+    // transcript, and the inbox, with the chat closed. They share one delivery
+    // function (`services/askDelivery.ts`); what this pins is that they also
+    // still share the wire, because losing either channel silently removes half
+    // the promise — and the half that goes first is the one with no UI beside
+    // it in the file that registers it.
+    const handled = new Set(
+      [...sources.values()].flatMap((src) =>
+        [...src.matchAll(/(?:ipcHandle|ipcMain\.handle)\(\s*'([^']+)'/g)].map((m) => m[1])
+      )
+    )
+    for (const channel of ['agent:answer-request', 'inbox:answer']) {
+      expect(handled.has(channel), `${channel} is not handled anywhere`).toBe(true)
+    }
+    const preload = readFileSync(join(ipcDir, '../../preload/index.ts'), 'utf8')
+    expect(preload).toContain("ipcRenderer.invoke('agent:answer-request'")
+    expect(preload).toContain("ipcRenderer.invoke('inbox:answer'")
+  })
 })
