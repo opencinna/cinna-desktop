@@ -86,6 +86,10 @@ User -> ChatInput (renderer) -> useChatStream.startRun()
      -> Stream deltas back via MessagePort throughout
 ```
 
+## Main-owned Continuations
+
+The shared executor owns a turn after dispatch, even if its renderer port closes. An Inbox next-message answer runs through the same routing/persistence/driver path without opening a conversation. Acceptance saves the user message and settles its agent’s pending requests in one transaction; a refusal rolls back both. Later stream completion is a separate event. This supplies one-turn continuation, not automatic task loops or attachment to a live headless turn. See [execution details](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+
 ## Integration Points
 
 - [LLM Adapters](../../llm/adapters/adapters.md) — Each provider adapter handles the actual streaming and tool-use protocol

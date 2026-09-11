@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
@@ -129,7 +129,7 @@ vi.mock('../agents/drivers', () => ({
 
 const recordRunEvent = vi.fn()
 vi.mock('../services/inboxService', () => ({
-  inboxService: { recordRunEvent: (...args: unknown[]) => recordRunEvent(...args) }
+  inboxService: { recordRunEvent: (...args: unknown[]) => recordRunEvent(...args), resumeChat: vi.fn(), hasNextMessage: () => false }
 }))
 
 // The real command dispatch short-circuits for a `card` agent by handing the
@@ -139,6 +139,7 @@ vi.mock('../services/localAgents/commandService', () => ({
 }))
 
 const { registerRunHandlers } = await import('./run.ipc')
+const { runExecutionService } = await import('../services/runExecutionService')
 
 function fakePort() {
   return { start: vi.fn(), close: vi.fn(), postMessage: vi.fn() }
@@ -199,6 +200,17 @@ const ASK: RunEvent = {
   request: { kind: 'permission', action: 'bash', resources: ['ls'] },
   resume: 'reply'
 }
+
+afterEach(() => {
+  // The fake services leave the stream open for event-forwarding assertions.
+  // Close those fake turns so the main execution owner releases the chat.
+  for (const call of streamToAgent.mock.calls) {
+    ;(call[0] as unknown as { port: { close(): void } }).port.close()
+  }
+  for (const call of llmStream.mock.calls) {
+    ;(call[0] as { port: { close(): void } }).port.close()
+  }
+})
 
 beforeEach(() => {
   ipcOnHandlers.clear()
@@ -359,22 +371,43 @@ describe('run:send — a throw before the turn has an owner', () => {
     // Both services post a terminal event and close in their own `finally`, so
     // re-raising their failure would have the wrapper post to a closed port and
     // report as unhandled a turn the user has already been told about.
-    streamToAgent.mockRejectedValueOnce(new Error('the stream blew up'))
+    streamToAgent.mockImplementationOnce(async (input) => {
+      ;(input as { port: { close(): void } }).port.close()
+      throw new Error('the stream blew up')
+    })
     const port = await send({ chatId: 'chat-1', content: 'hello' })
     expect(port.postMessage).not.toHaveBeenCalled()
-    expect(port.close).not.toHaveBeenCalled()
+    expect(port.close).toHaveBeenCalledTimes(1)
   })
 
   it('does not post over an llm stream that already owns the port either', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
-    llmStream.mockRejectedValueOnce(new Error('the stream blew up'))
+    llmStream.mockImplementationOnce(async (input) => {
+      ;(input as { port: { close(): void } }).port.close()
+      throw new Error('the stream blew up')
+    })
     const port = await send({ chatId: 'chat-1', content: 'hello' })
     expect(port.postMessage).not.toHaveBeenCalled()
-    expect(port.close).not.toHaveBeenCalled()
+    expect(port.close).toHaveBeenCalledTimes(1)
   })
 })
 
 describe('run:send — refusals and the channels it replaced', () => {
+  it('keeps acceptance after persistence even when command setup then fails', async () => {
+    const commands = await import('../services/localAgents/commandService')
+    vi.spyOn(commands, 'resolveCommandRunner').mockImplementationOnce(() => { throw new Error('Command catalog unavailable') })
+    const observe = vi.fn()
+    const handle = runExecutionService.start(
+      { profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: '/run:check' },
+      { observe, preserveOnRefusal: true }
+    )
+    await expect(handle.accepted).resolves.toBeUndefined()
+    await handle.completed
+    expect(observe).toHaveBeenCalledWith(expect.anything(), { type: 'error', error: 'Command catalog unavailable' })
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'failed', 'Command catalog unavailable')
+  })
+
   it('refuses a chat the caller does not own, and closes the port', async () => {
     chatRow = undefined as unknown as Record<string, unknown>
     const port = await send({ chatId: 'chat-9', content: 'hello' })
@@ -405,10 +438,21 @@ describe('run:send — refusals and the channels it replaced', () => {
     )
   })
 
-  it('reports a chat it refuses as an ending too', async () => {
+  it('cannot finalize another profile’s job through an unowned chat id', async () => {
     chatRow = undefined as unknown as Record<string, unknown>
     await send({ chatId: 'chat-9', content: 'hello' })
-    expect(reportRunCompletion).toHaveBeenCalledWith('chat-9', 'failed', 'Chat not found')
+    expect(reportRunCompletion).not.toHaveBeenCalled()
+    expect(recordRunEvent).not.toHaveBeenCalled()
+  })
+
+  it('does not finalize a job when ownership lookup itself fails', async () => {
+    const { chatRepo } = await import('../db/chats')
+    vi.mocked(chatRepo.getOwned).mockImplementationOnce(() => { throw new Error('database unavailable') })
+    const port = await send({ chatId: 'chat-9', content: 'hello' })
+    expect(port.postMessage).toHaveBeenCalledWith({ type: 'error', error: 'database unavailable' })
+    expect(port.close).toHaveBeenCalled()
+    expect(reportRunCompletion).not.toHaveBeenCalled()
+    expect(recordRunEvent).not.toHaveBeenCalled()
   })
 
   it('never lets that bookkeeping fail the turn it is reporting', async () => {
@@ -464,7 +508,7 @@ describe('run:send — the inbox tap', () => {
     portGivenToTheStream().postMessage(ASK)
 
     expect(recordRunEvent).toHaveBeenCalledWith(
-      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-1' },
+      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-1', turnId: expect.any(String) },
       ASK
     )
     expect(port.postMessage).toHaveBeenCalledWith(ASK)
@@ -478,7 +522,7 @@ describe('run:send — the inbox tap', () => {
     portGivenToTheStream().postMessage(ASK)
 
     expect(recordRunEvent).toHaveBeenCalledWith(
-      { userId: 'profile-user', chatId: 'chat-1', agentId: null },
+      { userId: 'profile-user', chatId: 'chat-1', agentId: null, turnId: expect.any(String) },
       ASK
     )
   })
@@ -487,5 +531,89 @@ describe('run:send — the inbox tap', () => {
     const port = await send({ chatId: 'chat-1', content: 'hello' })
     portGivenToTheStream().close()
     expect(port.close).toHaveBeenCalled()
+  })
+})
+
+
+describe('main-owned turn lifetime', () => {
+  const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
+  const payload = { chatId: 'chat-1', content: 'Continue' }
+
+  it('keeps an early-returning model turn alive with no renderer until its stream closes', async () => {
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer })
+    await handle.accepted
+    let complete = false
+    void handle.completed.then(() => { complete = true })
+    await Promise.resolve()
+    expect(complete).toBe(false)
+    expect(runExecutionService.isRunning('chat-1')).toBe(true)
+    expect(() => runExecutionService.start(scope, payload, { observe: observer })).toThrow('already has a turn')
+    const port = portGivenToTheStream()
+    port.postMessage(ASK)
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ turnId: handle.id, agentId: null }), ASK)
+    port.close()
+    await handle.completed
+    expect(runExecutionService.isRunning('chat-1')).toBe(false)
+  })
+
+  it('continues the asking agent in a coordinator chat without redirecting the answer to the model', async () => {
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn(), agentId: 'a-2' })
+    await handle.accepted
+    expect(routedTo()).toBe('a-2')
+    expect(llmStream).not.toHaveBeenCalled()
+    expect(prepareAgentSend).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a-2', userContent: 'Continue' }))
+  })
+
+  it('keeps observing events after its renderer disconnects', async () => {
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, {
+      observe: observer,
+      port: { postMessage: () => { throw new Error('closed view') }, close: () => { throw new Error('closed view') } }
+    })
+    await handle.accepted
+    const port = portGivenToTheStream()
+    expect(() => port.postMessage(ASK)).not.toThrow()
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a-1' }), ASK)
+    port.close()
+    await handle.completed
+  })
+
+  it('observes preparation failures on an owned chat and releases the active turn', async () => {
+    prepareAgentSend.mockImplementationOnce(() => { throw new Error('write failed') })
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer })
+    await expect(handle.accepted).rejects.toThrow('write failed')
+    await handle.completed
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ agentId: 'a-1' }), {
+      type: 'error', error: 'write failed'
+    })
+    expect(runExecutionService.isRunning('chat-1')).toBe(false)
+  })
+
+  it('observes an unexpected model setup failure even if the streaming service never closed', async () => {
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
+    llmStream.mockRejectedValueOnce(new Error('setup failed'))
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer })
+    await handle.accepted
+    await handle.completed
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ agentId: null }), {
+      type: 'error', error: 'setup failed'
+    })
+    expect(runExecutionService.isRunning('chat-1')).toBe(false)
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'failed', 'setup failed')
+  })
+
+  it('leaves a pending Inbox ask and job alone when answer preparation refuses', async () => {
+    prepareAgentSend.mockImplementationOnce(() => { throw new Error('write failed') })
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer, preserveOnRefusal: true })
+    await expect(handle.accepted).rejects.toThrow('write failed')
+    await handle.completed
+    expect(observer).not.toHaveBeenCalled()
+    expect(reportRunCompletion).not.toHaveBeenCalled()
   })
 })

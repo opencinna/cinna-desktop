@@ -1,3 +1,4 @@
+import { taskInputRequestRepo } from '../db/taskInputRequests'
 import {
   jobsRepo,
   jobFoldersRepo,
@@ -666,6 +667,8 @@ export const jobService = {
     const run = jobRunsRepo.getByLocalChatId(chatId)
     if (!run) return
     if (run.status !== 'running' && run.status !== 'pending') return
+    if (taskInputRequestRepo.listOpenForChat(chatId)
+      .some((request) => request.resume === 'next_message')) return
     jobRunsRepo.updateStatus(run.id, outcome, { errorMessage: errorMessage ?? null })
 
     // The task is the record of the work; the run row is the record of the
@@ -950,6 +953,18 @@ export const jobService = {
   ): JobRunRowWithMeta {
     const run = jobRunsRepo.getById(userId, runId)
     if (!run) throw new JobError('not_found', 'Job run not found')
+    if (run.status !== 'pending' && run.status !== 'running') return enrichRun(userId, run)
+    if (run.taskId && (status === 'succeeded' || status === 'failed' || status === 'cancelled')) {
+      const task = taskService.getById(userId, run.taskId)
+      if (task.executor === 'desktop') {
+        // setStatus validates this device's claim and expires idle Inbox asks.
+        // Do this before the job write so a refused claim changes neither row.
+        taskService.applyRunState(userId, task.id, RUN_STATE_FOR_OUTCOME[status])
+        if (status === 'failed' && errorMessage) {
+          taskService.setStatus(userId, task.id, 'error', { errorMessage })
+        }
+      }
+    }
     jobRunsRepo.updateStatus(runId, status, { errorMessage: errorMessage ?? null })
     const updated = jobRunsRepo.getById(userId, runId)
     if (!updated) throw new JobError('not_found', 'Job run not found after update')

@@ -24,6 +24,8 @@ Same convention as [The Local Engine](engine.md) and [Agents Home, Scanner & Fol
 
 The desktop already had a port-free, caller-agnostic single-turn primitive whose output is exactly what a folder agent has to produce: compact `text` for an orchestrator LLM, full-fidelity `parts[]` for the UI, `notices`, and the session bookkeeping. So the ACP driver is not a second pipeline; it is a second implementation of one call signature, and every consumer downstream of it — the parts accumulator, the delta sink, the message repository, the session repository, the renderer — is reused verbatim.
 
+A shared main-owned executor now wraps the transport for both typed chat sends and Inbox continuations. It observes asks without requiring a renderer port, reserves one active turn per chat, and distinguishes message acceptance from turn completion. This does not change ACP’s live permission/question parks or add autonomous task orchestration; see [shared turn lifetime](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+
 ## Core Concepts
 
 - **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Two of them, `a2a` and `acp`, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))

@@ -1,3 +1,5 @@
+import { taskInputRequestRepo } from '../db/taskInputRequests'
+import { jobRunsRepo } from '../db/jobs'
 import { syncRepo } from '../db/sync'
 import {
   taskRepo,
@@ -481,6 +483,17 @@ export const taskService = {
       dirtied(task, statusPatch(task, status, opts.errorMessage), ['status'])
     )
     if (!row) throw new TaskError('not_found', 'Task not found')
+    if (isSettled(status) || status === 'archived') {
+      taskInputRequestRepo.expireNextMessageForTask(taskId)
+      // An idle next-message turn has no stream left to finalize its job.
+      // Keep the attempt and its task consistent for explicit terminal writes.
+      const run = task.jobRunId ? jobRunsRepo.getById(userId, task.jobRunId) : null
+      if (run && (run.status === 'pending' || run.status === 'running')) {
+        jobRunsRepo.updateStatus(run.id,
+          status === 'completed' ? 'succeeded' : status === 'error' ? 'failed' : 'cancelled',
+          { errorMessage: status === 'error' ? row.errorMessage : null })
+      }
+    }
     logger.info('task status', { taskId, from, to: status })
     return written(userId, row)
   },

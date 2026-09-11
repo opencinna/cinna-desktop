@@ -77,7 +77,7 @@ export const A2A_AUTH_REQUIRED_FALLBACK = 'The agent needs you to sign in before
  * Only `text`-kind parts count: a status message may also carry thinking, a
  * tool part or a notice, and none of those is the question. A2A gives a
  * question no structure — no options, no header — so it becomes one open
- * question, or none when the agent sent no text at all.
+ * question, with a free-text fallback when the agent sent no text at all.
  */
 export function a2aInputRequestOf(
   state: string | undefined,
@@ -94,7 +94,7 @@ export function a2aInputRequestOf(
   }
   return {
     kind: 'question',
-    questions: text ? [{ question: text, multiSelect: false, options: [] }] : []
+    questions: [{ question: text || 'What should the agent do next?', multiSelect: false, options: [] }]
   }
 }
 
@@ -365,9 +365,6 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
             if (m.contextId) latestContextId = m.contextId
             if (m.taskId) setTaskId(m.taskId)
           } else if (event.kind === 'task') {
-            // A `task` frame posts no `status` today, so it posts no
-            // `needs_input` either, even when it arrives already parked; nor
-            // does the non-streaming path below. Only a `status-update` does.
             const t = event as Task
             latestContextId = t.contextId
             setTaskId(t.id)
@@ -376,6 +373,9 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
               accumulator.ingestMessage(t.status.message, deltaPort)
             }
             t.artifacts?.forEach((a) => accumulator.ingestArtifact(a, deltaPort))
+            onEvent?.({ type: 'status', state: toRunState(t.status?.state), taskId: t.id, contextId: t.contextId })
+            const request = a2aInputRequestOf(t.status?.state, t.status?.message)
+            if (request) onEvent?.({ type: 'needs_input', requestId: t.id, request, resume: 'next_message' })
           }
         }
       }
@@ -401,6 +401,9 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
         if (task.status?.state) latestTaskState = task.status.state
         if (task.status?.message) accumulator.ingestMessage(task.status.message, deltaPort)
         task.artifacts?.forEach((a) => accumulator.ingestArtifact(a, deltaPort))
+        onEvent?.({ type: 'status', state: toRunState(task.status?.state), taskId: task.id, contextId: task.contextId })
+        const request = a2aInputRequestOf(task.status?.state, task.status?.message)
+        if (request && task.id) onEvent?.({ type: 'needs_input', requestId: task.id, request, resume: 'next_message' })
       }
 
       if (rpcResult.task) {

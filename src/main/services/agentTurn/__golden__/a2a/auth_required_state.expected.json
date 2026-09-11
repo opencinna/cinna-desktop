@@ -7,6 +7,12 @@
   "events": [
     {
       "type": "status",
+      "state": "submitted",
+      "taskId": "task-ar-1",
+      "contextId": "ctx-ar-1"
+    },
+    {
+      "type": "status",
       "state": "working",
       "taskId": "task-ar-1",
       "contextId": "ctx-ar-1"

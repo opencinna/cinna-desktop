@@ -168,6 +168,52 @@ describe('a finished run finishes its task', () => {
     expect(task?.finishedAt).not.toBeNull()
   })
 
+  it.each(['job cancel', 'task cancel', 'task archive'] as const)(
+    '%s settles both records and expires an idle next-message ask', async (action) => {
+      const { taskInputRequestRepo } = await import('../db/taskInputRequests')
+      const { chatId, taskId, runId } = startedRunWithTask()
+      taskInputRequestRepo.open({
+        requestId: 'idle-ask', taskId, chatId, agentId: 'remote-agent', resume: 'next_message',
+        request: { kind: 'question', questions: [{ question: 'Which branch?', options: [], multiSelect: false }] }
+      })
+      taskService.applyRunState(USER, taskId, 'needs_input')
+      if (action === 'job cancel') jobService.setRunStatus(USER, runId, 'cancelled')
+      else taskService.setStatus(USER, taskId, action === 'task archive' ? 'archived' : 'cancelled')
+      expect(taskService.getById(USER, taskId).status).toBe(action === 'task archive' ? 'archived' : 'cancelled')
+      expect(jobRunsRepo.getById(USER, runId)?.status).toBe('cancelled')
+      expect(taskInputRequestRepo.listOpenForChat(chatId)).toEqual([])
+      // A delayed completion from the old turn cannot reopen or complete it.
+      jobService.reportRunCompletion(chatId, 'succeeded')
+      expect(jobRunsRepo.getById(USER, runId)?.status).toBe('cancelled')
+    }
+  )
+
+  it('does not let a late explicit job cancel rewrite a successful attempt', () => {
+    const { chatId, runId, taskId } = startedRunWithTask()
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    jobService.setRunStatus(USER, runId, 'cancelled')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('succeeded')
+    expect(taskService.getById(USER, taskId).status).toBe('completed')
+  })
+
+  it('keeps a next-message job running until its answer resumes and completes the same task', async () => {
+    const { taskInputRequestRepo } = await import('../db/taskInputRequests')
+    const { chatId, taskId, runId } = startedRunWithTask()
+    taskInputRequestRepo.open({
+      requestId: 'next-one', taskId, chatId, agentId: 'remote-agent', resume: 'next_message',
+      request: { kind: 'question', questions: [{ question: 'Which branch?', options: [], multiSelect: false }] }
+    })
+    taskService.applyRunState(USER, taskId, 'needs_input')
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('running')
+    expect(taskService.getById(USER, taskId).status).toBe('blocked')
+    taskInputRequestRepo.settle('next-one', 'answered', { kind: 'question', answers: [['main']] })
+    taskService.applyRunState(USER, taskId, 'working')
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('succeeded')
+    expect(taskService.getById(USER, taskId).status).toBe('completed')
+  })
+
   it('errors the task and keeps the reason when the run fails', () => {
     const { chatId, taskId } = startedRunWithTask()
     jobService.reportRunCompletion(chatId, 'failed', 'Invalid OpenAI API key')

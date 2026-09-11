@@ -1,9 +1,15 @@
 {
   "_notes": [
-    "The opening `task` frame (state submitted) emits no onEvent. Only `status-update` frames produce a `status` event, so `submitted` never reaches the renderer, although it does set the task state until `working` overwrites it.",
+    "Phase 5: the opening task frame emits its submitted status. Task frames and status updates now both report state, including input-required asks.",
     "The snapshot growth on art-plain-1 arrives as the true delta \", world\". The part with no cinna metadata on art-plain-2 defaults to kind text and merges into the same part."
   ],
   "events": [
+    {
+      "type": "status",
+      "state": "submitted",
+      "taskId": "task-plain-1",
+      "contextId": "ctx-plain-1"
+    },
     {
       "type": "status",
       "state": "working",

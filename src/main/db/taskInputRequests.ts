@@ -1,4 +1,4 @@
-import { and, desc, eq, isNull } from 'drizzle-orm'
+import { and, desc, eq, isNull, or } from 'drizzle-orm'
 import { getDb } from './client'
 import { taskInputRequests, tasks } from './schema'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
@@ -19,7 +19,7 @@ export interface OpenInputRequest {
 }
 
 export interface OpenInputRequestInput {
-  /** The run's `requestId`. It **is** the row's id — one id, one row, one answer path. */
+  /** Reply address, or the Inbox-generated address of a next-message occurrence. */
   requestId: string
   taskId: string
   chatId: string
@@ -34,7 +34,7 @@ export interface OpenInputRequestInput {
  * The registry is the live address and dies with the turn; this table is what
  * the user sees, and it outlives the chat view. Nothing here reaches a driver:
  * the row records that an ask exists and how it was settled, and
- * `inboxService` is the only thing that writes it.
+ * `inboxService` writes asks and answers; task terminal writes expire them.
  *
  * **Every read is scoped through `tasks`, not through `user_id`.** This table
  * has no user column — its task has one — and `taskService.remove` is a *soft*
@@ -122,6 +122,19 @@ export const taskInputRequestRepo = {
       .all()
   },
 
+  /** Expire durable continuation asks when their task can no longer resume. */
+  expireNextMessageForTask(taskId: string): void {
+    getDb().update(taskInputRequests).set({ status: 'expired', resolvedAt: new Date() })
+      .where(and(eq(taskInputRequests.taskId, taskId), eq(taskInputRequests.status, 'open'),
+        eq(taskInputRequests.resume, 'next_message'))).run()
+  },
+
+  listOpenForChat(chatId: string): TaskInputRequestRow[] {
+    return getDb().select().from(taskInputRequests).where(and(
+      eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.status, 'open')
+    )).all()
+  },
+
   /**
    * Expire every ask still open in a chat, and say how many there were.
    *
@@ -138,33 +151,25 @@ export const taskInputRequestRepo = {
    * compensates for the same silence in its own way (`chat.store.ts`
    * `withoutReplyRequests`); this is that compensation for the record.
    */
-  expireOpenForChat(chatId: string): number {
+  expireOpenForChat(chatId: string, replyOnly = false, nextMessageAgentId?: string): number {
     return getDb()
       .update(taskInputRequests)
       .set({ status: 'expired', resolvedAt: new Date() })
-      .where(and(eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.status, 'open')))
+      .where(and(eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.status, 'open'),
+        replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
+        nextMessageAgentId ? or(eq(taskInputRequests.resume, 'reply'), eq(taskInputRequests.agentId, nextMessageAgentId)) : undefined))
       .run().changes
   },
 
   /**
-   * Expire every open ask. Called once at boot, for every profile at once.
-   *
-   * A `reply` ask is an address inside a driver process on this machine, and no
-   * driver process survives a restart — so every row still marked open when the
-   * app starts is one nothing can answer. Leaving them would put buttons in the
-   * inbox whose only possible outcome is "no longer waiting", which is the lie
-   * `expired` exists to replace.
-   *
-   * A `next_message` ask writes no row (`inboxService`), so there is nothing
-   * here that a restart leaves answerable.
-   *
-   * Returns how many were expired, for the boot log.
+   * Boot invalidates only reply addresses backed by a dead driver process.
+   * Next-message requests retain their persisted session and remain answerable.
    */
   expireOpen(): number {
     return getDb()
       .update(taskInputRequests)
       .set({ status: 'expired', resolvedAt: new Date() })
-      .where(eq(taskInputRequests.status, 'open'))
+      .where(and(eq(taskInputRequests.status, 'open'), eq(taskInputRequests.resume, 'reply')))
       .run().changes
   }
 }

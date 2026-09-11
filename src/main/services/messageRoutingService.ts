@@ -65,6 +65,8 @@ export interface PrepareAgentSendInput {
   agentId: string
   userContent: string
   attachments?: MessageAttachment[]
+  /** Runs inside the user-message transaction; throwing rolls that message back. */
+  onPersisted?: () => void
 }
 
 export interface PrepareLlmSendInput {
@@ -72,6 +74,8 @@ export interface PrepareLlmSendInput {
   chatId: string
   userContent: string
   attachments?: MessageAttachment[]
+  /** Runs inside the user-message transaction; throwing rolls that message back. */
+  onPersisted?: () => void
 }
 
 export interface PreparedSend {
@@ -101,7 +105,7 @@ export const messageRoutingService = {
       content: userContent,
       addressedAgentId: agentId,
       attachments: attachments && attachments.length > 0 ? attachments : null
-    })
+    }, input.onPersisted)
 
     logger.debug('prepared agent send', {
       chatId,
@@ -126,7 +130,7 @@ export const messageRoutingService = {
       chatId,
       content: userContent,
       attachments: attachments && attachments.length > 0 ? attachments : null
-    })
+    }, input.onPersisted)
 
     logger.debug('prepared llm send', {
       chatId,

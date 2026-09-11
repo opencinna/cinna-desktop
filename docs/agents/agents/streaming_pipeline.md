@@ -4,6 +4,10 @@
 
 How A2A streaming events from a remote agent become structured, kind-routed message parts in the UI and DB. Focused on the per-part delta computation, the `cinna.content_kind` / `cinna.tool_name` / `cinna.tool_input` metadata contract with the Cinna backend, and the persisted `parts[]` shape.
 
+## Durable Input Requests
+
+A2A status-update, streamed task and nonstreaming task responses all emit normalized status and input-request events. An input-required response with no text becomes **What should the agent do next?**; auth-required uses its status text or the existing sign-in fallback. The main executor observes these before optional renderer forwarding and the Inbox stores a durable next-message occurrence separately from transcript parts. Normal turn completion and restart preserve it. Answering starts a new message on the same A2A task/context; it does not attempt to reply to a vanished park. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
+
 ## Core Concepts
 
 | Term | Definition |

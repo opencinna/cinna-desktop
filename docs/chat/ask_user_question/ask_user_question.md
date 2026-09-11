@@ -33,9 +33,9 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 - The questions payload is parsed defensively from the untyped `cinna.tool_input`: a missing/!array `questions`, entries without a `question` string, or options without a `label` are dropped. A part that yields zero valid questions renders nothing.
 - `multiSelect` is true when the payload sets `multiSelect` (Claude) or `multiple` (OpenCode).
 
-### Active-prompt gating
+### Transcript active-prompt gating
 
-- A question is answerable only when ALL hold: not currently streaming, no optimistic user message pending, and the question's message is the last message in the chat with `role: 'assistant'`. This is computed once per render as the active question message id.
+- A persisted transcript tool question is answerable when ALL hold: not currently streaming, no optimistic user message pending, and the question's message is the last message in the chat with `role: 'assistant'`. This is computed once per render as the active question message id.
 - Live-streaming question parts always render passively (interactive disabled) — they become answerable only once the turn finishes and the persisted part takes over.
 - A historical question (any user turn exists after it) renders muted and read-only forever.
 
@@ -45,10 +45,17 @@ Renders a remote agent's `AskUserQuestion` tool call as an interactive prompt in
 - The answer is sent through the canonical composer (the same A2A-vs-LLM and orchestrated-chat routing as every other turn) — never a bespoke send path. It carries no special metadata; the agent resumes purely because the turn threads onto the chat's existing context.
 - The Send button is gated: every question must have at least one selection, and any `__custom__` selection must have non-empty text.
 
-### No new persistence or transport
+### Transcript persistence and Inbox requests
 
-- The feature adds no database column, no message role, no IPC channel, and no answer-status flag. The question lives inside the existing `assistant` row's `parts[]`; "answered" is derived from message ordering, not stored. (Contrast cinna-core's own frontend, which persists a `tool_questions_status` flag server-side — the desktop does not need it because it derives the same state locally.)
-- The A2A `input-required` task status is **not** used as the trigger. Detection is the reliably-persisted tool part. The stream does report the state — `status { state: 'needs_input' }` followed by a `needs_input` event with `resume: 'next_message'`, which the chat store records — but a `next_message` ask never makes a block live, and no event is persisted, so a reloaded chat could not rely on it.
+- The transcript tool-part rendering adds no database column, message role or answer-status flag. The question lives inside the existing `assistant` row's `parts[]`; "answered" is derived from message ordering, not stored. (Contrast cinna-core's own frontend, which persists a `tool_questions_status` flag server-side — the desktop does not need it because it derives the same state locally.)
+- In the transcript tool-part renderer, A2A `input-required` task status is **not** used as the trigger. Detection is the reliably-persisted tool part. The stream does report the state — `status { state: 'needs_input' }` followed by a `needs_input` event with `resume: 'next_message'`, which the chat store records — but that event does not make a transcript tool block live. The Inbox’s separate persisted continuation row supplies its own answerable surface after reload.
+
+### Inbox continuation
+
+- The Inbox reuses this block/modal from a persisted input request; its liveness is separate from transcript message-order gating. A2A `input-required` and `auth-required` task responses create durable `next_message` requests, including nonstreaming responses. Empty question text gets **What should the agent do next?**; auth text becomes a question ending **Reply when you are ready to continue.**
+- Inbox submissions use `inbox:answer` with structured selections. For a next-message request main joins selected answer values into the new message, targets the request’s agent and continues the existing A2A context. It does not use the transcript formatter or navigate to the composer.
+- The modal closes only after acceptance. Busy/preparation refusal keeps the draft and controls for retry; accepted messages continue in main with the Inbox open. A later turn failure is recorded on that continuation. Pending submission disables edits, duplicate send and dismissal.
+- Answered cards remain visible for the Inbox mount. A repeated question in a new invocation gets a fresh request address and its own card. The request survives normal turn completion and app restart; a live reply park does not. See [the Inbox](../../jobs/tasks/inbox.md).
 
 ### Rendering placement
 

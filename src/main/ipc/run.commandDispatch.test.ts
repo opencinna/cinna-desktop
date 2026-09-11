@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import { capabilitiesFor } from '../agents/drivers/capabilities'
 
@@ -123,6 +123,8 @@ const COMMAND_RUN_SENTINEL = vi.fn()
 const resolveCommandRunner = vi.fn((..._args: unknown[]): unknown => COMMAND_RUN_SENTINEL)
 vi.mock('../services/localAgents/commandService', () => ({ resolveCommandRunner }))
 
+vi.mock('../services/inboxService', () => ({ inboxService: { recordRunEvent: vi.fn(), resumeChat: vi.fn(), hasNextMessage: () => false } }))
+
 const { registerRunHandlers } = await import('./run.ipc')
 
 function fakePort(): { start: () => void; close: () => void; postMessage: (m: unknown) => void } {
@@ -130,6 +132,14 @@ function fakePort(): { start: () => void; close: () => void; postMessage: (m: un
 }
 
 type BoundTurn = (io: { signal: AbortSignal; onEvent: (e: unknown) => void }) => Promise<unknown>
+
+afterEach(() => {
+  // The fake services leave the stream open for event-forwarding assertions.
+  // Close those fake turns so the main execution owner releases the chat.
+  for (const call of streamToAgent.mock.calls) {
+    ;(call[0] as unknown as { port: { close(): void } }).port.close()
+  }
+})
 
 beforeEach(() => {
   ipcOnHandlers.clear()

@@ -407,14 +407,15 @@ function AskBody({
       />
     )
   }
-  if (request.kind === 'question') {
+  if (request.kind === 'question' || (request.kind === 'auth' && entry.resume === 'next_message')) {
+    const questions = request.kind === 'question' ? request.questions : [{
+      question: `${request.message} Reply when you are ready to continue.`, multiSelect: false, options: []
+    }]
     return (
       <AskUserQuestionBlock
-        questions={request.questions}
-        // A parked question is answerable by id, which is what `liveRequestId`
-        // means. `interactive` is the *other* path — a cloud agent's question,
-        // answered by writing the next message in its chat — and that ask never
-        // reaches the inbox, because it writes no row (see `inboxService`).
+        questions={questions}
+        // Both delivery modes use the Inbox address. Main either replies to a
+        // parked driver or starts the next turn; the modal awaits acceptance.
         interactive={false}
         chatId={entry.chatId}
         liveRequestId={settledAs === null ? entry.requestId : undefined}
@@ -423,11 +424,8 @@ function AskBody({
       />
     )
   }
-  // `auth` and `elicitation` never park: A2A's auth ask ends its turn and is
-  // answered by the next message, and ACP's elicitations arrive already
-  // translated into questions. Neither writes a row, so neither can appear
-  // here — but an entry with nothing to render would be a blank card, so it
-  // says what it is and points at the thread that owns it.
+  // Unsupported reply-mode auth/elicitation stays descriptive; next-message
+  // auth above has an explicit response path through the question modal.
   return (
     <div className="text-[11px] text-[var(--color-text-muted)]">
       {request.kind === 'auth'

@@ -221,7 +221,7 @@ What it asserts for every driver:
 - On abort the turn settles by itself and emits nothing further, and carries `error` or `taskState: 'canceled'`
 - A parked ask is registered exactly once and released on answer, reject, abort and timeout — the timeout through the registry's real timer, shortened
 - A parked ask is **announced** exactly once (`needs_input`, `resume: 'reply'`, of the registration's kind, before anything is answered) and settled exactly once (`input_resolved`) while the turn is open
-- A2A has no `parks()`, because `input-required` ends its turn instead of parking; its `needs_input { resume: 'next_message' }` is pinned by its own scenario
+- A2A has no `parks()`, because `input-required` ends its turn instead of parking. Main persists its `needs_input { resume: 'next_message' }` as an Inbox continuation; streamed/nonstreaming task responses share this behavior. The row survives restart and acceptance starts another driver turn on the saved A2A context. ACP reply parks still expire with the process. See [the Inbox](../../jobs/tasks/inbox.md).
 - A session id the turn produces reaches `saveSession`, and the next turn on the same chat gets it back through `readSession`
 - `capabilities(row)` is the same answer on every call, and a caller editing the object it was handed cannot change the next answer
 - `readiness` resolves — never rejects, never throws — with a state this build knows and a sentence when it is not `ok`, whatever its dependencies do

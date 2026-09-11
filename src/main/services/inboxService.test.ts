@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import { ASK_NO_LONGER_WAITING, type InboxAnswerResult } from '../../shared/inbox'
+import type { AgentRow } from '../db/agents'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RemoteTaskAdapter } from '../tasks/adapters/adapter'
 import { RemoteTaskError } from '../tasks/adapters/adapter'
@@ -54,6 +55,17 @@ vi.mock('./askDelivery', () => ({
     deliverAnswer(args[0] as string, args[1] as string)
 }))
 
+const toolRun = vi.hoisted(() => vi.fn(async () => ({ text: 'Done', parts: [], notices: [] })))
+vi.mock('../agents/drivers', () => ({ driverFor: () => ({ run: toolRun }) }))
+
+const runStart = vi.hoisted(() => vi.fn())
+const runBusy = vi.hoisted(() => vi.fn(() => false))
+vi.mock('./runExecutionService', () => ({
+  runExecutionService: { start: runStart, isRunning: runBusy }
+}))
+vi.mock('./agentService', () => ({ agentService: { findAgent: () => ({ row: {}, userId: '__default__' }) } }))
+vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' }))
+
 const { inboxService } = await import('./inboxService')
 const { taskService } = await import('./taskService')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
@@ -69,7 +81,7 @@ const permission: Extract<RunEvent, { type: 'needs_input' }> = {
   resume: 'reply'
 }
 
-function ctx(overrides: { chatId?: string; agentId?: string | null } = {}) {
+function ctx(overrides: { chatId?: string; agentId?: string | null; turnId?: string } = {}) {
   return { userId: USER, chatId: CHAT, agentId: AGENT, ...overrides }
 }
 
@@ -115,6 +127,12 @@ function makeChatTask(chatId: string | null = CHAT) {
 
 beforeEach(() => {
   holder.current = createTestDatabase()
+  toolRun.mockClear()
+  runBusy.mockReturnValue(false)
+  runStart.mockReset().mockImplementation((scope, payload, options) => {
+    options.onAccepted({ userId: scope.profileUserId, chatId: payload.chatId, agentId: payload.addressedAgentId })
+    return { accepted: Promise.resolve(), completed: Promise.resolve() }
+  })
   holder.deliver = null
   holder.adapters = []
   deliverAnswer.mockClear()
@@ -146,13 +164,14 @@ describe('recording an ask', () => {
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
   })
 
-  it('blocks the task but writes no row for an ask the next message answers', async () => {
-    // A2A ends the turn to ask, so there is no address to post an answer to —
-    // a row would be a button in the inbox with nothing behind it.
+  it('records a next-message ask and keeps the task blocked after the turn ends', async () => {
     const task = makeTask()
-    inboxService.recordRunEvent(ctx(), { ...permission, resume: 'next_message' })
-
-    expect((await inboxService.list(USER))).toEqual([])
+    inboxService.recordRunEvent(ctx({ turnId: 'turn-1' }), { ...permission, resume: 'next_message' })
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+    const entries = await inboxService.list(USER)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]).toMatchObject({ taskId: task.id, resume: 'next_message' })
+    expect(entries[0].requestId).not.toBe(permission.requestId)
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
   })
 
@@ -219,25 +238,12 @@ describe('recording an ask', () => {
      * debug line for something that is not a fault, in place of a warning that
      * reads like one.
      */
-    it('makes none for an ask the next message answers, which would only sit blocked', async () => {
-      // A `next_message` ask writes no row, so a task made for it would hold
-      // nothing — and it would hold it in `blocked`: `endTurn` returns a task
-      // to `in_progress` only when it expired a row, and a plain chat has no
-      // job run for `reportRunCompletion` to finish it through. It would sit
-      // there for the life of the profile, offering a re-run for a conversation
-      // the user's next message already resumes.
-      holder.current?.raw.exec(
-        `INSERT INTO chats (id, user_id, title, created_at, updated_at)
-         VALUES ('chat-2', '${USER}', 'Tidy the build', 0, 0)`
-      )
-
-      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), {
-        ...permission,
-        resume: 'next_message'
-      })
-
-      expect(taskService.list(USER)).toEqual([])
-      expect((await inboxService.list(USER))).toEqual([])
+    it('creates a task for a hand-opened chat whose next message must answer an ask', async () => {
+      makeChat('chat-2')
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), { ...permission, resume: 'next_message' })
+      expect(taskService.list(USER)).toHaveLength(1)
+      expect(await inboxService.list(USER)).toHaveLength(1)
+      expect(taskService.list(USER)[0].status).toBe('blocked')
     })
 
     it('makes none for a parked ask that named no agent, which nothing could answer', () => {
@@ -394,7 +400,7 @@ describe('a turn that ends while it is still parked', () => {
     // here — `reportRunCompletion` is what writes the run's own outcome.
     const task = makeTask()
     inboxService.recordRunEvent(ctx(), { ...permission, resume: 'next_message' })
-    inboxService.recordRunEvent(ctx(), done)
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
 
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
   })
@@ -746,5 +752,133 @@ describe('remote inbox', () => {
     expect(await first).toBe('offline')
     expect(await retry).toBe('offline')
     expect(readCount).toBe(1)
+  })
+})
+
+
+describe('next-message continuation', () => {
+  const ask = { type: 'needs_input' as const, requestId: 'remote-task-1', resume: 'next_message' as const,
+    request: { kind: 'question' as const, questions: [{ question: 'Which branch?', multiSelect: false, options: [] }] } }
+
+  it('preserves a next-message ask over boot while expiring process-owned reply asks', async () => {
+    makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    inboxService.recordRunEvent(ctx(), permission)
+    expect(taskInputRequestRepo.expireOpen()).toBe(1)
+    const entries = await inboxService.list(USER)
+    expect(entries).toHaveLength(1)
+    expect(entries[0].resume).toBe('next_message')
+  })
+
+  it('deduplicates a repeated frame but gives the next occurrence its own address', async () => {
+    makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    const [first] = await inboxService.list(USER)
+    expect(await inboxService.list(USER)).toHaveLength(1)
+    inboxService.resumeChat(ctx(), 'main')
+    inboxService.recordRunEvent(ctx({ turnId: 'two' }), ask)
+    const [second] = await inboxService.list(USER)
+    expect(second.requestId).not.toBe(first.requestId)
+    expect(await inboxService.answer(USER, first.requestId, { kind: 'question', answers: [['old answer']] }))
+      .toMatchObject({ ok: false, code: 'already_answered' })
+  })
+
+  it('answers through the headless executor and resumes the same task', async () => {
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+    const [entry] = await inboxService.list(USER)
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
+    expect(runStart).toHaveBeenCalledWith(
+      { profileUserId: USER, settingsUserId: USER },
+      { chatId: CHAT, content: 'main', addressedAgentId: AGENT },
+      expect.objectContaining({ preserveOnRefusal: true })
+    )
+    expect(await inboxService.list(USER)).toHaveLength(0)
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('retains the waiting ask and answer when dispatch is busy or refuses before acceptance', async () => {
+    makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    const [entry] = await inboxService.list(USER)
+    runBusy.mockReturnValue(true)
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] }))
+      .toMatchObject({ ok: false, code: 'unavailable' })
+    runBusy.mockReturnValue(false)
+    runStart.mockImplementationOnce(() => { throw new Error('Could not save the message') })
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] }))
+      .toMatchObject({ ok: false, code: 'unavailable' })
+    expect(taskInputRequestRepo.getById(entry.requestId)?.status).toBe('open')
+  })
+
+  it.each(['end_turn', 'canceled', 'error'] as const)('keeps another agent’s question blocked after this agent ends with %s', async (stopReason) => {
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    inboxService.recordRunEvent(ctx({ turnId: 'two', agentId: 'folder:beta' }), ask)
+    inboxService.resumeChat(ctx(), 'main')
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason })
+    const remaining = await inboxService.list(USER)
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0].agentId).toBe('folder:beta')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+
+  it.each(['cancelled', 'archived'] as const)('does not restart a %s task from a retained Inbox card', async (status) => {
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    const [entry] = await inboxService.list(USER)
+    taskService.setStatus(USER, task.id, status)
+    expect(await inboxService.list(USER)).toHaveLength(0)
+    expect(await inboxService.answer(USER, entry.requestId, { kind: 'question', answers: [['main']] }))
+      .toMatchObject({ ok: false, code: 'no_longer_waiting' })
+    expect(runStart).not.toHaveBeenCalled()
+    expect(taskService.getById(USER, task.id).status).toBe(status)
+  })
+
+  it('refuses a typed continuation when the task has moved to a remote executor', () => {
+    const task = makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    taskService.bindRemote(USER, task.id, { adapter: 'fake', id: 'remote-one', key: null, url: null, state: {} })
+    taskService.handOffToRemote(USER, task.id)
+    expect(() => inboxService.resumeChat(ctx(), 'main')).toThrow('running elsewhere')
+    expect(taskInputRequestRepo.listOpenForChat(CHAT)).toHaveLength(1)
+  })
+
+  it('prevents coordinator re-entry while this agent is waiting for a human answer', async () => {
+    const { A2AAsMcpProvider } = await import('./a2aAsMcpProvider')
+    makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'parent:tool-one' }), ask)
+    const provider = new A2AAsMcpProvider(CHAT, { id: AGENT, name: 'Alpha', driver: 'a2a' } as AgentRow, USER, 'alpha')
+    expect(await provider.callTool('alpha', { message: 'Keep going' })).toMatchObject({ isError: true })
+    expect(toolRun).not.toHaveBeenCalled()
+    inboxService.resumeChat(ctx(), 'main')
+    expect(await provider.callTool('alpha', { message: 'Keep going' })).toMatchObject({ content: 'Done' })
+    expect(toolRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('uses child invocation identity when one parent turn calls the same agent again', async () => {
+    makeTask()
+    const parent = ctx({ turnId: 'parent', agentId: null })
+    inboxService.recordRunEvent(parent, { type: 'child', toolCallId: 'tool-one', agentId: AGENT, event: ask })
+    const [first] = await inboxService.list(USER)
+    inboxService.resumeChat(ctx(), 'main')
+    inboxService.recordRunEvent(parent, { type: 'child', toolCallId: 'tool-two', agentId: AGENT, event: ask })
+    const [second] = await inboxService.list(USER)
+    expect(second.requestId).not.toBe(first.requestId)
+  })
+
+  it('rolls back the user message and request settlement together if acceptance fails', async () => {
+    const { messageRepo } = await import('../db/messages')
+    makeTask()
+    inboxService.recordRunEvent(ctx({ turnId: 'one' }), ask)
+    const [entry] = await inboxService.list(USER)
+    expect(() => messageRepo.saveUser({ chatId: CHAT, content: 'Answer that was not accepted' }, () => {
+      taskInputRequestRepo.settle(entry.requestId, 'answered', { kind: 'question', answers: [['main']] })
+      throw new Error('acceptance failed')
+    })).toThrow('acceptance failed')
+    expect(messageRepo.firstByRole(CHAT, 'user')).toBeUndefined()
+    expect(taskInputRequestRepo.getById(entry.requestId)?.status).toBe('open')
   })
 })

@@ -1,3 +1,4 @@
+import { taskInputRequestRepo } from '../db/taskInputRequests'
 /**
  * Exposes an agent to the orchestrator LLM as an *emulated* MCP tool
  * (agents-as-MCP wrapper). One provider per attached agent. `getTools()`
@@ -119,6 +120,13 @@ export class A2AAsMcpProvider implements ToolProvider {
     input: Record<string, unknown>,
     opts?: ToolCallOptions
   ): Promise<ToolExecutionResult> {
+    if (taskInputRequestRepo.listOpenForChat(this.chatId).some((request) =>
+      request.agentId === this.agent.id && request.resume === 'next_message')) {
+      return {
+        isError: true,
+        content: 'This agent is waiting for a human answer in the Inbox. Do not call it again until that request is answered.'
+      }
+    }
     const message =
       typeof input.message === 'string' && input.message.trim().length > 0
         ? input.message

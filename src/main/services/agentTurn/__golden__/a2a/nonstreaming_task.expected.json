@@ -1,6 +1,6 @@
 {
   "_notes": [
-    "The non-streaming path emits only deltas and no status event, even though the task has a state.",
+    "Phase 5: the non-streaming task reports its status after ingesting its message and artifacts, so input-required results can also reach the Inbox.",
     "POSSIBLE BUG (ordering): status.message is ingested before the artifacts, so the final status text \"Checked.\" lands ahead of the tool part and the artifact text it summarises. The streaming path orders parts by arrival instead."
   ],
   "events": [
@@ -23,6 +23,12 @@
       "type": "delta",
       "kind": "text",
       "text": " Staging is on build 42."
+    },
+    {
+      "type": "status",
+      "state": "completed",
+      "taskId": "task-ns-1",
+      "contextId": "ctx-ns-1"
     }
   ],
   "result": {

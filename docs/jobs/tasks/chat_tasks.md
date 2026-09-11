@@ -2,49 +2,56 @@
 
 ## Purpose
 
-An agent asking for input in a conversation opened by hand must reach the same inbox as an agent running a job. The first answerable parked ask gives that chat a task, so every persisted input request has a task to belong to.
+An agent asking for input in a conversation opened by hand must reach the same Inbox as an agent running a job. The first persisted ask gives that chat a task, whether it parks the running driver or asks for a later message.
 
 ## Core Concepts
 
-- **Lazy task** — a desktop task created by `inboxService.taskForChat` when a chat with no task raises its first persisted ask. Ordinary chats without such an ask get no task from this mechanism.
-- **Parked ask** — a `needs_input` event with `resume: reply` and an agent id, recorded in `task_input_requests`. A `next_message` event has no live reply address and writes no inbox row.
-- **Chat-owned task** — a task without `jobRunId`; its turn’s ending is the work’s outcome. A job-owned task has a separate completion hook that knows the attempt’s outcome.
+- **Lazy task** — a desktop task created by `inboxService.taskForChat` when a chat with no task raises an ask with an agent id. Ordinary chats without such an ask get no task from this mechanism.
+- **Reply ask** — `resume: reply` addresses a live parked driver. Its address expires when that process or turn ends.
+- **Next-message ask** — `resume: next_message` records an A2A question or authentication request whose answer starts another turn. Its durable local address survives normal turn completion and app restart.
+- **Chat-owned task** — a task without `jobRunId`; it finishes from the root turn’s outcome once no next-message continuation remains. Job-owned tasks keep their existing attempt and completion hook.
 
 ## User Stories / Flows
 
-1. A user starts a conversation and an agent parks on a question or permission.
-2. If the chat has no task, the inbox service creates one using the chat’s title and router, with the full first user message as the immutable goal. The title is the fallback when there is no user message. The answering agent, including a nested agent identified by its child event, becomes the assignee.
-3. The task starts on this device before becoming blocked. The service writes the ask before marking the task blocked, so the user’s action has a row even if the status write fails.
-4. The Inbox displays the ask. Its task link opens the task page, whose **Open the conversation** header control returns to the original chat.
-5. Answering resumes the task when no open asks remain. The root turn’s done or error event settles abandoned asks and finishes a chat-owned task.
+1. A user starts a conversation and an agent asks a question or permission, or requests authentication before continuing.
+2. If the chat has no task, the Inbox service uses the chat’s title and router, with the full first user message as the immutable goal. The title is the fallback when there is no user message. The answering agent, including a nested agent identified by its child event, becomes the assignee.
+3. The task starts on this device before becoming blocked. The ask is written before the blocked status, so the user’s action has a row even if the status write fails.
+4. The user answers through the Inbox without opening the conversation. A next-message answer persists a new user message and continues the asking agent in the same chat, task and A2A context; an existing job run remains the same attempt.
+5. A typed message routed to that agent settles the same continuation. Other agents’ outstanding requests remain open, and prevent task/job finalization until they are settled.
+6. The final root turn settles abandoned requests and finishes the task only when no next-message request remains. The Inbox retains answered cards until the user leaves it.
 
 ## Business Rules
 
-- **Only an ask that gets a row creates a task.** Creating one for `next_message` would leave a blocked task with no reply address and nothing in the inbox. An existing task still receives the event’s blocked state.
-- **Start before blocking.** A new task cannot transition directly to blocked; the legal intermediate `in_progress` also records the truth that this turn is running here.
-- **The goal preserves the original request.** The chat title can be a truncation; copying it into the immutable goal would permanently lose what the user asked.
-- **A chat-owned task must have a finisher.** Done maps to completed, done with `stopReason: canceled` maps to cancelled, and error maps to error. Without this, a task created by a hand-opened chat remained running indefinitely because `jobService.reportRunCompletion` finds only job runs.
-- **A job-owned task waits for its job’s completion hook.** `endTurn` releases a blocked task when it expired abandoned asks, but leaves the outcome to `reportRunCompletion`; the root event alone cannot know all job outcomes. A nested agent finishing does not finish the enclosing task.
-- **Inbox bookkeeping never throws into the stream.** A deleted chat creates no task; a failed task or ask write is logged without interrupting the agent’s transport.
-- **This does not create a task for every chat or a desktop start control.** It supplies a parent for a persisted local ask. Remote asks use the remote-adapter path, and execution handover is documented separately.
+- **Start before blocking.** A new task cannot transition directly to blocked; the intermediate `in_progress` also records that this turn is running here.
+- **The goal preserves the original request.** A truncated chat title must not become the immutable goal when the full first user message exists.
+- **Finishing a turn does not finish a question.** Normal completion expires live reply addresses but preserves next-message requests. Boot expires reply addresses only; durable continuations need no surviving driver process.
+- **A repeated question is a new decision.** Next-message addresses include chat, agent, main-owned turn and protocol request identity; child asks also carry their invocation identity. Repeated frames in one invocation deduplicate, while a later identical question cannot reuse an answered card.
+- **Acceptance is atomic.** Saving the continuation message, settling matching requests and checking task status/device authority happen in one database transaction. A refusal rolls back both message and settlement. An already running chat refuses another turn without consuming the ask.
+- **Acceptance is not completion.** Once the message is accepted, the modal can close while main continues the turn. A later driver/network failure is the new turn’s outcome; it does not undo the accepted answer. See [the Inbox](inbox.md).
+- **Sibling asks survive.** A continued agent settles its own next-message requests. Its failure or cancellation must not expire another agent’s continuation. A coordinator tool refuses to call an agent while that agent still awaits a human answer.
+- **A chat-owned task has a finisher.** With no continuation remaining, normal done maps to completed, canceled to cancelled, and error/budget endings to error. Job-owned tasks wait for `jobService.reportRunCompletion`, which also defers while next-message requests remain.
+- **Explicit endings do not leave idle jobs running.** Completed/error/cancelled/archived task writes expire next-message requests and settle a linked pending/running job attempt. Archive maps that active attempt to cancelled; a terminal attempt keeps its outcome. Manual job completion/cancellation updates a desktop-owned task through the claim-checked task service before writing the job.
+- **Inbox event observation never throws into the stream.** A deleted chat creates no task; an event-bookkeeping failure is logged. Acceptance bookkeeping is different: it may refuse inside the transaction so no unaccepted message survives.
+- **This is one-turn continuation, not autonomous orchestration.** It creates a parent for persisted asks and continues their owner. It does not provide a takeover start control, coordinator handback, a task runner, scripts or live-run replay.
 
 ## Architecture Overview
 
-Run event → inboxService.recordRunEvent → openAsk → existing task or taskForChat → taskService.create / start → task_input_requests → Inbox → task page → original conversation.
+Run event → shared main executor observer → inboxService.recordRunEvent → existing task or taskForChat → taskService.create / start → task_input_requests → Inbox.
 
-Root done / error → inboxService.endTurn → expire open asks → finish chat-owned task, or leave the job-owned outcome to jobService.reportRunCompletion.
+Inbox answer or typed message → message transaction + resumeChat → same agent/context → next ask or final outcome; job-owned completion stays with jobService.reportRunCompletion.
 
 ## Where It Lives
 
-- `src/main/services/inboxService.ts` — `taskForChat`, `openAsk`, `endTurn`, `endedAs`, and the non-throwing event tap.
-- `src/main/services/inboxService.test.ts` — lazy creation, goal preservation, unsupported resume paths and completion cases.
-- `src/main/services/taskService.ts` — task creation, legal start and run-state mapping.
-- `src/renderer/src/components/tasks/TaskView.tsx` — task page and its conversation control.
+- `src/main/services/inboxService.ts` — lazy creation, request identity, resume/answer guards and completion.
+- `src/main/services/runExecutionService.ts` — shared main-owned turn lifetime with optional renderer port.
+- `src/main/db/messages.ts` and `src/main/services/messageRoutingService.ts` — transactional message acceptance.
+- `src/main/db/taskInputRequests.ts` — durable next-message rows and selective expiry.
+- `src/main/services/taskService.ts` — task creation, legal start, run-state mapping and settled-task request expiry.
+- `src/main/services/inboxService.test.ts` and `e2e/specs/next-message-inbox.spec.ts` — continuation, restart, identity, sibling and completion coverage.
 
 ## Integration Points
 
-- [Jobs](../jobs/jobs.md) — job tasks are created at execution and retain their own completion hook.
-- [Moving execution across the seam](remote_sync.md#moving-execution-across-the-seam) — remote handover and take-over controls.
-- [A Task on the User’s Other Devices](cross_device.md) — task rows travel; the local conversation does not.
-
-- [Tasks](tasks.md) and [the Inbox](inbox.md) — durable work records and the local/remote answer list.
+- [Jobs](../jobs/jobs.md) — job tasks retain their existing completion hook and attempt.
+- [Moving execution across the seam](remote_sync.md#moving-execution-across-the-seam) — handover and takeover controls.
+- [A Task on the User’s Other Devices](cross_device.md) — task rows travel; local conversations and continuation addresses do not.
+- [Tasks](tasks.md), [the Inbox](inbox.md) and [shared execution](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance) — work records, answer routing and runtime boundaries.

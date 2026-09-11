@@ -86,7 +86,14 @@ function getNextSortOrder(chatId: string): number {
 }
 
 export const messageRepo = {
-  saveUser(msg: SaveUserMessage): string {
+  saveUser(msg: SaveUserMessage, onSaved?: () => void): string {
+    if (onSaved) {
+      return getDb().transaction(() => {
+        const id = this.saveUser(msg)
+        onSaved()
+        return id
+      })
+    }
     const id = nanoid()
     getDb()
       .insert(messages)

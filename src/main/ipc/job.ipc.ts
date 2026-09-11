@@ -73,9 +73,8 @@ export function registerJobHandlers(): void {
 
   ipcHandle('job:cancel-run', async (_event, runId: string) => {
     userActivation.requireActivated()
-    // MVP: local runs are cancelled at the chat layer (existing chat stream
-    // cancel); we only flip pending runs here. Non-terminal running runs
-    // continue until the stream's own done/error path closes them.
+    // Settle the local task and any idle next-message ask as well as the job.
+    // Active stream cancellation remains available through the chat's Stop.
     return jobService.setRunStatus(getProfileScopeUserId(), runId, 'cancelled')
   })
 

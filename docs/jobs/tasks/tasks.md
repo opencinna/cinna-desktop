@@ -10,13 +10,13 @@ A task is the durable record of work: its original goal, current status, assigne
 - **Origin** — where the task was created, local or remote. It does not change when execution moves.
 - **Executor** — where execution belongs now, desktop or remote. A desktop task also carries a device claim; claiming work and starting it are separate actions.
 - **Binding** — the adapter and remote task identity that connect the local record to a service. SQLite remains the desktop's store even when the service is unreachable.
-- **Inbox entry** — an open input request associated with a task. Local entries persist the driver's live reply address; remote entries are fetched from the service and create no local request record.
+- **Inbox entry** — an open input request associated with a task. Local entries persist a live driver reply address or a durable next-message continuation; remote entries are fetched from the service and create no local request record.
 - **Handoff note** — what the next worker needs to continue. Its database value is also exported as a file for tools outside the app.
 
 ## User Stories / Flows
 
 1. **Run saved work.** Execute a job; its attempt receives a task. Open the task from the run history to see the goal, status and available actions, then open its conversation or service view when needed. Deleting the run does not delete the task's record of the work.
-2. **Answer a local agent.** A parked question or permission in a chat appears in the Inbox. A hand-opened chat acquires a task at its first persisted ask. Answer from the Inbox, keep the outcome visible, and return to the task or conversation.
+2. **Answer an agent running here.** A parked question/permission or A2A next-message question appears in the Inbox. A hand-opened chat acquires a task at its first persisted ask. Answer from the Inbox and keep the outcome visible. A next-message answer continues the same agent/chat/task in main without navigating away; its pending request survives app restart.
 3. **Answer remote work.** A locally known blocked task on an ask-capable adapter contributes its live questions to the same Inbox. Its task page offers **Open the Inbox** separately from takeover. A failed delivery keeps the question dialog and draft available for retry.
 4. **Keep remote work current.** The active profile pushes local edits and discovers remote tasks automatically, with five seconds between completed passes. Focus and wake catch up. A bound task page opens its saved record immediately, refreshes in the background and marks failed remote refreshes as stale.
 5. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. See the current completion gaps below.
@@ -30,13 +30,14 @@ A task is the durable record of work: its original goal, current status, assigne
 - **An ask has one rendering.** The Inbox reuses the transcript's permission and question blocks. It counts requests, not a service's notification counter, which may count multiple activities for one question.
 - **An unread Inbox is not empty.** Failed reads preserve the last successful list with an error indication. The badge and task actions cannot infer that nothing is waiting from stale data. The current complete-array contract also means one unavailable remote delays newly arriving local entries; it does not return a misleading partial success.
 - **Answering remote work does not guess its status.** Another session may still be blocked. The remote remains authoritative until the task is refreshed.
+- **A pending continuation prevents premature completion.** Normal turn completion and restart preserve next-message asks. Answers settle only their agent’s requests; sibling asks prevent task/job finalization. A stale card cannot resume settled or remotely claimed work.
+- **An explicit ending closes idle continuations.** Completing, failing, cancelling or archiving a task expires its next-message requests and settles its linked active job attempt; stale cards cannot restart it.
 - **A failed question delivery keeps the draft.** The modal stays open, disables edits and dismissal while sending, and shows the refusal beside the submission control. An acted-on Inbox card remains until the user leaves the view.
 
 ## Current Completion Gaps
 
 - Taking over a task without a local conversation has no desktop-start control yet. There is no general task hand-off IPC/picker; jobs are the production handover entry point.
-- A `next_message` ask has no parked reply address and writes no Inbox row. A hand-opened chat does not acquire a task for it; a job's completion path can still finish a task whose A2A agent requested the user's next message. This continuation lifecycle remains separate from the completed `reply` ask path.
-- Headless execution, coordinator handback, the script router and attach/replay remain later runtime work; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
+- Autonomous multi-turn execution, coordinator handback, the script router and attach/replay remain later runtime work; the existing headless path continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.
@@ -45,7 +46,7 @@ These are remaining implementation boundaries, not claims that the task runtime 
 
 Job or chat → task service → SQLite task → task page.
 
-Run input event → persisted local request; blocked bound task → remote adapter asks; both → Inbox → shared request block → local driver or remote adapter answer.
+Run input event → persisted local request; blocked bound task → remote adapter asks; both → Inbox → shared request block → local driver reply, same-chat next-message continuation or remote adapter answer.
 
 Task writes → device sync and handoff export; activated profile / focus / wake → task sync scheduler → dirty push then remote pull/reconcile → bound service.
 

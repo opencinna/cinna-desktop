@@ -293,7 +293,7 @@ describe('a2aInputRequestOf', () => {
     })
   })
 
-  it('asks no question when input-required carries no text', () => {
-    expect(a2aInputRequestOf('input-required', undefined)).toEqual({ kind: 'question', questions: [] })
+  it('offers a free-text answer when input-required carries no text', () => {
+    expect(a2aInputRequestOf('input-required', undefined)).toEqual({ kind: 'question', questions: [{ question: 'What should the agent do next?', multiSelect: false, options: [] }] })
   })
 })

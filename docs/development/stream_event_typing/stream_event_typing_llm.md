@@ -6,10 +6,10 @@ Project-specific wire contract for every `MessagePort` that carries a turn. LLM-
 
 | Send path | Posts `RunEvent` from | Receiver |
 |-----------|-----------------------|----------|
-| `agent:send-message` — a direct agent chat (A2A, or a folder agent over ACP) | `a2aStreamingService.streamToAgent`, the driver's `onEvent` (`runAgentTurn`, `LocalAgentTurnRunner`, `ClaudeAgentTurnRunner`), `StreamPartsAccumulator`, `postRunError` in `agent_a2a.ipc.ts` | `useChatStream.handleRun` |
-| `llm:send-message` — an LLM chat, orchestrated or not | `chatStreamingService`, `postRunError` in `llm.ipc.ts` | `useChatStream.handleRun` |
+| `run:send` (legacy agent/model channels forward here) | Shared executor → agent/model streaming service and driver/accumulator events | Main observer, then optional `useChatStream.handleRun` subscriber |
+| Inbox next-message continuation | Same executor/services, without a renderer port | Main Inbox observer and persisted transcript |
 
-One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one handler. The two IPC channels still exist; what differs between them is **which** variants a sender posts, never the shape of one.
+One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one renderer handler. `runExecutionService` owns the turn independently of its optional port; this is not an attach/replay API. See [shared lifetime and acceptance](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
 
 ### The overturned rule: "Distinct unions — never unify"
 
@@ -39,7 +39,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 | `isAgentStreamEvent`, `isLlmStreamEvent` | `isRunEvent` |
 | `useChatStream.handleAgent`, `handleLlm` | `useChatStream.handleRun` |
 
-**Persisted `messages.parts` did not change.** An ask is still stored as a `tool` part with a reserved name and a `per_` / `que_` id. The events are live-only, so every path that reads a transcript still recognises an ask by name and id (`src/shared/localAgentRequests.ts`) — a reloaded chat has no events to read.
+**Persisted `messages.parts` did not change.** The Inbox separately stores continuation requests in `task_input_requests`; this paragraph describes transcript parts only. An ask is still stored as a `tool` part with a reserved name and a `per_` / `que_` id. The events are live-only, so every path that reads a transcript still recognises an ask by name and id (`src/shared/localAgentRequests.ts`) — a reloaded chat has no events to read.
 
 ## Variants
 
@@ -57,7 +57,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 `InputRequest`:
 
 - `permission { action, resources, callId? }` — OpenCode and Claude asks. `action` is the engine's own word (`bash`, `Bash`, `WebFetch`)
-- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts only, as one open question — or none when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
+- `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts only, as one open question — with ‘What should the agent do next?’ when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
 - `auth { message, method?, url? }` — A2A `auth-required`; `message` falls back to `A2A_AUTH_REQUIRED_FALLBACK` when the status carries no text
 - `elicitation { message, schema }` — declared, posted by nothing yet
 
@@ -65,10 +65,10 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 
 | | `resume: 'reply'` | `resume: 'next_message'` |
 |---|---|---|
-| Posted by | `LocalAgentTurnRunner.park()`, the permission gate in `ClaudeAgentTurnRunner` | `runAgentTurn`, on a `status-update` frame |
+| Posted by | ACP permission/question parks | `runAgentTurn`, on status-update, streamed task or nonstreaming task responses |
 | Means | the run is parked **now**; the answer goes by id through `agent:answer-request`, and the address dies with the turn | the protocol ended the turn; the user's next message is the answer |
 | `requestId` | the engine's `per_*` / `que_*` id — the same id as the ask's `tool` part `toolId` | the A2A task id |
-| Makes a block answerable | yes | never — the composer is the answer path |
+| Makes a block answerable | live transcript/Inbox reply controls | durable Inbox question; a typed chat message can also continue the owning agent |
 | Followed by `input_resolved` | when settled while the turn is open | never |
 
 Rules, each pinned by a driver-contract clause (see [The driver contract](../../agents/local_agents/agent_turn_tech.md#the-driver-contract)):
@@ -77,7 +77,8 @@ Rules, each pinned by a driver-contract clause (see [The driver contract](../../
 - **One `needs_input` per ask**, not repeated on the way out (`park.needs_input`)
 - **One `input_resolved` per ask settled while the turn is open, after its `needs_input`** (`park.input_resolved`). An answer carries what was posted; a reject or a park timeout carries `{ kind: 'rejected' }` (`park.reject`, `park.timeout`). An ask the engine settles itself — answered from another window, or OpenCode echoing our own reply as `permission.v2.replied` — is reported once: `resolvedIds` dedupes, and `engineResolution` reads the resolution off the event, falling back to `rejected` for anything the desktop's vocabulary cannot state. Both runners post it **before** the decision line, so the block stops offering buttons before the transcript says what was decided
 - **Teardown posts nothing.** The ACP driver holds an `open` flag and closes it before its `finally` sweeps what is parked, so an ask the turn's own ending settles gets no `input_resolved` — the terminal `done` or `error` already says nothing is parked
-- **A2A posts `needs_input` from the streaming path's `status-update` only**, after the `status` and after the delta that already showed the question's text. A `task` frame that arrives already parked posts no `status` and so no `needs_input`, and neither does the non-streaming `message/send` path
+- **A2A normalizes every task response path.** `status-update`, streamed `task` and nonstreaming `message/send` task responses post `status` and the matching `needs_input`. Input-required without text still produces an open question; auth-required produces the existing sign-in fallback.
+- **Protocol request identity is not Inbox occurrence identity.** The event carries the A2A task id; main derives a durable next-message address from chat, agent, invocation and protocol request. A child invocation adds its tool-call identity. Normal done/boot preserve those rows; reply parks expire. The Inbox never depends on replaying this live event list.
 
 ## Receiver: `handleRun` and the Chat Store
 

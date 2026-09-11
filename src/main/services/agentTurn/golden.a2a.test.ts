@@ -342,7 +342,9 @@ describe('a2a abort, characterised', () => {
       signal: controller.signal,
       onEvent: (event) => {
         events.push(event)
-        markStarted()
+        // The opening task now emits submitted. Wait until the last queued
+        // working frame has arrived before testing a genuinely silent stream.
+        if (event.type === 'status' && event.state === 'working') markStarted()
       }
     })
     await started
@@ -364,7 +366,7 @@ describe('a2a abort, characterised', () => {
     // still working: no error, no `canceled`.
     expect(result.error).toBeUndefined()
     expect(result.taskState).toBe('working')
-    expect(events.map((e) => e.type)).toEqual(['status'])
+    expect(events.map((e) => e.type)).toEqual(['status', 'status'])
   })
 })
 
@@ -483,7 +485,7 @@ function heldTurn({
         signal: io.signal,
         onEvent: (event) => {
           io.onEvent(event)
-          markStarted()
+          if (event.type === 'status' && event.state === 'working') markStarted()
         }
       })
     }

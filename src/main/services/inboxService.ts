@@ -1,3 +1,4 @@
+import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
 import { taskRepo, type TaskRow } from '../db/tasks'
 import { chatRepo } from '../db/chats'
@@ -7,6 +8,9 @@ import { routerOf } from '../../shared/chatRouting'
 import { taskService } from './taskService'
 import { deliverAnswer } from './askDelivery'
 import { remoteInboxService } from './remoteInboxService'
+import { runExecutionService } from './runExecutionService'
+import { agentService } from './agentService'
+import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
@@ -17,56 +21,23 @@ import type { TaskInputRequestStatus } from '../../shared/tasks'
 const logger = createLogger('inbox')
 
 /**
- * The inbox — every ask waiting on a human, in one list, answerable with the
- * chat closed.
+ * Persistent human-input requests, answerable with the conversation closed.
  *
- * ## Two registries, and only one of them is the truth the user sees
+ * Reply requests mirror a live driver's pending address and expire at turn end
+ * or boot. Next-message requests instead retain the A2A session in SQLite and
+ * survive normal turn completion and restart. Their address includes the local
+ * turn/child invocation, because a protocol task id may ask again later.
  *
- * `agentTurn/pendingRequests` is the **live address**: an in-memory entry
- * inside the driver process that is parked on the ask, which dies with the
- * turn and with the app. `task_input_requests` is the **record**: it outlives
- * the chat view, survives a navigation, and is what the inbox renders. They are
- * written at the same moment and settled at the same moment, and this service
- * is the only place that knows about both.
+ * Every attributable ask gets a task, creating one for a hand-opened chat when
+ * needed. The shared execution service observes events before forwarding them
+ * to an optional renderer. Inbox answers and typed messages use the same local
+ * acceptance transaction: save the user message, settle this agent's prior
+ * request, and validate that this device may continue the task. The driver then
+ * runs independently of the view. A refused dispatch preserves the old ask.
  *
- * The inbox never reads `pendingRequests` to build a list (the plan's first
- * risk). It reads it exactly once, at the moment of answering, because that is
- * when "is this address still live" is the question being asked.
- *
- * ## What gets a row
- *
- * A `reply` ask — parked, answerable *now*, by request id. A `next_message`
- * ask (A2A `input-required`) writes **no row**: the protocol ended the turn and
- * the answer is the user's next message in the chat, so a row would be a button
- * with nothing behind it. Its task is marked `blocked`, but only until the turn
- * that asked reports how it ended — **and for A2A that ending is a success**,
- * because ending the turn *is* how the protocol asks. So
- * `jobService.reportRunCompletion` immediately walks the task on to
- * `completed`, and a job run whose agent is waiting for a reply reads as
- * finished.
- *
- * That is a real gap and it is deliberately left open here: closing it means
- * mirroring the run's *state* onto the task (a `status` event per A2A
- * status-update, on a path that has no task index), or teaching
- * `reportRunCompletion` that a blocked task stays blocked — which on its own
- * would strand the task in `blocked` for ever, since nothing would move it back
- * when the user's next message resumes the work. It belongs with step 11, where
- * the A2A/remote path folds onto the adapter. Recorded in the phase file.
- *
- * **A chat with no task gets one, at its first ask** — see {@link taskForChat}.
- * The table's `task_id` is the scope every read goes through, so until step 11
- * an ask raised in a chat the user opened by hand was answerable in the
- * transcript and in no list at all. That was this phase's own exit criterion
- * going unmet for the commonest way a person meets an agent.
- *
- * ## Nothing here is allowed to throw into a stream
- *
- * {@link inboxService.recordRunEvent} runs inside the turn's event pump, ahead
- * of `port.postMessage`. A throw from it would surface as a failure of the
- * *turn* — the ask would never reach the renderer and the agent would sit
- * parked — so every path through it is caught and logged. Bookkeeping is not
- * allowed to break the work it is recording, the same rule
- * `jobService.reportRunCompletion` follows for the same reason.
+ * Stream observation must never throw into execution. The recorder catches
+ * bookkeeping errors; explicit answer/admission methods report refusals to the
+ * caller. One agent finishing does not consume another agent's next-message ask.
  */
 
 /**
@@ -79,7 +50,7 @@ const logger = createLogger('inbox')
  * task list would keep.
  */
 function endedAs(event: Extract<RunEvent, { type: 'done' | 'error' }>): RunState {
-  if (event.type === 'error') return 'failed'
+  if (event.type === 'error' || event.stopReason === 'error' || event.stopReason === 'budget') return 'failed'
   return event.stopReason === 'canceled' ? 'canceled' : 'completed'
 }
 
@@ -114,6 +85,8 @@ export interface RunEventContext {
   chatId: string
   /** Who is answering. Null on the model's own turn; a `child` event names its own. */
   agentId: string | null
+  /** Main-owned turn identity, independent of any protocol task id. */
+  turnId?: string
 }
 
 /**
@@ -228,7 +201,8 @@ export const inboxService = {
         // a nested agent's deltas come through here by the thousand.
         const inner = event.event
         if (inner.type === 'needs_input' || inner.type === 'input_resolved') {
-          this.recordRunEvent({ ...ctx, agentId: event.agentId }, inner)
+          this.recordRunEvent({ ...ctx, agentId: event.agentId,
+            turnId: `${ctx.turnId ?? ctx.chatId}:${event.toolCallId}` }, inner)
         }
         return
       }
@@ -249,19 +223,9 @@ export const inboxService = {
 
   /** A run parked on a human. The row first, then the task's status. */
   openAsk(ctx: RunEventContext, event: Extract<RunEvent, { type: 'needs_input' }>): void {
-    // **A task is minted only for an ask that will actually have a row.**
-    // `taskForChat` exists so an ask in a hand-opened chat reaches the inbox, and
-    // a `next_message` ask never reaches it: the protocol ended the turn, there
-    // is no address to answer, and no row is written. A task created for one
-    // would hold nothing, and it would hold it in `blocked` — `endTurn` only
-    // returns a task to `in_progress` when it expired a row, and a plain chat
-    // has no job run for `reportRunCompletion` to finish it through either. So
-    // the task would sit `blocked` for the life of the profile, offering a
-    // re-run for a conversation the user's next message already resumes.
-    //
-    // An ask in a chat that *already* has a task is unaffected: that task is
-    // marked `blocked` whatever the resume kind, exactly as before.
-    const writesRow = event.resume === 'reply' && !!ctx.agentId
+    // An attributable ask always has a delivery path: a parked driver address
+    // or a new message to the same agent through the main execution service.
+    const writesRow = !!ctx.agentId
     const task =
       taskRepo.getByChatId(ctx.userId, ctx.chatId) ?? (writesRow ? taskForChat(ctx) : null)
     if (!task) return
@@ -270,9 +234,15 @@ export const inboxService = {
     // has to act on; a `blocked` task whose ask was never recorded is a dead
     // end, while a recorded ask on a task that is still `in_progress` is merely
     // a status one beat behind.
-    if (event.resume === 'reply' && ctx.agentId) {
+    if (ctx.agentId) {
+      const requestId = event.resume === 'next_message'
+        ? `next-message:${JSON.stringify([ctx.chatId, ctx.agentId, ctx.turnId ?? nanoid(), event.requestId])}`
+        : event.requestId
+      // A status frame may repeat during a turn. A later turn has a fresh
+      // address, so answering an old retained card cannot answer its new ask.
+      if (event.resume === 'next_message' && taskInputRequestRepo.getById(requestId)) return
       taskInputRequestRepo.open({
-        requestId: event.requestId,
+        requestId,
         taskId: task.id,
         chatId: ctx.chatId,
         agentId: ctx.agentId,
@@ -302,38 +272,24 @@ export const inboxService = {
    */
   closeAsk(ctx: RunEventContext, requestId: string, resolution: RequestResolution): void {
     const row = taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution)
-    // No row: a `next_message` ask, an ask raised in a chat that had already
-    // gone (so `taskForChat` had nothing to make a task from), or one this
-    // service has already settled. None of them is a fault, and none of them
-    // changes a task's status — the answer path did that already.
+    // Missing/settled rows are harmless. Next-message requests settle through
+    // message acceptance, rather than a driver's input_resolved frame.
     if (!row) return
     markTask(ctx.userId, row.taskId, 'working')
   },
 
   /**
-   * The turn ended. Anything it was still parked on died with it.
-   *
-   * **A driver does not always announce the asks it abandons.** The ACP driver
-   * closes the turn before releasing its parks, and `input_resolved` is gated on
-   * the turn being open — so a Stop, the turn ceiling and a crash all settle the
-   * registry in silence. An ask recorded by such a turn would otherwise stay
-   * open until the next restart, offering a button whose only outcome is "no
-   * longer waiting for an answer".
-   *
-   * Only a **top-level** ending sweeps, never a `child`'s: a coordinator can
-   * have several agents in flight in one chat, and one of them finishing says
-   * nothing about what another is parked on.
-   *
-   * A task left `blocked` by an ask that has just died is no longer waiting for
-   * anybody, so it goes back to `in_progress` — which is also the state
-   * `jobService.reportRunCompletion` needs to find it in a beat later, when it
-   * writes the outcome the run actually had.
+   * A normal ending expires only live reply addresses; next-message requests
+   * survive. Failure/stop also abandons this agent's continuation ask, while
+   * another agent's waiting question keeps the enclosing task blocked. A root
+   * model cancellation abandons its child asks along with the enclosing turn.
    */
   endTurn(
     ctx: RunEventContext,
     event: Extract<RunEvent, { type: 'done' | 'error' }>
   ): void {
-    const expired = taskInputRequestRepo.expireOpenForChat(ctx.chatId)
+    const normalEnd = event.type === 'done' && (!event.stopReason || event.stopReason === 'end_turn')
+    const expired = taskInputRequestRepo.expireOpenForChat(ctx.chatId, normalEnd, ctx.agentId ?? undefined)
     const task = taskRepo.getByChatId(ctx.userId, ctx.chatId)
     if (expired > 0) {
       logger.info('a turn ended while it was still parked; its asks are expired', {
@@ -342,6 +298,10 @@ export const inboxService = {
       })
     }
     if (!task) return
+    if (taskInputRequestRepo.listOpenForChat(ctx.chatId).some((row) => row.resume === 'next_message')) {
+      markTask(ctx.userId, task.id, 'needs_input')
+      return
+    }
 
     // **A task a job run owns is finished by the job run**, and must be left in
     // `in_progress` for it to find: `jobService.reportRunCompletion` knows the
@@ -368,11 +328,42 @@ export const inboxService = {
     markTask(ctx.userId, task.id, endedAs(event))
   },
 
+  hasNextMessage(userId: string, chatId: string): boolean {
+    return !!chatRepo.getOwned(userId, chatId) && taskInputRequestRepo.listOpenForChat(chatId)
+      .some((row) => row.resume === 'next_message')
+  },
+
+  /** A typed chat message and an Inbox answer resume the same waiting turn. */
+  resumeChat(ctx: RunEventContext, content: string): void {
+    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    const linked = taskRepo.getByChatId(ctx.userId, ctx.chatId)
+    if (linked && ['new', 'refining', 'open', 'in_progress', 'blocked'].includes(linked.status)) {
+      const task = taskService.getById(ctx.userId, linked.id)
+      if (task.executor !== 'desktop' || !task.runsHere) {
+        throw new Error('This task is running elsewhere. Take it over before continuing here.')
+      }
+    }
+    for (const row of taskInputRequestRepo.listOpenForChat(ctx.chatId)) {
+      if (row.resume !== 'next_message' || row.agentId !== ctx.agentId) continue
+      const task = taskService.getById(ctx.userId, row.taskId)
+      if (!['blocked', 'in_progress'].includes(task.status) || task.executor !== 'desktop' || !task.runsHere) {
+        throw new Error('This task is no longer waiting for this answer.')
+      }
+      taskInputRequestRepo.settle(row.id, 'answered', { kind: 'question', answers: [[content]] })
+      markTask(ctx.userId, row.taskId, 'working')
+    }
+  },
+
   /** Everything waiting on this profile, newest first. */
   async list(userId: string): Promise<InboxEntry[]> {
     const remote = await remoteInboxService.list(userId)
     const local = taskInputRequestRepo
       .listOpen(userId)
+      .filter(({ row }) => {
+        if (row.resume === 'reply') return true
+        const task = taskService.getById(userId, row.taskId)
+        return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
+      })
       .map(({ row, taskTitle }) => toEntry(row, taskTitle))
     return [...local, ...remote].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
   },
@@ -415,14 +406,42 @@ export const inboxService = {
         code: 'already_answered'
       }
     }
-    if (row.resume !== 'reply') {
-      // Unreachable while only `reply` asks get rows, and here so that stays
-      // true out loud: a `next_message` ask is answered by writing in the chat,
-      // and there is no address for this path to post to.
-      return {
-        ok: false,
-        reason: 'Open the conversation to answer this one.',
-        code: 'not_here'
+    if (row.resume === 'next_message') {
+      if (!['blocked', 'in_progress'].includes(task.status)) {
+        taskInputRequestRepo.settle(requestId, 'expired')
+        return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
+      }
+      if (resolution.kind !== 'question' || resolution.answers.length === 0 ||
+        !resolution.answers.some((answers) => answers.some((text) => text.trim().length > 0))) {
+        return { ok: false, reason: 'Enter an answer before sending.', code: 'malformed' }
+      }
+      if (!taskService.getById(userId, task.id).runsHere || task.executor !== 'desktop') {
+        return { ok: false, reason: 'This task is now running elsewhere.', code: 'not_here' }
+      }
+      const settingsUserId = getSettingsScopeUserId()
+      if (!chatRepo.getOwned(userId, row.chatId) ||
+        !agentService.findAgent(settingsUserId, userId, row.agentId)) {
+        return { ok: false, reason: 'The conversation or its agent is no longer available.', code: 'not_here' }
+      }
+      // Check the active owner before consuming the ask. A simultaneous typed
+      // answer or another card must not launch a second turn in this chat.
+      if (runExecutionService.isRunning(row.chatId)) {
+        return { ok: false, reason: 'This conversation is still finishing its turn. Try again shortly.', code: 'unavailable' }
+      }
+      const content = resolution.answers.map((answers) => answers.join(', ')).join('\n')
+      try {
+        const handle = runExecutionService.start({ profileUserId: userId, settingsUserId }, {
+          chatId: row.chatId, content, addressedAgentId: row.agentId
+        }, {
+          observe: (ctx, event) => this.recordRunEvent(ctx, event),
+          preserveOnRefusal: true,
+          agentId: row.agentId,
+          onAccepted: (ctx) => this.resumeChat(ctx, content)
+        })
+        await handle.accepted
+        return { ok: true }
+      } catch (error) {
+        return { ok: false, reason: error instanceof Error ? error.message : 'The answer could not be sent.', code: 'unavailable' }
       }
     }
 
