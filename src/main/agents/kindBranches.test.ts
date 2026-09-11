@@ -41,6 +41,16 @@ import { fileURLToPath } from 'node:url'
  *                    `…Type` suffix, because `remoteTargetType === 'agent'` and
  *                    every `mimeType` would come with it
  * - `providerType` — `providerType` against `'mcp' | 'agent'`
+ * - `remoteAdapter` — an **equality comparison against an adapter id** (`'cinna'`,
+ *                    and the ids §5.6 names as the reason the seam is an
+ *                    interface): `remoteAdapter === 'cinna'`, `adapter.id ===
+ *                    'cinna'`. Deliberately *not* every read of
+ *                    `remote_adapter` — `taskRepo`, `taskService` and
+ *                    `schema.ts` legitimately read it to ask *whether* a task
+ *                    is bound and to pass the opaque id through to the DTO, and
+ *                    a category that counted those would enter non-zero on code
+ *                    that branches on nothing. Comparing it to a literal is the
+ *                    thing that turns `cinna` from a file into a concept.
  * - `routing`      — every read of `.orchestrated`, the boolean that used to say
  *                    who answers in a chat. `chat.agentId && !chat.orchestrated`
  *                    was re-derived in five places before phase 4; the column
@@ -69,6 +79,16 @@ import { fileURLToPath } from 'node:url'
  *   worth it for one site today (`sync/identity.ts`, allowlisted anyway).
  * - Membership and lookup: `['local', 'folder'].includes(a.source)`,
  *   `LABELS[agent.kind]`, a `Record<AgentSource, …>`.
+ * - **A subject renamed off the word the pattern looks for.** `adapterId ===
+ *   'cinna'`, `service === 'cinna'`, a bare `id === 'cinna'` — every one a
+ *   quoted-literal comparison, which is exactly what `remoteAdapter` claims to
+ *   count, defeated by a one-word variable name. Worse in kind than the rest of
+ *   this list, which is why it is spelled out: the category's own description
+ *   would otherwise imply that literal comparisons are all caught. Widening the
+ *   subject to any identifier would count `id === 'cinna'` in the auth and
+ *   account-type code that legitimately compares against that string
+ *   (`auth.ipc.ts`, `fileService`, `RegisterForm`), so the subject stays narrow
+ *   and this stays a known gap.
  * - A branch behind a helper other than those two. A new helper is
  *   invisible until its call pattern is added here — which is the honest thing
  *   to do in the commit that introduces it.
@@ -76,7 +96,14 @@ import { fileURLToPath } from 'node:url'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../..')
 
-type Category = 'source' | 'engine' | 'kind' | 'jobType' | 'providerType' | 'routing'
+type Category =
+  | 'source'
+  | 'engine'
+  | 'kind'
+  | 'jobType'
+  | 'providerType'
+  | 'routing'
+  | 'remoteAdapter'
 
 const CATEGORIES: Category[] = [
   'source',
@@ -84,8 +111,24 @@ const CATEGORIES: Category[] = [
   'kind',
   'jobType',
   'providerType',
-  'routing'
+  'routing',
+  'remoteAdapter'
 ]
+
+/**
+ * The ids a `RemoteTaskAdapter` can have. `cinna` is the only one implemented;
+ * the other three are the worked examples in §5.6 that the seam exists for, and
+ * naming them here means the first `remoteAdapter === 'linear'` is counted the
+ * day it is written rather than the day someone remembers to add it.
+ */
+const ADAPTER_IDS = ['cinna', 'linear', 'github', 'a2a']
+
+/**
+ * The two ways an adapter is named **without a string literal**: a
+ * screaming-case constant with ADAPTER in it (`CINNA_ADAPTER_ID`), and a
+ * concrete adapter's own `id` (`cinnaTaskAdapter.id`).
+ */
+const ADAPTER_CONSTANT = '(?:[A-Z][A-Z0-9_]*ADAPTER[A-Z0-9_]*|[a-z]\\w*Adapter\\.id)'
 
 /** Non-allowlisted branch sites per category, exactly as measured. Lowered by each phase. */
 const LIMITS: Record<Category, number> = {
@@ -121,7 +164,15 @@ const LIMITS: Record<Category, number> = {
   // router, pinned per file in `OWNERSHIP`. The category exists so the next
   // read of the column — in the phase before it is dropped — has to be
   // deliberate.
-  routing: 0
+  routing: 0,
+  // **Zero from the day it was added**, and phase 5 step 8 is the step that
+  // added it. `cinna` is a file, not a concept: `adapterFor(id)` is the one
+  // lookup, `capabilities()` is what a caller asks, and nothing outside
+  // `src/main/tasks/adapters/` (allowlisted) names a service. The category
+  // exists so that the first `if (task.remoteAdapter === 'cinna')` — the
+  // cheapest thing to write when step 11 folds in the `cinna_task` job path —
+  // fails this test instead of shipping.
+  remoteAdapter: 0
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
@@ -138,6 +189,9 @@ const LIMIT = 78
 const ALLOWLIST: string[] = [
   // A driver is where a kind branch belongs (phase 2).
   'src/main/agents/drivers/',
+  // And an adapter is where a *remote* branch belongs (phase 5). The registry
+  // and the null adapter name ids because looking one up is their whole job.
+  'src/main/tasks/adapters/',
   // And the routing helper is where a *routing* branch belongs (phase 4). Its
   // one read of `orchestrated` is the fallback for a chat DTO that predates
   // `chats.router` — the whole reason the mirror is still written.
@@ -282,6 +336,24 @@ const PATTERNS: Record<Category, RegExp[]> = {
   kind: comparisons('(?:kind|\\w*Kind)', ['kit', 'bare', 'workshop', 'external']),
   jobType: comparisons('type', ['local', 'cinna_task']),
   providerType: comparisons('providerType', ['mcp', 'agent']),
+  remoteAdapter: [
+    ...comparisons('(?:adapter|\\w*Adapter)', ADAPTER_IDS),
+    // The same branch reached through the object: `adapter.id === 'cinna'`.
+    new RegExp(
+      `\\b(?:adapter|\\w*Adapter)!?\\??\\.id\\s*${OP}\\s*${QUOTE}(?<value>${ADAPTER_IDS.join('|')})\\1`,
+      'g'
+    ),
+    // **And the same branch with no literal in it at all.** `source` has this
+    // exact hole and closed it with the two `FOLDER_AGENT_SOURCE` patterns
+    // above — whose comment records that it went unseen until someone read the
+    // tree by hand. The trigger here is step 9: the moment `cinnaTaskAdapter`
+    // exists, `binding.adapter === cinnaTaskAdapter.id` is the *natural* way to
+    // write the branch, and it reads more correct than the literal does — no
+    // magic string — which is what makes it likely rather than merely possible.
+    // A screaming-case constant naming an adapter is the other shape.
+    new RegExp(`\\b(?:adapter|\\w*Adapter)!?\\??(?:\\.id)?\\s*${OP}\\s*${ADAPTER_CONSTANT}`, 'g'),
+    new RegExp(`${ADAPTER_CONSTANT}\\s*${OP}\\s*${RECEIVER}\\b(?:adapter|\\w*Adapter)\\b`, 'g')
+  ],
   // Any read of the property, not a comparison: the re-derivations that phase 4
   // removed were `chat.agentId && !chat.orchestrated` and `chatData?.orchestrated
   // ? … : …`, neither of which compares it to a literal. A `key: value` write
