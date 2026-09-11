@@ -1,5 +1,7 @@
 # Jobs — Technical Details
 
+Task records and Inbox channels are documented in [Tasks: Technical Details](../tasks/tasks_tech.md); job attempts retain their own completion and refresh hooks.
+
 ## File Locations
 
 ### Main process

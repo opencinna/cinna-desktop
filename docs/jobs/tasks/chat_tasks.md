@@ -30,7 +30,7 @@ An agent asking for input in a conversation opened by hand must reach the same i
 
 ## Architecture Overview
 
-Run event → inboxService.onRunEvent → openAsk → existing task or taskForChat → taskService.create / start → task_input_requests → Inbox → task page → original conversation.
+Run event → inboxService.recordRunEvent → openAsk → existing task or taskForChat → taskService.create / start → task_input_requests → Inbox → task page → original conversation.
 
 Root done / error → inboxService.endTurn → expire open asks → finish chat-owned task, or leave the job-owned outcome to jobService.reportRunCompletion.
 
@@ -46,3 +46,5 @@ Root done / error → inboxService.endTurn → expire open asks → finish chat-
 - [Jobs](../jobs/jobs.md) — job tasks are created at execution and retain their own completion hook.
 - [Moving execution across the seam](remote_sync.md#moving-execution-across-the-seam) — remote handover and take-over controls.
 - [A Task on the User’s Other Devices](cross_device.md) — task rows travel; the local conversation does not.
+
+- [Tasks](tasks.md) and [the Inbox](inbox.md) — durable work records and the local/remote answer list.

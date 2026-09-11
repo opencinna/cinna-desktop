@@ -97,6 +97,8 @@ useTaskAttachmentDownload().download({ taskId, attachmentId, filename })
 
 ## Integration Points
 
+- [Tasks and the Inbox](../tasks/tasks.md) — the task page owns work status and takeover; the Inbox answers enumerated remote questions, while this service view retains conversation and attachment browsing.
+
 - [Jobs](../jobs/jobs.md) — Cinna-task runs originate from a Cinna Task Job's `Run` button. The task view is reached from the job's run history.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — All cinna-core HTTP requests use the active Cinna OAuth bearer token; 401/403 raises `CinnaApiError('reauth_required')`.
 - [File Attachments](../../chat/file_attachments/file_attachments.md) — Reuses the `AttachmentList` badge UI but with a separate download path; `TaskAttachment` ≠ `FileUpload`.

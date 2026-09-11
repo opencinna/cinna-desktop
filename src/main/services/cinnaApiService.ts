@@ -103,7 +103,9 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
   const started = Date.now()
   let response: Response
   try {
-    response = await net.fetch(url, { method, headers, body })
+    // Includes reading the body: a server that sends headers and then stalls
+    // must release inbox answers and polling work as well as initial connects.
+    response = await net.fetch(url, { method, headers, body, signal: AbortSignal.timeout(30_000) })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('network error', { url, method, error: msg, durationMs: Date.now() - started })

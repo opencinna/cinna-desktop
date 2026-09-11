@@ -501,11 +501,11 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
     And a task a *service* is running, for the same reason in the same place:
     every arm below offers something this device cannot do to work it does not
     hold. The re-run has no chat to send into — a remote task never had one —
-    and the Inbox cannot contain its asks, which live on the service and are
-    read through the adapter rather than out of `task_input_requests`.
+    but the Inbox can now contain its asks, read through the adapter. The
+    remote banner keeps that action separate from taking over execution.
   */
   if (task.executor === 'remote' && CLAIM_MATTERS.includes(task.status)) {
-    return <RemoteBanner task={task} />
+    return <RemoteBanner task={task} asks={asks} />
   }
 
   if (task.status === 'blocked' && asks.count > 0) {
@@ -727,7 +727,8 @@ function ElsewhereBanner({ task }: { task: TaskDto }): React.JSX.Element {
  * `RerunBanner` both follow: these arms replace each other on a poll, and two
  * controls that can swap without a gesture must not share pixels.
  */
-function RemoteBanner({ task }: { task: TaskDto }): React.JSX.Element {
+function RemoteBanner({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX.Element {
+  const setActiveView = useUIStore((s) => s.setActiveView)
   const { takeOver, isPending } = useTakeOverTask()
   const { data: live, isPending: livePending, refetch } = useRemoteLiveSession(task)
   const [error, setError] = useState<string | null>(null)
@@ -862,7 +863,15 @@ function RemoteBanner({ task }: { task: TaskDto }): React.JSX.Element {
           a rendered placeholder: an empty row is what a live task keeps for
           good, and it should read as spacing rather than as something missing.
         */}
-        <div className="flex justify-end min-h-[1.75rem] items-center">
+        <div className="flex justify-between gap-2 min-h-[1.75rem] items-center">
+          <div>
+            {task.status === 'blocked' && asks.count > 0 && (
+              <button type="button" onClick={() => setActiveView('inbox')}
+                className="px-2.5 py-1 rounded-md text-[11px] font-medium text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)]">
+                Open the Inbox
+              </button>
+            )}
+          </div>
           {offered && (
             <button
               type="button"

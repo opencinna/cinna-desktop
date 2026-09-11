@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Check, CheckCircle2, HelpCircle } from 'lucide-react'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { AnswerQuestionsModal } from './AnswerQuestionsModal'
@@ -136,37 +136,46 @@ function AnswerAffordance({
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
+  const submitting = useRef(false)
   // Route a cloud agent's answer through the canonical composer, so it reaches
   // whoever the chat's router says answers — the same resolution as every other
   // turn, including the agent this chat is currently addressed to. The answer
   // auto-threads onto the chat's existing context so the agent resumes.
   const { submit } = useChatComposer(chatId)
 
-  const handleSubmit = (text: string, structured: string[][]): void => {
+  const handleSubmit = async (text: string, structured: string[][]): Promise<void> => {
+    if (submitting.current) return
     // A retry starts clean. Without this a refused answer's red line survived
     // the answer that then landed, and sat under the button saying the opposite
     // of what had just happened.
     setError(null)
-    if (liveRequestId && onAnswerLocal) {
-      void onAnswerLocal(liveRequestId, structured).catch((err) =>
-        setError(err instanceof Error ? err.message : String(err))
-      )
+    submitting.current = true
+    setPending(true)
+    try {
+      if (liveRequestId && onAnswerLocal) {
+        await onAnswerLocal(liveRequestId, structured)
+        setOpen(false)
+        return
+      }
+      // **No chat and no live address: say so rather than do nothing.** The
+      // composer's `submit` returns silently on a null `chatId`, so this branch
+      // used to close the modal, send nothing and report nothing. It is
+      // unreachable from the two callers that exist — the transcript always has a
+      // chat, the inbox always has a request id — and it is exactly what the next
+      // caller would write by accident, now that `chatId` is allowed to be null.
+      if (!chatId) {
+        setError('This question can only be answered in the chat it was asked in.')
+        return
+      }
+      await submit(text)
       setOpen(false)
-      return
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      submitting.current = false
+      setPending(false)
     }
-    // **No chat and no live address: say so rather than do nothing.** The
-    // composer's `submit` returns silently on a null `chatId`, so this branch
-    // used to close the modal, send nothing and report nothing. It is
-    // unreachable from the two callers that exist — the transcript always has a
-    // chat, the inbox always has a request id — and it is exactly what the next
-    // caller would write by accident, now that `chatId` is allowed to be null.
-    if (!chatId) {
-      setError('This question can only be answered in the chat it was asked in.')
-      setOpen(false)
-      return
-    }
-    void submit(text)
-    setOpen(false)
   }
 
   return (
@@ -181,12 +190,14 @@ function AnswerAffordance({
         <HelpCircle size={13} />
         {questions.length > 1 ? 'Answer questions' : 'Answer'}
       </button>
-      {error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
+      {!open && error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
       {open && (
         <AnswerQuestionsModal
           questions={questions}
           onSubmit={handleSubmit}
           onClose={() => setOpen(false)}
+          pending={pending}
+          error={error}
         />
       )}
     </>

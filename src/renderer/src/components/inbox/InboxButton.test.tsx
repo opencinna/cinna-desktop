@@ -122,4 +122,19 @@ describe('InboxButton', () => {
     button.click()
     expect(useUIStore.getState().activeView).toBe('inbox')
   })
+
+  it('reports a failed warm refresh even when the last successful count was zero', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retryDelay: 0 } } })
+    const list = vi.fn<() => Promise<InboxEntry[]>>().mockResolvedValue([])
+    ;(window as unknown as { api: Record<string, unknown> }).api = {
+      app: { setTheme: async () => undefined }, inbox: { list }
+    }
+    render(createElement(QueryClientProvider, { client }, createElement(InboxButton)))
+    await waitFor(() => expect(client.getQueryState(['inbox'])?.status).toBe('success'))
+    list.mockRejectedValue(new Error('service offline'))
+    await client.invalidateQueries({ queryKey: ['inbox'] })
+    const button = await screen.findByRole('button', { name: 'Inbox — could not be read' })
+    expect(slotOf(button).textContent).toBe('!')
+    expect(client.getQueryData(['inbox'])).toEqual([])
+  })
 })

@@ -30,7 +30,7 @@ export function InboxButton(): React.JSX.Element {
   // badge that only counted would report "nothing waiting" for an agent that
   // is parked — and would be the last place anyone looked for the reason. The
   // slot is the same width either way, so saying so moves nothing.
-  const unreadable = isError && !data
+  const unreadable = isError
 
   return (
     <div className="px-1.5 pt-1.5 pb-0.5">

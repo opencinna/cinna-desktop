@@ -161,7 +161,7 @@ Once execution succeeds, local bookkeeping is best-effort. If the row disappeare
 3. `task:take-over(taskId, force?)` probes again. `true` refuses even when forced; `null` requires `force: true`. A stale probe’s refusal stays beside the button and triggers a fresh probe.
 4. `taskService.takeOver` changes the executor and device claim. It starts no work and sends no stop or status command to the remote. A separate run gesture is required; a task without a local chat still needs the desktop-start path.
 
-The remote banner precedes local re-run controls for `in_progress`, `blocked` and `error`. Reserved liveness and control rows keep a late answer from moving the page under the pointer. A task that lost its binding can still be claimed: the probe answers false locally rather than waiting forever for a disabled query.
+The remote banner precedes local re-run controls for `in_progress`, `blocked` and `error`. A blocked task with enumerated asks has **Open the Inbox** in a separate left-hand slot, while takeover stays on the right; answering a question is not a claim on execution. Reserved liveness and control rows keep a late answer from moving the page under the pointer. A task that lost its binding can still be claimed: the probe answers false locally rather than waiting forever for a disabled query.
 
 ## What this deliberately does not do
 
@@ -206,6 +206,8 @@ taskSyncService.reconcile -> adapter.list(userId, null)
 - Tests: `src/main/tasks/taskStatusPath.test.ts`, `src/main/services/taskSyncService.test.ts` (push and pull), `src/main/services/taskSyncService.reconcile.test.ts`, and the four writers' cases in `src/main/services/taskService.test.ts`
 
 ## Integration Points
+
+- [Tasks](tasks.md) and [the Inbox](inbox.md) — durable task UI and live ask enumeration; the five-second Inbox poll does not schedule a remote task pull.
 
 - [Remote Task Adapters](remote_adapters.md) — the seam used for handover, refresh and reconciliation
 - [cinna-core as a Remote Task Adapter](cinna_adapter.md) — the one adapter this build ships, and the source of most of the rules above

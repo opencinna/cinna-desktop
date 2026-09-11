@@ -6,6 +6,7 @@ import { agentRepo } from '../db/agents'
 import { routerOf } from '../../shared/chatRouting'
 import { taskService } from './taskService'
 import { deliverAnswer } from './askDelivery'
+import { remoteInboxService } from './remoteInboxService'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent, RunState } from '../../shared/runEvents'
@@ -368,10 +369,12 @@ export const inboxService = {
   },
 
   /** Everything waiting on this profile, newest first. */
-  list(userId: string): InboxEntry[] {
-    return taskInputRequestRepo
+  async list(userId: string): Promise<InboxEntry[]> {
+    const remote = await remoteInboxService.list(userId)
+    const local = taskInputRequestRepo
       .listOpen(userId)
       .map(({ row, taskTitle }) => toEntry(row, taskTitle))
+    return [...local, ...remote].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
   },
 
   /**
@@ -385,7 +388,10 @@ export const inboxService = {
    *
    * Returns data, never throws (see {@link InboxAnswerResult}).
    */
-  answer(userId: string, requestId: string, resolution: RequestResolution): InboxAnswerResult {
+  async answer(userId: string, requestId: string, resolution: RequestResolution): Promise<InboxAnswerResult> {
+    if (remoteInboxService.isRemoteAddress(requestId)) {
+      return remoteInboxService.answer(userId, requestId, resolution)
+    }
     const row = taskInputRequestRepo.getById(requestId)
     if (!row) return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
     // Scoped through the task, because that is where the user id lives — and a

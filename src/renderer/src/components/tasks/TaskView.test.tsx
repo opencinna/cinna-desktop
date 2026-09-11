@@ -357,6 +357,17 @@ describe('the other states', () => {
       remote: { adapter: 'fake', id: 'x1', key: 'ENG-421', url: null }
     }
 
+    it('opens the inbox for a blocked remote task even while its agent is live', async () => {
+      remoteLive.mockResolvedValue(true)
+      listInbox.mockResolvedValue([{ ...WAITING, source: 'remote', chatId: null }])
+      await renderTask({ ...REMOTE, status: 'blocked', chatId: null })
+      const button = await screen.findByRole('button', { name: 'Open the Inbox' })
+      await act(async () => button.click())
+      expect(useUIStore.getState().activeView).toBe('inbox')
+      expect(takeOver).not.toHaveBeenCalled()
+      expect(runSend).not.toHaveBeenCalled()
+    })
+
     /**
      * §5.10, and the twin of decision 8's refusal for another device. The claim
      * does not stop the agent, so the two outcomes of pressing it are two

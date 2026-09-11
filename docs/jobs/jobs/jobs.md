@@ -263,6 +263,8 @@ Run flow (cinna_task)
 
 ## Integration Points
 
+- [Tasks and the Inbox](../tasks/tasks.md) — each attempt has a durable work record; local and remote asks are answerable from the shared Inbox without opening the run conversation.
+
 - [Messaging](../../chat/messaging/messaging.md) — Local runs spawn a chat that the existing send pipeline drives end-to-end.
 - [Chat Routing](../../chat/chat_routing/chat_routing.md) — a job run makes the same `newChatRouter` decision the new-chat composer makes, and spawns a chat already on that router. `src/shared/chatRouting.ts` is shared by the composer, the job runner and main's send path.
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — a job that mixes agents with MCP servers spawns a coordinated chat that calls each agent/MCP as a tool.

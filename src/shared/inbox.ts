@@ -19,8 +19,8 @@ import type { InputRequest, InputResumeMode } from './runEvents'
  *  - `local` — a run parked on this machine. Answered through the driver that
  *    parked it, by request id.
  *  - `remote` — an open ask on a bound remote system. Answered through its
- *    adapter. **Nothing produces one yet**; the arm is here because the entry
- *    the renderer binds to must not change shape when step 9 lands.
+ *    adapter. Its address includes the local task and remote binding so IDs
+ *    from two services cannot collide.
  */
 export type InboxSource = 'local' | 'remote'
 
@@ -82,6 +82,7 @@ export type InboxAnswerCode =
   | 'not_here'
   | 'not_owned'
   | 'malformed'
+  | 'unavailable'
 
 /** An answer to an ask whose turn has since ended — a stale block, not a fault. */
 export const ASK_NO_LONGER_WAITING = 'This request is no longer waiting for an answer.'

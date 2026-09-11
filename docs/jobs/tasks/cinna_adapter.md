@@ -76,6 +76,10 @@ Each is a real server behaviour with a real cost, and each has a test.
 - **A timestamp with no zone is UTC.** The service serialises naive UTC datetimes, and JavaScript reads a zoneless string as *local* time — which on a machine east of Greenwich makes every pulled task look hours older than it is and, through the cursor, hides the change that produced it
 - **`action_required_count` is a probe, not a quantity.** It is profile-wide, it raises two rows per ask, and it is gated on a read flag only the web clears. It is still the right answer to "is anything waiting over there" — one cheap call, with none of the cursor's blind spot for comment-only changes — but it is not a count any surface can print beside its own rows
 
+## Transport and Inbox Delivery
+
+The production JSON transport in `src/main/services/cinnaApiService.ts` aborts each request after thirty seconds, including a stalled response body. This releases in-flight Inbox work so a later retry can make progress. The Inbox has a separate ten-second user-facing deadline and retains its underlying operation until it settles; it does not assume a timed-out answer was never delivered. See [the Inbox](inbox.md) for binding-scoped request identities, identical-answer coalescing and conflicting-answer refusals.
+
 ## Classifying a failure
 
 The whole taxonomy turns on `not_ours` (unbind for ever) against `rejected` (keep the binding), and on cinna-core both arrive as 400. Telling them apart needs two pieces of evidence the transport did not used to carry, so `CinnaApiError` now holds the **HTTP status** and the server's own **detail** sentence alongside its code. `status` is undefined only for a failure that never became a response — no profile, no server URL, a dead socket, an unparseable body — and that distinction is the point: "the request was refused" and "the request did not happen" are different answers. Both Cinna transports (`cinna-http.ts` and `cinnaApiService.ts`) set it, because an invariant documented on the class and true for only half the traffic is worse than no invariant.
@@ -91,7 +95,7 @@ Uploads are classified in the wiring rather than in the adapter, because they do
 
 ## What this deliberately does not do
 
-- **It does not subscribe.** The answer route streams; this adapter posts and reads a flag, and never opens the stream
+- **It does not subscribe.** The answer endpoint returns a JSON stream-start result; later conversation events are emitted over the service’s WebSocket. The adapter posts the answer and never subscribes to those events
 - **It does not model refinement.** `refining` is cinna's own flow, and the desktop does not drive it — which is one of the ways `taskStatusPath` can answer "there is no path"
 - **It does not read attachments back.** The seam has no read half for artifacts, so a task's remote files are invisible here
 - **It does not decide what a failure costs.** It classifies and rejects; whether that means a retry, a dropped marker or an unbind is [the sync service's](remote_sync.md) decision

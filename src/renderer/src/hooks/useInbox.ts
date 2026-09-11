@@ -18,8 +18,10 @@ import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../../s
  * all three cases, and the inbox exists precisely for the asks nobody is
  * watching.
  *
- * `inbox:list` is one indexed read over `task_input_requests` joined to its
- * task. It runs every five seconds for as long as the window is not *hidden* —
+ * `inbox:list` joins local requests to tasks and reads blocked remote tasks'
+ * asks through their adapters. Concurrent remote reads are shared in main;
+ * a failed read rejects the list instead of pretending it is empty.
+ * It runs every five seconds for as long as the window is not *hidden* —
  * TanStack gates `refetchInterval` on `document.visibilityState`, not on OS
  * focus, so an Electron window sitting behind another app still polls; only
  * minimising or occluding it stops.

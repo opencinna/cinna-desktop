@@ -23,6 +23,8 @@ interface AnswerQuestionsModalProps {
    */
   onSubmit: (text: string, structured: string[][]) => void
   onClose: () => void
+  pending?: boolean
+  error?: string | null
 }
 
 /**
@@ -36,17 +38,19 @@ interface AnswerQuestionsModalProps {
 export function AnswerQuestionsModal({
   questions,
   onSubmit,
-  onClose
+  onClose,
+  pending = false,
+  error = null
 }: AnswerQuestionsModalProps): React.JSX.Element {
   const cardRef = useRef<HTMLDivElement>(null)
   const [answers, setAnswers] = useState<Record<number, CollectedAnswer>>({})
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') onClose()
+      if (e.key === 'Escape' && !pending) onClose()
     }
     const onMouse = (e: MouseEvent): void => {
-      if (cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
+      if (!pending && cardRef.current && !cardRef.current.contains(e.target as Node)) onClose()
     }
     window.addEventListener('keydown', onKey)
     window.addEventListener('mousedown', onMouse)
@@ -54,7 +58,7 @@ export function AnswerQuestionsModal({
       window.removeEventListener('keydown', onKey)
       window.removeEventListener('mousedown', onMouse)
     }
-  }, [onClose])
+  }, [onClose, pending])
 
   const answeredFlags = useMemo(
     () => questions.map((q, i) => isQuestionAnswered(q, answers[i])),
@@ -93,7 +97,7 @@ export function AnswerQuestionsModal({
   }
 
   const handleSend = (): void => {
-    if (!allAnswered) return
+    if (!allAnswered || pending) return
     const text = formatAnswersForSubmission(questions, answers)
     if (!text.trim()) return
     onSubmit(text, toStructuredAnswers(questions, answers))
@@ -103,6 +107,9 @@ export function AnswerQuestionsModal({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--color-overlay-backdrop)] px-4">
       <div
         ref={cardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={questions.length > 1 ? `${questions.length} questions` : 'Question'}
         className="w-full max-w-2xl max-h-[85vh] flex flex-col rounded-xl border
           border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg"
       >
@@ -117,6 +124,7 @@ export function AnswerQuestionsModal({
           <button
             type="button"
             onClick={onClose}
+            disabled={pending}
             className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]
               hover:text-[var(--color-text)] transition-colors"
             title="Close"
@@ -178,6 +186,7 @@ export function AnswerQuestionsModal({
                       <button
                         key={oi}
                         type="button"
+                        disabled={pending}
                         onClick={() => setSelected(i, q, opt.label)}
                         className={
                           'w-full text-left flex items-start gap-2 px-3 py-2 rounded-lg border transition-colors ' +
@@ -222,6 +231,7 @@ export function AnswerQuestionsModal({
                   {/* Synthetic free-text "Other" option, always available. */}
                   <button
                     type="button"
+                    disabled={pending}
                     onClick={() => setSelected(i, q, CUSTOM_ANSWER_VALUE)}
                     className={
                       'w-full text-left flex items-start gap-2 px-3 py-2 rounded-lg border transition-colors ' +
@@ -254,6 +264,7 @@ export function AnswerQuestionsModal({
                       type="text"
                       autoFocus
                       value={a.custom}
+                      disabled={pending}
                       onChange={(e) => setCustom(i, e.target.value)}
                       placeholder="Type your answer…"
                       className="w-full mt-1 px-3 py-2 text-[13px] rounded-lg border border-[var(--color-border)]
@@ -269,10 +280,14 @@ export function AnswerQuestionsModal({
         </div>
 
         {/* Footer */}
+        <div role={error ? 'alert' : undefined} className="min-h-[2.5rem] shrink-0 px-5 text-[12px] text-[var(--color-danger)]">
+          {error}
+        </div>
         <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-[var(--color-border)]">
           <button
             type="button"
             onClick={onClose}
+            disabled={pending}
             className="px-3 py-1.5 rounded-lg text-xs font-medium text-[var(--color-text-secondary)]
               hover:bg-[var(--color-bg-hover)] transition-colors"
           >
@@ -281,13 +296,13 @@ export function AnswerQuestionsModal({
           <button
             type="button"
             onClick={handleSend}
-            disabled={!allAnswered}
-            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium
+            disabled={!allAnswered || pending}
+            className="inline-flex min-w-[8rem] justify-center items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-medium
               bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
               disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             <Send size={13} />
-            Send {questions.length > 1 ? 'answers' : 'answer'}
+            {pending ? 'Sending…' : `Send ${questions.length > 1 ? 'answers' : 'answer'}`}
           </button>
         </div>
       </div>

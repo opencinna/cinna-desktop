@@ -156,6 +156,28 @@ describe('InboxView', () => {
     expect(screen.queryByText('Nothing is waiting on you.')).toBeNull()
   })
 
+  it('preserves a remote answer draft through delivery failure and retries it', async () => {
+    listMock.mockResolvedValue([{ ...QUESTION, source: 'remote', chatId: null }])
+    answerMock.mockResolvedValueOnce({ ok: false, code: 'unavailable', reason: 'The service is offline.' })
+      .mockResolvedValueOnce({ ok: true })
+    render(createElement(InboxView), { wrapper })
+    fireEvent.click(await screen.findByRole('button', { name: 'Answer' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Other (enter custom answer)' }))
+    const input = screen.getByPlaceholderText('Type your answer…') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Keep this detailed answer' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'The service is offline.')
+    expect(screen.getByRole('dialog', { name: 'Question' })).toBeTruthy()
+    expect(input.value).toBe('Keep this detailed answer')
+    fireEvent.click(screen.getByRole('button', { name: 'Send answer' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(answerMock.mock.calls).toEqual([
+      [{ requestId: 'que_1', answers: [['Keep this detailed answer']] }],
+      [{ requestId: 'que_1', answers: [['Keep this detailed answer']] }]
+    ])
+    expect(screen.getByText('Answered: Keep this detailed answer.')).toBeTruthy()
+  })
+
   it('answers a question by request id and stops offering the control', async () => {
     // Mutation: restore `liveRequestId={entry.requestId}` unconditionally and
     // this fails on the last line — the row keeps an Answer button whose only

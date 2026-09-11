@@ -71,7 +71,7 @@ const SETTLED_REFUSALS: readonly InboxAnswerCode[] = [
 ]
 
 export function InboxView(): React.JSX.Element {
-  const { data, isLoading, isError, refetch } = useInboxList()
+  const { data, isLoading, isError, isSuccess, refetch } = useInboxList()
   const { data: agents, isPending: agentsPending } = useAgents()
   const now = useRelativeNow()
   const [retained, setRetained] = useState<InboxEntry[]>([])
@@ -137,7 +137,7 @@ export function InboxView(): React.JSX.Element {
             beside a sidebar badge reading 1 — with the wrong number attached to
             the word that claims to explain it.
           */}
-          {waiting > 0 && (
+          {isSuccess && waiting > 0 && (
             <span className="text-[11px] text-[var(--color-text-muted)]">{waiting} waiting</span>
           )}
         </header>
