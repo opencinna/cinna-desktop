@@ -23,7 +23,8 @@ Everything the seam describes, with one narrowing: a task attachment on cinna-co
 | `pushFields` | `PATCH /api/v1/tasks/{id}` — `title`, `current_description`, `priority`, `selected_agent_id` |
 | `pushStatus` | `POST /api/v1/tasks/{id}/status`, one step per call |
 | `archive` | `POST /api/v1/tasks/{id}/archive` — its own route, which owns the archive timestamp |
-| `fetch` | `GET /api/v1/tasks/{id}/detail` **and** `GET /api/v1/tasks/{id}/sessions` |
+| `fetch` | `GET /api/v1/tasks/{id}/detail` |
+| `liveSession` | `GET /api/v1/tasks/{id}/sessions` — whether any session has `interaction_status: running` |
 | `list` (no cursor) | `GET /api/v1/tasks/?status=active`, paged by offset |
 | `list` (cursor) | `GET /api/v1/tasks/?updated_since=…`, paged by advancing the cursor |
 | `listSubtasks` | `GET /api/v1/tasks/{id}/subtasks/` |
@@ -48,7 +49,9 @@ Each is a real server behaviour with a real cost, and each has a test.
 
 ## Two costs this mapping pays, deliberately
 
-**`fetch` is two requests.** The detail route for the task, and the sessions route for whether anything is running on it *right now*. The task's own status cannot answer that: cinna-core recomputes status from its sessions, so a task can sit `in_progress` with nothing live, and can be live before the recompute lands. `list` reports "cannot tell" for the mirror-image reason — the list response carries no session state, and asking per row would be one request per task on every poll. "Cannot tell" is a real answer the take-over control knows what to do with; inferring liveness from the status would be wrong in both directions.
+**`fetch` is one request; liveness is a separate question.** `liveSession(userId, binding)` asks the sessions route when the task page needs to offer Take over, and again when the user presses it. The task's own status cannot answer that: cinna-core recomputes status from its sessions, so a task can sit `in_progress` with nothing live, and can be live before the recompute lands. `fetch` and `list` return snapshots without liveness; polling a task must not pay an extra round trip for an answer the pull discards. The adapter rejects transport failures; the caller turns a failed probe into “cannot tell”.
+
+**Session ids are not cached in the binding.** Both `execute` and `fetch` formerly wrote `remote_state.sessionIds`, although nothing read it. `liveSession` and `listOpenAsks` ask the service afresh, because a session that appeared since the last read is exactly the one that may be working or asking a question. `execute` returns its binding without adding a session id.
 
 **`answerAsk` reads before it writes.** The answer path flips the referenced message to *answered* without reporting what it was before, so the only way to report `{delivered: false}` for an ask somebody already answered is to look first — and the read also supplies the session id, which the ask id alone does not carry. It is a race: an answer landing between the read and the post is reported as delivered by both surfaces. That is the cheaper wrong answer; the alternative is claiming delivery for an ask that was already gone, over a question the user thinks they just decided.
 
@@ -93,7 +96,7 @@ Uploads are classified in the wiring rather than in the adapter, because they do
 - **It does not read attachments back.** The seam has no read half for artifacts, so a task's remote files are invisible here
 - **It does not decide what a failure costs.** It classifies and rejects; whether that means a retry, a dropped marker or an unbind is [the sync service's](remote_sync.md) decision
 - **It does not walk a status path.** It sends one step per call. Walking belongs one layer up, where the desktop's own view of the task is
-- **Nothing calls it in the running app yet** — it is registered, and the only scheduled caller of any adapter has no producers wired. See [Keeping a Bound Task in Step](remote_sync.md)
+- **Nothing schedules the periodic half.** Job execution, run refresh and the task page’s take-over probe call it through [the sync service](remote_sync.md); no timer calls `pull`, `pushAll` or `reconcile`.
 
 ## Architecture Overview
 
@@ -122,7 +125,7 @@ taskSyncService  ->  adapterFor('cinna')  ->  cinnaTaskAdapter.wiring.ts
 ## Integration Points
 
 - [Remote Task Adapters](remote_adapters.md) — the seam, its capability set, and the contract suite this adapter is a subject of
-- [Keeping a Bound Task in Step](remote_sync.md) — the only scheduled caller
+- [Keeping a Bound Task in Step](remote_sync.md) — job handover, run refresh, take-over checks and the unscheduled periodic half
 - [The Handoff Note, Exported](handoff_note_export.md) — the local half of the same note
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — the older, read-only path to the same server for a `cinna_task` job run
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — where the bearer and the server URL come from

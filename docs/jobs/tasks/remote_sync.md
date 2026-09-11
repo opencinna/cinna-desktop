@@ -2,9 +2,9 @@
 
 ## Purpose
 
-A task bound to a remote system exists twice: as a row in this device's SQLite, and as whatever that service holds. `taskSyncService` is the only module that talks to a [remote task adapter](remote_adapters.md) on a schedule, and its whole job is to make the two copies agree — pushing what this device knows and the service does not, pulling what changed there, and periodically asking whether a replica still exists at all.
+A task bound to a remote system exists twice: as a row in this device's SQLite, and as whatever that service holds. `taskSyncService` coordinates the [remote task adapter](remote_adapters.md) calls that keep the copies in step and move execution between them: pushing local changes, pulling remote changes, reconciling replicas and handing work over.
 
-**Nothing in the running app calls it yet.** See [What this deliberately does not do](#what-this-deliberately-does-not-do).
+**Nothing schedules the periodic half.** Job execution calls `handOff`, run refresh calls `pullOne`, and the task page calls `liveSession` and `takeOver` through IPC. No timer calls `pull`, `pushAll` or `reconcile`.
 
 ## Core Concepts
 
@@ -15,7 +15,7 @@ A task bound to a remote system exists twice: as a row in this device's SQLite, 
 - **Cursor** — per `(profile, adapter)`, the `updated_since` timestamp the next pull asks from. In memory, so a restart costs one active-set pull
 - **Remote work** — `{waiting, complete}`: whether anything on a bound service is waiting on the user, and whether every bound service could be asked. Deliberately not a number
 
-## The four jobs
+## The five jobs
 
 | Job | What it does |
 |---|---|
@@ -23,6 +23,7 @@ A task bound to a remote system exists twice: as a row in this device's SQLite, 
 | `pull(userId)` / `pullOne(userId, taskId)` | Take everything the service changed since the cursor and write it locally, creating a replica for anything new |
 | `reconcile(userId)` | Ask whether replicas the service no longer lists still exist, and drop the ones it says are gone |
 | `remoteWork(userId)` | Ask each bound service whether anything there is waiting on a human |
+| `handOff` / `takeOver` / `liveSession` | Move the executor across the seam, with a fresh liveness check before taking remote work back |
 
 ## Business Rules
 
@@ -84,13 +85,13 @@ An uncursored `list` is the adapter's **active set**, which on cinna-core exclud
 Two narrowings, each with a stated cost:
 
 - **only replicas are candidates.** A mirror vanishing from the service means the *binding* is stale, not the task, and deleting a user's own task because a mirror went missing is the one outcome with no way back
-- **only replicas the desktop still believes are live.** A finished replica is absent from the active set by construction, so confirming them all would be two requests each at every app start and every twentieth pull, for work nobody is waiting on. The consequence, stated rather than hidden: a replica that finished here and was *then* deleted on the service stays as local history — the better of the two wrongs, since it is a record of work that really happened
+- **only replicas the desktop still believes are live.** A finished replica is absent from the active set by construction, so confirming them all would be one detail request each at every app start and every twentieth pull, for work nobody is waiting on. The consequence, stated rather than hidden: a replica that finished here and was *then* deleted on the service stays as local history — the better of the two wrongs, since it is a record of work that really happened
 
 The confirming `fetch` is not thrown away. A replica the desktop still calls live which the service does not list as active has usually finished there with the delta missed, so the snapshot that proves it exists also brings it up to date.
 
-### A delete is invisible to a cursor, so the reconcile is on a timer
+### A delete is invisible to a cursor, so full pulls include reconciliation
 
-The first pull of a session always reconciles — a fresh process has no cursor and is already asking for the whole active set, so the "full reconcile on start" falls out of the design rather than needing a column. After that it is every twentieth pull: often enough that a task deleted on the web does not linger for a working day, rare enough that the extra confirmation is not a per-poll cost.
+The first pull of a session always reconciles — a fresh process has no cursor and is already asking for the whole active set, so the "full reconcile on start" falls out of the design rather than needing a column. After that it is every twentieth pull, keeping the extra confirmation off most passes. These are rules of `pull`, not a wall-clock guarantee: nothing currently schedules those passes.
 
 ### The cursor overlaps itself by a second, and only advances on a new maximum
 
@@ -141,15 +142,36 @@ Each adapter answers `actionRequiredCount` from whatever its own service counts,
 
 Each service in a pull, and each task in a `pushAll`, is isolated. It does not take an adapter bug to need this: a push awaits the network and then writes, and a task the user deleted while it was in flight makes that write throw — which without isolation would silently skip every task after it in the list.
 
+## Moving execution across the seam
+
+### Desktop to service
+
+1. `handOff` refuses a task already executing remotely, preventing a second session on the same work. It uses the existing binding’s adapter, or the first available registered adapter for this profile.
+2. An unbound task is created remotely with the local task id as its external reference; its parent binding travels too. The binding is saved before later network calls.
+3. A supported handoff note is sent, followed by a supported remote-agent assignment for an existing binding. A new create already carried the assignee.
+4. If `execute` is supported, start the work and record `in_progress` through `acceptRemoteStatus`, which queues no status push. A service without execution receives an assignment and keeps its status.
+5. Flip the executor last. A failed execute must leave a desktop task with a binding, not claim that an agent started somewhere it did not.
+
+Once execution succeeds, local bookkeeping is best-effort. If the row disappeared while the service started, `handed_over` tells the job caller that work did start and prevents refusal cleanup from deleting its record again. This is different from a refused handover, whose newly created job task is soft-deleted.
+
+### Service to desktop
+
+1. The task page probes liveness separately from its local task read. The probe has a five-second UI deadline and a one-minute cache; the deadline does not cancel the underlying request.
+2. While checking, the banner names the wait. A live agent gets a sentence and no Take over control. A stopped agent gets **Take over**. Unknown liveness gets an explanation and **Take over anyway**; that label and sentence are the confirmation, without a modal.
+3. `task:take-over(taskId, force?)` probes again. `true` refuses even when forced; `null` requires `force: true`. A stale probe’s refusal stays beside the button and triggers a fresh probe.
+4. `taskService.takeOver` changes the executor and device claim. It starts no work and sends no stop or status command to the remote. A separate run gesture is required; a task without a local chat still needs the desktop-start path.
+
+The remote banner precedes local re-run controls for `in_progress`, `blocked` and `error`. Reserved liveness and control rows keep a late answer from moving the page under the pointer. A task that lost its binding can still be claimed: the probe answers false locally rather than waiting forever for a disabled query.
+
 ## What this deliberately does not do
 
-- **Nothing drives the loop.** There is no timer, no IPC channel and no service caller for `push`, `pull`, `reconcile`, `pullOne` or `remoteWork` — the only production import of this module is `authService`, and it calls `resetCursors` alone (see the next bullet). This is the same shape as the handoff-note writer landing before anything wrote a note, and the adapter seam landing before its first adapter. The producers arrive with the step that folds the `cinna_task` job path onto `adapter.create` + `adapter.execute`; until then the sync loop is written, tested and inert
-- **`resetCursors()` and `forgetBindings()` are the exceptions — they do have callers**, both in `authService`, because the hazard they guard does not wait for `pull` to have a scheduler. A profile id is *this device's*, not the account's, and `registerCinna`'s rebind branch finds a profile row by **email** and refreshes its server URL: signing in with the same address on a different cinna server lands on the same row, keeping its id, its tasks, its cursors *and* every `remote_*` column on them. The cursor half would make the next pull a **delta rather than the active set** — nothing on the new account older than that cursor ever fetched, and no reconcile either because the pass count is no longer zero. The binding half is worse because it is written down: a replica keeps a short code and a deep link into a server this profile can no longer see, and a mirror keeps a remote id belonging to another account. The reconcile cannot clean either up — it skips mirrors by design and skips *terminal* replicas as a per-poll cost it refuses to pay, which is exactly the set that would otherwise survive for ever. So a rebind whose server URL changed calls `forgetBindings`, which **unbinds without deleting**: a replica degrades into an ordinary local task, an honest record of work that really happened, while the wrong links and push targets go. Deleting instead would be a destructive write on a sign-in path, and now that the [`task` collection syncs](cross_device.md) it would carry that delete to the user's other devices — as an ordinary upsert marked deleted, since a soft delete is not a tombstone — which is a much larger claim than "this profile changed accounts". `deleteAccount` resets cursors too, which is hygiene rather than a fix: it drops the `users` row as well, so a later sign-in mints a fresh id and the stale entry could never be read. A profile *switch* touches nothing — the data is still there and the claim is still true
-- **It pulls finished history only as far back as a week.** The first pull of a session has no cursor and asks for the active set, which excludes everything completed, cancelled and archived — so the first pass also makes one *cursored* request covering the last seven days, because a cursor carries no status filter and is the only route by which a terminal task arrives at all. Without it there was a visible seam at the moment of linking: work finished ten minutes before was missing while work finished ten minutes after was there. Anything older than the window still never arrives, which is the volume decision — `FIRST_PASS_BACKFILL_MS` is one constant, and the screen that lists remote tasks is the right place to revisit it. The window costs one request per app start, not per poll
-- **It does not decide who executes a task.** Handing work over and taking it back are `taskService.handOffToRemote` / `takeOver`, and a person's decision
+- **Nothing schedules the periodic half.** `jobService.executeCinnaTask` calls `handOff`; `refreshCinnaRun` calls `pullOne`; `task:take-over` and `task:remote-live` call `takeOver` and `liveSession`. No timer calls `pull`, `pushAll` or `reconcile`, and `remoteWork` has no production caller. A task page’s ordinary `task:get` reads SQLite; the page may separately pull app-sync, but neither fetches the bound service’s task. A full pull still needs in-flight deduplication before a scheduler can safely overlap passes.
+- **`resetCursors()` and `forgetBindings()` protect account changes**, both in `authService`, because the hazard they guard does not wait for `pull` to have a scheduler. A profile id is *this device's*, not the account's, and `registerCinna`'s rebind branch finds a profile row by **email** and refreshes its server URL: signing in with the same address on a different cinna server lands on the same row, keeping its id, its tasks, its cursors *and* every `remote_*` column on them. The cursor half would make the next pull a **delta rather than the active set** — nothing on the new account older than that cursor ever fetched, and no reconcile either because the pass count is no longer zero. The binding half is worse because it is written down: a replica keeps a short code and a deep link into a server this profile can no longer see, and a mirror keeps a remote id belonging to another account. The reconcile cannot clean either up — it skips mirrors by design and skips *terminal* replicas as a per-poll cost it refuses to pay, which is exactly the set that would otherwise survive for ever. So a rebind whose server URL changed calls `forgetBindings`, which **unbinds without deleting**: a replica degrades into an ordinary local task, an honest record of work that really happened, while the wrong links and push targets go. Deleting instead would be a destructive write on a sign-in path, and now that the [`task` collection syncs](cross_device.md) it would carry that delete to the user's other devices — as an ordinary upsert marked deleted, since a soft delete is not a tombstone — which is a much larger claim than "this profile changed accounts". `deleteAccount` resets cursors too, which is hygiene rather than a fix: it drops the `users` row as well, so a later sign-in mints a fresh id and the stale entry could never be read. A profile *switch* touches nothing — the data is still there and the claim is still true
+- **It pulls finished history only as far back as a week.** The first pull of a session has no cursor and asks for the active set, which excludes everything completed, cancelled and archived — so the first pass also makes one *cursored* request covering the last seven days, because a cursor carries no status filter and is the only route by which a terminal task arrives at all. Without it there was a visible seam at the moment of linking: work finished ten minutes before was missing while work finished ten minutes after was there. Anything older than the window still never arrives, which is the volume decision — `FIRST_PASS_BACKFILL_MS` is one constant, and the screen that lists remote tasks is the right place to revisit it. The window costs one request per page on the first pull of a session, not on every poll
+- **It does not start a desktop conversation.** Taking over claims the task; `taskService.start` still takes an existing chat. A remote task with no local chat cannot yet be started here through a renderer control. There is also no `task:hand-off` channel or assignee picker: the handover service currently gets its production calls from jobs.
 - **It does not read `remote_state`.** That blob is the adapter's own vocabulary and is opaque here, which is why the remote's id for an assignee lives in `assigneeAgentId` — an id in the space its `kind` names — rather than inside the binding. A field only the adapter can read is no use to the code that builds the push
 - **It never compares an adapter id to anything.** It asks `capabilities()` and `availability()`; the kind-branch ratchet holds the count of such comparisons outside `src/main/tasks/adapters/` at zero
-- **It does not surface anything.** There is no DTO field for `liveSession`, which `fetch` currently pays a request for and the pull discards; the take-over control that needs it arrives with the screen that renders it
+- **Liveness is not persisted or polled with task snapshots.** The task page asks `task:remote-live` separately; a failed probe becomes unknown, and `takeOver` probes again before changing the executor.
 
 ## Architecture Overview
 
@@ -175,7 +197,7 @@ taskSyncService.reconcile -> adapter.list(userId, null)
 
 ## Where it lives
 
-- `src/main/services/taskSyncService.ts` — `push`, `pushAll`, `pullOne`, `pull`, `reconcile`, `remoteWork`, `resetCursors`; module-private `pushOne`, `upsert`, `dropMissing`, `resolveParent`, `wouldChange`, `consequenceOf`
+- `src/main/services/taskSyncService.ts` — `handOff`, `takeOver`, `liveSession`, `preferredAdapterId`, `push`, `pushAll`, `pullOne`, `pull`, `reconcile`, `remoteWork`, `resetCursors`, `forgetBindings`; module-private `pushOne`, `upsert`, `dropMissing`, `resolveParent`, `wouldChange`, `consequenceOf`
 - `src/main/tasks/taskStatusPath.ts` — `taskStatusPath(from, to)`, the breadth-first walk. Main-only rather than `shared/`: the renderer has no business knowing a remote exists, and this is the one rule about a *remote's* transition table rather than the desktop's own
 - `src/main/services/taskService.ts` — `bindRemote`, `unbindRemote`, `markRemoteSynced`, `applyRemoteSnapshot`, and the `dirtied()` helper every mutator of a bound task passes its patch through. All four end in `written(userId, row)`, so a binding write keeps [the exported note](handoff_note_export.md) current
 - `src/main/tasks/adapters/adapter.ts` — `RemoteDirtyField`, `REMOTE_DIRTY_FIELDS`, `isRemoteDirtyField`
@@ -185,9 +207,9 @@ taskSyncService.reconcile -> adapter.list(userId, null)
 
 ## Integration Points
 
-- [Remote Task Adapters](remote_adapters.md) — the seam this service is the only scheduled caller of
+- [Remote Task Adapters](remote_adapters.md) — the seam used for handover, refresh and reconciliation
 - [cinna-core as a Remote Task Adapter](cinna_adapter.md) — the one adapter this build ships, and the source of most of the rules above
 - [The Handoff Note, Exported](handoff_note_export.md) — the file every task write re-exports, which is why a no-op pull must write nothing
-- [Jobs](../jobs/jobs.md) — where tasks come from, and where the producers for this service will be wired
+- [Jobs](../jobs/jobs.md) — creates tasks and hands remote runs over here; their run status is derived from the refreshed task
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — the read-only view of a `cinna_task` run, which talks to cinna-core directly and predates this service
 - [A Task on the User's Other Devices](cross_device.md) — the other way a task exists twice: `remote_synced_at` and `remote_dirty` are the two columns of *this* relationship that deliberately never leave the device that owns them

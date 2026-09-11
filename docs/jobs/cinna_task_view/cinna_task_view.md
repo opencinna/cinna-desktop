@@ -15,7 +15,7 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 ## User Stories / Flows
 
 ### Opening the task view
-1. From a job's **Run history**, user clicks a row of a `cinna_task` run that has a `cinnaTaskId`.
+1. From a job’s **Run history**, user clicks **On the service** on a task-linked `cinna_task` run. A legacy run without a local task still opens this view on its row click; both require `cinnaTaskId`.
 2. Main area swaps to the **Cinna Task Run View**. The sidebar stays on the Jobs tab; the originating job stays highlighted.
 3. The view fetches the task detail (`GET /api/v1/tasks/{id}/detail`) and renders.
 4. Header shows: a "← Back to {job title}" link, the task title, a status pill, and the short code (or task id when no short code is set).
@@ -57,7 +57,7 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 
 ## Business Rules
 
-- **Cinna-only.** The view is only reachable for `cinna_task` runs with a non-null `cinnaTaskId`. A **local** run row no longer lands here or on its chat by default: a local run records the task it produced, and its row opens that task's page, with the conversation as its own labelled action ([Jobs](../jobs/jobs.md)). A `cinna_task` run has no such task yet — the remote path does not create one — so these rows keep this screen, and so does a local run old enough to predate the tasks table.
+- **Cinna-only.** The view requires a `cinna_task` run with a non-null `cinnaTaskId`. Every new run has a local task, which its row opens; the visible **On the service** action preserves access to this conversation. A legacy remote row without a task opens this view directly until refresh adopts it. Local runs offer **Chat** for their conversation instead, and a legacy local row still opens its chat. See [Jobs](../jobs/jobs.md).
 - **Single API call.** Comments + standalone attachments come from `/api/v1/tasks/{id}/detail` — one round-trip, not three.
 - **System entries hidden by default in counts.** The row's comment-count badge filters out `status_change | assignment | system` so the user sees the number of authored comments, not the activity log size.
 - **Timezone correction.** cinna-core serializes `datetime` columns from Python without a `Z`, but the values are UTC. The view parses timestamps with explicit UTC tagging so relative times don't drift by the user's offset.

@@ -6,10 +6,10 @@ A task always lives in SQLite here. A task may *additionally* be bound to a syst
 
 ## Core Concepts
 
-- **Adapter** — `RemoteTaskAdapter` (`src/main/tasks/adapters/adapter.ts`): create, fetch, list, push, comment, archive, ask and answer for one remote system. Its `id` is stored in `tasks.remote_adapter` and is **opaque outside this folder**
+- **Adapter** — `RemoteTaskAdapter` (`src/main/tasks/adapters/adapter.ts`): create, fetch, list, probe liveness, execute, push, comment, archive, ask and answer for one remote system. Its `id` is stored in `tasks.remote_adapter` and is **opaque outside this folder**
 - **Binding** — `RemoteBinding`: the `remote_*` columns as one value — `{adapter, id, key, url, state}`. `key` is the human-facing short code and is display only; `url` is where a person would go to look, `http(s)` or null; `state` is the remote's own vocabulary and **may not be read outside the adapter that wrote it**, which is why `TaskDto.remote` carries the other four fields and not that one
 - **Capabilities** — `RemoteTaskCapabilities`: what this adapter can actually do, computed with no I/O and the same on every call. **Callers ask this; they never branch on the id**
-- **Null adapter** — what an id this build does not implement resolves to. Every capability false, a `ready: false` availability naming the service, and `UnsupportedRemoteOperation` from every operation
+- **Null adapter** — what an id this build does not implement resolves to. Every capability false, a `ready: false` availability naming the service, `liveSession: null`, and `UnsupportedRemoteOperation` from gated operations
 - **Registry** — `src/main/tasks/adapters/index.ts`. `adapterFor(id)` is **total**: it always returns something adapter-shaped, so no caller has a branch for "there is no adapter for that"
 - **Contract suite** — `adapterContract.ts`, the clauses every adapter must satisfy, run over each implementation and over six fakes
 
@@ -44,6 +44,12 @@ Two of them are **lists rather than flags**, and both were flags first. A boolea
 - **A remote ask is a run event's `InputRequest`.** A cinna tool question and a parked local permission reach the inbox in the same shape, so one component renders both and there is no second union to drift. Answering an ask that is no longer open is `{delivered: false}` — the commonest thing that happens to an ask, and an answer rather than a failure; it is what `AgentDriver.respond` already returns for a local park.
 - **The handoff note is first-class, not a comment with a magic type.** Posting it as a `result` comment would have written a *cinna* literal outside this folder, in a field no ratchet watches — and an adapter with `comments: false` would have had no channel for the note at all, so a managed-agent service could not be handed over to. The desktop side of the same string is [the exported file](handoff_note_export.md).
 - **What goes out is this app's vocabulary; what comes back is the remote's.** `RemoteCommentDraft.type` is the closed set `note | result | system`, because callers outside this folder choose it. `RemoteComment.type` on the way in is an open string: refusing a remote's own comment vocabulary would be the desktop arguing with the system doing the work.
+
+### Liveness is a question, not a snapshot field
+
+`RemoteTaskAdapter.liveSession(userId, binding)` returns `true | false | null`: working, stopped, or unable to tell. It has no capability flag because the third answer already expresses that limitation. `RemoteTaskSnapshot` carries the task’s durable fields and no liveness field. The task page asks separately when it needs to shape Take over; the take-over service asks again after the press, because a cached answer cannot authorize a later claim.
+
+A failed probe remains a rejection at the adapter boundary. The caller decides that a failure means “cannot tell” and asks for confirmation. Inferring liveness from `status` instead both blocks safe take-overs and permits competing workers, since a service’s status can lag or outlive its sessions.
 
 ## Failure codes
 
@@ -88,7 +94,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 
 ## What this deliberately does not do
 
-- **It ships one adapter, and nothing in the running app drives it yet.** The registry holds `cinna` and nothing else — a test asserts the id is *present*, because a missed registration is the one failure the null adapter makes comfortable enough to hide: the task would open perfectly, show "a service this version of Cinna does not know about", sync nothing and log nothing. The scheduled caller exists too ([Keeping a Bound Task in Step](remote_sync.md)) and has no producers wired, so no adapter is called on a timer today.
+- **It ships one adapter, with no periodic scheduler.** The registry holds `cinna`; a test asserts its registration so the null adapter cannot hide a missing import. Job handover, run refresh and take-over controls reach adapters through [the sync service](remote_sync.md). Nothing schedules `pull`, `pushAll` or `reconcile`.
 - **No read half for artifacts.** `putArtifact` is the seam's only write-only channel — comments and asks both have a `list*`, and a snapshot carries no artifacts — so a replica's remote attachments are invisible here. The capability is named `writeArtifactKinds` so the absence is a statement in the type rather than a gap in a docstring; a `listArtifacts` is additive when a surface needs one.
 - **No push subscription.** Every adapter is polled. A later adapter may expose a subscription and be preferred over polling; nothing here builds one.
 - **The renderer never sees which service a task is on beyond its display fields.** `TaskListQuery` has no `remoteAdapter` arm, and `TaskDto.remote` omits `state`.
@@ -99,7 +105,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 taskService (SQLite write, committed)
         |
         v
- taskSyncService (no producers wired yet)
+ taskSyncService (job execution / refresh; take-over IPC)
         |
         v
  adapterFor(binding.adapter) -> RemoteTaskAdapter
