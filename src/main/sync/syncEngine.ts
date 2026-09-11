@@ -296,10 +296,13 @@ export async function runSyncCycle(
   result.pulled += drained.pulled
   result.decryptSkipped += drained.decryptSkipped
 
-  // Advance the dirty watermark from the max *post-apply* updatedAt. Apply no
-  // longer bumps updatedAt, so freshly-pulled replicas carry the peer's
-  // (older) timestamp and are correctly excluded from the next push — no
-  // re-push churn. Any false re-send still resolves to `unchanged` via
+  // Advance the dirty watermark from the max *post-apply* updatedAt, and this
+  // is the **whole** mechanism that stops re-push churn — not, as this comment
+  // used to say, that a freshly-pulled replica carries an older timestamp. It
+  // carries the *server's* `server_updated_at` (see `ctx` above), which is
+  // monotonic and ≥ the original, so a replica is always **newer** than the row
+  // it mirrors and would be in every subsequent push batch if the watermark did
+  // not move past it here. Any false re-send still resolves to `unchanged` via
   // fingerprint.
   let newWatermark = sinceMs
   for (const mapper of COLLECTION_MAPPERS) {

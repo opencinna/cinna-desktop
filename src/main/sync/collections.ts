@@ -53,11 +53,25 @@ export interface DirtyRecord {
 }
 
 /**
- * Context threaded into `apply` for one sync drain pass. `clientUpdatedAt` is
- * the peer's timestamp (carried onto the row verbatim — no `new Date()` bump,
- * so an applied copy stays a passive replica). `cache` dedupes auto-created
- * dependencies across the pass so N jobs referencing the same missing MCP
- * create exactly one provider.
+ * Context threaded into `apply` for one sync drain pass.
+ *
+ * **`clientUpdatedAt` is the SERVER's time, not the sender's**, whatever its
+ * name suggests: `syncApi.mapRecord` fills it from `server_updated_at`, because
+ * the server does not echo the peer's `client_updated_at` (`syncEngine.ts` says
+ * so where it builds this). It is carried onto the row verbatim — no
+ * `new Date()` bump — but that does **not** make an applied copy older than the
+ * row it mirrors; `server_updated_at` is monotonic and ≥ the original, so a
+ * replica is always *newer*. What keeps it from being pushed straight back is
+ * the watermark, which `syncEngine` recomputes from `maxUpdatedAt` **after** the
+ * pull loop, so everything just applied is already behind it.
+ *
+ * This docstring used to say "the peer's timestamp", and a step-10 test harness
+ * built a whole two-device fixture on that reading and proved a property
+ * production does not have. The name is the trap; it is kept because it is the
+ * wire field's name.
+ *
+ * `cache` dedupes auto-created dependencies across the pass so N jobs
+ * referencing the same missing MCP create exactly one provider.
  */
 const logger = createLogger('sync-collections')
 
