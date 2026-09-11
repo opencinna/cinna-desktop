@@ -44,9 +44,14 @@ vi.mock('../auth/scope', () => ({
 }))
 vi.mock('./cinnaApiService', () => ({ getCinnaServerUrl: () => null, cinnaApiService: {} }))
 vi.mock('./syncService', () => ({ syncService: { markDirty: () => undefined } }))
+vi.mock('../logger/logger', () => ({
+  createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
+}))
 
 const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 const { jobService } = await import('./jobService')
+const { taskRepo } = await import('../db/tasks')
+const { taskService } = await import('./taskService')
 
 const USER = '__default__'
 
@@ -126,5 +131,85 @@ describe('jobService.reportRunCompletion', () => {
     jobService.reportRunCompletion(chatId, 'cancelled')
     const row = jobRunsRepo.listByJob(USER, jobId).find((r) => r.id === runId)
     expect(row?.status).toBe('succeeded')
+  })
+})
+
+/**
+ * The run row is the record of the job's *attempt*; the task is the record of
+ * the **work**, and it outlives the chat. A run that ends has to say so in both
+ * places, or the Jobs view and the task list disagree about the same fact.
+ *
+ * The status does not come from a switch here — it goes through
+ * `taskService.applyRunState`, so a job run and an agent turn report a task the
+ * same way, and so the `new → completed` jump a run that finishes instantly
+ * would attempt is walked rather than refused.
+ */
+describe('a finished run finishes its task', () => {
+  /** A started run with a task attached, the way `executeLocal` leaves one. */
+  function startedRunWithTask(): { runId: string; chatId: string; taskId: string } {
+    const { runId, chatId, jobId } = startedRun()
+    const task = taskService.create(USER, {
+      title: 'Nightly check',
+      goal: 'Check the invoices',
+      chatId,
+      jobId,
+      jobRunId: runId
+    })
+    jobRunsRepo.setTaskId(runId, task.id)
+    taskService.start(USER, task.id, { chatId })
+    return { runId, chatId, taskId: task.id }
+  }
+
+  it('completes the task when the run succeeds', () => {
+    const { chatId, taskId } = startedRunWithTask()
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    const task = taskRepo.getById(USER, taskId)
+    expect(task?.status).toBe('completed')
+    expect(task?.finishedAt).not.toBeNull()
+  })
+
+  it('errors the task and keeps the reason when the run fails', () => {
+    const { chatId, taskId } = startedRunWithTask()
+    jobService.reportRunCompletion(chatId, 'failed', 'Invalid OpenAI API key')
+    const task = taskRepo.getById(USER, taskId)
+    expect(task?.status).toBe('error')
+    expect(task?.errorMessage).toBe('Invalid OpenAI API key')
+  })
+
+  it('cancels the task when the user presses Stop', () => {
+    const { chatId, taskId } = startedRunWithTask()
+    jobService.reportRunCompletion(chatId, 'cancelled')
+    const task = taskRepo.getById(USER, taskId)
+    expect(task?.status).toBe('cancelled')
+    // A stop is not a failure, in both places.
+    expect(task?.errorMessage).toBeNull()
+  })
+
+  it('finalizes the run even when the task write cannot happen', () => {
+    // Best-effort on purpose. A run that has genuinely finished must be
+    // recorded as finished whatever happens to the task, or the sidebar counts
+    // it as busy for the life of the app — trading a visible wrong status for
+    // an invisible one.
+    const { runId, chatId, taskId } = startedRunWithTask()
+    taskService.remove(USER, taskId)
+
+    expect(() => jobService.reportRunCompletion(chatId, 'succeeded')).not.toThrow()
+    const row = jobRunsRepo.getById(USER, runId)
+    expect(row?.status).toBe('succeeded')
+  })
+
+  it('still finalizes a run from before tasks existed', () => {
+    // `job_runs.task_id` is nullable for exactly these rows.
+    const { runId, chatId } = startedRun()
+    expect(jobRunsRepo.getById(USER, runId)?.taskId).toBeNull()
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    expect(jobRunsRepo.getById(USER, runId)?.status).toBe('succeeded')
+  })
+
+  it('leaves the task alone when a late stop cannot rewrite the run', () => {
+    const { chatId, taskId } = startedRunWithTask()
+    jobService.reportRunCompletion(chatId, 'succeeded')
+    jobService.reportRunCompletion(chatId, 'cancelled')
+    expect(taskRepo.getById(USER, taskId)?.status).toBe('completed')
   })
 })

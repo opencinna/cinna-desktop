@@ -22,8 +22,11 @@ import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError } from '../errors'
 import { newChatRouter, routingOf } from '../../shared/chatRouting'
 import type { JobRunOrigin } from '../../shared/jobs'
+import type { RunState } from '../../shared/runEvents'
+import { parseTaskPriority } from '../../shared/tasks'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
+import { taskService } from './taskService'
 import { rebuildJobManifest } from '../sync/manifest'
 import {
   resolveMode,
@@ -41,6 +44,17 @@ import type { JobDependencyStatus, JobSyncManifest } from '../../shared/sync'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
+
+/**
+ * A run outcome as a run state, so a job run and an agent turn report a task
+ * the same way. `reportRunCompletion` is the job path; the stream path posts
+ * these states itself.
+ */
+const RUN_STATE_FOR_OUTCOME: Record<'succeeded' | 'failed' | 'cancelled', RunState> = {
+  succeeded: 'completed',
+  failed: 'failed',
+  cancelled: 'canceled'
+}
 
 export interface JobDetail extends JobRow {
   agentIds: string[]
@@ -400,6 +414,7 @@ export const jobService = {
         type: 'local'
         chatId: string
         runId: string
+        taskId: string
         prompt: string
         agentId: string | null
         modeId: string | null
@@ -449,6 +464,8 @@ export const jobService = {
   ): {
     chatId: string
     runId: string
+    /** The task this run is executing. Every local run has one. */
+    taskId: string
     prompt: string
     agentId: string | null
     modeId: string | null
@@ -566,10 +583,40 @@ export const jobService = {
       onDemandMcpIds: answerer.kind === 'model' ? filteredMcpIds : []
     })
 
+    // The task, **after** the chat and the run exist.
+    //
+    // §5.8 sketches this the other way round — create the task, then start it —
+    // and that inversion is right, but it belongs with step 11, where the
+    // adapter turns `start` into one dispatch for both executors. Creating the
+    // task first *today* would mean every refusal above (an unresolvable agent,
+    // a deleted MCP, a missing mode) left an orphan task sitting in `new` that
+    // nothing would ever run or clear. Those refusals are load-bearing and are
+    // deliberately left untouched.
+    const task = taskService.create(userId, {
+      title: job.title,
+      goal: job.prompt,
+      router,
+      origin: 'local',
+      executor: 'desktop',
+      chatId,
+      assigneeAgentId: firstAnswerer,
+      assigneeName: firstAnswerer ? (agentRepo.getOwned(userId, firstAnswerer)?.name ?? null) : null,
+      assigneeKind: firstAnswerer ? 'agent' : 'model',
+      priority: parseTaskPriority(job.cinnaPriority),
+      jobId,
+      jobRunId: runId
+    })
+    jobRunsRepo.setTaskId(runId, task.id)
+    // The run is already `running` — `createLocalChatAndRun` writes it that way
+    // — so the task says the same thing rather than sitting at `new` until the
+    // first delta arrives.
+    taskService.start(userId, task.id, { chatId })
+
     logger.info('job executed (local)', {
       jobId,
       chatId,
       runId,
+      taskId: task.id,
       router,
       agents: existingAgentIds.length,
       mcps: filteredMcpIds.length
@@ -578,6 +625,7 @@ export const jobService = {
     return {
       chatId,
       runId,
+      taskId: task.id,
       prompt: job.prompt,
       agentId: firstAnswerer,
       modeId: job.modeId
@@ -607,9 +655,36 @@ export const jobService = {
     if (!run) return
     if (run.status !== 'running' && run.status !== 'pending') return
     jobRunsRepo.updateStatus(run.id, outcome, { errorMessage: errorMessage ?? null })
+
+    // The task is the record of the work; the run row is the record of the
+    // *job's* attempt at it. Both are written, and the task's status comes from
+    // the run vocabulary through `applyRunState` rather than being derived here
+    // — `submitted` does not map onto a legal step from `in_progress`, and this
+    // path is not written to catch a throw.
+    //
+    // Deliberately best-effort: a run that has genuinely finished must be
+    // recorded as finished even if the task write fails, or the sidebar counts
+    // it as busy for the life of the app. Failing the whole hook to keep two
+    // rows in step would trade a visible wrong status for an invisible one.
+    if (run.taskId) {
+      try {
+        taskService.applyRunState(run.userId, run.taskId, RUN_STATE_FOR_OUTCOME[outcome])
+        if (outcome === 'failed' && errorMessage) {
+          taskService.setStatus(run.userId, run.taskId, 'error', { errorMessage })
+        }
+      } catch (err) {
+        logger.warn('could not record the run outcome on its task', {
+          runId: run.id,
+          taskId: run.taskId,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    }
+
     logger.info('job run finalized via chat stream', {
       runId: run.id,
       chatId,
+      taskId: run.taskId ?? undefined,
       status: outcome
     })
   },

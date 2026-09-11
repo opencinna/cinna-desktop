@@ -11,9 +11,11 @@ import { createLogger } from '../logger/logger'
 import {
   canTransition,
   parseTaskStatus,
+  taskStatusForRunState,
   VALID_TRANSITIONS,
   type TaskStatus
 } from '../../shared/taskStatus'
+import type { RunState } from '../../shared/runEvents'
 import {
   parseTaskAssigneeKind,
   parseTaskExecutor,
@@ -322,6 +324,43 @@ export const taskService = {
       logger.info('task status pulled', { taskId, from: task.status, to: status })
     }
     return toTaskDto(row)
+  },
+
+  /**
+   * Move a task to wherever a **run state** says it is now.
+   *
+   * The bridge `setStatus` cannot be: a run's vocabulary is A2A's and a task's
+   * is cinna's, and the two do not step in lockstep. `submitted` maps to `open`,
+   * which is not reachable from `in_progress` — and `submitted` is a real state
+   * that `a2aStreamingService` passes straight through, once per A2A task, which
+   * means once per turn. Wiring run events to `setStatus` directly would throw
+   * `invalid_transition` inside the stream-completion path, which is not written
+   * to catch it, on the second turn of every agent chat.
+   *
+   * So three cases, in order:
+   *
+   *  - the derived status is one legal step away → take it;
+   *  - it is terminal and it is not → walk through `in_progress` first, which is
+   *    the local twin of the status *path* a bound remote needs (§5.12 rule 2);
+   *  - neither → **no-op**. A run announcing `submitted` for a task already
+   *    `in_progress` is telling us nothing we do not know, and going backwards
+   *    to `open` would be a worse lie than saying nothing.
+   *
+   * Returns the task as it now stands, unchanged in the no-op case.
+   */
+  applyRunState(userId: string, taskId: string, state: RunState): TaskDto {
+    const task = requireTask(userId, taskId)
+    const from = parseTaskStatus(task.status)
+    const to = taskStatusForRunState(state)
+
+    if (canTransition(from, to)) return this.setStatus(userId, taskId, to)
+    if (isSettled(to) && canTransition(from, 'in_progress')) {
+      this.setStatus(userId, taskId, 'in_progress')
+      return this.setStatus(userId, taskId, to)
+    }
+
+    logger.debug('run state says nothing this task can act on', { taskId, from, state })
+    return toTaskDto(task)
   },
 
   setAssignee(userId: string, taskId: string, assignee: TaskAssignee): TaskDto {

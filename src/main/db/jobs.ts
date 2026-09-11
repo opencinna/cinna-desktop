@@ -844,6 +844,19 @@ export const jobRunsRepo = {
     })
   },
 
+  /**
+   * Point a run at the task it is executing.
+   *
+   * A separate write rather than a `create` argument because the task is made
+   * *after* the chat and the run: creating it first would leave an orphan task
+   * behind every refusal on the way to `createLocalChatAndRun`, and those
+   * refusals are the ones that stop a job running with no agent.
+   */
+  setTaskId(runId: string, taskId: string): boolean {
+    const result = getDb().update(jobRuns).set({ taskId }).where(eq(jobRuns.id, runId)).run()
+    return result.changes > 0
+  },
+
   updateStatus(
     runId: string,
     status: JobRunStatus,

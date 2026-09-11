@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import { TaskError } from '../errors'
 import type { TaskStatus } from '../../shared/taskStatus'
+import type { RunState } from '../../shared/runEvents'
 
 /**
  * `taskService` against a real database with the real migrations applied — the
@@ -267,6 +268,72 @@ describe('acceptRemoteStatus — accepted, because somewhere else initiated it',
     expect(taskService.acceptRemoteStatus(USER, task.id, 'cancelled').finishedAt).toBeInstanceOf(
       Date
     )
+  })
+})
+
+describe('applyRunState — the bridge between the two vocabularies', () => {
+  it('takes a step the table allows', () => {
+    const task = makeTask()
+    expect(taskService.applyRunState(USER, task.id, 'working').status).toBe('in_progress')
+    expect(taskService.applyRunState(USER, task.id, 'needs_input').status).toBe('blocked')
+  })
+
+  it('walks through in_progress when a run ends before it visibly started', () => {
+    // `new → completed` is not in the table. A run that finishes in two seconds
+    // still has to pass through the middle, and this is the local twin of the
+    // status *path* a bound remote needs.
+    const task = makeTask()
+    const done = taskService.applyRunState(USER, task.id, 'completed')
+    expect(done.status).toBe('completed')
+    // …and it really passed through, so `startedAt` is set rather than null.
+    expect(done.startedAt).toBeInstanceOf(Date)
+  })
+
+  it('walks through in_progress for a failure before the first turn, too', () => {
+    const task = makeTask()
+    expect(taskService.applyRunState(USER, task.id, 'failed').status).toBe('error')
+  })
+
+  it('says nothing rather than going backwards', () => {
+    // A2A's `submitted` maps to `open`, and a second turn in the same chat
+    // starts a new A2A task there. `in_progress → open` is not in the table,
+    // and throwing here would break the stream-completion path on the second
+    // turn of every agent chat.
+    const task = makeTask()
+    driveTo(task.id, 'in_progress')
+    expect(() => taskService.applyRunState(USER, task.id, 'submitted')).not.toThrow()
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('never throws for any run state from any status', () => {
+    const states: RunState[] = [
+      'submitted',
+      'working',
+      'needs_input',
+      'completed',
+      'failed',
+      'canceled',
+      'rejected',
+      'unknown'
+    ]
+    for (const from of ['new', 'open', 'in_progress', 'blocked', 'completed', 'archived'] as const) {
+      for (const state of states) {
+        const task = makeTask()
+        // Walk to `from` through whatever legal path exists, then apply.
+        if (from === 'open') driveTo(task.id, 'open')
+        if (from === 'in_progress') driveTo(task.id, 'in_progress')
+        if (from === 'blocked') driveTo(task.id, 'in_progress', 'blocked')
+        if (from === 'completed') driveTo(task.id, 'in_progress', 'completed')
+        if (from === 'archived') driveTo(task.id, 'archived')
+        expect(() => taskService.applyRunState(USER, task.id, state)).not.toThrow()
+      }
+    }
+  })
+
+  it('leaves an archived task where the user put it', () => {
+    const task = makeTask()
+    driveTo(task.id, 'in_progress', 'completed', 'archived')
+    expect(taskService.applyRunState(USER, task.id, 'working').status).toBe('archived')
   })
 })
 

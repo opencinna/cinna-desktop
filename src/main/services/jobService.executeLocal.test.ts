@@ -58,6 +58,7 @@ const { chatOnDemandMcpRepo } = await import('../db/chatOnDemandMcp')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { chatRepo } = await import('../db/chats')
 const { jobService } = await import('./jobService')
+const { taskRepo } = await import('../db/tasks')
 
 const USER = '__default__'
 const JOB_ID = 'job-1'
@@ -442,5 +443,85 @@ describe('the gate is scoped to folder and remote sources', () => {
     // together.
     const [dep] = jobService.getDependencyStatus(USER, JOB_ID)
     expect(dep.state).toBe('needs-setup')
+  })
+})
+
+/**
+ * Every local run gets a task (agent runtime plan, phase 5 step 3).
+ *
+ * The half that matters is the second one: a run the gate **refuses** must
+ * leave no task behind either. §5.8 sketches the task being created first and
+ * then started, which would have put an orphan `new` task behind every refusal
+ * in this file — work nothing would ever run, clear, or explain.
+ */
+describe('a local run produces a task', () => {
+  function plainJob(title = 'Local job') {
+    return jobsRepo.create(USER, {
+      type: 'local',
+      title,
+      description: null,
+      prompt: 'Do the thing'
+    })
+  }
+
+  it('links the run and the task to each other', () => {
+    const job = plainJob()
+    const res = jobService.executeLocal(USER, job.id)
+
+    expect(res.taskId).toBeTruthy()
+    const task = taskRepo.getById(USER, res.taskId)
+    expect(task).toBeDefined()
+    expect(task?.jobRunId).toBe(res.runId)
+    expect(task?.jobId).toBe(job.id)
+    expect(task?.chatId).toBe(res.chatId)
+
+    const [runRow] = jobRunsRepo.listByJob(USER, job.id)
+    expect(runRow.taskId).toBe(res.taskId)
+  })
+
+  it('starts the task, because the run row already says running', () => {
+    const job = plainJob()
+    const res = jobService.executeLocal(USER, job.id)
+    const task = taskRepo.getById(USER, res.taskId)
+    // A task sitting at `new` while its run says `running` is two rows
+    // disagreeing about the same fact.
+    expect(task?.status).toBe('in_progress')
+    expect(task?.startedAt).not.toBeNull()
+  })
+
+  it('carries the job’s prompt as the goal and the job’s title', () => {
+    const job = plainJob('Nightly invoice check')
+    const res = jobService.executeLocal(USER, job.id)
+    const task = taskRepo.getById(USER, res.taskId)
+    expect(task?.title).toBe('Nightly invoice check')
+    expect(task?.goal).toBe('Do the thing')
+  })
+
+  it('records the router the run actually chose', () => {
+    const job = plainJob()
+    const res = jobService.executeLocal(USER, job.id)
+    // No agent, no MCP → direct, to the local model.
+    expect(taskRepo.getById(USER, res.taskId)?.router).toBe('direct')
+    expect(taskRepo.getById(USER, res.taskId)?.assigneeKind).toBe('model')
+  })
+
+  it('names the agent that takes the first message as the assignee', () => {
+    indexWorkshop()
+    applyIncomingJob([folderDep])
+    const res = run()
+    const task = taskRepo.getById(USER, res.taskId)
+    expect(task?.assigneeAgentId).toBe(res.agentId)
+    expect(task?.assigneeKind).toBe('agent')
+    expect(task?.assigneeName).toBeTruthy()
+  })
+
+  it('leaves no task behind when the gate refuses the run', () => {
+    // The orphan check. A refusal that still wrote a task would put work in the
+    // user's list that nothing can run — the same shape of lie as a run row
+    // recorded for a run that never happened.
+    applyIncomingJob([folderDep])
+    expect(() => run()).toThrow()
+    expect(taskRepo.list(USER)).toHaveLength(0)
+    expect(jobRunsRepo.listByJob(USER, JOB_ID)).toHaveLength(0)
   })
 })
