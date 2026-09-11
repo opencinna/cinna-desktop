@@ -11,6 +11,7 @@ import { JobEditPage } from '../jobs/JobEditPage'
 import { CinnaTaskRunView } from '../jobs/CinnaTaskRunView'
 import { NoteDetail } from '../notes/NoteDetail'
 import { InboxView } from '../inbox/InboxView'
+import { TaskView } from '../tasks/TaskView'
 import { LocalAgentPage } from '../agents/local/LocalAgentPage'
 import { ExamplePromptTags } from '../chat/ExamplePromptTags'
 import { HintBar } from '../ui/HintBar'
@@ -313,6 +314,10 @@ export function MainArea(): React.JSX.Element {
 
   if (activeView === 'inbox') {
     return <InboxView />
+  }
+
+  if (activeView === 'task') {
+    return <TaskView />
   }
 
   if (activeView === 'job-detail') {

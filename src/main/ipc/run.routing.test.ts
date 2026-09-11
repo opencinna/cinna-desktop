@@ -47,6 +47,24 @@ vi.mock('../db/chats', () => ({
   chatRepo: { getOwned: vi.fn(() => chatRow), listMessages }
 }))
 
+/**
+ * A refusal is an ending, and this is the only thing that hears one.
+ *
+ * A turn that never reached a streaming service used to report nothing: the two
+ * services report their own endings, and neither of them ran. So the job run
+ * that asked for the turn stayed `running` for the life of the app, and its
+ * task stayed wherever the caller had put it — which is what let the task
+ * page's re-run claim a stuck task `in_progress` and then leave it there when
+ * the turn was refused for a missing agent.
+ */
+const reportRunCompletion = vi.fn()
+vi.mock('../services/jobService', () => ({
+  jobService: {
+    reportRunCompletion: (chatId: string, status: string, message?: string) =>
+      reportRunCompletion(chatId, status, message)
+  }
+}))
+
 const saveError = vi.fn()
 const lastAddressedAgentId = vi.fn((): string | null => null)
 const lastId = vi.fn((): string | null => 'm-last')
@@ -185,6 +203,9 @@ const ASK: RunEvent = {
 beforeEach(() => {
   ipcOnHandlers.clear()
   vi.clearAllMocks()
+  // `clearAllMocks` drops calls, not implementations — and one test below makes
+  // this one throw. Without the reset it would throw for the rest of the file.
+  reportRunCompletion.mockReset()
   lastId.mockReturnValue('m-last')
   lastAddressedAgentId.mockReturnValue(null)
   cursorGet.mockReturnValue(undefined)
@@ -369,6 +390,50 @@ describe('run:send — refusals and the channels it replaced', () => {
       chatId: 'chat-1',
       short: 'Agent not found or not configured'
     })
+  })
+
+  it('reports a missing agent as an ending, so the run and its task stop hanging', async () => {
+    // Mutation: drop `reportRefusal` from `runAgentTurn` and this fails — the
+    // job run stays `running` (the sidebar's busy badge with it) and the task
+    // the re-run just claimed is never moved again.
+    chatRow = { id: 'chat-1', router: 'direct', agentId: 'a-gone' }
+    await send({ chatId: 'chat-1', content: 'hello' })
+    expect(reportRunCompletion).toHaveBeenCalledWith(
+      'chat-1',
+      'failed',
+      'Agent not found or not configured'
+    )
+  })
+
+  it('reports a chat it refuses as an ending too', async () => {
+    chatRow = undefined as unknown as Record<string, unknown>
+    await send({ chatId: 'chat-9', content: 'hello' })
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-9', 'failed', 'Chat not found')
+  })
+
+  it('never lets that bookkeeping fail the turn it is reporting', async () => {
+    // The call inside `dispatchRun`'s catch is the one that matters: that
+    // function's whole guarantee is that it does not throw, because a rejection
+    // there is invisible — `void dispatchRun(...)` in an `ipcMain.on` listener
+    // posts nothing, closes nothing, and leaves the renderer streaming.
+    // **What catches the mutation is the runner, not the two assertions
+    // below.** `send` does not await `dispatchRun` — the listener is
+    // `void dispatchRun(...)`, which is the whole reason the guarantee matters
+    // — so a rejection surfaces as an unhandled one. Verified: removing the
+    // try/catch in `reportRefusal` makes this file exit 1 with
+    // "Unhandled Rejection", while the assertions still pass. They pin the
+    // other half: the turn still ends on the port.
+    reportRunCompletion.mockImplementation(() => {
+      throw new Error('database is locked')
+    })
+    prepareAgentSend.mockImplementationOnce(() => {
+      throw new Error('Chat not found')
+    })
+    const port = await send({ chatId: 'chat-1', content: 'hello' })
+    expect(port.close).toHaveBeenCalled()
+    expect(port.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'error', error: 'Chat not found' })
+    )
   })
 
   it('routes agent:send-message through the same decision', async () => {

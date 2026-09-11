@@ -51,8 +51,9 @@ import type { TaskStatus } from '../../src/shared/taskStatus'
  *   the card.
  * - Answering from the Inbox, with the chat closed, reaches the agent as ACP's
  *   own outcome and settles the row and the badge.
- * - The transcript of the chat the user left holds the decision when it is
- *   reopened, read-only.
+ * - The run row opens the **task**, whose page names the work and leads to the
+ *   conversation; the transcript of the chat the user left holds the decision
+ *   when it is reopened, read-only.
  * - The task walks `in_progress → blocked → in_progress → completed`.
  *
  * ## What it does not
@@ -297,9 +298,16 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
     // The transcript's own block, with the ask's own words.
     await expect(row.getByText('The agent is asking to run a command', { exact: true })).toBeVisible()
     await expect(row.getByText('rm -rf build', { exact: true })).toBeVisible()
-    // Deliberately no link back to the conversation: the three permission
-    // buttons are every control on the card.
-    await expect(row.getByRole('button')).toHaveText(['Allow once', 'Always allow', 'Deny'])
+    // **Still no link back to the conversation**, and that is the point: a
+    // parked ask is a turn that has not resolved, so the transcript holds the
+    // job's prompt and nothing else. The one way back out of the row is the
+    // *task*, which is the screen that does have something to show.
+    await expect(row.getByRole('button')).toHaveText([
+      'Open the task',
+      'Allow once',
+      'Always allow',
+      'Deny'
+    ])
     await expect(row.getByRole('link')).toHaveCount(0)
   })
 
@@ -314,7 +322,9 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
       .toEqual([{ outcome: { outcome: 'selected', optionId: 'once' } }])
 
     await expect(row.getByText('Allowed once.', { exact: true })).toBeVisible()
-    await expect(row.getByRole('button')).toHaveCount(0)
+    // The ask's own controls are gone; the way to the task is not an answer and
+    // outlives the decision.
+    await expect(row.getByRole('button')).toHaveText(['Open the task'])
     await expect(inboxButton()).toHaveAccessibleName('Inbox')
 
     // Back to work — a real interval, because the agent is finishing what it
@@ -323,16 +333,26 @@ test('a job parks on a permission ask, the user answers it in the Inbox, and the
     await expectTaskStatus(cinna, jobId, 'completed')
   })
 
-  await test.step('the transcript shows the resolution when the chat is reopened', async () => {
+  await test.step('the run row opens the task, and the task leads to the transcript', async () => {
     // Back to Jobs: the tab is still the selected one, so this is the Inbox
     // handing the centre back to the job the ask came from.
     await cinna.page.getByRole('button', { name: 'Jobs', exact: true }).click()
     await expect(cinna.page.getByRole('heading', { name: JOB_TITLE })).toBeVisible()
-    const runRow = cinna.page.getByTitle('Open chat')
+    // **The row's target is the task now**, not the chat — the task is what
+    // outlives a conversation that is hidden from the Chats list and is deleted
+    // with the run. The conversation is still one click away, from the task.
+    const runRow = cinna.page.getByTitle('Open the task')
     await expect(runRow).toContainText('Succeeded')
     await runRow.click()
 
     const page = cinna.page
+    await expect(page.getByRole('heading', { level: 1, name: JOB_TITLE })).toBeVisible()
+    await expect(page.getByText('completed', { exact: true })).toBeVisible()
+    await expect(page.getByText(JOB_PROMPT, { exact: true })).toBeVisible()
+    // A finished task needs no banner (`ux_rules.md` §2).
+    await expect(page.getByRole('status')).toHaveCount(0)
+
+    await page.getByRole('button', { name: 'Open the conversation' }).click()
     await expect(page.getByText('Permission to run a command', { exact: true })).toBeVisible()
     await expect(page.getByText('rm -rf build', { exact: true })).toBeVisible()
     await expect(page.getByText('Allowed once.', { exact: true })).toBeVisible()

@@ -101,6 +101,20 @@ export interface JobRunData {
   finishedAt: Date | null
   createdAt: Date
   /**
+   * The task this run produced — the record of the *work*, where the run row is
+   * the record of the job's attempt at it (agent runtime plan, phase 5). It is
+   * what a run row links to.
+   *
+   * Null for two kinds of run, and they are different: one that predates the
+   * tasks table (history), and a `cinna_task` run, which does not create one
+   * until step 11 folds that path onto the task adapter. Both fall back to what
+   * the row did before — the chat, or the cinna task screen.
+   *
+   * The column has been on the wire since step 3 (`enrichRun` spreads the row);
+   * this is the declaration catching up with it.
+   */
+  taskId: string | null
+  /**
    * True when this is a local run whose chat exists but is hidden from the
    * main Chats list (i.e. user hasn't clicked "Move to Chats" yet). False
    * for promoted chats, deleted chats (`localChatId` is null), and

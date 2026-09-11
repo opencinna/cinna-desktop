@@ -15,6 +15,7 @@ import { useRefreshCinnaRun, useCinnaServerUrl } from '../../hooks/useCinna'
 import { useOpenExternal } from '../../hooks/useSystem'
 import { useCinnaTaskView } from '../../hooks/useCinnaTaskView'
 import { useShowChatInList } from '../../hooks/useChat'
+import { useOpenTask } from '../../hooks/useTasks'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useUIStore } from '../../stores/ui.store'
 import { createLogger } from '../../stores/logger.store'
@@ -52,6 +53,7 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
   const openExternal = useOpenExternal()
   const showChatInList = useShowChatInList()
   const deleteRun = useDeleteJobRun()
+  const openTask = useOpenTask()
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const now = useRelativeNow()
@@ -70,6 +72,19 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
   const canOpenChat = run.type === 'local' && !!run.localChatId
   const canOpenCinnaView = run.type === 'cinna_task' && !!run.cinnaTaskId
   const canMoveToChats = canOpenChat && run.chatHidden
+  /**
+   * **The row opens the task, not the chat.** A task outlives the chat it ran
+   * in — which is hidden from the Chats list, and can be deleted with the run —
+   * so it is the record of the work and the one thing that is still there
+   * afterwards (§5.8 of the agent runtime plan: "the run row's link target
+   * changes to the task view"). The conversation stays one click away, as its
+   * own labelled action.
+   *
+   * Runs that predate the tasks table have no `taskId` and keep exactly the
+   * behaviour they had; so does a `cinna_task` run, which does not create a
+   * task until step 11 folds that path onto the task adapter.
+   */
+  const canOpenTask = !!run.taskId
 
   // Cinna rows show comment/attachment count badges. Polling is disabled
   // here so N visible rows don't trigger N /detail fetches every 5s; the
@@ -117,8 +132,12 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
     )
   }
 
-  const rowClickable = canOpenChat || canOpenCinnaView
+  const rowClickable = canOpenTask || canOpenChat || canOpenCinnaView
   const handleRowClick = (): void => {
+    if (canOpenTask && run.taskId) {
+      openTask(run.taskId)
+      return
+    }
     if (canOpenChat && run.localChatId) {
       openChatFromRun(run.localChatId)
       return
@@ -127,6 +146,11 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
       setActiveCinnaRunId(run.id)
       setActiveView('cinna-task-run')
     }
+  }
+
+  const handleOpenChatClick = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    if (run.localChatId) openChatFromRun(run.localChatId)
   }
 
   const handleRefreshClick = (e: React.MouseEvent): void => {
@@ -171,13 +195,15 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
           : undefined
       }
       title={
-        canOpenChat
-          ? 'Open chat'
-          : canOpenCinnaView
-            ? 'Open task view'
-            : chatGone
-              ? 'Chat no longer available'
-              : undefined
+        canOpenTask
+          ? 'Open the task'
+          : canOpenChat
+            ? 'Open chat'
+            : canOpenCinnaView
+              ? 'Open task view'
+              : chatGone
+                ? 'Chat no longer available'
+                : undefined
       }
       className={`group flex items-center gap-2 px-3 py-2 rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] transition-colors ${
         rowClickable
@@ -199,12 +225,23 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         </span>
       )}
       <div className="flex-1 min-w-0">
+        {/*
+          **The row names what it opens.** It said "Local chat" while its
+          tooltip and its destination had both become the task — a control that
+          names the thing it no longer opens (`ux_rules.md` §10, and its
+          accessible name carried the same wrong word). The task's own title is
+          deliberately not used: for a job run it is the job's title, which is
+          the heading directly above this list, and a sub-line that repeats the
+          title says nothing (§7).
+        */}
         <div className="text-xs text-[var(--color-text-secondary)] truncate">
           {run.type === 'cinna_task' && run.cinnaShortCode
             ? `Cinna task ${run.cinnaShortCode}`
             : run.type === 'cinna_task'
               ? 'Cinna task'
-              : 'Local chat'}
+              : canOpenTask
+                ? 'Task'
+                : 'Local chat'}
         </div>
         <div className="text-[10px] text-[var(--color-text-muted)]">
           {formatRelativeFromDate(createdAt, now)}
@@ -236,6 +273,33 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
             </span>
           )}
         </div>
+      )}
+
+      {/*
+        **The conversation is a labelled control, not a hover reveal.** The row
+        itself now opens the task, so this is the only route from Run history to
+        the chat — and putting it in the hover strip below replaced a
+        discoverable way in with an invisible one: `ux_rules.md` §11 is explicit
+        that a control whose only distinction appears on `:hover` does not exist
+        for anyone who has not already guessed it is there. So it sits outside
+        that wrapper, at rest, with its name on it.
+
+        Only on rows that lead somewhere else first. A run with no task still
+        opens its chat when the row is clicked, and a second control for the
+        thing the row already does would be noise.
+      */}
+      {canOpenTask && canOpenChat && (
+        <button
+          type="button"
+          onClick={handleOpenChatClick}
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+            text-[10px] font-medium text-[var(--color-accent)]
+            hover:bg-[var(--color-bg-hover)] transition-colors"
+          title="Open the conversation this run happened in"
+        >
+          <MessageSquare size={11} />
+          Chat
+        </button>
       )}
 
       {/* Action icons reveal on row hover (focus-within keeps them reachable

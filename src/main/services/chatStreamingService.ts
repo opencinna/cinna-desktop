@@ -150,12 +150,23 @@ export const chatStreamingService = {
   async stream(input: StreamInput): Promise<StreamHandle> {
     const { userId, chatId, wireContent, port } = input
 
+    // **A refusal is an ending, and the three below are endings nobody used to
+    // report.** Each of them posts an error, closes the port and throws — and
+    // `run.ipc.ts`'s `handOff` swallows that throw by design, because a service
+    // that owns the port owns its ending. So a turn refused *here* left the job
+    // run it belonged to at `running` for the life of the app (nothing reaps a
+    // stale one, and the sidebar's busy indicator counts it), and left its task
+    // wherever the caller put it. That second half is what made the task page's
+    // "Re-run from the last message" able to destroy the state it recovers
+    // from: the re-run claims the task `in_progress`, the turn is refused for a
+    // missing credential, and nothing moves the task again.
     const chat = chatRepo.getOwned(userId, chatId)
     if (!chat) {
       const err = 'Chat not found'
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
       port.close()
+      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('not_found', err)
     }
     if (!chat.providerId || !chat.modelId) {
@@ -163,6 +174,7 @@ export const chatStreamingService = {
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
       port.close()
+      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('not_configured', err)
     }
 
@@ -172,6 +184,7 @@ export const chatStreamingService = {
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
       port.close()
+      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('adapter_unavailable', err)
     }
 

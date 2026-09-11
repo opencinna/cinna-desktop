@@ -276,6 +276,18 @@ describe('InboxView', () => {
     expect(rowTitles(container)).toEqual(['Nightly check'])
   })
 
+  it('opens the task an ask belongs to, which is the only way back to the work', async () => {
+    // The step-5 UX review removed the link to the conversation: a parked ask
+    // is a turn that has not resolved, so the transcript holds the prompt and
+    // nothing else. The task page is what replaced it, and this row is where it
+    // is reached from.
+    listMock.mockResolvedValue([PERMISSION])
+    renderInbox()
+    fireEvent.click(await screen.findByRole('button', { name: 'Open the task' }))
+    expect(useUIStore.getState().activeView).toBe('task')
+    expect(useUIStore.getState().activeTaskId).toBe('t1')
+  })
+
   it('says nothing is waiting when nothing is', async () => {
     listMock.mockResolvedValue([])
     renderInbox()

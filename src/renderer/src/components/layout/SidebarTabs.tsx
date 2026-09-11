@@ -4,9 +4,24 @@ import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
 
 /**
+ * The centers that belong to **no** tab, and are therefore the ones the
+ * already-selected tab has to be able to leave.
+ *
+ * The Inbox was the first: an ask belongs to no tab, which is the point of it.
+ * The task page is the second, reached from a job's run rows *and* from an
+ * inbox entry — so which tab is selected while it is open depends on where the
+ * user came from, and pressing that tab has to realign the center rather than
+ * decide nothing changed. The cinna run screen has always had the same shape
+ * and the same trap; it is named here rather than left as the one exception
+ * nobody wrote down.
+ */
+const TABLESS_VIEWS: readonly ActiveView[] = ['inbox', 'task', 'cinna-task-run']
+
+/**
  * The center each tab owns, for the one case that only realigns it: returning
- * from the Inbox to the tab that is already selected. A genuine tab change goes
- * through `handleSwitchTab`'s body, which also clears the old tab's selection.
+ * from a tabless view to the tab that is already selected. A genuine tab change
+ * goes through `handleSwitchTab`'s body, which also clears the old tab's
+ * selection.
  */
 const VIEW_FOR_TAB: Record<SidebarTab, ActiveView> = {
   chats: 'chat',
@@ -35,6 +50,7 @@ export function SidebarTabs(): React.JSX.Element {
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
+  const setActiveTaskId = useUIStore((s) => s.setActiveTaskId)
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
@@ -48,24 +64,26 @@ export function SidebarTabs(): React.JSX.Element {
   // collapsed folder, so the "first job" is ambiguous from the user's POV
   // and would silently expand a folder. Instead we land on the empty
   // "Select a job from the sidebar" view.
-  // The Inbox is the one view that belongs to no tab, so it is also the one the
+  // A view that belongs to no tab (`TABLESS_VIEWS`) is the one the
   // already-selected tab has to be able to leave: pressing Chats while the
-  // inbox fills the center must realign the center, not decide nothing changed.
+  // inbox or a task fills the center must realign the center, not decide
+  // nothing changed.
   const handleSwitchTab = (target: SidebarTab): void => {
-    const leavingInbox = activeView === 'inbox'
-    if (target === sidebarTab && !leavingInbox) return
+    const leavingTabless = TABLESS_VIEWS.includes(activeView)
+    if (target === sidebarTab && !leavingTabless) return
     setSidebarTab(target)
-    // **Coming back from the inbox to the tab you were already on keeps your
-    // place.** The resets below exist because a genuine tab change must not
-    // leave a job in the center under the Notes list; nothing about pressing
-    // Chats to leave the inbox asks for the open chat to be abandoned, and
-    // dropping it would send a user who answered one ask back to a different
-    // conversation than the one they left.
+    // **Coming back to the tab you were already on keeps your place.** The
+    // resets below exist because a genuine tab change must not leave a job in
+    // the center under the Notes list; nothing about pressing Chats to leave
+    // the inbox asks for the open chat to be abandoned, and dropping it would
+    // send a user who answered one ask back to a different conversation than
+    // the one they left.
     if (target === sidebarTab) {
       setActiveView(VIEW_FOR_TAB[target])
       return
     }
     setActiveCinnaRunId(null)
+    setActiveTaskId(null)
     if (target === 'chats') {
       const firstChat = chats?.[0]
       setActiveView('chat')

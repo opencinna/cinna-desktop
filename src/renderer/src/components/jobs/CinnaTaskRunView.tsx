@@ -26,6 +26,7 @@ import { markdownComponents } from '../../utils/markdownComponents'
 import { formatRelativeFromServer } from '../../utils/cinnaTime'
 import { AttachmentList } from '../chat/AttachmentBadge'
 import { isContentComment } from '../../../../shared/cinnaTaskView'
+import { TaskStatusPill } from '../tasks/TaskStatusPill'
 import { unwrapIpcError } from '../../utils/ipcError'
 import type {
   CinnaTaskAttachmentDto,
@@ -152,7 +153,7 @@ export function CinnaTaskRunView(): React.JSX.Element {
               <h1 className="text-base font-semibold text-[var(--color-text)] truncate">
                 {data?.task.title || job?.title || 'Cinna task'}
               </h1>
-              {data?.task.status && <StatusPill status={data.task.status} />}
+              {data?.task.status && <TaskStatusPill status={data.task.status} />}
             </div>
             <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5 font-mono">
               {run.cinnaShortCode ? `#${run.cinnaShortCode}` : run.cinnaTaskId}
@@ -271,23 +272,6 @@ function CountBadge({ count }: { count: number }): React.JSX.Element {
         border border-[var(--color-border)]"
     >
       {count}
-    </span>
-  )
-}
-
-function StatusPill({ status }: { status: string }): React.JSX.Element {
-  const lc = status.toLowerCase()
-  const tone =
-    lc === 'completed' || lc === 'succeeded' || lc === 'archived'
-      ? 'bg-[var(--color-severity-ok)]/15 text-[var(--color-severity-ok-text)]'
-      : lc === 'error' || lc === 'failed'
-        ? 'bg-[var(--color-severity-error)]/15 text-[var(--color-severity-error-text)]'
-        : lc === 'cancelled'
-          ? 'bg-[var(--color-bg-hover)] text-[var(--color-text-muted)]'
-          : 'bg-[var(--color-severity-info)]/15 text-[var(--color-severity-info-text)]'
-  return (
-    <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide ${tone}`}>
-      {status}
     </span>
   )
 }

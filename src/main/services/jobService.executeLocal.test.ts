@@ -477,6 +477,13 @@ describe('a local run produces a task', () => {
 
     const [runRow] = jobRunsRepo.listByJob(USER, job.id)
     expect(runRow.taskId).toBe(res.taskId)
+
+    // And it survives the trip out to the renderer, which is what the run row
+    // in the Jobs sidebar navigates on. `listRuns` is the shape `job:list-runs`
+    // hands the preload; a `taskId` that stopped here would leave every row
+    // opening the chat again with nothing to say why.
+    const [listed] = jobService.listRuns(USER, job.id)
+    expect(listed.taskId).toBe(res.taskId)
   })
 
   it('starts the task, because the run row already says running', () => {

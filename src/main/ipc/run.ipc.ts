@@ -6,6 +6,7 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from '../services/agentService'
 import { messageRoutingService } from '../services/messageRoutingService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
+import { jobService } from '../services/jobService'
 import { chatStreamingService } from '../services/chatStreamingService'
 import { buildCatchUpPacket, withCatchUp } from '../services/threadContextService'
 import { driverFor } from '../agents/drivers'
@@ -104,11 +105,53 @@ async function dispatchRun(port: Port | undefined, payload: RunSendPayload): Pro
     // ending from that point on.
     postRunError(port, message)
     port.close()
+    reportRefusal(payload.chatId, message)
+  }
+}
+
+/**
+ * A turn that ended before any streaming service owned it.
+ *
+ * **A refusal is an ending.** Nothing else will report one from here: the two
+ * services report their own, and a turn that never reached either leaves the
+ * job run it belongs to at `running` for the life of the app — nothing reaps a
+ * stale one, and `countInProgressByJob` (the sidebar's busy indicator) counts
+ * it. Through `reportRunCompletion` the task hears about it too, which is what
+ * keeps the task page's "Re-run from the last message" from turning the state
+ * it recovers from into one nothing can move: without this, a re-run that is
+ * refused for a missing agent leaves the task claimed and running for ever.
+ *
+ * Safe to call on a chat that belongs to no job run, and safe to call twice:
+ * `reportRunCompletion` no-ops for both.
+ *
+ * **It swallows its own errors, by contract**, for the same reason
+ * `observeAsks` does. One call site is inside `dispatchRun`'s catch, and that
+ * function's guarantee is that it never throws — a throw out of there is
+ * invisible, because the caller is `void dispatchRun(...)` in an `ipcMain.on`
+ * listener. Letting bookkeeping break the one path whose job is to report a
+ * failure would trade a stale run row for a renderer that streams for ever.
+ */
+function reportRefusal(chatId: string, message: string): void {
+  try {
+    jobService.reportRunCompletion(chatId, 'failed', message)
+  } catch (err) {
+    logger.warn('could not record a refused turn as an ending', {
+      chatId,
+      error: err instanceof Error ? err.message : String(err)
+    })
   }
 }
 
 async function resolveAndRun(port: Port, payload: RunSendPayload): Promise<void> {
   if (!userActivation.isActivated()) {
+    // **The one unowned exit that deliberately reports nothing.** Every other
+    // refusal below goes through `reportRefusal`, and the asymmetry is the
+    // point: this branch is the app declining to do *anything* profile-scoped,
+    // and a job-run write here would be the only place main touches a locked
+    // profile's rows. A run that is stale-`running` when the profile locks was
+    // orphaned by the lock, not by this send — nothing reaps it at unlock or at
+    // boot either, and that reaper is the fix for the whole class rather than a
+    // write smuggled past the guard that exists to prevent it.
     postRunError(port, 'Session not activated — user must authenticate first')
     port.close()
     return
@@ -122,6 +165,7 @@ async function resolveAndRun(port: Port, payload: RunSendPayload): Promise<void>
     logger.error(err, { chatId })
     postRunError(port, err)
     port.close()
+    reportRefusal(chatId, err)
     return
   }
 
@@ -213,6 +257,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     postRunError(port, err)
     messageRepo.saveError({ chatId, short: err })
     port.close()
+    reportRefusal(chatId, err)
     return
   }
   const { row: agent, userId: agentOwnerId } = located

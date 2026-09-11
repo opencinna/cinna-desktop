@@ -19,6 +19,7 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 2. Main area swaps to the **Cinna Task Run View**. The sidebar stays on the Jobs tab; the originating job stays highlighted.
 3. The view fetches the task detail (`GET /api/v1/tasks/{id}/detail`) and renders.
 4. Header shows: a "← Back to {job title}" link, the task title, a status pill, and the short code (or task id when no short code is set).
+   - The status pill is now the **shared** `TaskStatusPill` (`src/renderer/src/components/tasks/TaskStatusPill.tsx`), the same component the task page uses, so a status cannot be amber on one screen and red on the next. It still takes the raw server string and prints an unrecognised value under a neutral tone rather than dropping or guessing at it. Two spellings changed with the move: `archived` is now muted rather than green — it is filed away, not succeeded — and `blocked` reads amber where it used to take the same in-progress info tone as every unrecognised value, because a task waiting on somebody is not a task quietly progressing.
 5. Top-right action row: a Refresh icon (forces a re-fetch) and an "Open on Cinna" icon (deep-links to `{cinnaServerUrl}/tasks/{short_code}` in the default browser).
 
 ### Reading comments
@@ -51,11 +52,12 @@ A read-only view inside the desktop that surfaces a Cinna task's **comments** an
 
 ### Leaving the view
 1. Back link returns to **Job Detail** (`activeView = 'job-detail'`) and clears `activeCinnaRunId`.
-2. Switching the sidebar tab away from Jobs also clears `activeCinnaRunId` (see [App Shell · Sidebar Tab Realign](../../ui/app_shell/app_shell.md)).
+2. Switching the sidebar tab away from Jobs also clears `activeCinnaRunId` (see [App Shell](../../ui/app_shell/app_shell.md)).
+3. Pressing the **already-selected** tab now leaves the view too. This screen belongs to no tab, and while one such view fills the centre the tab press has to realign the centre rather than decide nothing changed — previously the press was a no-op, so the one gesture that looks like "take me back to my jobs" was the one that did nothing. `activeCinnaRunId` is deliberately left set on that path, so the tab's own selection is kept.
 
 ## Business Rules
 
-- **Cinna-only.** The view is only reachable for `cinna_task` runs with a non-null `cinnaTaskId`. Local-run rows still navigate to their spawned chat as before.
+- **Cinna-only.** The view is only reachable for `cinna_task` runs with a non-null `cinnaTaskId`. A **local** run row no longer lands here or on its chat by default: a local run records the task it produced, and its row opens that task's page, with the conversation as its own labelled action ([Jobs](../jobs/jobs.md)). A `cinna_task` run has no such task yet — the remote path does not create one — so these rows keep this screen, and so does a local run old enough to predate the tasks table.
 - **Single API call.** Comments + standalone attachments come from `/api/v1/tasks/{id}/detail` — one round-trip, not three.
 - **System entries hidden by default in counts.** The row's comment-count badge filters out `status_change | assignment | system` so the user sees the number of authored comments, not the activity log size.
 - **Timezone correction.** cinna-core serializes `datetime` columns from Python without a `Z`, but the values are UTC. The view parses timestamps with explicit UTC tagging so relative times don't drift by the user's offset.

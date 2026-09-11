@@ -5,6 +5,12 @@ export type ActiveView =
   | 'settings'
   /** The one list of asks waiting on a human — reachable from every tab. */
   | 'inbox'
+  /**
+   * One task: what the work is, where it stands, and the way back into it.
+   * Reached from a job's run rows and from an inbox entry, so — like the inbox
+   * — it belongs to no sidebar tab.
+   */
+  | 'task'
   | 'job-detail'
   | 'job-edit'
   | 'cinna-task-run'
@@ -51,6 +57,8 @@ interface UIStore {
   activeJobId: string | null
   /** Cinna task run currently being viewed (when activeView === 'cinna-task-run'). */
   activeCinnaRunId: string | null
+  /** The task whose page is open (when activeView === 'task'). */
+  activeTaskId: string | null
   activeNoteId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
@@ -74,6 +82,7 @@ interface UIStore {
   setSidebarTab: (tab: SidebarTab) => void
   setActiveJobId: (id: string | null) => void
   setActiveCinnaRunId: (id: string | null) => void
+  setActiveTaskId: (id: string | null) => void
   setActiveNoteId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
@@ -92,6 +101,7 @@ export const useUIStore = create<UIStore>((set) => ({
   sidebarTab: 'chats',
   activeJobId: null,
   activeCinnaRunId: null,
+  activeTaskId: null,
   activeNoteId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
@@ -107,6 +117,7 @@ export const useUIStore = create<UIStore>((set) => ({
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
   setActiveJobId: (id) => set({ activeJobId: id }),
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
+  setActiveTaskId: (id) => set({ activeTaskId: id }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
   setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),

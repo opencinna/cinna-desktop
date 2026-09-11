@@ -3,6 +3,7 @@ import { AlertTriangle, Inbox as InboxIcon, Loader2 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
 import { useAnswerAsk, useInboxList } from '../../hooks/useInbox'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
+import { useOpenTask } from '../../hooks/useTasks'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
@@ -21,7 +22,7 @@ import type { InboxAnswerCode, InboxEntry } from '../../../../shared/inbox'
  * rendering, and a second one would be a second place for "Always allow" to
  * mean something slightly different. The row around them supplies what the
  * transcript gets from context — which task this is, which agent is asking,
- * and the way back to the conversation.
+ * and the way back to the work (the task page, never the chat — see the row).
  *
  * ## A row the user has acted on never leaves while they are looking at it
  *
@@ -236,6 +237,7 @@ function InboxRow({
   onActed: (entry: InboxEntry) => void
 }): React.JSX.Element {
   const answer = useAnswerAsk()
+  const openTask = useOpenTask()
   const card = useRef<HTMLElement>(null)
   /**
    * The card's height at the moment it was answered, held as a floor.
@@ -316,33 +318,47 @@ function InboxRow({
       className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]/40 px-3 py-2.5"
     >
       {/*
-        **No link to the conversation.** There is nothing there to open: the
-        assistant message carrying the ask is persisted only once the turn's
-        `run()` resolves (`a2aStreamingService.streamToAgent`), and a parked ask
-        is by definition a turn that has not — so the transcript holds the job's
-        prompt and nothing else, over a sidebar that does not list a
-        job-spawned chat at all. A control that lands on a screen missing the
-        very thing it was pressed from is the silent failure of `ux_rules.md`
-        §6. The way back to the work belongs to the task view (step 6), which
-        this entry already carries a `taskId` for.
+        **The way back is the task, never the conversation.** There is nothing
+        in the transcript to open: the assistant message carrying the ask is
+        persisted only once the turn's `run()` resolves
+        (`a2aStreamingService.streamToAgent`), and a parked ask is by definition
+        a turn that has not — so the chat holds the job's prompt and nothing
+        else, over a sidebar that does not list a job-spawned chat at all. A
+        control that lands on a screen missing the very thing it was pressed
+        from is the silent failure of `ux_rules.md` §6.
+
+        The task page is the screen that *does* have it: what the work is, where
+        it stands, and the conversation as its own labelled action once there is
+        something in it. It is a text action in the accent colour rather than a
+        clickable title, because a control the colour of the prose beside it is
+        not a control anybody finds (§11).
       */}
-      <div className="min-w-0 mb-2">
-        {/*
-          13px, the size of the ask's own headline below it. At `text-xs` the
-          card's subject was set smaller than its body — one scale per surface
-          (`ux_rules.md` §12), and here the block inside is what sets it.
-        */}
-        <div
-          className="text-[13px] font-medium text-[var(--color-text)] truncate"
-          title={entry.taskTitle}
+      <div className="min-w-0 mb-2 flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          {/*
+            13px, the size of the ask's own headline below it. At `text-xs` the
+            card's subject was set smaller than its body — one scale per surface
+            (`ux_rules.md` §12), and here the block inside is what sets it.
+          */}
+          <div
+            className="text-[13px] font-medium text-[var(--color-text)] truncate"
+            title={entry.taskTitle}
+          >
+            {entry.taskTitle}
+          </div>
+          <div className="text-[11px] text-[var(--color-text-muted)] truncate">
+            {[agentLabel, formatRelativeFromDate(entry.createdAt, now)]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => openTask(entry.taskId)}
+          className="shrink-0 text-[11px] font-medium text-[var(--color-accent)] hover:text-[var(--color-accent-hover)] transition-colors"
         >
-          {entry.taskTitle}
-        </div>
-        <div className="text-[11px] text-[var(--color-text-muted)] truncate">
-          {[agentLabel, formatRelativeFromDate(entry.createdAt, now)]
-            .filter(Boolean)
-            .join(' · ')}
-        </div>
+          Open the task
+        </button>
       </div>
       <AskBody entry={entry} settledAs={settledAs} onDeliver={deliver} />
     </article>
