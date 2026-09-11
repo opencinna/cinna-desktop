@@ -1,7 +1,19 @@
 import { MessageSquare, ClipboardList, NotebookPen, Bot } from 'lucide-react'
-import { useUIStore, type SidebarTab } from '../../stores/ui.store'
+import { useUIStore, type ActiveView, type SidebarTab } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
 import { useChatList } from '../../hooks/useChat'
+
+/**
+ * The center each tab owns, for the one case that only realigns it: returning
+ * from the Inbox to the tab that is already selected. A genuine tab change goes
+ * through `handleSwitchTab`'s body, which also clears the old tab's selection.
+ */
+const VIEW_FOR_TAB: Record<SidebarTab, ActiveView> = {
+  chats: 'chat',
+  jobs: 'job-detail',
+  notes: 'note-detail',
+  agents: 'local-agent'
+}
 
 const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[] = [
   { id: 'chats', label: 'Chats', Icon: MessageSquare },
@@ -19,6 +31,7 @@ const TAB_ITEMS: { id: SidebarTab; label: string; Icon: typeof MessageSquare }[]
 export function SidebarTabs(): React.JSX.Element {
   const sidebarTab = useUIStore((s) => s.sidebarTab)
   const setSidebarTab = useUIStore((s) => s.setSidebarTab)
+  const activeView = useUIStore((s) => s.activeView)
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
@@ -35,9 +48,23 @@ export function SidebarTabs(): React.JSX.Element {
   // collapsed folder, so the "first job" is ambiguous from the user's POV
   // and would silently expand a folder. Instead we land on the empty
   // "Select a job from the sidebar" view.
+  // The Inbox is the one view that belongs to no tab, so it is also the one the
+  // already-selected tab has to be able to leave: pressing Chats while the
+  // inbox fills the center must realign the center, not decide nothing changed.
   const handleSwitchTab = (target: SidebarTab): void => {
-    if (target === sidebarTab) return
+    const leavingInbox = activeView === 'inbox'
+    if (target === sidebarTab && !leavingInbox) return
     setSidebarTab(target)
+    // **Coming back from the inbox to the tab you were already on keeps your
+    // place.** The resets below exist because a genuine tab change must not
+    // leave a job in the center under the Notes list; nothing about pressing
+    // Chats to leave the inbox asks for the open chat to be abandoned, and
+    // dropping it would send a user who answered one ask back to a different
+    // conversation than the one they left.
+    if (target === sidebarTab) {
+      setActiveView(VIEW_FOR_TAB[target])
+      return
+    }
     setActiveCinnaRunId(null)
     if (target === 'chats') {
       const firstChat = chats?.[0]

@@ -385,6 +385,22 @@ export type PermissionReply = 'once' | 'always' | 'reject'
  * Shared rather than declared beside the registry in main, because it crosses
  * the wire: an `input_resolved` stream event carries it to the renderer.
  */
+/**
+ * What a settled question says it was answered with — one sentence, in one
+ * place.
+ *
+ * The transcript reads it as the runner's own `tool_result` line, replayed out
+ * of the database long after the turn; the inbox reads it as the record on a
+ * row the user has just answered. Those are two surfaces describing one
+ * decision, and the way they stay the same sentence is that neither of them
+ * writes it. Full stop included: every other decision line in a transcript ends
+ * in one, and this one is read beside them.
+ */
+export function describeQuestionAnswers(answers: string[][]): string {
+  const chosen = answers.flat().filter(Boolean)
+  return chosen.length > 0 ? `Answered: ${chosen.join(', ')}.` : 'Answered.'
+}
+
 export type RequestResolution =
   | {
       kind: 'permission'

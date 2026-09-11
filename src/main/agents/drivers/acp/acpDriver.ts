@@ -60,6 +60,7 @@ import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult } from '../../../services/a2aStreamingService'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { RunEvent } from '../../../../shared/runEvents'
+import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
   LocalPermissionRequest,
   RequestResolution
@@ -980,14 +981,12 @@ async function answerElicitation(
     const resolution = await handle.answered
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
     if (resolution.kind === 'question') {
-      const answers = resolution.answers.flat().filter(Boolean)
-      // The old OpenCode runner's own sentence, full stop included: every other
-      // decision line in a transcript ends in one, and this one is read beside
-      // them.
+      // The old OpenCode runner's own sentence, now shared with the inbox,
+      // which renders the same record on a row answered with this chat closed.
       world.emit(
         world.stream.settleQuestion(
           requestId,
-          answers.length > 0 ? `Answered: ${answers.join(', ')}.` : 'Answered.'
+          describeQuestionAnswers(resolution.answers)
         ).message
       )
       return { action: 'accept', content: toElicitationContent(form, resolution.answers) }

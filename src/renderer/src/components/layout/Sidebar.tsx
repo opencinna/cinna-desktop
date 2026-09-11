@@ -22,6 +22,7 @@ import { JobsList } from '../jobs/JobsList'
 import { NotesList } from '../notes/NotesList'
 import { LocalAgentsList } from '../agents/local/LocalAgentsList'
 import { SidebarTabs } from './SidebarTabs'
+import { InboxButton } from '../inbox/InboxButton'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
@@ -152,17 +153,23 @@ export function Sidebar(): React.JSX.Element {
             </div>
           </>
         ) : (
-          <div className="flex-1 overflow-y-auto">
-            {sidebarTab === 'chats' ? (
-              <ChatList />
-            ) : sidebarTab === 'jobs' ? (
-              <JobsList />
-            ) : sidebarTab === 'notes' ? (
-              <NotesList />
-            ) : (
-              <LocalAgentsList />
-            )}
-          </div>
+          <>
+            {/* Above the tab's list, not inside it: an ask belongs to no tab.
+                The job that raised it is under Jobs, its chat under Chats, and
+                the inbox exists so the user does not have to know which. */}
+            <InboxButton />
+            <div className="flex-1 overflow-y-auto">
+              {sidebarTab === 'chats' ? (
+                <ChatList />
+              ) : sidebarTab === 'jobs' ? (
+                <JobsList />
+              ) : sidebarTab === 'notes' ? (
+                <NotesList />
+              ) : (
+                <LocalAgentsList />
+              )}
+            </div>
+          </>
         )}
 
         {/* Footer: profile (left) — agent status + interface (right) */}

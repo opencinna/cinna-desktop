@@ -263,6 +263,14 @@ export const inboxService = {
     if (!task || task.deletedAt) {
       return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
     }
+    // **`expired` is not `answered`, and the difference is the whole sentence.**
+    // A row settled by `endTurn`, by the park timing out or by the boot sweep
+    // was never decided by anybody; reporting it as answered over an ask to run
+    // `rm -rf build` tells the user somebody allowed it. Both are refusals, and
+    // only one of them is a claim about what happened.
+    if (row.status === 'expired') {
+      return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
+    }
     if (row.status !== 'open') {
       return {
         ok: false,

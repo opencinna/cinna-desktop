@@ -379,6 +379,24 @@ describe('answering from the inbox', () => {
     expect(deliverAnswer).toHaveBeenCalledTimes(1)
   })
 
+  it('does not call an expired ask answered', () => {
+    // Mutation: fold the `expired` arm back into `row.status !== 'open'` and
+    // this fails — an ask the turn abandoned comes back "already answered",
+    // which over `rm -rf build` tells the user somebody allowed it. Nobody
+    // decided anything; the address simply died.
+    makeTask()
+    inboxService.recordRunEvent(ctx(), permission)
+    // The turn ends under the parked ask — a Stop, the ceiling, a crash.
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'canceled' })
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
+
+    const result = inboxService.answer(USER, 'per_1', { kind: 'permission', reply: 'once' })
+
+    expect(result).toMatchObject({ ok: false, code: 'no_longer_waiting' })
+    expect(result.reason).toBe(ASK_NO_LONGER_WAITING)
+    expect(deliverAnswer).not.toHaveBeenCalled()
+  })
+
   it('refuses an ask that belongs to another profile, without delivering it', () => {
     makeTask()
     inboxService.recordRunEvent(ctx(), permission)

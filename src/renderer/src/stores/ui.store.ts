@@ -3,6 +3,8 @@ import { create } from 'zustand'
 export type ActiveView =
   | 'chat'
   | 'settings'
+  /** The one list of asks waiting on a human — reachable from every tab. */
+  | 'inbox'
   | 'job-detail'
   | 'job-edit'
   | 'cinna-task-run'

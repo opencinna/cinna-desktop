@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCircle2, HelpCircle } from 'lucide-react'
+import { Check, CheckCircle2, HelpCircle } from 'lucide-react'
 import { useChatComposer } from '../../hooks/useChatComposer'
 import { AnswerQuestionsModal } from './AnswerQuestionsModal'
 import type { AskQuestion } from '../../utils/askUserQuestion'
@@ -12,7 +12,12 @@ interface AskUserQuestionBlockProps {
    * questions that have already been answered, which render as a muted record.
    */
   interactive: boolean
-  chatId: string
+  /**
+   * The chat the question was asked in. Null only where the surface rendering
+   * this block is not a chat — the inbox, which answers by request id and
+   * never reaches the composer path below.
+   */
+  chatId: string | null
   /**
    * The engine request id (`que_*`) when a **local** agent is parked on this
    * question right now.
@@ -27,6 +32,17 @@ interface AskUserQuestionBlockProps {
    * second time while the first turn was still waiting.
    */
   liveRequestId?: string
+  /**
+   * What this question settled as, as one sentence — the sibling of
+   * {@link PermissionRequestBlock}'s `decision`, and for the same reason: a
+   * settled ask that shows no record of its own outcome tells the reader
+   * nothing, and sends them back to the transcript to find out.
+   *
+   * Compose it with `describeQuestionAnswers`, never by hand: the runner writes
+   * the same sentence into the transcript as a `tool_result`, and the two are
+   * read one reload apart.
+   */
+  decision?: string
   onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }
 
@@ -42,6 +58,7 @@ export function AskUserQuestionBlock({
   interactive,
   chatId,
   liveRequestId,
+  decision,
   onAnswerLocal
 }: AskUserQuestionBlockProps): React.JSX.Element | null {
   if (questions.length === 0) return null
@@ -79,6 +96,12 @@ export function AskUserQuestionBlock({
               </li>
             ))}
           </ul>
+          {decision && (
+            <div className="mt-2 inline-flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
+              <Check size={12} />
+              {decision}
+            </div>
+          )}
           {/* The send hook (and its chat-store subscription) lives in the inner
               component so it mounts only for the active prompt — historical,
               read-only records stay subscription-free. */}
@@ -107,7 +130,7 @@ function AnswerAffordance({
   onAnswerLocal
 }: {
   questions: AskQuestion[]
-  chatId: string
+  chatId: string | null
   liveRequestId?: string
   onAnswerLocal?: (requestId: string, answers: string[][]) => Promise<unknown>
 }): React.JSX.Element {
@@ -120,10 +143,25 @@ function AnswerAffordance({
   const { submit } = useChatComposer(chatId)
 
   const handleSubmit = (text: string, structured: string[][]): void => {
+    // A retry starts clean. Without this a refused answer's red line survived
+    // the answer that then landed, and sat under the button saying the opposite
+    // of what had just happened.
+    setError(null)
     if (liveRequestId && onAnswerLocal) {
       void onAnswerLocal(liveRequestId, structured).catch((err) =>
         setError(err instanceof Error ? err.message : String(err))
       )
+      setOpen(false)
+      return
+    }
+    // **No chat and no live address: say so rather than do nothing.** The
+    // composer's `submit` returns silently on a null `chatId`, so this branch
+    // used to close the modal, send nothing and report nothing. It is
+    // unreachable from the two callers that exist — the transcript always has a
+    // chat, the inbox always has a request id — and it is exactly what the next
+    // caller would write by accident, now that `chatId` is allowed to be null.
+    if (!chatId) {
+      setError('This question can only be answered in the chat it was asked in.')
       setOpen(false)
       return
     }
