@@ -574,6 +574,28 @@ export const taskService = {
     return written(userId, row)
   },
 
+  /** Bind a new desktop conversation inside its first message's transaction. */
+  beginDesktopChat(userId: string, taskId: string, chatId: string, assignee: TaskAssignee): TaskDto {
+    const task = requireTask(userId, taskId)
+    requireRunsHere(userId, task)
+    if (!canTransition(parseTaskStatus(task.status), 'in_progress')) {
+      throw new TaskError('invalid_transition', `A ${task.status} task cannot be started`)
+    }
+    const row = taskRepo.update(userId, taskId, dirtied(task, {
+      ...statusPatch(task, 'in_progress'),
+      chatId,
+      router: 'direct',
+      executorDevice: thisDeviceId(userId),
+      assigneeAgentId: assignee.agentId,
+      assigneeName: assignee.name,
+      assigneeKind: assignee.kind,
+      assigneeRef: null
+    }, ['status', 'assignee']))
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    // Export after acceptance commits; a filesystem write cannot roll back.
+    return toTaskDto(row, thisDeviceId(userId))
+  },
+
   /**
    * The markdown note the next agent reads. Exported to a file beside the task
    * in step 7 of the phase, and posted as a comment on a bound remote in step 9

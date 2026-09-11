@@ -539,6 +539,17 @@ describe('main-owned turn lifetime', () => {
   const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
   const payload = { chatId: 'chat-1', content: 'Continue' }
 
+  it('cancels a main-owned turn by owned chat and refuses a foreign chat', async () => {
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
+    await handle.accepted
+    const cancel = vi.spyOn(handle, 'cancel')
+    runExecutionService.cancelChat('profile-user', 'chat-1')
+    expect(cancel).toHaveBeenCalledTimes(1)
+    chatRow = undefined as unknown as Record<string, unknown>
+    expect(() => runExecutionService.cancelChat('other-profile', 'chat-1')).toThrow('Chat not found')
+    expect(cancel).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps an early-returning model turn alive with no renderer until its stream closes', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     const observer = vi.fn()

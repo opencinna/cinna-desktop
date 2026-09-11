@@ -19,10 +19,12 @@ A task is the durable record of work: its original goal, current status, assigne
 2. **Answer an agent running here.** A parked question/permission or A2A next-message question appears in the Inbox. A hand-opened chat acquires a task at its first persisted ask. Answer from the Inbox and keep the outcome visible. A next-message answer continues the same agent/chat/task in main without navigating away; its pending request survives app restart.
 3. **Answer remote work.** A locally known blocked task on an ask-capable adapter contributes its live questions to the same Inbox. Its task page offers **Open the Inbox** separately from takeover. A failed delivery keeps the question dialog and draft available for retry.
 4. **Keep remote work current.** The active profile pushes local edits and discovers remote tasks automatically, with five seconds between completed passes. Focus and wake catch up. A bound task page opens its saved record immediately, refreshes in the background and marks failed remote refreshes as stale.
-5. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. See the current completion gaps below.
+5. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. For a task with no local chat, choose an available agent or **Default chat model**, then press **Continue**. Main starts one new conversation with the goal, distinct description and handoff note, and opens it after acceptance.
 
 ## Business Rules
 
+- **Starting here keeps the work.** Continue reuses the task and its remote/job provenance; it does not create another job attempt or reuse the remote protocol session. A refused start keeps the selected target and task page open. Changing the target clears the old refusal. Pending controls disable in place.
+- **Start only work this device owns.** Existing conversations continue through their own controls. Active turns, pending local questions, script tasks and completed/cancelled/archived tasks cannot be replaced by a new start. Failed tasks may be retried. Agent readiness and model configuration are checked before dispatch, with profile/claim/configuration rechecks after asynchronous preparation.
 - **The task outlives an attempt.** Status and provenance belong to the work; conversation and run links may disappear without erasing its goal or history.
 - **Local writes are local first.** Network failures do not undo a task edit. Bound changes accumulate dirty markers for the adapter coordinator; device sync is a separate path.
 - **Validate status writes; accept remote facts.** The desktop uses the shared transition table. Pulled status is accepted as the service's fact. Run state maps into task state at the recording boundary, rather than becoming a second task vocabulary.
@@ -36,8 +38,8 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- Taking over a task without a local conversation has no desktop-start control yet. There is no general task hand-off IPC/picker; jobs are the production handover entry point.
-- Autonomous multi-turn execution, coordinator handback, the script router and attach/replay remain later runtime work; the existing headless path continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
+- There is no general task hand-off IPC/picker; jobs are the production handover entry point. The local Continue picker chooses the first desktop conversation’s target, not a remote destination.
+- Autonomous multi-turn execution, coordinator handback, the script router and attach/replay remain later runtime work; the existing main-owned path starts one explicit task turn or continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.
@@ -45,6 +47,8 @@ These are remaining implementation boundaries, not claims that the task runtime 
 ## Architecture Overview
 
 Job or chat → task service → SQLite task → task page.
+
+Take over → device claim; Continue → task execution preflight → new chat + transactional message/task binding → shared main executor → accepted chat navigation.
 
 Run input event → persisted local request; blocked bound task → remote adapter asks; both → Inbox → shared request block → local driver reply, same-chat next-message continuation or remote adapter answer.
 

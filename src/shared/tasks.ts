@@ -290,6 +290,18 @@ export interface TaskListQuery {
   includeArchived?: boolean
 }
 
+/** Explicit desktop continuation target; remote assignee ids are not accepted. */
+export type DesktopTaskTarget =
+  | { kind: 'agent'; agentId: string }
+  | { kind: 'model'; modeId?: string }
+
+export interface TaskStartResult {
+  task: TaskDto
+  chatId: string
+  /** Main turn identity, not a new job attempt. */
+  runId: string
+}
+
 /**
  * Where an entry in the inbox stands.
  *

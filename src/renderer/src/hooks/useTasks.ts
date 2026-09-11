@@ -5,7 +5,7 @@ import { useUIStore } from '../stores/ui.store'
 import { useChatStream } from './useChatStream'
 import { INBOX_QUERY_KEY } from './useInbox'
 import { unwrapIpcError } from '../utils/ipcError'
-import type { TaskDto } from '../../../shared/tasks'
+import type { DesktopTaskTarget, TaskDto } from '../../../shared/tasks'
 import type { TaskStatus } from '../../../shared/taskStatus'
 
 /**
@@ -64,6 +64,29 @@ export function useOpenTask(): (taskId: string) => void {
     },
     [setActiveTaskId, setActiveView]
   )
+}
+
+/** Main persists and dispatches once; this hook only displays the accepted run. */
+export function useStartTask() {
+  const queryClient = useQueryClient()
+  const [isPending, setPending] = useState(false)
+  const setActiveChatId = useChatStore((state) => state.setActiveChatId)
+  const setActiveView = useUIStore((state) => state.setActiveView)
+  const start = useCallback(async (taskId: string, target: DesktopTaskTarget): Promise<void> => {
+    setPending(true)
+    try {
+      const result = await window.api.tasks.start(taskId, target).catch((error) => {
+        throw new Error(unwrapIpcError(error, 'This task could not be started.'))
+      })
+      queryClient.setQueryData(TASK_QUERY_KEY(taskId), result.task)
+      void queryClient.invalidateQueries({ queryKey: ['chats'] })
+      void queryClient.invalidateQueries({ queryKey: ['chat', result.chatId] })
+      void queryClient.invalidateQueries({ queryKey: INBOX_QUERY_KEY })
+      setActiveChatId(result.chatId)
+      setActiveView('chat')
+    } finally { setPending(false) }
+  }, [queryClient, setActiveChatId, setActiveView])
+  return { start, isPending }
 }
 
 export const REMOTE_LIVE_QUERY_KEY = (taskId: string | null): readonly unknown[] => [

@@ -5,11 +5,16 @@ import { inboxService } from '../services/inboxService'
 import { runExecutionService } from '../services/runExecutionService'
 import { createLogger } from '../logger/logger'
 import { postRunError } from './_streamPort'
+import { ipcHandle } from './_wrap'
 import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('run')
 
 export function registerRunHandlers(): void {
+  ipcHandle('run:cancel-chat', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    runExecutionService.cancelChat(getProfileScopeUserId(), chatId)
+  })
   // ipcRenderer.postMessage passes the payload as the 2nd arg to the listener
   // and the MessagePort on event.ports — see CLAUDE.md.
   ipcMain.on('run:send', (event, payload: RunSendPayload) => {

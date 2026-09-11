@@ -26,6 +26,7 @@ import type { IpcMainInvokeEvent } from 'electron'
  */
 
 const markDirty = vi.hoisted(() => vi.fn())
+const startTask = vi.hoisted(() => vi.fn(async () => ({ task: { id: 't1' }, chatId: 'c1', runId: 'run1' })))
 const service = vi.hoisted(() => ({
   update: vi.fn(() => ({ id: 't1' })),
   setStatus: vi.fn(() => ({ id: 't1' })),
@@ -57,6 +58,7 @@ vi.mock('./_wrap', () => ({
 vi.mock('../services/syncService', () => ({ syncService: { markDirty } }))
 vi.mock('../services/taskService', () => ({ taskService: service }))
 vi.mock('../services/taskSyncService', () => ({ taskSyncService: sync }))
+vi.mock('../services/taskExecutionService', () => ({ taskExecutionService: { start: startTask } }))
 vi.mock('../services/inboxService', () => ({
   inboxService: { list: vi.fn(() => []), answer: vi.fn() }
 }))
@@ -64,7 +66,7 @@ vi.mock('../services/askDelivery', () => ({ parseAnswerPayload: vi.fn(() => null
 vi.mock('../auth/activation', () => ({
   userActivation: { requireActivated: vi.fn() }
 }))
-vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-1' }))
+vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-1', getSettingsScopeUserId: () => 'settings-1' }))
 
 const { registerTaskHandlers } = await import('./task.ipc')
 
@@ -85,6 +87,7 @@ async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
 describe('a task write a person made reaches the other devices without waiting a minute', () => {
   it.each([
     ['task:take-over', ['t1']],
+    ['task:start', ['t1', { kind: 'model' }]],
     ['task:update', ['t1', { title: 'Renamed' }]],
     ['task:set-status', ['t1', 'in_progress']],
     ['task:delete', ['t1']]
@@ -98,6 +101,15 @@ describe('a task write a person made reaches the other devices without waiting a
       throw new Error('Task not found')
     })
     await expect(invoke('task:take-over', 't1')).rejects.toThrow('Task not found')
+    expect(markDirty).not.toHaveBeenCalled()
+  })
+
+  it('captures both start scopes and nudges only after acceptance', async () => {
+    await invoke('task:start', 't1', { kind: 'agent', agentId: 'a1' })
+    expect(startTask).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, 't1', { kind: 'agent', agentId: 'a1' })
+    markDirty.mockClear()
+    startTask.mockRejectedValueOnce(new Error('not ready'))
+    await expect(invoke('task:start', 't1', { kind: 'model' })).rejects.toThrow('not ready')
     expect(markDirty).not.toHaveBeenCalled()
   })
 

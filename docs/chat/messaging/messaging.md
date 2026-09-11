@@ -88,7 +88,7 @@ User -> ChatInput (renderer) -> useChatStream.startRun()
 
 ## Main-owned Continuations
 
-The shared executor owns a turn after dispatch, even if its renderer port closes. An Inbox next-message answer runs through the same routing/persistence/driver path without opening a conversation. Acceptance saves the user message and settles its agent’s pending requests in one transaction; a refusal rolls back both. Later stream completion is a separate event. This supplies one-turn continuation, not automatic task loops or attachment to a live headless turn. See [execution details](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+The shared executor owns a turn after dispatch, even if its renderer port closes. An Inbox next-message answer runs through the same routing/persistence/driver path without opening a conversation. Task Continue creates a new direct chat and dispatches its goal/handoff prompt once in main, then navigates after acceptance. Acceptance saves the user message and settles its agent’s pending requests in one transaction; a refusal rolls back both. Later stream completion is a separate event. Chat detail exposes a process-local active run id. Without an attached stream, the open chat polls persisted messages every second until that run ends, showing Stop during the run and Send afterwards. This supplies one-turn execution and visible completion, not automatic task loops or token replay. See [execution details](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
 
 ## Integration Points
 

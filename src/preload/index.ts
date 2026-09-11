@@ -110,6 +110,8 @@ export type { MessageAttachment }
 
 export interface ChatData {
   id: string
+  /** Ephemeral main-owned turn; present on detail reads only. */
+  activeRunId?: string | null
   title: string
   modelId: string | null
   providerId: string | null
@@ -794,6 +796,7 @@ const api = {
    * decision this channel exists to take away from the composer.
    */
   run: {
+    cancelChat: (chatId: string): Promise<void> => ipcRenderer.invoke('run:cancel-chat', chatId),
     send: (
       chatId: string,
       content: string,
@@ -1135,6 +1138,8 @@ const api = {
     list: (query?: TaskListQuery): Promise<TaskDto[]> =>
       ipcRenderer.invoke('task:list', query),
     get: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:get', taskId),
+    start: (taskId: string, target: import('../shared/tasks').DesktopTaskTarget): Promise<import('../shared/tasks').TaskStartResult> =>
+      ipcRenderer.invoke('task:start', taskId, target),
     update: (
       taskId: string,
       patch: { title?: string; description?: string | null; priority?: TaskDto['priority']; router?: TaskDto['router'] }

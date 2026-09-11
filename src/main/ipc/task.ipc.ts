@@ -1,13 +1,14 @@
 import { userActivation } from '../auth/activation'
-import { getProfileScopeUserId } from '../auth/scope'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskService, type TaskFieldPatch } from '../services/taskService'
 import { inboxService } from '../services/inboxService'
 import { syncService } from '../services/syncService'
 import { taskSyncService } from '../services/taskSyncService'
+import { taskExecutionService } from '../services/taskExecutionService'
 import { parseAnswerPayload } from '../services/askDelivery'
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../shared/inbox'
-import type { TaskDto, TaskListQuery } from '../../shared/tasks'
+import type { DesktopTaskTarget, TaskDto, TaskListQuery } from '../../shared/tasks'
 import type { TaskStatus } from '../../shared/taskStatus'
 
 /**
@@ -60,6 +61,15 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:get', async (_event, taskId: string): Promise<TaskDto> => {
     userActivation.requireActivated()
     return taskSyncService.getWatched(getProfileScopeUserId(), taskId)
+  })
+
+  ipcHandle('task:start', async (_event, taskId: string, target: DesktopTaskTarget) => {
+    userActivation.requireActivated()
+    const profileUserId = getProfileScopeUserId()
+    const result = await taskExecutionService.start(
+      { profileUserId, settingsUserId: getSettingsScopeUserId() }, taskId, target)
+    syncService.markDirty(profileUserId)
+    return result
   })
 
   /** Title, description, priority, router — writable whoever is running the task. */

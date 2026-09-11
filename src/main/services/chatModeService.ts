@@ -16,6 +16,8 @@ export interface ChatModeListItem extends ChatModeRow {
   enabled: boolean
 }
 
+export interface ChatModeScope { profileUserId: string; settingsUserId: string }
+
 export const chatModeService = {
   list(userId: string): ChatModeRow[] {
     return chatModeRepo.list(userId)
@@ -30,10 +32,11 @@ export const chatModeService = {
    * independent flags; precedence between them is resolved separately in
    * {@link resolveEffectiveDefault}. Backs the `chatmode:list` IPC.
    */
-  listMerged(): ChatModeListItem[] {
-    const profileUserId = getProfileScopeUserId()
+  listMerged(scope?: ChatModeScope): ChatModeListItem[] {
+    const profileUserId = scope?.profileUserId ?? getProfileScopeUserId()
     const overrides = managedOverrideRepo.map(profileUserId)
-    return chatModeRepo.listByUserIds(getManagedResourceScopes()).map((r) => {
+    const userIds = scope ? [...new Set([scope.settingsUserId, scope.profileUserId])] : getManagedResourceScopes()
+    return chatModeRepo.listByUserIds(userIds).map((r) => {
       if (!r.managed) return { ...r, enabled: true }
       const ov = overrides.get(`mode:${r.id}`)
       return { ...r, enabled: ov?.enabled ?? true, modelId: ov?.modelId ?? r.modelId }
@@ -60,8 +63,8 @@ export const chatModeService = {
    * The one effective default mode, honoring the local/account precedence toggle
    * (`prioritizeAccountDefaults`). Null when neither side has a default set.
    */
-  resolveEffectiveDefault(): ChatModeRow | null {
-    const items = this.listMerged()
+  resolveEffectiveDefault(scope?: ChatModeScope): ChatModeRow | null {
+    const items = this.listMerged(scope)
     const prioritize = appSettingsRepo.get('prioritizeAccountDefaults')
     const id = resolveDefaultModeId(items, prioritize)
     return id ? items.find((i) => i.id === id) ?? null : null

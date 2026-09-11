@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry } from '../../../../shared/inbox'
@@ -25,11 +25,13 @@ const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
 const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
 const runSend = vi.fn()
+const startTask = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   tasks: {
+    start: (taskId: string, target: unknown) => startTask(taskId, target),
     get: () => getTask(),
     setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
     takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
@@ -37,7 +39,7 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
   },
   inbox: { list: () => listInbox() },
   agents: {
-    list: async () => [{ id: 'a1', name: 'Invoice Checker' }],
+    list: async () => [{ id: 'a1', name: 'Invoice Checker', enabled: true }],
     onRemoteSyncComplete: () => () => {},
     onReadinessChanged: () => () => {},
     checkReadiness: async () => undefined
@@ -277,14 +279,30 @@ describe('a failed task', () => {
 })
 
 describe('a task whose conversation is gone', () => {
-  it('says so instead of showing a control that can never work', async () => {
-    // `ux_rules.md` §11's principle for a choice that is no longer valid: it
-    // degrades to an explanation, not to a button that fails after the click —
-    // and a disabled control whose only account of itself is a `title` tooltip
-    // says nothing at all to a keyboard or touch user.
+  it('starts through main once and navigates only after acceptance', async () => {
     await renderTask({ chatId: null })
-    await screen.findByText(/nothing left to send again/)
+    await screen.findByRole('option', { name: 'Invoice Checker' })
     expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
+    fireEvent.change(screen.getByRole('combobox', { name: 'Continue with' }), { target: { value: 'a1' } })
+    startTask.mockResolvedValueOnce({ task: { ...BASE, chatId: 'new-chat' }, chatId: 'new-chat', runId: 'turn1' })
+    await act(async () => { screen.getByRole('button', { name: 'Continue' }).click() })
+    expect(startTask).toHaveBeenCalledExactlyOnceWith('t1', { kind: 'agent', agentId: 'a1' })
+    expect(runSend).not.toHaveBeenCalled()
+    expect(useChatStore.getState().activeChatId).toBe('new-chat')
+    expect(useUIStore.getState().activeView).toBe('chat')
+  })
+
+  it('keeps the selection and control when main refuses to start', async () => {
+    await renderTask({ chatId: null })
+    fireEvent.change(screen.getByRole('combobox', { name: 'Continue with' }), { target: { value: 'model' } })
+    startTask.mockRejectedValueOnce(new Error("Error invoking remote method 'task:start': Error: Choose a default chat mode"))
+    await act(async () => { screen.getByRole('button', { name: 'Continue' }).click() })
+    expect((await screen.findByText('Choose a default chat mode')).textContent).not.toContain('Error invoking')
+    expect((screen.getByRole('combobox', { name: 'Continue with' }) as HTMLSelectElement).value).toBe('model')
+    fireEvent.change(screen.getByRole('combobox', { name: 'Continue with' }), { target: { value: 'a1' } })
+    expect(screen.queryByText('Choose a default chat mode')).toBeNull()
+    expect((screen.getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(runSend).not.toHaveBeenCalled()
   })
 })
 

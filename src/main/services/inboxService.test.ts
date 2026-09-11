@@ -69,6 +69,7 @@ vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' })
 const { inboxService } = await import('./inboxService')
 const { taskService } = await import('./taskService')
 const { taskInputRequestRepo } = await import('../db/taskInputRequests')
+const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
 
 const USER = '__default__'
 const CHAT = 'chat-1'
@@ -105,13 +106,16 @@ function makeChat(id: string): void {
  * can end it. `makeChatTask` is the other shape.
  */
 function makeTask(chatId: string | null = CHAT) {
+  const job = jobsRepo.create(USER, { title: 'Ship the thing', prompt: 'Ship by Friday', type: 'local' })
+  const run = jobRunsRepo.create({ userId: USER, jobId: job.id, type: 'local', localChatId: chatId, status: 'running' })
   const task = taskService.create(USER, {
     title: 'Ship the thing',
     goal: 'Ship the thing by Friday',
     chatId,
-    jobId: 'job-1',
-    jobRunId: 'run-1'
+    jobId: job.id,
+    jobRunId: run.id
   })
+  jobRunsRepo.setTaskId(run.id, task.id)
   return taskService.start(USER, task.id, { chatId })
 }
 
@@ -137,6 +141,15 @@ beforeEach(() => {
   holder.adapters = []
   deliverAnswer.mockClear()
   makeChat(CHAT)
+})
+
+it('finishes a new desktop conversation even when its task retains an older job attempt', () => {
+  const task = makeTask(null)
+  taskService.beginDesktopChat(USER, task.id, CHAT, { kind: 'agent', agentId: AGENT, name: 'Alpha' })
+  inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+  expect(taskService.getById(USER, task.id).status).toBe('completed')
+  expect(jobRunsRepo.getById(USER, task.jobRunId!)?.status).toBe('succeeded')
+  expect(jobRunsRepo.getByLocalChatId(CHAT)).toBeUndefined()
 })
 
 afterEach(() => {

@@ -23,10 +23,15 @@ export function useChatList() {
 }
 
 export function useChatDetail(chatId: string | null) {
+  const hasAttachedStream = useChatStore((state) =>
+    state.activeChatId === chatId && state.isStreaming)
   return useQuery({
     queryKey: ['chat', chatId],
     queryFn: () => (chatId ? window.api.chat.get(chatId) : null),
-    enabled: !!chatId
+    enabled: !!chatId,
+    // Main-started turns have no live port here yet. Keep reading through the
+    // final persistence/close, including errors, instead of freezing at seed.
+    refetchInterval: (query) => !hasAttachedStream && query.state.data?.activeRunId ? 1_000 : false
   })
 }
 
@@ -175,5 +180,3 @@ export function useSetChatRouter() {
     }
   })
 }
-
-

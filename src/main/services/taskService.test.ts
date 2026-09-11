@@ -1123,7 +1123,10 @@ describe('every task write keeps the exported note in step', () => {
   it('classifies every method on the service', () => {
     // The whole point: a method added without a line here fails, and the person
     // adding it has to decide whether it writes.
-    expect([...READS, ...Object.keys(WRITES)].sort()).toEqual(Object.keys(taskService).sort())
+    // beginDesktopChat runs inside message acceptance; taskExecutionService
+    // exports after commit so a rolled-back transaction cannot publish a file.
+    const deferredExportWrites = ['beginDesktopChat']
+    expect([...READS, ...Object.keys(WRITES), ...deferredExportWrites].sort()).toEqual(Object.keys(taskService).sort())
   })
 
   it.each(Object.entries(WRITES))('%s', (_name, { run, leaves }) => {

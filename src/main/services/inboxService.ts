@@ -2,6 +2,7 @@ import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
 import { taskRepo, type TaskRow } from '../db/tasks'
 import { chatRepo } from '../db/chats'
+import { jobRunsRepo } from '../db/jobs'
 import { messageRepo } from '../db/messages'
 import { agentRepo } from '../db/agents'
 import { routerOf } from '../../shared/chatRouting'
@@ -308,7 +309,8 @@ export const inboxService = {
     // outcome this event cannot — a stop, a refusal, a budget ceiling — and
     // writes it a beat later through the same `applyRunState`. Writing a
     // terminal status here would be a second, worse answer racing the real one.
-    if (task.jobRunId) {
+    const currentJobRun = task.jobRunId ? jobRunsRepo.getByLocalChatId(ctx.chatId) : null
+    if (currentJobRun?.taskId === task.id) {
       if (expired > 0) markTask(ctx.userId, task.id, 'working')
       return
     }

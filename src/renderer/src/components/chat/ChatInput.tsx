@@ -292,7 +292,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
     textareaRef.current?.focus()
   }, [chatId])
   const { cancel: cancelStream } = useChatStream()
-  const { isStreaming, activeRequestId } = useChatStore()
+  const { isStreaming: hasPortStream, activeRequestId } = useChatStore()
+  const isStreaming = hasPortStream || !!chatData?.activeRunId
 
   // Trigger popup state — shared between @ (agents/MCP), # (example prompts),
   // / (CLI commands), and ? (notes).
@@ -1059,8 +1060,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   ])
 
   const handleCancel = useCallback(() => {
+    if (chatId && chatData?.activeRunId) {
+      void window.api.run.cancelChat(chatId).catch((error) => {
+        setSendError(unwrapIpcError(error, 'This turn could not be stopped.'))
+      })
+      return
+    }
     if (activeRequestId) cancelStream(activeRequestId)
-  }, [activeRequestId, cancelStream])
+  }, [chatId, chatData?.activeRunId, activeRequestId, cancelStream, setSendError])
 
   // The @ popup is the combined agent+MCP picker whenever we're in an MCP
   // mention context (active chat OR new-chat with the buffer wired up), so
@@ -1468,6 +1475,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
           {isStreaming ? (
             <button
               onClick={handleCancel}
+              aria-label="Stop"
               className="p-1.5 rounded-lg bg-[var(--color-danger)] hover:opacity-80 text-white transition-opacity"
             >
               <Square size={16} />

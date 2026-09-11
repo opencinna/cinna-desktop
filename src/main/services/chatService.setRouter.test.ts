@@ -63,6 +63,18 @@ vi.mock('./agentService', () => ({ agentService: { findAgent: () => null } }))
 const USER = 'profile-1'
 
 const { chatService } = await import('./chatService')
+const { activeRunsByChat } = await import('./runExecutionState')
+
+it('exposes main-run activity only on an owned chat and clears it when the turn closes', () => {
+  const chat = chatService.create(USER)
+  activeRunsByChat.set(chat.id, { id: 'headless-turn' } as never)
+  try {
+    expect(chatService.get(USER, chat.id)?.activeRunId).toBe('headless-turn')
+    expect(chatService.get('another-profile', chat.id)).toBeNull()
+    activeRunsByChat.delete(chat.id)
+    expect(chatService.get(USER, chat.id)?.activeRunId).toBeNull()
+  } finally { activeRunsByChat.delete(chat.id) }
+})
 const { chatRepo } = await import('../db/chats')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
 const { a2aSessionRepo } = await import('../db/agents')

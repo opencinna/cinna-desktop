@@ -11,6 +11,7 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
+import { activeRunsByChat } from './runExecutionState'
 
 const logger = createLogger('chat')
 
@@ -33,11 +34,11 @@ export const chatService = {
     return chatRepo.list(userId)
   },
 
-  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[] }) | null {
+  get(userId: string, chatId: string): (ChatRow & { messages: MessageRow[]; activeRunId: string | null }) | null {
     const chat = chatRepo.getOwned(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
-    return { ...chat, messages }
+    return { ...chat, messages, activeRunId: activeRunsByChat.get(chatId)?.id ?? null }
   },
 
   create(userId: string): ChatRow {

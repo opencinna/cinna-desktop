@@ -55,7 +55,7 @@ Tasks that can never start again are skipped — `isUnstartable`: `completed`, `
 
 ### Take over claims, and does not run
 
-One write. `executor_device` moves here and the page re-renders with the controls it was refusing to show; the second press is the user's. "This is mine now" and "go" are two decisions, and a task that may be mid-turn somewhere else is the worst case in which to take the second on the user's behalf.
+One write. `executor_device` moves here and the page re-renders with the controls it was refusing to show; the second press is the user's. A task without a local chat offers **Continue** with an available agent or default model; accepted execution creates its local conversation without changing its origin or remote binding. "This is mine now" and "go" are two decisions, and a task that may be mid-turn somewhere else is the worst case in which to take the second on the user's behalf.
 
 It is offered where the work has **stopped** (`blocked`, `error`) and withheld while it is **streaming** (`in_progress`), because the claim does not stop the other device. Both outcomes of a mid-run take-over are bad, and the button has no third one: the other device's turn ends, its `applyRunState` hits `requireRunsHere`, throws into a best-effort catch, and the task sits `in_progress` for ever — or the run finishes first and whole-record LWW writes its own row back, silently undoing the claim.
 
@@ -63,13 +63,13 @@ A task a bound **service** is running gets the same treatment across the seam, f
 
 ### A person's write is nudged; a run's own progress is not
 
-`syncService.markDirty` is called from `task.ipc.ts`, not from `taskService`, so the debounce covers `update`, `set-status`, `take-over` and `delete` and nothing else — and it is called **after** the write, so a refused write never announces itself. A run reports itself several times a turn through `applyRunState`, and debouncing a full sync cycle onto each of those is chatty for a row that is changing on its own; those ride the 60 s periodic cycle. Take-over is the one that most needs the nudge — its whole purpose is to tell another device it has lost the claim, and a minute of silence there is a minute in which both devices believe they own the run.
+`syncService.markDirty` is called from `task.ipc.ts`, not from `taskService`, so the debounce covers `update`, `set-status`, `take-over`, accepted `start` and `delete` — and it is called **after** the write, so a refused write never announces itself. A run reports itself several times a turn through `applyRunState`, and debouncing a full sync cycle onto each of those is chatty for a row that is changing on its own; those ride the 60 s periodic cycle. Take-over is the one that most needs the nudge — its whole purpose is to tell another device it has lost the claim, and a minute of silence there is a minute in which both devices believe they own the run.
 
 There is also a layering reason it cannot live in the service: `sync/collections.ts` imports `taskService` (the apply path goes through it so [the exported note](handoff_note_export.md) follows the row), and `syncService → syncEngine → collections → taskService` would close a cycle if the service imported `syncService` back. Nothing imports `ipc/`.
 
 ### The task page looks live, and is not
 
-`useTask` re-reads every five seconds and stops once the task is settled — but it re-reads the **local** row, so nothing a peer wrote appears until a sync cycle has run. Two things run one: opening the page (`useSyncOnViewOpen`, throttled to one server ping per 8 s) and the 60 s periodic cycle. A pulled change surfaces through `data-changed` → the `['task']` query key, which is the prefix of every task page's key.
+`useTask` re-reads every five seconds; unbound tasks stop once settled, while bound tasks keep refreshing remote detail — but it re-reads the **local** row, so nothing a peer wrote appears until a sync cycle has run. Two things run one: opening the page (`useSyncOnViewOpen`, throttled to one server ping per 8 s) and the 60 s periodic cycle. A pulled change surfaces through `data-changed` → the `['task']` query key, which is the prefix of every task page's key.
 
 ### The banner never names the device
 

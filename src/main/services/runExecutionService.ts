@@ -18,6 +18,7 @@ import type { RunSendPayload } from '../../shared/ipcPayloads'
 
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
+import { activeRunsByChat as activeChats } from './runExecutionState'
 
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
@@ -30,11 +31,15 @@ export interface RunHandle {
   completed: Promise<void>
   cancel(): void
 }
-const activeChats = new Map<string, RunHandle>()
 
 /** Main owns the turn. A renderer is an optional subscriber, never its lifetime. */
 export const runExecutionService = {
   isRunning(chatId: string): boolean { return activeChats.has(chatId) },
+
+  cancelChat(userId: string, chatId: string): void {
+    if (!chatRepo.getOwned(userId, chatId)) throw new Error('Chat not found')
+    activeChats.get(chatId)?.cancel()
+  },
 
   start(scope: RunScope, payload: RunSendPayload, options: {
     observe: RunObserver
