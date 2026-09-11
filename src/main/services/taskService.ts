@@ -7,6 +7,7 @@ import {
   type TaskRow
 } from '../db/tasks'
 import { TaskError } from '../errors'
+import { taskFileService } from './taskFileService'
 import { createLogger } from '../logger/logger'
 import {
   canTransition,
@@ -191,6 +192,26 @@ export function toTaskDto(
   }
 }
 
+/**
+ * The tail of every write: the row as a DTO, with its exported note in step.
+ *
+ * The export is here rather than in `setHandoffNote` alone — where §5.11 puts
+ * it — because the frontmatter carries `title`, `status`, `assignee`, `parent`
+ * and `updated`, and all five change from elsewhere. Exporting only on the note
+ * write would leave a file claiming `in_progress` under a task that finished an
+ * hour ago, which is worse than no file: nothing reads it back, so nothing
+ * would ever correct it. Hanging it off every write instead means a file that
+ * exists is current, and the cost is one filesystem call per task write.
+ *
+ * {@link taskFileService.exportHandoff} never throws and removes the file when
+ * there is no note, so this is also the delete path for a note that was cleared.
+ */
+function written(row: TaskRow): TaskDto {
+  const dto = toTaskDto(row)
+  taskFileService.exportHandoff(dto)
+  return dto
+}
+
 /** What a caller may change about a task regardless of who is running it. */
 export interface TaskFieldPatch {
   title?: string
@@ -254,7 +275,7 @@ export const taskService = {
       executor: row.executor,
       jobRunId: row.jobRunId ?? undefined
     })
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -273,7 +294,7 @@ export const taskService = {
 
     const row = taskRepo.update(userId, taskId, next)
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -304,7 +325,7 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, statusPatch(task, status, opts.errorMessage))
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task status', { taskId, from, to: status })
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -323,7 +344,7 @@ export const taskService = {
     if (parseTaskStatus(task.status) !== status) {
       logger.info('task status pulled', { taskId, from: task.status, to: status })
     }
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -372,7 +393,7 @@ export const taskService = {
       assigneeKind: assignee.kind
     })
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -385,7 +406,7 @@ export const taskService = {
     requireRunsHere(userId, task)
     const row = taskRepo.update(userId, taskId, { handoffNote: note })
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -419,7 +440,7 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, patch)
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task started', { taskId, executor: row.executor, chatId: row.chatId ?? undefined })
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -440,7 +461,7 @@ export const taskService = {
     })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task taken over', { taskId, from: task.executor, fromDevice: task.executorDevice })
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -458,7 +479,7 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, { executor: 'remote', executorDevice: null })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task handed to remote', { taskId, adapter: task.remoteAdapter })
-    return toTaskDto(row)
+    return written(row)
   },
 
   /**
@@ -472,6 +493,10 @@ export const taskService = {
   remove(userId: string, taskId: string): void {
     requireTask(userId, taskId)
     taskRepo.softDelete(userId, taskId)
+    // The row survives as a tombstone; the file is a view of a task the user
+    // can no longer open, so it goes. A soft delete is still a delete to
+    // anything reading the folder.
+    taskFileService.removeHandoff(taskId)
     logger.info('task deleted', { taskId })
   }
 }

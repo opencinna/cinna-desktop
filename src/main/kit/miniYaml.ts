@@ -299,3 +299,127 @@ export function parseFrontmatter(text: string): Frontmatter | null {
   }
   return null
 }
+
+/**
+ * A value this writer can put in a frontmatter block. Scalars only, and
+ * deliberately: every consumer so far writes a flat map, and a nested writer
+ * that nobody exercises is a second way to produce the "plausible wrong value"
+ * the header of this file warns about. It grows when something needs it.
+ *
+ * `undefined` means **omit the key** — an optional field is left out rather
+ * than written as `null`, which is a different claim.
+ */
+export type FrontmatterScalar = string | number | boolean | null
+
+/** `key` is code, not data: one this reader cannot split on is a call-site bug. */
+const SAFE_KEY = /^[A-Za-z_][A-Za-z0-9_-]*$/
+
+/**
+ * Keys that pass {@link SAFE_KEY} and still do not survive the trip.
+ *
+ * `parseMap` builds its result with `map[key] = value` on an object literal, and
+ * `__proto__` is a setter there rather than a property — so the line is written,
+ * parsed, and the key is **silently absent** from the document with no issue
+ * reported. Refused here rather than fixed in the reader, because the reader's
+ * behaviour is older than this writer and shared with the kit's own files; what
+ * is new is the promise that whatever this function writes, `parseFrontmatter`
+ * reads back.
+ */
+const UNWRITABLE_KEYS = new Set(['__proto__'])
+
+/**
+ * The two shapes {@link parseScalar} reads back **as a number**, as one test.
+ *
+ * `String(value)` is not always one of them: JavaScript switches to exponential
+ * notation below 1e-6 and at or above 1e21, and neither numeric pattern in the
+ * reader accepts an exponent — so `0.0000001` would be written as `1e-7` and
+ * read back as the *string* `'1e-7'`, with `issues: []`. Checking the rendered
+ * token against the reader's own grammar catches that, and `NaN`, `Infinity`
+ * and `-Infinity` fall out of the same check rather than needing their own.
+ */
+const READS_BACK_AS_NUMBER = /^[-+]?(\d+|\d+\.\d*|\.\d+)$/
+
+/**
+ * Replace every character this reader treats as a line break, or cannot escape,
+ * with a space.
+ *
+ * The obvious rule — "control characters", `< 0x20` — is **not** the rule, and
+ * the difference is a silent data loss. `splitKey` ends its value at `$` with
+ * `.` in front of it, and in a JavaScript regex `.` does not match U+2028 or
+ * U+2029: those are LineTerminators. So a value containing one fails to split,
+ * the line is dropped by `parseMap`, and the key disappears from the document
+ * with **no issue reported** — a key that is simply absent, which is the one
+ * outcome the header of this file says must never happen quietly. Measured, not
+ * assumed: `.` matches U+0085 and does not match U+2028 or U+2029. U+0085 is
+ * folded anyway, because a real YAML reader — which is what an agent reading
+ * one of these files will use — does treat it as a line break, and a value that
+ * survives here and splits there is worse than one that is folded in both.
+ *
+ * The rest are folded because there is no escape for them: {@link toLines}
+ * splits on newlines and rewrites tabs as two spaces *before* a quote is
+ * considered, so a literal one does not survive the trip whatever we do with
+ * it. A folded title is visibly the same title; a vanished one is not.
+ */
+function flattenControls(value: string): string {
+  let out = ''
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0
+    const isControl = code < 0x20 || code === 0x7f
+    const isLineTerminator = code === 0x85 || code === 0x2028 || code === 0x2029
+    out += isControl || isLineTerminator ? ' ' : ch
+  }
+  return out
+}
+
+/**
+ * Quote a string so {@link parseScalar} reads back exactly what went in.
+ *
+ * **Always quoted, never bare.** A bare scalar round-trips for most strings and
+ * then silently changes `42`, `true`, `null`, `~`, `[a]`, a leading `-` and
+ * anything containing ` #` into something else. Quoting unconditionally costs
+ * two characters and removes the whole class.
+ */
+function quote(value: string): string {
+  return `"${flattenControls(value).replace(/([\\"])/g, '\\$1')}"`
+}
+
+function formatScalar(value: FrontmatterScalar, key: string): string {
+  if (value === null) return 'null'
+  if (typeof value === 'boolean') return value ? 'true' : 'false'
+  if (typeof value === 'number') {
+    const rendered = String(value)
+    if (!READS_BACK_AS_NUMBER.test(rendered)) {
+      throw new Error(
+        `Frontmatter key \`${key}\` is ${rendered}, which this reader would read back as the string "${rendered}" rather than a number`
+      )
+    }
+    return rendered
+  }
+  return quote(value)
+}
+
+/**
+ * Render a `---`-delimited frontmatter block above a markdown body, in the
+ * subset {@link parseFrontmatter} reads back unchanged.
+ *
+ * The round trip is the contract, and the tests assert all three halves of it:
+ * `parseFrontmatter(formatFrontmatter(data, body))` returns that `data`, that
+ * `body`, and **no issues**. Keys are validated rather than escaped — they come
+ * from code, and a key this reader cannot split on is a mistake to be told
+ * about, not a line to drop.
+ */
+export function formatFrontmatter(
+  data: Record<string, FrontmatterScalar | undefined>,
+  body = ''
+): string {
+  const lines: string[] = ['---']
+  for (const [key, value] of Object.entries(data)) {
+    if (value === undefined) continue
+    if (!SAFE_KEY.test(key) || UNWRITABLE_KEYS.has(key)) {
+      throw new Error(`\`${key}\` is not a frontmatter key this writer can round-trip`)
+    }
+    lines.push(`${key}: ${formatScalar(value, key)}`)
+  }
+  lines.push('---', '')
+  return lines.join('\n') + body
+}

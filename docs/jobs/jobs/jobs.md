@@ -270,5 +270,6 @@ Run flow (cinna_task)
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — Cinna Task jobs require an active Cinna OAuth session; reauth bubbles up as `JobError('reauth_required')`.
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — Read-only in-app view of a cinna_task run; reached by clicking a `cinna_task` row in this job's run history. Surfaces comments + attachments fetched from cinna-core.
 - **The task page** (`src/renderer/src/components/tasks/TaskView.tsx`, `activeView: 'task'`) — where a local run row with a task lands. It renders the task, offers the way back to the job and to the conversation, and for a task that is `blocked` or `error` offers a re-run from the last message in that conversation. It belongs to no sidebar tab, so pressing the already-selected tab leaves it rather than deciding nothing changed.
+- [The Handoff Note, Exported](../tasks/handoff_note_export.md) — every write to a task a job produced also keeps that task's handoff note in step as a file under `<userData>/tasks/`, when it has one.
 - [App Shell](../../ui/app_shell/app_shell.md) — Sidebar gains the icon tab rail; settings view hides it.
 - [Onboarding](../../auth/onboarding/onboarding.md) — JobTypePicker reuses the onboarding welcome-card visual treatment (Sparkles header + 2-card grid).

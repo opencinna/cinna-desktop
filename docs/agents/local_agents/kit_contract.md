@@ -142,6 +142,8 @@ So the three shapes that do this are detected, not guessed at:
 
 **`parseMiniYaml()` remains, and discards issues.** It is for display-only callers that never execute the result — reading STATUS.md frontmatter, for instance. If a value will be run, published, or otherwise acted on, use `parseWithIssues()`. This distinction is the whole point of the module having two entry points.
 
+**The module also writes one thing**, and the same danger runs backwards through it. `formatFrontmatter()` renders the `---` block above a markdown body for the [exported handoff note](../../jobs/tasks/handoff_note_export.md), and its contract is the round trip: what it writes, this reader reads back as the same data, the same body and **no issues**. So it quotes every string rather than deciding when to, folds anything that would end a line early, and refuses a key or a number it could not promise to read back — because a writer that emits a line this reader would mangle is writing a file the app cannot read, in the module whose whole purpose is that such a value never passes silently.
+
 ### Validation severity
 
 - **error** — the folder is broken or would import wrong: a missing required field, a prompt file that is not there, an exposed secret, an unresolvable `/run:`, an unreadable command. The agent is not run

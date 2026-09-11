@@ -28,7 +28,7 @@ Implementation reference for [Kit Contract & Manifest Layer](kit_contract.md).
 - `src/main/kit/validator.ts` — the TS port of `kit.py validate`
 - `src/main/kit/layout.ts` — typed view over `layout.json`, glob matching, command localization
 - `src/main/kit/exportTree.ts` — export file list, content hash, total size
-- `src/main/kit/miniYaml.ts` — the small YAML reader
+- `src/main/kit/miniYaml.ts` — the small YAML reader, and the one frontmatter writer
 - `src/main/kit/hash.ts` — `sha256Hex()`, the one digest both `exportTree` and `manifestIo` use
 - `src/main/errors.ts` — `KitError` / `KitErrorCode`
 
@@ -152,6 +152,7 @@ This must stay identical to the conditional `allOf` in `schema/cinna-agent.schem
 - `parseMiniYaml(text)` → `data` only — **display-only callers**, which is why it still exists
 - `parseFrontmatter(text)` → `{data, body, issues} | null` for `---`-delimited frontmatter (STATUS.md, and a Claude folder subagent's `.claude/agents/*.md`). `issues` is the same list `parseWithIssues` returns, so a caller that acts on the values — [the Claude engine's subagent reader](claude_engine_tech.md#folder-subagents-claudeagentsts) — can refuse the file rather than pass on a value that is plausible and wrong
 - `parseScalar(raw)` — quoted strings, `null`/`~`, booleans, ints, floats, simple `[a, b]` inline sequences
+- `formatFrontmatter(data, body?)` → the `---`-delimited block above a markdown body — the module's **one writer**, used by the [exported handoff note](../../jobs/tasks/handoff_note_export.md). Flat scalars only (`string | number | boolean | null`); `undefined` omits the key, since an optional field left out is a different claim from one written as `null`
 
 `MiniYamlIssue.code` is one of:
 
@@ -161,7 +162,14 @@ This must stay identical to the conditional `allOf` in `schema/cinna-agent.schem
 | `skipped_line` | a line indented past every key above it | nothing — the text is silently dropped |
 | `inline_comment` | an unquoted value containing `" #"` | everything before the `#`, i.e. a shorter string |
 
-Internals: `toLines()` (tabs→2 spaces, blanks/comments/document markers dropped, 1-based line numbers kept for attribution), `noteScalarIssues()`, `splitKey()`, `parseBlock()` / `parseMap()` / `parseSequence()`, `stripComment()`, `unquote()`, `hasInlineComment()`. Never throws — a file it cannot make sense of returns `{data: {}, issues: []}`.
+Internals: `toLines()` (tabs→2 spaces, blanks/comments/document markers dropped, 1-based line numbers kept for attribution), `noteScalarIssues()`, `splitKey()`, `parseBlock()` / `parseMap()` / `parseSequence()`, `stripComment()`, `unquote()`, `hasInlineComment()`. Reading never throws — a file it cannot make sense of returns `{data: {}, issues: []}`. **Writing does**, on a key or a number it cannot promise to read back: `formatFrontmatter` is called with values from code, so an input it would mangle is a mistake to be told about rather than a line to emit and regret.
+
+**The writer's contract is the round trip, in three parts**: `parseFrontmatter(formatFrontmatter(data, body))` returns that data, that body, **and an empty `issues` list**. The third part is the one that matters, because of what this subset does to input it cannot represent — it returns a plausible wrong value rather than failing, so a writer that emits an issue-producing line is writing a file it cannot read. Four rules fall out of it:
+
+- **Strings are always quoted, never bare.** A bare scalar round-trips for most strings and then silently changes `42`, `true`, `null`, `~`, `[a]`, a leading `-` and anything containing `" #"` into something else. Two characters removes the whole class, and there is then no judgement call to get wrong.
+- **Line terminators and control characters are folded to spaces.** Not "control characters" as `< 0x20` — U+2028 and U+2029 are not in that range and `splitKey`'s `.` does not match them, so a value carrying one fails to split, the line is dropped, and **the key is silently absent from the document with no issue reported**: the one outcome this module exists to prevent. U+0085 is folded with them because a real YAML reader — which is what an agent reading the file will use — treats it as a break. Tabs and newlines are folded because `toLines()` rewrites them before a quote is ever considered, so a literal one cannot survive whatever the writer does — and an unfolded newline in a title would end the frontmatter block early and lose *the rest of the fields*, not just that value.
+- **A number that would render in exponential notation is refused.** JavaScript switches to it below 1e-6 and at or above 1e21, and neither numeric pattern in the reader accepts an exponent — `0.0000001` would come back as the string `'1e-7'` with no issue raised. The rendered token is checked against the reader's own grammar, which catches `NaN` and the infinities for free.
+- **`__proto__` is refused as a key.** It passes the key pattern and still does not survive: `parseMap` assigns onto an object literal, where it is a setter, so the line is written, parsed, and the key is simply not in the result. Refused in the writer rather than fixed in the reader — the reader's behaviour is older than the writer and shared with the kit's own files.
 
 ### `src/main/kit/exportTree.ts`
 

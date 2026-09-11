@@ -66,6 +66,14 @@ export interface TaskCreateInput {
  * not writable: `id`, `userId` and `origin` — provenance, which never changes.
  * `goal` is absent for the same reason (it is cinna's `original_message`, and
  * it is immutable once created).
+ *
+ * **Six of these columns are also frontmatter** in the exported handoff note
+ * (`services/taskFileService.ts`): `title`, `status`, `assigneeName`,
+ * `parentTaskId`, `remoteKey` and `updatedAt`. Nothing reads that file back, so
+ * a write that does not re-export leaves it lying with nothing to correct it —
+ * which is why every `taskService` mutation ends in `written(row)` rather than
+ * `toTaskDto(row)`, and why `taskService.test.ts` pins the list of methods that
+ * do. A new writer of any of these six belongs on that list.
  */
 export type TaskPatch = Partial<
   Pick<

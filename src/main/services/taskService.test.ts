@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import { TaskError } from '../errors'
 import type { TaskStatus } from '../../shared/taskStatus'
@@ -17,7 +20,19 @@ import type { RunState } from '../../shared/runEvents'
 
 const holder = vi.hoisted(() => ({
   current: null as TestDatabase | null,
-  deviceId: null as string | null
+  deviceId: null as string | null,
+  userData: ''
+}))
+
+/**
+ * Real enough for `taskFileService`, which is the only thing below this service
+ * that asks Electron anything. The exported handoff note is a file, and the
+ * claim worth testing here is not that the file is well formed — that is
+ * `taskFileService.test.ts` — but that *this* service keeps it in step with the
+ * row, including on writes that are not the note.
+ */
+vi.mock('electron', () => ({
+  app: { getPath: () => holder.userData }
 }))
 
 vi.mock('../logger/logger', () => ({
@@ -42,6 +57,7 @@ vi.mock('../db/sync', () => ({
 
 const { taskService } = await import('./taskService')
 const { taskRepo } = await import('../db/tasks')
+const { parseFrontmatter } = await import('../kit/miniYaml')
 
 const USER = '__default__'
 const OTHER_USER = 'someone-else'
@@ -50,11 +66,13 @@ beforeEach(() => {
   holder.current = createTestDatabase()
   // Default: a profile with sync off. Null device id means "here".
   holder.deviceId = null
+  holder.userData = mkdtempSync(join(tmpdir(), 'cinna-task-service-'))
 })
 
 afterEach(() => {
   holder.current?.close()
   holder.current = null
+  if (holder.userData) rmSync(holder.userData, { recursive: true, force: true })
 })
 
 function makeTask(overrides: Partial<Parameters<typeof taskService.create>[1]> = {}) {
@@ -559,5 +577,222 @@ describe('reads and deletes', () => {
 
   it('reports no binding for a desktop-only task', () => {
     expect(makeTask().remote).toBeNull()
+  })
+})
+
+/**
+ * The note on disk is a **view** of the row, and these are the two ways a view
+ * goes wrong: it is not there when the row says it should be, and it is there
+ * saying something the row stopped agreeing with.
+ *
+ * The second is why the export hangs off every write rather than off
+ * `setHandoffNote` alone, as §5.11 specifies. The frontmatter carries `status`,
+ * `title`, `assignee`, `parent` and `updated`, every one of which changes from
+ * somewhere else — and since nothing ever reads the file back, a stale one is
+ * never corrected by anything.
+ */
+describe('the exported handoff note', () => {
+  function noteFile(taskId: string): string | null {
+    const path = join(holder.userData, 'tasks', `${taskId}.md`)
+    return existsSync(path) ? readFileSync(path, 'utf8') : null
+  }
+
+  it('is written when the note is set, and says what the task is', () => {
+    const task = makeTask({ title: 'Ship the thing' })
+    taskService.setHandoffNote(USER, task.id, 'Ledger read; two invoices flagged.')
+
+    const parsed = parseFrontmatter(noteFile(task.id)!)
+    expect(parsed!.data.id).toBe(task.id)
+    expect(parsed!.data.title).toBe('Ship the thing')
+    expect(parsed!.data.status).toBe('new')
+    expect(parsed!.body).toBe('Ledger read; two invoices flagged.\n')
+  })
+
+  it('follows the task’s status, not just its note', () => {
+    const task = makeTask()
+    taskService.setHandoffNote(USER, task.id, 'Half done.')
+    driveTo(task.id, 'in_progress', 'completed')
+
+    expect(parseFrontmatter(noteFile(task.id)!)!.data.status).toBe('completed')
+  })
+
+  it('follows a renamed title and a reassignment', () => {
+    const task = makeTask()
+    taskService.setHandoffNote(USER, task.id, 'Half done.')
+    taskService.update(USER, task.id, { title: 'Ship it on Monday' })
+    taskService.setAssignee(USER, task.id, {
+      agentId: 'agt_2',
+      name: 'Ledger agent',
+      kind: 'agent'
+    })
+
+    const parsed = parseFrontmatter(noteFile(task.id)!)
+    expect(parsed!.data.title).toBe('Ship it on Monday')
+    expect(parsed!.data.assignee).toBe('Ledger agent')
+  })
+
+  it('is not written for a task that has no note', () => {
+    const task = makeTask()
+    driveTo(task.id, 'in_progress')
+    expect(noteFile(task.id)).toBeNull()
+  })
+
+  it('goes away when the note is cleared', () => {
+    const task = makeTask()
+    taskService.setHandoffNote(USER, task.id, 'Half done.')
+    expect(noteFile(task.id)).not.toBeNull()
+
+    taskService.setHandoffNote(USER, task.id, null)
+    expect(noteFile(task.id)).toBeNull()
+  })
+
+  it('goes away when the task is deleted', () => {
+    const task = makeTask()
+    taskService.setHandoffNote(USER, task.id, 'Half done.')
+    expect(noteFile(task.id)).not.toBeNull()
+
+    taskService.remove(USER, task.id)
+    expect(noteFile(task.id)).toBeNull()
+  })
+})
+
+/**
+ * **Every mutating method keeps the file in step — enumerated, so a new one
+ * cannot quietly skip it.**
+ *
+ * This is the guard on the deviation above, and it exists because of exactly
+ * where the deviation is going to be tested next. Nothing writes
+ * `remoteAdapter` / `remoteId` / `remoteKey` today, which is the only reason
+ * `shortCode` in the frontmatter cannot go stale — and step 9's
+ * `taskSyncService` binding write is precisely such a method. If it ends
+ * `return toTaskDto(row)` like the two read paths do, every bound task's file
+ * starts claiming the wrong short code, or none, and not one assertion in this
+ * suite notices.
+ *
+ * So the *list* is what is pinned, not the behaviour of one method: adding
+ * anything to `taskService` fails the first test here until it is classified as
+ * a read or a write, and classifying it as a write immediately demands that it
+ * actually touch the file.
+ */
+describe('every task write keeps the exported note in step', () => {
+  /** Methods that only read. A read must not write the file either. */
+  const READS = ['list', 'getById', 'getRow']
+
+  const NOTE = 'Half done; the ledger is open.'
+
+  /**
+   * One recipe per mutating method. Each runs against a task that already has a
+   * note, whose file has been removed first — so the assertion is that *this
+   * call* put it back, not that some earlier call had.
+   */
+  const WRITES: Record<
+    string,
+    { run: (taskId: string) => string; leaves: 'file' | 'no file' }
+  > = {
+    create: {
+      run: () => makeTask({ handoffNote: NOTE }).id,
+      leaves: 'file'
+    },
+    update: {
+      run: (id) => taskService.update(USER, id, { title: 'Renamed' }).id,
+      leaves: 'file'
+    },
+    setStatus: {
+      run: (id) => taskService.setStatus(USER, id, 'in_progress').id,
+      leaves: 'file'
+    },
+    acceptRemoteStatus: {
+      run: (id) => taskService.acceptRemoteStatus(USER, id, 'blocked').id,
+      leaves: 'file'
+    },
+    applyRunState: {
+      run: (id) => taskService.applyRunState(USER, id, 'working').id,
+      leaves: 'file'
+    },
+    setAssignee: {
+      run: (id) =>
+        taskService.setAssignee(USER, id, { agentId: 'agt_9', name: 'Ledger', kind: 'agent' }).id,
+      leaves: 'file'
+    },
+    setHandoffNote: {
+      run: (id) => taskService.setHandoffNote(USER, id, 'A newer note.').id,
+      leaves: 'file'
+    },
+    start: {
+      run: (id) => taskService.start(USER, id).id,
+      leaves: 'file'
+    },
+    takeOver: {
+      run: (id) => taskService.takeOver(USER, id).id,
+      leaves: 'file'
+    },
+    handOffToRemote: {
+      run: (id) => taskService.handOffToRemote(USER, id).id,
+      leaves: 'file'
+    },
+    remove: {
+      run: (id) => {
+        taskService.remove(USER, id)
+        return id
+      },
+      leaves: 'no file'
+    }
+  }
+
+  function noteFilePath(taskId: string): string {
+    return join(holder.userData, 'tasks', `${taskId}.md`)
+  }
+
+  it('classifies every method on the service', () => {
+    // The whole point: a method added without a line here fails, and the person
+    // adding it has to decide whether it writes.
+    expect([...READS, ...Object.keys(WRITES)].sort()).toEqual(Object.keys(taskService).sort())
+  })
+
+  it.each(Object.entries(WRITES))('%s', (_name, { run, leaves }) => {
+    // A bound task, so `handOffToRemote` has something to hand off and every
+    // other recipe exercises the `shortCode` field at the same time.
+    const task = makeTask({
+      handoffNote: NOTE,
+      remoteAdapter: 'fake',
+      remoteId: 'r-1',
+      remoteKey: 'FAKE-1'
+    })
+
+    if (leaves === 'file') {
+      // Remove it first, so the assertion is about *this* call.
+      rmSync(noteFilePath(task.id), { force: true })
+    } else {
+      expect(existsSync(noteFilePath(task.id))).toBe(true)
+    }
+
+    const touched = run(task.id)
+    expect(existsSync(noteFilePath(touched))).toBe(leaves === 'file')
+  })
+
+  /**
+   * Two of the recipes above run methods that are *allowed* to do nothing —
+   * `update` with an empty patch returns early, and `applyRunState` no-ops on a
+   * state the task cannot reach. A recipe that happened to hit either path
+   * would assert nothing while still passing, so what they do is pinned here
+   * rather than left to be inferred from the inputs.
+   */
+  it('the two recipes that could legitimately no-op do not', () => {
+    const renamed = makeTask({ handoffNote: NOTE })
+    expect(taskService.update(USER, renamed.id, { title: 'Renamed' }).title).toBe('Renamed')
+
+    const running = makeTask({ handoffNote: NOTE })
+    expect(taskService.applyRunState(USER, running.id, 'working').status).toBe('in_progress')
+  })
+
+  it.each(READS)('%s writes nothing', (name) => {
+    const task = makeTask({ handoffNote: NOTE })
+    rmSync(noteFilePath(task.id), { force: true })
+
+    if (name === 'list') taskService.list(USER)
+    if (name === 'getById') taskService.getById(USER, task.id)
+    if (name === 'getRow') taskService.getRow(USER, task.id)
+
+    expect(existsSync(noteFilePath(task.id))).toBe(false)
   })
 })
