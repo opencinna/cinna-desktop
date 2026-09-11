@@ -212,19 +212,20 @@ export const authService = {
       // intentionally NOT re-checked here: a completed OAuth flow proves control
       // of the Cinna identity (email matches `existing.username`), which is a
       // stronger assertion than the local password. Mirrors `reauthCinna`.
+      const previousServerUrl = existing.cinnaServerUrl
       userRepo.updateCinnaProfile(existing.id, {
         displayName: tokens.profile.displayName,
         cinnaFullName: tokens.profile.fullName,
         cinnaServerUrl: serverUrl,
         cinnaHostingType: input.hostingType ?? 'cloud'
       })
-      // The row id is this device's, not the account's, and `cinnaServerUrl` was
-      // just refreshed from the flow that completed — so the same address on a
-      // different cinna server rebinds here with a remote-task cursor that
-      // belongs to the previous one. A stale cursor makes the next pull a delta
-      // instead of the active set, and nothing on screen would explain the
-      // half-empty result.
-      taskSyncService.resetCursors(existing.id)
+      // The row id is this device's, not the account's. The same address on a
+      // *different* cinna server rebinds onto this row and keeps everything it
+      // holds — including remote-task cursors and bindings that belong to the
+      // previous account. Read before the update above overwrites it.
+      if (previousServerUrl !== serverUrl) {
+        taskSyncService.forgetBindings(existing.id)
+      }
       storeCinnaTokens(existing.id, tokens)
       await userActivation.activate(existing.id)
       logger.info('user.rebound', { userId: existing.id, username, type: 'cinna_user' })

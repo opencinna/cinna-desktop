@@ -907,6 +907,45 @@ describe('history the first pull brings in', () => {
   })
 })
 
+describe('forgetting what a profile held for a previous account', () => {
+  it('unbinds every task and keeps all of them', async () => {
+    // A mirror: created here, also put on the service.
+    const mine = await bound({ title: 'Mine' })
+    // A replica that has finished. This is the set the reconcile can never
+    // clean up — it skips mirrors by design, and skips terminal replicas as a
+    // per-poll cost it refuses to pay.
+    const done = cinna.seed({ title: 'Theirs, finished', status: 'completed' })
+    cinna.touch(done.id, { updated_at: new Date(Date.now() - 60 * 60 * 1000) })
+    await taskSyncService.pull(USER)
+    expect(taskService.list(USER)).toHaveLength(2)
+
+    taskSyncService.forgetBindings(USER)
+
+    // Nothing destroyed — a replica degrades to an ordinary local task, which
+    // is an honest record of work that really happened.
+    const after = taskService.list(USER)
+    expect(after).toHaveLength(2)
+    expect(after.map((t) => t.title).sort()).toEqual(['Mine', 'Theirs, finished'])
+    // ...and no task still points at the previous account.
+    expect(after.every((t) => t.remote === null || t.remote === undefined)).toBe(true)
+    expect(taskRepo.getById(USER, mine)?.remoteId).toBeNull()
+    expect(taskRepo.getById(USER, mine)?.remoteDirty).toBeNull()
+  })
+
+  it('forgets the cursors too, so the next pull is a first pass', async () => {
+    cinna.seed({ title: 'Live' })
+    await taskSyncService.pull(USER)
+
+    taskSyncService.forgetBindings(USER)
+
+    const mark = cinna.calls().length
+    await taskSyncService.pull(USER)
+    expect(
+      cinna.calls().slice(mark).some((c) => c.path.includes('status=active'))
+    ).toBe(true)
+  })
+})
+
 describe('forgetting a profile’s cursors', () => {
   /**
    * Did the pass that just ran ask for the uncursored active set? That request

@@ -926,6 +926,54 @@ export const taskSyncService = {
    * Called with no argument by tests that want two passes to be two first
    * passes.
    */
+  /**
+   * This profile now answers to a different account: forget every binding it
+   * holds, and its cursors with them.
+   *
+   * `registerCinna`'s rebind branch finds a profile row by **email** and
+   * refreshes its server URL, so signing in with the same address on a
+   * different cinna server keeps the row — its id, its tasks, its cursors and
+   * every `remote_*` column on them. Resetting the cursor alone fixes only the
+   * half that governs what arrives next. The bindings are the other half, and
+   * they are worse, because they are *written down*: a replica of the previous
+   * account's task keeps a short code and a deep link into a server this
+   * profile can no longer see, and a mirror keeps a remote id that now belongs
+   * to somebody else's account.
+   *
+   * The reconcile cannot clean this up. It skips mirrors by design (a task
+   * created here is this device's work, and a missing remote copy means a stale
+   * binding, not a dead task) and it skips **terminal** replicas as a permanent
+   * per-poll cost it refuses to pay — which is exactly the set that would
+   * otherwise survive for ever.
+   *
+   * **Unbind, not delete** (the user's call, 2026-09-11). Nothing is destroyed:
+   * a replica degrades into an ordinary local task, which is an honest record
+   * of work that really happened, and the wrong deep links and wrong push
+   * targets are gone. Deleting instead would be a destructive write on a
+   * sign-in path — and once the `task` collection syncs, a soft delete carries
+   * a tombstone to the user's other devices, which is a far larger claim than
+   * "this profile changed accounts".
+   *
+   * Every adapter is included because every adapter authenticates *as the
+   * profile* — `availability(userId)` is the seam's own way of asking "is this
+   * profile linked to you" — so a profile that is now a different account is a
+   * different caller to all of them.
+   */
+  forgetBindings(userId: string): void {
+    let unbound = 0
+    for (const adapter of allAdapters()) {
+      for (const row of taskRepo.list(userId, {
+        remoteAdapter: adapter.id,
+        includeArchived: true
+      })) {
+        taskService.unbindRemote(userId, row.id, 'the profile was linked to a different account')
+        unbound += 1
+      }
+    }
+    if (unbound > 0) logger.info('unbound every task after a profile re-link', { unbound })
+    this.resetCursors(userId)
+  },
+
   resetCursors(userId?: string): void {
     if (userId === undefined) {
       cursors.clear()
