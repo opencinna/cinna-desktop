@@ -1408,3 +1408,110 @@ describe('scheduled sync races', () => {
     await taskSyncService.pullOne(USER, id)
   })
 })
+
+describe('watched subtasks', () => {
+  it('imports completed children absent from active discovery under their original parent', async () => {
+    const parent = cinna.seed({ title: 'Parent' })
+    await taskSyncService.pull(USER)
+    const localParent = taskRepo.getByRemote(USER, holder.adapters[0].id, parent.id)!
+    const child = cinna.seed({ title: 'Finished child', parent_task_id: parent.id, status: 'completed' })
+    expect(taskRepo.getByRemote(USER, holder.adapters[0].id, child.id)).toBeUndefined()
+    const children = await taskSyncService.listChildren(USER, localParent.id)
+    expect(children.map((task) => [task.title, task.status, task.parentTaskId])).toEqual([
+      ['Finished child', 'completed', localParent.id]
+    ])
+    expect(taskService.list(USER, { rootOnly: true }).map((task) => task.id)).toEqual([localParent.id])
+  })
+
+  it('coalesces reads and refuses a response from an obsolete connection', async () => {
+    const parent = cinna.seed({ title: 'Parent' })
+    await taskSyncService.pull(USER)
+    const local = taskRepo.getByRemote(USER, holder.adapters[0].id, parent.id)!
+    cinna.seed({ title: 'Late child', parent_task_id: parent.id })
+    const adapter = holder.adapters[0]
+    const original = adapter.listSubtasks.bind(adapter)
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    let entered!: () => void
+    const entry = new Promise<void>((resolve) => { entered = resolve })
+    const read = vi.spyOn(adapter, 'listSubtasks').mockImplementation(async (...args) => {
+      entered()
+      await gate
+      return original(...args)
+    })
+    const first = taskSyncService.listChildren(USER, local.id)
+    const second = taskSyncService.listChildren(USER, local.id)
+    await entry
+    taskSyncService.resetCursors(USER)
+    release()
+    const results = await Promise.allSettled([first, second])
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+    expect(read).toHaveBeenCalledTimes(1)
+    expect(taskService.list(USER, { parentTaskId: local.id })).toEqual([])
+  })
+})
+
+describe('subtask refresh ordering and saved reads', () => {
+  it('keeps saved children visible on a cold offline read and exposes refresh failure', async () => {
+    const parent = cinna.seed({ title: 'Parent' })
+    cinna.seed({ title: 'Saved child', parent_task_id: parent.id })
+    await taskSyncService.pull(USER)
+    const local = taskRepo.getByRemote(USER, holder.adapters[0].id, parent.id)!
+    taskSyncService.resetCursors(USER)
+    cinna.behave('transport')
+    const snapshot = taskSyncService.getChildren(USER, local.id)
+    expect(snapshot.tasks.map((task) => task.title)).toEqual(['Saved child'])
+    await taskSyncService.listChildren(USER, local.id).catch(() => {})
+    await Promise.resolve()
+    const failed = taskSyncService.getChildren(USER, local.id)
+    expect(failed.tasks.map((task) => task.title)).toEqual(['Saved child'])
+    expect(failed.refreshError).toContain('could not be refreshed')
+    await taskSyncService.listChildren(USER, local.id).catch(() => {})
+  })
+
+  it('accepts child data after a concurrent no-op parent detail refresh', async () => {
+    const parent = cinna.seed({ title: 'Parent' })
+    await taskSyncService.pull(USER)
+    const local = taskRepo.getByRemote(USER, holder.adapters[0].id, parent.id)!
+    cinna.seed({ title: 'Finished child', parent_task_id: parent.id, status: 'completed' })
+    const adapter = holder.adapters[0]
+    const original = adapter.listSubtasks.bind(adapter)
+    let release!: () => void
+    let entered!: () => void
+    const entry = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(adapter, 'listSubtasks').mockImplementationOnce(async (...args) => {
+      entered(); await gate; return original(...args)
+    })
+    const read = taskSyncService.listChildren(USER, local.id)
+    await entry
+    await taskSyncService.pullOne(USER, local.id)
+    release()
+    expect((await read).map((task) => task.title)).toEqual(['Finished child'])
+  })
+
+  it('waits for the profile discovery pass before reading children', async () => {
+    const parent = cinna.seed({ title: 'Parent' })
+    await taskSyncService.pull(USER)
+    const local = taskRepo.getByRemote(USER, holder.adapters[0].id, parent.id)!
+    const adapter = holder.adapters[0]
+    const original = adapter.list.bind(adapter)
+    let release!: () => void
+    let entered!: () => void
+    const entry = new Promise<void>((resolve) => { entered = resolve })
+    const gate = new Promise<void>((resolve) => { release = resolve })
+    vi.spyOn(adapter, 'list').mockImplementationOnce(async (...args) => {
+      entered(); await gate; return original(...args)
+    })
+    const childRead = vi.spyOn(adapter, 'listSubtasks')
+    const full = taskSyncService.pull(USER)
+    await entry
+    const children = taskSyncService.listChildren(USER, local.id)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(childRead).not.toHaveBeenCalled()
+    release()
+    await full
+    await children
+    expect(childRead).toHaveBeenCalledTimes(1)
+  })
+})

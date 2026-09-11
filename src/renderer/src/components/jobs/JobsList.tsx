@@ -15,6 +15,7 @@ import { JobFolderRow } from './JobFolderRow'
 import { JobFolderEditModal } from './JobFolderEditModal'
 import { JobTypePicker } from './JobTypePicker'
 import { JobsDragContext, type JobsDrag } from './dragContext'
+import { TaskList } from '../tasks/TaskList'
 
 export function JobsList(): React.JSX.Element {
   const { data: jobs, isLoading } = useJobList()
@@ -232,6 +233,7 @@ export function JobsList(): React.JSX.Element {
           )}
         </div>
 
+        <div className="max-h-[45%] overflow-y-auto border-t border-[var(--color-border)]"><TaskList /></div>
         {pickingType && <JobTypePicker onClose={() => setPickingType(false)} />}
         {renamingFolder && (
           <JobFolderEditModal

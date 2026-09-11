@@ -41,6 +41,7 @@ const service = vi.hoisted(() => ({
  * of a task an agent is working on right now) costs a request.
  */
 const sync = vi.hoisted(() => ({
+  getChildren: vi.fn(() => ({ tasks: [], refreshed: true })),
   getWatched: vi.fn(() => ({ id: 't1' })),
   takeOver: vi.fn(async () => ({ id: 't1' })),
   handOff: vi.fn(async () => ({ id: 't1' })),
@@ -125,4 +126,10 @@ describe('a task write a person made reaches the other devices without waiting a
       expect(markDirty).not.toHaveBeenCalled()
     }
   )
+})
+
+it('reads saved children with refresh metadata in the captured profile', async () => {
+  expect(await invoke('task:children', 'parent')).toEqual({ tasks: [], refreshed: true })
+  expect(sync.getChildren).toHaveBeenCalledWith('profile-1', 'parent')
+  expect(markDirty).not.toHaveBeenCalled()
 })

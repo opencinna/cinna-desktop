@@ -31,6 +31,8 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined },
   tasks: {
+    list: async () => [],
+    children: async () => ({ tasks: [], refreshed: true }),
     start: (taskId: string, target: unknown) => startTask(taskId, target),
     get: () => getTask(),
     setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),

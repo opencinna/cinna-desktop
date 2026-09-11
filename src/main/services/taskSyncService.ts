@@ -91,7 +91,8 @@ import {
   parseTaskAssigneeKind,
   parseTaskPriority,
   type TaskAssignee,
-  type TaskDto
+  type TaskDto,
+  type TaskListSnapshot
 } from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
 import { TaskError } from '../errors'
@@ -238,6 +239,8 @@ const cursors = new Map<string, CursorState>()
 const pushesInFlight = new Map<string, Promise<void>>()
 const pullsInFlight = new Map<string, Promise<void>>()
 const readsInFlight = new Map<string, Promise<TaskDto | null>>()
+const childrenInFlight = new Map<string, Promise<TaskDto[]>>()
+const childrenRefreshState = new Map<string, Omit<TaskListSnapshot, 'tasks'>>()
 let globalEpoch = 0
 const profileEpochs = new Map<string, number>()
 // Revisions order local read/write operations without comparing clocks across devices.
@@ -762,6 +765,68 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 }
 
 export const taskSyncService = {
+  getChildren(userId: string, taskId: string): TaskListSnapshot {
+    const task = taskService.getById(userId, taskId)
+    const key = cursorKey(userId, taskId)
+    const local = (): TaskDto[] => taskService.list(userId, { parentTaskId: taskId })
+    if (!task.remote || task.parentTaskId || !adapterFor(task.remote.adapter).capabilities().subtasks) {
+      return { tasks: local(), refreshed: true }
+    }
+    if (!childrenInFlight.has(key)) {
+      const started = generation(userId)
+      void this.listChildren(userId, taskId).then(() => {
+        if (generation(userId) === started) childrenRefreshState.set(key, { refreshed: true })
+      }).catch(() => {
+        if (generation(userId) === started) childrenRefreshState.set(key, {
+          refreshed: childrenRefreshState.get(key)?.refreshed ?? false,
+          refreshError: 'Subtasks could not be refreshed.'
+        })
+      })
+    }
+    return { tasks: local(), ...(childrenRefreshState.get(key) ?? { refreshed: false }) }
+  },
+
+  /** A parent's full child list includes finished work omitted by active discovery. */
+  async listChildren(userId: string, taskId: string): Promise<TaskDto[]> {
+    taskService.getById(userId, taskId)
+    const key = cursorKey(userId, taskId)
+    const pending = childrenInFlight.get(key)
+    if (pending) return pending
+    const work = (async () => {
+      const row = taskRepo.getById(userId, taskId)!
+      const binding = bindingOf(row)
+      const adapter = binding && adapterFor(binding.adapter)
+      if (!binding || !adapter?.capabilities().subtasks || row.parentTaskId) {
+        return taskService.list(userId, { parentTaskId: taskId })
+      }
+      const started = generation(userId)
+      // Discovery and watched child reads share revision ordering.
+      await Promise.allSettled([
+        pullsInFlight.get(userId), readsInFlight.get(key), pushesInFlight.get(key)
+      ])
+      if (!bindingIsCurrent(userId, taskId, binding, started)) {
+        throw new TaskError('invalid_input', 'The task connection changed. Refresh its subtasks.')
+      }
+      const beforeRead = new Map(revisions)
+      const children = await adapter.listSubtasks(userId, binding)
+      if (!bindingIsCurrent(userId, taskId, binding, started) || taskRepo.getById(userId, taskId)?.parentTaskId) {
+        throw new TaskError('invalid_input', 'The task changed while reading its subtasks. Try again.')
+      }
+      for (const child of children) {
+        if (child.binding.adapter !== adapter.id || child.parentId !== binding.id) continue
+        const childKey = bindingKey(userId, child.binding)
+        if (!readIsCurrent(userId, child.binding, beforeRead.get(childKey) ?? 0)) continue
+        bump(childKey)
+        upsert(userId, adapter, child)
+      }
+      return taskService.list(userId, { parentTaskId: taskId })
+    })()
+    childrenInFlight.set(key, work)
+    try { return await work } finally {
+      if (childrenInFlight.get(key) === work) childrenInFlight.delete(key)
+    }
+  },
+
   /** Read SQLite immediately; refresh a watched binding without blocking its page. */
   getWatched(userId: string, taskId: string): TaskDto {
     const task = taskService.getById(userId, taskId)
@@ -1298,6 +1363,12 @@ export const taskSyncService = {
     for (const key of readsInFlight.keys()) {
       if (key.startsWith(`${userId} `)) readsInFlight.delete(key)
     }
+    for (const key of childrenInFlight.keys()) {
+      if (key.startsWith(`${userId} `)) childrenInFlight.delete(key)
+    }
+    for (const key of childrenRefreshState.keys()) {
+      if (key.startsWith(`${userId} `)) childrenRefreshState.delete(key)
+    }
   },
 
   resetCursors(userId?: string): void {
@@ -1306,6 +1377,8 @@ export const taskSyncService = {
       profileEpochs.clear()
       pullsInFlight.clear()
       readsInFlight.clear()
+      childrenInFlight.clear()
+      childrenRefreshState.clear()
       cursors.clear()
       revisions.clear()
       refreshErrors.clear()

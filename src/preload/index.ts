@@ -1135,6 +1135,8 @@ const api = {
    * it. A channel with no caller is worse than no channel: it looks wired.
    */
   tasks: {
+    children: (taskId: string): Promise<import('../shared/tasks').TaskListSnapshot> =>
+      ipcRenderer.invoke('task:children', taskId),
     list: (query?: TaskListQuery): Promise<TaskDto[]> =>
       ipcRenderer.invoke('task:list', query),
     get: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:get', taskId),

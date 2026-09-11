@@ -46,10 +46,11 @@ import type { TaskStatus } from '../../shared/taskStatus'
 export function registerTaskHandlers(): void {
   ipcHandle('task:list', async (_event, query?: TaskListQuery): Promise<TaskDto[]> => {
     userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
     // Rebuilt field by field rather than forwarded: the repo's filter has an
     // arm (`remoteAdapter`) that belongs to the adapters and to
     // `taskSyncService`, and a renderer must not be able to reach it.
-    return taskService.list(getProfileScopeUserId(), {
+    return taskService.list(userId, {
       statuses: query?.statuses,
       executor: query?.executor,
       parentTaskId: query?.parentTaskId,
@@ -61,6 +62,11 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:get', async (_event, taskId: string): Promise<TaskDto> => {
     userActivation.requireActivated()
     return taskSyncService.getWatched(getProfileScopeUserId(), taskId)
+  })
+
+  ipcHandle('task:children', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    return taskSyncService.getChildren(getProfileScopeUserId(), taskId)
   })
 
   ipcHandle('task:start', async (_event, taskId: string, target: DesktopTaskTarget) => {

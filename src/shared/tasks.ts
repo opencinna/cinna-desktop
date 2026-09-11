@@ -290,6 +290,13 @@ export interface TaskListQuery {
   includeArchived?: boolean
 }
 
+export interface TaskListSnapshot {
+  tasks: TaskDto[]
+  /** False until the first remote child refresh; saved rows are always present. */
+  refreshed: boolean
+  refreshError?: string
+}
+
 /** Explicit desktop continuation target; remote assignee ids are not accepted. */
 export type DesktopTaskTarget =
   | { kind: 'agent'; agentId: string }

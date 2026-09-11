@@ -207,10 +207,18 @@ taskSyncService.reconcile -> adapter.list(userId, null)
                          ->  not_ours -> taskService.remove
 ```
 
+## Watched children
+
+Opening a root task also watches its children. `task:children` calls `taskSyncService.getChildren`, which returns SQLite rows immediately with `TaskListSnapshot.refreshed` and optional `refreshError`. The background `listChildren` uses the adapter’s full subtask list, so a child completed before the active/delta cursor can still appear under its parent. `task:list` remains a local-array read.
+
+Reads coalesce per profile/parent and wait for the current profile pull and parent detail/push. They recheck profile generation, binding and root/child relationship before applying, accept only the same adapter/remote parent, and compare each child’s revision with the pre-read snapshot. A concurrent unchanged parent detail must not invalidate useful child data. Responses do not remove saved children merely because a remote omitted them.
+
+The renderer polls the snapshot every five seconds. Both a first offline read and a later failure retain known children; the footer reports the failed refresh and offers retry. Before the first successful refresh, an empty snapshot says loading rather than “No subtasks.” Local-only parents return a confirmed local snapshot without contacting an adapter.
+
 ## Where it lives
 
 - `src/main/services/taskSyncScheduler.ts` — activation/focus/resume carrier, coalesced trailing pass and completion-based timer; lifecycle hooks in `src/main/auth/activation.ts` and `src/main/index.ts`.
-- `src/main/services/taskSyncService.ts` — `getWatched`, `invalidatePending`, `handOff`, `takeOver`, `liveSession`, `preferredAdapterId`, `push`, `pushAll`, `pullOne`, `pull`, `reconcile`, `remoteWork`, `resetCursors`, `forgetBindings`; module-private `pushOne`, `upsert`, `dropMissing`, `resolveParent`, `wouldChange`, `consequenceOf`
+- `src/main/services/taskSyncService.ts` — `getWatched`, `getChildren`, `listChildren`, `invalidatePending`, `handOff`, `takeOver`, `liveSession`, `preferredAdapterId`, `push`, `pushAll`, `pullOne`, `pull`, `reconcile`, `remoteWork`, `resetCursors`, `forgetBindings`; module-private `pushOne`, `upsert`, `dropMissing`, `resolveParent`, `wouldChange`, `consequenceOf`
 - `src/main/tasks/taskStatusPath.ts` — `taskStatusPath(from, to)`, the breadth-first walk. Main-only rather than `shared/`: the renderer has no business knowing a remote exists, and this is the one rule about a *remote's* transition table rather than the desktop's own
 - `src/main/services/taskService.ts` — `bindRemote`, `unbindRemote`, `markRemoteSynced`, `applyRemoteSnapshot`, and the `dirtied()` helper every mutator of a bound task passes its patch through. All four end in `written(userId, row)`, so a binding write keeps [the exported note](handoff_note_export.md) current
 - `src/main/tasks/adapters/adapter.ts` — `RemoteDirtyField`, `REMOTE_DIRTY_FIELDS`, `isRemoteDirtyField`

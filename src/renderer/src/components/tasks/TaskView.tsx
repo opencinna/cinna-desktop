@@ -24,6 +24,7 @@ import {
   useRerunTask,
   useTakeOverTask,
   useStartTask,
+  useOpenTask,
   useTask
 } from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
@@ -31,6 +32,7 @@ import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { TaskStatusPill } from './TaskStatusPill'
+import { TaskList } from './TaskList'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -154,6 +156,7 @@ function TaskPage({
   const { data: agents, isPending: agentsPending } = useAgents()
   const inbox = useInboxList()
   const openChat = useOpenChatFromRun()
+  const openTask = useOpenTask()
   const openExternal = useOpenExternal()
   const setActiveView = useUIStore((s) => s.setActiveView)
   const setActiveJobId = useUIStore((s) => s.setActiveJobId)
@@ -265,6 +268,12 @@ function TaskPage({
                 travel — there is nowhere on this machine to go back to. See the
                 note on `back` above.
               */}
+              {task.parentTaskId && (
+                <button type="button" onClick={() => openTask(task.parentTaskId!)}
+                  className="inline-flex items-center gap-1 mb-1.5 text-[11px] font-medium text-[var(--color-accent)]">
+                  <ArrowLeft size={11} />Parent task
+                </button>
+              )}
               {task.jobId && (
                 <div className="min-h-[1.125rem] mb-1.5">
                   {job && (
@@ -410,6 +419,8 @@ function TaskPage({
             )}
           </dl>
         </Section>
+
+        {!task.parentTaskId && <TaskList key={task.id} parentTaskId={task.id} />}
 
         {/*
           Under everything, never over it: a poll can fail at any moment,
