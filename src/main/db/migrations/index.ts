@@ -15,6 +15,7 @@ import { migrateAccountConfig } from './account-config'
 import { migrateUsers, migrateUserIdColumns } from './users'
 import { migrateChatFiles } from './chat-files'
 import { migrateJobs } from './jobs'
+import { migrateTasks } from './tasks'
 import { migrateNotes } from './notes'
 import { migrateAppSettings } from './app-settings'
 import { runSyncMigrations } from './sync'
@@ -70,6 +71,10 @@ export function runAllMigrations(sqlite: Database.Database): void {
   migrateChatFiles(sqlite)
   // Jobs depend on chats + mcp_providers being present (FK references).
   migrateJobs(sqlite)
+  // `tasks` + `task_input_requests` + `job_runs.task_id`. After `chats` (the
+  // task's chat is a `SET NULL` reference) and after `jobs`, whose `job_runs`
+  // table it alters.
+  migrateTasks(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).

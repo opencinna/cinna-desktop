@@ -2,8 +2,21 @@ import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite
 import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 import type { MessageAttachment } from '../../shared/attachments'
-import type { JobSyncManifest } from '../../shared/sync'
+import type { JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
 import type { ChatRouter } from '../../shared/chatRouting'
+import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
+import type { RequestResolution } from '../../shared/localAgentRequests'
+import type { TaskStatus } from '../../shared/taskStatus'
+import type {
+  TaskArtifact,
+  TaskAssignee,
+  TaskBudget,
+  TaskExecutor,
+  TaskInputRequestStatus,
+  TaskOrigin,
+  TaskPriority,
+  TaskRouter
+} from '../../shared/tasks'
 
 export const users = sqliteTable('users', {
   id: text('id').primaryKey(),
@@ -535,6 +548,13 @@ export const jobRuns = sqliteTable('job_runs', {
   cinnaTaskId: text('cinna_task_id'),
   cinnaShortCode: text('cinna_short_code'),
   status: text('status').notNull().default('pending'), // pending | running | succeeded | failed | cancelled
+  /**
+   * The task this run produced (agent runtime plan, phase 5). Nullable: runs
+   * that predate the tasks table are history, and `cinnaTaskId` /
+   * `cinnaShortCode` above are mirrors of the task's `remoteId` / `remoteKey`
+   * for one phase so a downgrade still finds the remote task.
+   */
+  taskId: text('task_id'),
   errorMessage: text('error_message'),
   startedAt: integer('started_at', { mode: 'timestamp' }),
   finishedAt: integer('finished_at', { mode: 'timestamp' }),
@@ -573,6 +593,122 @@ export const chatAgentCursors = sqliteTable(
   },
   (table) => [primaryKey({ columns: [table.chatId, table.agentId] })]
 )
+
+/**
+ * The unit of work that outlives a chat view (agent runtime plan, phase 5).
+ *
+ * A task is a goal with a status, an assignee, a handoff note and artifacts.
+ * SQLite is always where it lives; a linked profile may additionally carry it
+ * to the user's other devices through app-sync, and bind it to a remote system
+ * through a `RemoteTaskAdapter`. The status vocabulary is cinna-core's — see
+ * `src/shared/taskStatus.ts` for why, and `migrations/tasks.ts` for why these
+ * columns and not others.
+ *
+ * `origin` never changes; `executor` does, and flipping it is how work changes
+ * hands. Field authority follows `executor` (`taskService`), not this table.
+ */
+export const tasks = sqliteTable('tasks', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  title: text('title').notNull(),
+  /** The original ask, immutable once created. cinna's `original_message`. */
+  goal: text('goal').notNull(),
+  /** The working description, edited as the task is understood. cinna's `current_description`. */
+  description: text('description'),
+  status: text('status').$type<TaskStatus>().notNull().default('new'),
+  priority: text('priority').$type<TaskPriority>().notNull().default('normal'),
+  router: text('router').$type<TaskRouter>().notNull().default('direct'),
+
+  origin: text('origin').$type<TaskOrigin>().notNull().default('local'),
+  executor: text('executor').$type<TaskExecutor>().notNull().default('desktop'),
+  /**
+   * The sync device id running this task while `executor = 'desktop'`. Null
+   * means *this* device, which is also what a profile with sync off always
+   * has. The claim that keeps two devices from both believing they own a run.
+   */
+  executorDevice: text('executor_device'),
+
+  /** Never synced — chats are not a synced collection, so a replica opens with no thread. */
+  chatId: text('chat_id').references(() => chats.id, { onDelete: 'set null' }),
+  /** Device-local `agents` row id. Never synced; `assigneeRef` travels instead. */
+  assigneeAgentId: text('assignee_agent_id'),
+  /** Display hint. May be stale, may name an agent that exists only on the remote. */
+  assigneeName: text('assignee_name'),
+  assigneeKind: text('assignee_kind')
+    .$type<TaskAssignee['kind']>()
+    .notNull()
+    .default('model'),
+  /** Portable assignee descriptor for app-sync — the `kind: 'agent'` arm of `JobDepDescriptor`. */
+  assigneeRef: text('assignee_ref', { mode: 'json' }).$type<JobDepDescriptor | null>(),
+  /** One level only. Enforced in `taskService`, not by the schema. */
+  parentTaskId: text('parent_task_id'),
+  /** Provenance. No FK: jobs can be deleted, and job runs do not sync at all. */
+  jobId: text('job_id'),
+  jobRunId: text('job_run_id'),
+
+  /** The adapter's id. Null = a desktop-only task. Read nowhere outside `main/tasks/adapters/`. */
+  remoteAdapter: text('remote_adapter'),
+  remoteId: text('remote_id'),
+  /** The remote's human key — a short code, `ENG-421`, `#1234`. Display only. */
+  remoteKey: text('remote_key'),
+  remoteUrl: text('remote_url'),
+  /** Opaque to everything outside the adapter that wrote it. */
+  remoteState: text('remote_state', { mode: 'json' }).$type<Record<string, unknown> | null>(),
+  /** Per-device bookkeeping: never synced, or a peer inherits a watermark it never earned. */
+  remoteSyncedAt: integer('remote_synced_at', { mode: 'timestamp' }),
+  /** Field names changed since the last successful push. Dirty-field, never whole-record. */
+  remoteDirty: text('remote_dirty', { mode: 'json' }).$type<string[] | null>(),
+
+  handoffNote: text('handoff_note'),
+  artifacts: text('artifacts', { mode: 'json' }).$type<TaskArtifact[] | null>(),
+  /** Read by the headless task runner in phase 6; carried across sync from here. */
+  budget: text('budget', { mode: 'json' }).$type<TaskBudget | null>(),
+  errorMessage: text('error_message'),
+
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  updatedAt: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  startedAt: integer('started_at', { mode: 'timestamp' }),
+  finishedAt: integer('finished_at', { mode: 'timestamp' }),
+  /** App-sync carries tombstones, so a delete is a soft one. */
+  deletedAt: integer('deleted_at', { mode: 'timestamp' })
+})
+
+/**
+ * One open (or settled) human-input request against a task — the persistent
+ * twin of `agentTurn/pendingRequests`, which is in-memory and dies with the
+ * turn.
+ *
+ * The id **is** the run's `requestId`, because that is already the address an
+ * answer is posted to (`per_*` / `que_*` for a local agent). One id, one row,
+ * one answer path.
+ *
+ * Deliberately **not** synced: a `reply`-mode ask is an address on this machine
+ * that dies with the driver process holding it, so a row for it on another
+ * device would offer a button nothing could answer. A remote's open asks get no
+ * row at all — the remote is the registry and the desktop is the view.
+ */
+export const taskInputRequests = sqliteTable('task_input_requests', {
+  /** The run's `requestId`, verbatim. */
+  id: text('id').primaryKey(),
+  taskId: text('task_id')
+    .notNull()
+    .references(() => tasks.id, { onDelete: 'cascade' }),
+  chatId: text('chat_id').notNull(),
+  agentId: text('agent_id').notNull(),
+  /** The `InputRequest` from `shared/runEvents.ts`, verbatim — not a second union. */
+  request: text('request', { mode: 'json' }).$type<InputRequest>().notNull(),
+  resume: text('resume').$type<InputResumeMode>().notNull(),
+  status: text('status').$type<TaskInputRequestStatus>().notNull().default('open'),
+  resolution: text('resolution', { mode: 'json' }).$type<RequestResolution | null>(),
+  createdAt: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .$defaultFn(() => new Date()),
+  resolvedAt: integer('resolved_at', { mode: 'timestamp' })
+})
 
 /**
  * Local-store backed attachments. One row per file the user picked into a

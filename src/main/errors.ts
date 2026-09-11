@@ -94,6 +94,36 @@ export type JobErrorCode =
   | 'incomplete_setup'
   | 'invalid_input'
 
+/**
+ * The task domain (agent runtime plan, phase 5). Each code separates a
+ * condition a surface answers differently; none of them is a synonym for
+ * another.
+ */
+export type TaskErrorCode =
+  | 'not_found'
+  /** An empty title, a goal with nothing in it, a status string off the vocabulary. */
+  | 'invalid_input'
+  /**
+   * The move is not in the transition table (`shared/taskStatus.ts`), which is
+   * cinna-core's copied as data. A **local** write only: a status arriving from
+   * a pull is taken as fact, because the server's own session handlers bypass
+   * its table and refusing it would make the desktop the one corrupting state.
+   */
+  | 'invalid_transition'
+  /**
+   * A subtask of a subtask. One level of hierarchy, matching every shipped
+   * product and the plan's rule 6 — a deeper remote tree is *shown* flat, never
+   * created here.
+   */
+  | 'nested_too_deep'
+  /**
+   * The task is being run somewhere else — another of the user's devices, or
+   * the bound remote system — so this device may not write the fields whose
+   * authority follows `executor`. Not a lock: `takeOver` is the write that
+   * moves it here, and it is deliberately not gated on this.
+   */
+  | 'running_elsewhere'
+
 export type NoteErrorCode =
   | 'not_found'
   | 'not_activated'
@@ -237,6 +267,7 @@ export class AuthError extends DomainError<AuthErrorCode> {}
 export class AgentError extends DomainError<AgentErrorCode> {}
 export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
 export class JobError extends DomainError<JobErrorCode> {}
+export class TaskError extends DomainError<TaskErrorCode> {}
 export class NoteError extends DomainError<NoteErrorCode> {}
 export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
 export class FileError extends DomainError<FileErrorCode> {}

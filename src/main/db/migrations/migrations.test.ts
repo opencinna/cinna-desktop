@@ -356,3 +356,150 @@ describe('chats.router on an install that predates it', () => {
     raw.close()
   })
 })
+
+describe('tasks on an install that predates them', () => {
+  it('creates both tables with the columns the phase specifies', () => {
+    const raw = freshDatabase()
+    expect(tableNames(raw)).toContain('tasks')
+    expect(tableNames(raw)).toContain('task_input_requests')
+
+    const taskCols = columnNames(raw, 'tasks')
+    for (const col of [
+      'id',
+      'user_id',
+      'title',
+      'goal',
+      'description',
+      'status',
+      'priority',
+      'router',
+      // Provenance and who-runs-it-now are two columns on purpose.
+      'origin',
+      'executor',
+      'executor_device',
+      'chat_id',
+      'assignee_agent_id',
+      'assignee_name',
+      'assignee_kind',
+      'assignee_ref',
+      'parent_task_id',
+      'job_id',
+      'job_run_id',
+      'remote_adapter',
+      'remote_id',
+      'remote_key',
+      'remote_url',
+      'remote_state',
+      'remote_synced_at',
+      'remote_dirty',
+      'handoff_note',
+      'artifacts',
+      'budget',
+      'error_message',
+      'created_at',
+      'updated_at',
+      'started_at',
+      'finished_at',
+      'deleted_at'
+    ]) {
+      expect(taskCols).toContain(col)
+    }
+
+    // No column names a particular remote system: the binding is an adapter id
+    // plus opaque state, so the next integration adds a file, not a column.
+    expect([...taskCols].filter((c) => c.includes('cinna'))).toEqual([])
+
+    expect(columnNames(raw, 'task_input_requests')).toEqual(
+      new Set([
+        'id',
+        'task_id',
+        'chat_id',
+        'agent_id',
+        'request',
+        'resume',
+        'status',
+        'resolution',
+        'created_at',
+        'resolved_at'
+      ])
+    )
+    raw.close()
+  })
+
+  it('adds task_id to job_runs without touching the cinna mirrors', () => {
+    const raw = freshDatabase()
+    const runCols = columnNames(raw, 'job_runs')
+    expect(runCols).toContain('task_id')
+    // Kept for one phase as mirrors of the task's remote binding, so a
+    // downgrade to the previous build still finds the remote task.
+    expect(runCols).toContain('cinna_task_id')
+    expect(runCols).toContain('cinna_short_code')
+    raw.close()
+  })
+
+  it('replays over a database that already holds a task', () => {
+    const raw = freshDatabase()
+    const now = Date.now()
+    raw
+      .prepare(
+        `INSERT INTO tasks (id, user_id, title, goal, status, priority, router, origin, executor,
+                            assignee_kind, created_at, updated_at)
+         VALUES ('t-1', '__default__', 'Ship it', 'Ship the thing', 'in_progress', 'high',
+                 'direct', 'local', 'desktop', 'agent', ?, ?)`
+      )
+      .run(now, now)
+    raw
+      .prepare(
+        `INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, request, resume, status, created_at)
+         VALUES ('per_1', 't-1', 'c-1', 'a-1', '{"kind":"permission","action":"bash","resources":[]}',
+                 'reply', 'open', ?)`
+      )
+      .run(now)
+
+    expect(() => runAllMigrations(adaptDatabase(raw))).not.toThrow()
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM tasks').get()).toEqual({ c: 1 })
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM task_input_requests').get()).toEqual({ c: 1 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+
+  it('cascades an ask away with its task, and releases a task from its deleted chat', () => {
+    const raw = freshDatabase()
+    const now = Date.now()
+    raw
+      .prepare(
+        `INSERT INTO chats (id, user_id, title, router, orchestrated, hidden_from_list, created_at, updated_at)
+         VALUES ('c-1', '__default__', 'A chat', 'direct', 0, 1, ?, ?)`
+      )
+      .run(now, now)
+    raw
+      .prepare(
+        `INSERT INTO tasks (id, user_id, title, goal, status, priority, router, origin, executor,
+                            assignee_kind, chat_id, created_at, updated_at)
+         VALUES ('t-1', '__default__', 'Ship it', 'Ship the thing', 'blocked', 'normal',
+                 'direct', 'local', 'desktop', 'model', 'c-1', ?, ?)`
+      )
+      .run(now, now)
+    raw
+      .prepare(
+        `INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, request, resume, status, created_at)
+         VALUES ('per_1', 't-1', 'c-1', 'a-1', '{"kind":"permission","action":"bash","resources":[]}',
+                 'reply', 'open', ?)`
+      )
+      .run(now)
+
+    // A task outlives its chat — that is the whole point of it — so the chat
+    // reference is SET NULL, not CASCADE.
+    raw.prepare("DELETE FROM chats WHERE id = 'c-1'").run()
+    expect(raw.prepare("SELECT chat_id FROM tasks WHERE id = 't-1'").get()).toEqual({
+      chat_id: null
+    })
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM tasks').get()).toEqual({ c: 1 })
+
+    // An ask is meaningless without the task it is asking about.
+    raw.prepare("DELETE FROM tasks WHERE id = 't-1'").run()
+    expect(raw.prepare('SELECT COUNT(*) AS c FROM task_input_requests').get()).toEqual({ c: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})

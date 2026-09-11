@@ -59,6 +59,12 @@ export interface JobRunCreateInput {
   cinnaTaskId?: string | null
   cinnaShortCode?: string | null
   status?: JobRunStatus
+  /**
+   * The task this run produced (agent runtime plan, phase 5). Optional while
+   * `jobService.execute` is still the one that creates it — step 3 makes every
+   * run have one.
+   */
+  taskId?: string | null
 }
 
 export const jobsRepo = {
@@ -726,6 +732,7 @@ export const jobRunsRepo = {
       localChatId: input.localChatId ?? null,
       cinnaTaskId: input.cinnaTaskId ?? null,
       cinnaShortCode: input.cinnaShortCode ?? null,
+      taskId: input.taskId ?? null,
       status: input.status ?? 'pending',
       errorMessage: null,
       startedAt: input.status === 'running' ? now : null,
@@ -769,6 +776,8 @@ export const jobRunsRepo = {
      * matching the new-chat flow (not the chat-mode baseline set).
      */
     onDemandMcpIds: string[]
+    /** The task this run is executing. Null only for a caller that predates tasks. */
+    taskId?: string | null
   }): { chatId: string; runId: string } {
     return getDb().transaction((tx) => {
       const now = new Date()
@@ -817,6 +826,7 @@ export const jobRunsRepo = {
           localChatId: chatId,
           cinnaTaskId: null,
           cinnaShortCode: null,
+          taskId: input.taskId ?? null,
           status: 'running',
           errorMessage: null,
           startedAt: now,

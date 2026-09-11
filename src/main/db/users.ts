@@ -12,7 +12,8 @@ import {
   jobs,
   jobFolders,
   notes,
-  noteFolders
+  noteFolders,
+  tasks
 } from './schema'
 
 export type UserRow = typeof users.$inferSelect
@@ -153,6 +154,11 @@ export const userRepo = {
     db.transaction((tx) => {
       tx.delete(chats).where(eq(chats.userId, id)).run()
       tx.delete(jobs).where(eq(jobs.userId, id)).run() // → job_runs, job_agents, job_mcp_providers
+      // → task_input_requests by FK cascade. Tasks hold the goal, the
+      // description, the handoff note and the error text, and `tasks.user_id`
+      // has no FK, so without this line everything a deleted profile was
+      // working on stays in the database under a dead user id.
+      tx.delete(tasks).where(eq(tasks.userId, id)).run()
       tx.delete(jobFolders).where(eq(jobFolders.userId, id)).run()
       tx.delete(notes).where(eq(notes.userId, id)).run()
       tx.delete(noteFolders).where(eq(noteFolders.userId, id)).run()
