@@ -8,12 +8,19 @@
  * rule). See `plans/native-client-data-sync.md` §9.
  */
 
-/** Collections synced in Phase 1. Phases 2/3 extend this union. */
+/**
+ * Collections synced in Phase 1, plus `task` (agent-runtime plan, phase 5).
+ *
+ * A `task` carries the work itself — its goal, status, executor claim and
+ * handoff note — but **not** its chat: chats are not a synced collection, so a
+ * replica opens with no thread and a way to continue the work here.
+ */
 export type SyncCollection =
   | 'note'
   | 'note_folder'
   | 'job'
   | 'job_folder'
+  | 'task'
 
 /** High-level engine status surfaced to the UI. */
 export type SyncStatus = 'idle' | 'syncing' | 'error' | 'offline'

@@ -4,7 +4,8 @@ import {
   type TaskCreateInput,
   type TaskListFilter,
   type TaskPatch,
-  type TaskRow
+  type TaskRow,
+  type TaskSyncValues
 } from '../db/tasks'
 import { TaskError } from '../errors'
 import type { RemoteDirtyField } from '../tasks/adapters/adapter'
@@ -177,6 +178,14 @@ function dirtied(task: TaskRow, patch: TaskPatch, fields: readonly RemoteDirtyFi
  */
 export function toTaskDto(
   row: TaskRow,
+  /**
+   * This device's sync id, from {@link thisDeviceId}. Required rather than
+   * defaulted: the honest default would be `null`, which {@link taskRunsHere}
+   * reads as "this device owns everything it can see" — so a caller that
+   * forgot it would hand the renderer a write control over a run another
+   * device is streaming, and nothing would look wrong.
+   */
+  thisDevice: string | null,
   counts: { total: number; completed: number } = { total: 0, completed: 0 }
 ): TaskDto {
   // Every union is parsed rather than trusted. These columns are written by
@@ -199,6 +208,13 @@ export function toTaskDto(
     origin: parseTaskOrigin(row.origin),
     executor: parseTaskExecutor(row.executor),
     executorDevice: row.executorDevice,
+    // Computed here because the renderer cannot compute it: there is no IPC
+    // channel for this device's sync id, and the rule that needs it is shared
+    // (`taskRunsHere`) so that main and the renderer cannot drift about it.
+    runsHere: taskRunsHere(
+      { executor: parseTaskExecutor(row.executor), executorDevice: row.executorDevice },
+      thisDevice
+    ),
     chatId: row.chatId,
     assignee,
     parentTaskId: row.parentTaskId,
@@ -236,8 +252,8 @@ export function toTaskDto(
  * {@link taskFileService.exportHandoff} never throws and removes the file when
  * there is no note, so this is also the delete path for a note that was cleared.
  */
-function written(row: TaskRow): TaskDto {
-  const dto = toTaskDto(row)
+function written(userId: string, row: TaskRow): TaskDto {
+  const dto = toTaskDto(row, thisDeviceId(userId))
   taskFileService.exportHandoff(dto)
   return dto
 }
@@ -274,6 +290,54 @@ export interface TaskFieldPatch {
   router?: TaskRouter
 }
 
+/**
+ * A record from a peer, with the fields the peer was **not allowed to write**
+ * replaced by what this device already has.
+ *
+ * The asymmetry this closes: {@link requireRunsHere} stops a device from
+ * writing `status`, `assignee` and `handoffNote` for a task another device
+ * holds — but `taskService.update` (title, description, priority, router) is
+ * deliberately *not* gated, because fixing a title on the machine you are
+ * looking at is not a claim on the run. App-sync is **whole-record**
+ * last-writer-wins, so that ungated edit pushes the replica's whole row,
+ * including its stale copy of the three guarded fields, under a newer
+ * timestamp. The holder then applies its own stale state back over the state
+ * its agent had just produced: a handoff note, a finish time and an error
+ * reason destroyed on the one machine that had them.
+ *
+ * So the guard is applied on the way in as well as on the way out. It is
+ * narrow on purpose — it holds only while **this device is the named holder
+ * and the arriving record still agrees that it is**. A record that names a
+ * different holder is a take-over, and the new holder's values are the ones
+ * that count. A `null` claim confers nothing: it means nobody in particular,
+ * and treating it as authority would let two devices each keep their own
+ * version for ever with nothing to converge on.
+ */
+function respectingTheClaim(
+  local: TaskRow | undefined,
+  thisDevice: string | null,
+  values: TaskSyncValues
+): TaskSyncValues {
+  if (!local || local.deletedAt) return values
+  if (thisDevice === null) return values
+  if (local.executor !== 'desktop' || values.executor !== 'desktop') return values
+  if (local.executorDevice !== thisDevice) return values
+  if (values.executorDevice !== local.executorDevice) return values
+  return {
+    ...values,
+    status: local.status,
+    startedAt: local.startedAt,
+    finishedAt: local.finishedAt,
+    errorMessage: local.errorMessage,
+    handoffNote: local.handoffNote,
+    assigneeAgentId: local.assigneeAgentId,
+    assigneeName: local.assigneeName,
+    assigneeKind: local.assigneeKind,
+    assigneeRef: local.assigneeRef
+  }
+}
+
+
 export const taskService = {
   list(userId: string, filter: TaskListFilter = {}): TaskDto[] {
     const rows = taskRepo.list(userId, filter)
@@ -281,12 +345,15 @@ export const taskService = {
       userId,
       rows.map((r) => r.id)
     )
-    return rows.map((row) => toTaskDto(row, counts.get(row.id)))
+    // One read of the device id for the whole page, not one per row.
+    const device = thisDeviceId(userId)
+    return rows.map((row) => toTaskDto(row, device, counts.get(row.id)))
   },
 
   getById(userId: string, taskId: string): TaskDto {
     const row = requireTask(userId, taskId)
-    return toTaskDto(row, taskRepo.subtaskCounts(userId, [row.id]).get(row.id))
+    const counts = taskRepo.subtaskCounts(userId, [row.id]).get(row.id)
+    return toTaskDto(row, thisDeviceId(userId), counts)
   },
 
   /** The row, unmapped. For main-process callers that need the remote binding. */
@@ -329,7 +396,7 @@ export const taskService = {
       executor: row.executor,
       jobRunId: row.jobRunId ?? undefined
     })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -360,7 +427,7 @@ export const taskService = {
 
     const row = taskRepo.update(userId, taskId, dirtied(task, next, dirty))
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -395,7 +462,7 @@ export const taskService = {
     )
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task status', { taskId, from, to: status })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -414,7 +481,7 @@ export const taskService = {
     if (parseTaskStatus(task.status) !== status) {
       logger.info('task status pulled', { taskId, from: task.status, to: status })
     }
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -451,7 +518,7 @@ export const taskService = {
     }
 
     logger.debug('run state says nothing this task can act on', { taskId, from, state })
-    return toTaskDto(task)
+    return toTaskDto(task, thisDeviceId(userId))
   },
 
   setAssignee(userId: string, taskId: string, assignee: TaskAssignee): TaskDto {
@@ -471,7 +538,7 @@ export const taskService = {
       )
     )
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -484,7 +551,7 @@ export const taskService = {
     requireRunsHere(userId, task)
     const row = taskRepo.update(userId, taskId, dirtied(task, { handoffNote: note }, ['handoffNote']))
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -518,7 +585,7 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, dirtied(task, patch, ['status']))
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task started', { taskId, executor: row.executor, chatId: row.chatId ?? undefined })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -539,7 +606,7 @@ export const taskService = {
     })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task taken over', { taskId, from: task.executor, fromDevice: task.executorDevice })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -557,7 +624,7 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, { executor: 'remote', executorDevice: null })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task handed to remote', { taskId, adapter: task.remoteAdapter })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -599,7 +666,7 @@ export const taskService = {
     })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task bound to a service', { taskId, adapter: binding.adapter })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -634,7 +701,7 @@ export const taskService = {
       adapter: task.remoteAdapter ?? undefined,
       reason
     })
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -691,7 +758,7 @@ export const taskService = {
     }
     const row = taskRepo.update(userId, taskId, patch)
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return written(row)
+    return written(userId, row)
   },
 
   /**
@@ -754,7 +821,135 @@ export const taskService = {
 
     const row = taskRepo.update(userId, taskId, next)
     if (!row) throw new TaskError('not_found', 'Task not found')
-    return written(row)
+    return written(userId, row)
+  },
+
+  /**
+   * Write a task that arrived from another of the user's devices.
+   *
+   * The app-sync apply path, and the reason it is a `taskService` method rather
+   * than a `taskRepo` call from `sync/collections.ts`: **the exported handoff
+   * note has to follow the row**. Every local mutation ends in `written()`
+   * precisely so a file under `<userData>/tasks/` is never left claiming a
+   * status an hour out of date, and a row that arrives from a peer changes the
+   * same six frontmatter fields that a local edit does. Going round the service
+   * would also have resurrected a deleted task's file, which is why
+   * `taskRepo.update` grew its own `deletedAt` filter — a second lock on the
+   * same door, not a substitute for this one.
+   *
+   * What it deliberately does **not** do is validate. There is no transition
+   * check (the peer is reporting what happened on the device that was running
+   * the work, exactly as {@link taskService.acceptRemoteStatus} is), no
+   * `requireRunsHere` (a replica of a task another device is running is the
+   * whole point), and no one-level parent check (a peer that broke that rule
+   * has already broken it; refusing the row here would only make the two
+   * devices disagree for ever). The rules this module enforces are about what
+   * *this* device may initiate.
+   *
+   * It does validate **one** thing, and it is not a rule about vocabulary:
+   * {@link respectingTheClaim} keeps the fields a peer was never allowed to
+   * write for a task this device holds. Whole-record last-writer-wins is what
+   * makes that necessary — see that function.
+   *
+   * Returns null when nothing was written — which {@link taskRepo.upsertFromSync}
+   * reports rather than this inferring it, because the one refusal it makes
+   * (an id that belongs to a different profile on this install) is the sort of
+   * thing a log should name only when it was the thing that happened.
+   */
+  applySyncedTask(userId: string, values: TaskSyncValues): TaskDto | null {
+    const device = thisDeviceId(userId)
+    const local = taskRepo.getById(userId, values.id)
+    // Branch on the check that was actually made, not on a read-back that came
+    // up empty: the two coincide today only because `getById` does not filter
+    // `deletedAt`, and a warning that names a second profile the reader then
+    // cannot find is worse than no warning at all.
+    if (!taskRepo.upsertFromSync(userId, respectingTheClaim(local, device, values))) {
+      logger.warn('a synced task was refused: that id belongs to another profile', {
+        taskId: values.id
+      })
+      return null
+    }
+    const row = taskRepo.getById(userId, values.id)
+    if (!row) {
+      // Not reachable: the upsert above reported that it wrote. Logged rather
+      // than thrown because this runs inside the sync drain, where one bad
+      // record must not stall the rest of the page.
+      logger.error('a synced task vanished between its write and the read back', {
+        taskId: values.id
+      })
+      return null
+    }
+    const dto = toTaskDto(row, device)
+    // A delete that arrived from a peer takes the file with it, the same way a
+    // local `remove` does. `exportHandoff` already removes the file when there
+    // is no note, but a *deleted* task with a note still has one.
+    if (row.deletedAt) taskFileService.removeHandoff(row.id)
+    else taskFileService.exportHandoff(dto)
+    return dto
+  },
+
+  /**
+   * Give this device's freshly-minted sync id to every task that was claimed by
+   * nobody in particular.
+   *
+   * **A null `executor_device` means two different things, and they were the
+   * same value.** {@link taskRunsHere} reads it as "here" — correctly, while a
+   * profile has no sync identity, because there is no other device that could
+   * disagree. The moment one is enrolled that stops being true: those tasks
+   * sync with a null claim and read as *mine* on every device the account has,
+   * so §5.4's "two devices cannot both believe they own a run" does not hold
+   * for any task created before sync was switched on. Pressing Run on the
+   * second device passes `requireRunsHere` and starts a second run of a task
+   * the first is already streaming.
+   *
+   * So enrolment is where "nobody's" becomes "this device's". Any device that
+   * enrols later gets a different id and correctly sees these as somebody
+   * else's; a device restored from a backup receives them already claimed, so
+   * there is nothing null left for it to adopt.
+   *
+   * Terminal tasks are skipped. `completed`, `cancelled` and `archived` reach
+   * nothing but `archived` in the transition table, so no run can ever start
+   * from one — and a profile's history is most of its tasks. Claiming them
+   * would bump `updated_at` on all of it to write a claim nobody will read.
+   *
+   * Returns how many it adopted, for the log.
+   */
+  adoptUnclaimed(userId: string, deviceId: string): number {
+    // `list` already excludes soft-deleted and archived rows.
+    const unclaimed = taskRepo
+      .list(userId, { executor: 'desktop' })
+      .filter((row) => row.executorDevice === null && !isSettled(parseTaskStatus(row.status)))
+    for (const row of unclaimed) {
+      const next = taskRepo.update(userId, row.id, { executorDevice: deviceId })
+      if (next) written(userId, next)
+    }
+    if (unclaimed.length > 0) {
+      logger.info('unclaimed tasks adopted by this device', {
+        count: unclaimed.length,
+        deviceId
+      })
+    }
+    return unclaimed.length
+  },
+
+  /**
+   * Apply a **tombstone** for a task — a pulled sync record with no payload at
+   * all, which means the row itself is gone on the device that sent it.
+   *
+   * Unreachable from anything this build writes: a task's only delete is
+   * {@link taskService.remove}, which is soft and travels as an ordinary
+   * upsert. It exists because `CollectionMapper.apply` has a null-plaintext arm
+   * that every collection must answer, and because a record a mapper ignores is
+   * a record the server hands back on every pull for ever.
+   */
+  removeSyncedTask(userId: string, taskId: string): void {
+    // **The file goes only if a row of ours did.** `deleteOwned` is scoped to
+    // the profile; `taskFileService.removeHandoff` is keyed on the task id
+    // alone, and `<userData>/tasks/` is shared by every profile on this
+    // install — so a tombstone carrying an id that belongs to a *different*
+    // profile would leave that profile's row intact and delete its note, with
+    // nothing that could ever put the file back.
+    if (taskRepo.deleteOwned(userId, taskId)) taskFileService.removeHandoff(taskId)
   },
 
   /**

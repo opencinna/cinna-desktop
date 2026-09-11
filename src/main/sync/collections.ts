@@ -1,17 +1,30 @@
 import { notesRepo, noteFoldersRepo } from '../db/notes'
 import { jobsRepo, jobFoldersRepo } from '../db/jobs'
-import { buildJobManifest } from './manifest'
+import { taskRepo } from '../db/tasks'
+import { taskService } from '../services/taskService'
+import { buildJobManifest, buildTaskAssigneeRef } from './manifest'
 import {
   resolveMode,
   resolveMcp,
   resolveFolderAgent,
   resolveLocalAgent,
   resolveRemoteAgent,
+  resolveTaskAssignee,
   profileServerUrl,
   newResolveCache,
   type ResolveCache
 } from './resolvers'
 import type { SyncCollection, JobDepDescriptor, JobSyncManifest } from '../../shared/sync'
+import type { TaskStatus } from '../../shared/taskStatus'
+import type {
+  TaskArtifact,
+  TaskAssignee,
+  TaskBudget,
+  TaskExecutor,
+  TaskOrigin,
+  TaskPriority,
+  TaskRouter
+} from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
 
 /**
@@ -88,6 +101,27 @@ function dateOrNull(v: unknown): Date | null {
 }
 function stringList(v: unknown): string[] {
   return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []
+}
+function dateOr(v: unknown, fallback: Date): Date {
+  return typeof v === 'number' && Number.isFinite(v) ? new Date(v) : fallback
+}
+function msOrNull(d: Date | null): number | null {
+  return d ? d.getTime() : null
+}
+/**
+ * A wire value carried into a JSON column **verbatim**, with only the shape
+ * check the column's own type needs.
+ *
+ * The same reasoning as the job manifest's `deps` (see `apply` below): a peer
+ * on a newer build may put a field in here this build has never heard of, and
+ * re-deriving from a narrowed view on the way back out would change the bytes
+ * and make the server report a change on every sync for ever.
+ */
+function jsonObject(v: unknown): Record<string, unknown> | null {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+}
+function jsonArray<T>(v: unknown): T[] | null {
+  return Array.isArray(v) ? (v as T[]) : null
 }
 
 // ---------------- note ----------------
@@ -350,6 +384,147 @@ const jobMapper: CollectionMapper = {
   }
 }
 
+// ---------------- task ----------------
+
+/**
+ * The `kind: 'agent'` arm of a dependency descriptor, off the wire. Reuses
+ * {@link parseDeps} so a task's assignee and a job's agent dependency are
+ * validated by exactly one function — they are the same descriptor, and two
+ * parsers for one shape is how the two would come to disagree about it.
+ */
+function parseAssigneeRef(v: unknown): Extract<JobDepDescriptor, { kind: 'agent' }> | null {
+  const [first] = parseDeps([v])
+  return first && first.kind === 'agent' ? first : null
+}
+
+/**
+ * A task on the wire.
+ *
+ * Four columns are **absent by design**, in three groups, and every absence is
+ * load-bearing:
+ *
+ *  - **`chat_id`.** Chats are not a synced collection, so an id from another
+ *    device would name a row that does not exist here — and the task page would
+ *    offer "Open the conversation" over nothing. A replica opens with no thread.
+ *  - **`assignee_agent_id`.** An `agents` row id is device-local. The portable
+ *    descriptor in `assignee_ref` travels in its place and is resolved on the
+ *    way in, exactly as a job's agent dependency is — this is the problem
+ *    `JobDepDescriptor` was built for and it is reused rather than reinvented.
+ *  - **`remote_synced_at` / `remote_dirty`.** Per-device bookkeeping. A peer
+ *    that has never spoken to that service must not inherit a watermark saying
+ *    it has, nor a list of fields *this* device still owes it.
+ *
+ * What does travel is the **binding** (`remote_adapter`, `remote_id`,
+ * `remote_key`, `remote_url`, `remote_state`), so a peer opens the same remote
+ * task rather than creating a second one; and `executor_device`, which is the
+ * whole point of it — it is how the other device knows not to run this.
+ *
+ * `job_id` / `job_run_id` are carried as-is and tolerated as dangling: jobs
+ * sync and job *runs* do not, so a replica knows which job a task came from and
+ * shows that job's title, never the run.
+ */
+const taskMapper: CollectionMapper = {
+  collection: 'task',
+  listDirty(userId, sinceMs) {
+    return taskRepo.listChangedSince(userId, sinceMs).map((r) => ({
+      collection: 'task' as const,
+      clientEntityId: r.id,
+      plaintext: {
+        title: r.title,
+        goal: r.goal,
+        description: r.description ?? null,
+        status: r.status,
+        priority: r.priority,
+        router: r.router,
+        origin: r.origin,
+        executor: r.executor,
+        executorDevice: r.executorDevice ?? null,
+        assigneeName: r.assigneeName ?? null,
+        assigneeKind: r.assigneeKind,
+        assigneeRef: buildTaskAssigneeRef(userId, r),
+        parentTaskId: r.parentTaskId ?? null,
+        jobId: r.jobId ?? null,
+        jobRunId: r.jobRunId ?? null,
+        remoteAdapter: r.remoteAdapter ?? null,
+        remoteId: r.remoteId ?? null,
+        remoteKey: r.remoteKey ?? null,
+        remoteUrl: r.remoteUrl ?? null,
+        remoteState: r.remoteState ?? null,
+        handoffNote: r.handoffNote ?? null,
+        artifacts: r.artifacts ?? null,
+        budget: r.budget ?? null,
+        errorMessage: r.errorMessage ?? null,
+        // `createdAt` travels, unlike a job's. A task page prints it ("Created
+        // three days ago") and so do `startedAt` / `finishedAt`; a replica that
+        // stamped its own arrival time would say every task in the user's
+        // history began the moment this device joined the account.
+        createdAt: r.createdAt.getTime(),
+        startedAt: msOrNull(r.startedAt),
+        finishedAt: msOrNull(r.finishedAt),
+        deletedAt: msOrNull(r.deletedAt)
+      },
+      deleted: !!r.deletedAt,
+      clientUpdatedAt: r.updatedAt.getTime()
+    }))
+  },
+  maxUpdatedAt: (userId) => taskRepo.maxUpdatedAt(userId),
+  apply(userId, id, plaintext, _deleted, ctx) {
+    if (!plaintext) {
+      taskService.removeSyncedTask(userId, id)
+      return
+    }
+    // Stored **verbatim**, then resolved separately — the same split the job
+    // manifest makes, and for the same reason: what goes back on the wire must
+    // be the bytes that arrived. Resolving to a local agent id and re-deriving
+    // the descriptor from *that* would drop the assignee entirely on a device
+    // that does not have the agent.
+    const ref = jsonObject(plaintext.assigneeRef)
+    const parsed = parseAssigneeRef(plaintext.assigneeRef)
+    const arrived = new Date(ctx.clientUpdatedAt)
+    taskService.applySyncedTask(userId, {
+      id,
+      title: str(plaintext.title) || 'Untitled task',
+      goal: str(plaintext.goal),
+      description: strOrNull(plaintext.description),
+      // The five unions are carried raw rather than narrowed here. `toTaskDto`
+      // parses every one of them on the way out (`parseTaskStatus` and its
+      // four siblings exist for exactly this trip), so a value from a newer
+      // build survives storage, re-encodes to the bytes it arrived as, and
+      // still renders as something.
+      status: str(plaintext.status) as TaskStatus,
+      priority: str(plaintext.priority) as TaskPriority,
+      router: str(plaintext.router) as TaskRouter,
+      origin: str(plaintext.origin) as TaskOrigin,
+      executor: str(plaintext.executor) as TaskExecutor,
+      executorDevice: strOrNull(plaintext.executorDevice),
+      assigneeAgentId: parsed ? resolveTaskAssignee(userId, parsed) : null,
+      assigneeName: strOrNull(plaintext.assigneeName),
+      assigneeKind: str(plaintext.assigneeKind) as TaskAssignee['kind'],
+      assigneeRef: (ref as JobDepDescriptor | null) ?? null,
+      parentTaskId: strOrNull(plaintext.parentTaskId),
+      jobId: strOrNull(plaintext.jobId),
+      jobRunId: strOrNull(plaintext.jobRunId),
+      remoteAdapter: strOrNull(plaintext.remoteAdapter),
+      remoteId: strOrNull(plaintext.remoteId),
+      remoteKey: strOrNull(plaintext.remoteKey),
+      remoteUrl: strOrNull(plaintext.remoteUrl),
+      remoteState: jsonObject(plaintext.remoteState),
+      handoffNote: strOrNull(plaintext.handoffNote),
+      artifacts: jsonArray<TaskArtifact>(plaintext.artifacts),
+      budget: jsonObject(plaintext.budget) as TaskBudget | null,
+      errorMessage: strOrNull(plaintext.errorMessage),
+      // A payload from a build that predates `createdAt` travelling would have
+      // none; the peer's own modification time is the closest honest answer,
+      // and it is never in the future.
+      createdAt: dateOr(plaintext.createdAt, arrived),
+      updatedAt: arrived,
+      startedAt: dateOrNull(plaintext.startedAt),
+      finishedAt: dateOrNull(plaintext.finishedAt),
+      deletedAt: dateOrNull(plaintext.deletedAt)
+    })
+  }
+}
+
 // ---------------- registry ----------------
 
 /**
@@ -360,12 +535,18 @@ export const COLLECTION_MAPPERS: CollectionMapper[] = [
   noteFolderMapper,
   jobFolderMapper,
   noteMapper,
-  jobMapper
+  jobMapper,
+  // Last, and after `job`: a task carries the `job_id` it came from, so a peer
+  // applying top-down has the job's title to show above it. The dependency is
+  // one-way and cosmetic — a dangling `job_id` is a supported state, since job
+  // runs never sync at all — so this is tidiness, not correctness.
+  taskMapper
 ]
 
 export const MAPPERS_BY_COLLECTION: Record<SyncCollection, CollectionMapper> = {
   note: noteMapper,
   note_folder: noteFolderMapper,
   job: jobMapper,
-  job_folder: jobFolderMapper
+  job_folder: jobFolderMapper,
+  task: taskMapper
 }

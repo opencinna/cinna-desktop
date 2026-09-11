@@ -1,0 +1,99 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import type { IpcMainInvokeEvent } from 'electron'
+
+/**
+ * **Which task writes tell the user's other devices, and which do not.**
+ *
+ * Notes and jobs nudge sync from their *services*. Tasks cannot: the app-sync
+ * apply path goes through `taskService` (so the exported handoff note follows a
+ * row that arrives from a peer), and `syncService → syncEngine → collections →
+ * taskService` would close a cycle if the service imported `syncService` back.
+ * The nudge therefore lives in the IPC layer, which nothing imports.
+ *
+ * That makes the split a deliberate one rather than an accident of layering,
+ * and it is the split this file pins: **a person's write is nudged; a run's
+ * own progress is not.** `applyRunState` fires several times a turn, and
+ * debouncing a full sync cycle onto each would be chatty for a row that moves
+ * on its own. A take-over is the opposite case — its whole purpose is to tell
+ * another device it has lost the claim, and until that lands both devices pass
+ * `taskRunsHere` and both will write the run.
+ *
+ * It is a test rather than a comment because of what the step-9a review found
+ * about one-line call sites: the unit tests drive `markDirty` directly, so
+ * deleting a call to it here would leave the whole suite green and the failure
+ * — a minute of two devices each believing they own a run — announces itself to
+ * nobody.
+ */
+
+const markDirty = vi.hoisted(() => vi.fn())
+const service = vi.hoisted(() => ({
+  update: vi.fn(() => ({ id: 't1' })),
+  setStatus: vi.fn(() => ({ id: 't1' })),
+  takeOver: vi.fn(() => ({ id: 't1' })),
+  remove: vi.fn(),
+  list: vi.fn(() => []),
+  getById: vi.fn(() => ({ id: 't1' }))
+}))
+
+/** Captured `channel → handler`, instead of touching `ipcMain`. */
+const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => unknown>())
+
+vi.mock('./_wrap', () => ({
+  ipcHandle: (channel: string, handler: (...args: unknown[]) => unknown) => {
+    handlers.set(channel, handler)
+  }
+}))
+vi.mock('../services/syncService', () => ({ syncService: { markDirty } }))
+vi.mock('../services/taskService', () => ({ taskService: service }))
+vi.mock('../services/inboxService', () => ({
+  inboxService: { list: vi.fn(() => []), answer: vi.fn() }
+}))
+vi.mock('../services/askDelivery', () => ({ parseAnswerPayload: vi.fn(() => null) }))
+vi.mock('../auth/activation', () => ({
+  userActivation: { requireActivated: vi.fn() }
+}))
+vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => 'profile-1' }))
+
+const { registerTaskHandlers } = await import('./task.ipc')
+
+const event = {} as IpcMainInvokeEvent
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  handlers.clear()
+  registerTaskHandlers()
+})
+
+async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
+  const handler = handlers.get(channel)
+  expect(handler, `${channel} is not registered`).toBeTruthy()
+  return (handler as (...a: unknown[]) => unknown)(event, ...args)
+}
+
+describe('a task write a person made reaches the other devices without waiting a minute', () => {
+  it.each([
+    ['task:take-over', ['t1']],
+    ['task:update', ['t1', { title: 'Renamed' }]],
+    ['task:set-status', ['t1', 'in_progress']],
+    ['task:delete', ['t1']]
+  ] as const)('%s nudges sync', async (channel, args) => {
+    await invoke(channel, ...args)
+    expect(markDirty).toHaveBeenCalledWith('profile-1')
+  })
+
+  it('nudges *after* the write, so a refused write never announces itself', async () => {
+    service.takeOver.mockImplementationOnce(() => {
+      throw new Error('Task not found')
+    })
+    await expect(invoke('task:take-over', 't1')).rejects.toThrow('Task not found')
+    expect(markDirty).not.toHaveBeenCalled()
+  })
+
+  it.each([['task:list', []], ['task:get', ['t1']]] as const)(
+    '%s is a read and nudges nothing',
+    async (channel, args) => {
+      await invoke(channel, ...args)
+      expect(markDirty).not.toHaveBeenCalled()
+    }
+  )
+})

@@ -22,6 +22,7 @@ const getTask = vi.fn<() => Promise<TaskDto>>()
 const listInbox = vi.fn<() => Promise<InboxEntry[]>>()
 const getChat = vi.fn()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
+const takeOver = vi.fn<(taskId: string) => Promise<TaskDto>>()
 const runSend = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
 
@@ -29,7 +30,8 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
   app: { setTheme: async () => undefined },
   tasks: {
     get: () => getTask(),
-    setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status)
+    setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
+    takeOver: (taskId: string) => takeOver(taskId)
   },
   inbox: { list: () => listInbox() },
   agents: {
@@ -62,6 +64,7 @@ const BASE: TaskDto = {
   origin: 'local',
   executor: 'desktop',
   executorDevice: null,
+  runsHere: true,
   chatId: 'c1',
   assignee: { agentId: 'a1', name: 'Invoice Checker', kind: 'agent' },
   parentTaskId: null,
@@ -121,6 +124,7 @@ beforeEach(() => {
     ]
   })
   setStatus.mockResolvedValue(BASE)
+  takeOver.mockResolvedValue({ ...BASE, runsHere: true, executorDevice: null })
   openExternal.mockResolvedValue({ success: true })
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
@@ -362,5 +366,151 @@ describe('the other states', () => {
     // three would only delay the sentence) — hence a window past the default.
     await screen.findByText('This task could not be opened.', undefined, { timeout: 4000 })
     await screen.findByText('Task not found')
+  })
+})
+
+/**
+ * A task another of the user's devices is running.
+ *
+ * Reachable only now that tasks sync. Everything the page would otherwise offer
+ * — the re-run, the pointer at the Inbox — is something this device cannot do
+ * to a run it does not hold: main refuses the write, and the ask is in the
+ * inbox of the device that raised it, because `task_input_requests` never
+ * syncs. So the only control here is the one that changes that.
+ */
+describe('a task running on another device', () => {
+  const ELSEWHERE: Partial<TaskDto> = { runsHere: false, executorDevice: 'device-b' }
+
+  it('offers to take it over instead of to re-run it', async () => {
+    await renderTask({ ...ELSEWHERE, status: 'blocked' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take over' })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
+    expect(screen.getByText(/stopped on another of your devices/)).toBeTruthy()
+  })
+
+  /**
+   * The one shape with no control at all, and the reason is not tidiness.
+   * Taking over a live run does not stop it: the other device keeps streaming,
+   * and its `reportRunCompletion` is then refused by `requireRunsHere` and
+   * swallowed, leaving the task `in_progress` for ever — or it finishes first
+   * and its whole record wins last-writer-wins, undoing the claim. Neither
+   * outcome is one a button should offer.
+   */
+  it('reports a live run elsewhere and offers nothing to press', async () => {
+    await renderTask({ ...ELSEWHERE, status: 'in_progress' })
+    await waitFor(() =>
+      expect(screen.getByText(/running on another of your devices/)).toBeTruthy()
+    )
+    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull()
+    // And nothing else this device cannot do, either.
+    expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
+  })
+
+  /**
+   * Every task a peer created carries that peer's `executor_device` from the
+   * moment it was created, and nothing clears it. So a rule written as "say
+   * something unless the work is over" put this banner on every task the user
+   * had ever made on their other machine — on statuses where this page offers
+   * nothing anyway, which is `ux_rules.md` §2's definition of noise.
+   */
+  it.each(['new', 'open', 'refining'] as const)(
+    'says nothing about a claim on a %s task, which offers nothing anyway',
+    async (status) => {
+      await renderTask({ ...ELSEWHERE, status })
+      await screen.findByRole('heading', { level: 1 })
+      expect(screen.queryByRole('status')).toBeNull()
+    }
+  )
+
+  /**
+   * The measured defect: left-aligned, Take over overlapped *Re-run from the
+   * last message* — which sends a message — by 5.66 px at an identical x, and
+   * the two arms replace each other on a poll. jsdom has no layout, so what is
+   * pinned here is the structural fact the fix turns on: the two buttons sit on
+   * opposite edges of their rows.
+   */
+  it('keeps Take over off the edge Re-run uses', async () => {
+    await renderTask({ ...ELSEWHERE, status: 'blocked' })
+    const takeOverButton = await screen.findByRole('button', { name: 'Take over' })
+    expect(takeOverButton.parentElement?.className).toContain('justify-end')
+  })
+
+  /**
+   * The other measured one: the peer reports a failure on a poll, so this line
+   * appears with no gesture. Above the button it moved it by 7.83 px.
+   */
+  it('puts a failure reason below the control, never above it', async () => {
+    await renderTask({
+      ...ELSEWHERE,
+      status: 'error',
+      errorMessage: 'The ledger file was missing.'
+    })
+    const reason = await screen.findByText('The ledger file was missing.')
+    const button = screen.getByRole('button', { name: 'Take over' })
+    // `DOCUMENT_POSITION_FOLLOWING` — the reason comes after the button.
+    expect(button.compareDocumentPosition(reason) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  /**
+   * Even with an ask sitting in this device's inbox for the same task id. That
+   * combination cannot happen through sync — the rows do not travel — but the
+   * page must not *depend* on that, because the banner it would otherwise show
+   * points at a list whose controls answer a driver on another machine.
+   */
+  it('does not point at the Inbox for a task it does not hold', async () => {
+    listInbox.mockResolvedValue([WAITING])
+    await renderTask({ ...ELSEWHERE, status: 'blocked' })
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take over' })).toBeTruthy())
+    expect(screen.queryByRole('button', { name: 'Open the Inbox' })).toBeNull()
+  })
+
+  it('claims the task and leaves the second press to the user', async () => {
+    // The claim is a real write, so the next read returns the claimed task —
+    // modelled here, because the hook seeds the cache *and* re-reads, and a
+    // mock that kept answering "elsewhere" would test the seed alone.
+    takeOver.mockImplementation(async () => {
+      const claimed: TaskDto = { ...BASE, status: 'blocked', runsHere: true }
+      getTask.mockResolvedValue(claimed)
+      return claimed
+    })
+    await renderTask({ ...ELSEWHERE, status: 'blocked' })
+    const button = await screen.findByRole('button', { name: 'Take over' })
+    await act(async () => {
+      button.click()
+    })
+
+    expect(takeOver).toHaveBeenCalledWith('t1')
+    // The claim alone — nothing was run.
+    expect(runSend).not.toHaveBeenCalled()
+    // And the page now shows what the task's own status makes possible.
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: /Re-run from the last message/ })
+      ).toBeTruthy()
+    )
+  })
+
+  it('keeps the control and says why when the claim is refused', async () => {
+    takeOver.mockRejectedValue(new Error('Error invoking remote method: Task not found'))
+    await renderTask({ ...ELSEWHERE, status: 'blocked' })
+    const button = await screen.findByRole('button', { name: 'Take over' })
+    await act(async () => {
+      button.click()
+    })
+
+    await waitFor(() => expect(screen.getByText(/Task not found/)).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'Take over' })).toBeTruthy()
+  })
+
+  /**
+   * A finished task keeps the claim of whichever device ran it — nothing clears
+   * `executorDevice` on completion — so the banner has to be about what is
+   * still possible rather than about who holds the row. There is nothing to
+   * take over from a task that is over.
+   */
+  it.each(['completed', 'cancelled', 'archived'] as const)('says nothing when the work is %s', async (status) => {
+    await renderTask({ ...ELSEWHERE, status })
+    await screen.findByRole('heading', { level: 1 })
+    expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull()
   })
 })

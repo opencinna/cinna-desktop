@@ -150,6 +150,46 @@ export function resolveFolderAgent(
 }
 
 /**
+ * Resolve a synced task's portable assignee descriptor to a local `agents` row
+ * id, or null when this device does not have that agent.
+ *
+ * **Nothing is auto-created here**, and that is a deliberate departure from the
+ * job apply path beside it, where {@link resolveLocalAgent} and
+ * {@link resolveMcp} both leave a disabled shell behind on a miss. Three
+ * reasons, and the first is the phase plan's own words for this collection: a
+ * miss "leaves `assignee_agent_id` null", which is only a sentence that can be
+ * written about lookups — an auto-create never misses.
+ *
+ * The second is that nothing is lost by declining. A job's manifest is the
+ * job's *definition*, and a dependency dropped there is gone; a task's
+ * descriptor is stored verbatim in `assignee_ref` and re-emitted unchanged, so
+ * it resolves by itself the day the agent appears on this device.
+ *
+ * The third is proportion. A job is something the user configured once; a task
+ * is a unit of work, and a profile syncs a great many of them. Auto-creating a
+ * disabled agent row per synced task would fill the user's Agents list with
+ * rows they never asked for, from work that has already finished somewhere
+ * else.
+ *
+ * An exhaustive `switch` rather than an if/else chain, for the reason
+ * `agentIdentityKey` records: the `else` form typechecks against a new union
+ * member and silently treats it as a local agent.
+ */
+export function resolveTaskAssignee(
+  profileUserId: string,
+  desc: Extract<JobDepDescriptor, { kind: 'agent' }>
+): string | null {
+  switch (desc.source) {
+    case 'remote':
+      return resolveRemoteAgent(profileUserId, desc, profileServerUrl(profileUserId))
+    case 'local':
+      return findLocalAgent(desc)?.id ?? null
+    case 'folder':
+      return resolveFolderAgent(desc)
+  }
+}
+
+/**
  * Resolve an MCP provider by connection identity in Default Scope; on a miss
  * auto-create a disabled, not-connected provider from the coords. Env values /
  * auth tokens never sync, so the shell starts credential-less.

@@ -116,6 +116,7 @@ function sampleTask(title: string): TaskDto {
     origin: 'remote',
     executor: 'remote',
     executorDevice: null,
+    runsHere: false,
     chatId: null,
     assignee: { agentId: null, name: null, kind: 'remote_agent' },
     parentTaskId: null,

@@ -21,7 +21,7 @@ import { useConnectIntent } from './hooks/useConnectIntent'
 import { useTrayIcon } from './hooks/useTrayIcon'
 import { useLocalAgentWatch } from './hooks/useLocalAgents'
 import { useEngineWatch } from './hooks/useEngine'
-import { useSyncEvents, useSyncOnTabOpen } from './hooks/useSync'
+import { useSyncEvents, useSyncOnViewOpen } from './hooks/useSync'
 import {
   consumeForceOnboarding,
   isOnboardingDismissed,
@@ -93,10 +93,11 @@ function Shell(): React.JSX.Element {
   useTrayIcon()
   // App-level sync wiring (Cinna profiles only). `useSyncEvents` keeps the
   // note/job caches fresh from peer changes no matter which screen is open;
-  // `useSyncOnTabOpen` pings the server when the Notes/Jobs screen is opened.
+  // `useSyncOnViewOpen` pings the server when a screen whose contents sync is
+  // opened — Notes, Jobs, or a task page.
   const isCinnaUser = useAuthStore((s) => s.currentUser?.type === 'cinna_user')
   useSyncEvents(isCinnaUser)
-  useSyncOnTabOpen(isCinnaUser)
+  useSyncOnViewOpen(isCinnaUser)
   // Folder agents are files on disk that other tools edit. Subscribing here,
   // once, means an assistant's change to a folder refreshes the Agents tab and
   // the open agent page wherever the user happens to be.

@@ -1,4 +1,5 @@
 import { jobsRepo, type JobRow } from '../db/jobs'
+import type { TaskRow } from '../db/tasks'
 import { agentRepo } from '../db/agents'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { chatModeRepo } from '../db/chatModes'
@@ -114,4 +115,47 @@ export function rebuildJobManifest(userId: string, jobId: string): void {
 /** Convenience for IPC handlers that already know the active profile. */
 export function rebuildActiveJobManifest(jobId: string): void {
   rebuildJobManifest(getProfileScopeUserId(), jobId)
+}
+
+/**
+ * Build a task's portable **assignee** descriptor from its current local state.
+ *
+ * The task twin of {@link buildJobManifest}, and much smaller for one reason: a
+ * task has exactly one assignee, and the row that names it is right there in
+ * `assignee_agent_id`. A job carries N dependencies, several of which this
+ * device may be unable to rebuild, which is why `jobs.sync_deps` stores the
+ * wire manifest verbatim and this is derived at encode time instead.
+ *
+ * The `?? task.assigneeRef` fall-through is the part that matters, and it is
+ * the same carry-forward `buildJobManifest` ends with: a replica whose device
+ * does not have the assignee resolved `assignee_agent_id` to null on the way
+ * in, so deriving alone would **drop the assignee from the payload** and hand
+ * the next device a task assigned to nobody. The stored descriptor is what it
+ * re-emits, byte for byte.
+ *
+ * Only `kind: 'agent'` is derived. The other two name nothing in this device's
+ * `agents` table: a `model` assignee has no row at all, and a `remote_agent`'s
+ * `assigneeAgentId` is *the bound service's* id for it (see `TaskAssignee`), so
+ * looking it up here would either miss or, worse, hit an unrelated row.
+ */
+export function buildTaskAssigneeRef(
+  userId: string,
+  task: TaskRow
+): JobDepDescriptor | null {
+  if (task.assigneeKind === 'agent' && task.assigneeAgentId) {
+    const settingsScope = getSettingsScopeUserId()
+    // A task's assignee is a Default-Scope local *or folder* agent, or a
+    // profile-scoped remote one — the same two lookups a job attachment needs.
+    const row =
+      agentRepo.getOwned(settingsScope, task.assigneeAgentId) ??
+      agentRepo.getOwned(userId, task.assigneeAgentId)
+    if (row) {
+      const desc = agentRowToDescriptor(
+        row,
+        row.source === 'remote' ? profileServerUrl(userId) : null
+      )
+      if (desc) return desc
+    }
+  }
+  return task.assigneeRef ?? null
 }

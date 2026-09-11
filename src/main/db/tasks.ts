@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
 import { tasks } from './schema'
 import type { JobDepDescriptor } from '../../shared/sync'
@@ -132,6 +132,49 @@ export interface TaskListFilter {
    * pile, and every list that is not the archive itself means the live ones.
    */
   includeArchived?: boolean
+}
+
+/**
+ * One task exactly as it arrived from another of the user's devices, already
+ * decoded and with its portable assignee descriptor resolved to a local agent
+ * id (or to null, when this device does not have that agent).
+ *
+ * The three columns that are **not** here are the three that do not travel:
+ * `chatId`, `remoteSyncedAt` and `remoteDirty`. See
+ * {@link taskRepo.upsertFromSync}.
+ */
+export interface TaskSyncValues {
+  id: string
+  title: string
+  goal: string
+  description: string | null
+  status: TaskStatus
+  priority: TaskPriority
+  router: TaskRouter
+  origin: TaskOrigin
+  executor: TaskExecutor
+  executorDevice: string | null
+  assigneeAgentId: string | null
+  assigneeName: string | null
+  assigneeKind: TaskAssignee['kind']
+  assigneeRef: JobDepDescriptor | null
+  parentTaskId: string | null
+  jobId: string | null
+  jobRunId: string | null
+  remoteAdapter: string | null
+  remoteId: string | null
+  remoteKey: string | null
+  remoteUrl: string | null
+  remoteState: Record<string, unknown> | null
+  handoffNote: string | null
+  artifacts: TaskArtifact[] | null
+  budget: TaskBudget | null
+  errorMessage: string | null
+  createdAt: Date
+  updatedAt: Date
+  startedAt: Date | null
+  finishedAt: Date | null
+  deletedAt: Date | null
 }
 
 /** How many subtasks a task has, and how many of them are done. cinna's computed pair. */
@@ -297,14 +340,22 @@ export const taskRepo = {
   },
 
   /**
-   * Soft-delete. App-sync carries tombstones, so the row stays and the delete
-   * travels as `deletedAt`.
+   * Soft-delete. The row stays and the delete travels as `deletedAt`.
    *
-   * No `syncRepo.addTombstone` yet — `'task'` joins `SyncCollection` with the
-   * `taskMapper` in step 10 of the phase, and a tombstone for a collection the
-   * sync engine has no mapper for would be pushed and never applied. Until
-   * then a delete is local, which is exactly what it already is for a profile
-   * with sync off.
+   * **No `syncRepo.addTombstone`, and that is the finished design rather than a
+   * gap.** A tombstone is app-sync's carrier for a *hard* delete — the wire
+   * record has no payload at all, and the peer that receives one removes its
+   * row (`notesRepo.permanentDelete`, `emptyTrash`). A soft delete rides the
+   * ordinary push instead: `softDelete` bumps `updatedAt`, so
+   * {@link taskRepo.listChangedSince} picks the row up, `taskMapper` sends it
+   * with `deleted: true` and `deletedAt` in the payload, and the peer applies
+   * it as an upsert. Jobs and notes have worked exactly this way since sync
+   * shipped; a task has no trash and no restore, so this is the only delete it
+   * has.
+   *
+   * `updatedAt` moves with `deletedAt` deliberately: the push batch is selected
+   * by `updatedAt > watermark` and that value is also the LWW timestamp, so a
+   * delete that left it stale would never reach a peer at all.
    */
   softDelete(userId: string, taskId: string): boolean {
     const now = new Date()
@@ -312,6 +363,165 @@ export const taskRepo = {
       .update(tasks)
       .set({ deletedAt: now, updatedAt: now })
       .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId), isNull(tasks.deletedAt)))
+      .run()
+    return result.changes > 0
+  },
+
+  // ---- Data-sync engine helpers ------------------------------------------
+  // Back the `task` mapper in `src/main/sync/collections.ts`. Soft-deleted rows
+  // are INCLUDED here, unlike every read above: a delete is a change like any
+  // other and it is the one change a peer most needs to hear about.
+
+  /** Tasks changed since `sinceMs` (exclusive), INCLUDING soft-deleted ones. */
+  listChangedSince(userId: string, sinceMs: number): TaskRow[] {
+    return getDb()
+      .select()
+      .from(tasks)
+      .where(and(eq(tasks.userId, userId), gt(tasks.updatedAt, new Date(sinceMs))))
+      .all()
+  },
+
+  /**
+   * The newest `updated_at` in this profile's tasks, in **milliseconds**.
+   *
+   * Answered by SQLite rather than by reducing every row in JS, which is what
+   * `notesRepo` and `jobsRepo` do. The divergence is deliberate and it is about
+   * growth: this runs for every collection on every sync cycle, and `tasks` is
+   * the first one that gains a row per *job run* rather than per user gesture,
+   * so a busy profile would allocate a `Date` per task every sixty seconds to
+   * compute one number the index already holds. The other three are worth the
+   * same change and it is not this phase's to make.
+   *
+   * **The `* 1000` is the whole risk here.** Drizzle's
+   * `integer({ mode: 'timestamp' })` stores **seconds**, so `max()` answers in
+   * seconds while every caller — and `Date.getTime()`, which the JS version
+   * returned — works in milliseconds. Getting it wrong by a factor of a
+   * thousand makes the push watermark either never advance or never hold, and
+   * neither announces itself. `sync/taskCollection.test.ts` pins the value
+   * against a known timestamp for exactly that reason.
+   */
+  maxUpdatedAt(userId: string): number {
+    const row = getDb()
+      .select({ max: sql<number | null>`max(${tasks.updatedAt})` })
+      .from(tasks)
+      .where(eq(tasks.userId, userId))
+      .get()
+    return row?.max ? row.max * 1000 : 0
+  },
+
+  /**
+   * Write a task that arrived from another of the user's devices.
+   *
+   * **The one writer here that may touch a soft-deleted row**, and the contrast
+   * with {@link taskRepo.update} is the whole point of both. `update` refuses a
+   * tombstone because every caller of it is a local mutation and resurrecting a
+   * deleted task behind the user's back is a defect. This is not a local
+   * mutation: the sync engine has already decided, by last-writer-wins on the
+   * server, that the arriving copy is the newer one — so if the peer's copy
+   * says the task is alive and ours says it is deleted, the peer deleted and
+   * then restored it, or ours was deleted first and lost. Refusing here would
+   * leave the two devices permanently disagreeing with no way to converge.
+   *
+   * `deletedAt` therefore comes off the wire like any other column rather than
+   * being preserved from the local row.
+   *
+   * Callers go through `taskService.applySyncedTask`, never here directly: the
+   * exported handoff note has to follow the row, and only the service knows
+   * that.
+   *
+   * Returns **false** for the one refusal it makes — an id that belongs to
+   * another profile on this install — so the caller can say *that* rather than
+   * infer a reason from a read-back that came up empty. The two are the same
+   * thing today and only by accident: `getById` does not filter `deletedAt`,
+   * so a tombstone is not a second way to miss, and nothing else can make the
+   * insert not land. An inference that holds by coincidence is one that stops
+   * holding silently.
+   */
+  upsertFromSync(userId: string, values: TaskSyncValues): boolean {
+    const db = getDb()
+    // Cross-profile defence in depth, the same check `jobsRepo.upsertFromSync`
+    // makes: an id that already belongs to another profile is never rewritten.
+    const existing = db
+      .select({ uid: tasks.userId })
+      .from(tasks)
+      .where(eq(tasks.id, values.id))
+      .get()
+    if (existing && existing.uid !== userId) return false
+
+    const row = {
+      ...values,
+      userId,
+      // Three columns are deliberately absent from `TaskSyncValues` and are
+      // therefore set only on INSERT: `chatId` (chats are not a synced
+      // collection, so a replica opens with no thread) and the two per-device
+      // bookkeeping fields, which a peer must never inherit — a watermark
+      // saying "this device last heard from that service at X" is a claim only
+      // the device that made the call can make.
+      chatId: null,
+      remoteSyncedAt: null,
+      remoteDirty: null
+    }
+    db.insert(tasks)
+      .values(row)
+      .onConflictDoUpdate({
+        target: tasks.id,
+        set: {
+          title: values.title,
+          goal: values.goal,
+          description: values.description,
+          status: values.status,
+          priority: values.priority,
+          router: values.router,
+          origin: values.origin,
+          executor: values.executor,
+          executorDevice: values.executorDevice,
+          assigneeAgentId: values.assigneeAgentId,
+          assigneeName: values.assigneeName,
+          assigneeKind: values.assigneeKind,
+          assigneeRef: values.assigneeRef,
+          parentTaskId: values.parentTaskId,
+          jobId: values.jobId,
+          jobRunId: values.jobRunId,
+          remoteAdapter: values.remoteAdapter,
+          remoteId: values.remoteId,
+          remoteKey: values.remoteKey,
+          remoteUrl: values.remoteUrl,
+          remoteState: values.remoteState,
+          handoffNote: values.handoffNote,
+          artifacts: values.artifacts,
+          budget: values.budget,
+          errorMessage: values.errorMessage,
+          createdAt: values.createdAt,
+          updatedAt: values.updatedAt,
+          startedAt: values.startedAt,
+          finishedAt: values.finishedAt,
+          deletedAt: values.deletedAt
+        }
+      })
+      .run()
+    return true
+  },
+
+  /**
+   * Hard-delete, scoped to the owning user.
+   *
+   * The arm of the mapper that applies a **tombstone** — a pulled record with
+   * no payload at all. Nothing on the desktop writes one for a task today
+   * (`softDelete` is the only delete a task has, and it travels as an upsert),
+   * so this is reached only by a peer on a build that does, which is the shape
+   * every other collection's mapper already tolerates. It is here rather than
+   * left to throw because an unhandled collection stalls nothing but also
+   * applies nothing: the record would come back on every pull for ever.
+   *
+   * Returns whether a row of **this user's** actually went, which the caller
+   * needs: the exported handoff note is keyed on the task id alone and the
+   * folder is not profile-scoped, so removing the file on a delete that hit
+   * nothing would take another profile's file with it.
+   */
+  deleteOwned(userId: string, taskId: string): boolean {
+    const result = getDb()
+      .delete(tasks)
+      .where(and(eq(tasks.id, taskId), eq(tasks.userId, userId)))
       .run()
     return result.changes > 0
   },

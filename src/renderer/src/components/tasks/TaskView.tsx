@@ -7,6 +7,7 @@ import {
   ArrowLeft,
   ExternalLink,
   FileText,
+  Laptop,
   Link as LinkIcon,
   Loader2,
   MessageSquare,
@@ -17,13 +18,14 @@ import { useInboxList } from '../../hooks/useInbox'
 import { useJob, useOpenChatFromRun } from '../../hooks/useJobs'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useOpenExternal } from '../../hooks/useSystem'
-import { useRerunTask, useTask } from '../../hooks/useTasks'
+import { useRerunTask, useTakeOverTask, useTask } from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { TaskStatusPill } from './TaskStatusPill'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
+import type { TaskStatus } from '../../../../shared/taskStatus'
 
 /**
  * One task: what the work is, where it stands, and the way back into it.
@@ -44,12 +46,19 @@ import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
  * reason `InboxSource` already has a `remote` arm: the shape a surface binds to
  * must not change when the thing that fills it arrives.
  *
- * One arm is deliberately *not* here. A task claimed by another of the user's
- * devices is also read-only, and telling the two apart needs this device's sync
- * id, which the renderer has no way to ask for. Tasks do not sync until step 10,
- * so the state is unreachable today; the answer is a `runsHere` on the DTO
- * (`taskRunsHere` in `shared/tasks.ts` already computes it in main), and it
- * belongs with the step that makes the state possible.
+ * The third arm arrived with the tasks the `task` app-sync collection brings in
+ * (step 10). A task claimed by another of the user's devices is read-only here
+ * too, and telling that apart from one this device owns needs this device's
+ * sync id — which the renderer has no way to ask for, so main answers it as
+ * `runsHere` on the DTO (`taskRunsHere` in `shared/tasks.ts` is the rule, and
+ * it is shared so the two sides cannot drift about it).
+ *
+ * The banner for that arm does **not** name the device. Nothing on this machine
+ * can: `executorDevice` is a sync device id, and the names behind those ids
+ * live in the account's device list on the server, which this page has no read
+ * of and which can fail. A sentence that said "MacBook Pro" only after a second
+ * network round trip would also change width under the pointer (`ux_rules.md`
+ * §1), so the honest generic sentence is the one that is always right.
  *
  * ## Blocked with nothing waiting is a real state, and it has one way out
  *
@@ -429,8 +438,40 @@ interface AskState {
   retry: () => void
 }
 
+/**
+ * The only three statuses on which another device's claim is worth saying
+ * anything about.
+ *
+ * Written as the set that *does* speak rather than the set that stays quiet,
+ * because the rule is about what the page would otherwise do: on `blocked` and
+ * `error` it would offer a control this device cannot use, and on `in_progress`
+ * work is genuinely happening somewhere else. Everywhere else a peer's claim
+ * changes nothing the user can see or act on — `new` and `open` offer nothing
+ * to begin with, and the three terminal statuses are over — so a banner would
+ * be noise (`ux_rules.md` §2).
+ *
+ * `new` and `open` are the ones worth naming: **every** task a peer created
+ * carries that peer's `executor_device` from the moment it was created, so a
+ * set defined by exclusion put a banner on every task the user had ever made on
+ * their other machine.
+ */
+const CLAIM_MATTERS: readonly TaskStatus[] = ['in_progress', 'blocked', 'error']
+
 function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX.Element | null {
   const setActiveView = useUIStore((s) => s.setActiveView)
+
+  /*
+    First, before every arm below, and that order is the whole point: each of
+    them offers something this device cannot do to a task another one holds.
+    The re-run would be refused by `requireRunsHere` in main, and "Open the
+    Inbox" would point at a list that cannot contain the ask — a `reply`
+    address dies with the driver process holding it, so `task_input_requests`
+    never syncs and the ask is only ever in the inbox of the device that raised
+    it. Offering either would be a control that cannot work.
+  */
+  if (task.executor === 'desktop' && !task.runsHere && CLAIM_MATTERS.includes(task.status)) {
+    return <ElsewhereBanner task={task} />
+  }
 
   if (task.status === 'blocked' && asks.count > 0) {
     return (
@@ -513,6 +554,109 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
   if (task.status === 'blocked') return <RerunBanner task={task} />
 
   return null
+}
+
+/**
+ * The task is claimed by another of the user's devices.
+ *
+ * **Two shapes, and which one you get turns on whether a run is live over
+ * there** — because that is what decides whether claiming it is safe.
+ *
+ * `in_progress` gets a sentence and **no control**, and that is the finding the
+ * UX review turned up by pressing the button: taking over a live run does not
+ * stop it. The other device keeps streaming, and when its turn ends
+ * `reportRunCompletion` → `applyRunState` → `setStatus` hits `requireRunsHere`,
+ * throws, and is swallowed by the best-effort catch step 3 put there — so the
+ * task sits `in_progress` for ever. The other order is no better: app-sync is
+ * whole-record last-writer-wins, so a run that finishes before the claim is
+ * pulled writes its own row back and silently undoes the claim. A button whose
+ * two possible outcomes are "stuck for ever" and "nothing happened" is not a
+ * button. (§5.10 already refuses a mid-run take-over on the *remote* side for
+ * the same reason; this is the device-to-device twin of that refusal.)
+ *
+ * `blocked` and `error` get the control, because nothing is streaming there —
+ * the run that raised the ask, or failed, is over.
+ *
+ * **The button is on the right of its own row**, which is neither edge the two
+ * arms it can be replaced by use. Measured by the UX review: left-aligned, it
+ * overlapped *Re-run from the last message* by 5.66 px at an identical x, and
+ * that button **sends a message**. The waiting arm's *Open the Inbox* already
+ * owns the right of the **first** row. Different row from one, different edge
+ * from the other, so a swap can only ever land on empty space — the rule
+ * `RerunBanner`'s own comment states.
+ */
+function ElsewhereBanner({ task }: { task: TaskDto }): React.JSX.Element {
+  const { takeOver, isPending } = useTakeOverTask()
+  const [error, setError] = useState<string | null>(null)
+
+  const live = task.status === 'in_progress'
+
+  const onTakeOver = async (): Promise<void> => {
+    setError(null)
+    try {
+      await takeOver(task.id)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'This task could not be taken over.')
+    }
+  }
+
+  return (
+    <Banner
+      tone={live ? 'neutral' : task.status === 'error' ? 'danger' : 'warning'}
+      icon={<Laptop size={13} className="shrink-0 mt-0.5" />}
+    >
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="break-words">
+          {live
+            ? 'This task is running on another of your devices.'
+            : 'This task stopped on another of your devices. Take it over to pick it up here.'}
+        </div>
+        {/*
+          "Pick it up", not "carry on with it": the claim is one gesture and
+          working on it is the next. Taking over a blocked task reveals the
+          re-run; it does not press it (`ux_rules.md` §7 — say what the control
+          does, not what the user wants).
+        */}
+        {!live && (
+          <div className="flex justify-end">
+            <button
+              type="button"
+              onClick={() => void onTakeOver()}
+              disabled={isPending}
+              title="Continue this task on this device"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium
+                bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+                disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {/* The spinner replaces the icon rather than the label: "Taking
+                  over…" grew the button by 19 px under the pointer, measured. */}
+              {isPending ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <Laptop size={11} />
+              )}
+              Take over
+            </button>
+          </div>
+        )}
+        {/*
+          **Both of these are below the button, and the error message is the
+          one that matters.** It arrives on a *poll* — the peer reports a
+          failure and this arm changes shape under a pointer that is already
+          over the control — so above the button it moved it by 7.83 px with no
+          gesture at all (`ux_rules.md` §1, measured). The refusal below it is
+          the ordinary §6 shape: beside the control that produced it, and the
+          control stays.
+        */}
+        {!live && task.status === 'error' && task.errorMessage && (
+          <div className="break-words text-[11px] text-[var(--color-text-secondary)]">
+            {task.errorMessage}
+          </div>
+        )}
+        {error && <div className="text-[11px] text-[var(--color-danger)]">{error}</div>}
+      </div>
+    </Banner>
+  )
 }
 
 /**
@@ -615,14 +759,22 @@ function Banner({
   icon,
   children
 }: {
-  tone: 'warning' | 'danger'
+  /**
+   * `neutral` is not a third colour for the sake of it. `ux_rules.md` §2 is
+   * that a banner appears when something needs attention, and amber says
+   * something is wrong — a task another of the user's devices is working on
+   * perfectly well is neither. It is reporting, not warning.
+   */
+  tone: 'neutral' | 'warning' | 'danger'
   icon: React.ReactNode
   children: React.ReactNode
 }): React.JSX.Element {
   const skin =
     tone === 'danger'
       ? 'text-[var(--color-danger)] bg-[var(--color-danger)]/10 border-[var(--color-danger)]/30'
-      : 'text-[var(--color-text-secondary)] bg-[var(--color-warning)]/10 border-[var(--color-warning)]/30'
+      : tone === 'neutral'
+        ? 'text-[var(--color-text-secondary)] bg-[var(--color-bg-secondary)] border-[var(--color-border)]'
+        : 'text-[var(--color-text-secondary)] bg-[var(--color-warning)]/10 border-[var(--color-warning)]/30'
   return (
     <div
       role="status"

@@ -57,6 +57,7 @@ vi.mock('../db/sync', () => ({
 
 const { taskService } = await import('./taskService')
 const { taskRepo } = await import('../db/tasks')
+type TaskSyncValues = import('../db/tasks').TaskSyncValues
 const { parseFrontmatter } = await import('../kit/miniYaml')
 
 const USER = '__default__'
@@ -81,6 +82,58 @@ function makeTask(overrides: Partial<Parameters<typeof taskService.create>[1]> =
     goal: 'Ship the thing by Friday',
     ...overrides
   })
+}
+
+/**
+ * The row as a peer would have sent it — every synced column, taken from what
+ * is in the database now and then overridden.
+ *
+ * Built from the row rather than written out by hand so a column added to
+ * `TaskSyncValues` fails to compile here instead of being silently omitted from
+ * every test that applies one.
+ */
+function syncValues(
+  taskId: string,
+  overrides: Partial<TaskSyncValues> = {}
+): TaskSyncValues {
+  const row = taskRepo.getById(USER, taskId)
+  if (!row) throw new Error(`no task ${taskId}`)
+  return {
+    id: row.id,
+    title: row.title,
+    goal: row.goal,
+    description: row.description,
+    status: row.status,
+    priority: row.priority,
+    router: row.router,
+    origin: row.origin,
+    executor: row.executor,
+    executorDevice: row.executorDevice,
+    assigneeAgentId: row.assigneeAgentId,
+    assigneeName: row.assigneeName,
+    assigneeKind: row.assigneeKind,
+    assigneeRef: row.assigneeRef,
+    parentTaskId: row.parentTaskId,
+    jobId: row.jobId,
+    jobRunId: row.jobRunId,
+    remoteAdapter: row.remoteAdapter,
+    remoteId: row.remoteId,
+    remoteKey: row.remoteKey,
+    remoteUrl: row.remoteUrl,
+    remoteState: row.remoteState,
+    handoffNote: row.handoffNote,
+    artifacts: row.artifacts,
+    budget: row.budget,
+    errorMessage: row.errorMessage,
+    createdAt: row.createdAt,
+    // A peer's edit is newer than what is here, by construction: it is why the
+    // server handed it to us.
+    updatedAt: new Date(row.updatedAt.getTime() + 60_000),
+    startedAt: row.startedAt,
+    finishedAt: row.finishedAt,
+    deletedAt: row.deletedAt,
+    ...overrides
+  }
 }
 
 /** Walk a task to a status through legal steps, so a test can start where it means to. */
@@ -1020,6 +1073,33 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.applyRemoteSnapshot(USER, id, { title: 'From the web' }).id,
       leaves: 'file'
     },
+    // Enrolment's backfill: it bumps `updatedAt`, which is frontmatter, on
+    // every task that had no claim.
+    adoptUnclaimed: {
+      run: (id) => {
+        holder.deviceId = 'device-here'
+        taskService.adoptUnclaimed(USER, 'device-here')
+        return id
+      },
+      leaves: 'file'
+    },
+    // The app-sync apply path. It is on this list rather than calling
+    // `taskRepo.upsertFromSync` from the mapper for exactly the reason the list
+    // exists: a peer's edit changes `title`, `status` and `assigneeName`, all
+    // three of which are frontmatter.
+    applySyncedTask: {
+      run: (id) => taskService.applySyncedTask(USER, syncValues(id, { title: 'From a peer' }))!.id,
+      leaves: 'file'
+    },
+    // And its tombstone arm, which must take the file with it — a file for a
+    // task that no longer exists anywhere is the one an agent would still read.
+    removeSyncedTask: {
+      run: (id) => {
+        taskService.removeSyncedTask(USER, id)
+        return id
+      },
+      leaves: 'no file'
+    },
     remove: {
       run: (id) => {
         taskService.remove(USER, id)
@@ -1084,5 +1164,195 @@ describe('every task write keeps the exported note in step', () => {
     if (name === 'getRow') taskService.getRow(USER, task.id)
 
     expect(existsSync(noteFilePath(task.id))).toBe(false)
+  })
+})
+
+/**
+ * The app-sync apply path — a task arriving from another of the user's devices.
+ *
+ * Against the real database, because every claim here is about what is in the
+ * row afterwards. The mapper that decodes the wire payload and resolves the
+ * assignee descriptor is `sync/collections.ts` and is tested there; what is
+ * tested here is the half `taskService` owns, which is the half with the rules.
+ */
+describe('a task that arrived from another device', () => {
+  const PEER = 'device-peer'
+
+  function noteFilePath(taskId: string): string {
+    return join(holder.userData, 'tasks', `${taskId}.md`)
+  }
+
+  it('creates a row under the id the peer sent, with the peer’s times', () => {
+    const created = new Date('2026-01-02T03:04:05.000Z')
+    const updated = new Date('2026-03-04T05:06:07.000Z')
+    const dto = taskService.applySyncedTask(USER, {
+      ...syncValues(makeTask().id),
+      id: 'tsk_from_peer',
+      title: 'Written elsewhere',
+      createdAt: created,
+      updatedAt: updated
+    })
+
+    expect(dto?.id).toBe('tsk_from_peer')
+    const row = taskRepo.getById(USER, 'tsk_from_peer')
+    expect(row?.title).toBe('Written elsewhere')
+    // Not "now". A replica that stamped its own arrival time would tell the
+    // user every task in their history began the moment this device joined.
+    expect(row?.createdAt.getTime()).toBe(created.getTime())
+    expect(row?.updatedAt.getTime()).toBe(updated.getTime())
+  })
+
+  it('never inherits the three columns that do not travel', () => {
+    const local = makeTask()
+    taskService.bindRemote(USER, local.id, {
+      adapter: 'fake',
+      id: 'r-1',
+      key: 'FAKE-1',
+      url: null,
+      state: { session: 's1' }
+    })
+    taskService.update(USER, local.id, { title: 'Edited here' })
+    // Bound, dirty and in a chat — the three things a peer must not be told.
+    expect(taskRepo.getById(USER, local.id)?.remoteDirty).toEqual(['title'])
+
+    taskService.applySyncedTask(USER, {
+      ...syncValues(local.id),
+      id: 'tsk_peer_2',
+      title: 'From the peer'
+    })
+
+    const row = taskRepo.getById(USER, 'tsk_peer_2')
+    // The binding itself DOES travel — a peer must open the same remote task
+    // rather than create a second one — but the bookkeeping about it does not.
+    expect(row?.remoteId).toBe('r-1')
+    expect(row?.remoteSyncedAt).toBeNull()
+    expect(row?.remoteDirty).toBeNull()
+    expect(row?.chatId).toBeNull()
+  })
+
+  it('is read-only here while the peer holds the claim, and writable once it does not', () => {
+    holder.deviceId = 'device-here'
+    const seed = makeTask()
+    const dto = taskService.applySyncedTask(USER, {
+      ...syncValues(seed.id),
+      id: 'tsk_claimed',
+      executor: 'desktop',
+      executorDevice: PEER
+    })
+    expect(dto?.runsHere).toBe(false)
+    // And main refuses the write the banner refuses to offer.
+    expect(() => taskService.setStatus(USER, 'tsk_claimed', 'in_progress')).toThrow(TaskError)
+
+    taskService.takeOver(USER, 'tsk_claimed')
+    expect(taskService.getById(USER, 'tsk_claimed').runsHere).toBe(true)
+    expect(() => taskService.setStatus(USER, 'tsk_claimed', 'in_progress')).not.toThrow()
+  })
+
+  it('takes the peer’s delete, and the exported note goes with it', () => {
+    const task = makeTask({ handoffNote: 'Half done.' })
+    expect(existsSync(noteFilePath(task.id))).toBe(true)
+
+    taskService.applySyncedTask(USER, { ...syncValues(task.id), deletedAt: new Date() })
+
+    expect(taskRepo.getById(USER, task.id)?.deletedAt).not.toBeNull()
+    expect(existsSync(noteFilePath(task.id))).toBe(false)
+    // And it is gone from every list and every service method, as a local
+    // delete would be.
+    expect(taskService.list(USER)).toHaveLength(0)
+    expect(() => taskService.getById(USER, task.id)).toThrow(TaskError)
+  })
+
+  /**
+   * The one case that separates this writer from `taskRepo.update`, which
+   * refuses a soft-deleted row outright.
+   *
+   * The sync engine only calls apply for a record the server's last-writer-wins
+   * has already declared the newer one. Refusing it here would leave the two
+   * devices permanently disagreeing about whether the task exists, with nothing
+   * that could ever reconcile them.
+   */
+  it('resurrects a row this device had deleted, which `taskRepo.update` refuses to do', () => {
+    const task = makeTask({ handoffNote: 'Half done.' })
+    const alive = syncValues(task.id)
+    taskService.remove(USER, task.id)
+    expect(taskRepo.update(USER, task.id, { title: 'nope' })).toBeUndefined()
+
+    const dto = taskService.applySyncedTask(USER, { ...alive, deletedAt: null })
+
+    expect(dto?.id).toBe(task.id)
+    expect(taskRepo.getById(USER, task.id)?.deletedAt).toBeNull()
+    // The note comes back with it: the task is a task again.
+    expect(existsSync(noteFilePath(task.id))).toBe(true)
+  })
+
+  it('writes nothing when the id already belongs to another profile here', () => {
+    const mine = makeTask({ title: 'Mine' })
+    const theirs = taskService.create(OTHER_USER, { title: 'Theirs', goal: 'Theirs, please' })
+
+    const result = taskService.applySyncedTask(USER, {
+      ...syncValues(mine.id),
+      id: theirs.id,
+      title: 'Stolen'
+    })
+
+    expect(result).toBeNull()
+    expect(taskRepo.getById(OTHER_USER, theirs.id)?.title).toBe('Theirs')
+  })
+
+  /**
+   * And the repo *says* it refused, rather than leaving the service to infer it
+   * from a read-back that came up empty. The two coincide today only because
+   * `getById` does not filter `deletedAt` — an inference that holds by
+   * coincidence stops holding silently, and what it would produce is a warning
+   * naming a second profile the reader then goes looking for and cannot find.
+   */
+  it('reports the refusal rather than leaving it to be inferred', () => {
+    const mine = makeTask({ title: 'Mine' })
+    const theirs = taskService.create(OTHER_USER, { title: 'Theirs', goal: 'Theirs, please' })
+
+    expect(taskRepo.upsertFromSync(USER, { ...syncValues(mine.id), id: theirs.id })).toBe(false)
+    expect(taskRepo.upsertFromSync(USER, syncValues(mine.id))).toBe(true)
+  })
+
+  /**
+   * No transition check, deliberately — the peer is reporting what happened on
+   * the device that was running the work, exactly as a pull from a bound
+   * service does. `new → completed` is not in the table and `setStatus` would
+   * refuse it; a device reporting it is not asking permission.
+   */
+  it('takes a status the transition table would refuse from a local write', () => {
+    const task = makeTask()
+    expect(() => taskService.setStatus(USER, task.id, 'completed')).toThrow(TaskError)
+
+    taskService.applySyncedTask(USER, { ...syncValues(task.id), status: 'completed' })
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('removeSyncedTask hard-deletes the row and its file', () => {
+    const task = makeTask({ handoffNote: 'Half done.' })
+    taskService.removeSyncedTask(USER, task.id)
+    expect(taskRepo.getById(USER, task.id)).toBeUndefined()
+    expect(existsSync(noteFilePath(task.id))).toBe(false)
+  })
+
+  /**
+   * `<userData>/tasks/` is shared by every profile on this install, and
+   * `removeHandoff` is keyed on the task id alone — so a tombstone for an id
+   * this profile does not own would leave the owning profile's row intact and
+   * silently delete its note, which nothing reads back and nothing would ever
+   * recreate.
+   */
+  it('removeSyncedTask leaves another profile’s task and its file alone', () => {
+    const theirs = taskService.create(OTHER_USER, {
+      title: 'Theirs',
+      goal: 'Theirs, please',
+      handoffNote: 'Their note.'
+    })
+    expect(existsSync(noteFilePath(theirs.id))).toBe(true)
+
+    taskService.removeSyncedTask(USER, theirs.id)
+
+    expect(taskRepo.getById(OTHER_USER, theirs.id)).toBeDefined()
+    expect(existsSync(noteFilePath(theirs.id))).toBe(true)
   })
 })

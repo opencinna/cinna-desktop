@@ -67,6 +67,49 @@ export function useOpenTask(): (taskId: string) => void {
 }
 
 /**
+ * Claim a task this device does not currently hold — from another of the user's
+ * devices, or from a bound service.
+ *
+ * It is one write and deliberately nothing else. `executorDevice` moves to this
+ * device and the page re-renders with the controls it was refusing to show; it
+ * does **not** then start the work. Those are two gestures because they answer
+ * two different questions — "this is mine now" and "go" — and running a task
+ * the moment somebody claimed it would take the second decision on their
+ * behalf, on a task that may be mid-turn somewhere else.
+ *
+ * §5.4's claim, not a lock: two devices cannot both believe they own a run
+ * without one of them having written that it did, and this is that write.
+ */
+export function useTakeOverTask(): {
+  takeOver: (taskId: string) => Promise<void>
+  isPending: boolean
+} {
+  const queryClient = useQueryClient()
+  const [isPending, setPending] = useState(false)
+
+  const takeOver = useCallback(
+    async (taskId: string): Promise<void> => {
+      setPending(true)
+      try {
+        const task = await window.api.tasks.takeOver(taskId).catch((err) => {
+          throw new Error(unwrapIpcError(err, 'This task could not be taken over.'))
+        })
+        // Seed *and* invalidate. The seed replaces the banner the user just
+        // pressed straight away rather than a poll later; the re-read is what
+        // makes the page agree with main, which is the only copy that matters.
+        queryClient.setQueryData(TASK_QUERY_KEY(taskId), task)
+        void queryClient.invalidateQueries({ queryKey: TASK_QUERY_KEY(taskId) })
+      } finally {
+        setPending(false)
+      }
+    },
+    [queryClient]
+  )
+
+  return { takeOver, isPending }
+}
+
+/**
  * Re-run a task from the last message in its chat.
  *
  * **Why a task needs this at all.** A task can sit `blocked` with nothing in

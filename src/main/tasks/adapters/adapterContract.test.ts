@@ -44,6 +44,7 @@ function makeTask(overrides: Partial<TaskDto> = {}): TaskDto {
     origin: 'local',
     executor: 'desktop',
     executorDevice: null,
+    runsHere: true,
     chatId: null,
     assignee: { agentId: 'agt_1', name: 'Ledger agent', kind: 'agent' },
     parentTaskId: null,

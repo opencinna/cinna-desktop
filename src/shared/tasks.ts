@@ -227,6 +227,19 @@ export interface TaskDto {
    * so the claim is explicit rather than raced.
    */
   executorDevice: string | null
+  /**
+   * Is **this** device the one running the task — {@link taskRunsHere} already
+   * applied, by the main process that knows this device's sync id.
+   *
+   * Derived rather than stored, and derived *here* rather than in the renderer,
+   * because the renderer has no way to ask which device it is: there is no IPC
+   * channel for the sync device id and adding one would put a second copy of
+   * the rule on the other side of the bridge. A task page showing a replica
+   * claimed by another device has to tell that apart from one it may write to,
+   * and `executorDevice` alone cannot — both a foreign id and a null read the
+   * same way without the local id to compare against.
+   */
+  runsHere: boolean
 
   /** The chat this task runs in, on this device. Never syncs — chats are not a synced collection. */
   chatId: string | null

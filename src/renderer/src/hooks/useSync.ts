@@ -24,7 +24,13 @@ const COLLECTION_QUERY_KEYS: Record<SyncCollection, string[]> = {
   note: ['notes'],
   note_folder: ['note-folders'],
   job: ['jobs'],
-  job_folder: ['job-folders']
+  job_folder: ['job-folders'],
+  // `['task']` is the prefix of `TASK_QUERY_KEY(taskId)`, so invalidating it
+  // refreshes whichever task page is open. The inbox is deliberately *not*
+  // here: `task_input_requests` never syncs — a `reply` ask is an address on
+  // the device that raised it — so a synced task can never change what is
+  // waiting on this one.
+  task: ['task']
 }
 
 export function useSyncState(enabled: boolean): ReturnType<typeof useQuery<SyncState>> {
@@ -75,6 +81,23 @@ export function useSyncEvents(enabled: boolean): void {
 const SYNCED_TABS = new Set(['jobs', 'notes'])
 
 /**
+ * The task page is the third, and it is **not** a sidebar tab — `useOpenTask`
+ * deliberately leaves the tab where it was and only sets `activeView`, so the
+ * tab-keyed trigger above could never fire for it.
+ *
+ * It is worth its own arm because the page *looks* live and is not: `useTask`
+ * re-reads every five seconds, but from the local row, so without a pull it
+ * shows whatever the last sync cycle left — up to a minute old. What is stale
+ * there is the thing the page most needs to be right about: whether another
+ * device has taken the task over.
+ *
+ * The Inbox is deliberately absent. `task_input_requests` never syncs — a
+ * `reply` ask is an address on the machine that raised it — so a pull cannot
+ * change what is in that list.
+ */
+const SYNCED_VIEWS = new Set(['task'])
+
+/**
  * Coalesce rapid tab toggles into at most one server ping per window — the
  * steady-state 60s periodic timer already covers anything missed. Module-level
  * so it survives remounts (the timestamp is process-global, not per-component).
@@ -83,8 +106,9 @@ const VIEW_PULL_THROTTLE_MS = 8_000
 let lastViewPullAt = 0
 
 /**
- * Ping the server for peer changes whenever the user opens a synced screen
- * (Notes / Jobs). Fires a full sync cycle (`syncNow` = push pending edits +
+ * Ping the server for peer changes whenever the user opens a screen whose
+ * contents sync (Notes / Jobs, or a task page). Fires a full sync cycle
+ * (`syncNow` = push pending edits +
  * pull peer changes); the main process gates it to **active, unlocked Cinna
  * profiles**, so it's an inexpensive no-op otherwise. Throttled so flipping
  * between tabs doesn't hammer the backend.
@@ -92,16 +116,17 @@ let lastViewPullAt = 0
  * Pulled-in rows surface live via {@link useSyncEvents} (`data-changed` →
  * cache invalidation), which must be mounted app-level for this to be visible.
  */
-export function useSyncOnTabOpen(enabled: boolean): void {
+export function useSyncOnViewOpen(enabled: boolean): void {
   const sidebarTab = useUIStore((s) => s.sidebarTab)
+  const activeView = useUIStore((s) => s.activeView)
   useEffect(() => {
     if (!enabled) return
-    if (!SYNCED_TABS.has(sidebarTab)) return
+    if (!SYNCED_TABS.has(sidebarTab) && !SYNCED_VIEWS.has(activeView)) return
     const now = Date.now()
     if (now - lastViewPullAt < VIEW_PULL_THROTTLE_MS) return
     lastViewPullAt = now
     void window.api.sync.syncNow()
-  }, [enabled, sidebarTab])
+  }, [enabled, sidebarTab, activeView])
 }
 
 export function useSyncInit(): ReturnType<typeof useMutation<SyncInitResult, Error, void>> {

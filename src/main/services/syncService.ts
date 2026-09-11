@@ -7,6 +7,8 @@ import { CinnaApiError, SyncError } from '../errors'
 import { userRepo } from '../db/users'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { syncRepo } from '../db/sync'
+import { taskService } from './taskService'
+import { identifyThisDevice } from '../sync/deviceIdentity'
 import { syncApi } from './syncApi'
 import { runSyncCycle } from '../sync/syncEngine'
 import { getCinnaAccessToken, decodeAccessTokenSubject } from '../auth/cinna-tokens'
@@ -274,8 +276,31 @@ async function ensureServerDeviceId(userId: string, publicKey: Uint8Array): Prom
     device_label: deviceName(),
     public_key: await deviceKeyCodec.to(publicKey)
   })
-  syncRepo.patchState(userId, { deviceId: dev.id })
+  adoptDeviceId(userId, dev.id)
   return dev.id
+}
+
+/**
+ * Record the server-assigned device id — and take ownership of the work that
+ * had none.
+ *
+ * The two are one step because of what a null `tasks.executor_device` means
+ * before and after this line. Until a profile has a sync identity it means
+ * "here", and that is right: nothing else could disagree. From here on tasks
+ * travel, and a null claim would read as "mine" on every device the account
+ * has — so two of them would offer Run on the same task. See
+ * `taskService.adoptUnclaimed`.
+ *
+ * Best-effort: a device that could not adopt its own tasks is still a device,
+ * and failing enrolment over it would leave the profile unable to sync at all.
+ */
+function adoptDeviceId(userId: string, deviceId: string): void {
+  syncRepo.patchState(userId, { deviceId })
+  try {
+    taskService.adoptUnclaimed(userId, deviceId)
+  } catch (err) {
+    logger.warn('adopting unclaimed tasks failed (non-fatal)', { error: String(err) })
+  }
 }
 
 /** Append this device's `device` envelope so subsequent launches unlock silently. */
@@ -730,10 +755,14 @@ export const syncService = {
     // Best-effort: record the server-assigned device UUID (matches our public
     // key) so future device-envelope lookups + the trusted-devices UI resolve
     // "this device". Never fatal — a device envelope also carries our pubkey.
+    //
+    // The positional fallback this used to end in — `?? res.devices[0]` on any
+    // public-key miss — is now `identifyThisDevice`, which refuses to guess
+    // between several real devices. See that module for why a wrong answer
+    // stopped being harmless the moment tasks began to sync.
     try {
-      const myDevice =
-        res.devices?.find((d) => d.public_key === myPub) ?? res.devices?.[0]
-      if (myDevice?.id) syncRepo.patchState(userId, { deviceId: myDevice.id })
+      const myDevice = identifyThisDevice(res.devices, myPub)
+      if (myDevice?.id) adoptDeviceId(userId, myDevice.id)
     } catch (err) {
       logger.warn('init: capturing device id failed (non-fatal)', { error: String(err) })
     }
