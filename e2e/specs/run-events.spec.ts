@@ -388,24 +388,26 @@ test('a folder agent asks a question mid-turn, the user answers it, and the answ
 })
 
 /**
- * **Expected to fail: a product defect, and not a phase 3 regression** — the
- * two render sites involved are identical at `HEAD`, and the driver records the
- * answer exactly as the runner it replaced did.
+ * **Was `test.fail()` from phase 3 until phase 5 step 5 closed it.** The defect
+ * it recorded: the driver writes the answer as a `tool_result` part on the
+ * question's own id (`Answered: Teal.`, which the test above reads back from the
+ * database), `pairCommandTools` consumes that part so it is not rendered
+ * standalone, and the text was then handed only to `PermissionRequestBlock` —
+ * `AskUserQuestionBlock` took no `decision` prop. A replayed permission read
+ * "Allowed once."; a replayed question read "A question asked" and never said
+ * what the user chose.
  *
- * The driver records the answer as a `tool_result` part on the question's own
- * id (`Answered: Teal.`, which the test above reads back from the database), and
- * nothing draws it. `pairCommandTools` in `MessageStream.tsx` consumes a
- * `tool_result` paired with any `per_` / `que_` ask so it is not rendered
- * standalone, and only `PermissionRequestBlock` is then handed that text as
- * `decision`; `AskUserQuestionBlock` takes no such prop. A replayed permission
- * reads "Allowed once."; a replayed question reads "A question asked" and never
- * says what the user chose — nor does the live block once answered.
+ * What closed it was the inbox needing the same line for the same reason: a row
+ * answered with its chat closed has to say what it settled as. The block gained
+ * the prop, the sentence moved into `describeQuestionAnswers` so the runner and
+ * both surfaces spell it once, and `MessageStream` passes the `decision` it was
+ * already computing at all three call sites.
  *
- * Its prerequisites are asserted by the test above, so a failure there is
- * reported there. The run fails here the day the answer is shown.
+ * So this asserts the two surfaces agree: what the inbox shows on a row it has
+ * just answered is the string this reads back out of the transcript a reopen
+ * later.
  */
 test('the replayed question block shows the answer the user gave', async ({ cinna }) => {
-  test.fail()
   test.setTimeout(120_000)
   await arrange(cinna, ASKS_QUESTION)
   await sendToAgent(cinna, QUESTION_PROMPT)

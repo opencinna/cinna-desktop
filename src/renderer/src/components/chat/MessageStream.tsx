@@ -397,6 +397,14 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
           interactive={questionLive}
           chatId={chatId}
           liveRequestId={live}
+          // The runner's `Answered: …` line, which `pairCommandTools` has
+          // already consumed so it does not render standalone. It was computed
+          // at all three call sites and handed only to the permission block, so
+          // a replayed question said "A question asked" and never what the user
+          // chose — the gap `run-events.spec.ts`'s `test.fail()` was written
+          // against, and the one the inbox would otherwise have closed on its
+          // own surface while the transcript stayed silent.
+          decision={decision}
           onAnswerLocal={answerQuestion}
         />
       )
