@@ -253,7 +253,8 @@ function buildLoggingFetch(base: typeof fetch): typeof fetch {
  */
 async function fetchRawCard(
   cardUrl: string,
-  accessToken?: string
+  accessToken?: string,
+  signal?: AbortSignal
 ): Promise<Record<string, unknown>> {
   const resolvedUrl = resolveCardUrl(cardUrl)
   logger.debug(`GET ${resolvedUrl}`, { authenticated: !!accessToken })
@@ -261,7 +262,7 @@ async function fetchRawCard(
   let response: Response
   try {
     response = await fetchImpl(resolvedUrl, {
-      headers: { Accept: 'application/json' }
+      headers: { Accept: 'application/json' }, signal
     })
   } catch (err) {
     logger.error(`Network error fetching ${resolvedUrl}`, { error: String(err) })
@@ -383,14 +384,28 @@ export async function fetchAgentCard(
 export async function createA2AClient(
   endpointUrl: string,
   cardUrl: string,
-  accessToken?: string
+  accessToken?: string,
+  signal?: AbortSignal
 ): Promise<A2AClient> {
+  const base = accessToken ? buildAuthFetch(accessToken) : fetch
+  // The legacy A2AClient ignores per-call request options. Bind cancellation
+  // at its HTTP seam; the independent cancel RPC must survive a stopped turn.
+  const turnFetch: typeof fetch = (input, init) => {
+    let cancel = false
+    if (typeof init?.body === 'string') {
+      try { cancel = JSON.parse(init.body).method === 'tasks/cancel' } catch { /* SDK owns JSON encoding. */ }
+    }
+    const requestSignal = cancel ? AbortSignal.timeout(10_000) : signal
+    return base(input, requestSignal ? {
+      ...init, signal: init?.signal ? AbortSignal.any([init.signal, requestSignal]) : requestSignal
+    } : init)
+  }
   const opts: A2AClientOptions = {
-    fetchImpl: buildLoggingFetch(accessToken ? buildAuthFetch(accessToken) : fetch)
+    fetchImpl: buildLoggingFetch(turnFetch)
   }
 
   // Fetch the raw card and patch it with the resolved endpoint URL
-  const rawCard = await fetchRawCard(cardUrl, accessToken)
+  const rawCard = await fetchRawCard(cardUrl, accessToken, signal)
   rawCard.url = endpointUrl
   if (!rawCard.protocolVersion) {
     rawCard.protocolVersion = SUPPORTED_PROTOCOL_PREFIX
@@ -430,4 +445,3 @@ export function buildSendParams(
     }
   }
 }
-

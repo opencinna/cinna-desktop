@@ -66,11 +66,9 @@
  * | (phase 2, `a2aDriver.ts`) readiness rethrows a card-fetch failure | the contract's `readiness.never_throws` |
  * | (phase 2, `capabilities.ts`) every row of a driver shares one capabilities object | the contract's `capabilities.stable` on all three drivers, and `auth_required_401` — the re-auth flag read the object that clause had edited |
  *
- * Abort breaks both halves of the contract, and each is recorded by how it
- * breaks: `abort.settles` by **timeout** — `hangs()` leaves the stream open and
- * the runner cannot end the turn by itself — and `abort.reports` by
- * **assertion**, over `hangsServerAssisted()`, where the fake server ends the
- * stream and the result still says neither `error` nor `canceled`.
+ * Phase 6 connects cancellation to HTTP, including silent streams. Both abort
+ * contract clauses now pass without a server response; stopped turns preserve
+ * streamed parts and do not advance the saved session checkpoint.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { FakeSessionRepo, SessionPatch } from './__golden__/a2a/fakeAgent'
@@ -321,52 +319,35 @@ describe('golden: a2a (driver over runAgentTurn)', () => {
   })
 })
 
-describe('a2a abort, characterised', () => {
-  it('does not settle on abort while the agent is silent: the signal never reaches fetch', async () => {
-    // The evidence behind the contract's `abort.settles` entry below. `runAgentTurn`
-    // looks at its signal only when the next stream event arrives, and hands
-    // it to neither the SDK nor `fetch` — so a stopped turn on a quiet agent
-    // stays pending until the *server* ends the stream. In direct chat that
-    // happens because the `a2a` driver also sends `tasks/cancel` on abort; a
-    // caller holding only the signal has no way to end it.
+describe('a2a abort', () => {
+  it('settles on Stop while the server stays silent and leaves the saved session untouched', async () => {
     const fixture = heldPlainText()
     const agent = fakeA2aAgent(fixture)
+    const repo = seededRepo(fixture)
     const controller = new AbortController()
     const events: RunEvent[] = []
-    let markStarted: () => void = () => {}
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve
-    })
-
-    const promise = startPumpTurn(fixture, agent, fakeSessionRepo(), {
+    let markStarted!: () => void
+    const started = new Promise<void>((resolve) => { markStarted = resolve })
+    const promise = startPumpTurn(fixture, agent, repo, {
       signal: controller.signal,
       onEvent: (event) => {
         events.push(event)
-        // The opening task now emits submitted. Wait until the last queued
-        // working frame has arrived before testing a genuinely silent stream.
         if (event.type === 'status' && event.state === 'working') markStarted()
       }
     })
     await started
     controller.abort()
-
     const outcome = await Promise.race([
       promise.then(() => 'settled' as const),
       sleep(100).then(() => 'still pending' as const)
     ])
-    expect(outcome).toBe('still pending')
-    expect(agent.requests.map((r) => [r.method, r.signal])).toEqual([
-      ['GET', false],
-      ['POST', false]
-    ])
-
-    agent.close()
+    expect(outcome).toBe('settled')
+    expect(agent.requests.map((r) => [r.method, r.signal])).toEqual([['GET', true], ['POST', true]])
     const result = await promise
-    // And once the server does let go, the stop reads as a turn that is
-    // still working: no error, no `canceled`.
-    expect(result.error).toBeUndefined()
-    expect(result.taskState).toBe('working')
+    expect(result.error).toBeDefined()
+    expect(repo.upserts).toEqual([])
     expect(events.map((e) => e.type)).toEqual(['status', 'status'])
+    agent.close()
   })
 })
 
@@ -391,11 +372,10 @@ function makeSubject(): DriverContractSubject {
     }),
 
     // Nothing on the far side reacts to the abort: `runAgentTurn` has to end
-    // the turn by itself, and today it cannot (`abort.settles` below).
+    // the turn by itself.
     hangs: () => heldTurn({ serverEndsStreamOnAbort: false }),
 
-    // What a server does once the turn is cancelled — it ends the stream — so
-    // `abort.reports` can see what the result says instead of timing out.
+    // Clean server EOF racing Stop must report cancellation too.
     hangsServerAssisted: () => heldTurn({ serverEndsStreamOnAbort: true }),
 
     underTest: () => {
@@ -493,15 +473,6 @@ function heldTurn({
 }
 
 describeDriverContract('a2a', makeSubject, {
-  knownViolations: {
-    'abort.settles': {
-      reason:
-        'runAgentTurn reads its signal only when the next stream event arrives and hands it to neither the SDK nor fetch, so an aborted turn on a silent agent never settles — see "a2a abort, characterised"',
-      by: 'timeout'
-    },
-    'abort.reports':
-      'an aborted runAgentTurn returns success with the last streamed taskState (e.g. working), neither error nor canceled — see canceled_midway'
-  },
   knownFailureViolations: {
     task_failed:
       'a task that ends `failed` returns success; its reason merges into the answer text and the job is reported succeeded',

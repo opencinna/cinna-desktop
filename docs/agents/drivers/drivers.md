@@ -92,7 +92,9 @@ These all run inside the A2A driver's `run`:
 - mapping an expired Cinna session to the re-auth code
 - telling the agent to cancel its task on a stop
 
-They used to be written twice, in the chat handler and in the orchestrator's agent tool, with different sentences, and only one copy mapped the re-auth code. Every failure there is now a turn result carrying `error`. It therefore arrives after the user's message is saved and is finalised like any other failed turn, which is how a folder agent's failures always arrived. A stop and an orchestrator abort send `tasks/cancel` through the same listener, so the request goes out once.
+They used to be written twice, in the chat handler and in the orchestrator's agent tool, with different sentences, and only one copy mapped the re-auth code. Every failure there is now a turn result carrying `error`. It therefore arrives after the user's message is saved and is finalised like any other failed turn, which is how a folder agent's failures always arrived. A stop and an orchestrator abort share one cancellation path. Local waiting ends even when the server stops sending frames, headers or body bytes. Once the client and task identity are known, that path makes at most one best-effort `tasks/cancel` request without waiting for its acknowledgement. A stopped turn therefore does not claim that the remote task has stopped.
+
+**Stop keeps the output already shown and preserves the previous session checkpoint.** The turn emits no further events and saves no new remote context or task identity after Stop. A fresh stopped chat has no checkpoint; a chat with a previous checkpoint retains it for a later message. This prevents a locally cancelled exchange from being recorded as a successfully completed session. Endpoint and credential pre-flight also stop waiting promptly; a shared credential refresh may finish in the background but cannot dispatch the stopped turn.
 
 **A missing card URL refuses only an A2A row.** A folder agent is created with no card. A combined "no agent, or no card" guard once matched every folder agent and made the folder branch unreachable for a whole phase. Now only an A2A row reaches the A2A driver, and for that row a missing card really is a misconfiguration. `hasRunConfig` answers the same question for the orchestrator's tool list.
 
@@ -109,7 +111,7 @@ Two answers depend on the row, not only on the driver:
 Every driver answers `readiness()` without throwing, and **null means "could not tell"**.
 
 - **A2A** fetches the agent's card with the agent's token, with a five-second bound around the whole check.
-  - A card that does not answer within the bound gives `null`, not `unreachable`. A turn's own card fetch has no bound and simply waits longer, so refusing a slow agent would make readiness stricter than the turn it predicts
+  - A card that does not answer within the bound gives `null`, not `unreachable`. A turn's own card fetch has no automatic deadline but remains stoppable, so refusing a slow agent would make readiness stricter than the turn it predicts
   - The bound includes the token. A token endpoint that accepted the connection and never answered once held a list-time slot for ever, and every check queued behind it waited too
 - **OpenCode** readiness is the folder's alone, and that launcher deliberately has no rungs of its own: whether the binary is resolved is not part of it, because the turn resolves it (downloading it if it must), and a list must never start a download to answer "can this agent run"
 - **Claude** — the launcher's rungs, asked about the engine the **folder** names rather than the one the row stores, so an agent just switched over in the Runtime card is answered about where it is going. The folder first, then whether a `claude` is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn

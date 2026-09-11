@@ -89,7 +89,7 @@ On stream completion:
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
   - For each notice: messageRepo.saveTransition({ chatId, content, sourceAgentId })
   - messageRepo.saveAssistant({ chatId, content: answer, parts })
-  - a2aSessionRepo.upsert(...)
+  - a2aSessionRepo.upsert(...) only for a successful, non-aborted exchange
   - port.postMessage({ type: 'done', stopReason })   # 'canceled' if the request was aborted, else 'end_turn'
 
 Notices are persisted *before* the assistant message so transcript ordering
@@ -97,6 +97,14 @@ matches the on-the-wire order — startup pings sit above the answer they
 preceded. Notices never appear in `messages.parts[]`; they live on their own
 `role: 'agent_transition'` rows.
 ```
+
+## Cancellation and session checkpoints
+
+Stop aborts the underlying card/message fetch, including body reads and silent SSE waits. Checking only after a received frame once left a stopped turn waiting indefinitely when the server went silent. The driver also stops waiting for endpoint/token pre-flight without cancelling shared credential refresh work. [Driver implementation](../drivers/drivers_tech.md#the-a2a-driver) owns the legacy SDK fetch seam and the independent cancellation request.
+
+Task identity reaches the driver before any message or artifact can emit its first delta. The event sink checks abort before and after forwarding, while the accumulator records the current part first. A Stop triggered inside that callback therefore keeps the part just shown and prevents subsequent events.
+
+An aborted pump returns accumulated text, parts and notices alongside an error; it does not return a newly learned session checkpoint or upsert the session row. A previous checkpoint is preserved, and a fresh stopped turn leaves none. The direct-chat wrapper persists partial output, emits a canceled terminal event and releases its active request; it skips completed-only bookkeeping. Tool callers retain the error-bearing result. Remote `tasks/cancel` is best effort and does not delay local completion, so local Stop is not confirmation of remote cancellation.
 
 ## Why per-`(messageId, partIndex)` keying
 

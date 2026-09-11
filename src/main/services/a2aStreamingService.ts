@@ -253,12 +253,17 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
     fileIds,
     isCinnaTokenAuth = false,
     signal,
-    onEvent,
+    onEvent: sink,
     onClient,
     onTaskId
   } = input
   const metadata =
     fileIds && fileIds.length > 0 ? { cinna_file_ids: fileIds } : undefined
+  const onEvent = (event: RunEvent): void => {
+    signal.throwIfAborted()
+    sink?.(event)
+    signal.throwIfAborted()
+  }
 
   // Forwards delta events from the accumulator to the caller's sink.
   const deltaPort = {
@@ -284,9 +289,12 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
   })
 
   try {
-    const client = await createA2AClient(endpointUrl, cardUrl, accessToken)
+    signal.throwIfAborted()
+    const client = await createA2AClient(endpointUrl, cardUrl, accessToken, signal)
+    signal.throwIfAborted()
     onClient?.(client)
     const card = await client.getAgentCard()
+    signal.throwIfAborted()
     const supportsStreaming = card.capabilities?.streaming === true
 
     logger.info(`Agent "${agentName}" | endpoint: ${endpointUrl}`, {
@@ -322,17 +330,17 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
         logger.debug(`← stream event #${eventIndex++}`, event)
         if (signal.aborted) {
           logger.debug('Stream aborted by client', { eventsReceived: eventIndex })
-          break
+          signal.throwIfAborted()
         }
 
         if ('kind' in event) {
           if (event.kind === 'status-update') {
             const su = event as TaskStatusUpdateEvent
+            setTaskId(su.taskId)
             if (su.status?.message) {
               accumulator.ingestMessage(su.status.message, deltaPort)
             }
             latestContextId = su.contextId
-            setTaskId(su.taskId)
             latestTaskState = su.status.state
             onEvent?.({
               type: 'status',
@@ -355,15 +363,16 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
             }
           } else if (event.kind === 'artifact-update') {
             const au = event as TaskArtifactUpdateEvent
+            if (au.taskId !== latestTaskId) setTaskId(au.taskId)
             if (au.artifact) {
               accumulator.ingestArtifact(au.artifact, deltaPort)
             }
             if (au.contextId) latestContextId = au.contextId
           } else if (event.kind === 'message') {
             const m = event as Message
+            if (m.taskId) setTaskId(m.taskId)
             accumulator.ingestMessage(m, deltaPort)
             if (m.contextId) latestContextId = m.contextId
-            if (m.taskId) setTaskId(m.taskId)
           } else if (event.kind === 'task') {
             const t = event as Task
             latestContextId = t.contextId
@@ -385,6 +394,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       const params = buildSendParams(wireContent, sessionContextId, sessionTaskId, metadata)
       logger.debug('→ sendMessage', params)
       const result = await client.sendMessage(params)
+      signal.throwIfAborted()
       logger.debug('← response', result)
       const responseJson = result as unknown as Record<string, unknown>
 
@@ -425,6 +435,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       logger.debug('Non-streaming complete')
     }
 
+    signal.throwIfAborted()
     const parts = accumulator.snapshotParts()
     const answerText = accumulator.answerText()
     const notices = accumulator.snapshotNotices()

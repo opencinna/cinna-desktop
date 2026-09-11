@@ -140,7 +140,7 @@ describe('a2a driver — run', () => {
       }
     })
     const result = await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))
-    expect(result).toEqual({ text: '', parts: [], notices: [] })
+    expect(result).toEqual({ text: '', parts: [], notices: [], taskState: 'canceled' })
     expect(d.runTurn).not.toHaveBeenCalled()
   })
 
@@ -171,6 +171,48 @@ describe('a2a driver — run', () => {
     await pending
     expect(cancelTask).toHaveBeenCalledTimes(1)
     expect(cancelTask).toHaveBeenCalledWith({ id: 'task-1' })
+  })
+
+  it('does no preflight work for an already stopped turn', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const resolveEndpoint = vi.fn()
+    const d = deps({ resolveEndpoint })
+    expect((await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))).taskState).toBe('canceled')
+    expect(resolveEndpoint).not.toHaveBeenCalled()
+    expect(d.runTurn).not.toHaveBeenCalled()
+  })
+
+  it.each(['resolveEndpoint', 'resolveAccessToken'] as const)('stops waiting for %s without dispatching when it resolves late', async (stage) => {
+    const controller = new AbortController()
+    let started!: () => void
+    let complete!: (value: string) => void
+    const ready = new Promise<void>((resolve) => { started = resolve })
+    const d = deps({ [stage]: () => {
+      started()
+      return new Promise<string>((resolve) => { complete = resolve })
+    } })
+    const pending = createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))
+    await ready
+    controller.abort()
+    expect((await pending).taskState).toBe('canceled')
+    complete('late-resolution')
+    await Promise.resolve()
+    expect(d.runTurn).not.toHaveBeenCalled()
+  })
+
+  it('cancels once when task identity arrives after Stop and does not await cancellation acknowledgement', async () => {
+    const controller = new AbortController()
+    const cancelTask = vi.fn(() => new Promise(() => {}))
+    const d = deps({ runTurn: vi.fn(async (turn: A2ARunAgentTurnInput) => {
+      controller.abort()
+      turn.onTaskId?.('late-task')
+      turn.onClient?.({ cancelTask } as never)
+      turn.onTaskId?.('late-task')
+      return { text: 'partial', parts: [], notices: [] }
+    }) })
+    expect((await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))).text).toBe('partial')
+    expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ id: 'late-task' })
   })
 
   it('cancels nothing when the stop lands before a task exists', async () => {

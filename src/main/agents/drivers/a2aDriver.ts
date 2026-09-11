@@ -65,6 +65,21 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 
 class ReadinessTimeout extends Error {}
 
+/** Stop waiting without cancelling a credential refresh shared by other runs. */
+function resolveForTurn<T>(signal: AbortSignal, resolveValue: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    signal.throwIfAborted()
+    const abort = (): void => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    Promise.resolve().then(() => {
+      signal.throwIfAborted()
+      return resolveValue()
+    }).then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
+}
+
+const canceled = (): RunAgentTurnResult => ({ text: '', parts: [], notices: [], taskState: 'canceled' })
+
 export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
   return {
     id: 'a2a',
@@ -73,6 +88,7 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
 
     async run(userId, agent, input) {
       const { chatId, wireContent, fileIds, signal, onEvent } = input
+      if (signal.aborted) return canceled()
 
       // **Not "no card, so not an agent".** A folder agent is inserted with
       // `cardUrl: null`, and a combined `!agent || !agent.cardUrl` guard in the
@@ -88,8 +104,9 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
 
       let endpointUrl: string | null
       try {
-        endpointUrl = await deps.resolveEndpoint(userId, agent)
+        endpointUrl = await resolveForTurn(signal, () => deps.resolveEndpoint(userId, agent))
       } catch (err) {
+        if (signal.aborted) return canceled()
         const isReauth = deps.isReauthRequired(err)
         const message = isReauth
           ? CINNA_SESSION_EXPIRED_MESSAGE
@@ -108,8 +125,9 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
 
       let accessToken: string | undefined
       try {
-        accessToken = await deps.resolveAccessToken(userId, agent)
+        accessToken = await resolveForTurn(signal, () => deps.resolveAccessToken(userId, agent))
       } catch (err) {
+        if (signal.aborted) return canceled()
         const isReauth = deps.isReauthRequired(err)
         const message = isReauth
           ? CINNA_SESSION_EXPIRED_MESSAGE
@@ -121,7 +139,7 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
       // A stop that landed during the resolution above. The message has not
       // gone out yet, so there is nothing to cancel and nothing to send: this
       // is a stopped turn that streamed nothing.
-      if (signal.aborted) return { text: '', parts: [], notices: [] }
+      if (signal.aborted) return canceled()
 
       // When the turn is stopped, also tell the agent to cancel its task —
       // otherwise it keeps running server-side after we stop reading the
@@ -130,8 +148,10 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
       // exactly once, and only when there is a task to cancel.
       let client: A2AClient | undefined
       let taskId: string | undefined
+      let cancelSent = false
       const onAbort = (): void => {
-        if (!client || !taskId) return
+        if (!signal.aborted || cancelSent || !client || !taskId) return
+        cancelSent = true
         const id = taskId
         logger.info('Sending cancelTask to agent', { taskId: id })
         client
@@ -159,9 +179,11 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
           onEvent,
           onClient: (c) => {
             client = c
+            onAbort()
           },
           onTaskId: (id) => {
             taskId = id
+            onAbort()
           }
         })
       } finally {

@@ -1,8 +1,6 @@
 {
   "_notes": [
-    "The stop lands inside the 3rd onEvent; the next frame is a JSON-RPC error, so the SDK throws before the pump can see the signal, and the turn ends in runAgentTurn's catch with the signal already aborted.",
-    "Phase 1 (review finding S1): result.parts keeps what streamed ('First, checking the ') beside the error. Before, the catch returned empty parts, and streamToAgent — which treats an aborted result as a stop and saves its parts — saved nothing, so done's refetch cleared text the user had watched arrive.",
-    "No session upsert and no taskState, as for stream_rpc_error: the catch returns before the session write. A non-aborted failure still returns no parts (stream_rpc_error)."
+    "Stop interrupts the active HTTP request immediately, preserves exactly the emitted partial parts, and does not advance the saved session. A later queued server frame is not ingested."
   ],
   "events": [
     {
@@ -32,8 +30,8 @@
     ],
     "notices": [],
     "error": {
-      "message": "SSE event contained an error: Stream closed (Code: -32603) Data: {\"detail\":\"connection dropped after tasks/cancel\"}",
-      "raw": "Error: SSE event contained an error: Stream closed (Code: -32603) Data: {\"detail\":\"connection dropped after tasks/cancel\"}"
+      "message": "This operation was aborted",
+      "raw": "AbortError: This operation was aborted"
     }
   }
 }

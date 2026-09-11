@@ -1,7 +1,6 @@
 {
   "_notes": [
-    "POSSIBLE BUG: after an abort the session is saved with taskState `working`. The chat remembers a task that has actually been cancelled, and the next turn resends its taskId.",
-    "Neither request carries the abort signal (`signal: false`), so neither the SDK nor fetch can see the stop."
+    "Stop reaches the card/message HTTP transport. No session checkpoint advances on cancellation; the separate tasks/cancel request uses its own deadline and still reaches the remote."
   ],
   "_phase2_note": "Phase 2 drives this scenario through the a2a driver instead of runAgentTurn, so the third request — `tasks/cancel` for the live task, sent once from the driver's abort listener — is now pinned. It is not new behaviour: before phase 2 `streamToAgent.cancel` (direct chat) and `A2AAsMcpProvider` (orchestrated) each sent it, one layer above what phase 0 recorded. The first note's 'neither request' predates it; the cancel carries no signal either.",
   "requests": [
@@ -9,13 +8,13 @@
       "method": "GET",
       "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
       "authorization": "Bearer tok-cinna-golden",
-      "signal": false
+      "signal": true
     },
     {
       "method": "POST",
       "url": "https://agent.example.test/a2a/",
       "authorization": "Bearer tok-cinna-golden",
-      "signal": false,
+      "signal": true,
       "body": {
         "jsonrpc": "2.0",
         "method": "message/stream",
@@ -45,7 +44,7 @@
       "method": "POST",
       "url": "https://agent.example.test/a2a/",
       "authorization": "Bearer tok-cinna-golden",
-      "signal": false,
+      "signal": true,
       "body": {
         "jsonrpc": "2.0",
         "method": "tasks/cancel",
@@ -59,17 +58,10 @@
   "sessionReads": [
     null
   ],
-  "sessionUpserts": [
-    {
-      "chatId": "chat-golden",
-      "agentId": "agent-remote-1",
-      "contextId": "ctx-cancel-1",
-      "taskId": "task-cancel-1",
-      "taskState": "working"
-    }
-  ],
+  "sessionUpserts": [],
   "taskIdsSurfaced": [
     "task-cancel-1"
   ],
-  "clientsSurfaced": 1
+  "clientsSurfaced": 1,
+  "_phase6_note": "Supersedes the historical phase2 note: all HTTP calls now carry a signal, with an independent signal for tasks/cancel."
 }

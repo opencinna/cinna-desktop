@@ -83,10 +83,7 @@ export interface RecordedRequest {
   method: string
   url: string
   authorization: string | null
-  /**
-   * Whether the request carried an `AbortSignal`. Today none does: the turn's
-   * signal is checked between stream events and never handed to the SDK.
-   */
+  /** Whether this HTTP request carries its turn or independent cancel signal. */
   signal: boolean
   /** Parsed JSON body; absent for a `GET`. */
   body?: { jsonrpc?: string; id?: unknown; method?: string; params?: unknown }
@@ -114,14 +111,16 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
   const requests: RecordedRequest[] = []
   let held: ReadableStreamDefaultController<Uint8Array> | null = null
   let closed = false
+  let removeAbort = (): void => {}
 
   const close = (): void => {
     if (closed || !held) return
     closed = true
+    removeAbort()
     held.close()
   }
 
-  const answer = (reply: Reply, rpcId: unknown): Response => {
+  const answer = (reply: Reply, rpcId: unknown, signal?: AbortSignal | null): Response => {
     if ('network' in reply) {
       const cause = Object.assign(new Error(reply.network.causeMessage ?? reply.network.message), {
         code: reply.network.causeCode
@@ -136,8 +135,18 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
             const body = { jsonrpc: '2.0', id: rpcId, ...frame }
             controller.enqueue(enc.encode(`data: ${JSON.stringify(body)}\n\n`))
           }
-          if (reply.hold) held = controller
-          else controller.close()
+          if (reply.hold) {
+            held = controller
+            const abort = (): void => {
+              if (closed) return
+              closed = true
+              removeAbort()
+              controller.error(signal?.reason)
+            }
+            removeAbort = () => signal?.removeEventListener('abort', abort)
+            signal?.addEventListener('abort', abort, { once: true })
+            if (signal?.aborted) abort()
+          } else controller.close()
         }
       })
       return new Response(stream, { status: 200, headers: { 'content-type': 'text/event-stream' } })
@@ -154,6 +163,7 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
   }
 
   const fakeFetch = (async (input: Parameters<typeof fetch>[0], init?: RequestInit) => {
+    init?.signal?.throwIfAborted()
     const method = (init?.method ?? 'GET').toUpperCase()
     const body = typeof init?.body === 'string' ? (JSON.parse(init.body) as RecordedRequest['body']) : undefined
     requests.push({
@@ -163,9 +173,12 @@ export function fakeA2aAgent(fixture: A2aFixture): FakeAgent {
       signal: init?.signal != null,
       ...(body ? { body } : {})
     })
-    if (method === 'GET') return answer(fixture.http.card, undefined)
+    if (method === 'GET') return answer(fixture.http.card, undefined, init?.signal)
+    if (body?.method === 'tasks/cancel') return answer({ rpc: { result: {
+      kind: 'task', id: (body.params as { id: string }).id, contextId: 'cancel-context', status: { state: 'canceled' }
+    } } }, body.id, init?.signal)
     if (!fixture.http.rpc) throw new Error(`fake agent: unexpected ${method} ${urlOf(input)}`)
-    return answer(fixture.http.rpc, body?.id)
+    return answer(fixture.http.rpc, body?.id, init?.signal)
   }) as typeof fetch
 
   return {

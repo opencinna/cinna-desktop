@@ -4,13 +4,13 @@
       "method": "GET",
       "url": "https://agent.example.test/a2a/.well-known/agent-card.json",
       "authorization": null,
-      "signal": false
+      "signal": true
     },
     {
       "method": "POST",
       "url": "https://agent.example.test/a2a/",
       "authorization": null,
-      "signal": false,
+      "signal": true,
       "body": {
         "jsonrpc": "2.0",
         "method": "message/send",

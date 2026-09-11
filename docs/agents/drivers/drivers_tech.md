@@ -187,7 +187,7 @@ Capabilities read the **stored** launcher (`launcherOfRow`), because a row is al
 - **The OpenCode launcher has no `readiness`**, deliberately: its binary is one this app will download, so its absence is not a state a user has to fix, and a list must never start a download to answer a question about a row
 
 ### The `a2a` driver
-`run`, in order:
+`run` first returns an empty result with `taskState: 'canceled'` for an already-aborted signal. Otherwise, in order:
 1. No `cardUrl` → `AGENT_NOT_CONFIGURED`
 2. `resolveEndpoint` throws:
    - a re-auth → `CINNA_SESSION_EXPIRED_MESSAGE` with `CINNA_REAUTH_REQUIRED_CODE`
@@ -195,8 +195,12 @@ Capabilities read the **stored** launcher (`launcherOfRow`), because a row is al
    - anything else → `Failed to resolve agent endpoint: …`
 3. `resolveEndpoint` returns `null` → `NO_ENDPOINT_CONFIGURED`
 4. `resolveAccessToken` throws → the same re-auth mapping
-5. `signal.aborted` after the pre-flight → an empty success, and nothing is sent
-6. Otherwise `runTurn(…)`, with `isCinnaTokenAuth: capabilitiesFor(agent).auth === 'cinna'`. An abort listener sends `client.cancelTask({id})` once, and only when `onClient` and `onTaskId` have both fired
+5. Endpoint and token waits use `resolveForTurn`, which races the signal and checks it before entering deferred work. Abort returns the canceled result and sends nothing; late resolution or rejection is observed without starting the turn. It does not cancel a shared token refresh
+6. Otherwise `runTurn(…)`, with `isCinnaTokenAuth: capabilitiesFor(agent).auth === 'cinna'`. The abort listener and both identity callbacks call the same cancellation check: once aborted and both client and task ID are known, send `client.cancelTask({id})` at most once. Late callbacks can still trigger that request; duplicate callbacks cannot repeat it. The driver does not await acknowledgement and logs failures
+
+**Transport cancellation uses the legacy client's fetch seam.** The installed `@a2a-js/sdk` 0.3.13 exposes per-call `RequestOptions.signal` on its newer Client/Transport API, but the imported legacy `A2AClient` does not accept those options. `createA2AClient` in `src/main/agents/a2a-client.ts` binds the optional turn signal to raw-card fetch and the injected fetch implementation. This interrupts card and JSON headers/body waits and silent SSE reads, including logging clones/tees. Any existing request signal is combined with it. JSON-RPC `tasks/cancel` instead gets an independent ten-second deadline, because reusing the aborted turn signal would suppress the cancellation request itself. No SDK upgrade or new protocol is involved.
+
+`runAgentTurn` in `src/main/services/a2aStreamingService.ts` checks abort around awaits, before/after each event callback, and before successful session persistence. Task identity is surfaced before the first message/artifact delta; artifact updates report only a changed ID. The accumulator records each part before forwarding, so a synchronous Stop inside a delta retains exactly that visible partial output and emits nothing afterward. Abort returns partial text/parts/notices with an error and performs no session upsert; the previous stored checkpoint remains unchanged. The direct-chat wrapper saves partial output, emits `done(canceled)`, reports cancellation and releases its active request. The tool caller receives the error-bearing result. See [Streaming Pipeline](../agents/streaming_pipeline.md#cancellation-and-session-checkpoints) for the persistence boundary.
 
 `readiness` checks, all inside `withTimeout(…, A2A_READINESS_TIMEOUT_MS)`:
 - No card → `invalid`, *"This agent has no card URL. Add one in Settings → Agents."*
@@ -331,6 +335,8 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
 - `src/main/agents/drivers/a2aDriver.test.ts` —
   - `run`: the pre-flight handed through; a stream 401 treated as a re-auth only for a synced agent; a missing card refused before anything is resolved; no endpoint; a token failure; a stop during the pre-flight sending nothing; cancel sent once, and not before a task exists; `respond` never delivering
   - `readiness`: `ok`; a disabled row probed like any other; no card; an expired session as a state; a 401 for synced versus hand-added agents; unreachable, with `detail`; `null` when the card times out and when the token hangs; 4xx versus 5xx; an unusable card; never throwing, even synchronously
+- `src/main/services/a2aCancellation.test.ts` — actual loopback HTTP through the installed SDK and logging fetch: stalled card/JSON headers and bodies, silent SSE, and Stop inside the first task-message or artifact delta. Requires prompt settlement, exact partial output, no checkpoint update and an actual cancel RPC after abort
+- `src/main/services/agentTurn/golden.a2a.test.ts` — held-stream abort must settle without another frame; its fake honors fetch signals and returns a distinct cancellation response. Cancel goldens retain partial output and do not advance sessions. The separate task-failed and nonstreaming JSON-RPC failure characterizations remain
 - `src/main/services/agentReadinessService.test.ts` — the cache:
   - nothing known before a check, and nothing probed before install
   - overlapping checks coalesced
