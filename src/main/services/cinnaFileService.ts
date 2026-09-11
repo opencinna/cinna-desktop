@@ -64,7 +64,24 @@ export type CinnaFileErrorCode =
   | 'file_not_writable'
   | 'file_not_readable'
 
-export class CinnaFileError extends DomainError<CinnaFileErrorCode> {}
+export class CinnaFileError extends DomainError<CinnaFileErrorCode> {
+  /**
+   * The HTTP status, when the failure was a response rather than something that
+   * never became one.
+   *
+   * The same field, for the same reason, as {@link CinnaApiError.status}:
+   * `upload_failed` covers a dropped socket *and* a 415 or a 413, and a caller
+   * that has to decide whether trying again could ever work cannot tell them
+   * apart from the code alone. `tasks/adapters/cinnaTaskAdapter.wiring.ts` is
+   * the first caller that has to.
+   */
+  readonly status?: number
+
+  constructor(code: CinnaFileErrorCode, message: string, detail?: string, status?: number) {
+    super(code, message, detail)
+    this.status = status
+  }
+}
 
 /**
  * Shape returned by Cinna backend `POST /api/v1/files/upload` (subset).
@@ -180,7 +197,9 @@ export const cinnaFileService = {
       })
       throw new CinnaFileError(
         'upload_failed',
-        `Upload failed (${response.status}): ${bodyText.slice(0, 200) || response.statusText}`
+        `Upload failed (${response.status}): ${bodyText.slice(0, 200) || response.statusText}`,
+        undefined,
+        response.status
       )
     }
 

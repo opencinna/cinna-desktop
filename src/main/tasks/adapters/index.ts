@@ -23,12 +23,13 @@
  * make comfortable. Importing here means the registry file is the one place a
  * reader has to look, and the one place that can go wrong.
  *
- * Empty until step 9, deliberately: the seam and its contract suite exist
- * before the first implementation so the interface is not shaped by one
- * remote's field names.
+ * The seam and its contract suite landed a step before the first
+ * implementation, deliberately, so the interface was not shaped by one remote's
+ * field names. `cinna` joined in step 9 as one import and one line.
  */
 
 import { createNullAdapter } from './nullAdapter'
+import { cinnaTaskAdapter } from './cinnaTaskAdapter.wiring'
 import type { RemoteTaskAdapter } from './adapter'
 
 /** Every adapter this build has, by id. */
@@ -87,5 +88,4 @@ export function allAdapters(): RemoteTaskAdapter[] {
 export * from './adapter'
 
 // Implementations register themselves by being imported here, and nowhere else.
-// `cinnaTaskAdapter` joins in step 9:
-//   import './cinnaTaskAdapter'
+registerAdapter(cinnaTaskAdapter)

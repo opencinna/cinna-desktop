@@ -3,6 +3,7 @@ import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { CinnaApiError } from '../errors'
+import { extractErrorDetail } from './cinna-http'
 import { createLogger } from '../logger/logger'
 import type {
   CinnaTaskAttachmentDto,
@@ -117,12 +118,25 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
       status: response.status,
       durationMs: Date.now() - started
     })
+    // The server's own sentence, and the status, both travel on the error.
+    // A caller that has to tell an illegal transition from a task that is not
+    // this account's cannot do it from the status line — cinna-core answers 400
+    // for both — so the two pieces of evidence it *can* use are here rather
+    // than flattened into the message. See `tasks/adapters/cinnaTaskAdapter.ts`.
+    const detail = extractErrorDetail(text)
     if (response.status === 401 || response.status === 403) {
-      throw new CinnaApiError('reauth_required', `Cinna ${response.status}`)
+      throw new CinnaApiError(
+        'reauth_required',
+        `Cinna ${response.status}`,
+        detail || String(response.status),
+        response.status
+      )
     }
     throw new CinnaApiError(
       'request_failed',
-      `Cinna API ${response.status}: ${text.slice(0, 200) || response.statusText}`
+      `Cinna API ${response.status}: ${detail || response.statusText}`,
+      detail,
+      response.status
     )
   }
 

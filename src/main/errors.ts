@@ -269,7 +269,30 @@ export class AgentStatusError extends DomainError<AgentStatusErrorCode> {}
 export class JobError extends DomainError<JobErrorCode> {}
 export class TaskError extends DomainError<TaskErrorCode> {}
 export class NoteError extends DomainError<NoteErrorCode> {}
-export class CinnaApiError extends DomainError<CinnaApiErrorCode> {}
+export class CinnaApiError extends DomainError<CinnaApiErrorCode> {
+  /**
+   * The HTTP status the server answered with, when there was one.
+   *
+   * Undefined for a failure that never became a response — no profile, no
+   * server URL, a socket that died, a body that would not parse. That
+   * distinction is the point: "the request was refused" and "the request did
+   * not happen" are different answers, and a caller that has to tell them apart
+   * (the remote-task adapters, which unbind a task on one and retry on the
+   * other) could otherwise only do it by reading the message text.
+   *
+   * On cinna-core the status **alone is not enough to classify a refusal**:
+   * `PermissionDeniedError` and `ValidationError` are both 400 and surface
+   * through one handler, so an illegal transition and a task that is not yours
+   * arrive identically. `detail` carries the server's own sentence for exactly
+   * that reason — see `tasks/adapters/cinnaTaskAdapter.ts`.
+   */
+  readonly status?: number
+
+  constructor(code: CinnaApiErrorCode, message: string, detail?: string, status?: number) {
+    super(code, message, detail)
+    this.status = status
+  }
+}
 export class FileError extends DomainError<FileErrorCode> {}
 export class AppSettingsError extends DomainError<AppSettingsErrorCode> {}
 export class SyncError extends DomainError<SyncErrorCode> {}

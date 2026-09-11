@@ -72,7 +72,9 @@ This is a normal state, not an error: the row carries whatever `remote_adapter` 
 
 `adapterContract.ts` holds the clauses; `adapterContract.test.ts` runs them. **The suite owns the assertions** — a world only says how to build the adapter and how to make its far side misbehave, so an adapter cannot pass by describing its own behaviour back to the suite. `knownViolations` records a clause an adapter does not satisfy, with a reason, and a recorded violation that *starts* passing fails the suite, so the record has to be deleted in the commit that fixes it rather than rotting into a ceiling.
 
-Subjects today are six fakes, not one: a full service, Linear (status, no asks, no execute, no nesting, link attachments), GitHub Issues (no agent assignee, no nesting, no action-required probe), a managed-agent service (asks, no comments), a remote the desktop may only read, and the null adapter. The named risk this answers is a seam shaped by a single implementation — an interface drawn around one remote acquires its field names and breaks on the second. **The caveat is worth stating: all the fakes speak the seam's vocabulary already, so what they prove is that the capability set can describe six services, not that a real mapping survives.** The first real evidence is the first real adapter.
+Six of the subjects are fakes: a full service, Linear (status, no asks, no execute, no nesting, link attachments), GitHub Issues (no agent assignee, no nesting, no action-required probe), a managed-agent service (asks, no comments), a remote the desktop may only read, and the null adapter. The named risk they answer is a seam shaped by a single implementation — an interface drawn around one remote acquires its field names and breaks on the second. **The caveat that goes with them is that they all speak the seam's vocabulary already, so what they prove is that the capability set can describe six services, not that a real mapping survives.**
+
+The seventh and eighth subjects are the answer to that caveat: [the cinna-core adapter](cinna_adapter.md) itself, on a linked profile and an unlinked one, driven over a fake *server* rather than a fake adapter. Everything below the transport there is production code — the routes, the payload field names, the status refusal, the ask translation, the error taxonomy — and the fake refuses the way the real service refuses. It passed the clauses on its first run with no `knownViolations` entry, so the seam did not have to move for its first real mapping; what moved was everything around it.
 
 Clauses, by name: `id.stable`, `capabilities.stable`, `availability.answers`, `create.binds`, `create.only_inventor`, `handoffNote.lands`, `unsupported.refused`, `supported.works`, `status.narrow`, `subtasks.no_orphan`, `asks.run_vocabulary`, `failure.is_domain`, `not_ours.no_retry`, `rejected.keeps_binding`, `deepLink.openable`, `count.counts`.
 
@@ -86,7 +88,7 @@ The category counts an **equality comparison against an adapter id**, not a read
 
 ## What this deliberately does not do
 
-- **There is no implementation, and the registry is empty** — a test asserts it. The seam and its suite land before the first adapter precisely so the interface is not shaped by one remote's field names. Nothing outside the folder imports it yet, and the reconciler that will call adapters after a local write does not exist.
+- **It ships one adapter, and nothing in the running app drives it yet.** The registry holds `cinna` and nothing else — a test asserts the id is *present*, because a missed registration is the one failure the null adapter makes comfortable enough to hide: the task would open perfectly, show "a service this version of Cinna does not know about", sync nothing and log nothing. The scheduled caller exists too ([Keeping a Bound Task in Step](remote_sync.md)) and has no producers wired, so no adapter is called on a timer today.
 - **No read half for artifacts.** `putArtifact` is the seam's only write-only channel — comments and asks both have a `list*`, and a snapshot carries no artifacts — so a replica's remote attachments are invisible here. The capability is named `writeArtifactKinds` so the absence is a statement in the type rather than a gap in a docstring; a `listArtifacts` is additive when a surface needs one.
 - **No push subscription.** Every adapter is polled. A later adapter may expose a subscription and be preferred over polling; nothing here builds one.
 - **The renderer never sees which service a task is on beyond its display fields.** `TaskListQuery` has no `remoteAdapter` arm, and `TaskDto.remote` omits `state`.
@@ -97,25 +99,32 @@ The category counts an **equality comparison against an adapter id**, not a read
 taskService (SQLite write, committed)
         |
         v
- reconciler (not built yet) -> adapterFor(binding.adapter) -> RemoteTaskAdapter
-                                        |                          |
-                                 null adapter                 a real service
-                             (unknown id: refuses,          (create / fetch / push /
-                              says so in words)              comments / asks / archive)
+ taskSyncService (no producers wired yet)
+        |
+        v
+ adapterFor(binding.adapter) -> RemoteTaskAdapter
+            |                          |
+     null adapter                 cinnaTaskAdapter
+ (unknown id: refuses,          (create / fetch / push /
+  says so in words)              comments / asks / archive)
 ```
 
 ## Where it lives
 
-- `src/main/tasks/adapters/adapter.ts` — the interface, `RemoteTaskError`, `UnsupportedRemoteOperation`, and the binding/snapshot/ask/comment shapes
+- `src/main/tasks/adapters/adapter.ts` — the interface, `RemoteTaskError`, `UnsupportedRemoteOperation`, the binding/snapshot/ask/comment shapes, and `RemoteDirtyField`, the names a pending change is recorded under
 - `src/main/tasks/adapters/index.ts` — `adapterFor()`, `registerAdapter()`, `hasAdapter()`, `allAdapters()`, and the import list implementations join
 - `src/main/tasks/adapters/nullAdapter.ts` — `createNullAdapter(id)`
+- `src/main/tasks/adapters/cinnaTaskAdapter.ts` + `.wiring.ts` — the one implementation this build ships ([its own doc](cinna_adapter.md))
 - `src/main/tasks/adapters/adapterContract.ts` — `describeAdapterContract(name, world, options?)`, `AdapterWorld`, the clause union
 - `src/main/tasks/adapters/testSupport/fakeRemote.ts` — the configurable fake and `CAPABILITY_SHAPES`, the worked services
+- `src/main/tasks/adapters/testSupport/fakeCinnaServer.ts` — cinna-core in memory, so the real adapter can be a contract subject
 - `src/shared/taskStatus.ts` — `REMOTE_WRITABLE_STATUSES`, the vocabulary a status push is narrowed to
 - `src/shared/tasks.ts` — `TaskDto`, `TaskRemoteRef`, `TaskArtifact`
 
 ## Integration Points
 
+- [cinna-core as a Remote Task Adapter](cinna_adapter.md) — the first implementation, and where every cinna field name lives
+- [Keeping a Bound Task in Step](remote_sync.md) — who calls an adapter, in what order, and what a failure costs
 - [The Handoff Note, Exported](handoff_note_export.md) — the local side of `putHandoffNote`
 - [Agent Drivers & Readiness](../../agents/drivers/drivers.md) — the same capability-not-kind arrangement, one layer down
 - [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) — the read-only view of a `cinna_task` job run, which talks to cinna-core directly and predates this seam

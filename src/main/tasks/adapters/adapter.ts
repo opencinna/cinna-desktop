@@ -111,6 +111,37 @@ export class UnsupportedRemoteOperation extends RemoteTaskError {
 /** Fields a remote may let the desktop write. Narrower than `TaskPatch` on purpose. */
 export type RemoteWritableField = 'title' | 'description' | 'priority' | 'assignee'
 
+/**
+ * What `tasks.remote_dirty` holds: the things changed here since the last
+ * successful push.
+ *
+ * The four writable fields, plus the two that have channels of their own —
+ * `status` goes through {@link RemoteTaskAdapter.pushStatus} (as a *path*, not
+ * a destination) and `handoffNote` through
+ * {@link RemoteTaskAdapter.putHandoffNote}. A marker is a statement that this
+ * device knows something the remote does not; it is cleared only when the
+ * remote has been told, so a laptop that was asleep, offline or unlinked when
+ * the change happened still pushes it later.
+ *
+ * `goal` is deliberately absent: it is immutable once created. So are `router`,
+ * `chatId`, `executor` and every other column the desktop owns outright — a
+ * remote has no field for them and nothing to be told.
+ */
+export type RemoteDirtyField = RemoteWritableField | 'status' | 'handoffNote'
+
+export const REMOTE_DIRTY_FIELDS: readonly RemoteDirtyField[] = [
+  'title',
+  'description',
+  'priority',
+  'assignee',
+  'status',
+  'handoffNote'
+]
+
+export function isRemoteDirtyField(value: unknown): value is RemoteDirtyField {
+  return (REMOTE_DIRTY_FIELDS as readonly unknown[]).includes(value)
+}
+
 /** What this adapter can actually do. Callers ask; they never branch on `id`. */
 export interface RemoteTaskCapabilities {
   /**

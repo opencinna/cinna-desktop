@@ -124,14 +124,22 @@ export function parseTaskRouter(raw: unknown): TaskRouter {
 /**
  * Who the task is assigned to.
  *
+ * `agentId` is an id **in the space `kind` names**:
+ *
  *  - `agent` — an agent on this device; `agentId` is its `agents` row id.
  *  - `model` — the local LLM, or nobody in particular. `agentId` is null.
- *  - `remote_agent` — an agent that exists only in the bound remote system.
- *    `agentId` is null here; the binding's own state holds the remote id.
+ *  - `remote_agent` — an agent that exists only in the bound remote system;
+ *    `agentId` is *that system's* id for it, which is what a push sends as the
+ *    assignee. An earlier version of this comment said the binding's own state
+ *    held it, and that could never work: `remote.state` is opaque outside
+ *    `src/main/tasks/adapters/` (§5.6 rule 1), so the code that builds the
+ *    push — `taskSyncService`, which is outside — may not read it. A field the
+ *    only possible writer cannot read is not a field.
  *
- * `agentId` is device-local and therefore never syncs; a portable descriptor
- * (the `kind: 'agent'` arm of `JobDepDescriptor`, `shared/sync.ts`) travels in
- * its place and is resolved on arrival, exactly as a job's agent already is.
+ * A `kind: 'agent'` id is device-local and therefore never syncs; a portable
+ * descriptor (the `kind: 'agent'` arm of `JobDepDescriptor`, `shared/sync.ts`)
+ * travels in its place and is resolved on arrival, exactly as a job's agent
+ * already is.
  */
 export interface TaskAssignee {
   agentId: string | null

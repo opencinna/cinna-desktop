@@ -7,6 +7,7 @@ import {
   type TaskRow
 } from '../db/tasks'
 import { TaskError } from '../errors'
+import type { RemoteDirtyField } from '../tasks/adapters/adapter'
 import { taskFileService } from './taskFileService'
 import { createLogger } from '../logger/logger'
 import {
@@ -54,9 +55,14 @@ const logger = createLogger('task')
  * deliberately not gated on it.
  *
  * Remote pushes are **not** here. `taskService` writes SQLite and nothing else;
- * `taskSyncService` reconciles with a bound adapter afterwards (step 9). That
- * split is what makes an unlinked profile, an offline laptop and a 500 the same
- * code path.
+ * `taskSyncService` reconciles with a bound adapter afterwards. That split is
+ * what makes an unlinked profile, an offline laptop and a 500 the same code
+ * path — and it is why the only thing this module does about a binding is
+ * **write down what changed**. A mutation on a bound task adds its
+ * {@link RemoteDirtyField} markers to `remote_dirty`; the push reads them,
+ * sends what it can, and clears them. Nothing here ever talks to a network, so
+ * a task edited on a laptop that is asleep, offline or unlinked still pushes
+ * when it wakes.
  */
 
 /**
@@ -138,6 +144,30 @@ function nonEmpty(value: string, field: string): string {
 }
 
 /**
+ * Add a patch's remote-facing changes to `remote_dirty`, for a task that has a
+ * remote to tell.
+ *
+ * A **read of `remoteAdapter`, never a comparison against one** — the question
+ * is whether the task is bound at all, and which service it is bound to is the
+ * adapter's business. That distinction is what the kind-branch ratchet's
+ * `remoteAdapter` category is defined around.
+ *
+ * The markers accumulate rather than replace: a title edited twice before the
+ * laptop comes back online is one marker, and a title edited while a *status*
+ * push is still outstanding must not erase the status marker. `taskSyncService`
+ * clears each one only when the remote has actually been told.
+ *
+ * An unbound task is left alone, so the column stays null for the overwhelming
+ * majority of tasks and a later `bindRemote` starts from a clean slate.
+ */
+function dirtied(task: TaskRow, patch: TaskPatch, fields: readonly RemoteDirtyField[]): TaskPatch {
+  if (!task.remoteAdapter || fields.length === 0) return patch
+  const next = new Set<string>(task.remoteDirty ?? [])
+  for (const field of fields) next.add(field)
+  return { ...patch, remoteDirty: [...next] }
+}
+
+/**
  * The row as every surface sees it.
  *
  * `subtaskCount` / `subtaskCompletedCount` are passed in rather than queried,
@@ -212,6 +242,30 @@ function written(row: TaskRow): TaskDto {
   return dto
 }
 
+/**
+ * What a pull may write, already translated out of the adapter's vocabulary.
+ *
+ * A `RemoteTaskSnapshot` is not passed in directly, and that is deliberate:
+ * `parentId` on a snapshot is the *remote's* id for the parent, and turning it
+ * into a local `parentTaskId` is a lookup only `taskSyncService` can do. This
+ * keeps `taskService` free of the adapter's types apart from the one it cannot
+ * avoid — the dirty-field names, which are what it writes.
+ */
+export interface RemoteSnapshotPatch {
+  title?: string
+  description?: string | null
+  priority?: TaskPriority
+  status?: TaskStatus
+  assignee?: TaskAssignee
+  /** A **local** task id, resolved by the caller, or null for a root task. */
+  parentTaskId?: string | null
+  errorMessage?: string | null
+  /** The remote's own modification time. Not "now" — see the method comment. */
+  updatedAt?: Date
+  /** The identity half of the binding is not writable here; only what it displays. */
+  binding?: { key: string | null; url: string | null; state: Record<string, unknown> }
+}
+
 /** What a caller may change about a task regardless of who is running it. */
 export interface TaskFieldPatch {
   title?: string
@@ -284,15 +338,27 @@ export const taskService = {
    * looking at is not a claim on the run.
    */
   update(userId: string, taskId: string, patch: TaskFieldPatch): TaskDto {
-    requireTask(userId, taskId)
+    const task = requireTask(userId, taskId)
     const next: TaskPatch = {}
-    if (patch.title !== undefined) next.title = nonEmpty(patch.title, 'Title')
-    if (patch.description !== undefined) next.description = patch.description
-    if (patch.priority !== undefined) next.priority = patch.priority
+    const dirty: RemoteDirtyField[] = []
+    if (patch.title !== undefined) {
+      next.title = nonEmpty(patch.title, 'Title')
+      dirty.push('title')
+    }
+    if (patch.description !== undefined) {
+      next.description = patch.description
+      dirty.push('description')
+    }
+    if (patch.priority !== undefined) {
+      next.priority = patch.priority
+      dirty.push('priority')
+    }
+    // `router` is not in the list: it is how *this* app decides who answers in
+    // the task's chat, and no remote has a field for it.
     if (patch.router !== undefined) next.router = patch.router
     if (Object.keys(next).length === 0) return this.getById(userId, taskId)
 
-    const row = taskRepo.update(userId, taskId, next)
+    const row = taskRepo.update(userId, taskId, dirtied(task, next, dirty))
     if (!row) throw new TaskError('not_found', 'Task not found')
     return written(row)
   },
@@ -322,7 +388,11 @@ export const taskService = {
       )
     }
 
-    const row = taskRepo.update(userId, taskId, statusPatch(task, status, opts.errorMessage))
+    const row = taskRepo.update(
+      userId,
+      taskId,
+      dirtied(task, statusPatch(task, status, opts.errorMessage), ['status'])
+    )
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task status', { taskId, from, to: status })
     return written(row)
@@ -387,11 +457,19 @@ export const taskService = {
   setAssignee(userId: string, taskId: string, assignee: TaskAssignee): TaskDto {
     const task = requireTask(userId, taskId)
     requireRunsHere(userId, task)
-    const row = taskRepo.update(userId, taskId, {
-      assigneeAgentId: assignee.agentId,
-      assigneeName: assignee.name,
-      assigneeKind: assignee.kind
-    })
+    const row = taskRepo.update(
+      userId,
+      taskId,
+      dirtied(
+        task,
+        {
+          assigneeAgentId: assignee.agentId,
+          assigneeName: assignee.name,
+          assigneeKind: assignee.kind
+        },
+        ['assignee']
+      )
+    )
     if (!row) throw new TaskError('not_found', 'Task not found')
     return written(row)
   },
@@ -404,7 +482,7 @@ export const taskService = {
   setHandoffNote(userId: string, taskId: string, note: string | null): TaskDto {
     const task = requireTask(userId, taskId)
     requireRunsHere(userId, task)
-    const row = taskRepo.update(userId, taskId, { handoffNote: note })
+    const row = taskRepo.update(userId, taskId, dirtied(task, { handoffNote: note }, ['handoffNote']))
     if (!row) throw new TaskError('not_found', 'Task not found')
     return written(row)
   },
@@ -437,7 +515,7 @@ export const taskService = {
       patch.executorDevice = thisDeviceId(userId)
     }
 
-    const row = taskRepo.update(userId, taskId, patch)
+    const row = taskRepo.update(userId, taskId, dirtied(task, patch, ['status']))
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task started', { taskId, executor: row.executor, chatId: row.chatId ?? undefined })
     return written(row)
@@ -479,6 +557,203 @@ export const taskService = {
     const row = taskRepo.update(userId, taskId, { executor: 'remote', executorDevice: null })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task handed to remote', { taskId, adapter: task.remoteAdapter })
+    return written(row)
+  },
+
+  /**
+   * Record the binding a remote `create` just invented.
+   *
+   * **The only writer of the five `remote_*` identity columns**, and the reason
+   * it is here rather than in `taskSyncService` is `written()`: `remoteKey` is
+   * one of the six columns the exported handoff note carries in its
+   * frontmatter, so a binding written through the repo directly would leave
+   * every bound task's file claiming the wrong short code with nothing that
+   * could ever correct it. `taskService.test.ts` pins the list of methods that
+   * end in `written()`, which is what makes that a rule rather than a habit.
+   *
+   * The dirty markers are cleared: a create sends every field the remote takes,
+   * so at this instant the two copies agree about everything except a status
+   * the remote assigns itself. What the remote's status *is* is not assumed —
+   * {@link taskSyncService} asks before it pushes a path.
+   */
+  bindRemote(
+    userId: string,
+    taskId: string,
+    binding: {
+      adapter: string
+      id: string
+      key: string | null
+      url: string | null
+      state: Record<string, unknown>
+    }
+  ): TaskDto {
+    requireTask(userId, taskId)
+    const row = taskRepo.update(userId, taskId, {
+      remoteAdapter: binding.adapter,
+      remoteId: binding.id,
+      remoteKey: binding.key,
+      remoteUrl: binding.url,
+      remoteState: binding.state,
+      remoteSyncedAt: new Date(),
+      remoteDirty: null
+    })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    logger.info('task bound to a service', { taskId, adapter: binding.adapter })
+    return written(row)
+  },
+
+  /**
+   * The task is not on that service any more — drop the binding and keep the
+   * task.
+   *
+   * Reached only from a `not_ours`, which an adapter answers only when it is
+   * sure (a 404, or a refusal it has positively identified as an ownership
+   * one). Everything the user can see is local and survives: the goal, the
+   * status, the note, the history. What goes is the claim that a copy exists
+   * somewhere else, which had stopped being true.
+   *
+   * `executor` is deliberately **not** moved back to `desktop`. A task that was
+   * running remotely is not now running here, and pretending otherwise would
+   * put a Stop button over nothing. §5.10's Take over is the write that moves
+   * it, and it is a person's decision.
+   */
+  unbindRemote(userId: string, taskId: string, reason: string): TaskDto {
+    const task = requireTask(userId, taskId)
+    const row = taskRepo.update(userId, taskId, {
+      remoteAdapter: null,
+      remoteId: null,
+      remoteKey: null,
+      remoteUrl: null,
+      remoteState: null,
+      remoteSyncedAt: null,
+      remoteDirty: null
+    })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    logger.warn('task unbound from its service', {
+      taskId,
+      adapter: task.remoteAdapter ?? undefined,
+      reason
+    })
+    return written(row)
+  },
+
+  /**
+   * What is still owed to the remote after a push pass.
+   *
+   * `remaining` is the markers that did **not** get through — an empty list
+   * means the two copies agree and the column goes back to null.
+   */
+  markRemoteSynced(
+    userId: string,
+    taskId: string,
+    remaining: readonly RemoteDirtyField[],
+    opts: {
+      binding?: { key: string | null; url: string | null; state: Record<string, unknown> }
+      /**
+       * Did anything actually reach the service?
+       *
+       * `remoteSyncedAt` means "when this device last got an answer about this
+       * task", and it is the only thing that could ever tell a stale binding
+       * from a quiet one. Stamping it on a pass that sent nothing — because
+       * every marker turned out to name a field this remote has no room for —
+       * would make it advance for ever on a service nobody can reach, which is
+       * the one reading it exists to rule out. A *refusal* counts: the server
+       * answered.
+       */
+      contacted?: boolean
+    } = {}
+  ): TaskDto {
+    const task = requireTask(userId, taskId)
+    const { binding, contacted } = opts
+    const patch: TaskPatch = {
+      remoteDirty: remaining.length > 0 ? [...remaining] : null,
+      // **Bookkeeping must not look like a change.** `taskRepo.update` stamps
+      // `updatedAt` unless it is given one, and `taskRepo.list` orders by it —
+      // so clearing a marker would float a task nobody touched to the top of
+      // the user's list every time a push succeeded. Worse, `remote_dirty` and
+      // `remote_synced_at` are per-device bookkeeping that deliberately never
+      // syncs, and bumping a *synced*, user-facing timestamp on their account
+      // to record them is exactly the "a mirror that always looks newer than
+      // the thing it mirrors wins every conflict it should lose" that
+      // `applyRemoteSnapshot` is careful to avoid.
+      updatedAt: task.updatedAt
+    }
+    if (contacted) patch.remoteSyncedAt = new Date()
+    // Every adapter call hands back the binding it was given, possibly
+    // refreshed — a short code the server has since minted, a session it is now
+    // answering on. The identity half (`adapter`, `id`) is not writable here:
+    // only `create` invents one, and a push that could re-identify a task is a
+    // push that could silently fork it.
+    if (binding !== undefined) {
+      patch.remoteKey = binding.key
+      patch.remoteUrl = binding.url
+      patch.remoteState = binding.state
+    }
+    const row = taskRepo.update(userId, taskId, patch)
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    return written(row)
+  },
+
+  /**
+   * Write what a pull brought back.
+   *
+   * Two rules, and both are about not destroying a local edit:
+   *
+   *  - **a field this device still owes the remote is not overwritten.** The
+   *    markers in `remote_dirty` are exactly "we know something it does not",
+   *    so taking the remote's value for one of them would throw away the user's
+   *    change moments before it was going to be sent. The push clears the
+   *    marker; until then the local value wins.
+   *  - **`updatedAt` is the remote's**, not now. §5.4 reconciles per field on
+   *    it, and a mirror that always looked newer than the thing it mirrors
+   *    would win every conflict it should lose.
+   *
+   * The status is taken as fact — no transition check. cinna's own session
+   * handlers bypass its table, so a replica can arrive in a state the table
+   * calls unreachable, and arguing with the system doing the work is how the
+   * desktop would become the one corrupting state.
+   */
+  applyRemoteSnapshot(userId: string, taskId: string, patch: RemoteSnapshotPatch): TaskDto {
+    const task = requireTask(userId, taskId)
+    const owed = new Set<string>(task.remoteDirty ?? [])
+    const next: TaskPatch = {}
+
+    if (patch.title !== undefined && !owed.has('title')) next.title = patch.title
+    if (patch.description !== undefined && !owed.has('description')) {
+      next.description = patch.description
+    }
+    if (patch.priority !== undefined && !owed.has('priority')) next.priority = patch.priority
+    if (patch.assignee !== undefined && !owed.has('assignee')) {
+      next.assigneeAgentId = patch.assignee.agentId
+      next.assigneeName = patch.assignee.name
+      next.assigneeKind = patch.assignee.kind
+    }
+    // `errorMessage` is part of the status, not a field beside it — `statusPatch`
+    // is what writes it — so it is protected by the *same* marker. Letting it
+    // through on its own was a real hole: `taskSyncService` always sends an
+    // `errorMessage` (null when the remote has none), so a task that had just
+    // failed here would have its reason wiped by the very next poll, before the
+    // status push that carries it had even left. Neither the status path nor
+    // cinna has a field for the text, so nothing would ever put it back: a task
+    // reading `error` that can no longer say why.
+    if (!owed.has('status')) {
+      if (patch.status !== undefined) {
+        Object.assign(next, statusPatch(task, patch.status, patch.errorMessage))
+      } else if (patch.errorMessage !== undefined) {
+        next.errorMessage = patch.errorMessage
+      }
+    }
+    if (patch.parentTaskId !== undefined) next.parentTaskId = patch.parentTaskId
+    if (patch.binding !== undefined) {
+      next.remoteKey = patch.binding.key
+      next.remoteUrl = patch.binding.url
+      next.remoteState = patch.binding.state
+    }
+    next.remoteSyncedAt = new Date()
+    if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt
+
+    const row = taskRepo.update(userId, taskId, next)
+    if (!row) throw new TaskError('not_found', 'Task not found')
     return written(row)
   },
 

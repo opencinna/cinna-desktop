@@ -88,6 +88,253 @@ function driveTo(taskId: string, ...path: TaskStatus[]) {
   for (const status of path) taskService.setStatus(USER, taskId, status)
 }
 
+describe('what a bound task owes its service', () => {
+  function boundTask() {
+    return makeTask({ remoteAdapter: 'fake', remoteId: 'r-1', remoteKey: 'FAKE-1' })
+  }
+
+  function dirtyOf(taskId: string): string[] {
+    return taskRepo.getById(USER, taskId)?.remoteDirty ?? []
+  }
+
+  it('writes nothing down for a task with no service to tell', () => {
+    const task = makeTask()
+    taskService.update(USER, task.id, { title: 'Renamed' })
+    taskService.setStatus(USER, task.id, 'in_progress')
+    // The column stays null for the overwhelming majority of tasks, so a later
+    // `bindRemote` starts from a clean slate rather than a backlog of changes
+    // the service was never going to hear about.
+    expect(taskRepo.getById(USER, task.id)?.remoteDirty).toBeNull()
+  })
+
+  it('marks each field that a remote has somewhere to put', () => {
+    const task = boundTask()
+    taskService.update(USER, task.id, { title: 'Renamed', description: 'Now understood.' })
+    expect(dirtyOf(task.id).sort()).toEqual(['description', 'title'])
+
+    taskService.setStatus(USER, task.id, 'in_progress')
+    taskService.setHandoffNote(USER, task.id, 'Half done.')
+    taskService.setAssignee(USER, task.id, { agentId: null, name: 'Someone', kind: 'remote_agent' })
+    expect(dirtyOf(task.id).sort()).toEqual([
+      'assignee',
+      'description',
+      'handoffNote',
+      'status',
+      'title'
+    ])
+  })
+
+  it('does not mark the router, which no remote has a field for', () => {
+    const task = boundTask()
+    taskService.update(USER, task.id, { router: 'human' })
+    expect(dirtyOf(task.id)).toEqual([])
+  })
+
+  it('accumulates rather than replaces, so one change cannot erase another', () => {
+    const task = boundTask()
+    taskService.setStatus(USER, task.id, 'in_progress')
+    taskService.update(USER, task.id, { title: 'Renamed' })
+    // A title edited while a status push is still outstanding must not throw
+    // the status away: the laptop may have been asleep for both.
+    expect(dirtyOf(task.id).sort()).toEqual(['status', 'title'])
+  })
+
+  it('does not mark a status that came *from* the service', () => {
+    const task = boundTask()
+    taskService.acceptRemoteStatus(USER, task.id, 'blocked')
+    // Otherwise every pull would queue a push of what it had just been told,
+    // and the two copies would talk past each other for ever.
+    expect(dirtyOf(task.id)).toEqual([])
+  })
+
+  it('clears what the push got through, and keeps what it did not', () => {
+    const task = boundTask()
+    taskService.update(USER, task.id, { title: 'Renamed' })
+    taskService.setStatus(USER, task.id, 'in_progress')
+
+    taskService.markRemoteSynced(USER, task.id, ['status'], { contacted: true })
+    expect(dirtyOf(task.id)).toEqual(['status'])
+    expect(taskRepo.getById(USER, task.id)?.remoteSyncedAt).toBeInstanceOf(Date)
+
+    taskService.markRemoteSynced(USER, task.id, [], { contacted: true })
+    expect(taskRepo.getById(USER, task.id)?.remoteDirty).toBeNull()
+  })
+
+  it('does not claim the service was reached by a pass that reached nothing', () => {
+    const task = boundTask()
+    taskService.update(USER, task.id, { title: 'Renamed' })
+    // Every marker named a field this remote has no room for, so nothing left
+    // the process. A timestamp that advanced here would advance for ever on a
+    // service nobody can reach — the one reading it exists to rule out.
+    taskService.markRemoteSynced(USER, task.id, [])
+    expect(taskRepo.getById(USER, task.id)?.remoteSyncedAt).toBeNull()
+    expect(taskRepo.getById(USER, task.id)?.remoteDirty).toBeNull()
+  })
+})
+
+describe('binding a task to a service', () => {
+  it('records the binding and starts from nothing owed', () => {
+    const task = makeTask()
+    taskService.update(USER, task.id, { title: 'Renamed' })
+
+    const bound = taskService.bindRemote(USER, task.id, {
+      adapter: 'fake',
+      id: 'r-9',
+      key: 'FAKE-9',
+      url: 'https://fake.test/tasks/FAKE-9',
+      state: { sessionIds: [] }
+    })
+
+    expect(bound.remote).toEqual({
+      adapter: 'fake',
+      id: 'r-9',
+      key: 'FAKE-9',
+      url: 'https://fake.test/tasks/FAKE-9'
+    })
+    // A create sends every field the remote takes, so at this instant the two
+    // copies agree — including about the title that was dirty a moment ago.
+    expect(taskRepo.getById(USER, task.id)?.remoteDirty).toBeNull()
+    expect(taskRepo.getById(USER, task.id)?.remoteSyncedAt).toBeInstanceOf(Date)
+  })
+
+  it('keeps the whole task when the service says it is gone', () => {
+    const task = makeTask({ remoteAdapter: 'fake', remoteId: 'r-1', remoteKey: 'FAKE-1' })
+    driveTo(task.id, 'in_progress')
+    taskService.handOffToRemote(USER, task.id)
+
+    const unbound = taskService.unbindRemote(USER, task.id, 'the service answered 404')
+    expect(unbound.remote).toBeNull()
+    expect(unbound.title).toBe(task.title)
+    expect(unbound.status).toBe('in_progress')
+    // Not moved back to `desktop`: it is not running here, and pretending it
+    // was would put a Stop button over nothing. Take over is a person's call.
+    expect(unbound.executor).toBe('remote')
+    expect(taskRepo.getById(USER, task.id)?.remoteDirty).toBeNull()
+  })
+
+  it('keeps the exported note in step with the short code', () => {
+    const task = makeTask({ handoffNote: 'Half done.' })
+    taskService.bindRemote(USER, task.id, {
+      adapter: 'fake',
+      id: 'r-9',
+      key: 'FAKE-9',
+      url: null,
+      state: {}
+    })
+    const file = readFileSync(join(holder.userData, 'tasks', `${task.id}.md`), 'utf8')
+    expect(parseFrontmatter(file)!.data.shortCode).toBe('FAKE-9')
+  })
+})
+
+describe('applying what a pull brought back', () => {
+  function replica() {
+    return makeTask({
+      origin: 'remote',
+      executor: 'remote',
+      remoteAdapter: 'fake',
+      remoteId: 'r-1',
+      remoteKey: 'FAKE-1'
+    })
+  }
+
+  it('takes the remote’s fields, and its modification time with them', () => {
+    const task = replica()
+    const theirs = new Date('2026-09-11T08:00:00.000Z')
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      title: 'Renamed on the web',
+      description: 'Understood better',
+      priority: 'urgent',
+      updatedAt: theirs
+    })
+    expect(next.title).toBe('Renamed on the web')
+    expect(next.priority).toBe('urgent')
+    // A mirror that always looked newer than the thing it mirrors would win
+    // every per-field conflict it should lose.
+    expect(next.updatedAt.toISOString()).toBe(theirs.toISOString())
+  })
+
+  it('takes a status the transition table calls unreachable', () => {
+    const task = replica()
+    // cinna's own session handlers bypass its table, so a replica really can
+    // arrive somewhere the desktop could not have walked to. Arguing with the
+    // system doing the work is how the desktop becomes the one corrupting it.
+    const next = taskService.applyRemoteSnapshot(USER, task.id, { status: 'completed' })
+    expect(next.status).toBe('completed')
+    expect(next.finishedAt).toBeInstanceOf(Date)
+  })
+
+  it('does not overwrite a field this device still owes the service', () => {
+    const task = replica()
+    taskService.update(USER, task.id, { title: 'Renamed here' })
+
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      title: 'Renamed there',
+      description: 'Also changed there'
+    })
+    // The marker means "we know something it does not" — taking its value now
+    // would throw the user's change away moments before it was to be sent.
+    expect(next.title).toBe('Renamed here')
+    // Everything not owed still comes through.
+    expect(next.description).toBe('Also changed there')
+  })
+
+  it('lets the remote’s status through once the push has been made', () => {
+    // Desktop-executed and bound: the shape where this device writes the
+    // status and the service is told about it afterwards.
+    const task = makeTask({ remoteAdapter: 'fake', remoteId: 'r-1', remoteKey: 'FAKE-1' })
+    taskService.setStatus(USER, task.id, 'in_progress')
+    expect(
+      taskService.applyRemoteSnapshot(USER, task.id, { status: 'blocked' }).status
+    ).toBe('in_progress')
+
+    taskService.markRemoteSynced(USER, task.id, [])
+    expect(taskService.applyRemoteSnapshot(USER, task.id, { status: 'blocked' }).status).toBe(
+      'blocked'
+    )
+  })
+
+  it('does not wipe the reason a task failed while the status is still owed', () => {
+    // `errorMessage` is written *by* `statusPatch` — it is part of the status,
+    // not a field beside it. A pull always carries one (null when the remote
+    // has none), so letting it through on its own wiped the text of a task that
+    // had just failed here, on the very next poll, before the push that reports
+    // the failure had even left. Nothing puts it back: the status path carries
+    // a reason, not the text, and cinna has no field for it.
+    const task = makeTask({ remoteAdapter: 'fake', remoteId: 'r-1' })
+    driveTo(task.id, 'in_progress')
+    taskService.setStatus(USER, task.id, 'error', { errorMessage: 'Agent crashed: ENOENT' })
+
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      status: 'in_progress',
+      errorMessage: null
+    })
+    expect(next.status).toBe('error')
+    expect(next.errorMessage).toBe('Agent crashed: ENOENT')
+  })
+
+  it('takes the remote’s reason once the status has been pushed', () => {
+    const task = replica()
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      status: 'error',
+      errorMessage: 'The agent could not reach the ledger'
+    })
+    expect(next.errorMessage).toBe('The agent could not reach the ledger')
+  })
+
+  it('refreshes what the binding displays without re-identifying the task', () => {
+    const task = replica()
+    const next = taskService.applyRemoteSnapshot(USER, task.id, {
+      binding: { key: 'FAKE-42', url: 'https://fake.test/tasks/FAKE-42', state: { seen: 1 } }
+    })
+    expect(next.remote).toEqual({
+      adapter: 'fake',
+      id: 'r-1',
+      key: 'FAKE-42',
+      url: 'https://fake.test/tasks/FAKE-42'
+    })
+  })
+})
+
 describe('create', () => {
   it('starts a task in the server’s create state, owned by the desktop', () => {
     const task = makeTask()
@@ -728,6 +975,33 @@ describe('every task write keeps the exported note in step', () => {
     },
     handOffToRemote: {
       run: (id) => taskService.handOffToRemote(USER, id).id,
+      leaves: 'file'
+    },
+    // The four binding writers. `bindRemote` is the one the step-7 review
+    // named in advance: it writes `remoteKey`, which is frontmatter, so a
+    // version of it that ended in `toTaskDto(row)` would leave every bound
+    // task's file claiming the wrong short code with nothing to correct it.
+    bindRemote: {
+      run: (id) =>
+        taskService.bindRemote(USER, id, {
+          adapter: 'fake',
+          id: 'r-2',
+          key: 'FAKE-2',
+          url: 'https://fake.test/tasks/FAKE-2',
+          state: {}
+        }).id,
+      leaves: 'file'
+    },
+    unbindRemote: {
+      run: (id) => taskService.unbindRemote(USER, id, 'the service says it is gone').id,
+      leaves: 'file'
+    },
+    markRemoteSynced: {
+      run: (id) => taskService.markRemoteSynced(USER, id, []).id,
+      leaves: 'file'
+    },
+    applyRemoteSnapshot: {
+      run: (id) => taskService.applyRemoteSnapshot(USER, id, { title: 'From the web' }).id,
       leaves: 'file'
     },
     remove: {

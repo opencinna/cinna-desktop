@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { describeAdapterContract, type AdapterWorld } from './adapterContract'
 import { CAPABILITY_SHAPES, createFakeRemote } from './testSupport/fakeRemote'
+import { createFakeCinnaServer } from './testSupport/fakeCinnaServer'
+import { createCinnaTaskAdapter } from './cinnaTaskAdapter'
 import { adapterFor, hasAdapter } from './index'
 import { createNullAdapter } from './nullAdapter'
 import { UnsupportedRemoteOperation, type RemoteBinding } from './adapter'
@@ -20,7 +22,11 @@ import type { TaskDto } from '../../../shared/tasks'
  * comment. If one of them needed a new field, the shape would be wrong and this
  * file would be where it showed.
  *
- * `cinnaTaskAdapter` joins as one more row in step 9.
+ * `cinnaTaskAdapter` joined as one more row in step 9, and it is the only
+ * subject here that is not a fake: it runs the real mapping against a fake
+ * *cinna server* that speaks the real routes and refuses the way the real one
+ * does. Six green fakes prove the capability set can describe six services;
+ * only this row proves a real mapping survives the seam.
  */
 
 const USER = '__default__'
@@ -111,6 +117,38 @@ describeAdapterContract('a remote the desktop may only read', fakeWorld('readOnl
 // A linked service is not the only state a profile is in.
 describeAdapterContract('a profile that is not connected', fakeWorld('full', false))
 
+/**
+ * cinna-core — **the real adapter**, over a fake server rather than a fake
+ * adapter.
+ *
+ * Everything below the transport is production code: the route paths, the
+ * payload field names, the status-write refusal, the two-request `fetch`, the
+ * translation of an unanswered tool-question message into an `InputRequest`,
+ * and the error taxonomy that decides whether a failure costs the binding.
+ */
+function cinnaWorld(ready = true): () => AdapterWorld {
+  return () => {
+    const server = createFakeCinnaServer({ ready })
+    const adapter = createCinnaTaskAdapter(server.world)
+    return {
+      adapter,
+      userId: USER,
+      ready,
+      task: makeTask(),
+      subtask: makeTask({ id: 'tsk_child', parentTaskId: 'tsk_local' }),
+      bind: () => adapter.create(USER, makeTask(), null),
+      requests: server.requests,
+      failTransport: () => server.behave('transport'),
+      denyOwnership: () => server.behave('not_ours'),
+      refuseWrite: () => server.behave('rejected'),
+      plantAsk: (binding: RemoteBinding) => server.plantAsk(binding.id)
+    }
+  }
+}
+
+describeAdapterContract('cinna-core, over its real routes', cinnaWorld())
+describeAdapterContract('cinna-core on an unlinked profile', cinnaWorld(false))
+
 // And the adapter for a service this build does not have must pass the same
 // clauses: a task bound to it still has to open.
 describeAdapterContract('a service this build does not have', () => {
@@ -144,10 +182,19 @@ describe('the adapter registry', () => {
     return import('./index')
   }
 
-  it('is empty until an implementation registers — the seam lands before the remote', async () => {
+  /**
+   * The scenario the null adapter makes comfortable, and which is therefore the
+   * one a missed registration would hide behind: a cinna-bound task would open
+   * perfectly, show "a service this version of Cinna does not know about", sync
+   * nothing, and log nothing, because nothing failed. Asserting the id is
+   * *present* is the only thing that tells a shipped adapter from a dropped
+   * side-effect import.
+   */
+  it('has the adapters this build ships, from the imports at the foot of the registry', async () => {
     const registry = await freshRegistry()
-    expect(registry.allAdapters()).toEqual([])
-    expect(registry.hasAdapter('cinna')).toBe(false)
+    expect(registry.hasAdapter('cinna')).toBe(true)
+    expect(registry.allAdapters().map((a) => a.id)).toEqual(['cinna'])
+    expect(registry.adapterFor('cinna').id).toBe('cinna')
   })
 
   it('resolves an unknown id to an adapter rather than to nothing', () => {
@@ -214,7 +261,8 @@ describe('the adapter registry', () => {
     expect(registry.adapterFor('registered-fake')).toBe(remote.adapter)
     expect(registry.hasAdapter('registered-fake')).toBe(true)
     expect(registry.allAdapters()).toContain(remote.adapter)
-    // And an id it still does not have is still the null adapter.
-    expect(registry.hasAdapter('cinna')).toBe(false)
+    // And an id it does not have is still the null adapter.
+    expect(registry.hasAdapter('linear')).toBe(false)
+    expect(registry.adapterFor('linear').capabilities().create).toBe(false)
   })
 })

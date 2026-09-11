@@ -8,7 +8,8 @@
  * (native install update endpoints) consume this so auth, error mapping, and
  * observability stay identical across every Cinna call.
  *
- * Error contract:
+ * Error contract (every HTTP failure also carries `status`, and `detail` is the
+ * server's own sentence — see {@link CinnaApiError.status}):
  *   - 401/403            → `CinnaApiError('reauth_required')`, `detail` = the status
  *                          (a 403 on a role-gated route is not a dead session)
  *   - other non-2xx      → `CinnaApiError('request_failed', '<status>: <detail>')`
@@ -64,7 +65,7 @@ async function resolveAuthHeader(userId: string): Promise<string> {
  * to the raw body slice so we never accidentally suppress server-supplied
  * context.
  */
-function extractErrorDetail(text: string): string {
+export function extractErrorDetail(text: string): string {
   const trimmed = text.trim()
   if (!trimmed) return ''
   if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
@@ -153,11 +154,22 @@ export async function cinnaFetch<T>(
       throw new CinnaApiError(
         'reauth_required',
         `Cinna ${response.status}`,
-        String(response.status)
+        String(response.status),
+        response.status
       )
     }
     const detail = extractErrorDetail(text) || response.statusText
-    throw new CinnaApiError('request_failed', `Cinna API ${response.status}: ${detail}`)
+    // The status travels here as well as on `cinnaApiService`'s transport.
+    // `CinnaApiError.status` is documented as an invariant of the *class* —
+    // "undefined only for a failure that never became a response" — and a
+    // second transport that quietly omitted it would make that sentence false
+    // for half the traffic, for the next person who writes a classifier over it.
+    throw new CinnaApiError(
+      'request_failed',
+      `Cinna API ${response.status}: ${detail}`,
+      detail,
+      response.status
+    )
   }
   try {
     return (await response.json()) as T
