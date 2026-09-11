@@ -13,10 +13,10 @@ npm run build    # Production build
 ## Build Validation
 
 - `npx electron-vite build` — full build validation (main + preload + renderer)
-- `npx tsc --noEmit --project tsconfig.web.json` — type-check renderer code only
+- `npm run typecheck` — type-check main, renderer and e2e; `npm run typecheck:web` for the renderer alone
 - `make e2e` — build, then drive the real Electron app with Playwright (`e2e/`); `make help` lists the other E2E targets. A manual step, not part of `npm test`. Each test gets a throwaway `HOME` and `userData`; never launch the built app in a test without that sandbox. To add a scenario: `/cinna-desktop.e2e.write <scenario>` (the `e2e-test-writer` agent); writing rules in `docs/development/e2e/e2e_llm.md`
 
-Do NOT use bare `npx tsc --noEmit` — it hangs silently in this project.
+Do NOT use bare `npx tsc --noEmit` — it hangs silently in this project. `npx tsc --noEmit --project tsconfig.web.json` does not work either: it fails with `TS6307` on the preload types the renderer imports. The npm scripts pass `--composite false`, which is what makes them work — so run the script, not the raw command it wraps.
 
 ## Agents
 
