@@ -29,10 +29,20 @@ const markDirty = vi.hoisted(() => vi.fn())
 const service = vi.hoisted(() => ({
   update: vi.fn(() => ({ id: 't1' })),
   setStatus: vi.fn(() => ({ id: 't1' })),
-  takeOver: vi.fn(() => ({ id: 't1' })),
   remove: vi.fn(),
   list: vi.fn(() => []),
   getById: vi.fn(() => ({ id: 't1' }))
+}))
+/**
+ * The two gestures that move work between here and a service go through
+ * `taskSyncService`, not `taskService`: one of the two elsewheres a task can be
+ * in is on a network, and the refusal that belongs to it (§5.10 — a take-over
+ * of a task an agent is working on right now) costs a request.
+ */
+const sync = vi.hoisted(() => ({
+  takeOver: vi.fn(async () => ({ id: 't1' })),
+  handOff: vi.fn(async () => ({ id: 't1' })),
+  liveSession: vi.fn(async () => false)
 }))
 
 /** Captured `channel → handler`, instead of touching `ipcMain`. */
@@ -45,6 +55,7 @@ vi.mock('./_wrap', () => ({
 }))
 vi.mock('../services/syncService', () => ({ syncService: { markDirty } }))
 vi.mock('../services/taskService', () => ({ taskService: service }))
+vi.mock('../services/taskSyncService', () => ({ taskSyncService: sync }))
 vi.mock('../services/inboxService', () => ({
   inboxService: { list: vi.fn(() => []), answer: vi.fn() }
 }))
@@ -82,14 +93,19 @@ describe('a task write a person made reaches the other devices without waiting a
   })
 
   it('nudges *after* the write, so a refused write never announces itself', async () => {
-    service.takeOver.mockImplementationOnce(() => {
+    sync.takeOver.mockImplementationOnce(() => {
       throw new Error('Task not found')
     })
     await expect(invoke('task:take-over', 't1')).rejects.toThrow('Task not found')
     expect(markDirty).not.toHaveBeenCalled()
   })
 
-  it.each([['task:list', []], ['task:get', ['t1']]] as const)(
+  it.each([
+    ['task:list', []],
+    ['task:get', ['t1']],
+    // A probe, and nothing about this device changed by asking.
+    ['task:remote-live', ['t1']]
+  ] as const)(
     '%s is a read and nudges nothing',
     async (channel, args) => {
       await invoke(channel, ...args)

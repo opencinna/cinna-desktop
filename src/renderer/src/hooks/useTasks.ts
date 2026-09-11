@@ -66,6 +66,87 @@ export function useOpenTask(): (taskId: string) => void {
   )
 }
 
+export const REMOTE_LIVE_QUERY_KEY = (taskId: string | null): readonly unknown[] => [
+  'task-remote-live',
+  taskId
+]
+
+/**
+ * How long the probe is allowed to take before "cannot tell" is the answer.
+ *
+ * **A request that never comes back is not the same as a slow one, and the
+ * banner cannot tell them apart** — while the query is in flight it shows the
+ * same shape as a service that answered "an agent is working on it": a sentence
+ * and no control. Measured by the UX review at six seconds against a stubbed
+ * hang, pixel-identical to the genuinely-live frame. So the user reads a
+ * definite statement about somebody else's agent from a request that silently
+ * never returned, and has no way to take the task back.
+ *
+ * It is reachable without a stub: the adapter's HTTP path has no `AbortSignal`
+ * and no timeout of its own, so a black-holed connection holds it for the OS
+ * connect timeout or longer. That is worth fixing in the adapter and it is not
+ * this step's; this is the deadline the *question* has, which is a different
+ * thing — five seconds is far longer than an answer takes and far shorter than
+ * a person will wait before deciding the app is stuck.
+ */
+const LIVE_PROBE_MS = 5_000
+
+/** The probe's answer, or `null` — "cannot tell" — if it takes too long. */
+function withDeadline(probe: Promise<boolean | null>): Promise<boolean | null> {
+  return Promise.race([
+    probe,
+    new Promise<null>((resolve) => setTimeout(() => resolve(null), LIVE_PROBE_MS))
+  ])
+}
+
+/**
+ * Is an agent working on this task in the service that holds it, right now?
+ *
+ * Asked **once**, when a remote task's page opens, and deliberately not on the
+ * page's five-second poll: it is a network round trip to somebody else's server
+ * and the answer only decides whether one control is on screen. `null` is a
+ * real answer — nobody can tell — and §5.10 turns it into a confirmation rather
+ * than a refusal.
+ *
+ * `undefined` while it is in flight, which is a fourth state and the reason the
+ * banner reserves its control's box rather than growing into it: the shape of
+ * that box must not change under a pointer already on its way (`ux_rules.md`
+ * §1).
+ *
+ * It is not the authority. `tasks.takeOver` asks again on the far side of the
+ * gesture, because an agent can start in the seconds between this answer and
+ * the press.
+ */
+export function useRemoteLiveSession(task: TaskDto | null): UseQueryResult<boolean | null> {
+  // **Any task a service is executing, bound or not.** A replica can lose its
+  // binding and keep `executor: 'remote'` — `unbindRemote` fires when a service
+  // answers "not yours", and it does not move the executor — and gating on
+  // `task.remote` here left that task's page showing "running in the service
+  // that holds it" with no control for ever, because the query never ran and
+  // the banner reads a query that never resolves as still in flight. Main
+  // answers `false` for it without touching a network, which is the truthful
+  // answer: there is no service that could be running it. One rule, in the
+  // place that can enforce it.
+  const enabled = !!task && task.executor === 'remote'
+  return useQuery({
+    queryKey: REMOTE_LIVE_QUERY_KEY(task?.id ?? null),
+    queryFn: () => withDeadline(window.api.tasks.remoteLive(task!.id)),
+    enabled,
+    // A service that answered a minute ago has not become a different service.
+    // Re-asking is what the take-over itself does, where it matters.
+    staleTime: 60_000,
+    // **No retry, and that is not a saving — it is the answer arriving sooner.**
+    // A rejection here is not a transport failure: `task:remote-live` already
+    // swallows every adapter error and answers `null`, and the deadline above
+    // turns a hang into `null` too. What is left that can reject is the
+    // activation guard or the scope lookup, which a second attempt does not fix.
+    // Retrying only holds the banner in its in-flight shape through TanStack's
+    // backoff — which is the shape that says "an agent is working on it" — when
+    // the honest answer, "cannot tell", is already known.
+    retry: false
+  })
+}
+
 /**
  * Claim a task this device does not currently hold — from another of the user's
  * devices, or from a bound service.
@@ -79,19 +160,23 @@ export function useOpenTask(): (taskId: string) => void {
  *
  * §5.4's claim, not a lock: two devices cannot both believe they own a run
  * without one of them having written that it did, and this is that write.
+ *
+ * `force` carries a confirmation the user gave: §5.10 confirms rather than
+ * refuses when the service could not say whether anything was working on the
+ * task. A service that says it **is** refuses the claim whatever `force` says.
  */
 export function useTakeOverTask(): {
-  takeOver: (taskId: string) => Promise<void>
+  takeOver: (taskId: string, force?: boolean) => Promise<void>
   isPending: boolean
 } {
   const queryClient = useQueryClient()
   const [isPending, setPending] = useState(false)
 
   const takeOver = useCallback(
-    async (taskId: string): Promise<void> => {
+    async (taskId: string, force?: boolean): Promise<void> => {
       setPending(true)
       try {
-        const task = await window.api.tasks.takeOver(taskId).catch((err) => {
+        const task = await window.api.tasks.takeOver(taskId, force).catch((err) => {
           throw new Error(unwrapIpcError(err, 'This task could not be taken over.'))
         })
         // Seed *and* invalidate. The seed replaces the banner the user just
@@ -99,6 +184,10 @@ export function useTakeOverTask(): {
         // makes the page agree with main, which is the only copy that matters.
         queryClient.setQueryData(TASK_QUERY_KEY(taskId), task)
         void queryClient.invalidateQueries({ queryKey: TASK_QUERY_KEY(taskId) })
+        // The task is this device's now, so nothing is running on it over
+        // there. Leaving the probe's answer cached would keep a stale "busy"
+        // on screen behind a control that has already moved on.
+        void queryClient.invalidateQueries({ queryKey: REMOTE_LIVE_QUERY_KEY(taskId) })
       } finally {
         setPending(false)
       }

@@ -1,10 +1,14 @@
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
-import { taskRepo } from '../db/tasks'
+import { taskRepo, type TaskRow } from '../db/tasks'
+import { chatRepo } from '../db/chats'
+import { messageRepo } from '../db/messages'
+import { agentRepo } from '../db/agents'
+import { routerOf } from '../../shared/chatRouting'
 import { taskService } from './taskService'
 import { deliverAnswer } from './askDelivery'
 import { createLogger } from '../logger/logger'
 import type { RequestResolution } from '../../shared/localAgentRequests'
-import type { RunEvent } from '../../shared/runEvents'
+import type { RunEvent, RunState } from '../../shared/runEvents'
 import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
 import type { InboxAnswerResult, InboxEntry } from '../../shared/inbox'
 import type { TaskInputRequestStatus } from '../../shared/tasks'
@@ -48,10 +52,11 @@ const logger = createLogger('inbox')
  * when the user's next message resumes the work. It belongs with step 11, where
  * the A2A/remote path folds onto the adapter. Recorded in the phase file.
  *
- * An ask in a chat with no task also writes no row — the table's `task_id` is
- * the scope every read goes through, and a plain chat the user opened by hand
- * has no task until a later phase gives every chat one. Such an ask stays
- * answerable in the transcript, exactly as it was before this phase.
+ * **A chat with no task gets one, at its first ask** — see {@link taskForChat}.
+ * The table's `task_id` is the scope every read goes through, so until step 11
+ * an ask raised in a chat the user opened by hand was answerable in the
+ * transcript and in no list at all. That was this phase's own exit criterion
+ * going unmet for the commonest way a person meets an agent.
  *
  * ## Nothing here is allowed to throw into a stream
  *
@@ -62,6 +67,20 @@ const logger = createLogger('inbox')
  * allowed to break the work it is recording, the same rule
  * `jobService.reportRunCompletion` follows for the same reason.
  */
+
+/**
+ * How a turn ended, in the run vocabulary.
+ *
+ * `stopReason` is optional and most drivers omit it, so `done` alone means the
+ * turn finished — which is what `taskStatusForRunState` turns into `completed`.
+ * A cancel is the one worth telling apart: a stopped turn is not a completed
+ * one, and a task marked `completed` because the user pressed Stop is a lie the
+ * task list would keep.
+ */
+function endedAs(event: Extract<RunEvent, { type: 'done' | 'error' }>): RunState {
+  if (event.type === 'error') return 'failed'
+  return event.stopReason === 'canceled' ? 'canceled' : 'completed'
+}
 
 /** Where a settled ask stands, from what the user (or the registry) decided. */
 function settledStatus(resolution: RequestResolution): Exclude<TaskInputRequestStatus, 'open'> {
@@ -106,7 +125,7 @@ export interface RunEventContext {
  * stream (see `taskService.applyRunState`). The catch is for everything else —
  * a task claimed by another device, a task deleted mid-turn.
  */
-function markTask(userId: string, taskId: string, state: 'needs_input' | 'working'): void {
+function markTask(userId: string, taskId: string, state: RunState): void {
   try {
     taskService.applyRunState(userId, taskId, state)
   } catch (err) {
@@ -116,6 +135,78 @@ function markTask(userId: string, taskId: string, state: 'needs_input' | 'workin
       error: err instanceof Error ? err.message : String(err)
     })
   }
+}
+
+/**
+ * The task an ask lands on, for a chat that had none — created here, at the
+ * first ask, and this is the phase's exit criterion (§5.9).
+ *
+ * **Why lazily, and why at all.** `task_input_requests.task_id` is `NOT NULL`
+ * and it is the scope every read of that table goes through, so until step 11
+ * only a job run's chat could hold an ask: one raised in a chat the user opened
+ * by hand was answerable in the transcript and **in no list at all**. That is
+ * the commonest way a person meets an agent in this app, and "every open ask is
+ * in one list" was untrue for exactly it.
+ *
+ * The three alternatives, and why this one (the user's call, 2026-09-11). A
+ * task per *chat* is the plan's eventual target model, but it changes what the
+ * word means to a user and multiplies the synced `task` collection by the size
+ * of the chats table — a phase 6/7 shape change, not a step. A nullable
+ * `task_id` is the smallest change and breaks the one rule the whole phase is
+ * built on. Moving the criterion to phase 6 leaves the phase's headline claim
+ * untrue.
+ *
+ * **It is created started.** A fresh task is `new`, and `new → blocked` is not
+ * in the transition table — so a task created and left alone would stay `new`
+ * while `applyRunState` no-ops, and the row would hang off a task that does not
+ * say it is waiting on anybody. `start` takes the legal step through
+ * `in_progress`, which is also true: a turn is running, and it is this one.
+ *
+ * **The goal is the first thing the user said**, not the chat's title. `goal`
+ * is the original ask and is immutable once written (`TaskPatch` refuses it),
+ * and the title is a forty-character truncation of the same message — so
+ * writing the title into both would make the permanent field the lossy one.
+ *
+ * Null when the chat is gone, which is not a fault: a chat deleted underneath a
+ * parked turn leaves an ask nobody can attribute, and the ask itself is still
+ * answerable in the transcript that is also gone. Nothing is thrown from here —
+ * see this module's header — and the caller treats null exactly as it treated a
+ * missing task before.
+ */
+function taskForChat(ctx: RunEventContext): TaskRow | null {
+  const chat = chatRepo.getOwned(ctx.userId, ctx.chatId)
+  if (!chat) {
+    logger.debug('an ask arrived in a chat that is not there; it stays in the transcript', {
+      chatId: ctx.chatId
+    })
+    return null
+  }
+  const firstUserMessage = messageRepo.firstByRole(ctx.chatId, 'user')?.content?.trim()
+  const agent = ctx.agentId ? agentRepo.getOwned(ctx.userId, ctx.agentId) : null
+  const created = taskService.create(ctx.userId, {
+    title: chat.title,
+    // A chat with no user message at all is reachable — an agent can speak
+    // first — and an empty goal is refused by `taskRepo.create`.
+    goal: firstUserMessage && firstUserMessage.length > 0 ? firstUserMessage : chat.title,
+    // The chat's own router, read through the one helper that knows about the
+    // `orchestrated` mirror. A `TaskRouter` is a `ChatRouter` plus `script`,
+    // which nothing writes yet (phase 6).
+    router: routerOf(chat),
+    origin: 'local',
+    executor: 'desktop',
+    chatId: ctx.chatId,
+    // Who is actually answering, which for a `child` event is the nested agent
+    // the wrapper named rather than the chat's own root.
+    assigneeAgentId: ctx.agentId,
+    assigneeName: agent?.name ?? null,
+    assigneeKind: ctx.agentId ? 'agent' : 'model'
+  })
+  taskService.start(ctx.userId, created.id, { chatId: ctx.chatId })
+  logger.info('a chat raised its first ask, so it has a task now', {
+    chatId: ctx.chatId,
+    taskId: created.id
+  })
+  return taskService.getRow(ctx.userId, created.id)
 }
 
 export const inboxService = {
@@ -143,8 +234,9 @@ export const inboxService = {
       if (event.type === 'needs_input') this.openAsk(ctx, event)
       else if (event.type === 'input_resolved') this.closeAsk(ctx, event.requestId, event.resolution)
       // A terminal event is the turn saying every address it held is gone —
-      // including the ones it abandoned without saying so.
-      else if (event.type === 'done' || event.type === 'error') this.endTurn(ctx)
+      // including the ones it abandoned without saying so — and, for a chat
+      // that owns its task outright, how the work ended.
+      else if (event.type === 'done' || event.type === 'error') this.endTurn(ctx, event)
     } catch (err) {
       logger.warn('an ask could not be recorded', {
         chatId: ctx.chatId,
@@ -156,13 +248,22 @@ export const inboxService = {
 
   /** A run parked on a human. The row first, then the task's status. */
   openAsk(ctx: RunEventContext, event: Extract<RunEvent, { type: 'needs_input' }>): void {
-    const task = taskRepo.getByChatId(ctx.userId, ctx.chatId)
-    if (!task) {
-      logger.debug('an ask arrived in a chat with no task; it stays in the transcript', {
-        chatId: ctx.chatId
-      })
-      return
-    }
+    // **A task is minted only for an ask that will actually have a row.**
+    // `taskForChat` exists so an ask in a hand-opened chat reaches the inbox, and
+    // a `next_message` ask never reaches it: the protocol ended the turn, there
+    // is no address to answer, and no row is written. A task created for one
+    // would hold nothing, and it would hold it in `blocked` — `endTurn` only
+    // returns a task to `in_progress` when it expired a row, and a plain chat
+    // has no job run for `reportRunCompletion` to finish it through either. So
+    // the task would sit `blocked` for the life of the profile, offering a
+    // re-run for a conversation the user's next message already resumes.
+    //
+    // An ask in a chat that *already* has a task is unaffected: that task is
+    // marked `blocked` whatever the resume kind, exactly as before.
+    const writesRow = event.resume === 'reply' && !!ctx.agentId
+    const task =
+      taskRepo.getByChatId(ctx.userId, ctx.chatId) ?? (writesRow ? taskForChat(ctx) : null)
+    if (!task) return
 
     // The row before the status, deliberately. The ask is the thing the user
     // has to act on; a `blocked` task whose ask was never recorded is a dead
@@ -200,7 +301,8 @@ export const inboxService = {
    */
   closeAsk(ctx: RunEventContext, requestId: string, resolution: RequestResolution): void {
     const row = taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution)
-    // No row: a `next_message` ask, an ask in a chat with no task, or one this
+    // No row: a `next_message` ask, an ask raised in a chat that had already
+    // gone (so `taskForChat` had nothing to make a task from), or one this
     // service has already settled. None of them is a fault, and none of them
     // changes a task's status — the answer path did that already.
     if (!row) return
@@ -226,14 +328,43 @@ export const inboxService = {
    * `jobService.reportRunCompletion` needs to find it in a beat later, when it
    * writes the outcome the run actually had.
    */
-  endTurn(ctx: RunEventContext): void {
-    if (taskInputRequestRepo.expireOpenForChat(ctx.chatId) === 0) return
+  endTurn(
+    ctx: RunEventContext,
+    event: Extract<RunEvent, { type: 'done' | 'error' }>
+  ): void {
+    const expired = taskInputRequestRepo.expireOpenForChat(ctx.chatId)
     const task = taskRepo.getByChatId(ctx.userId, ctx.chatId)
-    logger.info('a turn ended while it was still parked; its asks are expired', {
-      chatId: ctx.chatId,
-      taskId: task?.id
-    })
-    if (task) markTask(ctx.userId, task.id, 'working')
+    if (expired > 0) {
+      logger.info('a turn ended while it was still parked; its asks are expired', {
+        chatId: ctx.chatId,
+        taskId: task?.id
+      })
+    }
+    if (!task) return
+
+    // **A task a job run owns is finished by the job run**, and must be left in
+    // `in_progress` for it to find: `jobService.reportRunCompletion` knows the
+    // outcome this event cannot — a stop, a refusal, a budget ceiling — and
+    // writes it a beat later through the same `applyRunState`. Writing a
+    // terminal status here would be a second, worse answer racing the real one.
+    if (task.jobRunId) {
+      if (expired > 0) markTask(ctx.userId, task.id, 'working')
+      return
+    }
+
+    // **A task this chat made for itself has no such hook, and without this it
+    // never ends.** `reportRunCompletion` is keyed on
+    // `jobRunsRepo.getByLocalChatId`, which answers nothing for a chat the user
+    // opened by hand — so a lazily created task went `in_progress → blocked →
+    // in_progress` and stopped there for the life of the profile: listed as
+    // running, holding this device's claim, and *synced*, so the user's second
+    // device offered Take over on it for ever. One per hand-opened chat that
+    // ever raises an ask.
+    //
+    // The turn's own ending is the outcome here, because for this chat the turn
+    // *is* the work. A `child`'s ending never reaches this method, which is what
+    // keeps one nested agent finishing from ending a coordinator's task.
+    markTask(ctx.userId, task.id, endedAs(event))
   },
 
   /** Everything waiting on this profile, newest first. */

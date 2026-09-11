@@ -123,6 +123,40 @@ export type TaskErrorCode =
    * moves it here, and it is deliberately not gated on this.
    */
   | 'running_elsewhere'
+  /**
+   * A take-over of a task an agent is working on **right now** in the service
+   * that holds it (§5.10). Distinct from `running_elsewhere`, which is about
+   * who may write a field: this one is about a race, and it clears on its own
+   * the moment that agent stops.
+   */
+  | 'remote_busy'
+  /**
+   * The same question, unanswered. The service could not say whether anything
+   * was working on the task — it is unreachable, or this build has no adapter
+   * for it. §5.10 confirms rather than refuses here, so this code is what a
+   * surface turns into that confirmation; it is not a failure.
+   */
+  | 'remote_unknown'
+  /**
+   * There is no service to hand the task to: the profile is linked to none, or
+   * the one it names is not available right now. A `cinna_task` job run on an
+   * unlinked profile lands here.
+   */
+  | 'no_service'
+  /**
+   * The service took the work and the local record of it could not be kept —
+   * the task row went while the hand-over was in flight. Not a refusal, and the
+   * distinction is the point: a caller that cleans up after a refused
+   * hand-over must **not** clean up after this one, because an agent is
+   * running and there is nothing left to clean up anyway.
+   */
+  | 'handed_over'
+  /**
+   * The service is there and cannot do the thing asked of it —
+   * `capabilities()` says no. A remote with no `create` cannot be given a new
+   * task, and that is a property of the service rather than a fault.
+   */
+  | 'unsupported'
 
 export type NoteErrorCode =
   | 'not_found'

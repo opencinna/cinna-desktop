@@ -48,14 +48,15 @@
  *
  * ## Two costs this mapping pays, deliberately
  *
- * `fetch` is **two requests**: `/detail` for the task, and `/sessions` for
- * whether anything is running on it right now. `RemoteTaskSnapshot.liveSession`
- * is the take-over control's input (§5.10), the task's own `status` is not the
- * answer — cinna recomputes status from its sessions, so a task can sit
- * `in_progress` with nothing live — and `interaction_status === 'running'` on a
- * session is. `list` reports `liveSession: null` for the same reason in
- * reverse: `InputTaskPublicExtended` carries no session state, and `null` is a
- * real answer the UI knows what to do with.
+ * `liveSession` is **its own request** (`/sessions`), asked once by a person
+ * about to press Take over, and `fetch` is the single `/detail` call it looks
+ * like. Until step 11 the two were one: the snapshot carried a `liveSession`
+ * field, so every `fetch` — one per watched replica per pull pass — paid for
+ * `/sessions` as well, and the pull dropped the answer on the floor because a
+ * `TaskPatch` has nowhere to put it. The reason the question needs asking at
+ * all is unchanged: the task's own `status` is not the answer, because cinna
+ * recomputes status *from* its sessions, so a task can sit `in_progress` with
+ * nothing live and can be live before the recompute lands.
  *
  * `answerAsk` **reads before it writes**. cinna's answer path is
  * `POST /sessions/{id}/messages/stream` with `answers_to_message_id`, and
@@ -302,7 +303,7 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
   function snapshotOf(
     userId: string,
     row: CinnaTaskRow,
-    opts: { liveSession: boolean | null; previous?: RemoteBinding }
+    opts: { previous?: RemoteBinding } = {}
   ): RemoteTaskSnapshot {
     const assigneeRef = str(row.selected_agent_id)
     const assignee: RemoteAssignee | null = assigneeRef
@@ -331,7 +332,6 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
       parentId: str(row.parent_task_id),
       subtaskCount: num(row.subtask_count) ?? 0,
       subtaskCompletedCount: num(row.subtask_completed_count) ?? 0,
-      liveSession: opts.liveSession,
       updatedAt: date(row.updated_at) ?? new Date()
     }
   }
@@ -619,14 +619,15 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
         userId,
         `/api/v1/tasks/${encodeURIComponent(binding.id)}/detail`
       )
-      // The second request, and what it buys is in the module comment: the
-      // task's own status cannot answer "is something running there now".
+      return snapshotOf(userId, row, { previous: binding })
+    },
+
+    async liveSession(userId, binding) {
+      // `interaction_status === 'running'` on any of the task's sessions. The
+      // task's own status is not the answer: cinna recomputes it *from* these
+      // sessions, so it lags in one direction and leads in the other.
       const sessions = await sessionsOf(userId, binding)
-      const live = sessions.some((s) => str(s.interaction_status) === 'running')
-      const next = snapshotOf(userId, row, { liveSession: live, previous: binding })
-      const sessionIds = sessions.map((s) => str(s.id)).filter((s): s is string => s !== null)
-      next.binding.state = { ...next.binding.state, sessionIds }
-      return next
+      return sessions.some((s) => str(s.interaction_status) === 'running')
     },
 
     async list(userId, since) {
@@ -634,10 +635,7 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
       // cursor is the filter. Without one: the *active* set, which is what the
       // seam's docstring promises and is narrower than "everything".
       const rows = since ? await listChanged(userId, since) : await listActive(userId)
-      // `liveSession: null` — a real answer, meaning "this adapter cannot tell
-      // from here". The list response carries no session state and asking per
-      // row would be one request per task on every poll.
-      return rows.map((row) => snapshotOf(userId, row, { liveSession: null }))
+      return rows.map((row) => snapshotOf(userId, row))
     },
 
     async listSubtasks(userId, binding) {
@@ -646,12 +644,12 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
         userId,
         `/api/v1/tasks/${encodeURIComponent(binding.id)}/subtasks/`
       )
-      return (page?.data ?? []).map((row) => snapshotOf(userId, row, { liveSession: null }))
+      return (page?.data ?? []).map((row) => snapshotOf(userId, row))
     },
 
     async execute(userId, binding) {
       require('execute', 'execute')
-      const result = await call<{ success?: unknown; error?: unknown; session_id?: unknown }>(
+      const result = await call<{ success?: unknown; error?: unknown }>(
         userId,
         `/api/v1/tasks/${encodeURIComponent(binding.id)}/execute`,
         { method: 'POST', body: { mode: 'conversation' } }
@@ -665,26 +663,19 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
           str(result?.error) ?? 'execute returned success: false'
         )
       }
-      const sessionId = str(result?.session_id)
-      // **Merged, not replaced.** `remote_state.sessionIds` is a cache of the
-      // sessions this adapter has heard of, and `fetch` writes the server's
-      // whole list; replacing it here would make the same key mean "every
-      // session" after one call and "the one I just started" after another,
-      // which is how a field nobody reads becomes a field somebody trusts.
-      // Nothing reads it today — `listOpenAsks` deliberately always asks the
-      // server, because a session that appeared since the last `fetch` is
-      // exactly the one with a question on it. Step 11 decides whether anything
-      // should; until then it is a cache with one meaning.
-      const known = Array.isArray(binding.state.sessionIds)
-        ? binding.state.sessionIds.filter((id): id is string => typeof id === 'string')
-        : []
-      return {
-        ...binding,
-        state: {
-          ...binding.state,
-          sessionIds: sessionId && !known.includes(sessionId) ? [...known, sessionId] : known
-        }
-      }
+      // **The session this started is not cached, and step 11 is where that was
+      // decided.** `remote_state.sessionIds` used to be written from here and
+      // from `fetch`, with two different meanings — "the one I just started"
+      // and "every session the server listed" — against the day something read
+      // it. Nothing ever did: `listOpenAsks` asks the server every time,
+      // because a session that appeared since the last read is exactly the one
+      // with a question on it, and {@link RemoteTaskAdapter.liveSession} asks
+      // for the same reason. Now that `fetch` no longer lists sessions, the
+      // only remaining writer would be this one, and the key would quietly
+      // change meaning under any reader that arrived later. `remote_state`
+      // travels to the user's other devices (§5.5), so it would change meaning
+      // there too. A cache nobody reads is deleted rather than kept warm.
+      return binding
     },
 
     async addComment(userId, binding, comment: RemoteCommentDraft) {

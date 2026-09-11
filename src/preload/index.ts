@@ -1117,10 +1117,19 @@ const api = {
   /**
    * Tasks — the unit of work that outlives a chat view.
    *
-   * Read and edit only. Starting a task is still the job path (`jobs.execute`)
-   * until step 11 of the phase makes `taskService.start` one dispatch for both
-   * executors; exposing a half-wired Run here would be a button that sometimes
-   * does nothing.
+   * Read, edit, and pull the work back to this device.
+   *
+   * Starting a task from nothing is still the job path (`jobs.execute`): a task
+   * that has never run has no chat to run in, and spawning one is the job
+   * path's own sequence.
+   *
+   * **Only one of §5.10's two directions has a channel.** `takeOver` brings a
+   * task here from another device or from the service running it, and needs
+   * nothing from the user but the press. The other direction — handing a
+   * desktop task *to* a service — needs an assignee the service knows, and
+   * picking one is a surface that does not exist yet; the code path is
+   * `taskSyncService.handOff` and the `cinna_task` job run is what exercises
+   * it. A channel with no caller is worse than no channel: it looks wired.
    */
   tasks: {
     list: (query?: TaskListQuery): Promise<TaskDto[]> =>
@@ -1133,8 +1142,25 @@ const api = {
     /** Cancel, archive, or reopen. Refused when the task is running elsewhere. */
     setStatus: (taskId: string, status: TaskStatus): Promise<TaskDto> =>
       ipcRenderer.invoke('task:set-status', taskId, status),
-    /** Continue the task on this device. */
-    takeOver: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:take-over', taskId),
+    /**
+     * Is something working on this task in the service running it, right now?
+     *
+     * `null` means nobody can say — an unreachable service, or one this build
+     * has no adapter for — and it is a real answer the caller renders rather
+     * than an error. `false` for a task no service holds.
+     */
+    remoteLive: (taskId: string): Promise<boolean | null> =>
+      ipcRenderer.invoke('task:remote-live', taskId),
+    /**
+     * Continue the task on this device.
+     *
+     * `force` answers the `null` from {@link remoteLive}: §5.10 confirms rather
+     * than refuses when nobody can tell whether an agent is working on it, so
+     * the confirmation the user gave travels with the second attempt. A task an
+     * agent **is** working on is refused whatever this says.
+     */
+    takeOver: (taskId: string, force?: boolean): Promise<TaskDto> =>
+      ipcRenderer.invoke('task:take-over', taskId, force === true),
     delete: (taskId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('task:delete', taskId)
   },

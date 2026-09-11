@@ -284,30 +284,6 @@ export interface RemoteTaskSnapshot {
   /** The remote's own counts. cinna computes both; a flat remote reports zero. */
   subtaskCount: number
   subtaskCompletedCount: number
-  /**
-   * Is something **running on the remote right now**?
-   *
-   * `null` is a real answer — "this adapter cannot tell" — and §5.10 already
-   * says what the UI does with each of the three: a take-over is refused while
-   * work is live there, offered when it is not, and asks for confirmation when
-   * nobody knows.
-   *
-   * It is a field rather than a method, and it is here in step 8 rather than in
-   * step 11, because the alternative is worse in a specific way. The seam
-   * otherwise has nothing to ask: `status` is not the answer (cinna recomputes
-   * it from its sessions, so a task can sit `in_progress` with nothing live,
-   * and can be live before the recompute lands), and `RemoteBinding.state` —
-   * where cinna keeps the answering session — is opaque outside the adapter by
-   * rule, so `taskService` may not read it. With nothing to ask, the cheapest
-   * implementation of the Take over control is `status === 'in_progress'`
-   * inferred in the renderer, which is wrong **in both directions**: it blocks
-   * a take-over that was safe, and it offers one into a live agent, which is
-   * the race the rule exists to prevent and which ends with two runners on one
-   * task and `compute_status_from_sessions` overwriting whatever the desktop
-   * wrote. Adding the field now costs a line in each adapter; adding it in step
-   * 11 is a seam change under a half-built screen.
-   */
-  liveSession: boolean | null
   updatedAt: Date
 }
 
@@ -477,7 +453,50 @@ export interface RemoteTaskAdapter {
    */
   archive(userId: string, binding: RemoteBinding): Promise<RemoteBinding>
 
+  /**
+   * Everything the desktop mirrors about the task, in one call.
+   *
+   * Deliberately **not** an answer to "is something running there right now" —
+   * that is {@link RemoteTaskAdapter.liveSession}, and the split is step 11's.
+   * It was one call in step 8 (a `liveSession` field on the snapshot) because
+   * the seam then had nothing else to ask, and the cost of that shape only
+   * became visible once something used it: the pull calls `fetch` for every
+   * watched replica on every pass and throws the session state away, because
+   * there is nowhere in a `TaskPatch` to put it. On cinna that was a whole
+   * extra round trip per task per poll, paid for a question nobody was asking.
+   */
   fetch(userId: string, binding: RemoteBinding): Promise<RemoteTaskSnapshot>
+
+  /**
+   * Is something **running on the remote right now**?
+   *
+   * `null` is a real answer — "this adapter cannot tell" — and §5.10 says what
+   * the caller does with each of the three: a take-over is refused while work
+   * is live there, offered when it is not, and asks for confirmation when
+   * nobody knows. A **failed** probe collapses onto `null` at the call site
+   * rather than here, because the two are the same answer to the only question
+   * anybody asks of it, and an adapter that swallowed its own transport
+   * failures would be the one call in this interface that reports success for
+   * a request that did not happen.
+   *
+   * There is no capability for it. The tri-state already carries the whole
+   * answer — an adapter that cannot tell says `null` — and a boolean beside it
+   * would be a second way to spell the same thing, which is how the two drift.
+   *
+   * Its own question rather than a field on the snapshot, because the two are
+   * asked at completely different rates: the snapshot is pulled for every
+   * watched replica on every pass, and this is asked once, by a person about to
+   * press Take over. The reason it may not be inferred instead — `status ===
+   * 'in_progress'` in the renderer — is unchanged and is why it exists at all:
+   * cinna recomputes status from its sessions, so a task can sit `in_progress`
+   * with nothing live and can be live before the recompute lands, and
+   * `RemoteBinding.state` (where cinna keeps its sessions) is opaque outside
+   * this folder by rule. Inferring is wrong in both directions — it blocks a
+   * take-over that was safe, and it offers one into a live agent, which ends
+   * with two runners on one task and `compute_status_from_sessions` overwriting
+   * whatever the desktop wrote.
+   */
+  liveSession(userId: string, binding: RemoteBinding): Promise<boolean | null>
 
   /** Everything changed since `since`, or the adapter's own active set when null. */
   list(userId: string, since: Date | null): Promise<RemoteTaskSnapshot[]>

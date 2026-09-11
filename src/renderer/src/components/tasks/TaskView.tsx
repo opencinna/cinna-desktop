@@ -11,14 +11,20 @@ import {
   Link as LinkIcon,
   Loader2,
   MessageSquare,
-  RotateCcw
+  RotateCcw,
+  Server
 } from 'lucide-react'
 import { useAgents } from '../../hooks/useAgents'
 import { useInboxList } from '../../hooks/useInbox'
 import { useJob, useOpenChatFromRun } from '../../hooks/useJobs'
 import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useOpenExternal } from '../../hooks/useSystem'
-import { useRerunTask, useTakeOverTask, useTask } from '../../hooks/useTasks'
+import {
+  useRemoteLiveSession,
+  useRerunTask,
+  useTakeOverTask,
+  useTask
+} from '../../hooks/useTasks'
 import { useUIStore } from '../../stores/ui.store'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -220,6 +226,24 @@ function TaskPage({
     setActiveView('job-detail')
   }
 
+  /**
+   * **Step 11's answer to "a task with no job has no way out of its own page"
+   * turned out to be that it already had one.**
+   *
+   * Step 6 recorded that gap against the step that could first produce such a
+   * task, and step 11 is that step — a chat's first ask now mints one. The
+   * obvious fix was a second back link pointing at the chat, and the UX review
+   * measured what that actually produced: *Back to the conversation* and the
+   * header's own **Open the conversation** (rendered for any task with a
+   * `chatId`, ~400 px away on the same header row) — two controls, one
+   * destination, one noun (`ux_rules.md` §2, §7).
+   *
+   * So the labelled header control stays and the link is not added. The gap
+   * step 6 described was real for a task with **neither** a job nor a chat, and
+   * that is a peer copy whose chat did not travel — there is genuinely nowhere
+   * on this machine to go back to, so nothing is the right answer.
+   */
+
   return (
     <div className="flex-1 overflow-y-auto pt-[var(--topbar-h)]">
       <div className="max-w-2xl mx-auto px-6 py-6 space-y-6">
@@ -234,11 +258,11 @@ function TaskPage({
                 it with it (`ux_rules.md` §1). The space is reserved for any
                 task that has a job; only the sentence in it arrives late.
 
-                A task with no job gets no slot and no link, which is also the
-                one shape of this page with no visible way out of its own. It
-                is unreachable today — every task comes from a job run — and
-                what belongs there is a question for the step that can produce
-                one.
+                A task with no job gets no slot, and it needs none: the header's
+                own **Open the conversation** is the way out for one that has a
+                chat, and a task with neither is a peer copy whose chat did not
+                travel — there is nowhere on this machine to go back to. See the
+                note on `back` above.
               */}
               {task.jobId && (
                 <div className="min-h-[1.125rem] mb-1.5">
@@ -473,6 +497,17 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
     return <ElsewhereBanner task={task} />
   }
 
+  /*
+    And a task a *service* is running, for the same reason in the same place:
+    every arm below offers something this device cannot do to work it does not
+    hold. The re-run has no chat to send into — a remote task never had one —
+    and the Inbox cannot contain its asks, which live on the service and are
+    read through the adapter rather than out of `task_input_requests`.
+  */
+  if (task.executor === 'remote' && CLAIM_MATTERS.includes(task.status)) {
+    return <RemoteBanner task={task} />
+  }
+
   if (task.status === 'blocked' && asks.count > 0) {
     return (
       <Banner tone="warning" icon={<AlertTriangle size={13} className="shrink-0" />}>
@@ -501,16 +536,6 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
         >
           Open the Inbox
         </button>
-      </Banner>
-    )
-  }
-
-  if (task.status === 'blocked' && task.executor === 'remote') {
-    return (
-      <Banner tone="warning" icon={<AlertTriangle size={13} className="shrink-0" />}>
-        <span className="flex-1">
-          This task is waiting on something in the service that is running it.
-        </span>
       </Banner>
     )
   }
@@ -594,7 +619,9 @@ function ElsewhereBanner({ task }: { task: TaskDto }): React.JSX.Element {
   const onTakeOver = async (): Promise<void> => {
     setError(null)
     try {
-      await takeOver(task.id)
+      // Never forced. There is nothing to confirm: a device claim asks nothing
+      // of a network, so "could not tell" is not one of its answers.
+      await takeOver(task.id, false)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'This task could not be taken over.')
     }
@@ -649,6 +676,221 @@ function ElsewhereBanner({ task }: { task: TaskDto }): React.JSX.Element {
           control stays.
         */}
         {!live && task.status === 'error' && task.errorMessage && (
+          <div className="break-words text-[11px] text-[var(--color-text-secondary)]">
+            {task.errorMessage}
+          </div>
+        )}
+        {error && <div className="text-[11px] text-[var(--color-danger)]">{error}</div>}
+      </div>
+    </Banner>
+  )
+}
+
+/**
+ * The task is running in a service this desktop is bound to — §5.10's remote →
+ * desktop direction, and the twin of {@link ElsewhereBanner} on the other side
+ * of the seam.
+ *
+ * **The same three shapes, decided by the same question**, and it is asked
+ * rather than inferred. Whether work is live over there is `liveSession` on the
+ * adapter, one request, because the task's own status cannot answer it: cinna
+ * recomputes status *from* its sessions, so a task can sit `in_progress` with
+ * nothing live and can be live before the recompute lands. Inferring from
+ * `status === 'in_progress'` is wrong in both directions — it hides a
+ * take-over that was safe and offers one into a working agent.
+ *
+ *  - **live** — the sentence, and **no control**. Claiming does not stop the
+ *    agent, so the two outcomes of the press are two runners on one task, or a
+ *    claim the service's next status recompute silently undoes. Exactly
+ *    decision 8's reasoning for another *device*, which is where that refusal
+ *    was shaped first; §5.10 specified this one and step 10 built its twin.
+ *  - **not live** — Take over.
+ *  - **nobody can tell** — an unreachable service, or one this build has no
+ *    adapter for. §5.10 asks for a confirmation here rather than a refusal,
+ *    because refusing would strand the task on a service that cannot answer for
+ *    it. **The confirmation is the sentence and the label, not a second
+ *    press** — a deviation, and the reason is what the gesture actually does:
+ *    taking over *claims* and does not run. Nothing starts here and nothing
+ *    stops there, the flip is visible on this page the moment it lands, and the
+ *    worst outcome of a mistaken press is a claim that can be given back. A
+ *    modal in front of a reversible claim is a dialog about a risk the line
+ *    above the button has already stated.
+ *
+ * **The sentence never changes after it appears.** It is chosen from `status`,
+ * which the page already has, so the probe arriving late fills the control's
+ * reserved box and rewrites nothing the user may already be reading
+ * (`ux_rules.md` §1). The box is reserved for every shape including the live
+ * one, because `liveSession` is the thing that arrives late and it is the thing
+ * that decides whether there is a control at all.
+ *
+ * **The button is on the right of its own row**, the rule `ElsewhereBanner` and
+ * `RerunBanner` both follow: these arms replace each other on a poll, and two
+ * controls that can swap without a gesture must not share pixels.
+ */
+function RemoteBanner({ task }: { task: TaskDto }): React.JSX.Element {
+  const { takeOver, isPending } = useTakeOverTask()
+  const { data: live, isPending: livePending, refetch } = useRemoteLiveSession(task)
+  const [error, setError] = useState<string | null>(null)
+
+  /*
+    **`live !== false` — every answer that is not a definite "no agent is
+    working on it" is the cautious one.** Three values reach here as "cannot
+    tell": the adapter's own `null`, the deadline's `null`, and `undefined` from
+    a query that rejected. The last was read as *not live* — the least cautious
+    of the three — which put the plain **Take over** label on it, sent
+    `force: false`, and made main refuse with `remote_unknown`. The label never
+    changed, so the next press produced the identical refusal for ever. Both
+    reviews found this line from opposite ends; the UX one drove it and captured
+    two byte-identical frames.
+
+    **Written as two exclusions rather than as `!== false`**, which is how the
+    first version of this fix was written and what it broke: `live !== false` is
+    also true for `true`, so the *live* arm rendered the "could not say" line
+    under a sentence saying an agent was working on it — two statements that
+    contradict each other one line apart, and the second is the one that decides
+    whether the control appears. Caught on a re-measure, not by the fix's own
+    test, because the test asked what the button said and this changed a
+    sentence beside it.
+  */
+  const unknown = !livePending && live !== false && live !== true
+  const offered = !livePending && live !== true
+
+  const onTakeOver = async (): Promise<void> => {
+    setError(null)
+    try {
+      await takeOver(task.id, unknown)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'This task could not be taken over.')
+      // **Ask again, because a refusal means this answer is out of date.** The
+      // probe is cached for a minute, so a `false` that has gone stale gets the
+      // same dead end with no error anywhere: main says "cannot tell", the
+      // label stays *Take over*, and pressing it again refuses identically. A
+      // re-read turns the next press into the one that works — or, if an agent
+      // really did start, takes the control away, which is the honest outcome.
+      void refetch()
+    }
+  }
+
+  return (
+    <Banner
+      tone={task.status === 'error' ? 'danger' : task.status === 'blocked' ? 'warning' : 'neutral'}
+      icon={<Server size={13} className="shrink-0 mt-0.5" />}
+    >
+      {/*
+        **The whole block is reserved, not just the control's box.**
+
+        Reserving the button's row was not enough, and the UX review measured
+        exactly how much: the "could not say" line was inserted *above* it when
+        the probe resolved, moving the control, the error line and the `Goal`
+        heading below — 25.125 px, with no gesture, a second after the page
+        opened (`ux_rules.md` §1). Anything that can arrive late has to land
+        inside a box that was already the height of the tallest arm, which is
+        what `InboxRow` does for the same reason: the held space reads as bottom
+        padding rather than as a hole.
+
+        **Reserved by line count, not by a pixel total**, and the difference is
+        what the first version got wrong. A block-level `min-h` sized for
+        "sentence + sub-line + control" is only enough for the arms whose own
+        content does not already fill it — an `error` task always carries its
+        `errorMessage` in the same block, so the late sub-line was pure growth
+        and moved the Goal heading 24.25 px with no gesture. And a pixel total
+        cannot hold at every width: one wrap and it is wrong again.
+
+        So every arm renders the same three rows — sentence, liveness sub-line,
+        control row — and the sub-line's slot is there whether or not it has
+        anything in it. In flight and resolved then have identical line counts
+        in every arm and at every width, which is the property that actually
+        stops the page moving.
+
+        The control row is sized from the **button** (26.375 px measured, so
+        1.75 rem) rather than from a round 1.5 rem, which was 2.4 px short and
+        moved the heading by 0.875 px when the control arrived.
+      */}
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="break-words">
+          {task.status === 'blocked'
+            ? 'This task is waiting on something in the service that is running it.'
+            : task.status === 'error'
+              ? 'This task ended with an error in the service running it.'
+              : live === false
+                ? // **Not "Nothing is working on this task…", and not the
+                  // longer sentence either.** The header's status pill still
+                  // says IN PROGRESS, and a banner that only says nothing is
+                  // working leaves the two unreconciled; "listed as running"
+                  // is what ties them together. The first attempt at that was
+                  // 89 characters, which at 800 px — the app's `minWidth` — is
+                  // 535 px against a 410 px text column, so it wrapped to two
+                  // lines and moved the page by a line height at exactly the
+                  // width nobody looks at. This one is 54.
+                  'Listed as running, but nothing is working on it there.'
+                : 'This task is running in the service that holds it.'}
+        </div>
+        {/*
+          **One line, always present, three possible contents.** It carries
+          whatever the probe turned out to say — and carrying nothing is one of
+          the three, which is why the slot is here rather than the line.
+
+          It also stops the reserved space reading as a control that failed to
+          render: the live arm is the one that will never grow a button, and
+          before this it was a sentence over a dead strip. The peer twin has no
+          such strip because its liveness is known synchronously and this one
+          arrives over a network, so collapsing when the probe resolves would be
+          the jump the reservation exists to prevent. Saying the thing the strip
+          was failing to say costs nothing and answers the question the missing
+          button raises.
+
+          **The fourth content is the wait**, and it exists because reserving
+          did not shrink the in-flight frame the way this comment first claimed
+          it would: two rows are held, not one, so the wait was still a sentence
+          over ~62 px of blank — measured at 2.65 px *taller* than the hole it
+          replaced, and holdable for the full five seconds of the deadline. A
+          line saying what is being waited for costs no layout, because the slot
+          is already there, and turns a box that looks broken into one that is
+          working.
+        */}
+        <div className="min-h-[1.0625rem] break-words text-[11px] text-[var(--color-text-secondary)]">
+          {livePending
+            ? 'Checking whether an agent is working on it…'
+            : live === true
+              ? 'An agent is working on it there now, so it cannot be taken over yet.'
+              : unknown
+                ? 'That service could not say whether anything is working on it right now.'
+                : ''}
+        </div>
+        {/*
+          The control's own row, inside the reserved block. `min-h` rather than
+          a rendered placeholder: an empty row is what a live task keeps for
+          good, and it should read as spacing rather than as something missing.
+        */}
+        <div className="flex justify-end min-h-[1.75rem] items-center">
+          {offered && (
+            <button
+              type="button"
+              onClick={() => void onTakeOver()}
+              disabled={isPending}
+              title="Continue this task on this device"
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium
+                bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors
+                disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {/* The spinner replaces the icon, never the label: a label that
+                  changes width moves the button under the pointer. */}
+              {isPending ? (
+                <Loader2 size={11} className="animate-spin" />
+              ) : (
+                <Laptop size={11} />
+              )}
+              {unknown ? 'Take over anyway' : 'Take over'}
+            </button>
+          )}
+        </div>
+        {/*
+          An `errorMessage` arrives on a poll, so it sits **below** the control,
+          which is `ElsewhereBanner`'s rule: above the button it would move the
+          button with no gesture at all. The liveness sub-line is above the
+          control instead, because unlike this one it has a slot held for it.
+        */}
+        {task.status === 'error' && task.errorMessage && (
           <div className="break-words text-[11px] text-[var(--color-text-secondary)]">
             {task.errorMessage}
           </div>

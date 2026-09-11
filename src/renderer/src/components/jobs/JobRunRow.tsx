@@ -153,6 +153,12 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
     if (run.localChatId) openChatFromRun(run.localChatId)
   }
 
+  const handleOpenCinnaViewClick = (e: React.MouseEvent): void => {
+    e.stopPropagation()
+    setActiveCinnaRunId(run.id)
+    setActiveView('cinna-task-run')
+  }
+
   const handleRefreshClick = (e: React.MouseEvent): void => {
     e.stopPropagation()
     log.info('manual cinna run refresh', { runId: run.id, status: run.status })
@@ -299,6 +305,48 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
         >
           <MessageSquare size={11} />
           Chat
+        </button>
+      )}
+
+      {/*
+        The same rule, for the service's own conversation.
+
+        Step 11 gave a run that executes on a service a task, and `canOpenTask`
+        is checked first — so this row's click moved from the service's run view
+        to the task page, which is §5.8's "the run row's link target changes to
+        the task view". The service's view is the only screen in the app that
+        renders the *conversation* over there, and the task page does not; a
+        change that silently made it unreachable would take a surface away
+        rather than replace one.
+
+        So it is named, at rest, and for the same reason step 6's UX review gave
+        for Chat: a control nobody can find is a control that does not exist.
+
+        **It is never beside Chat**, which is worth saying because the shape
+        suggests otherwise: `canOpenChat` requires `type === 'local'` and
+        `canOpenCinnaView` requires `'cinna_task'`, so no run can offer both.
+        The two are the same idea — "the conversation this run happened in" —
+        for the two places a run can happen, and a row shows whichever one it
+        has.
+
+        **It is not called "Conversation", and the reason is a collision one
+        click wide.** The task page's own header button says *Open the
+        conversation* and opens the **local chat**; this one opens the thread on
+        the service. Two controls, one noun, two destinations, for the same task
+        (`ux_rules.md` §10). The label names *where* instead, which is the one
+        thing that actually distinguishes them.
+      */}
+      {canOpenTask && canOpenCinnaView && (
+        <button
+          type="button"
+          onClick={handleOpenCinnaViewClick}
+          className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded
+            text-[10px] font-medium text-[var(--color-accent)]
+            hover:bg-[var(--color-bg-hover)] transition-colors"
+          title="Open the conversation in the service that ran this"
+        >
+          <MessageSquare size={11} />
+          On the service
         </button>
       )}
 

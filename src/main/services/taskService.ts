@@ -100,6 +100,26 @@ function isSettled(status: TaskStatus): boolean {
 }
 
 /**
+ * A task no run can ever start from again.
+ *
+ * **Narrower than {@link isSettled}, and the difference is `error`.** The
+ * transition table gives `error` a way out — `error → in_progress` is what the
+ * task page's re-run is — so an errored task is one a device can still take a
+ * turn on, which makes it one whose claim matters. `completed` and `cancelled`
+ * reach nothing but `archived`, and `archived` reaches nothing at all.
+ *
+ * `adoptUnclaimed` is the caller, and it used `isSettled` — which skipped every
+ * errored task, leaving `executor_device` null on exactly the rows the re-run
+ * control is offered for. A null claim reads as "this device owns it" on every
+ * device (step 10's second review finding), so two machines would both have
+ * offered the re-run on one task. Found by the documenter, which noticed the
+ * docstring named three statuses and the predicate matched a different three.
+ */
+function isUnstartable(status: TaskStatus): boolean {
+  return status === 'completed' || status === 'cancelled' || status === 'archived'
+}
+
+/**
  * A task is being picked up again. The only statuses that mean work is
  * expected to continue — and therefore the only ones that may clear the record
  * of how it stopped last time.
@@ -555,6 +575,26 @@ export const taskService = {
   },
 
   /**
+   * Record which job run is executing this task.
+   *
+   * Its own writer, and a small one, because the ordering is not the same on
+   * both paths. A local run creates the chat and the run row before the task,
+   * so `create` carries `jobRunId` — a task created *first* cannot, and a
+   * `cinna_task` run has to be created first: the adapter is given the task's
+   * own id as `external_ref`, which is what makes a retried create idempotent.
+   *
+   * Not part of {@link taskService.update}, which is the set of fields a person
+   * edits and is deliberately ungated by the claim (§5.4). This is provenance:
+   * written once, by the code that made both rows.
+   */
+  linkJobRun(userId: string, taskId: string, jobRunId: string): TaskDto {
+    requireTask(userId, taskId)
+    const row = taskRepo.update(userId, taskId, { jobRunId })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    return written(userId, row)
+  },
+
+  /**
    * Begin work: claim the device and move to `in_progress`.
    *
    * What it does **not** do yet is dispatch. Step 3 hangs the desktop branch
@@ -907,10 +947,16 @@ export const taskService = {
    * else's; a device restored from a backup receives them already claimed, so
    * there is nothing null left for it to adopt.
    *
-   * Terminal tasks are skipped. `completed`, `cancelled` and `archived` reach
-   * nothing but `archived` in the transition table, so no run can ever start
-   * from one — and a profile's history is most of its tasks. Claiming them
-   * would bump `updated_at` on all of it to write a claim nobody will read.
+   * Tasks no run can start from are skipped — `completed`, `cancelled` and
+   * `archived`, which reach nothing but `archived` in the transition table. A
+   * profile's history is most of its tasks, and claiming them would bump
+   * `updated_at` on all of it to write a claim nobody will read.
+   *
+   * **`error` is adopted**, and it is the one this filter got wrong at first:
+   * it used {@link isSettled}, which counts `error` as stopped. It is stopped,
+   * and it is not finished — `error → in_progress` is the task page's re-run —
+   * so an errored task left with a null claim reads as "mine" on every device
+   * and two of them offer that re-run. See {@link isUnstartable}.
    *
    * Returns how many it adopted, for the log.
    */
@@ -918,7 +964,7 @@ export const taskService = {
     // `list` already excludes soft-deleted and archived rows.
     const unclaimed = taskRepo
       .list(userId, { executor: 'desktop' })
-      .filter((row) => row.executorDevice === null && !isSettled(parseTaskStatus(row.status)))
+      .filter((row) => row.executorDevice === null && !isUnstartable(parseTaskStatus(row.status)))
     for (const row of unclaimed) {
       const next = taskRepo.update(userId, row.id, { executorDevice: deviceId })
       if (next) written(userId, next)

@@ -9,14 +9,20 @@
  * the markers in `tasks.remote_dirty` survive until the remote has actually
  * been told.
  *
- * Four jobs:
+ * Five jobs:
  *
  *  - **push** what this device knows and the remote does not — the dirty
  *    fields, the handoff note, and the status as a *path* rather than a
  *    destination;
  *  - **pull** what changed there, through the adapter's `updated_since` cursor;
  *  - **reconcile** periodically, because a delete is invisible to a cursor;
- *  - **count** what is waiting on the user, for the inbox badge's remote half.
+ *  - **count** what is waiting on the user, for the inbox badge's remote half;
+ *  - **hand the work across the seam**, in both directions (§5.10) — which is
+ *    the only one of the five a person presses, and the reason it is here is
+ *    that it is the only other code allowed to call an adapter. `taskService`
+ *    owns the row and the two executor flips; everything that makes a flip
+ *    *mean* something — create, note, assign, execute, and the refusal to race
+ *    a live agent — is a network call, and lives on this side of that line.
  *
  * ## Three rules that are not obvious, each of which costs data if broken
  *
@@ -41,17 +47,25 @@
  *
  * ## What calls this
  *
- * **Nothing drives the loop yet** — no timer, no IPC channel, no service caller
- * for `push`, `pull`, `reconcile`, `pullOne` or `remoteWork`. Deliberately, the
- * same way `taskFileService` landed before anything wrote a handoff note and the
- * adapter seam landed before its first adapter. The producers arrive with step
- * 11, where the `cinna_task` job path folds onto `adapter.create` +
- * `adapter.execute` and `refreshCinnaRun` becomes {@link
- * taskSyncService.pullOne}.
+ * Step 11 gave the loop its producers. `jobService.execute` hands a
+ * `cinna_task` job's work over through {@link taskSyncService.handOff} — which
+ * is what `executeCinnaTask` used to do by hand, against one hardcoded service
+ * — and `jobService.refreshCinnaRun` is now {@link taskSyncService.pullOne}
+ * with the run's status derived from the task's. `task:take-over` and
+ * `task:remote-live` reach {@link taskSyncService.takeOver} and {@link
+ * taskSyncService.liveSession}.
  *
- * The one production import is `authService`, and it calls
- * {@link taskSyncService.resetCursors} alone — that hazard does not wait for a
- * scheduler, because it is about a cursor outliving the account it describes.
+ * **What still has no scheduler** is the periodic half: nothing calls `pull`,
+ * `pushAll` or `reconcile` on a timer. A bound task therefore syncs when
+ * something asks about it — a task page open, a job run refreshed — and not
+ * otherwise. That is the shape step 11 stops at deliberately: `pull` has no
+ * in-flight dedupe (unlike push's `pushesInFlight`), and the step that first
+ * schedules one is the step that owes it, because two overlapping passes both
+ * reading `pulls === 0` is only reachable once something can start two.
+ *
+ * `authService` calls {@link taskSyncService.resetCursors} alone — that hazard
+ * does not wait for a scheduler, because it is about a cursor outliving the
+ * account it describes.
  *
  * The cursor is deliberately in memory for the same reason §5.7 wants a full
  * reconcile on start: a restart costs one active-set pull, which is the pass
@@ -65,6 +79,7 @@ import { adapterFor, allAdapters } from '../tasks/adapters'
 import {
   RemoteTaskError,
   isRemoteDirtyField,
+  type RemoteAssignee,
   type RemoteBinding,
   type RemoteDirtyField,
   type RemoteTaskAdapter,
@@ -80,6 +95,7 @@ import {
   type TaskDto
 } from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
+import { TaskError } from '../errors'
 
 const logger = createLogger('task-sync')
 
@@ -367,24 +383,59 @@ function fieldPatch(
     if (field === 'title') patch.title = row.title
     if (field === 'description') patch.description = row.description
     if (field === 'priority') patch.priority = parseTaskPriority(row.priority)
-    if (field === 'assignee') {
-      const kind = parseTaskAssigneeKind(row.assigneeKind)
-      // **Only an assignee the remote could possibly know.** `assigneeAgentId`
-      // is an id in the space its `kind` names — a local `agents` row for
-      // `agent`, and the remote's own id for `remote_agent` — so a
-      // `remote_agent` is the one kind that has a reference to send.
-      //
-      // Not read out of `remoteState`, which is opaque outside
-      // `tasks/adapters/` by §5.6 rule 1; `shared/tasks.ts` used to say the
-      // binding state held this, which no caller outside the adapters could
-      // ever have honoured. Corrected there.
-      patch.assignee =
-        kind === 'remote_agent' && row.assigneeAgentId
-          ? { ref: row.assigneeAgentId, name: row.assigneeName, kind }
-          : null
-    }
+    if (field === 'assignee') patch.assignee = toRemoteAssignee(row)
   }
   return patch
+}
+
+/**
+ * The task's assignee as the remote can understand it, or null.
+ *
+ * **Only an assignee the remote could possibly know.** `assigneeAgentId` is an
+ * id in the space its `kind` names — a local `agents` row for `agent`, and the
+ * remote's own id for `remote_agent` — so a `remote_agent` is the one kind that
+ * has a reference to send. A local agent's id on a remote would name nothing,
+ * or worse, name something else.
+ *
+ * Not read out of `remoteState`, which is opaque outside `tasks/adapters/` by
+ * §5.6 rule 1; `shared/tasks.ts` used to say the binding state held this, which
+ * no caller outside the adapters could ever have honoured. Corrected there.
+ *
+ * Null means two things and the callers want them treated differently, which is
+ * why this answers with the value rather than the distinction: in a dirty-field
+ * push it is "clear the assignee", because the marker says the user changed it;
+ * in a hand-over it is "there is nobody to send", and {@link
+ * taskSyncService.handOff} skips the call rather than clearing what the remote
+ * already has.
+ */
+function toRemoteAssignee(row: TaskRow): RemoteAssignee | null {
+  const kind = parseTaskAssigneeKind(row.assigneeKind)
+  return kind === 'remote_agent' && row.assigneeAgentId
+    ? { ref: row.assigneeAgentId, name: row.assigneeName, kind }
+    : null
+}
+
+/**
+ * The adapter a hand-over goes to when the task does not already name one.
+ *
+ * The first registered adapter this profile can actually use. With one
+ * implementation in the build that is "cinna, if this profile is linked to a
+ * Cinna account" — and the point is that `jobService` gets to that answer
+ * without the word: §5.8 originally wrote `job.type === 'cinna_task' ? 'cinna'
+ * : null` straight into the job path, which is the phase's own exit criterion
+ * broken in the one file most likely to be read as precedent.
+ *
+ * `null` when the profile can use none of them, which a caller turns into a
+ * sentence. Registration order decides between two ready adapters; the day
+ * there are two, the choice belongs to the user and this becomes an argument
+ * rather than a default — which is why it is one function and not a rule spread
+ * over the callers.
+ */
+async function preferredAdapter(userId: string): Promise<RemoteTaskAdapter | null> {
+  for (const adapter of allAdapters()) {
+    if ((await adapter.availability(userId)).ready) return adapter
+  }
+  return null
 }
 
 /**
@@ -666,6 +717,306 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 }
 
 export const taskSyncService = {
+  /**
+   * Which service this profile would hand a task to, by id, or null for none.
+   *
+   * The registry's answer, exported so a caller that has to *record* the choice
+   * — rather than make it — can do so without naming an implementation. The one
+   * caller is a job run from before step 11 being given the task it never had:
+   * it knows the remote's id and needs to say which service that id belongs to.
+   */
+  async preferredAdapterId(userId: string): Promise<string | null> {
+    return (await preferredAdapter(userId))?.id ?? null
+  },
+
+  /**
+   * Is something running on this task in the service that holds it?
+   *
+   * Three answers, and `null` is one of them: "nobody here can tell". A
+   * **failed** probe collapses onto it, because unknown and unknowable are the
+   * same answer to the only question anybody asks of this — may I take the task
+   * over — and an unreachable service is exactly when a user most wants to be
+   * allowed to pull work back to their own machine.
+   *
+   * An unbound task, or one this device is already executing, is `false` rather
+   * than `null`: there is no remote agent that could be working on it, which is
+   * a real answer and not an absence of one.
+   */
+  async liveSession(userId: string, taskId: string): Promise<boolean | null> {
+    const row = taskRepo.getById(userId, taskId)
+    if (!row || row.deletedAt) return false
+    if (row.executor !== 'remote') return false
+    const binding = bindingOf(row)
+    if (!binding) return false
+
+    const adapter = adapterFor(binding.adapter)
+    if (!(await adapter.availability(userId)).ready) return null
+    try {
+      return await adapter.liveSession(userId, binding)
+    } catch (err) {
+      logger.warn('could not tell whether work is live on the remote', {
+        taskId,
+        adapter: adapter.id,
+        error: describe(err)
+      })
+      return null
+    }
+  },
+
+  /**
+   * Continue the task **here** — §5.10's remote → desktop direction, and the
+   * one call behind `task:take-over` whichever kind of elsewhere the task is in.
+   *
+   * A task held by another of the user's *devices* needs no network and falls
+   * straight through to {@link taskService.takeOver}; the claim is the whole
+   * mechanism there and step 10 built it.
+   *
+   * A task held by a bound *service* gets the refusal §5.10 specifies, and it
+   * is deliberately shaped like the device-to-device one decision 8 settled:
+   * **while work is live over there, a take-over is not offered at all.** The
+   * reasoning is the same on both sides of the seam. Claiming the task does not
+   * stop the agent that is working it — cinna recomputes the status from its
+   * own sessions, so the run that finishes second writes over whatever the
+   * first one decided — and the two outcomes of pressing it are "two runners on
+   * one task" and "nothing happened". This is the authority, not the control
+   * that hides itself: the probe the renderer makes to shape the banner is one
+   * round trip older than the press, and an agent can start in between.
+   *
+   * `force` is the third answer's other half. When nobody can tell — an adapter
+   * that does not know, a service this build has no adapter for, an unreachable
+   * server — §5.10 asks for a confirmation rather than a refusal, because
+   * refusing would strand the task on a service that cannot answer for it. The
+   * renderer confirms; this takes `force` and says so in the log, so a
+   * take-over that raced a live agent can be read back afterwards.
+   *
+   * **Nothing is pushed to the remote.** Neither direction of §5.10 tells the
+   * other side to stop, and this one has nothing it *could* say: cinna has no
+   * "the desktop has this now" state (that is the core plan's deferred item D).
+   * What the flip changes is who may write the status from here on, which
+   * `taskSyncService.push` reads on the next pass.
+   */
+  async takeOver(
+    userId: string,
+    taskId: string,
+    opts: { force?: boolean } = {}
+  ): Promise<TaskDto> {
+    const row = taskRepo.getById(userId, taskId)
+    if (!row || row.deletedAt) throw new TaskError('not_found', 'Task not found')
+
+    if (row.executor === 'remote' && bindingOf(row)) {
+      const live = await this.liveSession(userId, taskId)
+      if (live === true) {
+        throw new TaskError(
+          'remote_busy',
+          'Something is working on this task in the service running it. It can be continued here once that has stopped.'
+        )
+      }
+      if (live === null && !opts.force) {
+        throw new TaskError(
+          'remote_unknown',
+          'The service running this task could not say whether anything is working on it.'
+        )
+      }
+      if (live === null) {
+        logger.warn('taking over a task whose service could not say whether it was busy', {
+          taskId,
+          adapter: row.remoteAdapter ?? undefined
+        })
+      }
+    }
+
+    return taskService.takeOver(userId, taskId)
+  },
+
+  /**
+   * Hand the task to the service behind its binding — §5.10's desktop → remote
+   * direction, and the whole of what `jobService.executeCinnaTask` used to do
+   * inline against one hardcoded server.
+   *
+   * The sequence is §5.10's, and **every step is gated on the capability that
+   * covers it**, which is what makes the same call mean "run this" on a service
+   * that executes and "assign this" on one that does not — handing a task to
+   * Linear is exactly the second, and it is not a degraded version of the first.
+   *
+   *  1. `create`, if the task is not bound yet. The only call allowed to invent
+   *     a binding (§5.6 rule 4), and it carries the desktop's own id as
+   *     `external_ref`, so a create retried after a lost response returns the
+   *     first task rather than making a second one.
+   *  2. the handoff note, so whatever picks the task up reads what happened here
+   *     before it did.
+   *  3. the assignee — **only when the task was already bound**. A create
+   *     carries it, and pushing it again immediately afterwards is a second
+   *     request to say what the first one said.
+   *  4. `execute`.
+   *  5. and only then the executor flip.
+   *
+   * **The flip is last, and it is the one ordering decision in here that
+   * matters.** `executor` is what {@link taskSyncService.push} reads to decide
+   * whether this device may still write the status (§5.12 rule 4) and what the
+   * task page reads to decide whether to offer a re-run. Flipping it first and
+   * then failing to `execute` would leave the task marked as running on a
+   * service that never picked it up: no agent there, no controls here, and
+   * nothing on either side that would ever notice. Failing *before* the flip
+   * leaves an ordinary desktop task with a binding, which is a state the pull
+   * and the push both already understand.
+   */
+  async handOff(userId: string, taskId: string): Promise<TaskDto> {
+    const row = taskRepo.getById(userId, taskId)
+    if (!row || row.deletedAt) throw new TaskError('not_found', 'Task not found')
+    // **Handing over a task that is already over there runs it twice.** The
+    // sequence below would re-post the note, re-assign, and `execute` again —
+    // and cinna starts a *second session* on the same task, which is the exact
+    // race the other direction refuses with `remote_busy`. Unreachable today
+    // (`executeCinnaTask` always makes a fresh unbound task, and there is no
+    // channel for the gesture), and the guard is here rather than with the
+    // assignee picker that will reach it because it is cheaper now than it will
+    // be then — the reviewer's point, and the symmetric refusal already exists.
+    if (row.executor === 'remote') {
+      throw new TaskError('remote_busy', 'That task is already with the service running it.')
+    }
+
+    let binding = bindingOf(row)
+    const adapter = binding ? adapterFor(binding.adapter) : await preferredAdapter(userId)
+    if (!adapter) {
+      throw new TaskError(
+        'no_service',
+        'This profile is not connected to a service that can take a task.'
+      )
+    }
+    const availability = await adapter.availability(userId)
+    if (!availability.ready) {
+      throw new TaskError(
+        'no_service',
+        availability.reason ?? 'That service is not available for this profile.'
+      )
+    }
+
+    const caps = adapter.capabilities()
+    const existed = binding !== null
+    // Every marker this device still owes the remote, and the two ways this
+    // method settles some of them. A create sends everything the remote takes,
+    // and `bindRemote` clears the list for exactly that reason — so re-reading
+    // the pre-create row's markers here would put back what it just cleared.
+    let owed = (row.remoteDirty ?? []).filter(isRemoteDirtyField)
+
+    if (!binding) {
+      if (!caps.create) {
+        throw new TaskError('unsupported', 'That service cannot be given a new task.')
+      }
+      const parentRow = row.parentTaskId ? taskRepo.getById(userId, row.parentTaskId) : null
+      // A parent that is not on this service is the adapter's refusal to make,
+      // not ours: cinna's subtask route is a different path, and a subtask sent
+      // to `POST /tasks/` would be created at top level and look like a success.
+      const parentBinding = parentRow ? bindingOf(parentRow) : null
+      const created = await adapter.create(
+        userId,
+        taskService.getById(userId, taskId),
+        parentBinding
+      )
+      taskService.bindRemote(userId, taskId, {
+        adapter: adapter.id,
+        id: created.id,
+        key: created.key,
+        url: created.url,
+        state: created.state
+      })
+      binding = created
+      owed = []
+    }
+
+    if (row.handoffNote && caps.handoffNote) {
+      await adapter.putHandoffNote(userId, binding, row.handoffNote)
+    }
+
+    // Only for a task that was already there. A create sent the assignee with
+    // it; asking again in the same breath is a request that can only confirm
+    // what the previous one did.
+    const assignee = toRemoteAssignee(row)
+    if (existed && assignee && caps.writeFields.includes('assignee')) {
+      binding = await adapter.pushFields(userId, binding, { assignee })
+      owed = owed.filter((field) => field !== 'assignee')
+    }
+
+    let executed = false
+    if (caps.execute) {
+      binding = await adapter.execute(userId, binding)
+      executed = true
+    }
+
+    // **Past this line the service has the work, and nothing local may take it
+    // back.**
+    //
+    // Three local writes follow a network call that has already started an
+    // agent, and every one of them goes through `requireTask`, which throws for
+    // a row that has been deleted — by the user, or by a peer's tombstone
+    // arriving through app-sync — during the `execute` round trip, which on a
+    // real server is seconds. Left to throw, `executeCinnaTask`'s catch soft-
+    // deletes the task and never writes the `job_runs` row, so the user is told
+    // the run was refused while an agent burns tokens on a task that, by the
+    // rest of the app's reckoning, does not exist: no run row, nothing polling
+    // it, and nothing on this side that will ever hear the outcome. The
+    // desktop's promise that "a refused run leaves nothing new in your lists"
+    // would be kept for a run that **was not refused**.
+    //
+    // So the bookkeeping is best-effort, which is the rule
+    // `jobService.reportRunCompletion` already follows for its own task write,
+    // for the identical reason: the work really happened, so it must be
+    // recorded even if recording it fails. The binding and the remote id are
+    // what the caller actually needs, and `bindRemote` committed those before
+    // the call.
+    try {
+      // **Work has begun, so the task says so**, and it says it through
+      // `acceptRemoteStatus` rather than `setStatus`: this is recording what
+      // the service just told us, not something this device owes it. The
+      // difference is a dirty marker — `setStatus` would queue a status push to
+      // the remote that has just started the work, and the push refuses to send
+      // it (a task the service is executing has its status recomputed there,
+      // §5.12 rule 4), leaving a marker that can never clear.
+      //
+      // An adapter with **no** `execute` is left alone deliberately. Handing a
+      // task to a service that cannot run it is an *assignment*, which is what
+      // handing one to Linear means, and marking it `in_progress` would claim
+      // somebody had started.
+      if (executed) taskService.acceptRemoteStatus(userId, taskId, 'in_progress')
+      taskService.markRemoteSynced(userId, taskId, owed, {
+        binding: { key: binding.key, url: binding.url, state: binding.state },
+        contacted: true
+      })
+      const task = taskService.handOffToRemote(userId, taskId)
+      logger.info('task handed to a service', {
+        taskId,
+        adapter: adapter.id,
+        remoteId: binding.id,
+        executed
+      })
+      return task
+    } catch (err) {
+      logger.warn('a service took the work and the bookkeeping for it failed', {
+        taskId,
+        adapter: adapter.id,
+        remoteId: binding.id,
+        executed,
+        error: describe(err)
+      })
+      try {
+        return taskService.getById(userId, taskId)
+      } catch {
+        // **The row is gone entirely**, which is the likeliest way to get here,
+        // and the one case with nothing local left to return. What must not
+        // happen is the caller reporting a refusal: the service took the work
+        // and an agent is running. Its own code, so `executeCinnaTask` can tell
+        // this apart from "the service would not take it" and leave its cleanup
+        // alone — there is nothing to clean up, and a second delete of a row a
+        // peer already removed would be the app arguing with itself.
+        throw new TaskError(
+          'handed_over',
+          'That task was removed while the service was starting work on it. The work has started there.',
+          `remote ${binding.id} on ${adapter.id}`
+        )
+      }
+    }
+  },
+
   /**
    * Send what this device owes the remote for one task.
    *

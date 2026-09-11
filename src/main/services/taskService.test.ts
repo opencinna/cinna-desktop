@@ -1046,6 +1046,13 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.handOffToRemote(USER, id).id,
       leaves: 'file'
     },
+    // Provenance, written once by whatever made the run row. It is here and
+    // not on `READS` because it bumps `updatedAt`, which is frontmatter — the
+    // same reason `adoptUnclaimed` is on the list.
+    linkJobRun: {
+      run: (id) => taskService.linkJobRun(USER, id, 'run-1').id,
+      leaves: 'file'
+    },
     // The four binding writers. `bindRemote` is the one the step-7 review
     // named in advance: it writes `remoteKey`, which is frontmatter, so a
     // version of it that ended in `toTaskDto(row)` would leave every bound

@@ -14,9 +14,14 @@ import type { JobRunData } from '../../../../shared/jobs'
  * change safe: nothing the user could reach before is now unreachable.
  *
  * The rows that have **no** task keep exactly what they did. A run from before
- * the tasks table is history, and a `cinna_task` run does not create one until
- * step 11 folds that path onto the task adapter; both would otherwise land on a
- * page with nothing to show.
+ * the tasks table is history and would otherwise land on a page with nothing to
+ * show.
+ *
+ * **Step 11 made that true of a `cinna_task` run too**, and the same rule
+ * applies to it for the same reason. Its row now opens the task page, and the
+ * service's own run view — the only screen in the app that renders the
+ * conversation happening over there — became a named control beside Chat rather
+ * than a screen with no route to it.
  */
 
 const openChat = vi.hoisted(() => vi.fn())
@@ -113,6 +118,43 @@ describe('a run row with a task', () => {
     expect(screen.queryByRole('button', { name: 'Chat' })).toBeNull()
     screen.getByRole('button', { name: /Succeeded/ }).click()
     expect(openTask).toHaveBeenCalledWith('task-1')
+  })
+})
+
+describe('a run row for work executing on a service', () => {
+  function remoteRun(overrides: Partial<JobRunData> = {}): JobRunData {
+    return run({
+      type: 'cinna_task',
+      localChatId: null,
+      cinnaTaskId: 'ct-1',
+      cinnaShortCode: 'ABC',
+      ...overrides
+    })
+  }
+
+  it('opens the task, like every other run that has one', () => {
+    render(createElement(JobRunRow, { run: remoteRun() }))
+    screen.getByRole('button', { name: /Succeeded/ }).click()
+    expect(openTask).toHaveBeenCalledWith('task-1')
+    expect(setActiveView).not.toHaveBeenCalled()
+  })
+
+  it('still offers the service’s own thread, which the task page does not show', () => {
+    // The half of the change that makes it safe. The task page renders the
+    // task; the service's run view renders the conversation its agent is
+    // having, and nothing else in the app does. Moving the row's click without
+    // this would have removed a surface rather than replaced one.
+    render(createElement(JobRunRow, { run: remoteRun() }))
+    screen.getByRole('button', { name: 'On the service' }).click()
+    expect(setActiveCinnaRunId).toHaveBeenCalledWith('run-1')
+    expect(setActiveView).toHaveBeenCalledWith('cinna-task-run')
+    // Inside the row, so the row's own destination must not also fire.
+    expect(openTask).not.toHaveBeenCalled()
+  })
+
+  it('offers no second control on a run that has no task to compete with', () => {
+    render(createElement(JobRunRow, { run: remoteRun({ taskId: null }) }))
+    expect(screen.queryByRole('button', { name: 'On the service' })).toBeNull()
   })
 })
 

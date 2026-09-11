@@ -266,9 +266,6 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
       parentId: stored.parentId,
       subtaskCount: children.length,
       subtaskCompletedCount: children.filter((c) => c.status === 'completed').length,
-      // `executed` stands in for a live session the way cinna's sessions do;
-      // an adapter that cannot tell reports null here and the UI asks.
-      liveSession: stored.executed && stored.status === 'in_progress',
       updatedAt: stored.updatedAt
     }
   }
@@ -356,6 +353,15 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
     async fetch(_userId, binding) {
       call()
       return snapshotOf(load(binding))
+    },
+
+    async liveSession(_userId, binding) {
+      call()
+      // `executed` stands in for a live session the way cinna's sessions do.
+      // A fake that reported `null` here would never exercise either of the
+      // two answers the take-over path branches on.
+      const stored = load(binding)
+      return stored.executed && stored.status === 'in_progress'
     },
 
     async list(_userId, since) {

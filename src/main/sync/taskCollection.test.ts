@@ -931,6 +931,30 @@ describe('enrolling a device adopts the work that was nobody’s', () => {
     })
   })
 
+  it('adopts an errored task, because the page offers it a re-run', () => {
+    // **The one this filter got wrong.** `error` is stopped and it is not
+    // finished: `error → in_progress` is exactly what the task page's re-run
+    // does, so an errored task is one a device can still take a turn on. Skipped
+    // — which is what `isSettled` did — it keeps a null claim, and a null claim
+    // reads as "this device owns it" on every device. Two machines would both
+    // have offered that re-run on one task.
+    const before = on({ ...deviceA, deviceId: null }, () => {
+      const failed = taskService.create(USER, { title: 'Failed', goal: 'Failed work' })
+      taskService.setStatus(USER, failed.id, 'in_progress')
+      taskService.setStatus(USER, failed.id, 'error')
+      const cancelled = taskService.create(USER, { title: 'Called off', goal: 'Called off' })
+      taskService.setStatus(USER, cancelled.id, 'cancelled')
+      return { failed, cancelled }
+    })
+
+    on(deviceA, () => {
+      taskService.adoptUnclaimed(USER, 'device-a')
+      expect(taskRepo.getById(USER, before.failed.id)?.executorDevice).toBe('device-a')
+      // `cancelled` reaches nothing but `archived`, so no run can start from it.
+      expect(taskRepo.getById(USER, before.cancelled.id)?.executorDevice).toBeNull()
+    })
+  })
+
   it('stops the second device believing it owns them too', () => {
     const task = on({ ...deviceA, deviceId: null }, () =>
       taskService.create(USER, { title: 'Live', goal: 'Live work' })

@@ -18,15 +18,18 @@ import { chatRepo } from '../db/chats'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { chatModeRepo } from '../db/chatModes'
 import { agentRepo } from '../db/agents'
+import { taskRepo } from '../db/tasks'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
-import { JobError } from '../errors'
+import { JobError, TaskError } from '../errors'
 import { newChatRouter, routingOf } from '../../shared/chatRouting'
 import type { JobRunOrigin } from '../../shared/jobs'
 import type { RunState } from '../../shared/runEvents'
-import { parseTaskPriority } from '../../shared/tasks'
+import { parseTaskPriority, type TaskDto } from '../../shared/tasks'
+import type { TaskStatus } from '../../shared/taskStatus'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
 import { taskService } from './taskService'
+import { taskSyncService } from './taskSyncService'
 import { rebuildJobManifest } from '../sync/manifest'
 import {
   resolveMode,
@@ -400,11 +403,18 @@ export const jobService = {
   },
 
   /**
-   * Single entry point for running a job. Branches on `job.type` so the IPC
-   * handler stays a one-liner and the two execution paths share ownership +
-   * validation logic. The return is a discriminated union so the renderer
-   * can react to `local` (navigate to spawned chat + kick off stream) vs.
-   * `cinna_task` (stay on the job, start polling).
+   * Single entry point for running a job.
+   *
+   * **The last place `job.type` decides anything.** §5.8's end state is that
+   * the type is only which value the task's `executor` starts at, and after
+   * step 11 that is all it is: both arms make a task, and what differs is
+   * whether the work is started in a chat on this device or handed across the
+   * seam to a service. Nothing downstream of here reads it — a run's status
+   * comes from its task, and a refresh goes through whichever adapter holds it.
+   *
+   * The return is still a discriminated union, because the renderer does two
+   * different things with the answer: navigate to the spawned chat and kick off
+   * the stream, or stay on the job and start polling.
    */
   async execute(
     userId: string,
@@ -422,6 +432,8 @@ export const jobService = {
     | {
         type: 'cinna_task'
         runId: string
+        /** Every run has one now, whichever executor it starts on. */
+        taskId: string
         cinnaTaskId: string
         cinnaShortCode: string | null
       }
@@ -690,13 +702,35 @@ export const jobService = {
   },
 
   /**
-   * Spawn a cinna-core task for a `cinna_task` job. No local chat is created
-   * — the conversation lives on cinna-core; the desktop polls for status.
+   * Run a `cinna_task` job by **handing its task to the service**, which is the
+   * same gesture §5.10 gives the user and the same code behind it.
+   *
+   * Until step 11 this method spoke to one server directly — `createTask` with
+   * `auto_execute: true` on `cinnaApiService`, a local `job_runs` row, and no
+   * task at all — so a cinna job run was the one run in the app with nothing in
+   * the tasks table, invisible to the inbox, to the task page and to the user's
+   * other devices. Now it makes a task like every other run and moves it across
+   * the seam; `cinna` is chosen by {@link taskSyncService.handOff} asking the
+   * registry which adapter this profile can use, and the word does not appear
+   * here. §5.8 wrote `job.type === 'cinna_task' ? 'cinna' : null` into this
+   * method, which is the phase's own exit criterion broken in its own plan.
+   *
+   * **A hand-over that fails leaves nothing behind.** The task has to exist
+   * before the adapter can be given it — `external_ref` is the desktop's own id,
+   * which is what makes a retried create idempotent — so the orphan
+   * `executeLocal` avoids by ordering has to be cleaned up by hand here. A
+   * refused run leaves no task and no run row, which is what its own test
+   * asserts and what the user sees: the error, and nothing new in the list.
    */
   async executeCinnaTask(
     userId: string,
     jobId: string
-  ): Promise<{ runId: string; cinnaTaskId: string; cinnaShortCode: string | null }> {
+  ): Promise<{
+    runId: string
+    taskId: string
+    cinnaTaskId: string
+    cinnaShortCode: string | null
+  }> {
     const job = requireJob(userId, jobId)
     if (job.type !== 'cinna_task') {
       throw new JobError('unsupported_type', 'executeCinnaTask called on non-cinna job')
@@ -704,38 +738,121 @@ export const jobService = {
     if (!job.cinnaAgentId) {
       throw new JobError('missing_dependency', 'Cinna agent is required to run this job')
     }
+    // **Before the task exists.** The hand-over checks this too, and by then the
+    // task has been created — so a profile that is not connected to a service
+    // minted a task and soft-deleted it on *every* press of Run. A soft delete
+    // is not a rollback: the row survives for ever and travels to the user's
+    // other devices as an ordinary upsert carrying `deleted: true`. The task
+    // still cannot be created after the adapter call (`adapter.create` is handed
+    // its id as `external_ref`, which is what makes a retried create
+    // idempotent), so the check moves rather than the creation.
+    if (!(await taskSyncService.preferredAdapterId(userId))) {
+      throw new JobError(
+        'incomplete_setup',
+        "This job runs on a service, and this profile isn't connected to one."
+      )
+    }
 
-    const task = await cinnaApiService.createTask(userId, {
-      original_message: job.prompt,
+    const task = taskService.create(userId, {
       title: job.title,
-      selected_agent_id: job.cinnaAgentId,
-      priority: job.cinnaPriority ?? 'normal',
-      auto_execute: true
+      goal: job.prompt,
+      // The service routes the work; the desktop's own routers describe a chat,
+      // and this task has none.
+      router: 'direct',
+      origin: 'local',
+      executor: 'desktop',
+      // **An id in the space its kind names.** `remote_agent` is an agent that
+      // exists on the service and nowhere here, which is exactly what a job's
+      // configured agent is — there is no local `agents` row to point at.
+      assigneeAgentId: job.cinnaAgentId,
+      assigneeName: null,
+      assigneeKind: 'remote_agent',
+      priority: parseTaskPriority(job.cinnaPriority),
+      jobId
     })
+
+    let handed: TaskDto
+    try {
+      handed = await taskSyncService.handOff(userId, task.id)
+    } catch (err) {
+      // Soft-deleted rather than left: a task nothing picked up is not a task,
+      // and leaving it would put a permanently `new` row on the user's other
+      // devices for a run that never happened.
+      //
+      // **The cleanup may not replace the failure.** It is a second write on a
+      // path that has already failed once, and a throw from it would surface
+      // instead of the hand-over's own error — so the user would read "Task not
+      // found" where the truth was "that service refused the work". The
+      // original is what the surface needs; an orphan is what the log gets.
+      // **Not for a hand-over that succeeded.** `handed_over` means the service
+      // took the work and only the local record of it was lost, so there is
+      // nothing to clean up and an agent is running right now. Deleting here
+      // would be the app arguing with a row a peer has already removed.
+      if (err instanceof TaskError && err.code === 'handed_over') throw err
+      try {
+        taskService.remove(userId, task.id)
+      } catch (cleanupErr) {
+        logger.warn('a refused hand-over left its task behind', {
+          jobId,
+          taskId: task.id,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+        })
+      }
+      throw err
+    }
 
     const run = jobRunsRepo.create({
       jobId,
       userId,
       type: 'cinna_task',
-      cinnaTaskId: task.id,
-      cinnaShortCode: task.short_code,
-      status: mapCinnaStatus(task.status)
+      taskId: task.id,
+      // The two columns the run row keeps for its deep link. They are fed from
+      // the binding rather than from a server response, so a second adapter
+      // fills them the same way — the names are older than the seam and a
+      // rename belongs with the rest of `job.type` in phase 7.
+      cinnaTaskId: handed.remote?.id ?? null,
+      cinnaShortCode: handed.remote?.key ?? null,
+      status: jobRunStatusForTask(handed.status)
     })
+    taskService.linkJobRun(userId, task.id, run.id)
 
-    logger.info('job executed (cinna_task)', {
+    logger.info('job executed (handed to a service)', {
       jobId,
       runId: run.id,
-      cinnaTaskId: task.id,
-      shortCode: task.short_code
+      taskId: task.id,
+      remoteId: handed.remote?.id,
+      shortCode: handed.remote?.key
     })
 
-    return { runId: run.id, cinnaTaskId: task.id, cinnaShortCode: task.short_code }
+    return {
+      runId: run.id,
+      taskId: task.id,
+      cinnaTaskId: handed.remote?.id ?? '',
+      cinnaShortCode: handed.remote?.key ?? null
+    }
   },
 
   /**
-   * Poll cinna-core for the current state of a cinna_task run and persist
-   * any status change. No-op for non-cinna runs. Skips the network call for
-   * already-terminal runs unless `force` is true (manual user refresh).
+   * Bring a run that is executing on a service up to date, and let its status
+   * follow its task's.
+   *
+   * **The run status is derived, not fetched.** Until step 11 this asked one
+   * hardcoded server for a task detail and mapped the string it answered with;
+   * now {@link taskSyncService.pullOne} asks whichever adapter holds the task,
+   * writes the answer to the task row, and the run row says whatever its task
+   * says. That is §5.8's "the job run's status derives from the task" and it is
+   * what stops the two disagreeing — there was nothing keeping them in step
+   * before, because only one of them was ever written.
+   *
+   * **A run from before this step has no task**, and is adopted rather than
+   * left on a path of its own: a task is created for it, bound to the remote id
+   * the run row already carries, and the pull fills in everything else. Keeping
+   * the old fetch beside the new one for those rows would have been a second
+   * code path serving a shrinking set, and the run would still have been the
+   * one kind in the app with no task behind it.
+   *
+   * Skips the network for an already-terminal run unless `force` is set, which
+   * is the manual refresh.
    */
   async refreshCinnaRun(
     userId: string,
@@ -745,29 +862,50 @@ export const jobService = {
     const run = jobRunsRepo.getById(userId, runId)
     if (!run) throw new JobError('not_found', 'Job run not found')
     if (run.type !== 'cinna_task') return enrichRun(userId, run)
-    if (!run.cinnaTaskId) return enrichRun(userId, run)
     const isTerminal =
       run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled'
     if (isTerminal && !options.force) {
       return enrichRun(userId, run)
     }
 
-    logger.info('refreshing cinna run', {
+    const taskId = run.taskId ?? (await adoptRemoteRun(userId, run))
+    if (!taskId) return enrichRun(userId, run)
+
+    logger.info('refreshing a run executing on a service', {
       runId,
-      cinnaTaskId: run.cinnaTaskId,
+      taskId,
       prevStatus: run.status,
       force: options.force ?? false
     })
-    const detail = await cinnaApiService.getTaskDetail(userId, run.cinnaTaskId)
-    const mapped = mapCinnaStatus(detail.status)
-    if (mapped !== run.status) {
-      jobRunsRepo.updateStatus(runId, mapped)
+    const task = await taskSyncService.pullOne(userId, taskId)
+    if (task) {
+      const mapped = jobRunStatusForTask(task.status)
+      if (mapped !== run.status) jobRunsRepo.updateStatus(runId, mapped)
+      logger.info('run refreshed from its task', { runId, taskStatus: task.status, newStatus: mapped })
+    } else {
+      // **A null from `pullOne` is three different things**, and only one of
+      // them is news: the service could not be reached (say nothing and try
+      // again later), the task is no longer bound to anything, or the task row
+      // has gone. Telling them apart matters because the second is terminal —
+      // the pull unbinds on `not_ours`, which is a 404 or an ownership refusal,
+      // and a run whose work has been deleted on the service will never move
+      // again. Left as it was, it polled every five seconds for the life of the
+      // window with the job's badge lit, and every manual Refresh reported
+      // success.
+      //
+      // Asked of the row rather than returned by `pullOne`, because "is this
+      // task still bound" is the fact that decides it and the row is where that
+      // fact lives.
+      const stillBound = taskRepo.getById(userId, taskId)?.remoteAdapter ?? null
+      if (!stillBound) {
+        jobRunsRepo.updateStatus(runId, 'failed')
+        logger.warn('a run lost the work it was executing', { runId, taskId })
+        throw new JobError(
+          'missing_dependency',
+          'That task no longer exists on the service that was running it.'
+        )
+      }
     }
-    logger.info('cinna run refreshed', {
-      runId,
-      remoteStatus: detail.status,
-      newStatus: mapped
-    })
     const fresh = jobRunsRepo.getById(userId, runId) ?? run
     return enrichRun(userId, fresh)
   },
@@ -915,7 +1053,20 @@ export const jobService = {
  * `task.status` vocabulary (new, refining, open, in_progress, blocked,
  * completed, error, cancelled, archived).
  */
-function mapCinnaStatus(status: string): JobRunStatus {
+/**
+ * A job run's status, from the status of the task it is executing.
+ *
+ * One direction only, and it is this one: the task is the record and the run
+ * row is a view of it that the Jobs screen reads (§5.8). It used to map
+ * cinna-core's own status strings, which was the same table — task status *is*
+ * cinna's vocabulary, by the phase's first decision — over a value that had
+ * come straight off the wire instead of through `parseTaskStatus`.
+ *
+ * `blocked` is **running**, deliberately: a run whose agent is waiting on a
+ * human has not finished and has not failed. The thing the user has to do about
+ * it is in the inbox, which is where that distinction is rendered.
+ */
+function jobRunStatusForTask(status: TaskStatus): JobRunStatus {
   switch (status) {
     case 'completed':
     case 'archived':
@@ -924,10 +1075,79 @@ function mapCinnaStatus(status: string): JobRunStatus {
       return 'failed'
     case 'cancelled':
       return 'cancelled'
-    case 'pending':
     case 'new':
       return 'pending'
     default:
       return 'running'
   }
+}
+
+/**
+ * Give a pre-step-11 remote run the task it never had, and return its id.
+ *
+ * These rows carry the remote's id in `cinnaTaskId` and nothing else — no task,
+ * no binding, no way to reach an adapter. The task is created as a **replica**
+ * (`origin: 'remote'`), because that is what it is: the work was created on the
+ * service by a version of this app that did not model it here. The title and
+ * goal are the job's, which is the best this side knows until the first pull
+ * overwrites them with the service's own.
+ *
+ * Null when there is nothing to adopt — no remote id, or no adapter this
+ * profile can use, which is the same "leave it alone" the old code reached by
+ * returning the run unchanged.
+ */
+async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | null> {
+  if (!run.cinnaTaskId) return null
+  const adapterId = await taskSyncService.preferredAdapterId(userId)
+  if (!adapterId) return null
+  // **Read the run again on this side of the await.** Asking the registry which
+  // adapter is usable asks the adapter whether it is available, which is a
+  // promise — so two refreshes of the same run can both have passed the
+  // `run.taskId` check above before either of them writes one, and the second
+  // would mint a duplicate task bound to the same remote id. Nothing in the app
+  // presses this twice today; the caller before it disables its own button
+  // while the mutation is in flight. It is one read, and "nothing does this
+  // today" is how the two duplicated-row defects earlier in this phase started.
+  const fresh = jobRunsRepo.getById(userId, run.id)
+  if (fresh?.taskId) return fresh.taskId
+  // **And the collision this run knows nothing about.** A pull can already have
+  // made a replica for the same remote id — that is what a pull *does* — and
+  // binding a second local task to it would leave two tasks pushing to one
+  // remote task, each overwriting the other. The re-read above only stops this
+  // run adopting itself twice. Latent while nothing schedules `pull`; it comes
+  // alive on the same step that owes `pull` its in-flight dedupe.
+  const already = taskRepo.getByRemote(userId, adapterId, run.cinnaTaskId)
+  if (already) {
+    jobRunsRepo.setTaskId(run.id, already.id)
+    logger.info('a remote job run joined the task a pull had already made for it', {
+      runId: run.id,
+      taskId: already.id
+    })
+    return already.id
+  }
+  const job = jobsRepo.getById(userId, run.jobId)
+  const task = taskService.create(userId, {
+    title: job?.title ?? 'Task',
+    goal: job?.prompt ?? job?.title ?? 'Task',
+    router: 'direct',
+    origin: 'remote',
+    executor: 'remote',
+    priority: parseTaskPriority(job?.cinnaPriority ?? null),
+    jobId: run.jobId,
+    jobRunId: run.id
+  })
+  taskService.bindRemote(userId, task.id, {
+    adapter: adapterId,
+    id: run.cinnaTaskId,
+    key: run.cinnaShortCode,
+    url: null,
+    state: {}
+  })
+  jobRunsRepo.setTaskId(run.id, task.id)
+  logger.info('adopted a remote job run that predates its task', {
+    runId: run.id,
+    taskId: task.id,
+    adapter: adapterId
+  })
+  return task.id
 }

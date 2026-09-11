@@ -22,7 +22,8 @@ const getTask = vi.fn<() => Promise<TaskDto>>()
 const listInbox = vi.fn<() => Promise<InboxEntry[]>>()
 const getChat = vi.fn()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
-const takeOver = vi.fn<(taskId: string) => Promise<TaskDto>>()
+const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
+const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
 const runSend = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
 
@@ -31,7 +32,8 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
   tasks: {
     get: () => getTask(),
     setStatus: (taskId: string, status: TaskStatus) => setStatus(taskId, status),
-    takeOver: (taskId: string) => takeOver(taskId)
+    takeOver: (taskId: string, force?: boolean) => takeOver(taskId, force),
+    remoteLive: (taskId: string) => remoteLive(taskId)
   },
   inbox: { list: () => listInbox() },
   agents: {
@@ -125,6 +127,7 @@ beforeEach(() => {
   })
   setStatus.mockResolvedValue(BASE)
   takeOver.mockResolvedValue({ ...BASE, runsHere: true, executorDevice: null })
+  remoteLive.mockResolvedValue(false)
   openExternal.mockResolvedValue({ success: true })
   useUIStore.setState({ activeView: 'task', activeTaskId: 't1', activeJobId: null } as never)
   useChatStore.setState({ activeChatId: null } as never)
@@ -327,6 +330,268 @@ describe('the other states', () => {
     expect(screen.queryByRole('button', { name: /Re-run from the last message/ })).toBeNull()
   })
 
+  describe('taking a task back from the service running it', () => {
+    /**
+     * The banner's content block — the status sentence's own parent, because
+     * the sentence is the one row every arm always has text in.
+     */
+    const STATUS_SENTENCES = [
+      'This task is running in the service that holds it.',
+      'Listed as running, but nothing is working on it there.',
+      'This task is waiting on something in the service that is running it.',
+      'This task ended with an error in the service running it.'
+    ]
+
+    async function bannerBlock(): Promise<HTMLElement> {
+      // Matched against the whole set rather than a fragment: a fragment finds
+      // the liveness sub-line too, which lives in the same block, and two hits
+      // is an error rather than an answer.
+      const sentence = await screen.findByText((text) => STATUS_SENTENCES.includes(text))
+      return sentence.parentElement as HTMLElement
+    }
+
+    const REMOTE: Partial<TaskDto> = {
+      status: 'in_progress',
+      executor: 'remote',
+      origin: 'remote',
+      remote: { adapter: 'fake', id: 'x1', key: 'ENG-421', url: null }
+    }
+
+    /**
+     * §5.10, and the twin of decision 8's refusal for another device. The claim
+     * does not stop the agent, so the two outcomes of pressing it are two
+     * runners on one task and a claim the service's next status recompute
+     * undoes. A button with those two outcomes is not a button.
+     *
+     * **`blocked` is the case that matters**, and it is the reason this asks
+     * the adapter instead of reading `status`. cinna recomputes a task's status
+     * *from* its sessions, so the status lags what the sessions are doing in
+     * one direction and leads it in the other: a task can read `blocked` — an
+     * agent parked on a question — with that same agent's session still very
+     * much alive. Inferring "live" from `status === 'in_progress'` offers the
+     * take-over on exactly that task, which is the race the rule exists to
+     * prevent.
+     */
+    it.each(['in_progress', 'blocked'] as const)(
+      'offers no take-over while an agent is working on it there (%s)',
+      async (status) => {
+        remoteLive.mockResolvedValue(true)
+        await renderTask({ ...REMOTE, status })
+
+        await waitFor(() => expect(remoteLive).toHaveBeenCalledWith('t1'))
+        await waitFor(() =>
+          expect(screen.queryByRole('button', { name: /Take over/ })).toBeNull()
+        )
+      }
+    )
+
+    it('offers it once nothing is working on it there', async () => {
+      remoteLive.mockResolvedValue(false)
+      await renderTask(REMOTE)
+
+      const button = await screen.findByRole('button', { name: 'Take over' })
+      await act(async () => {
+        button.click()
+      })
+      expect(takeOver).toHaveBeenCalledWith('t1', false)
+    })
+
+    it('says so and names what it will do when the service cannot tell', async () => {
+      // Not a refusal: refusing here strands the task on a service that cannot
+      // answer for it. The confirmation is the sentence plus the label, because
+      // a take-over claims and does not run — nothing starts here and nothing
+      // stops there.
+      remoteLive.mockResolvedValue(null)
+      await renderTask(REMOTE)
+
+      await screen.findByText(/could not say whether anything is working on it/)
+      const button = await screen.findByRole('button', { name: 'Take over anyway' })
+      await act(async () => {
+        button.click()
+      })
+      expect(takeOver).toHaveBeenCalledWith('t1', true)
+    })
+
+    it('offers a way out of a task whose service is no longer connected', async () => {
+      // `unbindRemote` fires when a service answers "not yours" and does not
+      // move the executor, so a replica can be `executor: 'remote'` with no
+      // binding at all. Gated on `task.remote`, the probe never ran, the banner
+      // read that as still in flight, and the page offered nothing for ever.
+      remoteLive.mockResolvedValue(false)
+      await renderTask({ ...REMOTE, remote: null })
+
+      await screen.findByRole('button', { name: 'Take over' })
+      expect(remoteLive).toHaveBeenCalledWith('t1')
+    })
+
+    /**
+     * **The three liveness states each say exactly one thing about liveness.**
+     *
+     * This exists because of a defect no other test here could see: the fix
+     * that stopped an errored probe being read as "not live" was written as
+     * `live !== false`, which is also true for `true` — so the live arm
+     * rendered "That service could not say…" *underneath* a sentence saying an
+     * agent was working on it. Two statements contradicting each other one line
+     * apart, and the second is the one that decides whether the control
+     * appears. Every test around it asked what the **button** said, and the
+     * button was right; only a re-measure of the screen caught it.
+     *
+     * **What this actually holds down**, checked rather than assumed: the fix
+     * restructured the sub-line so `live === true` is tested *first*, which
+     * makes the original `live !== false` mutation no longer reachable through
+     * it — reverting that alone leaves these tests green, because the button is
+     * still absent and the sentence is still chosen by the earlier branch. What
+     * they do catch is the branch **order**: put `unknown` first, and the live
+     * arm contradicts itself again. That is the shape the defect would take
+     * next, so that is the one worth pinning.
+     */
+    it.each([
+      [true, /An agent is working on it there now/, /could not say/],
+      [false, /Listed as running, but nothing is working on it there/, /could not say|An agent is working/],
+      [null, /could not say whether anything is working/, /An agent is working on it there now/]
+    ] as const)('says one thing about liveness when the probe answers %s', async (
+      answer,
+      present,
+      absent
+    ) => {
+      remoteLive.mockResolvedValue(answer)
+      await renderTask(REMOTE)
+
+      await screen.findByText(present)
+      expect(screen.queryByText(absent)).toBeNull()
+    })
+
+    /**
+     * **Exhaustive, not "is the expected thing present".**
+     *
+     * N1 was invisible to every assertion in this file because each one asked
+     * whether something expected was there, and nothing asked whether anything
+     * *unexpected* was — so a live arm carrying both "an agent is working on
+     * it" and "the service could not say" passed them all. A screenshot is
+     * exhaustive by construction, which is why the screen caught it and the
+     * suite did not; asserting the banner's whole text is the cheap version of
+     * the same property. The UX reviewer asked for this one by name.
+     *
+     * **What it does not catch**, checked rather than claimed: reverting
+     * `unknown` to `live !== false`. The reviewer predicted it would, and that
+     * prediction was made against the shape before the rework — the sub-line
+     * now tests `live === true` first, so `unknown` is no longer reachable in
+     * the live arm at all. What these do catch is the branch **order**, which
+     * is the form the same defect would take next.
+     */
+    it.each([
+      [
+        true,
+        'This task is running in the service that holds it.' +
+          'An agent is working on it there now, so it cannot be taken over yet.'
+      ],
+      [false, 'Listed as running, but nothing is working on it there.' + 'Take over'],
+      [
+        null,
+        'This task is running in the service that holds it.' +
+          'That service could not say whether anything is working on it right now.' +
+          'Take over anyway'
+      ]
+    ] as const)('says all and only what it means when the probe answers %s', async (
+      answer,
+      expected
+    ) => {
+      remoteLive.mockResolvedValue(answer)
+      await renderTask(REMOTE)
+
+      const block = await bannerBlock()
+      await waitFor(() => expect(block.textContent).toBe(expected))
+    })
+
+    /**
+     * **N2's actual property, which nothing else holds down.**
+     *
+     * The banner does not move when the probe resolves because every arm
+     * renders the same rows in flight as resolved — sentence, liveness
+     * sub-line, control row — with the sub-line's slot present whether or not
+     * it has anything in it. A pixel `min-h` was the first attempt and could
+     * not survive a wrap; this is the shape that can.
+     *
+     * It breaks the moment somebody renders the sub-line conditionally, which
+     * is the natural tidy-up a future reader will want, because an empty `div`
+     * looks like a mistake. jsdom has no layout, so this counts rows rather
+     * than measuring them — the wrapping half was measured on the built app.
+     */
+    it.each([
+      ['in_progress', null, 3],
+      ['in_progress', false, 3],
+      ['in_progress', true, 3],
+      ['error', null, 4],
+      ['error', false, 4]
+    ] as const)(
+      'holds the same rows in flight as resolved (%s, probe answers %s)',
+      async (status, answerWith, rows) => {
+        // **`false` is the case that matters**, and a first version of this
+        // test used only `null`. With `null` the sub-line has something to say
+        // either way, so rendering it conditionally — the tidy-up above — keeps
+        // the row count identical and the test passes against the mutation it
+        // was written for. `false` is the arm whose slot is *empty* once the
+        // answer lands, which is exactly when a conditional render drops a row.
+        let answer: (live: boolean | null) => void = () => {}
+        remoteLive.mockImplementation(
+          () => new Promise<boolean | null>((resolve) => (answer = resolve))
+        )
+        await renderTask({ ...REMOTE, status, errorMessage: 'The agent gave up.' })
+
+        const block = await bannerBlock()
+        expect(block.children).toHaveLength(rows)
+
+        await act(async () => {
+          answer(answerWith)
+        })
+        await waitFor(() =>
+          expect(screen.queryByText(/Checking whether an agent is working/)).toBeNull()
+        )
+        expect(block.children).toHaveLength(rows)
+      }
+    )
+
+    it('treats a probe that failed as “cannot tell”, not as “nothing is running”', async () => {
+      // The least cautious reading of the three, and a dead end: the plain
+      // label sent `force: false`, main refused with `remote_unknown`, the
+      // label did not change, and the next press refused identically.
+      remoteLive.mockRejectedValue(new Error('socket hang up'))
+      await renderTask(REMOTE)
+
+      const button = await screen.findByRole('button', { name: 'Take over anyway' })
+      await act(async () => {
+        button.click()
+      })
+      expect(takeOver).toHaveBeenCalledWith('t1', true)
+    })
+
+    it('asks the service again when a take-over is refused', async () => {
+      // The same dead end reached with no error anywhere: the answer is cached
+      // for a minute, so a `false` that has gone stale gets refused and the
+      // label stays *Take over*. A re-read makes the next press the one that
+      // works.
+      remoteLive.mockResolvedValue(false)
+      takeOver.mockRejectedValueOnce(new Error('could not say whether anything is working on it'))
+      await renderTask(REMOTE)
+
+      const button = await screen.findByRole('button', { name: 'Take over' })
+      remoteLive.mockResolvedValue(null)
+      await act(async () => {
+        button.click()
+      })
+
+      await screen.findByRole('button', { name: 'Take over anyway' })
+      expect(remoteLive).toHaveBeenCalledTimes(2)
+    })
+
+    it('asks the service nothing about a task this device is already running', async () => {
+      // One request, for one question, and only where that question exists.
+      await renderTask({ status: 'blocked', executor: 'desktop', remote: null })
+      await screen.findByRole('button', { name: /Re-run from the last message/ })
+      expect(remoteLive).not.toHaveBeenCalled()
+    })
+  })
+
   it('renders a replica running in a connected service read-only', async () => {
     // Nothing produces one yet — the adapters land in steps 8–9 — but the page
     // binds to the shape rather than to what happens to fill it today. There is
@@ -479,7 +744,9 @@ describe('a task running on another device', () => {
       button.click()
     })
 
-    expect(takeOver).toHaveBeenCalledWith('t1')
+    // `force` is false: this is another *device*, and a device claim asks
+    // nothing of a network, so there is never anything to confirm.
+    expect(takeOver).toHaveBeenCalledWith('t1', false)
     // The claim alone — nothing was run.
     expect(runSend).not.toHaveBeenCalled()
     // And the page now shows what the task's own status makes possible.

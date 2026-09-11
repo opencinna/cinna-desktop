@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import type { RemoteTaskAdapter } from '../tasks/adapters/adapter'
 import type { TaskDto } from '../../shared/tasks'
-import { CinnaApiError } from '../errors'
+import { CinnaApiError, TaskError } from '../errors'
 
 /**
  * `taskSyncService` against a real database, the real `cinnaTaskAdapter`, and a
@@ -1060,5 +1060,202 @@ describe('what is waiting on the user', () => {
     // without looking at this tells the user nothing is waiting when the truth
     // is that nobody knows.
     expect(await taskSyncService.remoteWork(USER)).toEqual({ waiting: false, complete: false })
+  })
+})
+
+describe('moving the work across the seam (§5.10)', () => {
+  describe('handing a task to a service', () => {
+    it('creates it, executes it, and only then says the service is running it', async () => {
+      const task = taskService.create(USER, {
+        title: 'Reconcile payouts',
+        goal: 'Reconcile payouts for the last 7 days',
+        assigneeAgentId: 'agent-on-the-service',
+        assigneeKind: 'remote_agent'
+      })
+
+      const handed = await taskSyncService.handOff(USER, task.id)
+
+      expect(handed.executor).toBe('remote')
+      expect(handed.remote?.adapter).toBe('cinna')
+      const remote = cinna.task(handed.remote!.id)
+      // The desktop's own id, so a create retried after a lost response returns
+      // the first task rather than making a second one.
+      expect(remote?.external_ref).toBe(task.id)
+      expect(remote?.selected_agent_id).toBe('agent-on-the-service')
+      expect(cinna.calls().some((c) => c.path.endsWith('/execute'))).toBe(true)
+    })
+
+    it('leaves the task on this device when the service will not start it', async () => {
+      // **The ordering that matters.** `executor` is what the push reads to
+      // decide whether this device may still write the status, and what the
+      // page reads to decide whether to offer a re-run. Flipped before a failed
+      // execute, the task would be marked as running on a service that never
+      // picked it up: no agent there, no controls here.
+      cinna.refuseExecute()
+      const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
+
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toThrow()
+
+      const after = taskService.getById(USER, task.id)
+      expect(after.executor).toBe('desktop')
+      // The binding survives, because the task really is on the service now —
+      // a second attempt re-binds to the same row through `external_ref`
+      // instead of creating a second one.
+      expect(after.remote?.adapter).toBe('cinna')
+    })
+
+    it('refuses a task that is already with a service, rather than running it twice', async () => {
+      // The sequence would re-post the note, re-assign and `execute` again, and
+      // cinna starts a second session on the same task — the race the other
+      // direction refuses with `remote_busy`.
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      const before = cinna.calls().length
+
+      await expect(taskSyncService.handOff(USER, taskId)).rejects.toMatchObject({
+        code: 'remote_busy'
+      })
+      expect(cinna.calls().length).toBe(before)
+    })
+
+    it('keeps the hand-over when the bookkeeping after it fails', async () => {
+      // Three local writes follow the call that starts an agent, and each goes
+      // through `requireTask`. Left to throw, the caller's catch soft-deletes
+      // the task and writes no run row — so the user is told the run was
+      // refused while an agent burns tokens on a task that, by the rest of the
+      // app's reckoning, does not exist.
+      const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
+      const spy = vi.spyOn(taskService, 'acceptRemoteStatus').mockImplementationOnce(() => {
+        throw new TaskError('not_found', 'Task not found')
+      })
+
+      const handed = await taskSyncService.handOff(USER, task.id)
+
+      expect(spy).toHaveBeenCalled()
+      // The binding is what the caller needs, and it was committed before the
+      // network call.
+      expect(handed.remote?.adapter).toBe('cinna')
+      expect(cinna.calls().some((c) => c.path.endsWith('/execute'))).toBe(true)
+      spy.mockRestore()
+    })
+
+    it('says the work started when the task went while it was starting', async () => {
+      // The one sub-case with nothing local left to return. What must not
+      // happen is the caller reporting a refusal and cleaning up: an agent is
+      // running, and there is nothing to clean up anyway.
+      const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
+      const spy = vi.spyOn(taskService, 'markRemoteSynced').mockImplementationOnce(() => {
+        taskService.remove(USER, task.id)
+        throw new TaskError('not_found', 'Task not found')
+      })
+
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({
+        code: 'handed_over'
+      })
+      expect(cinna.calls().some((c) => c.path.endsWith('/execute'))).toBe(true)
+      spy.mockRestore()
+    })
+
+    it('refuses when the profile is connected to no service', async () => {
+      holder.adapters = []
+      const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({
+        code: 'no_service'
+      })
+      expect(taskService.getById(USER, task.id).executor).toBe('desktop')
+    })
+
+    it('does not re-send the assignee a create already carried', async () => {
+      const task = taskService.create(USER, {
+        title: 'Reconcile',
+        goal: 'Reconcile payouts',
+        assigneeAgentId: 'agent-on-the-service',
+        assigneeKind: 'remote_agent'
+      })
+      await taskSyncService.handOff(USER, task.id)
+      // One PATCH would be a request that can only confirm what the create said.
+      expect(cinna.calls().filter((c) => c.method === 'PATCH')).toHaveLength(0)
+    })
+  })
+
+  describe('taking a task back from a service', () => {
+    it('refuses while an agent is working on it there', async () => {
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      cinna.touch(remoteIdOf(taskId), { status: 'in_progress' })
+      cinna.startSession(remoteIdOf(taskId), 'running')
+
+      // §5.10, and the device-to-device twin decision 8 settled: claiming does
+      // not stop the agent, so the outcomes are two runners on one task or a
+      // claim the service's next status recompute undoes.
+      await expect(taskSyncService.takeOver(USER, taskId)).rejects.toMatchObject({
+        code: 'remote_busy'
+      })
+      expect(taskService.getById(USER, taskId).executor).toBe('remote')
+    })
+
+    it('allows it once nothing is working on it there', async () => {
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      // A task can sit `in_progress` on cinna with nothing live: the status is
+      // recomputed *from* the sessions, so it is not the question to ask.
+      cinna.touch(remoteIdOf(taskId), { status: 'in_progress' })
+
+      const task = await taskSyncService.takeOver(USER, taskId)
+      expect(task.executor).toBe('desktop')
+    })
+
+    it('confirms rather than refusing when the service cannot be asked', async () => {
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      cinna.behave('transport')
+
+      // Refusing would strand the task on a service that cannot answer for it.
+      await expect(taskSyncService.takeOver(USER, taskId)).rejects.toMatchObject({
+        code: 'remote_unknown'
+      })
+      expect(taskService.getById(USER, taskId).executor).toBe('remote')
+
+      const task = await taskSyncService.takeOver(USER, taskId, { force: true })
+      expect(task.executor).toBe('desktop')
+    })
+
+    it('asks the service nothing for a task held by another device', async () => {
+      // The device half of the same gesture needs no network, and paying for
+      // one would make a claim fail because somebody else's server was down.
+      holder.deviceId = 'device-here'
+      const task = taskService.create(USER, { title: 'Local', goal: 'Do the thing' })
+      taskRepo.update(USER, task.id, { executorDevice: 'device-there' })
+      const before = cinna.calls().length
+
+      const after = await taskSyncService.takeOver(USER, task.id)
+
+      expect(after.runsHere).toBe(true)
+      expect(cinna.calls().length).toBe(before)
+    })
+  })
+
+  describe('is anything working on it there', () => {
+    it('answers from the sessions, not from the status', async () => {
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      cinna.touch(remoteIdOf(taskId), { status: 'in_progress' })
+      expect(await taskSyncService.liveSession(USER, taskId)).toBe(false)
+
+      cinna.startSession(remoteIdOf(taskId), 'running')
+      expect(await taskSyncService.liveSession(USER, taskId)).toBe(true)
+    })
+
+    it('says nobody can tell when the service cannot be reached', async () => {
+      const taskId = await bound()
+      taskService.handOffToRemote(USER, taskId)
+      cinna.behave('transport')
+      expect(await taskSyncService.liveSession(USER, taskId)).toBeNull()
+    })
+
+    it('says no for a task no service holds, which is a real answer', async () => {
+      const task = taskService.create(USER, { title: 'Local', goal: 'Do the thing' })
+      expect(await taskSyncService.liveSession(USER, task.id)).toBe(false)
+    })
   })
 })

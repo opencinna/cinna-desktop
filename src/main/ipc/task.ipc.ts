@@ -3,6 +3,7 @@ import { getProfileScopeUserId } from '../auth/scope'
 import { taskService, type TaskFieldPatch } from '../services/taskService'
 import { inboxService } from '../services/inboxService'
 import { syncService } from '../services/syncService'
+import { taskSyncService } from '../services/taskSyncService'
 import { parseAnswerPayload } from '../services/askDelivery'
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../shared/inbox'
@@ -87,20 +88,46 @@ export function registerTaskHandlers(): void {
   })
 
   /**
+   * Is something working on this task in the service that holds it?
+   *
+   * A network question, which is why it is a channel of its own rather than a
+   * field on `TaskDto`: the DTO is built from a row, synchronously, at thirteen
+   * call sites. `null` is a real answer and the renderer has to render it —
+   * §5.10 confirms rather than refuses when nobody can tell.
+   *
+   * Asked once, when a take-over control is about to be shown. It is **not**
+   * the authority: `task:take-over` asks again on the far side of the user's
+   * gesture, because an agent can start in the seconds between.
+   */
+  ipcHandle('task:remote-live', async (_event, taskId: string): Promise<boolean | null> => {
+    userActivation.requireActivated()
+    return taskSyncService.liveSession(getProfileScopeUserId(), taskId)
+  })
+
+  /**
    * Continue a task here — from another device, or from a bound service.
+   *
+   * Through `taskSyncService` rather than `taskService`, because one of the two
+   * elsewheres is on a network: a task a remote agent is working on right now
+   * refuses the take-over (§5.10), and asking costs a request. The device half
+   * needs nothing and falls straight through.
+   *
+   * `force` is the answer to a service that could not say. §5.10 confirms
+   * rather than refuses there, so the renderer asks the user and sends it back.
    *
    * The nudge matters most on this one. The claim only means anything once the
    * other device has read it, and until then both of them pass `taskRunsHere`
    * and both will happily write the run. On the periodic cycle alone that
    * window is up to a minute wide; the debounce closes it to seconds.
    */
-  ipcHandle('task:take-over', async (_event, taskId: string) => {
+  ipcHandle('task:take-over', async (_event, taskId: string, force?: boolean) => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    const task = taskService.takeOver(userId, taskId)
+    const task = await taskSyncService.takeOver(userId, taskId, { force: force === true })
     syncService.markDirty(userId)
     return task
   })
+
 
   ipcHandle('task:delete', async (_event, taskId: string) => {
     userActivation.requireActivated()

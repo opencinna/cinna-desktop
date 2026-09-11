@@ -313,25 +313,33 @@ describe('cinnaTaskAdapter — reading a task back', () => {
 
   it('says whether work is live on the remote, from its sessions and not its status', async () => {
     const { server, adapter, binding } = await bound()
-    expect((await adapter.fetch(USER, binding)).liveSession).toBe(false)
+    expect(await adapter.liveSession(USER, binding)).toBe(false)
 
     // A task can sit `in_progress` with nothing running: cinna recomputes the
     // status from its sessions, so the status is the wrong thing to ask.
     server.touch(binding.id, { status: 'in_progress' })
     server.startSession(binding.id, '')
-    expect((await adapter.fetch(USER, binding)).liveSession).toBe(false)
+    expect(await adapter.liveSession(USER, binding)).toBe(false)
 
     server.startSession(binding.id, 'running')
-    expect((await adapter.fetch(USER, binding)).liveSession).toBe(true)
+    expect(await adapter.liveSession(USER, binding)).toBe(true)
   })
 
-  it('says it cannot tell from a list, rather than guessing', async () => {
+  it('does not ask about sessions to fetch a task', async () => {
     const { server, adapter, binding } = await bound()
     server.startSession(binding.id, 'running')
-    const [snapshot] = await adapter.list(USER, null)
-    // `InputTaskPublicExtended` carries no session state, and asking per row
-    // would be a request per task on every poll. `null` is a real answer.
-    expect(snapshot.liveSession).toBeNull()
+    const before = server.calls().length
+
+    await adapter.fetch(USER, binding)
+
+    // **One request, and the point is which one is absent.** Until step 11 the
+    // snapshot carried a `liveSession` field, so every `fetch` also listed the
+    // task's sessions — one extra round trip per watched replica per pull pass,
+    // for an answer `patchFrom` had nowhere to put and threw away. The question
+    // is asked by `liveSession`, once, by somebody about to take the task over.
+    expect(server.calls().slice(before).map((c) => c.path)).toEqual([
+      `/api/v1/tasks/${binding.id}/detail`
+    ])
   })
 
   it('asks for the active set with no cursor, and for everything changed with one', async () => {

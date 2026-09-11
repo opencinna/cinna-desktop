@@ -606,11 +606,22 @@ export function describeAdapterContract(
     clause('supported.works', 'says whether work is live on the remote, or says it cannot tell', async () => {
       const world = makeWorld()
       const binding = await bound(world)
-      const { liveSession } = await world.adapter.fetch(world.userId, binding)
+      const live = await world.adapter.liveSession(world.userId, binding)
       // Three states, and `null` is one of them. §5.10 turns each into a
       // different Take over control; an adapter that answered `false` when it
       // meant "no idea" would offer a take-over into a live agent.
-      expect([true, false, null]).toContain(liveSession)
+      expect([true, false, null]).toContain(live)
+
+      // **It is not a second copy of the snapshot's status**, and this is what
+      // makes the split worth having rather than a rename. A `fetch` costs the
+      // pull one call per watched replica per pass; this costs one call, once,
+      // when somebody is about to take the task over. An adapter that answered
+      // it out of the snapshot it had already fetched would be free to skip the
+      // question entirely — and cinna is the worked example of why that is
+      // wrong in both directions, since it recomputes status *from* the
+      // sessions this asks about.
+      const snapshot = await world.adapter.fetch(world.userId, binding)
+      expect(snapshot).not.toHaveProperty('liveSession')
     })
 
     clause('handoffNote.lands', 'has somewhere to leave the handoff note', async () => {

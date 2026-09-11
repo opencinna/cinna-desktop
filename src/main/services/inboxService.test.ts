@@ -73,11 +73,33 @@ function makeChat(id: string): void {
   )
 }
 
-/** A task in the state a job run leaves it in: started, running in its chat. */
+/**
+ * A task in the state a job run leaves it in: started, running in its chat, and
+ * **carrying its run's id**.
+ *
+ * `jobRunId` is what decides who ends the task, so it is not decoration here.
+ * A task a job run owns is finished by `jobService.reportRunCompletion`, which
+ * knows the outcome a `done` event cannot — a stop, a refusal, a budget ceiling
+ * — so `endTurn` leaves it in `in_progress` for that write to find. A task a
+ * *chat* made for itself has no such hook, and `endTurn` is the only thing that
+ * can end it. `makeChatTask` is the other shape.
+ */
 function makeTask(chatId: string | null = CHAT) {
   const task = taskService.create(USER, {
     title: 'Ship the thing',
     goal: 'Ship the thing by Friday',
+    chatId,
+    jobId: 'job-1',
+    jobRunId: 'run-1'
+  })
+  return taskService.start(USER, task.id, { chatId })
+}
+
+/** The shape `inboxService` itself mints: a chat's own task, with no job run. */
+function makeChatTask(chatId: string | null = CHAT) {
+  const task = taskService.create(USER, {
+    title: 'Tidy the build',
+    goal: 'Tidy the build directory',
     chatId
   })
   return taskService.start(USER, task.id, { chatId })
@@ -125,11 +147,109 @@ describe('recording an ask', () => {
     expect(taskService.getById(USER, task.id).status).toBe('blocked')
   })
 
-  it('records nothing for an ask in a chat that has no task', () => {
-    makeChat('chat-2')
-    inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), permission)
-    expect(inboxService.list(USER)).toEqual([])
-    expect(taskInputRequestRepo.getById('per_1')).toBeUndefined()
+  describe('an ask in a chat that has no task', () => {
+    /**
+     * **The phase's exit criterion, and the case it was failing on.** Only a
+     * job run created a task, so an ask raised in a chat the user opened by
+     * hand was answerable in the transcript and in no list at all — which is
+     * the commonest way a person meets an agent here.
+     */
+    it('makes one, so the ask is in the inbox', () => {
+      holder.current?.raw.exec(
+        `INSERT INTO chats (id, user_id, title, created_at, updated_at)
+         VALUES ('chat-2', '${USER}', 'Tidy the build', 0, 0)`
+      )
+      holder.current?.raw.exec(
+        `INSERT INTO messages (id, chat_id, role, content, sort_order, created_at)
+         VALUES ('m1', 'chat-2', 'user', 'Please tidy up the build directory', 1, 0)`
+      )
+
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), permission)
+
+      const entries = inboxService.list(USER)
+      expect(entries).toHaveLength(1)
+      expect(entries[0].requestId).toBe('per_1')
+      const task = taskService.getById(USER, entries[0].taskId)
+      expect(task.chatId).toBe('chat-2')
+      // Created *started*: `new → blocked` is not in the transition table, so a
+      // task left at `new` would sit there while `applyRunState` no-ops, and
+      // the row would hang off a task that never says it is waiting.
+      expect(task.status).toBe('blocked')
+      // The first thing the user said, not the chat's forty-character title:
+      // `goal` is the original ask and is immutable once written.
+      expect(task.goal).toBe('Please tidy up the build directory')
+      expect(task.title).toBe('Tidy the build')
+      expect(task.assignee).toEqual({ agentId: AGENT, name: null, kind: 'agent' })
+      // It is not a job's task, which is the half of this decision the task
+      // page has to answer for — a task with no job above it.
+      expect(task.jobId).toBeNull()
+      expect(task.jobRunId).toBeNull()
+    })
+
+    it('makes exactly one, however many asks the chat raises', () => {
+      holder.current?.raw.exec(
+        `INSERT INTO chats (id, user_id, title, created_at, updated_at)
+         VALUES ('chat-2', '${USER}', 'Tidy the build', 0, 0)`
+      )
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), permission)
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), {
+        ...permission,
+        requestId: 'per_2'
+      })
+
+      const taskIds = new Set(inboxService.list(USER).map((e) => e.taskId))
+      expect(taskIds.size).toBe(1)
+      expect(taskService.list(USER)).toHaveLength(1)
+    })
+
+    /**
+     * A behaviour pin, not a branch pin — worth saying out loud. Deleting
+     * `taskForChat`'s chat-existence guard does not fail this: the create
+     * would throw on the missing row instead, `recordRunEvent` would catch it,
+     * and the outcome the test can see is identical. What the guard buys is a
+     * debug line for something that is not a fault, in place of a warning that
+     * reads like one.
+     */
+    it('makes none for an ask the next message answers, which would only sit blocked', () => {
+      // A `next_message` ask writes no row, so a task made for it would hold
+      // nothing — and it would hold it in `blocked`: `endTurn` returns a task
+      // to `in_progress` only when it expired a row, and a plain chat has no
+      // job run for `reportRunCompletion` to finish it through. It would sit
+      // there for the life of the profile, offering a re-run for a conversation
+      // the user's next message already resumes.
+      holder.current?.raw.exec(
+        `INSERT INTO chats (id, user_id, title, created_at, updated_at)
+         VALUES ('chat-2', '${USER}', 'Tidy the build', 0, 0)`
+      )
+
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2' }), {
+        ...permission,
+        resume: 'next_message'
+      })
+
+      expect(taskService.list(USER)).toEqual([])
+      expect(inboxService.list(USER)).toEqual([])
+    })
+
+    it('makes none for a parked ask that named no agent, which nothing could answer', () => {
+      holder.current?.raw.exec(
+        `INSERT INTO chats (id, user_id, title, created_at, updated_at)
+         VALUES ('chat-2', '${USER}', 'Tidy the build', 0, 0)`
+      )
+
+      inboxService.recordRunEvent(ctx({ chatId: 'chat-2', agentId: null }), permission)
+
+      expect(taskService.list(USER)).toEqual([])
+    })
+
+    it('records nothing when the chat itself is gone, and does not throw', () => {
+      expect(() =>
+        inboxService.recordRunEvent(ctx({ chatId: 'chat-gone' }), permission)
+      ).not.toThrow()
+      expect(inboxService.list(USER)).toEqual([])
+      expect(taskInputRequestRepo.getById('per_1')).toBeUndefined()
+      expect(taskService.list(USER)).toEqual([])
+    })
   })
 
   it('attributes a nested agent’s ask to the agent that raised it', () => {
@@ -277,6 +397,70 @@ describe('a turn that ends while it is still parked', () => {
     inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
 
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('answered')
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+})
+
+/**
+ * **Who ends a task nobody else will.**
+ *
+ * `jobService.reportRunCompletion` is keyed on
+ * `jobRunsRepo.getByLocalChatId(chatId)`, which answers nothing for a chat the
+ * user opened by hand — so a task this service minted for such a chat had no
+ * finisher at all. It went `in_progress → blocked → in_progress` and stopped
+ * there for the life of the profile: listed as running, holding this device's
+ * claim, and **synced**, so the user's second device offered *Take over* on it
+ * for ever (`CLAIM_MATTERS` includes `in_progress`). One per hand-opened chat
+ * that ever raised an ask.
+ */
+describe('a turn ending in a chat that owns its own task', () => {
+  it('completes the task, because for this chat the turn is the work', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx(), permission)
+    inboxService.closeAsk(ctx(), 'per_1', { kind: 'permission', reply: 'once' })
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('records an error as an error', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx(), permission)
+    inboxService.recordRunEvent(ctx(), { type: 'error', error: 'the agent died' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('error')
+  })
+
+  it('records a stop as cancelled, not as finished work', () => {
+    // A task marked `completed` because the user pressed Stop is a lie the task
+    // list would keep for ever.
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'canceled' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('cancelled')
+  })
+
+  it('ends it even when the turn was never parked on anything', () => {
+    // The commonest shape by far: a chat whose task was minted by an earlier
+    // turn's ask, and whose later turns raise none. `endTurn` used to return
+    // early whenever it expired no rows.
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx(), { type: 'done', stopReason: 'end_turn' })
+
+    expect(taskService.getById(USER, task.id).status).toBe('completed')
+  })
+
+  it('is not ended by a nested agent finishing', () => {
+    // A coordinator can have several agents in flight in one chat; one of them
+    // finishing says nothing about whether the chat's work is done.
+    const task = makeChatTask()
+    inboxService.recordRunEvent(ctx({ agentId: null }), {
+      type: 'child',
+      toolCallId: 'call-1',
+      agentId: 'folder:beta',
+      event: { type: 'done', stopReason: 'end_turn' }
+    })
+
     expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
 })

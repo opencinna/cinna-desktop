@@ -66,6 +66,12 @@ export function createNullAdapter(id: string): RemoteTaskAdapter {
     pushStatus: async () => refuse('pushStatus'),
     archive: async () => refuse('archive'),
     fetch: async () => refuse('fetch'),
+    // **`null`, not a refusal**, and it is the one method here that answers.
+    // `null` is this question's own word for "cannot tell", which is exactly
+    // what a build with no adapter for this service knows — and the caller
+    // already has to handle it, so refusing would make the take-over path
+    // choose between a throw and a tri-state for the same fact.
+    liveSession: async () => null,
     list: async () => refuse('list'),
     listSubtasks: async () => refuse('listSubtasks'),
     execute: async () => refuse('execute'),
