@@ -201,12 +201,20 @@ export const authService = {
         logger.warn('cinna register rejected: name collides with a local account', { username })
         throw new AuthError('username_taken', `Account already exists for ${username}`)
       }
-      // Rebind: a previously signed-out Cinna profile is signing back in. Reuse
-      // the existing profile row (so its kept device key + synced data line up
-      // again) instead of minting a new id and orphaning everything. Refresh
-      // identity fields + tokens, then reactivate — activation silently
-      // auto-unlocks if the device was kept, or surfaces needs-unlock if it was
-      // removed at sign-out.
+      // Rebind: this email already has a profile row on this device, so reuse it
+      // (its device key and synced data line up with it) instead of minting a
+      // new id and orphaning everything. Refresh identity fields + tokens, then
+      // reactivate — activation silently auto-unlocks if the device was kept, or
+      // surfaces needs-unlock if it was removed.
+      //
+      // **Not "a signed-out profile signing back in."** Sign-out deletes the row
+      // (`deleteAccount` runs `deleteWithCascade` on both branches), so that
+      // path mints a fresh id and never arrives here. What reaches this branch
+      // is a profile that is still listed — signing in again over a profile the
+      // switcher already shows, or a row left by an installation from before
+      // sign-out deleted it. That distinction is load-bearing: it is the reason
+      // this branch, and not `deleteAccount`, is where a re-link can carry one
+      // account's cursors and task bindings into another's.
       //
       // A local password on the row (the device-level profile-switch lock) is
       // intentionally NOT re-checked here: a completed OAuth flow proves control
