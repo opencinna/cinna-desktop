@@ -41,13 +41,21 @@
  *
  * ## What calls this
  *
- * Nothing yet, deliberately, the same way `taskFileService` landed before
- * anything wrote a handoff note and the adapter seam landed before its first
- * adapter. The producers arrive with step 11, where the `cinna_task` job path
- * folds onto `adapter.create` + `adapter.execute` and `refreshCinnaRun` becomes
- * {@link taskSyncService.pullOne}. The cursor is deliberately in memory for the
- * same reason §5.7 wants a full reconcile on start: a restart costs one
- * active-set pull, which is the pass that would have to happen anyway.
+ * **Nothing drives the loop yet** — no timer, no IPC channel, no service caller
+ * for `push`, `pull`, `reconcile`, `pullOne` or `remoteWork`. Deliberately, the
+ * same way `taskFileService` landed before anything wrote a handoff note and the
+ * adapter seam landed before its first adapter. The producers arrive with step
+ * 11, where the `cinna_task` job path folds onto `adapter.create` +
+ * `adapter.execute` and `refreshCinnaRun` becomes {@link
+ * taskSyncService.pullOne}.
+ *
+ * The one production import is `authService`, and it calls
+ * {@link taskSyncService.resetCursors} alone — that hazard does not wait for a
+ * scheduler, because it is about a cursor outliving the account it describes.
+ *
+ * The cursor is deliberately in memory for the same reason §5.7 wants a full
+ * reconcile on start: a restart costs one active-set pull, which is the pass
+ * that would have to happen anyway, plus the bounded history window beside it.
  */
 
 import { taskRepo, type TaskRow } from '../db/tasks'
@@ -124,9 +132,11 @@ const CURSOR_OVERLAP_MS = 1_000
  * again.
  *
  * A week, because the question this answers is "what did my agents finish
- * recently", and because the cost is paid per app start rather than per poll:
- * one extra cursored request, which carries no status filter and is therefore
- * the only way a terminal task arrives at all.
+ * recently", and because the cost is paid per app start rather than per poll.
+ * It is a cursored `list`, which carries no status filter and is therefore the
+ * only route by which a terminal task arrives at all — and which is **paged**,
+ * so it is one request per page rather than one request flat. A wider window is
+ * not free: it is more pages, all awaited before the first upsert.
  *
  * **This number is a product decision, not a protocol one**, and nothing renders
  * the tasks it brings in yet. The screen that lists remote tasks is the right
@@ -135,27 +145,53 @@ const CURSOR_OVERLAP_MS = 1_000
  */
 const FIRST_PASS_BACKFILL_MS = 7 * 24 * 60 * 60 * 1_000
 
-function backfillSince(): Date {
-  return new Date(Date.now() - FIRST_PASS_BACKFILL_MS)
+/**
+ * The finished-history window, or an empty list if the service could not
+ * produce it.
+ *
+ * **Isolated from the pass that needs it, deliberately.** The active set has
+ * already been fetched by the time this runs, and letting a failure here escape
+ * would discard it: nothing would be upserted, `state.pulls` would stay at zero,
+ * and every later pass would repeat both requests and fail the same way — so a
+ * service that answers the active set perfectly and times out on the larger
+ * cursored one would sync **nothing at all**, indefinitely, logged as a plain
+ * failed pull. A missing week of history is not a reason to lose the week that
+ * is live.
+ */
+async function history(userId: string, adapter: RemoteTaskAdapter): Promise<RemoteTaskSnapshot[]> {
+  const since = new Date(Date.now() - FIRST_PASS_BACKFILL_MS)
+  try {
+    return await adapter.list(userId, since)
+  } catch (err) {
+    logger.warn('could not read finished history; keeping the active set', {
+      adapter: adapter.id,
+      error: err instanceof Error ? err.message : String(err)
+    })
+    return []
+  }
 }
 
 /**
  * Two lists of snapshots as one, keyed by the remote's id.
  *
- * The active set and the backfill window overlap by construction — anything
- * active *and* touched this week is in both — and an upsert of the same task
- * twice in one pass is a wasted write plus a duplicate entry in the parent
- * resolution batch. First writer wins: both lists came from the same service in
- * the same instant, so they cannot disagree about anything that matters.
+ * The active set and the history window overlap by construction — anything
+ * active *and* touched inside the window is in both — and upserting the same
+ * task twice in one pass is a wasted write plus a duplicate in the parent
+ * resolution batch.
+ *
+ * **The later list wins**, because the two are sequential round trips rather
+ * than one instant: a task that changes between them appears in both with
+ * different contents, and keeping the first-fetched copy would write the staler
+ * one — a task that completed mid-pass recorded as still running. The Map keeps
+ * the first insertion's *position*, so the ordering of `first` survives while
+ * its values are overwritten.
  */
 function mergeById(
   first: RemoteTaskSnapshot[],
   second: RemoteTaskSnapshot[]
 ): RemoteTaskSnapshot[] {
   const byId = new Map<string, RemoteTaskSnapshot>()
-  for (const snapshot of [...first, ...second]) {
-    if (!byId.has(snapshot.binding.id)) byId.set(snapshot.binding.id, snapshot)
-  }
+  for (const snapshot of [...first, ...second]) byId.set(snapshot.binding.id, snapshot)
   return [...byId.values()]
 }
 
@@ -734,9 +770,7 @@ export const taskSyncService = {
         // minutes before is missing while work finished ten minutes after is
         // there — so the first pass also asks for a bounded window of recent
         // history, where a cursor carries no status filter at all.
-        const snapshots = firstPass
-          ? mergeById(active, await adapter.list(userId, backfillSince()))
-          : active
+        const snapshots = firstPass ? mergeById(active, await history(userId, adapter)) : active
 
         // Two passes, and the second one is not belt-and-braces.
         //
@@ -783,14 +817,16 @@ export const taskSyncService = {
           state.cursor
         )
         state.pulls += 1
-        if (firstPass || state.pulls % RECONCILE_EVERY === 0) {
-          // `active`, not `snapshots`: on the first pass the cursor was null, so
-          // `active` *is* the active set and asking for it again would be the
-          // same request twice — but the backfill merged into `snapshots` is
-          // mostly terminal tasks, and handing those to `dropMissing` as "still
-          // listed as active" is a claim about the service that is not true.
-          await dropMissing(userId, adapter, firstPass ? active : null)
-        }
+        // **Before the reconcile, not after.** The pull's own work — every
+        // upsert — is finished at this point, and the reconcile below is a
+        // separate concern that can throw (`dropMissing`'s `taskService.remove`
+        // is not individually guarded). With the order reversed, that throw
+        // landed after `pulls` had been incremented and before the cursor was
+        // written: the session was then never a first pass again, so it got no
+        // history window and no reconcile until pass twenty, while still
+        // holding a null cursor — which means re-fetching the entire active set
+        // on every poll for the life of the process.
+        //
         // **Only on a new maximum.** Applying the rewind unconditionally has
         // two costs that are invisible until they are not: an idle profile
         // widens its own window by a second per poll, because `newest` falls
@@ -800,6 +836,14 @@ export const taskSyncService = {
         // idle cursor stays parked instead.
         if (newest !== null && (state.cursor === null || newest > state.cursor)) {
           state.cursor = new Date(newest.getTime() - CURSOR_OVERLAP_MS)
+        }
+        if (firstPass || state.pulls % RECONCILE_EVERY === 0) {
+          // `active`, not `snapshots`: on the first pass the cursor was null, so
+          // `active` *is* the active set and asking for it again would be the
+          // same request twice — but the history merged into `snapshots` is
+          // mostly terminal tasks, and handing those to `dropMissing` as "still
+          // listed as active" is a claim about the service that is not true.
+          await dropMissing(userId, adapter, firstPass ? active : null)
         }
       } catch (err) {
         logger.warn('pull failed for a service', {

@@ -765,6 +765,102 @@ describe('pulling what changed there', () => {
 })
 
 describe('history the first pull brings in', () => {
+  /**
+   * The real adapter over the fake server, with one request intercepted. The
+   * interceptor sees every path and may throw, or mutate the far side before
+   * letting the call through — which is how "the service changed between the
+   * two list requests" becomes reachable at all.
+   */
+  function interceptWith(hook: (path: string) => void): void {
+    holder.adapters = [
+      createCinnaTaskAdapter({
+        ...cinna.world,
+        request: async (userId, path, opts) => {
+          hook(path)
+          return cinna.world.request(userId, path, opts)
+        }
+      })
+    ]
+  }
+
+  it('keeps the active set when the history request fails', async () => {
+    cinna.seed({ title: 'Live', status: 'in_progress' })
+    interceptWith((path) => {
+      if (path.includes('updated_since=')) throw new Error('gateway timeout')
+    })
+
+    await taskSyncService.pull(USER)
+
+    // The active set was already in hand when the history call failed. Losing
+    // it would leave the pass count at zero as well, so every later pass would
+    // repeat both requests and fail identically — a profile that syncs nothing
+    // at all, while its primary request works perfectly.
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['Live'])
+  })
+
+  it('counts a pass whose history failed, so the next one is a delta', async () => {
+    cinna.seed({ title: 'Live', status: 'in_progress' })
+    interceptWith((path) => {
+      if (path.includes('updated_since=')) throw new Error('gateway timeout')
+    })
+    await taskSyncService.pull(USER)
+
+    const mark = cinna.calls().length
+    await taskSyncService.pull(USER)
+
+    expect(
+      cinna.calls().slice(mark).some((c) => c.path.includes('status=active'))
+    ).toBe(false)
+  })
+
+  it('takes the later copy of a task that changed between the two requests', async () => {
+    const task = cinna.seed({ title: 'Before', status: 'in_progress' })
+    // Two sequential round trips, not one instant. The active set is fetched
+    // first, so its copy is the stale one; keeping it would record a task that
+    // finished mid-pass as still running.
+    interceptWith((path) => {
+      if (path.includes('updated_since=')) cinna.touch(task.id, { title: 'After' })
+    })
+
+    await taskSyncService.pull(USER)
+
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['After'])
+  })
+
+  it('keeps the cursor it earned when the periodic reconcile throws', async () => {
+    // The reconcile runs after every upsert is already written, and on a
+    // periodic pass it makes its own uncursored `list` — outside the per-task
+    // catch inside `dropMissing`, so a failure there propagates out of the
+    // pass. With the cursor written after it, that throw discarded a cursor the
+    // pull had legitimately earned, and every later pass re-read the same rows.
+    // An hour of daylight between the two cursor positions, so the assertion
+    // is about which one was kept rather than about milliseconds.
+    const first = cinna.seed({ title: 'Live', status: 'in_progress' })
+    cinna.touch(first.id, { updated_at: new Date(Date.now() - 60 * 60 * 1000) })
+    await taskSyncService.pull(USER)
+
+    // Up to the pass before the periodic reconcile (every 20th).
+    for (let i = 0; i < 18; i++) await taskSyncService.pull(USER)
+
+    const renamedAt = new Date()
+    cinna.touch(first.id, { title: 'Renamed', updated_at: renamedAt })
+    interceptWith((path) => {
+      if (path.includes('status=active')) throw new Error('reconcile list failed')
+    })
+    await taskSyncService.pull(USER)
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['Renamed'])
+
+    // The rename was upserted *before* the reconcile ran, so the cursor that
+    // covers it was earned and must survive the reconcile's failure. The next
+    // pass asking from an hour ago is the symptom of losing it: every row in
+    // between is read again on every poll, for ever.
+    const mark = cinna.calls().length
+    await taskSyncService.pull(USER)
+    const delta = cinna.calls().slice(mark).find((c) => c.path.includes('updated_since='))
+    const asked = new Date(decodeURIComponent(/updated_since=([^&]+)/.exec(delta?.path ?? '')?.[1] ?? ''))
+    expect(asked.getTime()).toBeGreaterThan(renamedAt.getTime() - 5_000)
+  })
+
   it('finds a task that had already finished, which the active set omits', async () => {
     // Finished before this profile ever pulled. `status=active` excludes it, so
     // without the first-pass window there is no route by which it arrives: the
