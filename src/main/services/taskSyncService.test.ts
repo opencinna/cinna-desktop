@@ -764,35 +764,92 @@ describe('pulling what changed there', () => {
   })
 })
 
+describe('history the first pull brings in', () => {
+  it('finds a task that had already finished, which the active set omits', async () => {
+    // Finished before this profile ever pulled. `status=active` excludes it, so
+    // without the first-pass window there is no route by which it arrives: the
+    // first pass filters it out and every later pass is a delta.
+    const done = cinna.seed({ title: 'Finished before we linked', status: 'completed' })
+    cinna.touch(done.id, { updated_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) })
+
+    await taskSyncService.pull(USER)
+
+    const [task] = taskService.list(USER)
+    expect(task?.title).toBe('Finished before we linked')
+    expect(task?.status).toBe('completed')
+  })
+
+  it('stops at the window, so linking does not drag in a year of history', async () => {
+    const ancient = cinna.seed({ title: 'Finished last spring', status: 'completed' })
+    cinna.touch(ancient.id, { updated_at: new Date(Date.now() - 400 * 24 * 60 * 60 * 1000) })
+
+    await taskSyncService.pull(USER)
+
+    expect(taskService.list(USER)).toEqual([])
+  })
+
+  it('does not ask for history again on later passes', async () => {
+    cinna.seed({ title: 'Live' })
+    await taskSyncService.pull(USER)
+    const afterFirst = cinna.calls().length
+
+    await taskSyncService.pull(USER)
+
+    // One request, not two: the window is a cost paid per app start.
+    expect(cinna.calls().length - afterFirst).toBe(1)
+  })
+
+  it('writes a task in both lists only once', async () => {
+    // Active *and* touched inside the window — in both responses, and an upsert
+    // of the same task twice in one pass is a wasted write and a duplicate in
+    // the parent-resolution batch.
+    cinna.seed({ title: 'Live and recently touched', status: 'in_progress' })
+
+    await taskSyncService.pull(USER)
+
+    expect(taskService.list(USER).map((t) => t.title)).toEqual(['Live and recently touched'])
+  })
+})
+
 describe('forgetting a profile’s cursors', () => {
-  /** The query the last task-list request carried. `status=active` is a first pass. */
-  function lastListQuery(): string {
-    const lists = cinna.calls().filter((c) => c.method === 'GET' && c.path.startsWith('/api/v1/tasks/?'))
-    return lists[lists.length - 1]?.path ?? ''
+  /**
+   * Did the pass that just ran ask for the uncursored active set? That request
+   * is made on a first pass and on no other, so it is the observable for "this
+   * profile's cursor was forgotten".
+   */
+  function askedForActiveSet(from: number): boolean {
+    return cinna
+      .calls()
+      .slice(from)
+      .some((c) => c.method === 'GET' && c.path.includes('status=active'))
   }
 
   it('makes the next pull a first pass again, and only for the profile named', async () => {
     cinna.seed({ title: 'Raised on the web' })
 
+    let mark = cinna.calls().length
     await taskSyncService.pull(USER)
-    expect(lastListQuery()).toContain('status=active')
+    expect(askedForActiveSet(mark)).toBe(true)
 
     // With a cursor, a pass is a delta — which is the whole point of the
     // cursor, and the thing that goes wrong when it outlives its account.
+    mark = cinna.calls().length
     await taskSyncService.pull(USER)
-    expect(lastListQuery()).toContain('updated_since=')
+    expect(askedForActiveSet(mark)).toBe(false)
 
     // Another profile's reset must not touch this one. The map is keyed
     // `<profile> <adapter>`, so this is the assertion that a prefix match
     // cannot be a substring match.
     taskSyncService.resetCursors('some-other-profile')
+    mark = cinna.calls().length
     await taskSyncService.pull(USER)
-    expect(lastListQuery()).toContain('updated_since=')
+    expect(askedForActiveSet(mark)).toBe(false)
 
     // The re-link case: the profile keeps its id and gets a different account.
     taskSyncService.resetCursors(USER)
+    mark = cinna.calls().length
     await taskSyncService.pull(USER)
-    expect(lastListQuery()).toContain('status=active')
+    expect(askedForActiveSet(mark)).toBe(true)
   })
 
   it('brings in a task older than the cursor, which is what the re-link needs', async () => {

@@ -215,7 +215,12 @@ describe('when the reconcile happens', () => {
     cinna.seed({ title: 'Raised on the web' })
     await taskSyncService.pull(USER)
     const lists = cinna.calls().filter((c) => c.path.startsWith('/api/v1/tasks/?'))
-    expect(lists).toHaveLength(1)
+    // The confirming pass reuses the list the pull already has. The first pass
+    // does make a *second* list request — the finished-history window — but it
+    // is a cursored one, and the point of this test is that the expensive
+    // uncursored set is fetched once.
+    expect(lists.filter((c) => c.path.includes('status=active'))).toHaveLength(1)
+    expect(lists.filter((c) => c.path.includes('updated_since='))).toHaveLength(1)
   })
 
   it('does not run on every pull', async () => {

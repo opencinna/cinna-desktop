@@ -113,6 +113,52 @@ const CATCH_UP_REASON = 'Reported by Cinna Desktop (catching up)'
  */
 const CURSOR_OVERLAP_MS = 1_000
 
+/**
+ * How much finished history the first pull of a session brings in.
+ *
+ * The first pass has no cursor, so it asks for the adapter's *active* set —
+ * which on cinna excludes `completed`, `cancelled` and `archived`. Without this
+ * window, a task that finished before the profile linked (or before the app
+ * last started) is unreachable by any route: filtered out by status on the
+ * first pass, and absent from every later delta unless somebody touches it
+ * again.
+ *
+ * A week, because the question this answers is "what did my agents finish
+ * recently", and because the cost is paid per app start rather than per poll:
+ * one extra cursored request, which carries no status filter and is therefore
+ * the only way a terminal task arrives at all.
+ *
+ * **This number is a product decision, not a protocol one**, and nothing renders
+ * the tasks it brings in yet. The screen that lists remote tasks is the right
+ * place to revisit it — a longer window is one constant away, and an adapter
+ * whose history is expensive should narrow it through its own `list` instead.
+ */
+const FIRST_PASS_BACKFILL_MS = 7 * 24 * 60 * 60 * 1_000
+
+function backfillSince(): Date {
+  return new Date(Date.now() - FIRST_PASS_BACKFILL_MS)
+}
+
+/**
+ * Two lists of snapshots as one, keyed by the remote's id.
+ *
+ * The active set and the backfill window overlap by construction — anything
+ * active *and* touched this week is in both — and an upsert of the same task
+ * twice in one pass is a wasted write plus a duplicate entry in the parent
+ * resolution batch. First writer wins: both lists came from the same service in
+ * the same instant, so they cannot disagree about anything that matters.
+ */
+function mergeById(
+  first: RemoteTaskSnapshot[],
+  second: RemoteTaskSnapshot[]
+): RemoteTaskSnapshot[] {
+  const byId = new Map<string, RemoteTaskSnapshot>()
+  for (const snapshot of [...first, ...second]) {
+    if (!byId.has(snapshot.binding.id)) byId.set(snapshot.binding.id, snapshot)
+  }
+  return [...byId.values()]
+}
+
 /** Per (profile, adapter) pull bookkeeping. In memory; a restart resets it. */
 interface CursorState {
   cursor: Date | null
@@ -676,7 +722,21 @@ export const taskSyncService = {
       try {
         if (!(await adapter.availability(userId)).ready) continue
         const state = stateFor(userId, adapter.id)
-        const snapshots = await adapter.list(userId, state.cursor)
+        const firstPass = state.pulls === 0
+        const active = await adapter.list(userId, state.cursor)
+        // On the first pass there is no cursor, so `active` is the adapter's
+        // *active* set — which on cinna excludes everything completed,
+        // cancelled and archived. Left at that, a task that had already
+        // finished when this profile linked would never arrive by any route:
+        // the first pass filters it out by status, and every later pass is a
+        // delta that mentions it only if somebody touches it again. The result
+        // is a visible seam at the moment of linking — work finished ten
+        // minutes before is missing while work finished ten minutes after is
+        // there — so the first pass also asks for a bounded window of recent
+        // history, where a cursor carries no status filter at all.
+        const snapshots = firstPass
+          ? mergeById(active, await adapter.list(userId, backfillSince()))
+          : active
 
         // Two passes, and the second one is not belt-and-braces.
         //
@@ -722,12 +782,14 @@ export const taskSyncService = {
             latest === null || snapshot.updatedAt > latest ? snapshot.updatedAt : latest,
           state.cursor
         )
-        const firstPass = state.pulls === 0
         state.pulls += 1
         if (firstPass || state.pulls % RECONCILE_EVERY === 0) {
-          // On the first pass the cursor was null, so `snapshots` *is* the
-          // active set and asking for it again would be the same request twice.
-          await dropMissing(userId, adapter, firstPass ? snapshots : null)
+          // `active`, not `snapshots`: on the first pass the cursor was null, so
+          // `active` *is* the active set and asking for it again would be the
+          // same request twice — but the backfill merged into `snapshots` is
+          // mostly terminal tasks, and handing those to `dropMissing` as "still
+          // listed as active" is a claim about the service that is not true.
+          await dropMissing(userId, adapter, firstPass ? active : null)
         }
         // **Only on a new maximum.** Applying the rewind unconditionally has
         // two costs that are invisible until they are not: an idle profile
