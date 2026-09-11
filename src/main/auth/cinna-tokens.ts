@@ -1,12 +1,19 @@
 import { userRepo } from '../db/users'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { refreshCinnaTokens, CinnaReauthRequired } from './cinna-oauth'
+import { CinnaSessionChanged, cinnaSessionGeneration, invalidateCinnaSession } from './cinna-session'
+import type { CinnaTokenState } from '../db/users'
 
 // Per-user mutex to prevent concurrent refresh races. Keyed by userId so a
 // refresh in flight for one account can never be handed back to another (a
 // global promise would let account B dedup onto account A's refresh and receive
 // A's access token).
-const refreshInProgress = new Map<string, Promise<string>>()
+const refreshInProgress = new Map<string, { generation: number; state: CinnaTokenState; promise: Promise<string> }>()
+
+function sameSession(a: CinnaTokenState | null | undefined, b: CinnaTokenState): boolean {
+  return !!a && a.serverUrl === b.serverUrl && a.clientId === b.clientId &&
+    !!a.refreshTokenEnc && !!b.refreshTokenEnc && a.refreshTokenEnc.equals(b.refreshTokenEnc)
+}
 
 /**
  * Store Cinna OAuth tokens (encrypted) for a user.
@@ -21,6 +28,13 @@ export function storeCinnaTokens(
     expiresIn: number
   }
 ): void {
+  invalidateCinnaSession(userId)
+  persistTokens(userId, tokens)
+}
+
+function persistTokens(userId: string, tokens: {
+  clientId: string; accessToken: string; refreshToken: string; expiresIn: number
+}): void {
   userRepo.setCinnaTokens(userId, {
     clientId: tokens.clientId,
     accessTokenEnc: encryptApiKey(tokens.accessToken),
@@ -38,6 +52,7 @@ export function storeCinnaTokens(
  */
 export async function getCinnaAccessToken(userId: string): Promise<string> {
   const state = userRepo.getCinnaTokenState(userId)
+  const generation = cinnaSessionGeneration(userId)
 
   if (!state?.accessTokenEnc || !state.refreshTokenEnc) {
     throw new CinnaReauthRequired('No Cinna tokens stored')
@@ -52,9 +67,12 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
   // Deduplicate concurrent refresh attempts for THIS account.
   const inFlight = refreshInProgress.get(userId)
-  if (inFlight) {
-    return inFlight
+  if (inFlight && inFlight.generation === generation && sameSession(state, inFlight.state)) {
+    return inFlight.promise
   }
+
+  const isCurrent = (): boolean => cinnaSessionGeneration(userId) === generation &&
+    sameSession(userRepo.getCinnaTokenState(userId), state)
 
   // Defer the body to a microtask so the `refreshInProgress.set` below always
   // wins the ordering. Otherwise a *synchronous* throw inside the body (e.g.
@@ -63,6 +81,7 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
   // rejected promise in the map that poisons every later caller for this user.
   const refresh = Promise.resolve().then(async () => {
     try {
+      if (!isCurrent()) throw new CinnaSessionChanged()
       const currentRefreshToken = decryptApiKey(state.refreshTokenEnc!)
       const serverUrl = state.serverUrl
       const clientId = state.clientId
@@ -73,7 +92,9 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
       const newTokens = await refreshCinnaTokens(serverUrl, clientId, currentRefreshToken)
 
-      storeCinnaTokens(userId, {
+      if (!isCurrent()) throw new CinnaSessionChanged()
+      // Rotation keeps the same session; only a login/re-link replaces it.
+      persistTokens(userId, {
         clientId,
         accessToken: newTokens.accessToken,
         refreshToken: newTokens.refreshToken,
@@ -82,17 +103,18 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
 
       return newTokens.accessToken
     } catch (e) {
-      if (e instanceof CinnaReauthRequired) {
+      if (!isCurrent()) throw new CinnaSessionChanged()
+      if (e instanceof CinnaReauthRequired && isCurrent()) {
         // Replay detected or token revoked — clear all tokens
         clearCinnaTokens(userId)
       }
       throw e
     } finally {
-      refreshInProgress.delete(userId)
+      if (refreshInProgress.get(userId)?.promise === refresh) refreshInProgress.delete(userId)
     }
   })
 
-  refreshInProgress.set(userId, refresh)
+  refreshInProgress.set(userId, { generation, state, promise: refresh })
   return refresh
 }
 
@@ -100,6 +122,7 @@ export async function getCinnaAccessToken(userId: string): Promise<string> {
  * Clear all Cinna tokens and client ID for a user.
  */
 export function clearCinnaTokens(userId: string): void {
+  invalidateCinnaSession(userId)
   userRepo.clearCinnaTokens(userId)
 }
 

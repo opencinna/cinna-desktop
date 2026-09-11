@@ -77,9 +77,9 @@ All columns are nullable — NULL for `local_user` accounts. Migration uses `has
 
 ### `src/main/auth/cinna-tokens.ts`
 
-- `storeCinnaTokens(userId, { clientId, accessToken, refreshToken, expiresIn })` — Encrypts and writes to user row
-- `getCinnaAccessToken(userId)` — Decrypts access token; auto-refreshes if within 60s of expiry; mutex prevents concurrent refresh; throws `CinnaReauthRequired` on failure
-- `clearCinnaTokens(userId)` — Nulls all Cinna token/client columns
+- `storeCinnaTokens(userId, { clientId, accessToken, refreshToken, expiresIn })` — Advances the user’s credential-session generation, then encrypts and writes to the user row
+- `getCinnaAccessToken(userId)` — Decrypts access token; auto-refreshes if within 60s of expiry; mutex prevents concurrent refresh; throws `CinnaReauthRequired` on terminal authentication failure and `CinnaSessionChanged` when an old operation loses its captured session
+- `clearCinnaTokens(userId)` — Advances the credential-session generation, then nulls all Cinna token/client columns
 - `hasCinnaTokens(userId)` — Boolean check
 
 ### `src/main/services/authService.ts`
@@ -132,7 +132,7 @@ The `RegisterFormProps` interface no longer carries an `onCancel` callback — o
 - **State parameter**: 16 random bytes hex — prevents CSRF
 - **Localhost-only redirect**: callback server binds to `127.0.0.1` on a random available port
 - **Token encryption**: access and refresh tokens encrypted via `safeStorage` (OS keychain) before SQLite storage
-- **Token rotation**: server issues new refresh token on each refresh; old token invalidated; replay detection triggers full re-auth and local token wipe
-- **Refresh mutex**: concurrent refresh attempts deduplicated via a per-user in-flight promise — prevents race conditions that could trigger false replay detection and cross-account token bleed. Full lifecycle + suspend/resume orphan safeguards in [Token Lifecycle tech](./token_lifecycle_tech.md)
+- **Token rotation**: server issues a new refresh token on each refresh; private rotation persistence retains the credential-session generation. Login/re-auth replacement and clearing advance it. Replay detection clears only the still-current session; a late old refresh cannot overwrite or wipe replacement credentials. See [token lifecycle internals](token_lifecycle_tech.md)
+- **Refresh mutex**: concurrent refresh attempts deduplicated by user and captured credential session — prevents race conditions that could trigger false replay detection and cross-account token bleed. Full lifecycle + suspend/resume orphan safeguards in [Token Lifecycle tech](./token_lifecycle_tech.md)
 - **No secrets on disk**: `client_id` is public (per OAuth spec for native apps); no client secret stored
 - **Cleanup on failure**: if OAuth fails mid-flow, the partially-created user row is deleted — no orphaned records

@@ -6,7 +6,8 @@
 
 | Layer | File | Purpose |
 |-------|------|---------|
-| Tokens | `src/main/auth/cinna-tokens.ts` | `getCinnaAccessToken` (expiry check, per-user dedup mutex, rotation store), `storeCinnaTokens`, `clearCinnaTokens`, `decodeAccessTokenSubject` |
+| Tokens | `src/main/auth/cinna-tokens.ts` | `getCinnaAccessToken` (expiry check, session-scoped dedup, rotation store), `storeCinnaTokens`, `clearCinnaTokens`, `decodeAccessTokenSubject` |
+| Session identity | `src/main/auth/cinna-session.ts` | Process-local per-user credential-replacement generation; read by refresh and shared HTTP transport |
 | OAuth | `src/main/auth/cinna-oauth.ts` | `refreshCinnaTokens` — POST `grant_type=refresh_token`; maps 400/401 (`error` or FastAPI `detail`) to `CinnaReauthRequired` |
 | Sync service | `src/main/services/syncService.ts` | Owns the periodic + inbox timers and the suspend/resume hook (`setSystemSuspended`) |
 | API client | `src/main/services/cinnaApiService.ts` | `cinnaApiFetch` — shared Bearer wrapper; calls `getCinnaAccessToken` on every request, so all sync/inbox traffic is a potential refresh trigger |
@@ -24,14 +25,21 @@
 
 `src/main/auth/cinna-tokens.ts`
 
-- `refreshInProgress: Map<string, Promise<string>>` — **per-user** in-flight refresh, keyed by `userId`. A prior global `Promise<string>` let account B dedup onto account A's refresh and receive A's access token; the map keying closes that
+- `refreshInProgress` is keyed by userId and stores `{ generation, state, promise }`. A caller joins only when its generation and captured server URL, client id and encrypted refresh-token bytes match. A prior user-only promise could return an old login’s result after credentials were replaced; a global promise could cross accounts entirely
 - `getCinnaAccessToken(userId)` flow:
-  1. Load token state; throw `CinnaReauthRequired` if no tokens stored
+  1. Load token state and session generation; throw `CinnaReauthRequired` if no tokens stored
   2. `needsRefresh = Date.now() > expiresAt - 60_000` — return decrypted access token early when false
-  3. If `refreshInProgress.get(userId)` exists, return it (dedup)
-  4. Otherwise build the refresh promise, `set(userId, …)`, return it; the `finally` does `delete(userId)`
+  3. Join `refreshInProgress.get(userId)` only if its generation and session state still match
+  4. Otherwise register a new captured-session refresh; its `finally` removes the entry only if the entry still owns that promise, so an old refresh cannot remove a replacement’s mutex
 - The refresh body is wrapped in `Promise.resolve().then(async () => …)` so the `refreshInProgress.set` always runs before the body's `finally`. Without the microtask defer, a **synchronous** throw in the body (e.g. `decryptApiKey` on a corrupt blob / unavailable keychain) would run `finally`'s `delete` before the entry was ever set, leaving a permanently-rejected promise that poisons every later caller for that user
-- On a `CinnaReauthRequired` rejection the body calls `clearCinnaTokens(userId)`; other errors (network/5xx) propagate without clearing tokens
+- Recheck generation and session state before the deferred body starts and after the OAuth request resolves. A stale refresh rejects with `CinnaSessionChanged` without persisting its response; even an old session’s revocation is normalized to that retryable operation error. On terminal rejection, clear tokens only when that captured session is still current; a revoked old login must not clear a new one. Other errors (network/5xx) propagate without clearing tokens.
+- `storeCinnaTokens` is a credential replacement and increments the per-user generation before writing. `clearCinnaTokens` increments it before clearing. Successful silent rotation calls private `persistTokens` instead, keeping the generation stable so ordinary callers waiting for a refreshed token remain valid. The generation is process-local and is not the active-profile generation or an authentication credential.
+
+## HTTP Credential Preparation Guard
+
+`cinnaApiService.cinnaFetch` captures the normalized server base URL and `cinnaSessionGeneration(userId)` before awaiting the bearer token. It resolves the base again and compares both after the await, before constructing and dispatching the HTTP request. A replaced login or changed server rejects with `CinnaSessionChanged` and makes no fetch; normal token rotation keeps the session generation and proceeds. This prevents combining a captured old server with newly replaced credentials, including on task mutations. `CinnaSessionChanged` is an ordinary Error, not `CinnaReauthRequired` or a `reauth_required` code: `ipcHandle` must not broadcast a new sign-in request for healthy replacement credentials. Genuine expiry still follows the re-auth broadcast path. This guard does not cancel a request already dispatched or replace the task coordinator’s response-generation guards.
+
+Tests: `src/main/auth/cinna-tokens.test.ts` covers same-session coalescing/rotation, replacement success/revocation, replacement mutex ownership and replacement before deferred refresh begins. `src/main/services/cinnaApiService.http.test.ts` checks that a changed generation or server during token resolution dispatches no HTTP request, and exercises the actual `ipcHandle` wrapper to distinguish stale-operation errors from genuine expiry notifications.
 
 ## Suspend / Resume Timer Management
 
@@ -92,6 +100,6 @@ Every path below calls `getCinnaAccessToken` (directly or via `cinnaApiFetch`) a
 ## Security
 
 - Access + refresh tokens encrypted via `safeStorage` at rest (see [Cinna Accounts tech](./cinna_accounts_tech.md))
-- Refresh tokens are single-use; rotation overwrites the stored pair atomically via `storeCinnaTokens`
-- Per-user dedup mutex prevents a concurrent refresh from presenting a just-rotated-away token and self-triggering server-side replay revocation
+- Refresh tokens are single-use; rotation overwrites the stored pair atomically via private `persistTokens`; login/re-auth storage uses `storeCinnaTokens` to invalidate old-session callers
+- Per-user, captured-session dedup mutex prevents a concurrent refresh from presenting a just-rotated-away token and self-triggering server-side replay revocation
 - The `sub` claim read by `decodeAccessTokenSubject` is used only as an identifier (E2E crypto identity), never as a trust decision — signature intentionally unverified; the backend remains the sole authority on token validity

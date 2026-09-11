@@ -207,6 +207,10 @@ taskSyncService.reconcile -> adapter.list(userId, null)
                          ->  not_ours -> taskService.remove
 ```
 
+## Credential replacement during a request
+
+The shared Cinna HTTP transport captures the credential-session generation and server base before awaiting an access token, then checks both immediately before fetch. Re-authentication/re-linking cannot make a pending old request use the replacement session; it fails before dispatch with `CinnaSessionChanged`, an operation-retry error that does not request another sign-in. Silent token rotation preserves the generation and proceeds. This preparation guard complements the coordinator’s generation/binding checks on responses; it does not retract an already-sent mutation. See [token lifecycle internals](../../auth/cinna_accounts/token_lifecycle_tech.md#http-credential-preparation-guard).
+
 ## Watched children
 
 Opening a root task also watches its children. `task:children` calls `taskSyncService.getChildren`, which returns SQLite rows immediately with `TaskListSnapshot.refreshed` and optional `refreshError`. The background `listChildren` uses the adapter’s full subtask list, so a child completed before the active/delta cursor can still appear under its parent. `task:list` remains a local-array read.

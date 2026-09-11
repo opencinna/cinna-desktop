@@ -1,6 +1,7 @@
 import { net } from 'electron'
 import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
+import { CinnaSessionChanged, cinnaSessionGeneration } from '../auth/cinna-session'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { CinnaApiError } from '../errors'
 import { extractErrorDetail } from './cinna-http'
@@ -84,7 +85,11 @@ async function resolveAuthHeader(userId: string): Promise<string> {
 
 async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = {}): Promise<T> {
   const baseUrl = resolveBaseUrl(userId)
+  const generation = cinnaSessionGeneration(userId)
   const authHeader = await resolveAuthHeader(userId)
+  if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) {
+    throw new CinnaSessionChanged()
+  }
   const url = `${baseUrl}${path}`
   const method = opts.method ?? 'GET'
 

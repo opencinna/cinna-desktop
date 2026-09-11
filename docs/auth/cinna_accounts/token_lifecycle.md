@@ -14,7 +14,7 @@ Describes how a Cinna account's OAuth access/refresh tokens are kept valid betwe
 | **Replay / reuse detection** | If a refresh token that was already rotated away is presented again, the server treats it as a stolen-token replay and revokes the whole token family → the only recovery is full re-auth |
 | **Orphaned refresh** | A refresh round-trip that the server completed (old token now dead, new token minted) but whose response the desktop never stored — e.g. the OS suspended the process mid-`fetch`. The desktop is left holding the now-dead old token |
 | **Rotation-replay self-logout** | The failure mode an orphaned refresh causes: on the next refresh the desktop re-presents the dead old token, the server flags replay, and the user is logged out despite never doing anything wrong |
-| **Refresh dedup mutex** | Per-user in-flight promise so N concurrent callers needing a refresh trigger exactly one network round-trip and all await the same result — without it, the second caller would present the just-rotated-away token and self-trigger replay |
+| **Refresh dedup mutex** | Per-user, same-session in-flight promise so N concurrent callers needing a refresh trigger exactly one network round-trip and all await the same result — without it, the second caller would present the just-rotated-away token and self-trigger replay |
 | **Periodic sync timer** | Per-profile 60 s interval that runs a background sync cycle; each cycle is authed and may trigger a refresh |
 | **Inbox poll timer** | Focus-gated 5 s interval that checks for incoming device-pairing requests; also authed, also a refresh trigger |
 | **System-suspended state** | True between the OS `suspend` and `resume` power events. While set, no authed background timer is allowed to start |
@@ -31,9 +31,14 @@ Describes how a Cinna account's OAuth access/refresh tokens are kept valid betwe
 ### Concurrent-refresh dedup (per account)
 1. Two background cycles for the **same** account both find the token near expiry at the same moment
 2. The first to arrive creates the refresh promise and registers it under that account's id
-3. The second sees an in-flight refresh **for that account** and awaits the same promise instead of starting its own
+3. The second sees an in-flight refresh **for the same account and credential session** and awaits that promise instead of starting its own
 4. One network round-trip happens; both callers receive the same rotated access token. The in-flight entry is cleared when it settles
 5. Refreshes for *different* accounts never share a promise — account B can never receive account A's token
+
+### Re-authentication while a refresh is waiting
+1. Storing replacement credentials or clearing credentials advances the account’s in-memory session generation. Silent refresh rotation keeps that generation.
+2. A refresh captured before replacement cannot store its result or clear the new credentials when it fails. A new refresh uses its own promise, and the old promise cannot remove it.
+3. The shared HTTP client checks the session and server again after awaiting credentials. If either changed, it refuses before sending, so old request preparation cannot send replacement credentials to the old server. The user can retry that old operation; a healthy replacement session does not need another sign-in. Already-dispatched requests are outside this preparation guard.
 
 ### OS sleep / wake (orphan prevention)
 1. The OS is about to suspend the machine and emits a `suspend` power event
@@ -49,15 +54,15 @@ Describes how a Cinna account's OAuth access/refresh tokens are kept valid betwe
 
 ### When a refresh genuinely fails
 1. A refresh that returns `invalid_grant` / reuse-detected / unauthorized throws `CinnaReauthRequired`
-2. All stored tokens for that account are cleared
+2. Stored tokens are cleared only if the refresh still belongs to the current credential session; an obsolete refresh leaves replacement credentials intact
 3. The user is routed into the in-place re-auth flow — no local data is touched. See [Re-authentication](./reauthentication.md)
 
 ## Business Rules
 
 - Refresh fires when the access token is within **60 s** of expiry — never lazily after a 401 only
 - Refresh tokens are **single-use**; the rotated pair must always overwrite the previous pair, never append
-- Concurrent refreshes are deduplicated **per account** (keyed by userId). A global dedup would be a cross-account token-bleed bug — account B could receive account A's access token
-- A refresh rejected with replay/`invalid_grant`/unauthorized is terminal: clear all tokens and require full re-auth. Any *other* error (network, 5xx) is transient — tokens are left intact for a later retry
+- Concurrent refreshes are deduplicated **per account and captured credential session** (keyed by userId). A global dedup would be a cross-account token-bleed bug — account B could receive account A's access token
+- A current-session refresh rejected with replay/`invalid_grant`/unauthorized is terminal: clear its tokens and require full re-auth. An obsolete refresh cannot clear a replacement login. Any *other* error (network, 5xx) is transient — tokens are left intact for a later retry
 - No authed background timer (periodic sync **or** inbox poll) may start while the system is suspended. Both route through `getCinnaAccessToken` and so are equal orphan risks
 - Suspend/resume handling is idempotent — coalesced or repeated OS signals are no-ops past the first transition
 - **Residual**: a refresh already past its network call at the instant `suspend` fires cannot be aborted. The safeguard prevents *starting* new autonomous refreshes; it does not abort one already in flight. The dedup mutex and the "transient errors don't clear tokens" rule keep this residual from escalating where possible
@@ -71,11 +76,11 @@ Refresh (deduped, per account):
             ├─→ getCinnaAccessToken(userId)
   caller B ─┘     near expiry? ── no ──→ return stored access token
                        │ yes
-                       ├─ in-flight refresh for THIS userId? ── yes ──→ await it
+                       ├─ in-flight refresh for THIS userId/session? ── yes ──→ await it
                        │ no
                        └─ refreshCinnaTokens() ──→ POST /oauth/token (grant_type=refresh_token)
                           store rotated pair (overwrite)        │
-                          return new access token        replay? → CinnaReauthRequired → clear tokens
+                          return new access token        replay? → CinnaReauthRequired → clear only if current
 
 OS power events (main):
   powerMonitor 'suspend' ─→ syncService.setSystemSuspended(true)
