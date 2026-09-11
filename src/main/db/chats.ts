@@ -35,6 +35,10 @@ export const chatRepo = {
   },
 
   /** Load the full message history for an owned chat (caller must pre-verify ownership). */
+  listMessageIds(chatId: string): string[] {
+    return getDb().select({ id: messages.id }).from(messages).where(eq(messages.chatId, chatId)).all().map((row) => row.id)
+  },
+
   listMessages(chatId: string): MessageRow[] {
     return getDb()
       .select()

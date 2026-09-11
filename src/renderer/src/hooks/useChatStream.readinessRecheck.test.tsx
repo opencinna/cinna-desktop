@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import type { RunWatchMessage } from '../../../shared/runWatch'
 import type { RunEvent } from '../../../shared/runEvents'
 
 /**
@@ -15,10 +16,11 @@ import type { RunEvent } from '../../../shared/runEvents'
   app: { setTheme: async () => undefined }
 }
 
-const { useChatStream } = await import('./useChatStream')
+const { useLiveRunWatch } = await import('./useLiveRunWatch')
+const { useAuthStore } = await import('../stores/auth.store')
 const { useChatStore } = await import('../stores/chat.store')
 
-type StreamCallback = (event: RunEvent) => void
+type StreamCallback = (event: RunWatchMessage) => void
 
 let ending: RunEvent
 let checkReadiness: ReturnType<typeof vi.fn>
@@ -32,9 +34,10 @@ function installApi(agents: Record<string, unknown>): void {
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
     run: {
-      send: vi.fn((_c: string, _t: string, cb: StreamCallback) => {
-        cb({ type: 'request-id', requestId: 'req-1' })
-        cb(ending)
+      watch: vi.fn((_chatId: string, cb: StreamCallback) => {
+        cb({ type: 'snapshot', runId: 'run-1', sequence: 0, agentId: 'agent-1', active: true, replayAvailable: true, baselineMessageIds: [], events: [{ type: 'request-id', requestId: 'req-1' }] })
+        cb({ type: 'event', runId: 'run-1', sequence: 1, agentId: 'agent-1', event: ending })
+        return () => {}
       }),
       cancel: vi.fn()
     },
@@ -48,12 +51,9 @@ function installApi(agents: Record<string, unknown>): void {
 }
 
 async function runTurn(): Promise<void> {
-  const { result } = renderHook(() => useChatStream(), { wrapper })
-  await act(async () => {
-    result.current.startRun('chat-1', 'hello', {
-      target: { kind: 'agent', agentId: 'agent-1' }
-    })
-  })
+  useChatStore.getState().setActiveChatId('chat-1')
+  useAuthStore.setState({ currentUser: { id: 'u1', type: 'local_user' } as never })
+  await act(async () => { renderHook(() => useLiveRunWatch(), { wrapper }) })
 }
 
 beforeEach(() => {

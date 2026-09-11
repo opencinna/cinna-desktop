@@ -29,8 +29,8 @@ export function useChatDetail(chatId: string | null) {
     queryKey: ['chat', chatId],
     queryFn: () => (chatId ? window.api.chat.get(chatId) : null),
     enabled: !!chatId,
-    // Main-started turns have no live port here yet. Keep reading through the
-    // final persistence/close, including errors, instead of freezing at seed.
+    // A detached or replay-overflow view reads saved output until main closes
+    // the run. A full live projection arrives through useLiveRunWatch.
     refetchInterval: (query) => !hasAttachedStream && query.state.data?.activeRunId ? 1_000 : false
   })
 }

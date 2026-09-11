@@ -13,49 +13,24 @@ import type { ContentKind } from '../../../shared/messageParts'
 import { PERMISSION_TOOL_NAME, QUESTION_TOOL_NAME } from '../../../shared/localAgentRequests'
 
 /**
- * What every stream event does to renderer state, as `useChatStream` handles it
- * — the receiver-side characterization for the agent-runtime refactor.
- *
- * Phase 1 merged `handleLlm` and `handleAgent` into one `handleRun` and the two
- * event unions into `RunEvent`. A merge like that fails quietly: a `case` that
- * was in one switch and not the other disappears, or an event one handler
- * ignored starts doing something, and every surface still renders. So each row
- * here feeds one event through the hook the way production does — mount, send,
- * capture the callback `window.api` was handed, emit — and records **exactly
- * which chat-store fields changed and which queries were invalidated**. A field
- * a row does not name is asserted unchanged, so "the hook ignores this" is a
- * pinned fact rather than an absence of assertions. The table was written
- * before the merge; a row whose expectation the merge changed on purpose says
- * why in a comment.
- *
- * Two snapshots per row, because `done` is two-phase on purpose: the cursor
- * goes away at once, but the streaming blocks and the optimistic user bubble
- * stay until the `['chat', id]` refetch settles, so there is no visual gap.
- * `sync` is the state when the handler returns; `settled` is after pending
- * promises run. A row that omits `sync` changes nothing asynchronously.
- *
- * Some rows pin behaviour that looks wrong. They are marked `PINNED:` and are
- * not fixed here — this file records what is, so the merge can show it changed
- * nothing, and a fix can show it changed exactly one row.
- *
- * The coverage guards at the bottom are typed `Record<Union, true>`, so adding
- * an event variant, a content kind or a run state fails the typecheck until a
- * row for it exists.
+ * Event-by-event characterization of the selected chat's projection. The
+ * lifecycle watcher owns subscription, persistence refresh and agent status;
+ * this table pins the shared event handler's text, tool and ask semantics.
  */
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
   app: { setTheme: async () => undefined }
 }
 
-const { useChatStream } = await import('./useChatStream')
+const { useRunEventHandler } = await import('./useChatStream')
 const { useChatStore, isLiveInputRequest, isSettledInputRequest } = await import('../stores/chat.store')
 const { useAuthStore } = await import('../stores/auth.store')
 
 const CHAT_ID = 'chat-1'
 // A folder agent under a local account: the one combination where the post-turn
 // status pull is a plain `forceRefresh: false` read, so it is observable here.
-const AGENT_ID = 'folder:alpha'
 
+const AGENT_ID = 'folder:alpha'
 const SNAPSHOT_KEYS = [
   'activeChatId',
   'isStreaming',
@@ -160,33 +135,13 @@ async function flush(): Promise<void> {
   })
 }
 
-/**
- * Mount the hook, send once, and return the stream callback `window.api` was
- * handed.
- *
- * One channel now (`run:send`), so the two paths differ only in who the caller
- * says will answer — which is what decides whether the post-turn agent
- * bookkeeping runs. The tables below still drive both, because the claim is
- * that the vocabulary lands identically either way.
- */
-function mount(path: 'llm' | 'agent'): (event: RunEvent) => void {
+/** Mount the projection handler and seed an optimistic send. */
+function mount(_path: 'llm' | 'agent'): (event: RunEvent) => void {
   const wrapper = ({ children }: { children: ReactNode }): React.JSX.Element =>
     createElement(QueryClientProvider, { client }, children)
-  const { result } = renderHook(() => useChatStream(), { wrapper })
-
-  act(() => {
-    result.current.startRun(
-      CHAT_ID,
-      'hello',
-      path === 'llm'
-        ? { target: { kind: 'model' } }
-        : { target: { kind: 'agent', agentId: AGENT_ID } }
-    )
-  })
-  expect(runSend).toHaveBeenCalledTimes(1)
-  // The optimistic bubble is set by the send, before any event arrives.
-  expect(useChatStore.getState().pendingUserMessage).toEqual(PENDING)
-  return runSend.mock.calls[0][2] as (event: RunEvent) => void
+  const { result } = renderHook(() => useRunEventHandler(), { wrapper })
+  act(() => useChatStore.getState().setPendingUserMessage(PENDING))
+  return (event) => result.current(CHAT_ID, event)
 }
 
 async function runRow(path: 'llm' | 'agent', row: Row<RunEvent>): Promise<void> {
@@ -203,8 +158,7 @@ async function runRow(path: 'llm' | 'agent', row: Row<RunEvent>): Promise<void> 
   statusGet.mockClear()
   consoleError.mockClear()
 
-  // Read synchronously after the emit: the send's own 300 ms `['chat', id]`
-  // refetch is a timer, so it cannot land between these two lines.
+  // The event projector has no persistence side effects; the watch owns them.
   const invalidate = vi.spyOn(client, 'invalidateQueries')
   const before = snapshot()
   act(() => emit(row.event))
@@ -218,9 +172,7 @@ async function runRow(path: 'llm' | 'agent', row: Row<RunEvent>): Promise<void> 
   expect(sync).toEqual(row.sync ?? row.settled)
   expect(settled).toEqual(row.settled)
   expect(invalidated).toEqual(row.invalidates)
-  expect(statusGet.mock.calls.map(([args]) => args)).toEqual(
-    row.pullsStatus ? [{ agentId: AGENT_ID, forceRefresh: false }] : []
-  )
+  expect(statusGet).not.toHaveBeenCalled() // Lifecycle effects belong to the watcher.
   // Any handler log line (`… error:`), so one under a stale prefix would still
   // show up as a mismatch rather than be filtered out.
   const handlerLogs = consoleError.mock.calls.filter(
@@ -237,21 +189,9 @@ const REQUEST_ID = { type: 'request-id', requestId: 'req-1' } as const
 const PENDING = { content: 'hello', baselineUserCount: 0 }
 const STALE_BLOCK = { type: 'text', kind: 'text', content: 'from the last turn' } as const
 
-const DONE_SETTLED: Changes = {
-  isStreaming: false,
-  streamingBlocks: [],
-  activeRequestId: null,
-  pendingUserMessage: null
-}
-const DONE_INVALIDATES = [['chat', CHAT_ID], ['chats'], ['jobs']]
-
-const ERROR_CHANGES: Changes = {
-  isStreaming: false,
-  streamingBlocks: [],
-  activeRequestId: null,
-  pendingUserMessage: null,
-  streamedIncrementallyChatId: null
-}
+const DONE_SETTLED: Changes = { isStreaming: false }
+const DONE_INVALIDATES: unknown[][] = []
+const ERROR_CHANGES: Changes = { isStreaming: false }
 
 const FILE = { fileId: 'f-1', filename: 'report.pdf', mimeType: 'application/pdf', size: 1024 }
 const FILE_2 = { fileId: 'f-2', filename: 'chart.png', mimeType: 'image/png', size: 2048 }
@@ -683,7 +623,7 @@ const AGENT_ROWS: Row<RunEvent>[] = [
   },
 
   {
-    name: 'done: cursor off at once; blocks, request id and pending bubble cleared after the refetch',
+    name: 'done hides the cursor; watch settlement owns projection cleanup',
     seed: [REQUEST_ID, AGENT_TEXT],
     event: { type: 'done' },
     sync: { isStreaming: false },
@@ -708,11 +648,11 @@ const AGENT_ROWS: Row<RunEvent>[] = [
     // not invalidated. `sendError` is left alone by design (the error arrives
     // as a persisted SystemMessage row).
     // Edited on purpose: one handler, one log prefix (was `Agent error:`).
-    name: 'error without code stops streaming immediately and refetches the chat only',
+    name: 'error without code hides the cursor and leaves projection cleanup to the watcher',
     seed: [REQUEST_ID, AGENT_TEXT],
     event: { type: 'error', error: 'boom' },
     settled: ERROR_CHANGES,
-    invalidates: [['chat', CHAT_ID]],
+    invalidates: [],
     pullsStatus: true,
     logged: ['Stream error:', 'boom']
   },
@@ -722,7 +662,7 @@ const AGENT_ROWS: Row<RunEvent>[] = [
     seed: [REQUEST_ID, AGENT_TEXT],
     event: { type: 'error', error: 'Sign in again', code: 'cinna_reauth_required' },
     settled: ERROR_CHANGES,
-    invalidates: [['chat', CHAT_ID]],
+    invalidates: [],
     pullsStatus: true,
     logged: ['Stream error:', 'Sign in again']
   },
@@ -731,7 +671,7 @@ const AGENT_ROWS: Row<RunEvent>[] = [
     seed: [REQUEST_ID, AGENT_TEXT, ASK_REPLY, ASK_NEXT],
     event: { type: 'error', error: 'boom' },
     settled: { ...ERROR_CHANGES, inputRequests: [entry(ASK_NEXT)] },
-    invalidates: [['chat', CHAT_ID]],
+    invalidates: [],
     pullsStatus: true,
     logged: ['Stream error:', 'boom']
   }
@@ -1006,7 +946,7 @@ const LLM_ROWS: Row<RunEvent>[] = [
   childRow('child inside a child is ignored', child({ type: 'delta', kind: 'text', text: 'Hi' }), null),
 
   {
-    name: 'done: cursor off at once; blocks, request id and pending bubble cleared after the refetch',
+    name: 'done hides the cursor; watch settlement owns projection cleanup',
     seed: [REQUEST_ID, LLM_TEXT],
     event: { type: 'done' },
     sync: { isStreaming: false },
@@ -1015,11 +955,11 @@ const LLM_ROWS: Row<RunEvent>[] = [
   },
   {
     // Edited on purpose: one handler, one log prefix (was `LLM error:`).
-    name: 'error without errorDetail stops streaming immediately and refetches the chat only',
+    name: 'error without errorDetail hides the cursor and leaves projection cleanup to the watcher',
     seed: [REQUEST_ID, LLM_TEXT],
     event: { type: 'error', error: 'rate limited' },
     settled: ERROR_CHANGES,
-    invalidates: [['chat', CHAT_ID]],
+    invalidates: [],
     logged: ['Stream error:', 'rate limited']
   },
   {
@@ -1028,7 +968,7 @@ const LLM_ROWS: Row<RunEvent>[] = [
     seed: [REQUEST_ID, LLM_TEXT],
     event: { type: 'error', error: 'rate limited', errorDetail: '429 Too Many Requests' },
     settled: ERROR_CHANGES,
-    invalidates: [['chat', CHAT_ID]],
+    invalidates: [],
     logged: ['Stream error:', 'rate limited']
   }
 ]

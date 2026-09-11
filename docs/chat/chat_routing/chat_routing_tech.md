@@ -7,7 +7,7 @@
 - `src/shared/ipcPayloads.ts` — `RunSendPayload` (`chatId`, `content`, `attachments?`, `addressedAgentId?`); `AgentSendPayload` / `LlmSendPayload` remain for the two forwarded channels
 
 ### Main process
-- `src/main/ipc/run.ipc.ts` — `registerRunHandlers()`: `run:send` and legacy forwards; `dispatchRun` checks activation, starts the native port and passes explicit scopes, observation and acceptance callbacks to the shared executor.
+- `src/main/ipc/run.ipc.ts` — `registerRunHandlers()`: activated `run:start` command, owned `run:watch`, chat cancellation and legacy native-port forwards; passes explicit scopes, observation and transactional acceptance callbacks to the shared executor.
 - `src/main/services/runExecutionService.ts` — main-owned `start`, `isRunning`, `RunHandle`; private routing/agent preparation, catch-up, slash-command dispatch and terminal/refusal handling shared by IPC sends, Inbox continuations and explicit task starts.
 - `src/main/services/threadContextService.ts` — `buildCatchUpPacket(input)`, `withCatchUp(packet, userContent)`, `CATCH_UP_CAP`. Pure over `MessageRow[]`
 - `src/main/db/chatAgentCursors.ts` — `chatAgentCursorRepo.{get,list,advance}`
@@ -25,7 +25,7 @@
 - `src/main/db/jobs.ts` — `jobRunsRepo.createLocalChatAndRun({ router, … })`; `jobAgentRepo.listAgentIds` sorted
 
 ### Preload
-- `src/preload/index.ts` — `window.api.run.send(chatId, content, onEvent, { attachments?, addressedAgentId? })` and `window.api.run.cancel(requestId)`; `window.api.chat.setRouter(chatId, router)`; `ChatData.router` (+ the `orchestrated` mirror, marked do-not-read); `chat.update` accepts `router`
+- `src/preload/index.ts` — `window.api.run.start(payload)`, `watch(chatId, onMessage)` returning an unsubscribe function, and `cancelChat(chatId)`; legacy `send` / request-ID `cancel` remain. `window.api.chat.setRouter` and chat updates retain the same routing contract.
 
 ### Renderer
 - `src/renderer/src/components/chat/RouterBadge.tsx` — the three-value pill + tooltip; `RouterBadgeInfo` (`router`, `agentName?`, `answererName?`, `modelName?`). The tooltip opens upward and right-aligned, everywhere; there is no placement option, because the one surface that needed a different one stopped needing it and nobody noticed for months
@@ -65,12 +65,12 @@ Table: `chat_agent_cursors`
 
 ## IPC Channels
 
-- `run:send` — `postMessage` + `MessagePort`. `(payload: RunSendPayload)` → stream of `RunEvent` on the port. **The one send channel.** Main resolves who answers; `addressedAgentId` is the only input it cannot derive from the chat row
-- `agent:send-message` — forward onto `run:send`, mapping `agentId` → `addressedAgentId`. Kept for one phase
-- `llm:send-message` — forward onto `run:send` with no address. Kept for one phase
+- `run:start` — activated invoke with `RunSendPayload`, returning the run ID; main resolves the answerer. `run:watch` independently sends the owned chat’s snapshot and sequenced events over MessagePort. `run:send` remains the legacy combined send/port route. See [live-run IPC](../messaging/live_runs.md#architecture-and-ipc).
+- `agent:send-message` — forward onto `run:send`, mapping `agentId` → `addressedAgentId`. Retained until phase7 cleanup
+- `llm:send-message` — forward onto `run:send` with no address. Retained until phase7 cleanup
 - `chat:set-router` — `(chatId: string, router: string) => { success: true }`. Validates via `isChatRouter` and throws `ChatError('invalid_router', …)` otherwise
 - `chat:update` — also accepts `router`, and validates it the same way, because a new chat sets several fields in one call
-- Cancel is unchanged: `window.api.run.cancel` invokes **both** `llm:cancel` and `agent:cancel-message`, because one request id belongs to exactly one of them and the other is a no-op — cheaper than asking who is answering first
+- The normal Stop path uses owned `run:cancel-chat`, so a watch snapshot can be stopped before the protocol request ID arrives. Legacy `window.api.run.cancel` still invokes both protocol cancellation channels for an existing request ID.
 
 `run.ipc.ts` follows the project's `postMessage` convention: the payload is the **second argument** to the `ipcMain.on` listener, and the port is on `event.ports[0]`.
 
@@ -98,7 +98,7 @@ Table: `chat_agent_cursors`
 - `preserveOnRefusal` suppresses pre-acceptance error observation/job finalization for a pending answer or explicit task start, so a setup/refused transaction leaves the question or original task retryable. Refusals before owned chat resolution do not write job outcomes. After acceptance, driver endpoint/card/token failures are normal failed-turn outcomes; acceptance does not promise successful remote delivery or completion.
 - An Inbox continuation passes its verified asking `agentId` as an internal target override. This continues that agent even in a coordinator chat, without asking the model to choose who answers the human’s reply. Human routing and non-root internal continuations receive catch-up built before the new message is saved. Renderer `addressedAgentId` remains subject to ordinary attached-agent routing; it is not this override.
 - `inboxService.endTurn` preserves durable next-message requests after normal completion. Sibling requests restore blocked status at turn end and defer `jobService.reportRunCompletion`. A coordinator’s agent tool refuses re-entry while that agent awaits a human answer. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
-- This service runs one turn. It supplies no task budget loop, handoff/handback, script scheduler, multi-subscriber event hub or attach/replay API. Opening a chat does not subscribe to a main turn already in flight. `useChatDetail` polls persisted detail every second while `activeRunId` is present and no renderer stream is attached; it stops once the turn closes. `ChatInput` exposes Stop while either an attached stream or the main handle is active, and restores Send after the final read. Explicit takeover continuation is provided by [task execution](../../jobs/tasks/tasks_tech.md); polling does not supply token replay.
+- This service runs one turn and now feeds a profile/chat-scoped event hub. Selected-chat watches attach/replay and survive idle gaps; [Live Run Attachment and Replay](../messaging/live_runs.md) owns the bounded cache, transcript baseline and settlement rules. `useChatDetail` polling remains the fallback when replay is unavailable. `RunHandle.completed` still carries no typed outcome, and task-runner completion ownership, budgets, handoff/handback, scripts and scheduling remain separate work.
 
 ## Renderer Components
 

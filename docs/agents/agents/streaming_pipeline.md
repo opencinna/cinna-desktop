@@ -8,6 +8,10 @@ How A2A streaming events from a remote agent become structured, kind-routed mess
 
 A2A status-update, streamed task and nonstreaming task responses all emit normalized status and input-request events. An input-required response with no text becomes **What should the agent do next?**; auth-required uses its status text or the existing sign-in fallback. The main executor observes these before optional renderer forwarding and the Inbox stores a durable next-message occurrence separately from transcript parts. Normal turn completion and restart preserve it. Answering starts a new message on the same A2A task/context; it does not attempt to reply to a vanished park. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
 
+## Desktop Live Attachment
+
+The main executor publishes these normalized events through the shared [live-run hub](../../chat/messaging/live_runs.md), independently of the original sender. Reopening a running agent chat hydrates retained output and then follows new events. The watch layer owns bounded replay, persisted-row deduplication and terminal transcript settlement; the A2A accumulator and session-checkpoint rules below remain transport-owned.
+
 ## Core Concepts
 
 | Term | Definition |

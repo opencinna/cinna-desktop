@@ -1061,14 +1061,14 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   ])
 
   const handleCancel = useCallback(() => {
-    if (chatId && chatData?.activeRunId) {
+    if (chatId && (hasPortStream || chatData?.activeRunId)) {
       void window.api.run.cancelChat(chatId).catch((error) => {
         setSendError(unwrapIpcError(error, 'This turn could not be stopped.'))
       })
       return
     }
     if (activeRequestId) cancelStream(activeRequestId)
-  }, [chatId, chatData?.activeRunId, activeRequestId, cancelStream, setSendError])
+  }, [chatId, hasPortStream, chatData?.activeRunId, activeRequestId, cancelStream, setSendError])
 
   // The @ popup is the combined agent+MCP picker whenever we're in an MCP
   // mention context (active chat OR new-chat with the buffer wired up), so

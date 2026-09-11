@@ -26,7 +26,7 @@ const spies = vi.hoisted(() => ({
   addOnDemandMcp: vi.fn(async () => ({ success: true })),
   setMcpProviders: vi.fn(async () => ({ success: true })),
   deleteChat: vi.fn(async () => ({ success: true })),
-  runSend: vi.fn()
+  runSend: vi.fn().mockResolvedValue('run-1')
 }))
 
 function namespace(methods: Record<string, unknown>): unknown {
@@ -55,7 +55,7 @@ function namespace(methods: Record<string, unknown>): unknown {
         })
       }
       if (ns === 'files') return namespace({ ingestPaths: spies.ingestPaths })
-      if (ns === 'run') return namespace({ send: spies.runSend, cancel: () => undefined })
+      if (ns === 'run') return namespace({ start: spies.runSend, cancel: () => undefined })
       return namespace({})
     }
   }
@@ -154,12 +154,12 @@ describe('startNewChat — where the attachments go', () => {
 describe('startNewChat — the first message', () => {
   it('addresses the first agent picked in a human chat', async () => {
     await start({ agentIds: ['a-2', 'a-1'] })
-    expect(spies.runSend.mock.calls[0][3]).toMatchObject({ addressedAgentId: 'a-2' })
+    expect(spies.runSend.mock.calls[0][0]).toMatchObject({ addressedAgentId: 'a-2' })
   })
 
   it('names no agent in a coordinated chat', async () => {
     await start({ agentIds: ['a-1'], onDemandMcpIds: ['mcp-1'] })
-    const extras = spies.runSend.mock.calls[0][3] as { addressedAgentId?: string | null }
+    const extras = spies.runSend.mock.calls[0][0] as { addressedAgentId?: string | null }
     expect(extras.addressedAgentId ?? null).toBeNull()
   })
 })

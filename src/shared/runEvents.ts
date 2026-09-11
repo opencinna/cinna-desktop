@@ -2,7 +2,7 @@
  * The one stream vocabulary. Every `MessagePort` that carries a turn — a direct
  * agent chat (`agent:send-message`) and an LLM chat (`llm:send-message`) — posts
  * `RunEvent`s, the preload bridge filters them with {@link isRunEvent}, and the
- * renderer's `useChatStream.handleRun` consumes them.
+ * renderer's selected-chat watcher replays them through `useRunEventHandler`.
  *
  * Replaces `AgentStreamEvent`, `LlmStreamEvent` and the `tool_subevent` nesting
  * (agent runtime plan, phase 1). They were three unions for one thing: an LLM

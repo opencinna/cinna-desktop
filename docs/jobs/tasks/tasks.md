@@ -43,7 +43,7 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- Autonomous multi-turn execution, coordinator handback, the script router and attach/replay remain later runtime work; the existing main-owned path starts one explicit task turn or continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
+- Autonomous multi-turn execution, coordinator handback and the script router remain later runtime work; [live attachment/replay](../../chat/messaging/live_runs.md) now provides visibility into an existing main-owned turn; the existing main-owned path starts one explicit task turn or continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by task synchronization or live attachment.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.

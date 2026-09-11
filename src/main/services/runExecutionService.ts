@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import { liveRunHub } from './liveRunHub'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
@@ -57,6 +58,11 @@ export const runExecutionService = {
       throw new Error('This conversation has a pending remote handoff. Resolve it on the task page first.')
     }
     if (activeChats.has(payload.chatId)) throw new Error('This conversation already has a turn running.')
+    const chat = chatRepo.getOwned(scope.profileUserId, payload.chatId)
+    if (!chat) throw new Error('Chat not found')
+    const runId = nanoid()
+    const live = liveRunHub.begin(scope.profileUserId, payload.chatId, runId,
+      chatRepo.listMessageIds(payload.chatId))
     let accept!: () => void
     let refuse!: (error: Error) => void
     let complete!: () => void
@@ -67,7 +73,7 @@ export const runExecutionService = {
     let failure: string | null = null
     let context: RunEventContext | null = null
     const handle: RunHandle = {
-      id: nanoid(),
+      id: runId,
       accepted: new Promise<void>((resolve, reject) => { accept = resolve; refuse = reject }),
       completed: new Promise<void>((resolve) => { complete = resolve }),
       cancel() {
@@ -89,6 +95,7 @@ export const runExecutionService = {
           if (cancelRequested) handle.cancel()
         }
         if (event.type === 'error') failure = event.error
+        live.push(event)
         try { options.port?.postMessage(event) } catch {
           // A closed view is only a lost subscriber. Persistence and asks live on.
         }
@@ -99,6 +106,7 @@ export const runExecutionService = {
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
+        live.close()
         complete()
       }
     }
@@ -111,11 +119,11 @@ export const runExecutionService = {
     const refusal = (chatId: string, message: string): void => {
       if (accepted || !options.preserveOnRefusal) reportRefusal(chatId, message)
     }
-    void resolveAndRun(port, payload, scope, {
+    void resolveAndRun(port, payload, scope, chat, {
       observe,
-      context: (ctx) => { context = ctx },
+      context: (ctx) => { context = ctx; live.setAgentId(ctx.agentId) },
       persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id }),
-      accepted: () => { accepted = true; accept() },
+      accepted: () => { accepted = true; accept(); live.accepted() },
       refusal,
       agentId: options.agentId
     }).catch((error) => {
@@ -153,19 +161,11 @@ async function resolveAndRun(
   port: StreamPort,
   payload: RunSendPayload,
   scope: RunScope,
+  chat: NonNullable<ReturnType<typeof chatRepo.getOwned>>,
   lifecycle: RunLifecycle
 ): Promise<void> {
   const { chatId, content: userContent, attachments } = payload
   const { profileUserId, settingsUserId } = scope
-  const chat = chatRepo.getOwned(profileUserId, chatId)
-  if (!chat) {
-    const err = 'Chat not found'
-    logger.error(err, { chatId })
-    port.postMessage({ type: 'error', error: err })
-    port.close()
-    return
-  }
-
   lifecycle.context({ userId: profileUserId, chatId, agentId: null })
   const routing = routingOf(chat)
   // Only `human` reads any of this, and only `human` pays for the two reads.

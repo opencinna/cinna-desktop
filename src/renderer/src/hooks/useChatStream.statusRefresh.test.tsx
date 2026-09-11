@@ -3,6 +3,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import type { RunEvent } from '../../../shared/runEvents'
+import type { RunWatchMessage } from '../../../shared/runWatch'
 
 /**
  * What `useChatStream` does to the status surfaces when an agent turn ends.
@@ -21,7 +22,8 @@ import type { RunEvent } from '../../../shared/runEvents'
   app: { setTheme: async () => undefined }
 }
 
-const { useChatStream } = await import('./useChatStream')
+const { useLiveRunWatch } = await import('./useLiveRunWatch')
+const { useChatStore } = await import('../stores/chat.store')
 const { useAuthStore } = await import('../stores/auth.store')
 
 function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
@@ -29,8 +31,9 @@ function wrapper({ children }: { children: ReactNode }): React.JSX.Element {
   return createElement(QueryClientProvider, { client }, children)
 }
 
-type StreamCallback = (event: RunEvent) => void
+type StreamCallback = (event: RunWatchMessage) => void
 
+let ending: RunEvent
 let send: ReturnType<typeof vi.fn>
 let statusGet: ReturnType<typeof vi.fn>
 
@@ -49,15 +52,13 @@ function signInAs(type: 'local_user' | 'cinna_user'): void {
 
 beforeEach(() => {
   statusGet = vi.fn().mockResolvedValue({ success: true, item: null })
-  // Drives the turn straight to `done` so the post-turn branch runs.
-  send = vi.fn((_chatId: string, _content: string, cb: StreamCallback) => {
-    cb({ type: 'request-id', requestId: 'req-1' })
-    cb({ type: 'done' })
-  })
+  ending = { type: 'done' }
+  send = vi.fn()
   ;(window as unknown as { api: Record<string, unknown> }).api = {
     app: { setTheme: async () => undefined },
-    run: { send, cancel: vi.fn() },
+    run: { watch: send, cancel: vi.fn() },
     agentStatus: { list: vi.fn().mockResolvedValue({ success: true, items: [] }), get: statusGet },
+    agents: { checkReadiness: vi.fn().mockResolvedValue(null) },
     chat: { get: vi.fn() }
   }
 })
@@ -67,10 +68,13 @@ afterEach(() => {
 })
 
 async function runTurn(agentId: string): Promise<void> {
-  const { result } = renderHook(() => useChatStream(), { wrapper })
-  await act(async () => {
-    result.current.startRun('chat-1', 'hello', { target: { kind: 'agent', agentId } })
+  useChatStore.getState().setActiveChatId('chat-1')
+  send.mockImplementation((_chatId: string, cb: StreamCallback) => {
+    cb({ type: 'snapshot', runId: 'run-1', sequence: 0, agentId, active: true, replayAvailable: true, baselineMessageIds: [], events: [] })
+    cb({ type: 'event', runId: 'run-1', sequence: 1, agentId, event: ending })
+    return () => {}
   })
+  await act(async () => { renderHook(() => useLiveRunWatch(), { wrapper }) })
 }
 
 describe('useChatStream — the post-turn status pull', () => {
@@ -111,12 +115,7 @@ describe('useChatStream — the post-turn status pull', () => {
 
   it('pulls on an errored turn too — the agent may have written its status first', async () => {
     signInAs('local_user')
-    send.mockImplementation(
-      (_c: string, _t: string, cb: StreamCallback) => {
-        cb({ type: 'request-id', requestId: 'req-1' })
-        cb({ type: 'error', error: 'boom' })
-      }
-    )
+    ending = { type: 'error', error: 'failed' }
     await runTurn('folder:alpha')
     await waitFor(() =>
       expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
@@ -125,10 +124,7 @@ describe('useChatStream — the post-turn status pull', () => {
 
   it('does not pull mid-stream', async () => {
     signInAs('local_user')
-    send.mockImplementation((_c: string, _t: string, cb: StreamCallback) => {
-      cb({ type: 'request-id', requestId: 'req-1' })
-      cb({ type: 'delta', kind: 'text', text: 'hi' })
-    })
+    ending = { type: 'delta', kind: 'text', text: 'hi' }
     await runTurn('folder:alpha')
     expect(statusGet).not.toHaveBeenCalled()
   })

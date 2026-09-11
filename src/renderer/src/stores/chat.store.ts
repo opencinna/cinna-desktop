@@ -169,6 +169,9 @@ export interface PendingUserMessage {
 
 interface ChatStore {
   activeChatId: string | null
+  liveProjectionVersion: number
+  liveRunId: string | null
+  liveBaselineMessageIds: string[] | null
   streamingBlocks: StreamBlock[]
   isStreaming: boolean
   activeRequestId: string | null
@@ -241,6 +244,9 @@ interface ChatStore {
 
 export const useChatStore = create<ChatStore>((set) => ({
   activeChatId: null,
+  liveProjectionVersion: 0,
+  liveRunId: null,
+  liveBaselineMessageIds: null,
   streamingBlocks: [],
   isStreaming: false,
   activeRequestId: null,
@@ -257,8 +263,12 @@ export const useChatStore = create<ChatStore>((set) => ({
     })),
 
   setActiveChatId: (id) =>
-    set({
+    set((state) => ({
+      liveProjectionVersion: state.liveProjectionVersion + 1,
       activeChatId: id,
+      activeRequestId: null,
+      liveRunId: null,
+      liveBaselineMessageIds: null,
       streamingBlocks: [],
       isStreaming: false,
       pendingUserMessage: null,
@@ -266,7 +276,7 @@ export const useChatStore = create<ChatStore>((set) => ({
       sendError: null,
       inputRequests: [],
       settledInputRequestIds: []
-    }),
+    })),
 
   setPendingUserMessage: (message) =>
     set({ pendingUserMessage: message }),
@@ -426,8 +436,8 @@ export const useChatStore = create<ChatStore>((set) => ({
 
   finishStreaming: () =>
     // Keep `pendingUserMessage` set past `done`: the `done` handler keeps
-    // `streamingBlocks` visible until the refetch lands, then drops both
-    // together (see `useChatStream`'s `done` `.finally`) — the user bubble
+    // `streamingBlocks` visible until the watcher fetches the saved transcript,
+    // then drops both together — the user bubble
     // follows the same lifecycle so there's no gap when `done` beats the
     // refetch. The post-refetch clear (not this transition) is what finally
     // retires the optimistic copy, by which point its persisted row is in view.
@@ -456,8 +466,11 @@ export const useChatStore = create<ChatStore>((set) => ({
   setSendError: (error) => set({ sendError: error }),
 
   reset: () =>
-    set({
+    set((state) => ({
+      liveProjectionVersion: state.liveProjectionVersion + 1,
       activeChatId: null,
+      liveRunId: null,
+      liveBaselineMessageIds: null,
       streamingBlocks: [],
       isStreaming: false,
       activeRequestId: null,
@@ -467,5 +480,5 @@ export const useChatStore = create<ChatStore>((set) => ({
       inputRequests: [],
       settledInputRequestIds: [],
       addressedAgentByChat: {}
-    })
+    }))
 }))

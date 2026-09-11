@@ -19,6 +19,8 @@ vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: han
  * asserted here is what this handler *chooses* and what it *passes on*.
  */
 
+let profileId = 'profile-user'
+let activated = true
 const ipcOnHandlers = new Map<string, (...args: unknown[]) => unknown>()
 vi.mock('electron', () => ({
   ipcMain: {
@@ -35,10 +37,10 @@ vi.mock('../logger/logger', () => ({
 vi.mock('./_wrap', () => ({ ipcHandle: () => undefined }))
 
 vi.mock('../auth/activation', () => ({
-  userActivation: { isActivated: () => true, requireActivated: () => undefined }
+  userActivation: { isActivated: () => activated, requireActivated: () => undefined }
 }))
 vi.mock('../auth/scope', () => ({
-  getProfileScopeUserId: () => 'profile-user',
+  getProfileScopeUserId: () => profileId,
   getSettingsScopeUserId: () => 'settings-user'
 }))
 
@@ -46,7 +48,7 @@ let chatRow: Record<string, unknown> = {}
 let history: MessageRow[] = []
 const listMessages = vi.fn(() => history)
 vi.mock('../db/chats', () => ({
-  chatRepo: { getOwned: vi.fn(() => chatRow), listMessages }
+  chatRepo: { listMessageIds: vi.fn(() => []), getOwned: vi.fn(() => chatRow), listMessages }
 }))
 
 /**
@@ -636,5 +638,51 @@ describe('main-owned turn lifetime', () => {
     await handle.completed
     expect(observer).not.toHaveBeenCalled()
     expect(reportRunCompletion).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('run:watch native subscription', () => {
+  afterEach(() => { profileId = 'profile-user'; activated = true })
+  function watchPort() {
+    let onClose = (): void => {}
+    const port = { start: vi.fn(), close: vi.fn(() => onClose()), postMessage: vi.fn(),
+      on: vi.fn((_event: string, listener: () => void) => { onClose = listener }) }
+    ipcOnHandlers.get('run:watch')?.({ ports: [port] }, 'chat-1')
+    return port
+  }
+  it('attaches to a main-started run and native port closure leaves execution active', async () => {
+    const handle = runExecutionService.start({ profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'Continue' }, { observe: vi.fn() })
+    await handle.accepted
+    const source = portGivenToTheStream()
+    source.postMessage({ type: 'delta', kind: 'text', text: 'before attach' })
+    const port = watchPort()
+    expect(port.postMessage).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'snapshot', runId: handle.id,
+      events: expect.arrayContaining([{ type: 'delta', kind: 'text', text: 'before attach' }]) }))
+    port.close()
+    port.postMessage.mockClear()
+    source.postMessage({ type: 'delta', kind: 'text', text: 'after detach' })
+    expect(port.postMessage).not.toHaveBeenCalled()
+    expect(runExecutionService.isRunning('chat-1')).toBe(true)
+    source.close()
+    await handle.completed
+  })
+  it('revokes a watcher before delivery after a profile change', async () => {
+    const port = watchPort()
+    port.postMessage.mockClear()
+    profileId = 'another-user'
+    const handle = runExecutionService.start({ profileUserId: 'profile-user', settingsUserId: 'settings-user' },
+      { chatId: 'chat-1', content: 'Continue' }, { observe: vi.fn() })
+    await handle.accepted
+    expect(port.close).toHaveBeenCalled()
+    expect(port.postMessage).not.toHaveBeenCalled()
+    portGivenToTheStream().close()
+  })
+  it('refuses an unauthenticated watch without exposing a snapshot', () => {
+    activated = false
+    const port = watchPort()
+    expect(port.close).toHaveBeenCalled()
+    expect(port.postMessage).not.toHaveBeenCalled()
   })
 })

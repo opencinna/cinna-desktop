@@ -1,3 +1,4 @@
+import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { DetectedTool, OpenInRequest } from '../shared/localTools'
@@ -796,6 +797,15 @@ const api = {
    * decision this channel exists to take away from the composer.
    */
   run: {
+    start: (payload: RunSendPayload): Promise<string> => ipcRenderer.invoke('run:start', payload),
+    watch: (chatId: string, onMessage: (message: RunWatchMessage) => void): (() => void) => {
+      const channel = new MessageChannel()
+      channel.port1.onmessage = (event) => {
+        if (isRunWatchMessage(event.data)) onMessage(event.data)
+      }
+      ipcRenderer.postMessage('run:watch', chatId, [channel.port2])
+      return () => { channel.port1.onmessage = null; channel.port1.close() }
+    },
     cancelChat: (chatId: string): Promise<void> => ipcRenderer.invoke('run:cancel-chat', chatId),
     send: (
       chatId: string,

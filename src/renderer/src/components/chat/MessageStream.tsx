@@ -282,7 +282,7 @@ function ReauthErrorBubble({ detail }: { detail?: string }): React.JSX.Element {
 export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): React.JSX.Element {
   const { data: chatData } = useChatDetail(chatId)
   const { data: agents } = useAgents()
-  const { streamingBlocks, isStreaming, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds } = useChatStore()
+  const { streamingBlocks, isStreaming, liveBaselineMessageIds, pendingUserMessage, streamedIncrementallyChatId, inputRequests, settledInputRequestIds } = useChatStore()
   const verboseMode = useUIStore((s) => s.verboseMode)
   // **While a request block is answerable, new content must not move it.** A
   // second ask arriving under a pinned view scrolled the first block's buttons
@@ -314,7 +314,11 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
     if (pendingUserMessage) scrollToBottom()
   }, [pendingUserMessage, scrollToBottom])
 
-  const messages = chatData?.messages ?? []
+  // A model can persist completed tool rounds while its turn is still live.
+  // Replay represents those same rows until the terminal transcript refetch.
+  const baselineIds = liveBaselineMessageIds && new Set(liveBaselineMessageIds)
+  const messages = (chatData?.messages ?? []).filter((message) =>
+    !baselineIds || message.role === 'user' || message.role === 'system' || baselineIds.has(message.id))
   const hasStreamingContent = streamingBlocks.length > 0
 
   // The agent's `AskUserQuestion` tool is answerable only while the chat is

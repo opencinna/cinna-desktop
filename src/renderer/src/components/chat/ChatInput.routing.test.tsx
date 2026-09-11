@@ -21,7 +21,7 @@ const spies = vi.hoisted(() => ({
   list: vi.fn(async () => agentList.current),
   onDemandAgentList: vi.fn(async () => onDemandAgents.current),
   setRouter: vi.fn(async () => ({ success: true })),
-  runSend: vi.fn(),
+  runSend: vi.fn().mockResolvedValue('run-1'),
   addOnDemandAgent: vi.fn(async () => ({ success: true }))
 }))
 
@@ -57,7 +57,7 @@ const api: Record<string, unknown> = new Proxy(
           addOnDemandAgent: spies.addOnDemandAgent
         })
       }
-      if (ns === 'run') return namespace({ send: spies.runSend, cancel: () => undefined })
+      if (ns === 'run') return namespace({ start: spies.runSend, cancel: () => undefined })
       return namespace({})
     }
   }
@@ -201,7 +201,7 @@ describe('addressing a human chat', () => {
     fireEvent.change(box, { target: { value: 'now build it' } })
     fireEvent.keyDown(box, { key: 'Enter' })
     await waitFor(() => expect(spies.runSend).toHaveBeenCalled())
-    expect(spies.runSend.mock.calls[0][3]).toMatchObject({ addressedAgentId: 'a-2' })
+    expect(spies.runSend.mock.calls[0][0]).toMatchObject({ addressedAgentId: 'a-2' })
   })
 
   it('changes nothing about who answers while the user types', async () => {

@@ -55,7 +55,7 @@ vi.mock('../db/messages', () => ({
 // which agent `findAgent` is asked for, so the second test moves it.
 const getOwnedChat = vi.fn(() => ({ id: 'chat-1', router: 'direct', agentId: 'folder:alpha' }))
 vi.mock('../db/chats', () => ({
-  chatRepo: { getOwned: getOwnedChat, listMessages: vi.fn(() => []) }
+  chatRepo: { listMessageIds: vi.fn(() => []), getOwned: getOwnedChat, listMessages: vi.fn(() => []) }
 }))
 vi.mock('../db/chatAgentCursors', () => ({
   chatAgentCursorRepo: { get: vi.fn(() => undefined), advance: vi.fn() }

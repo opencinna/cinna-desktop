@@ -1,3 +1,5 @@
+import { chatRepo } from '../db/chats'
+import { liveRunHub } from '../services/liveRunHub'
 import { ipcMain, type MessagePortMain } from 'electron'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -11,6 +13,35 @@ import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../../sha
 const logger = createLogger('run')
 
 export function registerRunHandlers(): void {
+  ipcHandle('run:start', (_event, payload: RunSendPayload) => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    return runExecutionService.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, payload, {
+      preserveOnRefusal: inboxService.hasNextMessage(userId, payload.chatId),
+      observe: (ctx, event) => inboxService.recordRunEvent(ctx, event),
+      onAccepted: (ctx) => inboxService.resumeChat(ctx, payload.content)
+    }).id
+  })
+  ipcMain.on('run:watch', (event, chatId: string) => {
+    const port = event.ports?.[0]
+    if (!port) return
+    const userId = getProfileScopeUserId()
+    if (!userActivation.isActivated() || typeof chatId !== 'string' || !chatRepo.getOwned(userId, chatId)) {
+      port.close()
+      return
+    }
+    let unwatch = (): void => {}
+    const close = (): void => { unwatch(); port.close() }
+    port.on('close', () => unwatch())
+    port.start()
+    unwatch = liveRunHub.watch(userId, chatId, (message) => {
+      if (!userActivation.isActivated() || getProfileScopeUserId() !== userId || !chatRepo.getOwned(userId, chatId)) {
+        close()
+        throw new Error('Run subscription no longer belongs to the active profile')
+      }
+      port.postMessage(message)
+    })
+  })
   ipcHandle('run:cancel-chat', async (_event, chatId: string) => {
     userActivation.requireActivated()
     runExecutionService.cancelChat(getProfileScopeUserId(), chatId)

@@ -24,7 +24,7 @@ const getChat = vi.fn()
 const setStatus = vi.fn<(taskId: string, status: TaskStatus) => Promise<TaskDto>>()
 const takeOver = vi.fn<(taskId: string, force?: boolean) => Promise<TaskDto>>()
 const remoteLive = vi.fn<(taskId: string) => Promise<boolean | null>>()
-const runSend = vi.fn()
+const runSend = vi.fn().mockResolvedValue('run-1')
 const startTask = vi.fn()
 const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: string }>>()
 
@@ -49,8 +49,7 @@ const openExternal = vi.fn<(url: string) => Promise<{ success: boolean; error?: 
   jobs: { get: async () => ({ id: 'j1', title: 'Nightly check' }) },
   chat: { get: (chatId: string) => getChat(chatId) },
   run: {
-    send: (chatId: string, content: string, _cb: unknown, extras: unknown) =>
-      runSend(chatId, content, extras)
+    start: runSend
   },
   system: { openExternal: (url: string) => openExternal(url) }
 }
@@ -159,7 +158,7 @@ describe('a blocked task with nothing waiting on it', () => {
     // task that still reads as blocked, and a refusal here has to stop the run.
     expect(setStatus).toHaveBeenCalledWith('t1', 'in_progress')
     // The last **user** message, not the last message.
-    expect(runSend).toHaveBeenCalledWith('c1', 'Check August', {
+    expect(runSend).toHaveBeenCalledWith({ chatId: 'c1', content: 'Check August',
       attachments: undefined,
       addressedAgentId: 'a1'
     })
@@ -273,7 +272,7 @@ describe('a failed task', () => {
       button.click()
     })
     expect(setStatus).toHaveBeenCalledWith('t1', 'in_progress')
-    expect(runSend).toHaveBeenCalledWith('c1', 'Check August', {
+    expect(runSend).toHaveBeenCalledWith({ chatId: 'c1', content: 'Check August',
       attachments: undefined,
       addressedAgentId: 'a1'
     })

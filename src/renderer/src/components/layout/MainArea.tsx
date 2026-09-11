@@ -1,3 +1,4 @@
+import { useLiveRunWatch } from '../../hooks/useLiveRunWatch'
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { useUIStore } from '../../stores/ui.store'
 import { useChatStore } from '../../stores/chat.store'
@@ -267,6 +268,8 @@ export function MainArea(): React.JSX.Element {
       pendingMcpIds
     ]
   )
+
+  useLiveRunWatch()
 
   // Active chat: resolve current mode from chatData.modeId
   const { data: activeChatData } = useChatDetail(activeChatId)

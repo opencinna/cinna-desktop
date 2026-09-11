@@ -21,8 +21,8 @@ Full conversation management — creating chats, sending messages, streaming LLM
 
 ### Sending a message in an existing chat
 1. User types in the input box and presses Send
-2. Renderer creates a MessageChannel, sends port2 + a typed `LlmSendPayload` to main via `postMessage`
-3. `llm:send-message` IPC handler calls `messageRoutingService.prepareLlmSend()` (persists the user row + assembles `wireContent`), then hands off to `chatStreamingService.stream()`
+2. Renderer invokes `run:start` with a typed `RunSendPayload`; its selected-chat watch independently receives output
+3. Main resolves the chat router through the shared executor. The model path calls `messageRoutingService.prepareLlmSend()` (persists the user row + assembles `wireContent`), then hands off to `chatStreamingService.stream()`
 4. The streaming service loads full chat history, patches the most recent user turn with `wireContent` (so the on-demand announce prefix is in scope for this call only, never persisted), and gathers MCP + agent tools for the chat
 5. The service enters the tool-call loop (up to 10 rounds):
    - Calls the LLM adapter's `stream()` — adapter returns a `StreamResult` (content + tool calls)
@@ -43,7 +43,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 
 ### Cancellation
 1. User clicks Stop during streaming
-2. Renderer calls `llm:cancel` IPC
+2. Renderer calls owned `run:cancel-chat`, including before the transport request ID exists
 3. Main process aborts the in-flight request via AbortSignal; an agent sub-turn in flight is cancelled with it
 4. Between adapter calls (for example while a tool runs), the loop stops and the turn ends normally. Tool calls in that round that had not run yet are recorded as not run, because a provider refuses a history with an unanswered tool call
 5. Mid-reply — the usual case — the adapter rejects, and the text streamed so far in that round is saved as an ordinary assistant message, unless it is only whitespace
@@ -65,7 +65,7 @@ Full conversation management — creating chats, sending messages, streaming LLM
 
 ```
 User -> ChatInput (renderer) -> useChatStream.startRun()
-  -> MessageChannel -> ipcMain.on('run:send')  (RunSendPayload)
+  -> run:start command (RunSendPayload); independent run:watch MessagePort
   -> main resolves who answers from chats.router  (see docs/chat/chat_routing/)
      -> { kind: 'agent' } : the driver path
      -> { kind: 'model' } : below
@@ -88,7 +88,7 @@ User -> ChatInput (renderer) -> useChatStream.startRun()
 
 ## Main-owned Continuations
 
-The shared executor owns a turn after dispatch, even if its renderer port closes. An Inbox next-message answer runs through the same routing/persistence/driver path without opening a conversation. Task Continue creates a new direct chat and dispatches its goal/handoff prompt once in main, then navigates after acceptance. Acceptance saves the user message and settles its agent’s pending requests in one transaction; a refusal rolls back both. Later stream completion is a separate event. Chat detail exposes a process-local active run id. Without an attached stream, the open chat polls persisted messages every second until that run ends, showing Stop during the run and Send afterwards. This supplies one-turn execution and visible completion, not automatic task loops or token replay. See [execution details](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+The shared executor owns a turn after dispatch, even if its renderer port closes. An Inbox next-message answer runs through the same routing/persistence/driver path without opening a conversation. Task Continue creates a new direct chat and dispatches its goal/handoff prompt once in main, then navigates after acceptance. Acceptance saves the user message and settles its agent’s pending requests in one transaction; a refusal rolls back both. Later stream completion is a separate event. Opening the conversation attaches to its current run, replays retained output once and receives new events; switching away leaves execution running. A bounded replay cache and baseline message IDs prevent duplicated tool rounds, with saved-message polling when replay is unavailable. Stop works before the transport request ID exists. Closure retires the live projection only after a fresh saved read. See [Live Run Attachment and Replay](live_runs.md). This supplies one-turn execution and visibility; automatic task loops remain separate. See [execution details](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
 
 ## Integration Points
 
