@@ -91,7 +91,8 @@ type Routing = Parameters<typeof chatStreamingService._runStreamLoop>[6]
 
 async function run(
   rounds: Round[],
-  routing: (controller: AbortController) => Routing = () => new Map()
+  routing: (controller: AbortController) => Routing = () => new Map(),
+  onFinished?: Parameters<typeof chatStreamingService._runStreamLoop>[13]
 ): Promise<RunEvent[]> {
   const posted: RunEvent[] = []
   const controller = new AbortController()
@@ -108,7 +109,8 @@ async function run(
     {},
     'hello',
     [],
-    []
+    [],
+    onFinished
   )
   return posted
 }
@@ -238,5 +240,34 @@ describe('chatStreamingService — a stop mid-reply', () => {
     expect(posted.filter((e) => e.type === 'tool_use').map((e) => (e as { id: string }).id)).toEqual(['call-1'])
     expect(posted.at(-1)).toEqual({ type: 'done', stopReason: 'canceled' })
     expect(saved.runs).toEqual(['cancelled'])
+  })
+})
+
+
+describe('model turn outcomes', () => {
+  it('returns final text after persistence without finalizing a runner-owned job', async () => {
+    const persistedCounts: number[] = []
+    const finish = vi.fn(() => { persistedCounts.push(saved.assistant.length) })
+    await run([{ deltas: ['final'], then: 'finish', result: { content: 'final', toolCalls: [] } }], undefined, finish)
+    expect(finish).toHaveBeenCalledWith({ state: 'completed', text: 'final' })
+    expect(persistedCounts).toEqual([1])
+    expect(saved.runs).toEqual([])
+  })
+  it('distinguishes the tool-round ceiling from a natural ending and settles every tool pair', async () => {
+    const rounds: Round[] = Array.from({ length: 10 }, (_, index) => ({ deltas: [], then: 'finish',
+      result: { content: `round ${index}`, toolCalls: [{ id: `tool-${index}`, name: 'missing', input: {} }] } }))
+    const finish = vi.fn()
+    const posted = await run(rounds, undefined, finish)
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ state: 'budget', text: 'round 9', error: { message: 'The turn reached its limit of 10 model rounds.', code: 'round_budget' } }))
+    expect(posted.at(-1)).toEqual({ type: 'done', stopReason: 'budget' })
+    expect(saved.errors).toEqual([{ chatId: 'chat-1', short: 'The turn reached its limit of 10 model rounds.', code: 'round_budget' }])
+    expect(saved.toolCalls.map((row) => row.toolCallId)).toEqual(Array.from({ length: 10 }, (_, i) => `tool-${i}`))
+    expect(saved.runs).toEqual([])
+  })
+  it('returns a stopped round partial without inventing token usage', async () => {
+    const finish = vi.fn()
+    await run([{ deltas: ['partial'], then: 'stop' }], undefined, finish)
+    expect(finish).toHaveBeenCalledWith({ state: 'canceled', text: 'partial' })
+    expect(saved.assistant).toEqual([{ chatId: 'chat-1', content: 'partial' }])
   })
 })

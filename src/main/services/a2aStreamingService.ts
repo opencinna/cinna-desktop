@@ -23,7 +23,7 @@ import {
   type MessageLike,
   type ArtifactLike
 } from '../agents/streamPartsAccumulator'
-import { jobService } from './jobService'
+import { createTurnCompletion, type TurnCompletion, type TurnOutcome } from './turnCompletion'
 import { createLogger } from '../logger/logger'
 import type { InputRequest, RunEvent, RunState } from '../../shared/runEvents'
 import type { MessagePart } from '../../shared/messageParts'
@@ -139,6 +139,7 @@ export interface StreamToAgentInput {
    * not allowed to turn a finished turn into a failed one.
    */
   onCompleted?: () => void
+  onFinished?: TurnCompletion
 }
 
 /**
@@ -398,6 +399,10 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       logger.debug('← response', result)
       const responseJson = result as unknown as Record<string, unknown>
 
+      if (responseJson.error && typeof responseJson.error === 'object') {
+        const error = responseJson.error as { message?: unknown; code?: unknown }
+        throw new Error(typeof error.message === 'string' ? error.message : 'The agent returned a JSON-RPC error.')
+      }
       const rpcResult = (responseJson.result ?? responseJson) as Record<string, unknown>
 
       const ingestTaskShape = (task: {
@@ -458,7 +463,10 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       state: latestTaskState
     })
 
+    const failure = latestTaskState && !['completed', 'input-required', 'auth-required', 'canceled'].includes(latestTaskState)
+      ? (answerText || `The agent ended the turn with task state "${latestTaskState}".`) : undefined
     return {
+      ...(failure ? { error: { message: failure, raw: `A2A task state: ${latestTaskState}`, code: 'agent_task_failed' } } : {}),
       text: answerText || parts.map((p) => p.text).join(''),
       parts,
       notices,
@@ -507,6 +515,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
 export const a2aStreamingService = {
   async streamToAgent(input: StreamToAgentInput): Promise<void> {
     const { run, chatId, agentId, port } = input
+    const finish = createTurnCompletion(chatId, input.onFinished)
 
     const abortController = new AbortController()
     const requestId = nanoid()
@@ -528,19 +537,25 @@ export const a2aStreamingService = {
       // away), and finalizes the job run as `cancelled` — a run left
       // unfinalized stays `running` for the life of the app. Same ending as
       // `chatStreamingService`'s abort branch.
-      if (result.error && !abortController.signal.aborted) {
+      const canceled = abortController.signal.aborted || result.taskState === 'canceled'
+      const failedState = result.taskState && !['completed', 'input-required', 'auth-required', 'canceled'].includes(result.taskState)
+      const state: TurnOutcome['state'] = canceled ? 'canceled'
+        : result.error || failedState ? 'failed'
+        : result.taskState === 'input-required' || result.taskState === 'auth-required' ? 'needs_input' : 'completed'
+      const failure = result.error ?? (state === 'failed' ? { message: 'The agent reported that its task failed.', raw: result.taskState ?? '' } : undefined)
+      if (failure && !canceled) {
         port.postMessage(
-          result.error.code
-            ? { type: 'error', error: result.error.message, code: result.error.code }
-            : { type: 'error', error: result.error.message }
+          failure.code
+            ? { type: 'error', error: failure.message, code: failure.code }
+            : { type: 'error', error: failure.message }
         )
         messageRepo.saveError({
           chatId,
-          short: result.error.message,
-          detail: result.error.raw,
-          code: result.error.code
+          short: failure.message,
+          detail: failure.raw,
+          code: failure.code
         })
-        jobService.reportRunCompletion(chatId, 'failed', result.error.message)
+        finish({ state: 'failed', text: result.text, error: { message: failure.message, code: failure.code } })
         return
       }
 
@@ -567,7 +582,7 @@ export const a2aStreamingService = {
       messageRepo.touchChat(chatId)
       port.postMessage({
         type: 'done',
-        stopReason: abortController.signal.aborted ? 'canceled' : 'end_turn'
+        stopReason: canceled ? 'canceled' : 'end_turn'
       })
       // **The exit a stop most often takes, and the one the abort branch below
       // does not cover.** A runner that is cancelled cleanly returns what it
@@ -576,8 +591,8 @@ export const a2aStreamingService = {
       // through the `catch`. Reporting `succeeded` for it is the same lie the
       // OpenAI adapter used to tell by resolving on abort: the run reads as a
       // job that finished, and nothing distinguishes it from one that did.
-      jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
-      if (!abortController.signal.aborted) {
+      finish({ state, text: result.text })
+      if (!canceled && state !== 'failed') {
         try {
           input.onCompleted?.()
         } catch (err) {
@@ -610,17 +625,19 @@ export const a2aStreamingService = {
       if (!abortController.signal.aborted) {
         port.postMessage({ type: 'error', error: message })
         messageRepo.saveError({ chatId, short: message, detail: String(err) })
-        jobService.reportRunCompletion(chatId, 'failed', message)
+        finish({ state: 'failed', text: '', error: { message } })
       } else {
         // The other way a stopped turn leaves this function, and it needs the
         // same ending for the same reasons — the renderer included. Nothing the
         // runner streamed survives a throw, so there is nothing to keep.
         port.postMessage({ type: 'done', stopReason: 'canceled' })
-        jobService.reportRunCompletion(chatId, 'cancelled')
+        finish({ state: 'canceled', text: '' })
       }
     } finally {
-      port.close()
+      // Covers a persistence exception inside the error handler as well.
+      finish({ state: 'failed', text: '', error: { message: 'The agent turn ended without a persisted outcome.' } })
       activeRequests.delete(requestId)
+      port.close()
     }
   },
 

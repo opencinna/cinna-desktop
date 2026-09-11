@@ -24,6 +24,8 @@ export interface OpenInputRequestInput {
   taskId: string
   chatId: string
   agentId: string
+  rootRunId?: string
+  invocationId?: string
   request: InputRequest
   resume: InputResumeMode
 }
@@ -59,6 +61,8 @@ export const taskInputRequestRepo = {
       taskId: input.taskId,
       chatId: input.chatId,
       agentId: input.agentId,
+      rootRunId: input.rootRunId ?? null,
+      invocationId: input.invocationId ?? null,
       request: input.request,
       resume: input.resume,
       status: 'open',
@@ -94,12 +98,16 @@ export const taskInputRequestRepo = {
   settle(
     requestId: string,
     status: Exclude<TaskInputRequestStatus, 'open'>,
-    resolution: RequestResolution | null = null
+    resolution: RequestResolution | null = null,
+    scope?: { chatId: string; rootRunId?: string; invocationId?: string }
   ): TaskInputRequestRow | undefined {
     const result = getDb()
       .update(taskInputRequests)
       .set({ status, resolution, resolvedAt: new Date() })
-      .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.status, 'open')))
+      .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.status, 'open'),
+        scope ? eq(taskInputRequests.chatId, scope.chatId) : undefined,
+        scope ? scope.rootRunId ? eq(taskInputRequests.rootRunId, scope.rootRunId) : isNull(taskInputRequests.rootRunId) : undefined,
+        scope ? scope.invocationId ? eq(taskInputRequests.invocationId, scope.invocationId) : isNull(taskInputRequests.invocationId) : undefined))
       .run()
     if (result.changes === 0) return undefined
     return this.getById(requestId)
@@ -133,6 +141,25 @@ export const taskInputRequestRepo = {
     return getDb().select().from(taskInputRequests).where(and(
       eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.status, 'open')
     )).all()
+  },
+
+  listOpenForTask(taskId: string): TaskInputRequestRow[] {
+    return getDb().select().from(taskInputRequests).where(and(
+      eq(taskInputRequests.taskId, taskId), eq(taskInputRequests.status, 'open')
+    )).all()
+  },
+
+  listOpenForRun(chatId: string, rootRunId: string): TaskInputRequestRow[] {
+    return getDb().select().from(taskInputRequests).where(and(
+      eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.rootRunId, rootRunId), eq(taskInputRequests.status, 'open')
+    )).all()
+  },
+
+  expireOpenForRun(chatId: string, rootRunId: string, replyOnly: boolean, invocationId?: string): number {
+    return getDb().update(taskInputRequests).set({ status: 'expired', resolvedAt: new Date() })
+      .where(and(eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.rootRunId, rootRunId),
+        eq(taskInputRequests.status, 'open'), replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
+        invocationId ? eq(taskInputRequests.invocationId, invocationId) : undefined)).run().changes
   },
 
   /**

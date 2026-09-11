@@ -415,6 +415,8 @@ describe('tasks on an install that predates them', () => {
         'task_id',
         'chat_id',
         'agent_id',
+        'root_run_id',
+        'invocation_id',
         'request',
         'resume',
         'status',
@@ -499,6 +501,29 @@ describe('tasks on an install that predates them', () => {
     // An ask is meaningless without the task it is asking about.
     raw.prepare("DELETE FROM tasks WHERE id = 't-1'").run()
     expect(raw.prepare('SELECT COUNT(*) AS c FROM task_input_requests').get()).toEqual({ c: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})
+
+describe('input request ownership on an existing install', () => {
+  it('preserves legacy requests without assigning them to a new run, and replays idempotently', () => {
+    const raw = freshDatabase()
+    raw.exec('DROP INDEX idx_task_input_requests_run')
+    raw.exec('ALTER TABLE task_input_requests DROP COLUMN root_run_id')
+    raw.exec('ALTER TABLE task_input_requests DROP COLUMN invocation_id')
+    raw.exec(`INSERT INTO tasks (id, user_id, title, goal, created_at, updated_at)
+      VALUES ('legacy-task', '__default__', 'Task', 'Goal', 1, 1)`)
+    const request = JSON.stringify({ kind: 'permission', action: 'bash', resources: ['build'] })
+    raw.prepare(`INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, request, resume, status, created_at)
+      VALUES ('legacy-ask', 'legacy-task', 'legacy-chat', 'legacy-agent', ?, 'reply', 'open', 42)`).run(request)
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT * FROM task_input_requests').all()).toEqual([{
+      id: 'legacy-ask', task_id: 'legacy-task', chat_id: 'legacy-chat', agent_id: 'legacy-agent',
+      request, resume: 'reply', status: 'open', resolution: null, created_at: 42, resolved_at: null,
+      root_run_id: null, invocation_id: null
+    }])
     expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     raw.close()
   })

@@ -2,6 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
+const runnerTask = vi.hoisted(() => vi.fn())
+const openRunRequests = vi.hoisted(() => vi.fn(() => [] as { id: string; resume: 'reply' | 'next_message' }[]))
+vi.mock('../db/tasks', () => ({ taskRepo: { getById: runnerTask } }))
+vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: openRunRequests } }))
+vi.mock('../db/sync', () => ({ syncRepo: { getState: () => null } }))
 const handoffPending = vi.hoisted(() => vi.fn(() => false))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: handoffPending } }))
 
@@ -222,6 +227,8 @@ beforeEach(() => {
   // `clearAllMocks` drops calls, not implementations — and one test below makes
   // this one throw. Without the reset it would throw for the rest of the file.
   reportRunCompletion.mockReset()
+  openRunRequests.mockReturnValue([])
+  runnerTask.mockReturnValue(undefined)
   lastId.mockReturnValue('m-last')
   lastAddressedAgentId.mockReturnValue(null)
   cursorGet.mockReturnValue(undefined)
@@ -376,22 +383,30 @@ describe('run:send — a throw before the turn has an owner', () => {
     // re-raising their failure would have the wrapper post to a closed port and
     // report as unhandled a turn the user has already been told about.
     streamToAgent.mockImplementationOnce(async (input) => {
-      ;(input as { port: { close(): void } }).port.close()
+      const ended = input as { onFinished: (result: { state: 'completed'; text: string }) => void; port: { postMessage(event: RunEvent): void; close(): void } }
+      ended.port.postMessage({ type: 'done' })
+      ended.onFinished({ state: 'completed', text: 'saved' })
+      ended.port.close()
       throw new Error('the stream blew up')
     })
     const port = await send({ chatId: 'chat-1', content: 'hello' })
-    expect(port.postMessage).not.toHaveBeenCalled()
+    expect(port.postMessage).toHaveBeenCalledTimes(1)
+    expect(port.postMessage).toHaveBeenCalledWith({ type: 'done' })
     expect(port.close).toHaveBeenCalledTimes(1)
   })
 
   it('does not post over an llm stream that already owns the port either', async () => {
     chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
     llmStream.mockImplementationOnce(async (input) => {
-      ;(input as { port: { close(): void } }).port.close()
+      const ended = input as { onFinished: (result: { state: 'completed'; text: string }) => void; port: { postMessage(event: RunEvent): void; close(): void } }
+      ended.port.postMessage({ type: 'done' })
+      ended.onFinished({ state: 'completed', text: 'saved' })
+      ended.port.close()
       throw new Error('the stream blew up')
     })
     const port = await send({ chatId: 'chat-1', content: 'hello' })
-    expect(port.postMessage).not.toHaveBeenCalled()
+    expect(port.postMessage).toHaveBeenCalledTimes(1)
+    expect(port.postMessage).toHaveBeenCalledWith({ type: 'done' })
     expect(port.close).toHaveBeenCalledTimes(1)
   })
 })
@@ -520,7 +535,7 @@ describe('run:send — the inbox tap', () => {
     portGivenToTheStream().postMessage(ASK)
 
     expect(recordRunEvent).toHaveBeenCalledWith(
-      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-1', turnId: expect.any(String) },
+      { userId: 'profile-user', chatId: 'chat-1', agentId: 'a-1', turnId: expect.any(String), rootRunId: expect.any(String), completionOwner: 'turn' },
       ASK
     )
     expect(port.postMessage).toHaveBeenCalledWith(ASK)
@@ -534,7 +549,7 @@ describe('run:send — the inbox tap', () => {
     portGivenToTheStream().postMessage(ASK)
 
     expect(recordRunEvent).toHaveBeenCalledWith(
-      { userId: 'profile-user', chatId: 'chat-1', agentId: null, turnId: expect.any(String) },
+      { userId: 'profile-user', chatId: 'chat-1', agentId: null, turnId: expect.any(String), rootRunId: expect.any(String), completionOwner: 'turn' },
       ASK
     )
   })
@@ -684,5 +699,88 @@ describe('run:watch native subscription', () => {
     const port = watchPort()
     expect(port.close).toHaveBeenCalled()
     expect(port.postMessage).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('typed main turn completion', () => {
+  const scope = { profileUserId: 'profile-user', settingsUserId: 'settings-user' }
+  const payload = { chatId: 'chat-1', content: 'Continue' }
+  function serviceInput() {
+    return (streamToAgent.mock.calls.at(-1) ?? llmStream.mock.calls.at(-1))![0] as {
+      onFinished: (outcome: { state: 'completed' | 'failed' | 'canceled'; text: string }) => void
+      port: { postMessage(event: RunEvent): void; close(): void }
+    }
+  }
+  it('waits for model persistence/close, returns final text, and reports exactly once', async () => {
+    chatRow = { id: 'chat-1', router: 'coordinator', agentId: null }
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
+    await handle.accepted
+    const settled = vi.fn()
+    void handle.completed.then(settled)
+    await Promise.resolve()
+    expect(settled).not.toHaveBeenCalled()
+    const input = serviceInput()
+    input.onFinished({ state: 'completed', text: 'saved final answer' })
+    expect(settled).not.toHaveBeenCalled()
+    input.port.close()
+    await expect(handle.completed).resolves.toEqual({ state: 'completed', text: 'saved final answer',
+      accepted: true, runId: handle.id, inputRequestIds: [] })
+    input.onFinished({ state: 'failed', text: '' })
+    expect(reportRunCompletion).toHaveBeenCalledTimes(1)
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'succeeded', undefined)
+  })
+  it('runner-owned completion leaves task/job finalization to its owner and returns remaining asks', async () => {
+    runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status: 'in_progress' })
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer, runnerTaskId: 'task' })
+    await handle.accepted
+    const input = serviceInput()
+    input.port.postMessage({ type: 'done' })
+    input.onFinished({ state: 'completed', text: 'waiting' })
+    openRunRequests.mockReturnValue([{ id: 'durable-question', resume: 'next_message' }])
+    input.port.close()
+    await expect(handle.completed).resolves.toMatchObject({ state: 'needs_input', text: 'waiting', inputRequestIds: ['durable-question'] })
+    expect(reportRunCompletion).not.toHaveBeenCalled()
+    expect(observer).toHaveBeenCalledWith(expect.objectContaining({ completionOwner: 'runner', rootRunId: handle.id, turnId: handle.id }), { type: 'done' })
+  })
+  it.each(['completed', 'cancelled', 'archived', 'error', 'open'])('refuses runner admission for %s tasks', (status) => {
+    runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status })
+    expect(() => runExecutionService.start(scope, payload, { observe: vi.fn(), runnerTaskId: 'task' })).toThrow('does not own')
+    expect(runExecutionService.isRunning('chat-1')).toBe(false)
+  })
+  it.each([{ deletedAt: new Date() }, { executorDevice: 'another-device' }, { chatId: 'another-chat' }, { executor: 'remote' }])('refuses a deleted or foreign task claim %j', (override) => {
+    runnerTask.mockReturnValue({ id: 'task', chatId: 'chat-1', executor: 'desktop', executorDevice: null, status: 'in_progress', ...override })
+    expect(() => runExecutionService.start(scope, payload, { observe: vi.fn(), runnerTaskId: 'task' })).toThrow('does not own')
+  })
+  it('never invents success when a service closes without an outcome', async () => {
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
+    await handle.accepted
+    serviceInput().port.close()
+    await expect(handle.completed).resolves.toMatchObject({ state: 'failed', error: { message: 'The turn closed without a terminal outcome.' } })
+  })
+  it.each(['read-failed', 'dead-reply'])('keeps execution success separate from unknown request bookkeeping: %s', async (problem) => {
+    const observer = vi.fn()
+    const handle = runExecutionService.start(scope, payload, { observe: observer })
+    await handle.accepted
+    const input = serviceInput()
+    input.onFinished({ state: 'completed', text: 'saved' })
+    if (problem === 'read-failed') openRunRequests.mockImplementationOnce(() => { throw new Error('DB busy') })
+    else openRunRequests.mockReturnValueOnce([{ id: 'dead-ask', resume: 'reply' }])
+    input.port.close()
+    const result = await handle.completed
+    expect(result).toMatchObject({ state: 'completed', text: 'saved', inputRequestIds: [] })
+    expect(result.inputRequestReadError).toBeTruthy()
+    expect(reportRunCompletion).toHaveBeenCalledWith('chat-1', 'succeeded', undefined)
+    expect(observer).toHaveBeenCalledWith(expect.anything(), { type: 'done', stopReason: 'end_turn' })
+  })
+  it('releases execution even if status projection throws', async () => {
+    reportRunCompletion.mockImplementation(() => { throw new Error('DB busy') })
+    const handle = runExecutionService.start(scope, payload, { observe: vi.fn() })
+    await handle.accepted
+    const input = serviceInput()
+    input.onFinished({ state: 'completed', text: 'saved' }); input.port.close()
+    await expect(handle.completed).resolves.toMatchObject({ state: 'completed', text: 'saved' })
+    expect(runExecutionService.isRunning('chat-1')).toBe(false)
   })
 })

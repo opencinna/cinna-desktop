@@ -121,6 +121,16 @@ export function migrateTasks(sqlite: Database.Database): void {
       ON task_input_requests(task_id);
   `)
 
+  // Legacy request rows remain unowned; new events carry exact root/invocation
+  // identity so a late or parallel turn cannot settle a sibling's request.
+  for (const column of ['root_run_id', 'invocation_id']) {
+    if (!hasColumn(sqlite, 'task_input_requests', column)) {
+      sqlite.exec(`ALTER TABLE task_input_requests ADD COLUMN ${column} TEXT`)
+    }
+  }
+  sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_task_input_requests_run
+    ON task_input_requests(chat_id, root_run_id, invocation_id, status)`)
+
   // Which task a job run produced. Nullable for every run that predates this
   // migration: those rows are history, and inventing a task for each of them
   // would put tasks in the user's list for work that finished months ago with

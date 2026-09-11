@@ -1,7 +1,4 @@
 {
-  "_notes": [
-    "POSSIBLE BUG: the stale session is saved again unchanged, taskState input-required included, so every later turn resends a taskId the server has just reported as not found."
-  ],
   "requests": [
     {
       "method": "GET",
@@ -49,15 +46,7 @@
       "taskState": "input-required"
     }
   ],
-  "sessionUpserts": [
-    {
-      "chatId": "chat-golden",
-      "agentId": "agent-remote-1",
-      "contextId": "ctx-stale-1",
-      "taskId": "task-stale-1",
-      "taskState": "input-required"
-    }
-  ],
+  "sessionUpserts": [],
   "taskIdsSurfaced": [
     "task-stale-1"
   ],

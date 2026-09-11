@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import { ASK_NO_LONGER_WAITING, type InboxAnswerResult } from '../../shared/inbox'
+import type { AgentDriver } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RemoteTaskAdapter } from '../tasks/adapters/adapter'
@@ -55,7 +56,7 @@ vi.mock('./askDelivery', () => ({
     deliverAnswer(args[0] as string, args[1] as string)
 }))
 
-const toolRun = vi.hoisted(() => vi.fn(async () => ({ text: 'Done', parts: [], notices: [] })))
+const toolRun = vi.hoisted(() => vi.fn<AgentDriver['run']>(async () => ({ text: 'Done', parts: [], notices: [] })))
 vi.mock('../agents/drivers', () => ({ driverFor: () => ({ run: toolRun }) }))
 
 const runStart = vi.hoisted(() => vi.fn())
@@ -64,6 +65,8 @@ vi.mock('./runExecutionService', () => ({
   runExecutionService: { start: runStart, isRunning: runBusy }
 }))
 vi.mock('./agentService', () => ({ agentService: { findAgent: () => ({ row: {}, userId: '__default__' }) } }))
+vi.mock('../mcp/manager', () => ({ mcpManager: {} }))
+vi.mock('./fileStore', () => ({ attachmentToMediaPart: async () => null }))
 vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' }))
 
 const { inboxService } = await import('./inboxService')
@@ -82,7 +85,7 @@ const permission: Extract<RunEvent, { type: 'needs_input' }> = {
   resume: 'reply'
 }
 
-function ctx(overrides: { chatId?: string; agentId?: string | null; turnId?: string } = {}) {
+function ctx(overrides: { chatId?: string; agentId?: string | null; turnId?: string; rootRunId?: string; completionOwner?: 'turn' | 'runner' } = {}) {
   return { userId: USER, chatId: CHAT, agentId: AGENT, ...overrides }
 }
 
@@ -568,8 +571,8 @@ describe('answering from the inbox', () => {
     // The entry stops offering a button whose only outcome is that message.
     expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
     expect((await inboxService.list(USER))).toEqual([])
-    // Still blocked: nothing answered it, so the task has not moved on.
-    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    // No answerable request remains; the completion owner decides the final outcome.
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
   })
 
   it('keeps the ask open when the answer was merely the wrong shape', async () => {
@@ -893,5 +896,119 @@ describe('next-message continuation', () => {
     })).toThrow('acceptance failed')
     expect(messageRepo.firstByRole(CHAT, 'user')).toBeUndefined()
     expect(taskInputRequestRepo.getById(entry.requestId)?.status).toBe('open')
+  })
+})
+
+describe('run and invocation ownership', () => {
+  const root = ctx({ rootRunId: 'run-1', turnId: 'run-1', completionOwner: 'runner' })
+  const child = (toolCallId: string, event: RunEvent): RunEvent =>
+    ({ type: 'child', toolCallId, agentId: AGENT, event })
+  const answer = { kind: 'permission' as const, reply: 'once' as const }
+
+  it('keeps sibling requests blocked when the actual Inbox answer settles first', async () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(root, child('a', permission))
+    inboxService.recordRunEvent(root, child('b', { ...permission, requestId: 'per_2' }))
+    expect(await inboxService.answer(USER, 'per_1', answer)).toEqual({ ok: true })
+    inboxService.recordRunEvent(root, child('a', { type: 'input_resolved', requestId: 'per_1', resolution: answer }))
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('answered')
+    expect(taskInputRequestRepo.getById('per_2')?.status).toBe('open')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    expect(await inboxService.answer(USER, 'per_2', answer)).toEqual({ ok: true })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('aggregates surviving asks after an expired Inbox reply', async () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(root, permission)
+    inboxService.recordRunEvent(root, { ...permission, requestId: 'per_2' })
+    holder.deliver = () => ({ ok: false, code: 'no_longer_waiting', reason: ASK_NO_LONGER_WAITING })
+    await inboxService.answer(USER, 'per_1', answer)
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    await inboxService.answer(USER, 'per_2', answer)
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    expect(taskInputRequestRepo.listOpenForRun(CHAT, 'run-1')).toEqual([])
+  })
+
+  it('expires only the ending child, then its root, leaving other roots and legacy asks intact', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(root, child('a', permission))
+    inboxService.recordRunEvent(root, child('b', { ...permission, requestId: 'per_2' }))
+    inboxService.recordRunEvent(ctx({ rootRunId: 'run-2', turnId: 'run-2' }), { ...permission, requestId: 'other' })
+    inboxService.recordRunEvent(ctx(), { ...permission, requestId: 'legacy' })
+    inboxService.recordRunEvent(root, child('a', { type: 'done', stopReason: 'canceled' }))
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
+    expect(taskInputRequestRepo.getById('per_2')?.status).toBe('open')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.recordRunEvent(root, { type: 'done', stopReason: 'canceled' })
+    expect(taskInputRequestRepo.getById('per_2')?.status).toBe('expired')
+    expect(taskInputRequestRepo.listOpenForTask(task.id).map((row) => row.id).sort()).toEqual(['legacy', 'other'])
+  })
+
+  it('ignores a late resolution for a replaced request from another invocation', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(root, child('a', permission))
+    inboxService.recordRunEvent(root, child('b', permission))
+    inboxService.recordRunEvent(root, child('a', { type: 'input_resolved', requestId: 'per_1', resolution: answer }))
+    expect(taskInputRequestRepo.getById('per_1')).toMatchObject({ status: 'open', rootRunId: 'run-1', invocationId: 'run-1:b' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    inboxService.recordRunEvent(root, child('b', { type: 'input_resolved', requestId: 'per_1', resolution: answer }))
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('answered')
+  })
+
+  it('does not finish a runner-owned task when its turn finishes', () => {
+    const task = makeChatTask()
+    inboxService.recordRunEvent(root, permission)
+    inboxService.recordRunEvent(root, { type: 'done', stopReason: 'end_turn' })
+    expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+
+  it('keeps another agent blocked after typed continuation and preserves next-message asks at normal end', () => {
+    const task = makeChatTask()
+    const ask = { type: 'needs_input' as const, requestId: 'question', resume: 'next_message' as const,
+      request: { kind: 'question' as const, questions: [{ question: 'Which branch?', multiSelect: false, options: [] }] } }
+    inboxService.recordRunEvent(root, ask)
+    inboxService.recordRunEvent({ ...root, agentId: 'other-agent', turnId: 'run-1:other' }, ask)
+    inboxService.recordRunEvent(root, { type: 'done', stopReason: 'end_turn' })
+    expect(taskInputRequestRepo.listOpenForRun(CHAT, 'run-1')).toHaveLength(2)
+    inboxService.resumeChat(root, 'main')
+    expect(taskInputRequestRepo.listOpenForTask(task.id)).toHaveLength(1)
+    expect(taskInputRequestRepo.listOpenForTask(task.id)[0].agentId).toBe('other-agent')
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+  })
+})
+
+describe('model child completion integration', () => {
+  it.each([false, true])('cleans up a driver that silently drops a reply before the next model round (failure=%s)', async (isError) => {
+    const { chatStreamingService } = await import('./chatStreamingService')
+    const { A2AAsMcpProvider } = await import('./a2aAsMcpProvider')
+    const task = makeChatTask()
+    const root = ctx({ agentId: null, rootRunId: 'model-run', turnId: 'model-run', completionOwner: 'runner' })
+    const sibling = ctx({ rootRunId: 'sibling-run', turnId: 'sibling-run' })
+    inboxService.recordRunEvent(sibling, { ...permission, requestId: 'sibling' })
+    const provider = new A2AAsMcpProvider(CHAT, { id: AGENT, name: 'Alpha', driver: 'a2a' } as AgentRow, USER, 'alpha')
+    toolRun.mockImplementationOnce(async (_owner, _agent, io) => {
+      io.onEvent?.(permission)
+      expect(taskInputRequestRepo.getById('per_1')).toMatchObject({ rootRunId: 'model-run', invocationId: 'model-run:tool-1', status: 'open' })
+      return { text: 'child output', parts: [], notices: [], ...(isError ? { error: { message: 'child failed', raw: 'failed' } } : {}) }
+    })
+    let round = 0
+    const stream = vi.fn(async () => {
+      if (round++ === 0) return { content: '', toolCalls: [{ id: 'tool-1', name: 'alpha', input: { message: 'Build' } }] }
+      // The root is still executing. Only its ended child must be cleaned up.
+      expect(taskInputRequestRepo.getById('per_1')?.status).toBe('expired')
+      expect(taskInputRequestRepo.getById('sibling')?.status).toBe('open')
+      expect(taskService.getById(USER, task.id).status).toBe('blocked')
+      return { content: 'Final', toolCalls: [] }
+    })
+    const adapter = { stream, modelCapability: () => ({ acceptedMimeTypes: [], nativeMimeTypes: [], maxFileSizeBytes: 0, maxFilesPerMessage: 0 }), parseError: (error: Error) => ({ short: error.message, detail: error.message }) }
+    await chatStreamingService._runStreamLoop('provider', 'model', USER, CHAT,
+      adapter as unknown as Parameters<typeof chatStreamingService._runStreamLoop>[4], [], new Map([['alpha', provider]]),
+      new AbortController(), { postMessage: (event) => inboxService.recordRunEvent(root, event), close() {} }, {}, 'Build', [], [], () => {})
+    expect(stream).toHaveBeenCalledTimes(2)
+    expect(toolRun).toHaveBeenCalledTimes(1)
+    const { messageRepo } = await import('../db/messages')
+    expect(messageRepo.firstByRole(CHAT, 'tool_call')).toMatchObject({ content: isError ? 'child failed' : 'child output' })
   })
 })

@@ -18,7 +18,7 @@ import {
   ToolDefinition
 } from '../llm/types'
 import { ChatError } from '../errors'
-import { jobService } from './jobService'
+import { createTurnCompletion, type TurnCompletion } from './turnCompletion'
 import { attachmentToMediaPart } from './fileStore'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
@@ -58,6 +58,7 @@ export interface StreamInput {
    */
   wireContent: string
   port: StreamPort
+  onFinished?: TurnCompletion
 }
 
 export interface StreamHandle {
@@ -149,6 +150,7 @@ export const chatStreamingService = {
    */
   async stream(input: StreamInput): Promise<StreamHandle> {
     const { userId, chatId, wireContent, port } = input
+    const finish = createTurnCompletion(chatId, input.onFinished)
 
     // **A refusal is an ending, and the three below are endings nobody used to
     // report.** Each of them posts an error, closes the port and throws — and
@@ -165,16 +167,16 @@ export const chatStreamingService = {
       const err = 'Chat not found'
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
+      finish({ state: 'failed', text: '', error: { message: err } })
       port.close()
-      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('not_found', err)
     }
     if (!chat.providerId || !chat.modelId) {
       const err = 'Chat has no model/provider configured'
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
+      finish({ state: 'failed', text: '', error: { message: err } })
       port.close()
-      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('not_configured', err)
     }
 
@@ -183,8 +185,8 @@ export const chatStreamingService = {
       const err = 'Provider adapter not available'
       port.postMessage({ type: 'error', error: err })
       messageRepo.saveError({ chatId, short: err })
+      finish({ state: 'failed', text: '', error: { message: err } })
       port.close()
-      jobService.reportRunCompletion(chatId, 'failed', err)
       throw new ChatError('adapter_unavailable', err)
     }
 
@@ -286,10 +288,16 @@ export const chatStreamingService = {
       baseLog,
       augmentedWireContent,
       announce.mcpIds,
-      announce.agentIds
-    ).finally(() => {
-      port.close()
+      announce.agentIds,
+      finish
+    ).catch((error) => {
+      // Persistence itself can fail in the normal error handler. Still return
+      // a terminal result and release the handle; never strand a runner.
+      finish({ state: 'failed', text: '', error: { message: String(error) } })
+      logger.error('stream cleanup failed', { chatId, error: String(error) })
+    }).finally(() => {
       activeAbortControllers.delete(requestId)
+      port.close()
     })
 
     return {
@@ -319,8 +327,12 @@ export const chatStreamingService = {
      */
     pendingAnnounceMcpIds: string[],
     /** On-demand agent ids whose `pendingAnnounce` to clear — same timing. */
-    pendingAnnounceAgentIds: string[]
+    pendingAnnounceAgentIds: string[],
+    onFinished?: TurnCompletion
   ): Promise<void> {
+    const finish = createTurnCompletion(chatId, onFinished)
+    let lastAssistantText = ''
+    let naturalEnd = false
     // What the current round has streamed and nothing has saved yet. An adapter
     // rejects when its signal fires, so a stop mid-reply lands in the `catch`
     // with this text on the user's screen and nowhere in the database — see the
@@ -483,11 +495,12 @@ export const chatStreamingService = {
           content: result.content,
           toolCalls: result.toolCalls.length > 0 ? result.toolCalls : null
         })
+        lastAssistantText = result.content
         // Saved whole, so a stop from here on has nothing partial to keep.
         partial = ''
         currentMessages.push(assistantMsg)
 
-        if (result.toolCalls.length === 0) break
+        if (result.toolCalls.length === 0) { naturalEnd = true; break }
 
         for (const [index, tc] of result.toolCalls.entries()) {
           if (abortController.signal.aborted) {
@@ -629,19 +642,14 @@ export const chatStreamingService = {
         if (abortController.signal.aborted) break
       }
 
+      const canceled = abortController.signal.aborted
+      const budget = !canceled && !naturalEnd
+      const budgetMessage = `The turn reached its limit of ${MAX_TOOL_ROUNDS} model rounds.`
+      if (budget) messageRepo.saveError({ chatId, short: budgetMessage, code: 'round_budget' })
       messageRepo.touchChat(chatId)
-      port.postMessage({
-        type: 'done',
-        stopReason: abortController.signal.aborted ? 'canceled' : 'end_turn'
-      })
-      // **The exit a stop most often takes, and the one the abort branch below
-      // does not cover.** A runner that is cancelled cleanly returns what it
-      // streamed with no error — that is the documented contract, and both
-      // folder runners honour it — so the turn leaves through *this* line, not
-      // through the `catch`. Reporting `succeeded` for it is the same lie the
-      // OpenAI adapter used to tell by resolving on abort: the run reads as a
-      // job that finished, and nothing distinguishes it from one that did.
-      jobService.reportRunCompletion(chatId, abortController.signal.aborted ? 'cancelled' : 'succeeded')
+      port.postMessage({ type: 'done', stopReason: canceled ? 'canceled' : budget ? 'budget' : 'end_turn' })
+      finish({ state: canceled ? 'canceled' : budget ? 'budget' : 'completed', text: lastAssistantText,
+        ...(budget ? { error: { message: budgetMessage, code: 'round_budget' } } : {}) })
     } catch (err) {
       if (abortController.signal.aborted) {
         // **A stop is not an error, but it is an end.** Every adapter now
@@ -668,7 +676,7 @@ export const chatStreamingService = {
           messageRepo.touchChat(chatId)
         }
         port.postMessage({ type: 'done', stopReason: 'canceled' })
-        jobService.reportRunCompletion(chatId, 'cancelled')
+        finish({ state: 'canceled', text: partial.trim() ? partial : lastAssistantText })
         return
       }
       const error = err instanceof Error ? err : new Error(String(err))
@@ -680,7 +688,7 @@ export const chatStreamingService = {
       })
       port.postMessage({ type: 'error', error: parsed.short, errorDetail: parsed.detail })
       messageRepo.saveError({ chatId, short: parsed.short, detail: parsed.detail })
-      jobService.reportRunCompletion(chatId, 'failed', parsed.short)
+      finish({ state: 'failed', text: lastAssistantText, error: { message: parsed.short } })
     }
   }
 }

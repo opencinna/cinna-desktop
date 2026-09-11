@@ -1,14 +1,12 @@
 {
-  "_notes": [
-    "POSSIBLE BUG: A2AClient.sendMessage returns a JSON-RPC error as a value ({ jsonrpc, id, error }) instead of throwing it. runAgentTurn's `responseJson.result ?? responseJson` then finds neither a task nor a message, so the turn returns success with empty text and parts and no error. In direct chat that means `done`, nothing saved and a job run reported `succeeded`: the user gets neither a reply nor an error.",
-    "The result's contextId and taskId are just the remembered ones echoed back."
-  ],
   "events": [],
   "result": {
     "text": "",
     "parts": [],
     "notices": [],
-    "contextId": "ctx-stale-1",
-    "taskId": "task-stale-1"
+    "error": {
+      "message": "Task not found",
+      "raw": "Error: Task not found"
+    }
   }
 }

@@ -708,6 +708,8 @@ export const taskInputRequests = sqliteTable('task_input_requests', {
     .references(() => tasks.id, { onDelete: 'cascade' }),
   chatId: text('chat_id').notNull(),
   agentId: text('agent_id').notNull(),
+  rootRunId: text('root_run_id'),
+  invocationId: text('invocation_id'),
   /** The `InputRequest` from `shared/runEvents.ts`, verbatim — not a second union. */
   request: text('request', { mode: 'json' }).$type<InputRequest>().notNull(),
   resume: text('resume').$type<InputResumeMode>().notNull(),

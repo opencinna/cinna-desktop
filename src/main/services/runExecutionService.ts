@@ -1,5 +1,9 @@
 import { nanoid } from 'nanoid'
 import { liveRunHub } from './liveRunHub'
+import { reportStandaloneTurn, type TurnCompletion, type TurnOutcome } from './turnCompletion'
+import { taskRepo } from '../db/tasks'
+import { taskInputRequestRepo } from '../db/taskInputRequests'
+import { syncRepo } from '../db/sync'
 import { messageRepo } from '../db/messages'
 import { chatRepo } from '../db/chats'
 import { chatAgentCursorRepo } from '../db/chatAgentCursors'
@@ -7,7 +11,6 @@ import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { agentService } from './agentService'
 import { messageRoutingService } from './messageRoutingService'
 import { a2aStreamingService } from './a2aStreamingService'
-import { jobService } from './jobService'
 import { chatStreamingService } from './chatStreamingService'
 import { buildCatchUpPacket, withCatchUp } from './threadContextService'
 import { driverFor } from '../agents/drivers'
@@ -26,12 +29,20 @@ import { taskHandoffRepo } from '../db/taskHandoffs'
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
 export type RunObserver = (ctx: RunEventContext, event: RunEvent) => void
+export interface RunOutcome extends TurnOutcome {
+  runId: string
+  accepted: boolean
+  /** Durable Inbox addresses belonging to this run after dead reply cleanup. */
+  inputRequestIds: string[]
+  /** When present, request IDs are unknown and a runner must not advance. */
+  inputRequestReadError?: string
+}
 export interface RunHandle {
   id: string
   /** Resolves after the user message is persisted, before execution starts. */
   accepted: Promise<void>
   /** Resolves when the stream closes, including the model's asynchronous loop. */
-  completed: Promise<void>
+  completed: Promise<RunOutcome>
   cancel(): void
 }
 
@@ -53,6 +64,8 @@ export const runExecutionService = {
     preserveOnRefusal?: boolean
     /** Internal continuation targets the agent that owns the waiting ask. */
     agentId?: string
+    /** Internal runner admission. Never accepted from an IPC payload. */
+    runnerTaskId?: string
   }): RunHandle {
     if (handingOffChats.has(payload.chatId) || taskHandoffRepo.unresolvedForChat(scope.profileUserId, payload.chatId)) {
       throw new Error('This conversation has a pending remote handoff. Resolve it on the task page first.')
@@ -60,22 +73,32 @@ export const runExecutionService = {
     if (activeChats.has(payload.chatId)) throw new Error('This conversation already has a turn running.')
     const chat = chatRepo.getOwned(scope.profileUserId, payload.chatId)
     if (!chat) throw new Error('Chat not found')
+    if (options.runnerTaskId) {
+      const task = taskRepo.getById(scope.profileUserId, options.runnerTaskId)
+      if (!task || task.deletedAt || !['in_progress', 'blocked'].includes(task.status) ||
+        task.chatId !== payload.chatId || task.executor !== 'desktop' ||
+        task.executorDevice !== (syncRepo.getState(scope.profileUserId)?.deviceId ?? null)) {
+        throw new Error('This runner does not own the task conversation on this device.')
+      }
+    }
     const runId = nanoid()
     const live = liveRunHub.begin(scope.profileUserId, payload.chatId, runId,
       chatRepo.listMessageIds(payload.chatId))
     let accept!: () => void
     let refuse!: (error: Error) => void
-    let complete!: () => void
+    let complete!: (outcome: RunOutcome) => void
+    let outcome: TurnOutcome | null = null
     let accepted = false
     let closed = false
     let requestId: string | null = null
     let cancelRequested = false
     let failure: string | null = null
     let context: RunEventContext | null = null
+    let terminalObserved = false
     const handle: RunHandle = {
       id: runId,
       accepted: new Promise<void>((resolve, reject) => { accept = resolve; refuse = reject }),
-      completed: new Promise<void>((resolve) => { complete = resolve }),
+      completed: new Promise<RunOutcome>((resolve) => { complete = resolve }),
       cancel() {
         cancelRequested = true
         if (requestId) {
@@ -87,6 +110,10 @@ export const runExecutionService = {
     // The IPC caller need not await acceptance, but headless callers can.
     void handle.accepted.catch(() => {})
     activeChats.set(payload.chatId, handle)
+    const finish: TurnCompletion = (result) => {
+      if (outcome) return
+      outcome = result
+    }
     const port: StreamPort = {
       postMessage(event) {
         if (closed) return
@@ -102,27 +129,58 @@ export const runExecutionService = {
       },
       close() {
         if (closed) return
+        if (!outcome) finish({ state: 'failed', text: '', error: { message: failure ?? 'The turn closed without a terminal outcome.' } })
+        if (!terminalObserved && context) {
+          const result = outcome!
+          const event: RunEvent = result.state === 'failed'
+            ? { type: 'error', error: result.error?.message ?? 'The turn failed.' }
+            : { type: 'done', stopReason: result.state === 'canceled' ? 'canceled' : result.state === 'budget' ? 'budget' : 'end_turn' }
+          observe(context, event)
+          port.postMessage(event)
+        }
         closed = true
         if (!accepted) refuse(new Error(failure ?? 'The turn could not be started.'))
         if (activeChats.get(payload.chatId) === handle) activeChats.delete(payload.chatId)
         try { options.port?.close() } catch { /* subscriber already disconnected */ }
         live.close()
-        complete()
+        let inputRequestIds: string[] = []
+        let inputRequestReadError: string | undefined
+        try {
+          const requests = taskInputRequestRepo.listOpenForRun(payload.chatId, handle.id)
+          inputRequestIds = requests.filter((row) => row.resume === 'next_message').map((row) => row.id)
+          if (requests.some((row) => row.resume === 'reply')) {
+            inputRequestReadError = 'The turn left input requests whose live reply addresses have closed.'
+          }
+        }
+        catch (error) {
+          inputRequestReadError = 'The turn could not read its remaining input requests.'
+          logger.warn('could not read remaining turn requests', { chatId: payload.chatId, error: String(error) })
+        }
+        const result = outcome!
+        const final: RunOutcome = { ...result, state: result.state === 'completed' && inputRequestIds.length ? 'needs_input' : result.state,
+          runId: handle.id, accepted, inputRequestIds, ...(inputRequestReadError ? { inputRequestReadError } : {}) }
+        if (!options.runnerTaskId && (accepted || !options.preserveOnRefusal)) {
+          try { reportStandaloneTurn(payload.chatId, final) }
+          catch (error) { logger.warn('turn status projection failed', { chatId: payload.chatId, error: String(error) }) }
+        }
+        complete(final)
       }
     }
     const observe: RunObserver = (ctx, event) => {
       if (closed || (!accepted && options.preserveOnRefusal && event.type === 'error')) return
-      try { options.observe({ ...ctx, turnId: handle.id }, event) } catch (error) {
+      if (event.type === 'done' || event.type === 'error') terminalObserved = true
+      try { options.observe({ ...ctx, turnId: handle.id, rootRunId: handle.id, completionOwner: options.runnerTaskId ? 'runner' : 'turn' }, event) } catch (error) {
         logger.warn('run observer failed', { chatId: ctx.chatId, error: String(error) })
       }
     }
-    const refusal = (chatId: string, message: string): void => {
-      if (accepted || !options.preserveOnRefusal) reportRefusal(chatId, message)
+    const refusal = (_chatId: string, message: string): void => {
+      finish({ state: 'failed', text: '', error: { message } })
     }
     void resolveAndRun(port, payload, scope, chat, {
       observe,
+      finish,
       context: (ctx) => { context = ctx; live.setAgentId(ctx.agentId) },
-      persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id }),
+      persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id, rootRunId: handle.id, completionOwner: options.runnerTaskId ? 'runner' : 'turn' }),
       accepted: () => { accepted = true; accept(); live.accepted() },
       refusal,
       agentId: options.agentId
@@ -130,6 +188,7 @@ export const runExecutionService = {
       const message = error instanceof Error ? error.message : String(error)
       if (context) observe(context, { type: 'error', error: message })
       port.postMessage({ type: 'error', error: message })
+      finish({ state: 'failed', text: '', error: { message } })
       port.close()
       if (context) refusal(payload.chatId, message)
     })
@@ -137,19 +196,9 @@ export const runExecutionService = {
   }
 }
 
-function reportRefusal(chatId: string, message: string): void {
-  try {
-    jobService.reportRunCompletion(chatId, 'failed', message)
-  } catch (err) {
-    logger.warn('could not record a refused turn as an ending', {
-      chatId,
-      error: err instanceof Error ? err.message : String(err)
-    })
-  }
-}
-
 interface RunLifecycle {
   observe: RunObserver
+  finish: TurnCompletion
   agentId?: string
   context(ctx: RunEventContext): void
   persisted(ctx: RunEventContext): void
@@ -202,7 +251,7 @@ async function resolveAndRun(
     })
     lifecycle.accepted()
     await handOff(observed, () =>
-      chatStreamingService.stream({ userId: profileUserId, chatId, wireContent, port: observed }),
+      chatStreamingService.stream({ userId: profileUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish }),
       (message) => lifecycle.refusal(chatId, message)
     )
     return
@@ -215,6 +264,7 @@ async function resolveAndRun(
     persisted: () => lifecycle.persisted(context),
     accepted: () => lifecycle.accepted(),
     refusal: lifecycle.refusal,
+    finish: lifecycle.finish,
     agentId: target.agentId,
     userContent,
     attachments,
@@ -248,6 +298,7 @@ interface AgentTurnInput {
   persisted: () => void
   accepted: () => void
   refusal: (chatId: string, message: string) => void
+  finish: TurnCompletion
   agentId: string
   userContent: string
   attachments: RunSendPayload['attachments']
@@ -264,6 +315,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     logger.error(err, { agentId, chatId })
     port.postMessage({ type: 'error', error: err })
     messageRepo.saveError({ chatId, short: err })
+    input.finish({ state: 'failed', text: '', error: { message: err } })
     port.close()
     input.refusal(chatId, err)
     return
@@ -333,6 +385,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
       chatId,
       agentId,
       port,
+      onFinished: input.finish,
       // Only a turn that finished moves the cursor. A failed or stopped one
       // leaves the gap for the retry to carry.
       onCompleted: () => {

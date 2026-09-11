@@ -472,11 +472,4 @@ function heldTurn({
   }
 }
 
-describeDriverContract('a2a', makeSubject, {
-  knownFailureViolations: {
-    task_failed:
-      'a task that ends `failed` returns success; its reason merges into the answer text and the job is reported succeeded',
-    nonstreaming_rpc_error:
-      'the SDK returns a message/send JSON-RPC error as a value, so the turn is an empty success and the job is reported succeeded'
-  }
-})
+describeDriverContract('a2a', makeSubject)

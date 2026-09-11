@@ -102,6 +102,10 @@ preceded. Notices never appear in `messages.parts[]`; they live on their own
 `role: 'agent_transition'` rows.
 ```
 
+## Terminal Outcome
+
+`runAgentTurn` treats nonstream JSON-RPC error envelopes and failed/rejected/unfinished A2A task endings as failures. The direct wrapper persists the error rather than turning an empty answer into success. Input-required/auth-required report `needs_input`; canceled reports `canceled`. Its once-only `onFinished` callback runs after persistence and before close, with standalone job reporting as the default when no callback is supplied. The executor owns the final result and explicit runner completion policy; see [turn outcomes](../../chat/messaging/turn_completion.md).
+
 ## Cancellation and session checkpoints
 
 Stop aborts the underlying card/message fetch, including body reads and silent SSE waits. Checking only after a received frame once left a stopped turn waiting indefinitely when the server went silent. The driver also stops waiting for endpoint/token pre-flight without cancelling shared credential refresh work. [Driver implementation](../drivers/drivers_tech.md#the-a2a-driver) owns the legacy SDK fetch seam and the independent cancellation request.

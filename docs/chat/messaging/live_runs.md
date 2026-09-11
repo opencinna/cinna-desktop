@@ -45,7 +45,7 @@ Send → `run:start` → main executor → live hub → selected-chat `run:watch
 - `src/renderer/src/stores/chat.store.ts` — selected run ID, baseline IDs and projection version alongside blocks/requests; navigation and reset advance the version.
 - `src/renderer/src/components/chat/MessageStream.tsx` — filters persisted duplicates and renders replay/live blocks. `ChatInput` uses owned chat cancellation before a transport request ID is available. `useChatDetail` retains polling as the fallback when no complete live projection is attached.
 
-No new database table, migration or durable event log is introduced. The scope is visibility of an existing main-owned turn. `RunHandle.completed` still denotes stream lifetime and carries no typed outcome; task-runner completion ownership, autonomous loops, coordinator control outcomes, budgets, queues, scripts and schedules remain separate work.
+No new database table, migration or durable event log is introduced. The scope is visibility of an existing main-owned turn. The executor also supplies [typed turn outcomes and explicit completion ownership](turn_completion.md). Autonomous loops, coordinator control outcomes, in-flight task budgets, queues, scripts and schedules remain separate work.
 
 ## Verification and Related Features
 

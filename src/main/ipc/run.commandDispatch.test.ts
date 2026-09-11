@@ -1,3 +1,4 @@
+vi.mock('../db/taskInputRequests', () => ({ taskInputRequestRepo: { listOpenForRun: () => [] } }))
 vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: () => false } }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'

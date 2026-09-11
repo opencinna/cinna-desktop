@@ -297,3 +297,32 @@ describe('a2aInputRequestOf', () => {
     expect(a2aInputRequestOf('input-required', undefined)).toEqual({ kind: 'question', questions: [{ question: 'What should the agent do next?', multiSelect: false, options: [] }] })
   })
 })
+
+describe('typed agent turn outcomes', () => {
+  it.each([
+    ['completed', 'completed'], ['input-required', 'needs_input'], ['auth-required', 'needs_input'],
+    ['canceled', 'canceled'], ['failed', 'failed'], ['rejected', 'failed'], ['working', 'failed']
+  ] as const)('reports %s as %s after persistence and before close', async (taskState, state) => {
+    saved.length = 0
+    savedAssistant.length = 0
+    runCompletions.length = 0
+    const p = fakePort()
+    const timing: { closed: boolean; saved: number }[] = []
+    const finish = vi.fn((_outcome) => { timing.push({ closed: p.closed, saved: saved.length + savedAssistant.length }) })
+    await a2aStreamingService.streamToAgent({
+      chatId: 'chat_1', agentId: 'agent_1', port: p.port, onFinished: finish,
+      run: async () => ({ text: 'Agent response', parts: [{ kind: 'text', text: 'Agent response' }], notices: [], taskState })
+    })
+    expect(finish).toHaveBeenCalledTimes(1)
+    expect(finish).toHaveBeenCalledWith(expect.objectContaining({ state, text: 'Agent response' }))
+    expect(timing).toEqual([{ closed: false, saved: 1 }])
+    expect(runCompletions).toEqual([])
+    expect(p.closed).toBe(true)
+    expect(finish.mock.calls[0][0].usage).toBeUndefined()
+    if (state === 'failed') {
+      expect(saved).toHaveLength(1)
+      expect(p.posted.some((event) => event.type === 'error')).toBe(true)
+      expect(p.posted.some((event) => event.type === 'done')).toBe(false)
+    }
+  })
+})

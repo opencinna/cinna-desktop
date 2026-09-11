@@ -38,6 +38,7 @@ A task is the durable record of work: its original goal, current status, assigne
 - **An unread Inbox is not empty.** Failed reads preserve the last successful list with an error indication. The badge and task actions cannot infer that nothing is waiting from stale data. The current complete-array contract also means one unavailable remote delays newly arriving local entries; it does not return a misleading partial success.
 - **Answering remote work does not guess its status.** Another session may still be blocked. The remote remains authoritative until the task is refreshed.
 - **A pending continuation prevents premature completion.** Normal turn completion and restart preserve next-message asks. Answers settle only their agent’s requests; sibling asks prevent task/job finalization. A stale card cannot resume settled or remotely claimed work.
+- **A child ending affects its own asks.** Root/invocation ownership prevents a late resolution or child failure from consuming another invocation’s question. Answering any one request recomputes the task’s blocked state from all surviving siblings.
 - **An explicit ending closes idle continuations.** Completing, failing, cancelling or archiving a task expires its next-message requests and settles its linked active job attempt; stale cards cannot restart it.
 - **A failed question delivery keeps the draft.** The modal stays open, disables edits and dismissal while sending, and shows the refusal beside the submission control. An acted-on Inbox card remains until the user leaves the view.
 

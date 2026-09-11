@@ -88,6 +88,8 @@ export interface RunEventContext {
   agentId: string | null
   /** Main-owned turn identity, independent of any protocol task id. */
   turnId?: string
+  rootRunId?: string
+  completionOwner?: 'turn' | 'runner'
 }
 
 /**
@@ -110,6 +112,10 @@ function markTask(userId: string, taskId: string, state: RunState): void {
       error: err instanceof Error ? err.message : String(err)
     })
   }
+}
+
+function markAfterAskChange(userId: string, taskId: string): void {
+  markTask(userId, taskId, taskInputRequestRepo.listOpenForTask(taskId).length ? 'needs_input' : 'working')
 }
 
 /**
@@ -189,8 +195,8 @@ export const inboxService = {
    * Mirror one run event into the inbox. Called for every event on the send
    * path, before it reaches the renderer. Never throws.
    *
-   * Only two of the eleven `RunEvent` types do any work; the rest cost one
-   * comparison, which matters because deltas come through here by the thousand.
+   * Only ask and terminal events change rows; deltas pass through without
+   * database work, since they arrive by the thousand.
    */
   recordRunEvent(ctx: RunEventContext, event: RunEvent): void {
     try {
@@ -198,17 +204,24 @@ export const inboxService = {
       // that knows which agent raised it. The orchestrator's own `agentId` (the
       // model, so null) would be the wrong answer.
       if (event.type === 'child') {
-        // Only the two types that do work are worth the object this allocates:
+        // Only ask and terminal events need the invocation context this allocates:
         // a nested agent's deltas come through here by the thousand.
         const inner = event.event
-        if (inner.type === 'needs_input' || inner.type === 'input_resolved') {
-          this.recordRunEvent({ ...ctx, agentId: event.agentId,
+        if (inner.type === 'needs_input' || inner.type === 'input_resolved' ||
+          (ctx.rootRunId && (inner.type === 'done' || inner.type === 'error'))) {
+          this.recordRunEvent({ ...ctx, agentId: event.agentId, completionOwner: 'runner',
             turnId: `${ctx.turnId ?? ctx.chatId}:${event.toolCallId}` }, inner)
         }
         return
       }
       if (event.type === 'needs_input') this.openAsk(ctx, event)
       else if (event.type === 'input_resolved') this.closeAsk(ctx, event.requestId, event.resolution)
+      // Driver.run has no terminal event. The model's tool pair is the real
+      // child ending, including a driver that silently released its parks.
+      else if (ctx.rootRunId && (event.type === 'tool_result' || event.type === 'tool_error')) {
+        this.endTurn({ ...ctx, turnId: `${ctx.turnId ?? ctx.chatId}:${event.id}`, completionOwner: 'runner' },
+          event.type === 'tool_error' ? { type: 'error', error: event.error } : { type: 'done', stopReason: 'end_turn' })
+      }
       // A terminal event is the turn saying every address it held is gone —
       // including the ones it abandoned without saying so — and, for a chat
       // that owns its task outright, how the work ended.
@@ -247,6 +260,8 @@ export const inboxService = {
         taskId: task.id,
         chatId: ctx.chatId,
         agentId: ctx.agentId,
+        rootRunId: ctx.rootRunId,
+        invocationId: ctx.turnId,
         request: event.request,
         resume: event.resume
       })
@@ -272,11 +287,13 @@ export const inboxService = {
    * first wins and the other does nothing.
    */
   closeAsk(ctx: RunEventContext, requestId: string, resolution: RequestResolution): void {
-    const row = taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution)
+    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    const row = taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution,
+      { chatId: ctx.chatId, rootRunId: ctx.rootRunId, invocationId: ctx.turnId })
     // Missing/settled rows are harmless. Next-message requests settle through
     // message acceptance, rather than a driver's input_resolved frame.
     if (!row) return
-    markTask(ctx.userId, row.taskId, 'working')
+    markAfterAskChange(ctx.userId, row.taskId)
   },
 
   /**
@@ -290,7 +307,11 @@ export const inboxService = {
     event: Extract<RunEvent, { type: 'done' | 'error' }>
   ): void {
     const normalEnd = event.type === 'done' && (!event.stopReason || event.stopReason === 'end_turn')
-    const expired = taskInputRequestRepo.expireOpenForChat(ctx.chatId, normalEnd, ctx.agentId ?? undefined)
+    if (!chatRepo.getOwned(ctx.userId, ctx.chatId)) return
+    const expired = ctx.rootRunId
+      ? taskInputRequestRepo.expireOpenForRun(ctx.chatId, ctx.rootRunId, normalEnd,
+          ctx.turnId !== ctx.rootRunId ? ctx.turnId : undefined)
+      : taskInputRequestRepo.expireOpenForChat(ctx.chatId, normalEnd, ctx.agentId ?? undefined)
     const task = taskRepo.getByChatId(ctx.userId, ctx.chatId)
     if (expired > 0) {
       logger.info('a turn ended while it was still parked; its asks are expired', {
@@ -299,8 +320,13 @@ export const inboxService = {
       })
     }
     if (!task) return
-    if (taskInputRequestRepo.listOpenForChat(ctx.chatId).some((row) => row.resume === 'next_message')) {
+    if (taskInputRequestRepo.listOpenForTask(task.id).length) {
       markTask(ctx.userId, task.id, 'needs_input')
+      return
+    }
+
+    if (ctx.completionOwner === 'runner') {
+      if (expired > 0) markAfterAskChange(ctx.userId, task.id)
       return
     }
 
@@ -311,7 +337,7 @@ export const inboxService = {
     // terminal status here would be a second, worse answer racing the real one.
     const currentJobRun = task.jobRunId ? jobRunsRepo.getByLocalChatId(ctx.chatId) : null
     if (currentJobRun?.taskId === task.id) {
-      if (expired > 0) markTask(ctx.userId, task.id, 'working')
+      if (expired > 0) markAfterAskChange(ctx.userId, task.id)
       return
     }
 
@@ -325,8 +351,8 @@ export const inboxService = {
     // ever raises an ask.
     //
     // The turn's own ending is the outcome here, because for this chat the turn
-    // *is* the work. A `child`'s ending never reaches this method, which is what
-    // keeps one nested agent finishing from ending a coordinator's task.
+    // *is* the work. A child ending carries runner ownership, so it can clean up its
+    // requests without finishing the coordinator's task.
     markTask(ctx.userId, task.id, endedAs(event))
   },
 
@@ -352,7 +378,7 @@ export const inboxService = {
         throw new Error('This task is no longer waiting for this answer.')
       }
       taskInputRequestRepo.settle(row.id, 'answered', { kind: 'question', answers: [[content]] })
-      markTask(ctx.userId, row.taskId, 'working')
+      markAfterAskChange(ctx.userId, row.taskId)
     }
   },
 
@@ -454,12 +480,13 @@ export const inboxService = {
       // offering a button whose only outcome is this same message.
       if (outcome.code === 'no_longer_waiting') {
         taskInputRequestRepo.settle(requestId, 'expired')
+        markAfterAskChange(userId, row.taskId)
       }
       return outcome
     }
 
     taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution)
-    markTask(userId, row.taskId, 'working')
+    markAfterAskChange(userId, row.taskId)
     logger.info('an ask was answered from the inbox', {
       requestId,
       taskId: row.taskId,

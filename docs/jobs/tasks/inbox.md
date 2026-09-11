@@ -45,6 +45,16 @@ A next-message answer must contain nonempty question text and still belong to an
 
 After acceptance, the same task/chat/job attempt and A2A context continue without a renderer port. Later network/driver errors become the continued turn’s recorded outcome. Successful turn completion preserves new next-message asks and defers job finalization until none remain. Explicit completed/error/cancelled/archived task writes expire next-message requests and settle the linked active job attempt. Manual terminal job writes update the desktop-owned task first, validating its device claim; an already terminal attempt is not rewritten. Opening that conversation attaches through the shared [live-run watch](../../chat/messaging/live_runs.md); answering still starts one turn and does not supply an autonomous task-runner loop.
 
+## Invocation Ownership and Cleanup
+
+New local rows store nullable `root_run_id` and `invocation_id` alongside chat/agent identity. `src/main/db/migrations/tasks.ts` adds them idempotently and indexes scoped open-request reads; existing rows retain null ownership. Stream-derived settlement compares the exact chat/root/invocation, so a late resolution cannot consume a reused request ID belonging to another child.
+
+A root ending expires its own run’s reply rows; a child ending touches only its invocation. Success preserves next-message continuations, while error/cancellation expires that ending scope. Legacy events retain the prior chat/agent cleanup path. Boot still expires reply-only globally, and an explicit terminal task write still closes its durable continuations.
+
+Production agent tools do not have to emit a child terminal event. The model’s parent `tool_result` or `tool_error` performs exact invocation cleanup before another model round begins. Otherwise a driver that silently released its park could leave an undeliverable permission card visible until the entire model turn ended.
+
+Every answer, typed continuation, resolution and expiry recomputes blocked/working from all remaining asks on the task. Settling one request must not hide a sibling, including one belonging to another root or a legacy row. Runner-owned endings perform this bookkeeping without finishing the whole task/job. The executor’s [completion result](../../chat/messaging/turn_completion.md) returns only next-message IDs and separately discloses uncertain reads or surviving dead replies.
+
 ## Architecture and Files
 
 Inbox view / sidebar / task page → `useInboxList` → `inbox:list` → `inboxService.list` → local request repository and `remoteInboxService.list` → adapter.
