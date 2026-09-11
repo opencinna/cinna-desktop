@@ -19,6 +19,8 @@ import type { RunSendPayload } from '../../shared/ipcPayloads'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RunEventContext } from './inboxService'
 import { activeRunsByChat as activeChats } from './runExecutionState'
+import { handingOffChats } from './taskOperationState'
+import { taskHandoffRepo } from '../db/taskHandoffs'
 
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
@@ -51,6 +53,9 @@ export const runExecutionService = {
     /** Internal continuation targets the agent that owns the waiting ask. */
     agentId?: string
   }): RunHandle {
+    if (handingOffChats.has(payload.chatId) || taskHandoffRepo.unresolvedForChat(scope.profileUserId, payload.chatId)) {
+      throw new Error('This conversation has a pending remote handoff. Resolve it on the task page first.')
+    }
     if (activeChats.has(payload.chatId)) throw new Error('This conversation already has a turn running.')
     let accept!: () => void
     let refuse!: (error: Error) => void

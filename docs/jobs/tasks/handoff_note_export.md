@@ -53,9 +53,9 @@ The obvious home is inside the agent folder that is going to read it. It is not 
 ## What this deliberately does not do
 
 - **It does not import.** There is no reader, no watcher, no reconciliation. Editing the file changes nothing and will be overwritten by the next task write.
-- **It does not deliver the note to anybody.** Getting the note in front of an agent is a different mechanism: for a task bound to a remote service that is the adapter's `putHandoffNote` ([Remote Task Adapters](remote_adapters.md)); for a local agent nothing carries it yet.
+- **It does not deliver the note to anybody.** Getting the note in front of an agent is a different mechanism: for a task bound to a remote service that is the adapter's `putHandoffNote` ([Remote Task Adapters](remote_adapters.md)); local **Continue** includes the database note in its first prompt through `taskContinuationPrompt`; neither path reads the exported file.
 - **The file is not a task artifact.** It is not added to `TaskDto.artifacts`: the task page already renders the note as prose, and an artifact row opens through `app:open-external`, which refuses every scheme but `http(s)` — so it would have been a second rendering of the same string behind a control that does nothing.
-- **Nothing sets a handoff note yet.** `taskService.setHandoffNote` has no caller: there is no `task:*` IPC channel for it and nothing in main writes one, so in a running app the folder stays empty. A note now also *travels* — it is one of the columns the [cross-device](cross_device.md) collection carries — but since no device writes one, that changes nothing yet. The writer is in place so that the first thing to leave a note gets a file that is current from the start.
+- **The remote handoff dialog writes the accepted note.** `taskService.handOffToRemote` records it with remote ownership inside the acceptance transaction, and the coordinator exports after commit. The dialog draft is not a task mutation before acceptance. Notes also arrive through [device sync](cross_device.md); there is no separate free-standing note-edit IPC. See [remote handoff](remote_handoff.md).
 
 ## Architecture Overview
 

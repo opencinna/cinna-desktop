@@ -247,6 +247,16 @@ describe('refreshing a run that is executing on a service', () => {
     expect(taskService.getById(USER, started.taskId).status).toBe('completed')
   })
 
+  it('preserves the remote failure and terminal timestamp across a forced refresh', async () => {
+    makeJob()
+    const started = await runOnService()
+    cinna.touch(started.cinnaTaskId, { status: 'error', error_message: 'Remote validation failed' })
+    const first = await jobService.refreshCinnaRun(USER, started.runId)
+    expect(first).toMatchObject({ status: 'failed', errorMessage: 'Remote validation failed' })
+    const second = await jobService.refreshCinnaRun(USER, started.runId, { force: true })
+    expect(second).toMatchObject({ status: 'failed', errorMessage: 'Remote validation failed', finishedAt: first.finishedAt })
+  })
+
   it('reads a blocked task as a run that is still going', async () => {
     // A run whose agent is waiting on a human has not finished and has not
     // failed. What the user has to do about it is in the inbox.

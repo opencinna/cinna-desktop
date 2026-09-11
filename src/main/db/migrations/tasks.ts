@@ -93,6 +93,15 @@ export function migrateTasks(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_tasks_remote ON tasks(remote_adapter, remote_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_parent ON tasks(parent_task_id);
 
+    CREATE TABLE IF NOT EXISTS task_handoffs (
+      task_id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      chat_id TEXT,
+      receipt TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_task_handoffs_user_chat ON task_handoffs(user_id, chat_id);
+
     CREATE TABLE IF NOT EXISTS task_input_requests (
       id TEXT PRIMARY KEY,
       task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,

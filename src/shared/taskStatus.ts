@@ -1,3 +1,4 @@
+import type { JobRunStatus } from './jobs'
 /**
  * The task status vocabulary — **cinna-core's, copied here as data**.
  *
@@ -191,5 +192,22 @@ export function taskStatusForRunState(state: RunState): TaskStatus {
       return 'cancelled'
     case 'unknown':
       return 'in_progress'
+  }
+}
+
+/** A blocked task is still an active attempt; terminal history is projected by its owner. */
+export function jobRunStatusForTask(status: TaskStatus): JobRunStatus {
+  switch (status) {
+    case 'completed':
+    case 'archived':
+      return 'succeeded'
+    case 'error':
+      return 'failed'
+    case 'cancelled':
+      return 'cancelled'
+    case 'new':
+      return 'pending'
+    default:
+      return 'running'
   }
 }

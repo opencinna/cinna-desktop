@@ -151,6 +151,8 @@ export type TaskErrorCode =
    * running and there is nothing left to clean up anyway.
    */
   | 'handed_over'
+  /** A remote write may have succeeded; do not silently retry its execution. */
+  | 'handoff_uncertain'
   /**
    * The service is there and cannot do the thing asked of it —
    * `capabilities()` says no. A remote with no `create` cannot be given a new
@@ -164,6 +166,7 @@ export type NoteErrorCode =
   | 'invalid_input'
 
 export type CinnaApiErrorCode =
+  | 'request_not_sent'
   | 'not_cinna_user'
   | 'missing_server_url'
   | 'reauth_required'

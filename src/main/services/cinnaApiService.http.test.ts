@@ -1,5 +1,7 @@
 import { beforeEach, afterEach, describe, it, expect, vi } from 'vitest'
 
+const writeMock = vi.hoisted(() => vi.fn())
+vi.mock('./cinnaWriteFetch', () => ({ cinnaWriteFetch: writeMock }))
 const fetchMock = vi.hoisted(() => vi.fn<typeof fetch>())
 const tokenMock = vi.hoisted(() => vi.fn(async () => 'fake-token'))
 const account = vi.hoisted(() => ({ server: 'https://service.test' }))
@@ -20,10 +22,28 @@ const { CinnaSessionChanged } = await import('../auth/cinna-session')
 const { CinnaReauthRequired } = await import('../auth/cinna-oauth')
 const { ipcHandle } = await import('../ipc/_wrap')
 
-beforeEach(() => { fetchMock.mockReset(); notifyReauth.mockClear(); tokenMock.mockReset().mockResolvedValue('fake-token'); account.server = 'https://service.test' })
+beforeEach(() => { fetchMock.mockReset(); writeMock.mockReset(); notifyReauth.mockClear(); tokenMock.mockReset().mockResolvedValue('fake-token'); account.server = 'https://service.test' })
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers() })
 
 describe('task adapter HTTP transport', () => {
+  it.each(['session', 'server'])('rechecks the %s immediately before a prepared write dispatches', async (change) => {
+    writeMock.mockImplementationOnce(async (_url, options) => {
+      if (change === 'session') invalidateCinnaSession('user')
+      else account.server = 'https://replacement.test'
+      options.beforeDispatch()
+      throw new Error('must never reach dispatch')
+    })
+    await expect(cinnaApiFetch('user', '/execute', { method: 'POST' })).rejects.toBeInstanceOf(CinnaSessionChanged)
+  })
+  it('routes JSON mutations through the non-replay transport with captured credentials', async () => {
+    writeMock.mockResolvedValue(new Response('{"success":true}'))
+    expect(await cinnaApiFetch('user', '/execute', { method: 'post', body: { mode: 'conversation' } })).toEqual({ success: true })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(writeMock).toHaveBeenCalledWith('https://service.test/execute', expect.objectContaining({
+      method: 'POST', headers: expect.objectContaining({ Authorization: 'Bearer fake-token', 'Content-Type': 'application/json' }),
+      body: '{"mode":"conversation"}', signal: expect.any(AbortSignal)
+    }))
+  })
   it('does not reopen sign-in for a replaced session, while real expiry still does', async () => {
     ipcHandle('test:stale', () => { throw new CinnaSessionChanged() })
     await expect(registered.get('test:stale')!({})).rejects.toBeInstanceOf(CinnaSessionChanged)
@@ -41,6 +61,7 @@ describe('task adapter HTTP transport', () => {
     finish('replacement-token')
     await expect(pending).rejects.toMatchObject({ name: 'CinnaSessionChanged' })
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(writeMock).not.toHaveBeenCalled()
   })
   it('aborts an unresponsive request so a later inbox poll can try again', async () => {
     vi.useFakeTimers()

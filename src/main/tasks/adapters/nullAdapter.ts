@@ -28,6 +28,7 @@ import {
 } from './adapter'
 
 const NOTHING: RemoteTaskCapabilities = {
+  assigneeDirectory: false,
   create: false,
   writeStatus: false,
   handoffNote: false,
@@ -53,6 +54,7 @@ export function createNullAdapter(id: string): RemoteTaskAdapter {
 
   return {
     id,
+    listAssignees: async () => refuse('listAssignees'),
     // A fresh object every call. The temptation is to hand out the shared
     // `NOTHING` — every field is false, so what is there to protect? — but a
     // caller that edits what it was handed would then be editing the answer

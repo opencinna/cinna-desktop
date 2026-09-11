@@ -76,6 +76,20 @@ function count(table: string): number {
 }
 
 describe('deleteWithCascade', () => {
+  it('deletes handoff receipts and prevents a late response from recreating them', async () => {
+    const { taskHandoffRepo } = await import('./taskHandoffs')
+    const receipt = { taskId: 'deleted-task', chatId: 'chat', state: 'uncertain' as const,
+      adapterId: 'service', bindingPending: true, assignee: { ref: 'agent', name: 'Agent' },
+      remote: null, message: 'May have started', updatedAt: Date.now() }
+    taskHandoffRepo.put(USER, receipt)
+    taskHandoffRepo.put(KEEPER, { ...receipt, taskId: 'keeper-task' })
+    userRepo.deleteWithCascade(USER)
+    expect(taskHandoffRepo.get(USER, receipt.taskId)).toBeNull()
+    expect(taskHandoffRepo.get(KEEPER, 'keeper-task')).not.toBeNull()
+    expect(() => taskHandoffRepo.put(USER, receipt)).toThrow('deleted')
+    expect(count('task_handoffs')).toBe(1)
+  })
+
   it('takes the profile’s tasks and their open asks with it', () => {
     seedTask(USER, 't-1')
     expect(count('tasks')).toBe(1)

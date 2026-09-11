@@ -32,6 +32,8 @@ import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { markdownComponents } from '../../utils/markdownComponents'
 import { TaskStatusPill } from './TaskStatusPill'
+import { PendingHandoffControl } from './PendingHandoffControl'
+import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
@@ -122,6 +124,7 @@ export function TaskView(): React.JSX.Element {
             ? unwrapIpcError(task.error, 'The task could not be read.')
             : 'It may have been deleted.'}
         </div>
+        <PendingHandoffControl taskId={activeTaskId} />
         {task.error && (
           <button
             type="button"
@@ -354,6 +357,7 @@ function TaskPage({
           </div>
         </div>
 
+        <div className="flex justify-end min-h-8"><HandOffTaskControl key={task.id} task={task} /></div>
         {/*
           Directly under the header and above everything else, which is where a
           status that changes on its own is allowed to appear: the controls are

@@ -1,3 +1,4 @@
+import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
@@ -1235,6 +1236,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
 
   return (
     <div className="w-full max-w-3xl mx-auto px-4 relative">
+      <div className="absolute bottom-full right-4 mb-2"><PendingHandoffControl chatId={chatId} /></div>
       {agentPopupOpen &&
         (useCombinedPopup ? (
           <AgentMcpMentionPopup

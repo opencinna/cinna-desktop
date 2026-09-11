@@ -17,6 +17,7 @@ A task always lives in SQLite here. A task may *additionally* be bound to a syst
 
 | Capability | What it gates |
 |---|---|
+| `assigneeDirectory` | `listAssignees` returns selectable opaque remote references, names and kinds |
 | `create` | work can be *put* on this remote at all. A pull-only remote — a shared board, a read-scoped token — is bound by a pull, and says `false` here |
 | `writeStatus` | one status step may be pushed |
 | `archive` | the remote can file a task away, through `archive()` — its **own route**, not a status |
@@ -35,9 +36,11 @@ Two of them are **lists rather than flags**, and both were flags first. A boolea
 
 ## Business Rules
 
+- **The adapter owns remote assignee discovery.** The generic task picker submits an adapter id and opaque reference; handoff re-reads the directory and derives the name/kind in main. It does not use the local agent registry or a service-specific renderer hook. See [remote handoff](remote_handoff.md).
+
 - **Callers ask `capabilities()`, never the id.** An operation the capabilities deny is not a runtime condition to be caught — it is a bug at the call site, and calling it throws `UnsupportedRemoteOperation`. A quiet no-op would let a handover that cannot happen report success. This is what makes a poorer remote *expressible* rather than broken.
 - **Only `create` invents a binding.** Every other call takes one and returns it, possibly refreshed, never re-identified — *including* the bindings nested inside snapshots. A `fetch` that re-creates the task when the remote answers 404 would have its new id written back, and the original abandoned with the user's comments and attachments on it: from the user's side, a task that "resynced" and a second copy on the web.
-- **The local write already happened.** The adapter is called after SQLite is committed, so an adapter failure marks the binding stale and is retried — it never fails or rolls back the local write. That is what makes an unlinked profile, an offline laptop and a 500 the same code path. An adapter therefore **rejects rather than swallowing**: what a failure costs is the caller's decision.
+- **Ordinary sync follows a committed local write.** The adapter is called after SQLite is committed, so an adapter failure marks the binding stale and is retried — it never fails or rolls back the local write. That is what makes an unlinked profile, an offline laptop and a 500 the same code path. An adapter therefore **rejects rather than swallowing**: what a failure costs is the caller's decision.
 - **A status push is one step, not a destination.** The remote validates transitions, so a task that went `new → completed` locally goes up as two calls. Walking the path belongs to the reconciler; an adapter doing it here would be guessing at the remote's table.
 - **`archived` never travels as a status.** It is absent from `REMOTE_WRITABLE_STATUSES` (`src/shared/taskStatus.ts`) and is `archive()`'s job — on cinna-core a different route entirely. Without a method of its own, "the user filed it away" could only be expressed by smuggling a status through `pushStatus`.
 - **A flat remote never gets a silent orphan.** `create` takes the **parent's binding**, not the local parent id — an adapter holds no mapping from one to the other, so a method that took only the task could be satisfied only by sending no parent at all: the top-level orphan the rule is against, created while reporting success. A parent offered to a `subtasks: false` adapter is `unsupported`; a task that *has* a parent offered with `parent: null` is `invalid_request` and the remote is never asked.

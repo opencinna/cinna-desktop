@@ -1117,24 +1117,17 @@ const api = {
       ipcRenderer.invoke('noteFolder:reorder', orderedIds)
   },
 
-  /**
-   * Tasks — the unit of work that outlives a chat view.
-   *
-   * Read, edit, and pull the work back to this device.
-   *
-   * Starting a task from nothing is still the job path (`jobs.execute`): a task
-   * that has never run has no chat to run in, and spawning one is the job
-   * path's own sequence.
-   *
-   * **Only one of §5.10's two directions has a channel.** `takeOver` brings a
-   * task here from another device or from the service running it, and needs
-   * nothing from the user but the press. The other direction — handing a
-   * desktop task *to* a service — needs an assignee the service knows, and
-   * picking one is a surface that does not exist yet; the code path is
-   * `taskSyncService.handOff` and the `cinna_task` job run is what exercises
-   * it. A channel with no caller is worse than no channel: it looks wired.
-   */
+  /** Tasks: browse, continue locally, hand off, and recover an executor claim. */
   tasks: {
+    handoffReceipt: (taskId: string): Promise<import('../shared/taskHandoff').TaskHandoffReceipt | null> =>
+      ipcRenderer.invoke('task:handoff-receipt', taskId),
+    pendingChatHandoff: (chatId: string): Promise<import('../shared/taskHandoff').TaskHandoffReceipt | null> =>
+      ipcRenderer.invoke('task:chat-handoff', chatId),
+    resolveHandoff: (taskId: string): Promise<void> => ipcRenderer.invoke('task:resolve-handoff', taskId),
+    handoffOptions: (taskId: string): Promise<import('../shared/taskHandoff').TaskHandoffOptions> =>
+      ipcRenderer.invoke('task:handoff-options', taskId),
+    handOff: (taskId: string, target: import('../shared/taskHandoff').TaskHandoffTarget, note: string | null): Promise<import('../shared/taskHandoff').TaskHandoffOutcome> =>
+      ipcRenderer.invoke('task:hand-off', taskId, target, note),
     children: (taskId: string): Promise<import('../shared/tasks').TaskListSnapshot> =>
       ipcRenderer.invoke('task:children', taskId),
     list: (query?: TaskListQuery): Promise<TaskDto[]> =>

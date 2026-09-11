@@ -102,7 +102,7 @@ Added to: `llm_providers`, `mcp_providers`, `chats`, `chat_modes`, `agents`
 
 ### `src/main/db/users.ts`
 - `userRepo` exposes `list/get/getByUsername/insert/updateProfile/setPassword/clearPassword/setCinnaTokens/clearCinnaTokens/getCinnaTokenState/deleteWithCascade/rotateGuestAlias`
-- `deleteWithCascade(id)` runs in a single transaction across `chats`, `llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `users`
+- `deleteWithCascade(id)` removes user-scoped rows in one transaction, including chats, jobs, tasks, task handoff receipts, notes, providers, modes and agents. Handoff receipts intentionally survive task deletion, but not account deletion; `taskHandoffRepo.put` rejects a late network completion attempting to recreate a deleted profile’s receipt. See [remote handoff recovery](../../jobs/tasks/remote_handoff.md)
 
 ### `src/main/auth/session.ts`
 - `getCurrentUserId()` — returns in-memory active user ID

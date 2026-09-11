@@ -1,3 +1,4 @@
+vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: () => false } }))
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import { capabilitiesFor } from '../agents/drivers/capabilities'

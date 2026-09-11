@@ -237,6 +237,12 @@ const GATED: {
     name: 'actionRequiredCount',
     sameTask: true,
     run: (a, u) => a.actionRequiredCount(u)
+  },
+  {
+    capability: 'assigneeDirectory',
+    name: 'listAssignees',
+    sameTask: false,
+    run: (a, u) => a.listAssignees(u)
   }
 ]
 

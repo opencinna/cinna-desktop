@@ -19,6 +19,7 @@ Everything the seam describes, with one narrowing: a task attachment on cinna-co
 
 | Desktop operation | cinna-core |
 |---|---|
+| `listAssignees` | `GET /api/v1/agents/` — paginated envelope `data`, nonempty string ids and names mapped to `remote_agent` |
 | `create` | `POST /api/v1/tasks/`, or `POST /api/v1/tasks/{parent}/subtasks/` |
 | `pushFields` | `PATCH /api/v1/tasks/{id}` — `title`, `current_description`, `priority`, `selected_agent_id` |
 | `pushStatus` | `POST /api/v1/tasks/{id}/status`, one step per call |
@@ -34,6 +35,8 @@ Everything the seam describes, with one narrowing: a task attachment on cinna-co
 | `putArtifact` | upload the bytes, then `POST /api/v1/tasks/{id}/files/{fileId}` |
 | `listOpenAsks` / `answerAsk` | `GET /api/v1/sessions/{id}/messages`, then `POST /api/v1/sessions/{id}/messages/stream` |
 | `actionRequiredCount` | `GET /api/v1/activities/stats` |
+
+Directory reads reject malformed envelopes and ignore entries without a usable string id. A captured credential session that changes before sending maps to `invalid_request`: no task request was dispatched, so the coordinator must not mistake it for a lost execution acknowledgement. See [remote handoff and recovery](remote_handoff.md).
 
 ## Four things about cinna-core a reasonable adapter gets wrong
 
@@ -78,7 +81,11 @@ Each is a real server behaviour with a real cost, and each has a test.
 
 ## Transport and Inbox Delivery
 
-The production JSON transport in `src/main/services/cinnaApiService.ts` aborts each request after thirty seconds, including a stalled response body. This releases in-flight Inbox work so a later retry can make progress. The Inbox has a separate ten-second user-facing deadline and retains its underlying operation until it settles; it does not assume a timed-out answer was never delivered. See [the Inbox](inbox.md) for binding-scoped request identities, identical-answer coalescing and conflicting-answer refusals.
+The production JSON transport in `src/main/services/cinnaApiService.ts` aborts each request after thirty seconds, including proxy resolution and a stalled response body. GET/HEAD use Electron fetch. Mutations use `src/main/services/cinnaWriteFetch.ts` and the pinned production `undici` dependency: each call owns an Agent or ProxyAgent with pipelining disabled and `idempotent: false`. Only decompression is installed as an interceptor, including for error responses. Redirects are refused; the complete body and HTTP status/headers are retained before the private dispatcher is destroyed. No shared dispatcher or Electron connection pool is reset.
+
+Electron's buffered writes replayed a complete POST after a dropped warm connection. Its chunked alternative prevented that replay but crashed Chromium Network Service and broke later reads. Mutations therefore use Node's HTTP stack. Proxy routing still comes from Electron's `defaultSession.resolveProxy`: only the first DIRECT, PROXY or HTTPS route is supported. An unsupported route, including SOCKS, fails before dispatch rather than bypassing the proxy or trying a later route. Node default and system CA certificates supply the private TLS trust set; TLS verification stays enabled. Chromium's cached proxy authentication, integrated NTLM/Kerberos and client-certificate callbacks are not inherited by this transport.
+
+The credential-session generation and profile URL are checked again immediately before dispatch, after asynchronous proxy resolution. Preparation failures use `CinnaApiError('request_not_sent')`, mapped by the adapter to `invalid_request`; a dispatched network failure remains potentially accepted and follows handoff uncertainty rules. Proxy authentication failure does not retry directly. The Inbox has a separate ten-second user-facing deadline and retains its underlying operation until it settles; it does not assume a timed-out answer was never delivered. See [the Inbox](inbox.md) for binding-scoped request identities, identical-answer coalescing and conflicting-answer refusals.
 
 ## Classifying a failure
 

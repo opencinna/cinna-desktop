@@ -92,6 +92,7 @@ export interface FakeRemote {
 }
 
 const FULL: RemoteTaskCapabilities = {
+  assigneeDirectory: true,
   create: true,
   writeStatus: true,
   handoffNote: true,
@@ -271,6 +272,11 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
   }
 
   const adapter: RemoteTaskAdapter = {
+    async listAssignees() {
+      require('assigneeDirectory', 'listAssignees')
+      call()
+      return [{ ref: 'remote-worker', name: 'Remote worker', kind: 'remote_agent' }]
+    },
     id,
 
     // A fresh object every call, so a caller that edits what it was handed

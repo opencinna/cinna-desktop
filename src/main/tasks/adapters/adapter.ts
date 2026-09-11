@@ -144,6 +144,8 @@ export function isRemoteDirtyField(value: unknown): value is RemoteDirtyField {
 
 /** What this adapter can actually do. Callers ask; they never branch on `id`. */
 export interface RemoteTaskCapabilities {
+  /** Whether the service exposes selectable remote assignees. */
+  assigneeDirectory: boolean
   /**
    * Work can be **put** on this remote — {@link RemoteTaskAdapter.create}
    * works, and §5.10's handover has somewhere to go.
@@ -376,6 +378,8 @@ export interface RemoteTaskAdapter {
    * unlinked profile is an answer, not a failure.
    */
   availability(userId: string): Promise<RemoteAvailability>
+
+  listAssignees(userId: string): Promise<RemoteAssignee[]>
 
   /**
    * Put the task on the remote and return the binding that results. **The only

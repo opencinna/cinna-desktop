@@ -96,6 +96,16 @@ import {
 } from '../../shared/tasks'
 import { createLogger } from '../logger/logger'
 import { TaskError } from '../errors'
+import { taskHandoffRepo } from '../db/taskHandoffs'
+import { taskInputRequestRepo } from '../db/taskInputRequests'
+import { messageRepo } from '../db/messages'
+import { chatRepo } from '../db/chats'
+import { getDb } from '../db/client'
+import { taskFileService } from './taskFileService'
+import { activeRunsByChat } from './runExecutionState'
+import { handingOffChats, handingOffTasks, taskOperationKey } from './taskOperationState'
+import { canTransition } from '../../shared/taskStatus'
+import type { TaskHandoffOptions, TaskHandoffTarget, TaskHandoffReceipt } from '../../shared/taskHandoff'
 
 const logger = createLogger('task-sync')
 
@@ -241,6 +251,8 @@ const pullsInFlight = new Map<string, Promise<void>>()
 const readsInFlight = new Map<string, Promise<TaskDto | null>>()
 const childrenInFlight = new Map<string, Promise<TaskDto[]>>()
 const childrenRefreshState = new Map<string, Omit<TaskListSnapshot, 'tasks'>>()
+const handoffsInFlight = new Map<string, { intent: string; promise: Promise<TaskDto> }>()
+const unboundCreates = new Map<string, number>()
 let globalEpoch = 0
 const profileEpochs = new Map<string, number>()
 // Revisions order local read/write operations without comparing clocks across devices.
@@ -568,6 +580,7 @@ export interface RemoteWork {
  * interleaving costs.
  */
 async function pushOne(userId: string, taskId: string): Promise<void> {
+  if (taskHandoffRepo.unresolved(userId, taskId)) return
   const started = generation(userId)
   const row = taskRepo.getById(userId, taskId)
   if (!row || row.deletedAt) return
@@ -765,6 +778,44 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 }
 
 export const taskSyncService = {
+  pendingHandoffForChat(userId: string, chatId: string): TaskHandoffReceipt | null {
+    if (!chatRepo.getOwned(userId, chatId)) throw new TaskError('not_found', 'Conversation not found')
+    return taskHandoffRepo.pendingForChat(userId, chatId)
+  },
+  async resolveHandoff(userId: string, taskId: string): Promise<void> {
+    const receipt = taskHandoffRepo.get(userId, taskId)
+    if (!receipt || !taskHandoffRepo.unresolved(userId, taskId)) return
+    if (handoffsInFlight.has(cursorKey(userId, taskId))) throw new TaskError('remote_busy', 'Wait for the current handoff to finish.')
+    const row = taskRepo.getById(userId, taskId)
+    if (row && !row.deletedAt) { await this.takeOver(userId, taskId, { force: true }); return }
+    const started = generation(userId)
+    if (receipt.remote) {
+      const live = await adapterFor(receipt.adapterId).liveSession(userId, {
+        adapter: receipt.adapterId, ...receipt.remote, state: {}
+      }).catch(() => null)
+      if (live === true) throw new TaskError('remote_busy', 'An agent is working on this task in the service. Wait until it stops.')
+    }
+    if (generation(userId) !== started || handoffsInFlight.has(cursorKey(userId, taskId)) ||
+      JSON.stringify(taskHandoffRepo.get(userId, taskId)) !== JSON.stringify(receipt)) {
+      throw new TaskError('invalid_input', 'The handoff changed. Check it again.')
+    }
+    taskHandoffRepo.put(userId, { ...receipt, state: 'dismissed', message: 'Handoff explicitly resolved after task deletion.', updatedAt: Date.now() })
+  },
+  handoffReceipt(userId: string, taskId: string): TaskHandoffReceipt | null {
+    return taskHandoffRepo.get(userId, taskId)
+  },
+  async handoffOptions(userId: string, taskId: string): Promise<TaskHandoffOptions> {
+    const task = taskService.getById(userId, taskId)
+    const started = generation(userId)
+    const adapter = task.remote ? adapterFor(task.remote.adapter) : await preferredAdapter(userId)
+    if (!adapter) return { adapterId: null, assignees: [], reason: 'This profile is not connected to a task service.', receipt: taskHandoffRepo.get(userId, taskId) }
+    const ready = await adapter.availability(userId)
+    const assignees = ready.ready && adapter.capabilities().assigneeDirectory ? await adapter.listAssignees(userId) : []
+    if (generation(userId) !== started) throw new TaskError('invalid_input', 'The connection changed. Open the handoff again.')
+    return { adapterId: adapter.id, assignees, receipt: taskHandoffRepo.get(userId, taskId),
+      reason: !ready.ready ? ready.reason ?? 'The task service is unavailable.' :
+        !adapter.capabilities().assigneeDirectory ? 'This service does not offer an agent directory.' : null }
+  },
   getChildren(userId: string, taskId: string): TaskListSnapshot {
     const task = taskService.getById(userId, taskId)
     const key = cursorKey(userId, taskId)
@@ -811,6 +862,10 @@ export const taskSyncService = {
       const children = await adapter.listSubtasks(userId, binding)
       if (!bindingIsCurrent(userId, taskId, binding, started) || taskRepo.getById(userId, taskId)?.parentTaskId) {
         throw new TaskError('invalid_input', 'The task changed while reading its subtasks. Try again.')
+      }
+      if ((unboundCreates.get(cursorKey(userId, adapter.id)) ?? 0) > 0 ||
+        taskHandoffRepo.unboundCreatePending(userId, adapter.id)) {
+        throw new TaskError('handoff_uncertain', 'Subtasks will refresh once the pending handoff is resolved.')
       }
       for (const child of children) {
         if (child.binding.adapter !== adapter.id || child.parentId !== binding.id) continue
@@ -925,29 +980,36 @@ export const taskSyncService = {
     const row = taskRepo.getById(userId, taskId)
     if (!row || row.deletedAt) throw new TaskError('not_found', 'Task not found')
 
-    if (row.executor === 'remote' && bindingOf(row)) {
-      const live = await this.liveSession(userId, taskId)
-      if (live === true) {
-        throw new TaskError(
-          'remote_busy',
-          'Something is working on this task in the service running it. It can be continued here once that has stopped.'
-        )
-      }
-      if (live === null && !opts.force) {
-        throw new TaskError(
-          'remote_unknown',
-          'The service running this task could not say whether anything is working on it.'
-        )
-      }
-      if (live === null) {
-        logger.warn('taking over a task whose service could not say whether it was busy', {
-          taskId,
-          adapter: row.remoteAdapter ?? undefined
-        })
-      }
+    if (handoffsInFlight.has(cursorKey(userId, taskId))) {
+      throw new TaskError('remote_busy', 'Wait for the current handoff to finish.')
     }
-
-    return taskService.takeOver(userId, taskId)
+    const started = generation(userId)
+    const receipt = taskHandoffRepo.get(userId, taskId)
+    const unresolved = taskHandoffRepo.unresolved(userId, taskId)
+    if (unresolved && !opts.force) {
+      throw new TaskError('handoff_uncertain', 'Check the service, then explicitly take over if work should continue here.')
+    }
+    const binding = bindingOf(row) ?? (receipt?.remote ? {
+      adapter: receipt.adapterId, ...receipt.remote, state: {}
+    } : null)
+    if ((row.executor === 'remote' || unresolved) && binding) {
+      const live = await adapterFor(binding.adapter).liveSession(userId, binding).catch(() => null)
+      if (live === true) throw new TaskError('remote_busy', 'An agent is working on this task in the service. Wait until it stops.')
+      if (live === null && !opts.force) throw new TaskError('remote_unknown', 'The service could not say whether anything is working on this task.')
+    }
+    const current = taskRepo.getById(userId, taskId)
+    if (!current || current.deletedAt || generation(userId) !== started ||
+      current.executor !== row.executor || current.executorDevice !== row.executorDevice ||
+      current.remoteAdapter !== row.remoteAdapter || current.remoteId !== row.remoteId ||
+      JSON.stringify(taskHandoffRepo.get(userId, taskId)) !== JSON.stringify(receipt) ||
+      handoffsInFlight.has(cursorKey(userId, taskId))) {
+      throw new TaskError('invalid_input', 'The task or connection changed. Review it and try again.')
+    }
+    const result = taskService.takeOver(userId, taskId)
+    if (unresolved && receipt) taskHandoffRepo.put(userId, {
+      ...receipt, state: 'dismissed', message: 'Explicitly taken over on this device.', updatedAt: Date.now()
+    })
+    return result
   },
 
   /**
@@ -982,161 +1044,29 @@ export const taskSyncService = {
    * leaves an ordinary desktop task with a binding, which is a state the pull
    * and the push both already understand.
    */
-  async handOff(userId: string, taskId: string): Promise<TaskDto> {
-    const row = taskRepo.getById(userId, taskId)
-    if (!row || row.deletedAt) throw new TaskError('not_found', 'Task not found')
-    // **Handing over a task that is already over there runs it twice.** The
-    // sequence below would re-post the note, re-assign, and `execute` again —
-    // and cinna starts a *second session* on the same task, which is the exact
-    // race the other direction refuses with `remote_busy`. Unreachable today
-    // (`executeCinnaTask` always makes a fresh unbound task, and there is no
-    // channel for the gesture), and the guard is here rather than with the
-    // assignee picker that will reach it because it is cheaper now than it will
-    // be then — the reviewer's point, and the symmetric refusal already exists.
-    if (row.executor === 'remote') {
-      throw new TaskError('remote_busy', 'That task is already with the service running it.')
-    }
-
-    let binding = bindingOf(row)
-    const adapter = binding ? adapterFor(binding.adapter) : await preferredAdapter(userId)
-    if (!adapter) {
-      throw new TaskError(
-        'no_service',
-        'This profile is not connected to a service that can take a task.'
-      )
-    }
-    const availability = await adapter.availability(userId)
-    if (!availability.ready) {
-      throw new TaskError(
-        'no_service',
-        availability.reason ?? 'That service is not available for this profile.'
-      )
-    }
-
-    const caps = adapter.capabilities()
-    const existed = binding !== null
-    // Every marker this device still owes the remote, and the two ways this
-    // method settles some of them. A create sends everything the remote takes,
-    // and `bindRemote` clears the list for exactly that reason — so re-reading
-    // the pre-create row's markers here would put back what it just cleared.
-    let owed = (row.remoteDirty ?? []).filter(isRemoteDirtyField)
-
-    if (!binding) {
-      if (!caps.create) {
-        throw new TaskError('unsupported', 'That service cannot be given a new task.')
-      }
-      const parentRow = row.parentTaskId ? taskRepo.getById(userId, row.parentTaskId) : null
-      // A parent that is not on this service is the adapter's refusal to make,
-      // not ours: cinna's subtask route is a different path, and a subtask sent
-      // to `POST /tasks/` would be created at top level and look like a success.
-      const parentBinding = parentRow ? bindingOf(parentRow) : null
-      const created = await adapter.create(
-        userId,
-        taskService.getById(userId, taskId),
-        parentBinding
-      )
-      taskService.bindRemote(userId, taskId, {
-        adapter: adapter.id,
-        id: created.id,
-        key: created.key,
-        url: created.url,
-        state: created.state
-      })
-      binding = created
-      owed = []
-    }
-
-    if (row.handoffNote && caps.handoffNote) {
-      await adapter.putHandoffNote(userId, binding, row.handoffNote)
-    }
-
-    // Only for a task that was already there. A create sent the assignee with
-    // it; asking again in the same breath is a request that can only confirm
-    // what the previous one did.
-    const assignee = toRemoteAssignee(row)
-    if (existed && assignee && caps.writeFields.includes('assignee')) {
-      binding = await adapter.pushFields(userId, binding, { assignee })
-      owed = owed.filter((field) => field !== 'assignee')
-    }
-
-    let executed = false
-    if (caps.execute) {
-      binding = await adapter.execute(userId, binding)
-      executed = true
-    }
-
-    // **Past this line the service has the work, and nothing local may take it
-    // back.**
-    //
-    // Three local writes follow a network call that has already started an
-    // agent, and every one of them goes through `requireTask`, which throws for
-    // a row that has been deleted — by the user, or by a peer's tombstone
-    // arriving through app-sync — during the `execute` round trip, which on a
-    // real server is seconds. Left to throw, `executeCinnaTask`'s catch soft-
-    // deletes the task and never writes the `job_runs` row, so the user is told
-    // the run was refused while an agent burns tokens on a task that, by the
-    // rest of the app's reckoning, does not exist: no run row, nothing polling
-    // it, and nothing on this side that will ever hear the outcome. The
-    // desktop's promise that "a refused run leaves nothing new in your lists"
-    // would be kept for a run that **was not refused**.
-    //
-    // So the bookkeeping is best-effort, which is the rule
-    // `jobService.reportRunCompletion` already follows for its own task write,
-    // for the identical reason: the work really happened, so it must be
-    // recorded even if recording it fails. The binding and the remote id are
-    // what the caller actually needs, and `bindRemote` committed those before
-    // the call.
-    try {
-      // **Work has begun, so the task says so**, and it says it through
-      // `acceptRemoteStatus` rather than `setStatus`: this is recording what
-      // the service just told us, not something this device owes it. The
-      // difference is a dirty marker — `setStatus` would queue a status push to
-      // the remote that has just started the work, and the push refuses to send
-      // it (a task the service is executing has its status recomputed there,
-      // §5.12 rule 4), leaving a marker that can never clear.
-      //
-      // An adapter with **no** `execute` is left alone deliberately. Handing a
-      // task to a service that cannot run it is an *assignment*, which is what
-      // handing one to Linear means, and marking it `in_progress` would claim
-      // somebody had started.
-      if (executed) taskService.acceptRemoteStatus(userId, taskId, 'in_progress')
-      taskService.markRemoteSynced(userId, taskId, owed, {
-        binding: { key: binding.key, url: binding.url, state: binding.state },
-        contacted: true
-      })
-      const task = taskService.handOffToRemote(userId, taskId)
-      logger.info('task handed to a service', {
-        taskId,
-        adapter: adapter.id,
-        remoteId: binding.id,
-        executed
-      })
-      return task
-    } catch (err) {
-      logger.warn('a service took the work and the bookkeeping for it failed', {
-        taskId,
-        adapter: adapter.id,
-        remoteId: binding.id,
-        executed,
-        error: describe(err)
-      })
-      try {
-        return taskService.getById(userId, taskId)
-      } catch {
-        // **The row is gone entirely**, which is the likeliest way to get here,
-        // and the one case with nothing local left to return. What must not
-        // happen is the caller reporting a refusal: the service took the work
-        // and an agent is running. Its own code, so `executeCinnaTask` can tell
-        // this apart from "the service would not take it" and leave its cleanup
-        // alone — there is nothing to clean up, and a second delete of a row a
-        // peer already removed would be the app arguing with itself.
-        throw new TaskError(
-          'handed_over',
-          'That task was removed while the service was starting work on it. The work has started there.',
-          `remote ${binding.id} on ${adapter.id}`
-        )
-      }
-    }
+  async handOff(userId: string, taskId: string, target?: TaskHandoffTarget, note?: string | null): Promise<TaskDto> {
+    const key = cursorKey(userId, taskId)
+    const intent = JSON.stringify([target ?? null, note])
+    const existing = handoffsInFlight.get(key)
+    if (existing) return existing.intent === intent ? existing.promise : Promise.reject(
+      new TaskError('invalid_input', 'This task is already being handed to another agent.'))
+    const row = taskService.getById(userId, taskId)
+    const started = generation(userId)
+    const reservation = taskOperationKey(userId, taskId)
+    handingOffTasks.add(reservation)
+    if (row.chatId) handingOffChats.add(row.chatId)
+    const work = (pushesInFlight.get(key) ?? Promise.resolve()).catch(() => {}).then(() =>
+      performHandoff(userId, taskId, started, target, note))
+    const writer = work.then(() => {}, () => {})
+    pushesInFlight.set(key, writer)
+    const promise = work.finally(() => {
+      handingOffTasks.delete(reservation)
+      if (row.chatId) handingOffChats.delete(row.chatId)
+      if (pushesInFlight.get(key) === writer) pushesInFlight.delete(key)
+      if (handoffsInFlight.get(key)?.promise === promise) handoffsInFlight.delete(key)
+    })
+    handoffsInFlight.set(key, { intent, promise })
+    return promise
   },
 
   /**
@@ -1585,6 +1515,9 @@ async function pullRemoteTasks(userId: string): Promise<void> {
       // there — so the first pass also asks for a bounded window of recent
       // history, where a cursor carries no status filter at all.
       const snapshots = firstPass ? mergeById(active, await history(userId, adapter)) : active
+      // An unacknowledged create has no local binding yet. Retry discovery
+      // without advancing the cursor rather than manufacturing a duplicate.
+      if ((unboundCreates.get(cursorKey(userId, adapter.id)) ?? 0) > 0 || taskHandoffRepo.unboundCreatePending(userId, adapter.id)) continue
       if (generation(userId) !== started) return
 
       // Two passes, and the second one is not belt-and-braces.
@@ -1720,5 +1653,172 @@ async function pullSingleTask(userId: string, taskId: string): Promise<TaskDto |
       refreshErrors.set(key, 'Could not refresh from the remote service. Showing the saved task.')
     }
     return null
+  }
+}
+
+/** One remote writer; local execution stays reserved until every awaited call settles. */
+async function performHandoff(
+  userId: string, taskId: string, started: string, target?: TaskHandoffTarget, noteOverride?: string | null
+): Promise<TaskDto> {
+  const original = taskRepo.getById(userId, taskId)
+  if (!original || original.deletedAt) throw new TaskError('not_found', 'Task not found')
+  let binding = bindingOf(original)
+  let receipt: TaskHandoffReceipt | null = null
+  let accepted = false
+  let createdUnbound = false
+  let ambiguousStage: 'create' | 'execute' | null = null
+  const assertCurrent = (context = false): TaskRow => {
+    const row = taskRepo.getById(userId, taskId)
+    if (!row || row.deletedAt) throw new TaskError('not_found', 'Task not found')
+    const task = taskService.getById(userId, taskId)
+    if (generation(userId) !== started || row.executorDevice !== original.executorDevice ||
+      row.chatId !== original.chatId || row.parentTaskId !== original.parentTaskId || row.remoteAdapter !== (binding?.adapter ?? null) || row.remoteId !== (binding?.id ?? null)) {
+      throw new TaskError('invalid_input', 'The task or connection changed during handoff. Try again.')
+    }
+    if (task.executor === 'remote') throw new TaskError('remote_busy', 'That task is already with the service running it.')
+    if (!task.runsHere) throw new TaskError('running_elsewhere', 'Take over this task before handing it off.')
+    if (!canTransition(task.status, 'in_progress')) throw new TaskError('invalid_transition', 'This task cannot be handed off in its current state.')
+    if (task.chatId && activeRunsByChat.has(task.chatId)) throw new TaskError('remote_busy', 'Stop this task’s current turn before handing it off.')
+    if (taskInputRequestRepo.listOpen(userId).some(({ row: ask }) => ask.taskId === taskId)) {
+      throw new TaskError('remote_busy', 'Answer this task’s pending question before handing it off.')
+    }
+    if (context && (row.status !== original.status ||
+      (['title', 'description', 'priority', 'handoffNote', 'assignee'] as RemoteDirtyField[]).some((field) => !sameValue(original, row, field)))) {
+      throw new TaskError('invalid_input', 'The task context changed during handoff. Review it and try again.')
+    }
+    return row
+  }
+  assertCurrent()
+  if (taskHandoffRepo.unresolved(userId, taskId)) throw new TaskError('handoff_uncertain', 'Check the previous handoff before starting it again.')
+  if (target && (typeof target.adapterId !== 'string' || typeof target.ref !== 'string' || !target.ref.trim())) {
+    throw new TaskError('invalid_input', 'Choose a remote agent.')
+  }
+  if (noteOverride !== undefined && noteOverride !== null && (typeof noteOverride !== 'string' || noteOverride.length > 64_000)) {
+    throw new TaskError('invalid_input', 'The handoff note must be text under 64,000 characters.')
+  }
+  const adapter = binding ? adapterFor(binding.adapter) : target ? adapterFor(target.adapterId) : await preferredAdapter(userId)
+  if (!adapter) throw new TaskError('no_service', 'This profile is not connected to a service that can take a task.')
+  if (target && target.adapterId !== adapter.id) throw new TaskError('invalid_input', 'This task is bound to a different service.')
+  const availability = await adapter.availability(userId)
+  assertCurrent(true)
+  if (!availability.ready) throw new TaskError('no_service', availability.reason ?? 'That service is unavailable.')
+  const caps = adapter.capabilities()
+  let assignee = toRemoteAssignee(original)
+  if (target) {
+    if (!caps.assigneeDirectory) throw new TaskError('unsupported', 'This service does not offer an agent directory.')
+    assignee = (await adapter.listAssignees(userId)).find((candidate) => candidate.ref === target.ref) ?? null
+    assertCurrent(true)
+    if (!assignee) throw new TaskError('invalid_input', 'That remote agent is no longer available.')
+  }
+  if (binding) {
+    const live = await adapter.liveSession(userId, binding).catch(() => null)
+    assertCurrent(true)
+    if (live !== false) throw new TaskError(live ? 'remote_busy' : 'remote_unknown', live
+      ? 'An agent is already working on this task in the service.' : 'The service could not confirm that this task is idle. Try again when it is reachable.')
+  }
+  const note = noteOverride === undefined ? original.handoffNote : noteOverride
+  receipt = { taskId, chatId: original.chatId, adapterId: adapter.id, bindingPending: !binding, assignee: { ref: assignee?.ref ?? '', name: assignee?.name ?? null },
+    remote: binding ? { id: binding.id, key: binding.key, url: binding.url } : null,
+    state: 'preparing', message: null, updatedAt: Date.now() }
+  const saveReceipt = (state: TaskHandoffReceipt['state'], message: string | null = null): void => {
+    receipt = { ...receipt!, state, message, remote: binding ? { id: binding.id, key: binding.key, url: binding.url } : receipt!.remote, updatedAt: Date.now() }
+    taskHandoffRepo.put(userId, receipt)
+  }
+  const fieldsSent = new Set<RemoteDirtyField>()
+  if (binding) bump(bindingKey(userId, binding))
+  try {
+    saveReceipt('preparing')
+    if (!binding) {
+      if (!caps.create) throw new TaskError('unsupported', 'That service cannot be given a new task.')
+      const parent = original.parentTaskId ? taskRepo.getById(userId, original.parentTaskId) : null
+      const parentBinding = parent ? bindingOf(parent) : null
+      assertCurrent(true)
+      const createKey = cursorKey(userId, adapter.id)
+      unboundCreates.set(createKey, (unboundCreates.get(createKey) ?? 0) + 1)
+      try {
+        saveReceipt('creating')
+        ambiguousStage = 'create'
+        const draft = taskService.getById(userId, taskId)
+        binding = await adapter.create(userId, { ...draft, handoffNote: note,
+          assignee: assignee ? { agentId: assignee.ref, kind: assignee.kind, name: assignee.name } : draft.assignee }, parentBinding)
+        ambiguousStage = null
+        createdUnbound = true
+        // Validate the original identity before publishing the returned binding.
+        const created = binding
+        receipt = { ...receipt!, remote: { id: created.id, key: created.key, url: created.url } }
+        binding = null
+        try { assertCurrent(true) } catch {
+          saveReceipt('uncertain', 'The service created the task, but its local context changed. Work was not started. Check the service before trying again.')
+          throw new TaskError('handoff_uncertain', receipt!.message!)
+        }
+        binding = created
+        bump(bindingKey(userId, binding))
+        const owed = taskRepo.getById(userId, taskId)!.remoteDirty ?? []
+        taskService.bindRemote(userId, taskId, binding)
+        createdUnbound = false
+        receipt = { ...receipt!, bindingPending: false }
+        // Create does not carry every mutable field; preserve all unpaid edits.
+        taskService.markRemoteSynced(userId, taskId, owed.filter(isRemoteDirtyField))
+        saveReceipt('preparing')
+      } finally {
+        const remaining = (unboundCreates.get(createKey) ?? 1) - 1
+        if (remaining) unboundCreates.set(createKey, remaining); else unboundCreates.delete(createKey)
+      }
+    }
+    if (!binding) throw new TaskError('invalid_input', 'The service did not return a task binding.')
+    assertCurrent(true)
+    const fields: Partial<RemoteTaskFields> = {}
+    for (const field of ['title', 'description', 'priority'] as const) {
+      if (caps.writeFields.includes(field)) {
+        if (bindingOf(original) || (field === 'description' && original.description !== null)) fields[field] = original[field] as never
+        fieldsSent.add(field)
+      }
+    }
+    if (assignee && caps.writeFields.includes('assignee')) {
+      if (bindingOf(original) || original.parentTaskId) fields.assignee = assignee
+      fieldsSent.add('assignee')
+    }
+    else if (target && bindingOf(original)) throw new TaskError('unsupported', 'This service cannot change the task’s assignee.')
+    if (Object.keys(fields).length) { binding = await adapter.pushFields(userId, binding, fields); assertCurrent(true) }
+    if (note && caps.handoffNote) { await adapter.putHandoffNote(userId, binding, note); fieldsSent.add('handoffNote'); assertCurrent(true) }
+    if (caps.execute) {
+      saveReceipt('executing')
+      ambiguousStage = 'execute'
+      binding = await adapter.execute(userId, binding)
+      ambiguousStage = null
+    }
+    accepted = true
+    saveReceipt('accepted_pending', 'The service accepted this task. Check its state before continuing here.')
+    const current = assertCurrent(true)
+    const remaining = (current.remoteDirty ?? []).filter(isRemoteDirtyField)
+      .filter((field) => !fieldsSent.has(field) || !sameValue(original, current, field))
+      .filter((field) => field !== 'status')
+    const acceptedBinding = binding
+    const task = getDb().transaction(() => {
+      const updated = taskService.handOffToRemote(userId, taskId, {
+      assignee: assignee ? { kind: assignee.kind, agentId: assignee.ref, name: assignee.name } : null,
+      executed: caps.execute, note, remaining, binding: acceptedBinding, deferExport: true
+      })
+      saveReceipt('accepted')
+      return updated
+    })
+    taskFileService.exportHandoff(task)
+    if (original.chatId && chatRepo.getOwned(userId, original.chatId)) {
+      try { messageRepo.saveTransition({ chatId: original.chatId,
+        content: `Handed off to ${assignee?.name ?? 'the connected service'}${binding.key ? ` (${binding.key})` : ''}.` }) }
+      catch (error) { logger.warn('could not write handoff chat receipt', { taskId, error: describe(error) }) }
+    }
+    return task
+  } catch (error) {
+    if (accepted) throw new TaskError('handed_over', 'The service accepted this task, but its local record changed. Check the service before continuing.', describe(error))
+    if (error instanceof TaskError && error.code === 'handoff_uncertain') throw error
+    if (createdUnbound || (ambiguousStage && (!(error instanceof RemoteTaskError) || error.code === 'unavailable'))) {
+      saveReceipt('uncertain', `The service may have ${createdUnbound || ambiguousStage === 'create' ? 'created this task' : 'started work'}. Check it before trying again.`)
+      throw new TaskError('handoff_uncertain', receipt!.message!)
+    }
+    saveReceipt('dismissed', describe(error))
+    throw error
+  } finally {
+    if (binding) bump(bindingKey(userId, binding))
   }
 }

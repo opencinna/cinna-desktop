@@ -2,6 +2,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { AgentRow } from '../db/agents'
 import type { MessageRow } from '../db/messages'
 import type { RunEvent } from '../../shared/runEvents'
+const handoffPending = vi.hoisted(() => vi.fn(() => false))
+vi.mock('../db/taskHandoffs', () => ({ taskHandoffRepo: { unresolvedForChat: handoffPending } }))
 
 /**
  * `run:send` resolves who answers, and hands an agent the thread it missed.
@@ -503,6 +505,14 @@ describe('run:send — refusals and the channels it replaced', () => {
  * any router. What it must not do is get between the stream and the port.
  */
 describe('run:send — the inbox tap', () => {
+  it('refuses a chat whose handoff acknowledgement is unresolved before dispatching a provider', async () => {
+    handoffPending.mockReturnValueOnce(true)
+    const port = await send({ chatId: 'chat-1', content: 'Do this twice' })
+    expect(port.postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'error', error: expect.stringContaining('pending remote handoff') }))
+    expect(streamToAgent).not.toHaveBeenCalled()
+    expect(llmStream).not.toHaveBeenCalled()
+  })
+
   it('mirrors an agent turn’s events into the inbox and still forwards them', async () => {
     const port = await send({ chatId: 'chat-1', content: 'hello' })
     portGivenToTheStream().postMessage(ASK)

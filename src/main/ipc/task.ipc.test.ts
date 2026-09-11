@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { TaskError } from '../errors'
 import type { IpcMainInvokeEvent } from 'electron'
 
 /**
@@ -41,6 +42,7 @@ const service = vi.hoisted(() => ({
  * of a task an agent is working on right now) costs a request.
  */
 const sync = vi.hoisted(() => ({
+  handoffReceipt: vi.fn(() => null),
   getChildren: vi.fn(() => ({ tasks: [], refreshed: true })),
   getWatched: vi.fn(() => ({ id: 't1' })),
   takeOver: vi.fn(async () => ({ id: 't1' })),
@@ -132,4 +134,20 @@ it('reads saved children with refresh metadata in the captured profile', async (
   expect(await invoke('task:children', 'parent')).toEqual({ tasks: [], refreshed: true })
   expect(sync.getChildren).toHaveBeenCalledWith('profile-1', 'parent')
   expect(markDirty).not.toHaveBeenCalled()
+})
+
+
+describe('remote handoff outcomes', () => {
+  it('returns accepted data and nudges sync after the service accepts', async () => {
+    const result = await handlers.get('task:hand-off')!({}, 't1', { adapterId: 'service', ref: 'agent' }, 'Continue here')
+    expect(result).toMatchObject({ kind: 'accepted', task: { id: 't1' } })
+    expect(sync.handOff).toHaveBeenCalledWith('profile-1', 't1', { adapterId: 'service', ref: 'agent' }, 'Continue here')
+    expect(markDirty).toHaveBeenCalledWith('profile-1')
+  })
+  it.each([['handed_over', 'attention'], ['handoff_uncertain', 'uncertain']] as const)('preserves the %s outcome across IPC', async (code, kind) => {
+    sync.handOff.mockRejectedValueOnce(new TaskError(code, 'Check the service'))
+    const result = await handlers.get('task:hand-off')!({}, 't1', { adapterId: 'service', ref: 'agent' }, null)
+    expect(result).toMatchObject({ kind, message: 'Check the service' })
+    expect(markDirty).not.toHaveBeenCalled()
+  })
 })

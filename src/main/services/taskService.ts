@@ -1,3 +1,5 @@
+import { getDb } from '../db/client'
+import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import { jobRunsRepo } from '../db/jobs'
 import { syncRepo } from '../db/sync'
@@ -15,6 +17,7 @@ import { taskFileService } from './taskFileService'
 import { createLogger } from '../logger/logger'
 import {
   canTransition,
+  jobRunStatusForTask,
   parseTaskStatus,
   taskStatusForRunState,
   VALID_TRANSITIONS,
@@ -274,6 +277,27 @@ export function toTaskDto(
  * {@link taskFileService.exportHandoff} never throws and removes the file when
  * there is no note, so this is also the delete path for a note that was cleared.
  */
+/** Mirror only the currently active attempt, never a historical run linked as provenance. */
+function projectRemoteAttempt(userId: string, row: TaskRow): void {
+  if (row.executor !== 'remote' || !row.jobRunId || taskHandoffRepo.unresolved(userId, row.id)) return
+  const run = jobRunsRepo.getById(userId, row.jobRunId)
+  if (!run || run.taskId !== row.id || !['pending', 'running'].includes(run.status)) return
+  if (run.localChatId !== row.chatId) return
+  const status = jobRunStatusForTask(parseTaskStatus(row.status))
+  if (run.status !== status) jobRunsRepo.updateStatus(run.id, status, {
+    errorMessage: status === 'failed' ? row.errorMessage : null
+  })
+}
+
+function persistRemotePatch(userId: string, taskId: string, patch: TaskPatch): TaskRow {
+  return getDb().transaction(() => {
+    const row = taskRepo.update(userId, taskId, patch)
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    projectRemoteAttempt(userId, row)
+    return row
+  })
+}
+
 function written(userId: string, row: TaskRow): TaskDto {
   const dto = toTaskDto(row, thisDeviceId(userId))
   taskFileService.exportHandoff(dto)
@@ -509,7 +533,7 @@ export const taskService = {
    */
   acceptRemoteStatus(userId: string, taskId: string, status: TaskStatus): TaskDto {
     const task = requireTask(userId, taskId)
-    const row = taskRepo.update(userId, taskId, statusPatch(task, status))
+    const row = persistRemotePatch(userId, taskId, statusPatch(task, status))
     if (!row) throw new TaskError('not_found', 'Task not found')
     if (parseTaskStatus(task.status) !== status) {
       logger.info('task status pulled', { taskId, from: task.status, to: status })
@@ -691,15 +715,35 @@ export const taskService = {
    * that make it mean something — create, comment, assign, execute — are step
    * 11, each gated on the capability that covers it.
    */
-  handOffToRemote(userId: string, taskId: string): TaskDto {
+  handOffToRemote(userId: string, taskId: string, accepted?: {
+    assignee: TaskAssignee | null
+    executed: boolean
+    note: string | null
+    remaining: RemoteDirtyField[]
+    binding: { key: string | null; url: string | null; state: Record<string, unknown> }
+    deferExport?: boolean
+  }): TaskDto {
     const task = requireTask(userId, taskId)
     if (!task.remoteAdapter) {
       throw new TaskError('invalid_input', 'This task is not connected to a service')
     }
-    const row = taskRepo.update(userId, taskId, { executor: 'remote', executorDevice: null })
+    const row = taskRepo.update(userId, taskId, {
+      executor: 'remote', executorDevice: null,
+      ...(accepted && {
+        ...(accepted.executed ? statusPatch(task, 'in_progress') : {}),
+        ...(accepted.assignee && {
+          assigneeKind: accepted.assignee.kind, assigneeAgentId: accepted.assignee.agentId,
+          assigneeName: accepted.assignee.name, assigneeRef: null
+        }),
+        handoffNote: accepted.note,
+        remoteDirty: accepted.remaining.length ? accepted.remaining : null,
+        remoteKey: accepted.binding.key, remoteUrl: accepted.binding.url, remoteState: accepted.binding.state,
+        remoteSyncedAt: new Date()
+      })
+    })
     if (!row) throw new TaskError('not_found', 'Task not found')
     logger.info('task handed to remote', { taskId, adapter: task.remoteAdapter })
-    return written(userId, row)
+    return accepted?.deferExport ? toTaskDto(row, thisDeviceId(userId)) : written(userId, row)
   },
 
   /**
@@ -894,7 +938,7 @@ export const taskService = {
     next.remoteSyncedAt = new Date()
     if (patch.updatedAt !== undefined) next.updatedAt = patch.updatedAt
 
-    const row = taskRepo.update(userId, taskId, next)
+    const row = persistRemotePatch(userId, taskId, next)
     if (!row) throw new TaskError('not_found', 'Task not found')
     return written(userId, row)
   },

@@ -1,4 +1,5 @@
 import { net } from 'electron'
+import { cinnaWriteFetch } from './cinnaWriteFetch'
 import { userRepo } from '../db/users'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
 import { CinnaSessionChanged, cinnaSessionGeneration } from '../auth/cinna-session'
@@ -91,7 +92,7 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
     throw new CinnaSessionChanged()
   }
   const url = `${baseUrl}${path}`
-  const method = opts.method ?? 'GET'
+  const method = (opts.method ?? 'GET').toUpperCase()
 
   const headers: Record<string, string> = {
     Authorization: authHeader,
@@ -99,7 +100,7 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
     ...(opts.headers ?? {})
   }
 
-  let body: BodyInit | undefined
+  let body: string | undefined
   if (opts.body !== undefined) {
     headers['Content-Type'] = 'application/json'
     body = JSON.stringify(opts.body)
@@ -110,8 +111,16 @@ async function cinnaFetch<T>(userId: string, path: string, opts: FetchOptions = 
   try {
     // Includes reading the body: a server that sends headers and then stalls
     // must release inbox answers and polling work as well as initial connects.
-    response = await net.fetch(url, { method, headers, body, signal: AbortSignal.timeout(30_000) })
+    const signal = AbortSignal.timeout(30_000)
+    response = method === 'GET' || method === 'HEAD'
+      ? await net.fetch(url, { method, headers, signal })
+      : await cinnaWriteFetch(url, { method, headers, body, signal, beforeDispatch: () => {
+        if (cinnaSessionGeneration(userId) !== generation || resolveBaseUrl(userId) !== baseUrl) {
+          throw new CinnaSessionChanged()
+        }
+      } })
   } catch (err) {
+    if (err instanceof CinnaSessionChanged || err instanceof CinnaApiError) throw err
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('network error', { url, method, error: msg, durationMs: Date.now() - started })
     throw new CinnaApiError('request_failed', msg)

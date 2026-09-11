@@ -61,6 +61,7 @@ vi.mock('../tasks/adapters', async () => {
 const { taskSyncService } = await import('./taskSyncService')
 const { taskService } = await import('./taskService')
 const { taskRepo } = await import('../db/tasks')
+const { taskHandoffRepo } = await import('../db/taskHandoffs')
 const { createCinnaTaskAdapter } = await import('../tasks/adapters/cinnaTaskAdapter')
 const { createFakeCinnaServer } = await import('../tasks/adapters/testSupport/fakeCinnaServer')
 const { createFakeRemote, CAPABILITY_SHAPES } = await import(
@@ -1085,6 +1086,202 @@ describe('moving the work across the seam (§5.10)', () => {
       expect(cinna.calls().some((c) => c.path.endsWith('/execute'))).toBe(true)
     })
 
+    it('blocks a repeated start and outgoing status after losing execute acknowledgement, including restart', async () => {
+      const remote = createFakeRemote()
+      holder.adapters = [remote.adapter]
+      const task = taskService.create(USER, { title: 'Lost ack', goal: 'Only run once' })
+      const execute = remote.adapter.execute.bind(remote.adapter)
+      const spy = vi.spyOn(remote.adapter, 'execute').mockImplementationOnce(async (...args) => {
+        await execute(...args)
+        throw new Error('Connection closed after accepting work')
+      })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handoff_uncertain' })
+      const binding = taskService.getById(USER, task.id).remote!
+      expect(remote.stored(binding.id)?.executed).toBe(true)
+      expect(taskHandoffRepo.get(USER, task.id)?.state).toBe('uncertain')
+      taskSyncService.resetCursors()
+      taskService.setStatus(USER, task.id, 'cancelled')
+      const before = remote.requests()
+      await taskSyncService.push(USER, task.id)
+      expect(remote.requests()).toBe(before)
+      expect(remote.stored(binding.id)?.status).toBe('in_progress')
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toThrow()
+      expect(spy).toHaveBeenCalledTimes(1)
+      await expect(taskSyncService.takeOver(USER, task.id, { force: true })).rejects.toMatchObject({ code: 'remote_busy' })
+      spy.mockRestore()
+    })
+
+    it('keeps accepted work blocked when committing the local executor fails', async () => {
+      const task = taskService.create(USER, { title: 'Accepted', goal: 'Only run once' })
+      const spy = vi.spyOn(taskService, 'handOffToRemote').mockImplementationOnce(() => { throw new Error('Write failed') })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handed_over' })
+      spy.mockRestore()
+      expect(taskHandoffRepo.get(USER, task.id)?.state).toBe('accepted_pending')
+      taskSyncService.resetCursors()
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handoff_uncertain' })
+      expect(cinna.calls().filter((call) => call.path.endsWith('/execute'))).toHaveLength(1)
+    })
+
+    it('does not discover a duplicate after a lost create acknowledgement', async () => {
+      const task = taskService.create(USER, { title: 'One original', goal: 'Keep one identity' })
+      const adapter = holder.adapters[0]
+      const create = adapter.create.bind(adapter)
+      const spy = vi.spyOn(adapter, 'create').mockImplementationOnce(async (...args) => {
+        await create(...args)
+        throw new Error('Lost create acknowledgement')
+      })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handoff_uncertain' })
+      taskSyncService.resetCursors()
+      await taskSyncService.pull(USER)
+      expect(taskService.list(USER).map((row) => row.id)).toEqual([task.id])
+      expect(taskHandoffRepo.get(USER, task.id)).toMatchObject({ state: 'uncertain', bindingPending: true })
+      spy.mockRestore()
+    })
+
+    it('resolves a deleted task receipt without recreating the task, after remote work stops', async () => {
+      const remote = createFakeRemote()
+      holder.adapters = [remote.adapter]
+      const task = taskService.create(USER, { title: 'Deleted', goal: 'Do once' })
+      const execute = remote.adapter.execute.bind(remote.adapter)
+      const spy = vi.spyOn(remote.adapter, 'execute').mockImplementationOnce(async (...args) => {
+        const binding = await execute(...args)
+        taskService.remove(USER, task.id)
+        return binding
+      })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handed_over' })
+      const receipt = taskSyncService.handoffReceipt(USER, task.id)!
+      expect(receipt.state).toBe('accepted_pending')
+      expect(taskSyncService.handoffReceipt('another-user', task.id)).toBeNull()
+      await expect(taskSyncService.resolveHandoff(USER, task.id)).rejects.toMatchObject({ code: 'remote_busy' })
+      remote.touch(receipt.remote!.id, { executed: false })
+      await taskSyncService.resolveHandoff(USER, task.id)
+      expect(taskHandoffRepo.unresolved(USER, task.id)).toBe(false)
+      expect(() => taskService.getById(USER, task.id)).toThrow()
+      spy.mockRestore()
+    })
+
+    it('joins identical handoffs and refuses a competing assignment while creation is pending', async () => {
+      const adapter = holder.adapters[0]
+      const create = adapter.create.bind(adapter)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      let arrived!: () => void
+      const entered = new Promise<void>((resolve) => { arrived = resolve })
+      const spy = vi.spyOn(adapter, 'create').mockImplementationOnce(async (...args) => {
+        const binding = await create(...args)
+        arrived()
+        await gate
+        return binding
+      })
+      const task = taskService.create(USER, { title: 'Joined', goal: 'One execution' })
+      const first = taskSyncService.handOff(USER, task.id)
+      await entered
+      const second = taskSyncService.handOff(USER, task.id)
+      await expect(taskSyncService.handOff(USER, task.id, { adapterId: adapter.id, ref: 'different' })).rejects.toMatchObject({ code: 'invalid_input' })
+      await taskSyncService.pull(USER)
+      expect(taskService.list(USER)).toHaveLength(1)
+      release()
+      const results = await Promise.all([first, second])
+      expect(results[0].remote?.id).toBe(results[1].remote?.id)
+      expect(cinna.calls().filter((call) => call.path.endsWith('/execute'))).toHaveLength(1)
+      spy.mockRestore()
+    })
+
+    it('does not let an older recovery dismiss a replacement uncertain receipt', async () => {
+      const taskId = await bound()
+      const receipt = { taskId, chatId: null, state: 'uncertain' as const, adapterId: 'cinna', bindingPending: false,
+        remote: taskService.getById(USER, taskId).remote!, assignee: { ref: 'agent', name: 'Agent' }, message: 'First attempt', updatedAt: 1 }
+      taskHandoffRepo.put(USER, receipt)
+      let release!: (value: boolean) => void
+      const gate = new Promise<boolean>((resolve) => { release = resolve })
+      const probe = vi.spyOn(holder.adapters[0], 'liveSession').mockReturnValueOnce(gate)
+      const oldRecovery = taskSyncService.takeOver(USER, taskId, { force: true })
+      taskHandoffRepo.put(USER, { ...receipt, message: 'New uncertain attempt', updatedAt: 2 })
+      release(false)
+      await expect(oldRecovery).rejects.toMatchObject({ code: 'invalid_input' })
+      expect(taskHandoffRepo.get(USER, taskId)).toMatchObject({ state: 'uncertain', updatedAt: 2 })
+      probe.mockRestore()
+    })
+
+    it.each(['create', 'execute'] as const)('does not recreate an account receipt after a delayed %s result', async (operation) => {
+      const { userRepo } = await import('../db/users')
+      const task = taskService.create(USER, { title: 'Account removed', goal: 'Keep erased data erased' })
+      const adapter = holder.adapters[0]
+      const original = adapter[operation].bind(adapter)
+      const spy = vi.spyOn(adapter, operation).mockImplementationOnce(async (...args) => {
+        const result = await Reflect.apply(original, adapter, args)
+        userRepo.deleteWithCascade(USER)
+        return result
+      })
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toThrow()
+      expect(taskHandoffRepo.get(USER, task.id)).toBeNull()
+      expect(taskRepo.getById(USER, task.id)).toBeUndefined()
+      spy.mockRestore()
+    })
+
+    it('keeps a parent refresh from importing a child whose create acknowledgement is pending', async () => {
+      const remote = createFakeRemote()
+      holder.adapters = [remote.adapter]
+      const parent = taskService.create(USER, { title: 'Parent', goal: 'Parent goal' })
+      taskService.bindRemote(USER, parent.id, remote.seed(parent))
+      const child = taskService.create(USER, { title: 'Child', goal: 'Child goal', parentTaskId: parent.id })
+      const create = remote.adapter.create.bind(remote.adapter)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => { release = resolve })
+      let arrived!: () => void
+      const entered = new Promise<void>((resolve) => { arrived = resolve })
+      const spy = vi.spyOn(remote.adapter, 'create').mockImplementationOnce(async (...args) => {
+        const binding = await create(...args)
+        arrived()
+        await gate
+        return binding
+      })
+      const handoff = taskSyncService.handOff(USER, child.id)
+      await entered
+      await expect(taskSyncService.listChildren(USER, parent.id)).rejects.toMatchObject({ code: 'handoff_uncertain' })
+      expect(taskService.list(USER, { parentTaskId: parent.id }).map((row) => row.id)).toEqual([child.id])
+      release()
+      await handoff
+      const refreshed = await taskSyncService.listChildren(USER, parent.id)
+      expect(refreshed.map((row) => row.id)).toEqual([child.id])
+      spy.mockRestore()
+    })
+
+    it.each(['completed', 'error', 'cancelled'] as const)('projects remote %s onto the original active local job attempt', async (status) => {
+      const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
+      const { chatRepo } = await import('../db/chats')
+      const job = jobsRepo.create(USER, { type: 'local', title: 'Original job', prompt: 'Finish remotely' })
+      const chat = chatRepo.create(USER)
+      const task = taskService.create(USER, { title: job.title, goal: job.prompt, chatId: chat.id, jobId: job.id })
+      const run = jobRunsRepo.create({ userId: USER, jobId: job.id, type: 'local', localChatId: chat.id,
+        taskId: task.id, status: 'running' })
+      taskService.linkJobRun(USER, task.id, run.id)
+      const handed = await taskSyncService.handOff(USER, task.id)
+      cinna.touch(handed.remote!.id, { status, error_message: status === 'error' ? 'Remote failed' : null })
+      await taskSyncService.pullOne(USER, task.id)
+      const expected = status === 'completed' ? 'succeeded' : status === 'error' ? 'failed' : 'cancelled'
+      expect(jobRunsRepo.listByJob(USER, job.id)[0]).toMatchObject({ status: expected })
+      expect(jobRunsRepo.countInProgressByJob(USER).get(job.id) ?? 0).toBe(0)
+      expect(jobRunsRepo.getById(USER, run.id)?.finishedAt).not.toBeNull()
+      if (status === 'error') expect(jobRunsRepo.getById(USER, run.id)?.errorMessage).toBe('Remote failed')
+    })
+
+    it.each(['terminal', 'different-chat', 'deleted-chat'] as const)('does not rewrite %s job provenance from remote pulls', async (history) => {
+      const { jobsRepo, jobRunsRepo } = await import('../db/jobs')
+      const { chatRepo } = await import('../db/chats')
+      const job = jobsRepo.create(USER, { type: 'local', title: 'History', prompt: 'Original attempt' })
+      const chat = chatRepo.create(USER)
+      const currentChat = history !== 'terminal' ? chatRepo.create(USER) : chat
+      const task = taskService.create(USER, { title: job.title, goal: job.prompt, chatId: currentChat.id, jobId: job.id })
+      const status = history === 'terminal' ? 'failed' : 'running'
+      const run = jobRunsRepo.create({ userId: USER, jobId: job.id, type: 'local', localChatId: history === 'deleted-chat' ? null : chat.id, taskId: task.id, status })
+      taskService.linkJobRun(USER, task.id, run.id)
+      const handed = await taskSyncService.handOff(USER, task.id)
+      cinna.touch(handed.remote!.id, { status: 'completed' })
+      await taskSyncService.pullOne(USER, task.id)
+      expect(jobRunsRepo.getById(USER, run.id)?.status).toBe(status)
+    })
+
     it('leaves the task on this device when the service will not start it', async () => {
       // **The ordering that matters.** `executor` is what the push reads to
       // decide whether this device may still write the status, and what the
@@ -1125,16 +1322,16 @@ describe('moving the work across the seam (§5.10)', () => {
       // refused while an agent burns tokens on a task that, by the rest of the
       // app's reckoning, does not exist.
       const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
-      const spy = vi.spyOn(taskService, 'acceptRemoteStatus').mockImplementationOnce(() => {
+      const spy = vi.spyOn(taskService, 'handOffToRemote').mockImplementationOnce(() => {
         throw new TaskError('not_found', 'Task not found')
       })
 
-      const handed = await taskSyncService.handOff(USER, task.id)
+      await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'handed_over' })
 
       expect(spy).toHaveBeenCalled()
       // The binding is what the caller needs, and it was committed before the
       // network call.
-      expect(handed.remote?.adapter).toBe('cinna')
+      expect(taskService.getById(USER, task.id).remote?.adapter).toBe('cinna')
       expect(cinna.calls().some((c) => c.path.endsWith('/execute'))).toBe(true)
       spy.mockRestore()
     })
@@ -1144,9 +1341,11 @@ describe('moving the work across the seam (§5.10)', () => {
       // happen is the caller reporting a refusal and cleaning up: an agent is
       // running, and there is nothing to clean up anyway.
       const task = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile payouts' })
-      const spy = vi.spyOn(taskService, 'markRemoteSynced').mockImplementationOnce(() => {
+      const execute = holder.adapters[0].execute.bind(holder.adapters[0])
+      const spy = vi.spyOn(holder.adapters[0], 'execute').mockImplementationOnce(async (...args) => {
+        const binding = await execute(...args)
         taskService.remove(USER, task.id)
-        throw new TaskError('not_found', 'Task not found')
+        return binding
       })
 
       await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({

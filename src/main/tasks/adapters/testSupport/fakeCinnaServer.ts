@@ -199,6 +199,9 @@ export function createFakeCinnaServer(options: FakeCinnaOptions = {}): FakeCinna
   function route(method: string, rawPath: string, body: unknown): unknown {
     const path = rawPath.split('?')[0]
     const parts = path.replace(/^\/api\/v1\//, '').replace(/\/$/, '').split('/')
+    if (parts[0] === 'agents' && method === 'GET') {
+      return { data: [{ id: 'agt-worker', name: 'Remote worker' }], count: 1 }
+    }
 
     if (parts[0] === 'activities' && parts[1] === 'stats') {
       const waiting = [...sessions.values()].reduce(

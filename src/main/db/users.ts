@@ -13,7 +13,8 @@ import {
   jobFolders,
   notes,
   noteFolders,
-  tasks
+  tasks,
+  taskHandoffs
 } from './schema'
 
 export type UserRow = typeof users.$inferSelect
@@ -158,6 +159,7 @@ export const userRepo = {
       // description, the handoff note and the error text, and `tasks.user_id`
       // has no FK, so without this line everything a deleted profile was
       // working on stays in the database under a dead user id.
+      tx.delete(taskHandoffs).where(eq(taskHandoffs.userId, id)).run()
       tx.delete(tasks).where(eq(tasks.userId, id)).run()
       tx.delete(jobFolders).where(eq(jobFolders.userId, id)).run()
       tx.delete(notes).where(eq(notes.userId, id)).run()

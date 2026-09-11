@@ -6,6 +6,8 @@ import { syncService } from '../services/syncService'
 import { taskSyncService } from '../services/taskSyncService'
 import { taskExecutionService } from '../services/taskExecutionService'
 import { parseAnswerPayload } from '../services/askDelivery'
+import { TaskError } from '../errors'
+import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
 import { ipcHandle } from './_wrap'
 import type { AskAnswerPayload, InboxAnswerResult, InboxEntry } from '../../shared/inbox'
 import type { DesktopTaskTarget, TaskDto, TaskListQuery } from '../../shared/tasks'
@@ -67,6 +69,43 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:children', async (_event, taskId: string) => {
     userActivation.requireActivated()
     return taskSyncService.getChildren(getProfileScopeUserId(), taskId)
+  })
+
+  ipcHandle('task:handoff-receipt', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    return taskSyncService.handoffReceipt(getProfileScopeUserId(), taskId)
+  })
+  ipcHandle('task:chat-handoff', async (_event, chatId: string) => {
+    userActivation.requireActivated()
+    return taskSyncService.pendingHandoffForChat(getProfileScopeUserId(), chatId)
+  })
+  ipcHandle('task:resolve-handoff', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    await taskSyncService.resolveHandoff(userId, taskId)
+    syncService.markDirty(userId)
+  })
+
+  ipcHandle('task:handoff-options', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    return taskSyncService.handoffOptions(getProfileScopeUserId(), taskId)
+  })
+
+  ipcHandle('task:hand-off', async (_event, taskId: string, target: TaskHandoffTarget, note: string | null): Promise<TaskHandoffOutcome> => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    // A renderer handoff always names a target; only internal jobs may reuse assignment.
+    if (!target || typeof target !== 'object') return { kind: 'refused', message: 'Choose a remote agent.' }
+    try {
+      const task = await taskSyncService.handOff(userId, taskId, target, note)
+      syncService.markDirty(userId)
+      return { kind: 'accepted', task, receipt: taskSyncService.handoffReceipt(userId, taskId) ?? undefined, message: 'Task handed off.' }
+    } catch (error) {
+      const kind = error instanceof TaskError && error.code === 'handed_over' ? 'attention'
+        : error instanceof TaskError && error.code === 'handoff_uncertain' ? 'uncertain' : 'refused'
+      return { kind, receipt: taskSyncService.handoffReceipt(userId, taskId) ?? undefined,
+        message: error instanceof Error ? error.message : 'This task could not be handed off.' }
+    }
   })
 
   ipcHandle('task:start', async (_event, taskId: string, target: DesktopTaskTarget) => {

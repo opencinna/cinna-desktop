@@ -1,3 +1,4 @@
+import { jobRunStatusForTask } from '../../shared/taskStatus'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import {
   jobsRepo,
@@ -26,7 +27,6 @@ import { newChatRouter, routingOf } from '../../shared/chatRouting'
 import type { JobRunOrigin } from '../../shared/jobs'
 import type { RunState } from '../../shared/runEvents'
 import { parseTaskPriority, type TaskDto } from '../../shared/tasks'
-import type { TaskStatus } from '../../shared/taskStatus'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
 import { taskService } from './taskService'
@@ -791,7 +791,7 @@ export const jobService = {
       // took the work and only the local record of it was lost, so there is
       // nothing to clean up and an agent is running right now. Deleting here
       // would be the app arguing with a row a peer has already removed.
-      if (err instanceof TaskError && err.code === 'handed_over') throw err
+      if (err instanceof TaskError && (err.code === 'handed_over' || err.code === 'handoff_uncertain')) throw err
       try {
         taskService.remove(userId, task.id)
       } catch (cleanupErr) {
@@ -882,9 +882,9 @@ export const jobService = {
     })
     const task = await taskSyncService.pullOne(userId, taskId)
     if (task) {
-      const mapped = jobRunStatusForTask(task.status)
-      if (mapped !== run.status) jobRunsRepo.updateStatus(runId, mapped)
-      logger.info('run refreshed from its task', { runId, taskStatus: task.status, newStatus: mapped })
+      // The accepted remote snapshot projects only its matching active attempt.
+      // Repeating that write here would erase its error and overwrite history.
+      logger.info('run refreshed from its task', { runId, taskStatus: task.status })
     } else {
       // **A null from `pullOne` is three different things**, and only one of
       // them is news: the service could not be reached (say nothing and try
@@ -899,9 +899,14 @@ export const jobService = {
       // Asked of the row rather than returned by `pullOne`, because "is this
       // task still bound" is the fact that decides it and the row is where that
       // fact lives.
-      const stillBound = taskRepo.getById(userId, taskId)?.remoteAdapter ?? null
+      const currentTask = taskRepo.getById(userId, taskId)
+      const stillBound = currentTask?.remoteAdapter ?? null
       if (!stillBound) {
-        jobRunsRepo.updateStatus(runId, 'failed')
+        const currentRun = jobRunsRepo.getById(userId, runId)
+        if (currentRun && currentRun.taskId === taskId && ['pending', 'running'].includes(currentRun.status) &&
+          (!currentTask || currentRun.localChatId === currentTask.chatId)) {
+          jobRunsRepo.updateStatus(runId, 'failed')
+        }
         logger.warn('a run lost the work it was executing', { runId, taskId })
         throw new JobError(
           'missing_dependency',
@@ -1062,42 +1067,6 @@ export const jobService = {
 }
 
 /**
- * Translate a cinna-core task status into our local run status.
- * Terminal cinna states map to the matching local terminal; any in-flight
- * state collapses to `running`. Keep this aligned with the cinna-core
- * `task.status` vocabulary (new, refining, open, in_progress, blocked,
- * completed, error, cancelled, archived).
- */
-/**
- * A job run's status, from the status of the task it is executing.
- *
- * One direction only, and it is this one: the task is the record and the run
- * row is a view of it that the Jobs screen reads (§5.8). It used to map
- * cinna-core's own status strings, which was the same table — task status *is*
- * cinna's vocabulary, by the phase's first decision — over a value that had
- * come straight off the wire instead of through `parseTaskStatus`.
- *
- * `blocked` is **running**, deliberately: a run whose agent is waiting on a
- * human has not finished and has not failed. The thing the user has to do about
- * it is in the inbox, which is where that distinction is rendered.
- */
-function jobRunStatusForTask(status: TaskStatus): JobRunStatus {
-  switch (status) {
-    case 'completed':
-    case 'archived':
-      return 'succeeded'
-    case 'error':
-      return 'failed'
-    case 'cancelled':
-      return 'cancelled'
-    case 'new':
-      return 'pending'
-    default:
-      return 'running'
-  }
-}
-
-/**
  * Give a pre-step-11 remote run the task it never had, and return its id.
  *
  * These rows carry the remote's id in `cinnaTaskId` and nothing else — no task,
@@ -1134,6 +1103,7 @@ async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | 
   const already = taskRepo.getByRemote(userId, adapterId, run.cinnaTaskId)
   if (already) {
     jobRunsRepo.setTaskId(run.id, already.id)
+    if (!already.jobRunId) taskService.linkJobRun(userId, already.id, run.id)
     logger.info('a remote job run joined the task a pull had already made for it', {
       runId: run.id,
       taskId: already.id

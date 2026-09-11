@@ -20,7 +20,7 @@ A task is the durable record of work: its original goal, current status, assigne
 3. **Answer an agent running here.** A parked question/permission or A2A next-message question appears in the Inbox. A hand-opened chat acquires a task at its first persisted ask. Answer from the Inbox and keep the outcome visible. A next-message answer continues the same agent/chat/task in main without navigating away; its pending request survives app restart.
 4. **Answer remote work.** A locally known blocked task on an ask-capable adapter contributes its live questions to the same Inbox. Its task page offers **Open the Inbox** separately from takeover. A failed delivery keeps the question dialog and draft available for retry.
 5. **Keep remote work current.** The active profile pushes local edits and discovers remote tasks automatically, with five seconds between completed passes. Focus and wake catch up. A bound task page opens its saved record immediately, refreshes in the background and marks failed remote refreshes as stale.
-6. **Move execution.** A job can hand its task to a connected service. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. For a task with no local chat, choose an available agent or **Default chat model**, then press **Continue**. Main starts one new conversation with the goal, distinct description and handoff note, and opens it after acceptance.
+6. **Move execution.** On a desktop task, press **Hand off**, choose a remote agent and supply the handoff note. Jobs use the same handoff service. Accepted work moves to the service and leaves a receipt in its existing conversation. An uncertain result offers **Review pending handoff** before execution can continue here. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. For a task with no local chat, choose an available agent or **Default chat model**, then press **Continue**. Main starts one new conversation with the goal, distinct description and handoff note, and opens it after acceptance.
 
 ## Business Rules
 
@@ -28,6 +28,8 @@ A task is the durable record of work: its original goal, current status, assigne
 - **Saved children survive a failed refresh.** Opening Subtasks returns saved rows immediately and refreshes the remote parent’s children in the background. A failure leaves those rows visible with a retry message; an unconfirmed empty read does not claim there are no subtasks.
 - **Starting here keeps the work.** Continue reuses the task and its remote/job provenance; it does not create another job attempt or reuse the remote protocol session. A refused start keeps the selected target and task page open. Changing the target clears the old refusal. Pending controls disable in place.
 - **Start only work this device owns.** Existing conversations continue through their own controls. Active turns, pending local questions, script tasks and completed/cancelled/archived tasks cannot be replaced by a new start. Failed tasks may be retried. Agent readiness and model configuration are checked before dispatch, with profile/claim/configuration rechecks after asynchronous preparation.
+- **A lost acknowledgement is not a refusal.** A durable handoff receipt blocks another local start and outgoing task writes until explicit recovery. Known-live remote work cannot be taken over; an unknown result requires an explicit continue-anyway decision. Recovery remains available if the task was deleted or the agent directory is offline.
+- **Remote completion finishes the current attempt.** A handed-off job follows the remote task’s result. Older attempts retain their recorded outcome, including after the task starts a new local conversation.
 - **The task outlives an attempt.** Status and provenance belong to the work; conversation and run links may disappear without erasing its goal or history.
 - **Local writes are local first.** Network failures do not undo a task edit. Bound changes accumulate dirty markers for the adapter coordinator; device sync is a separate path.
 - **Validate status writes; accept remote facts.** The desktop uses the shared transition table. Pulled status is accepted as the service's fact. Run state maps into task state at the recording boundary, rather than becoming a second task vocabulary.
@@ -41,7 +43,6 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- There is no general task hand-off IPC/picker; jobs are the production handover entry point. The local Continue picker chooses the first desktop conversation’s target, not a remote destination.
 - Autonomous multi-turn execution, coordinator handback, the script router and attach/replay remain later runtime work; the existing main-owned path starts one explicit task turn or continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by this polling carrier.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
@@ -59,6 +60,7 @@ Task writes → device sync and handoff export; activated profile / focus / wake
 
 ## Integration Points
 
+- [Remote handoff and recovery](remote_handoff.md) — selected remote destination, durable uncertainty, shared jobs path and recovery controls.
 - [Technical details](tasks_tech.md) — schema, IPC and implementation entry points.
 - [The Inbox](inbox.md) — request identities, failure policy, polling and answer retries.
 - [Jobs](../jobs/jobs.md) and [Cinna task view](../cinna_task_view/cinna_task_view.md) — reusable work, attempt history and the service conversation.

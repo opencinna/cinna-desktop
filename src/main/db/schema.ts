@@ -7,6 +7,7 @@ import type { ChatRouter } from '../../shared/chatRouting'
 import type { InputRequest, InputResumeMode } from '../../shared/runEvents'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { TaskStatus } from '../../shared/taskStatus'
+import type { TaskHandoffReceipt } from '../../shared/taskHandoff'
 import type {
   TaskArtifact,
   TaskAssignee,
@@ -691,6 +692,14 @@ export const tasks = sqliteTable('tasks', {
  * device would offer a button nothing could answer. A remote's open asks get no
  * row at all — the remote is the registry and the desktop is the view.
  */
+// Local execution receipts deliberately survive task deletion and do not sync.
+export const taskHandoffs = sqliteTable('task_handoffs', {
+  taskId: text('task_id').primaryKey(),
+  userId: text('user_id').notNull(),
+  chatId: text('chat_id'),
+  receipt: text('receipt', { mode: 'json' }).$type<TaskHandoffReceipt>().notNull()
+})
+
 export const taskInputRequests = sqliteTable('task_input_requests', {
   /** The run's `requestId`, verbatim. */
   id: text('id').primaryKey(),

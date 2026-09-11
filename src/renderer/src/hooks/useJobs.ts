@@ -22,7 +22,8 @@ const jobRunLog = createLogger('job-run')
 export function useJobList() {
   return useQuery({
     queryKey: ['jobs'],
-    queryFn: () => window.api.jobs.list()
+    queryFn: () => window.api.jobs.list(),
+    refetchInterval: (query) => query.state.data?.some((job) => job.inProgressRunsCount > 0) ? 5000 : false
   })
 }
 
@@ -38,6 +39,7 @@ export function useJobRuns(jobId: string | null) {
   return useQuery({
     queryKey: ['jobs', jobId, 'runs'],
     queryFn: () => (jobId ? window.api.jobs.listRuns(jobId) : []),
+    refetchInterval: (query) => query.state.data?.some((run) => run.status === 'pending' || run.status === 'running') ? 5000 : false,
     enabled: !!jobId
   })
 }

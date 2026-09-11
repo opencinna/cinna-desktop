@@ -74,6 +74,7 @@ import { parseTaskPriority, type TaskArtifact, type TaskDto } from '../../../sha
 import type { InputQuestion, InputRequest } from '../../../shared/runEvents'
 import type { RequestResolution } from '../../../shared/localAgentRequests'
 import { CinnaApiError } from '../../errors'
+import { CinnaSessionChanged } from '../../auth/cinna-session'
 import { createLogger } from '../../logger/logger'
 import {
   RemoteTaskError,
@@ -186,6 +187,7 @@ export interface CinnaWorld {
  * bytes) and a link has no representation there at all.
  */
 const CINNA_CAPABILITIES: RemoteTaskCapabilities = {
+  assigneeDirectory: true,
   create: true,
   writeStatus: true,
   archive: true,
@@ -476,6 +478,14 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
 
   return {
     id,
+
+    async listAssignees(userId) {
+      const page = await call<{ data: Array<{ id?: unknown; name?: unknown }> }>(userId, '/api/v1/agents/')
+      if (!Array.isArray(page?.data)) throw new RemoteTaskError('unavailable', 'The agent directory could not be read.')
+      return page.data.flatMap((row) => typeof row.id === 'string' && row.id.trim()
+        ? [{ ref: row.id, name: typeof row.name === 'string' ? row.name : row.id, kind: 'remote_agent' as const }]
+        : [])
+    },
 
     // A fresh object every call, and fresh arrays inside it: a caller that
     // edits what it was handed must not change what the next one sees.
@@ -835,8 +845,10 @@ function commentTypeFor(type: RemoteCommentDraft['type']): string {
  * both arrive as 400. See the module comment.
  */
 function asRemoteError(err: unknown, path: string): RemoteTaskError {
+  if (err instanceof CinnaSessionChanged) return new RemoteTaskError('invalid_request', err.message)
   if (err instanceof RemoteTaskError) return err
   if (err instanceof CinnaApiError) {
+    if (err.code === 'request_not_sent') return new RemoteTaskError('invalid_request', err.message)
     const detail = err.detail?.trim() ?? ''
     if (err.code === 'not_cinna_user' || err.code === 'missing_server_url') {
       return new RemoteTaskError('unavailable', 'This profile is not connected to Cinna.', err.message)

@@ -1,4 +1,6 @@
 import { taskService } from './taskService'
+import { handingOffTasks, taskOperationKey } from './taskOperationState'
+import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskFileService } from './taskFileService'
 import { chatRepo } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
@@ -40,6 +42,9 @@ export const taskExecutionService = {
     let createdChatId: string | null = null
     let accepted = false
     const assertTask = (): TaskDto => {
+      if (handingOffTasks.has(taskOperationKey(scope.profileUserId, taskId)) || taskHandoffRepo.unresolved(scope.profileUserId, taskId)) {
+        throw new TaskError('handoff_uncertain', 'Resolve this task’s remote handoff before starting it here.')
+      }
       userActivation.requireActivated()
       if (getProfileScopeUserId() !== scope.profileUserId) {
         throw new TaskError('invalid_input', 'The active profile changed. Start this task from its profile.')
