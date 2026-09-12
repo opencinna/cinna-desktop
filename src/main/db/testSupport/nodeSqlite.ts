@@ -72,6 +72,7 @@ function wrapStatement(stmt: ReturnType<DatabaseSync['prepare']>) {
 export function adaptDatabase(raw: DatabaseSync): Database.Database {
   let depth = 0
   const client = {
+    get inTransaction() { return depth > 0 },
     exec: (sql: string) => {
       raw.exec(sql)
       return client

@@ -82,6 +82,34 @@ function completed(text: string) { return { text, parts: [], notices: [], taskSt
 const decision = (answer: string) => ({ kind: 'question' as const, answers: [[answer]] })
 
 describe('script runtime', () => {
+  it('prepares inside an outer transaction without escaping its rollback', async () => {
+    const job = makeJob([{ id: 'write', agent: 'writer', prompt: '{{goal}}' }])
+    expect(() => state.database!.db.transaction(() => {
+      const prepared = scriptRuntimeService.prepareJob(scope, job)
+      expect(scriptRuntimeRepo.get(USER, prepared.taskId)?.state).toBe('queued')
+      expect(() => prepared.launch()).toThrow('Commit the script admission')
+      throw new Error('occurrence insert failed')
+    })).toThrow('occurrence insert failed')
+    expect(taskRepo.list(USER)).toEqual([])
+    expect(jobRunsRepo.listByJob(USER, job.id)).toEqual([])
+    expect(scriptRuntimeRepo.list(USER)).toEqual([])
+    expect(taskRunnersByChat.size).toBe(0)
+    expect(driverRun).not.toHaveBeenCalled()
+  })
+  it('launches a committed preparation exactly once and refuses its old closure after recovery', async () => {
+    const prepared = scriptRuntimeService.prepareJob(scope, makeJob([{ id: 'write', agent: 'writer', prompt: '{{goal}}' }]))
+    expect(driverRun).not.toHaveBeenCalled()
+    expect(taskRunnersByChat.size).toBe(0)
+    prepared.launch()
+    await vi.waitFor(() => expect(taskService.getById(USER, prepared.taskId).status).toBe('completed'))
+    expect(driverRun).toHaveBeenCalledTimes(1)
+    expect(() => prepared.launch()).toThrow('no longer queued')
+    const interrupted = scriptRuntimeService.prepareJob(scope, makeJob([{ id: 'write', agent: 'writer', prompt: '{{goal}}' }]))
+    scriptRuntimeService.recover()
+    expect(scriptRuntimeRepo.get(USER, interrupted.taskId)?.state).toBe('interrupted')
+    expect(() => interrupted.launch()).toThrow('no longer queued')
+    expect(driverRun).toHaveBeenCalledTimes(1)
+  })
   it('dispatches an explicit coordinator job in main and settles its linked attempt', async () => {
     stream.mockResolvedValue({ content: '', toolCalls: [{ id: 'finish', name: 'finish', input: { summary: 'Verified coordinator result' } }] })
     const job = jobService.create(USER, { type: 'local', title: 'Coordinate', prompt: 'Complete work', router: 'coordinator' })

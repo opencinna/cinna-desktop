@@ -17,9 +17,12 @@ const logger = createLogger('Activation')
  * on activation: providers are not per-profile, so the same set is loaded
  * regardless of which user just signed in.
  */
-export async function reloadUserProviders(): Promise<void> {
+export async function reloadUserProviders(current: () => boolean = () => true): Promise<void> {
+  if (!current()) return
+  const profileUserId = getProfileScopeUserId()
   clearAllAdapters()
   await mcpManager.disconnectAll()
+  if (!current()) return
 
   const userId = getSettingsScopeUserId()
 
@@ -44,7 +47,6 @@ export async function reloadUserProviders(): Promise<void> {
   // Account-provisioned (Cinna-managed) providers are profile-scoped. Load the
   // active profile's already-synced managed adapters so they're usable
   // immediately on activation (even before the network sync refreshes them).
-  const profileUserId = getProfileScopeUserId()
   if (profileUserId !== DEFAULT_SCOPE_USER_ID) {
     accountConfigService.loadManagedAdapters(profileUserId)
   }

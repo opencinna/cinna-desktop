@@ -14,6 +14,7 @@ import { registerFilesHandlers } from './files.ipc'
 import { registerJobHandlers } from './job.ipc'
 import { registerNoteHandlers } from './note.ipc'
 import { registerTaskHandlers } from './task.ipc'
+import { registerLocalScheduleHandlers } from './localSchedule.ipc'
 import { registerCinnaHandlers } from './cinna.ipc'
 import { registerCatalogHandlers } from './catalog.ipc'
 import { registerSettingsHandlers } from './settings.ipc'
@@ -44,6 +45,7 @@ export function registerAllIpcHandlers(): void {
   registerNoteHandlers()
   // Tasks, and the inbox that is a view over them.
   registerTaskHandlers()
+  registerLocalScheduleHandlers()
   registerCinnaHandlers()
   registerCatalogHandlers()
   registerSettingsHandlers()

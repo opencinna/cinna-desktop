@@ -10,6 +10,8 @@ import {
 } from '../services/account-config-sync'
 import { syncService } from '../services/syncService'
 import { taskSyncScheduler } from '../services/taskSyncScheduler'
+import { localScheduleScheduler } from '../services/localScheduleScheduler'
+import { getSettingsScopeUserId } from './scope'
 import { localDevService } from '../localdev/localDevService'
 import { userRepo } from '../db/users'
 import { DEFAULT_USER_ID } from '../../shared/userIds'
@@ -20,6 +22,8 @@ import { DEFAULT_USER_ID } from '../../shared/userIds'
  */
 class UserActivation {
   private _activated = false
+  private _epoch = 0
+  private _operations: Promise<void> = Promise.resolve()
   private _unlockedUserIds = new Set<string>()
   /** In-flight `activate()` run, used to dedupe concurrent calls for one user. */
   private _pendingActivation?: { userId: string; promise: Promise<void> }
@@ -75,14 +79,25 @@ class UserActivation {
   }
 
   private async _activate(userId: string): Promise<void> {
+    const epoch = ++this._epoch
+    this._activated = false
     taskSyncScheduler.stop()
-    setCurrentUser(userId)
-    await reloadUserProviders()
-    this._activated = true
-    taskSyncScheduler.start(userId)
-
-    // Sync remote agents for Cinna users (non-blocking)
-    this._startRemoteSync(userId)
+    localScheduleScheduler.stop()
+    const current = () => epoch === this._epoch
+    // Provider teardown/reload must not overlap: a late disconnect for A
+    // could otherwise remove B's newly registered connections.
+    const operation = this._operations.catch(() => {}).then(async () => {
+      if (!current()) return
+      setCurrentUser(userId)
+      await reloadUserProviders(current)
+      if (!current()) return
+      this._activated = true
+      taskSyncScheduler.start(userId)
+      localScheduleScheduler.start({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() })
+      this._startRemoteSync(userId)
+    })
+    this._operations = operation
+    await operation
   }
 
   /** Trigger remote agent + account-config sync for Cinna users */
@@ -109,8 +124,11 @@ class UserActivation {
 
   /** Tear down the active session without loading any providers. */
   async deactivate(): Promise<void> {
+    const epoch = ++this._epoch
+    this._pendingActivation = undefined
     this._activated = false
     taskSyncScheduler.stop()
+    localScheduleScheduler.stop()
     // The local-dev state names a host and a folder belonging to the profile
     // that is going away; leaving it up would show the next profile someone
     // else's workspace path.
@@ -120,8 +138,12 @@ class UserActivation {
     // Zero all UMKs + clear sync timers on profile switch / sign-out.
     void syncService.onProfileSwitch()
     clearAllAdapters()
-    await mcpManager.disconnectAll()
-    setCurrentUser(DEFAULT_USER_ID)
+    const operation = this._operations.catch(() => {}).then(async () => {
+      await mcpManager.disconnectAll()
+      if (epoch === this._epoch) setCurrentUser(DEFAULT_USER_ID)
+    })
+    this._operations = operation
+    await operation
   }
 
   /** Guard for IPC handlers — throws if no user is activated. */

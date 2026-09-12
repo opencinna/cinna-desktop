@@ -221,3 +221,7 @@ No IPC, no renderer, no SQLite in this layer.
 ## Technical Details
 
 See [Kit Contract (tech)](kit_contract_tech.md).
+
+## Local schedule execution
+
+Manifest schedule declarations are descriptive until the user reviews and enables one for this profile/device. Desktop executes only static_prompt through a generated one-step script Job, with optional timezone frozen at review. Unsupported declaration types remain non-executable. See [Local schedules](../../jobs/tasks/local_schedules.md) for numeric cron, consent and recovery rules.

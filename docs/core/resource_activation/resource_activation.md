@@ -114,3 +114,7 @@ Activation is not a cheap read: it clears every LLM adapter and disconnects ever
 - **[Agents](../../agents/agents/agents.md)** — agent data gated behind activation
 - **[Chat Modes](../../chat/chat_modes/chat_modes.md)** — mode data gated behind activation
 - **[Messaging](../../chat/messaging/messaging.md)** — chat CRUD + streaming gated behind activation
+
+## Scheduled work
+
+[Local schedules](../../jobs/tasks/local_schedules.md) admits work only for the activated profile. Replacement/deactivation invalidates pending checks immediately; serialized provider reload must finish for the winning activation before admissions resume. Sleep/quit stops admission before runtime interruption. Already admitted tasks retain their captured profile/settings scope.

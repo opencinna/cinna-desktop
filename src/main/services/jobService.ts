@@ -31,6 +31,7 @@ import { parseTaskPriority, type TaskDto } from '../../shared/tasks'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
 import { taskService } from './taskService'
+import { taskRunnerBridge } from './taskRunnerBridge'
 import { taskSyncService } from './taskSyncService'
 import { rebuildJobManifest } from '../sync/manifest'
 import {
@@ -942,6 +943,10 @@ export const jobService = {
     if (!result.runDeleted) {
       throw new JobError('not_found', 'Job run not found')
     }
+    // The repository hard-deletes the owned chat too. Follow the same
+    // lifecycle notification as chatService.permanentDelete so a waiting
+    // script cannot retain unanswerable gates and permanent reservations.
+    if (result.chatDeleted && result.chatId) taskRunnerBridge.chatRemoved(userId, result.chatId)
     logger.info('job run deleted', {
       runId,
       chatId: result.chatId,

@@ -23,13 +23,15 @@ import { PromptDocCard } from './PromptDocCard'
 import { CommandsCard, StatusCard } from './ReadOnlyCards'
 import { PermissionsCard } from './PermissionsCard'
 import { FolderTab } from './FolderTab'
+import { SchedulesTab } from './SchedulesTab'
 
-export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'permissions' | 'folder'
+export type AgentPageTab = 'overview' | 'prompts' | 'commands' | 'schedules' | 'permissions' | 'folder'
 
 const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'prompts', label: 'Prompts' },
   { id: 'commands', label: 'Commands' },
+  { id: 'schedules', label: 'Schedules' },
   // Permissions is a tab and not a card on Overview: in the common case it is a
   // fixed paragraph identical for every folder agent plus "nothing remembered
   // yet" — knowledge, not a control (rule 2) — and the count badge is what
@@ -203,7 +205,7 @@ export function LocalAgentPage(): React.JSX.Element {
   // folder was never asked to have. Every other tab still has something true to
   // show: Overview its name and status, Prompts its `AGENT.md`, Permissions the
   // profile it runs under, Folder the findings that explain what it is.
-  const tabs = agent.kind === 'bare' ? TABS.filter((entry) => entry.id !== 'commands') : TABS
+  const tabs = agent.kind === 'bare' ? TABS.filter((entry) => !['commands', 'schedules'].includes(entry.id)) : TABS
   // The selected tab persists across agents, so someone on Commands who clicks
   // a bare agent would land on a tab that is not there and see an empty panel.
   // Falling back for the render only — `setTab` is untouched, so going back to
@@ -319,7 +321,7 @@ export function LocalAgentPage(): React.JSX.Element {
         <nav
           role="tablist"
           aria-label="Agent details"
-          className="flex gap-1 border-b border-[var(--color-border)]"
+          className="flex gap-1 overflow-x-auto border-b border-[var(--color-border)]"
         >
           {tabs.map((entry) => {
             const active = entry.id === activeTab
@@ -369,6 +371,7 @@ export function LocalAgentPage(): React.JSX.Element {
         </nav>
 
         <div role="tabpanel" className="space-y-3">
+          {activeTab === 'schedules' && <SchedulesTab agentId={agent.id} />}
           {activeTab === 'overview' &&
             /* Three of the four Overview cards name a file only a kit folder
                has: `app-data/storage/STATUS.md`, and the manifest twice. A card

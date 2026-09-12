@@ -1,4 +1,5 @@
 import type { ScriptRuntimeCheckpoint } from '../tasks/scriptRuntimeTypes'
+import type { LocalScheduleDefinition, LocalScheduleOccurrence } from '../../shared/localSchedules'
 import type { TaskScript } from '../../shared/taskScript'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
@@ -711,6 +712,37 @@ export const taskScriptRuntimes = sqliteTable('task_script_runtimes', {
   taskId: text('task_id').primaryKey().references(() => tasks.id, { onDelete: 'cascade' }),
   userId: text('user_id').notNull(),
   checkpoint: text('checkpoint', { mode: 'json' }).$type<ScriptRuntimeCheckpoint>().notNull()
+})
+
+// Execution opt-in and receipts belong to one profile on this device. Job/task
+// references deliberately survive their deletion so uncertainty stays visible.
+export const localScheduleBindings = sqliteTable('local_schedule_bindings', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  manifestId: text('manifest_id').notNull(),
+  name: text('name').notNull(),
+  definition: text('definition', { mode: 'json' }).$type<LocalScheduleDefinition>().notNull(),
+  revision: text('revision').notNull(),
+  jobId: text('job_id').notNull(),
+  jobFingerprint: text('job_fingerprint').notNull(),
+  jobIds: text('job_ids', { mode: 'json' }).$type<string[]>().notNull(),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+  reason: text('reason'),
+  watermark: integer('watermark').notNull()
+})
+export const localScheduleOccurrences = sqliteTable('local_schedule_occurrences', {
+  id: text('id').primaryKey(),
+  bindingId: text('binding_id').notNull().references(() => localScheduleBindings.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
+  civilKey: text('civil_key').notNull(),
+  utcMinute: integer('utc_minute').notNull(),
+  definition: text('definition', { mode: 'json' }).$type<LocalScheduleDefinition>().notNull(),
+  revision: text('revision').notNull(),
+  status: text('status').$type<LocalScheduleOccurrence['status']>().notNull(),
+  taskId: text('task_id'),
+  runId: text('run_id'),
+  chatId: text('chat_id'),
+  reason: text('reason')
 })
 
 export const taskRuntimes = sqliteTable('task_runtimes', {

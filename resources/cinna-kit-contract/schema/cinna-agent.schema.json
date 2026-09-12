@@ -243,7 +243,7 @@
       }
     },
     "schedules": {
-      "description": "Unattended runs. Declared locally, created on the platform at import time.",
+      "description": "Unattended run declarations. Platform import may create schedules; desktop static-prompt execution requires separate per-profile opt-in on each device and runs only while the app is open.",
       "type": "array",
       "items": {
         "type": "object",
@@ -265,7 +265,7 @@
             "pattern": "^\\S+\\s+\\S+\\s+\\S+\\s+\\S+\\s+\\S+$"
           },
           "timezone": {
-            "description": "IANA timezone name. Local-only metadata used to render the cron description at import.",
+            "description": "IANA timezone name. Desktop opt-in freezes this zone, or the current system zone when absent, for matching local schedule occurrences.",
             "type": [
               "string",
               "null"

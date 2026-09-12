@@ -73,6 +73,8 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 
 ## Renderer Components
 
+TaskView keeps Back to Job within the header width, with a fixed-size arrow, ellipsized text and full-name tooltip. The main task title remains fully visible by wrapping even unbroken words beside the nonshrinking status pill. This prevents generated schedule names from overflowing the page while preserving the existing reserved navigation slot during Job loading.
+
 - `TaskView` renders persisted work, description, status and actions. Attention branches distinguish work on this device, another device and a remote service. The remote banner probes liveness and keeps **Open the Inbox** separate from takeover. The conversation and service views remain their own navigation targets.
 - `HandOffTaskControl` and `PendingHandoffControl` in `src/renderer/src/components/tasks/` provide remote selection and receipt recovery. Every task page gets the independent receipt query, including terminal/no-chat tasks; the missing-task view and `ChatInput` also expose recovery. Directory failure cannot hide a receipt. Dialog polling cannot unmount the in-progress handoff draft.
 - `TaskList` is mounted below Jobs in an independently scrollable area capped at 45% of the sidebar, and below Details on root task pages as Subtasks. Child pages offer Parent task instead. Rows use `TaskStatusPill`, full-title accessible names/tooltips and `useOpenTask`; twenty rows are initially visible, with increments of twenty. The list is ordered by the repository’s descending updatedAt.
@@ -99,7 +101,7 @@ The authority is [Remote Task Adapters](remote_adapters.md): capability-gated op
 ## Current Gap List
 
 - Takeover and Continue remain separate actions. The remote Hand off picker uses the adapter directory; local Continue chooses an agent or model. An unresolved create can defer discovery until recovery because the remote identity is not yet safely correlated.
-- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. [Script execution](script_execution_tech.md) owns DAG steps through the same completion/admission seams. Schedules and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
+- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. [Script execution](script_execution_tech.md) owns DAG steps through the same completion/admission seams. [Local schedules](local_schedules_tech.md) add reviewed script admission and local occurrence receipts. Complete token accounting remains unsupported; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
 - A failed remote enumeration rejects the complete Inbox array, delaying new local entries too. Partial-result completeness must be carried explicitly before changing that policy.
 - Service-specific limitations, including recent-history bounds and the absence of a subscription, remain in the [Cinna mapping](cinna_adapter.md) and [remote coordination](remote_sync.md) documents.
 

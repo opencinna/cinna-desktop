@@ -37,4 +37,4 @@ Fresh kit declaration + current task-owner eligibility → successful ACP answer
 - [Kit contract](../../agents/local_agents/kit_contract.md) and [local agent prompts](../../agents/local_agents/engine.md) — portable manifest data and generated guidance.
 - [Turn outcomes](../../chat/messaging/turn_completion.md) and [Inbox](inbox.md) — successful completion and human-wait precedence.
 
-Schedules, complete token accounting and phase 7 protocol/new-driver cleanup remain separate work.
+[Local schedules](local_schedules.md) supply reviewed timed script admission. Complete token accounting and phase 7 protocol/new-driver cleanup remain separate work.

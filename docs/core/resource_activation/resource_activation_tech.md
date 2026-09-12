@@ -38,9 +38,9 @@ Every user-scoped handler calls `userActivation.requireActivated()` as its first
 
 ### `src/main/auth/activation.ts`
 
-- `userActivation.activate(userId)` — dedupes concurrent activations of the same user onto one in-flight `_pendingActivation` promise, then delegates to `_activate()`: `setCurrentUser()` + `reloadUserProviders()` + `_activated = true`. Activation is expensive and destructive (it disconnects and reconnects every MCP server), so overlapping calls must not both run
+- `userActivation.activate(userId)` deduplicates the same pending user, closes the gate and invalidates an epoch before serialized provider teardown/reload. It rechecks currency after awaits; reload checks after disconnect before registering adapters. Only the winning operation opens activation and starts task-sync and local-schedule checks. This prevents an older profile reload from re-registering resources or restarting scheduled admission after replacement.
 - **Renderer side:** `useStartup()` (`src/renderer/src/hooks/useAuth.ts`) memoises the `auth:get-startup` call in a module-scoped promise so it runs exactly once per renderer session. Deliberately not a `useQuery` — the auth mutations call `queryClient.resetQueries()`, which refetches active queries, and re-issuing this channel would re-activate the session
-- `userActivation.deactivate()` — sets `_activated = false` + `clearAllAdapters()` + `mcpManager.disconnectAll()` + `setCurrentUser('__default__')`
+- `userActivation.deactivate()` immediately closes the gate, invalidates the activation epoch and stops schedulers. Serialized teardown disconnects providers and resets the default session only if that epoch is still current.
 - `userActivation.isActivated()` — returns current gate state (used by MessagePort handlers that can't throw)
 - `userActivation.requireActivated()` — throws `'Session not activated'` if gate is closed (used by `ipcMain.handle` handlers)
 

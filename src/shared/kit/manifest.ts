@@ -25,7 +25,7 @@ export interface CredentialSlot {
 
 export type ScheduleType = 'static_prompt' | 'script_trigger'
 
-/** Unattended run. Declared locally, created on the platform at import time. */
+/** Unattended run declaration. Desktop execution requires separate local per-profile opt-in. */
 export interface AgentSchedule {
   name: string
   /** Five-field cron expression. */

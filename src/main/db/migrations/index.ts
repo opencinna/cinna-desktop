@@ -16,6 +16,7 @@ import { migrateUsers, migrateUserIdColumns } from './users'
 import { migrateChatFiles } from './chat-files'
 import { migrateJobs } from './jobs'
 import { migrateTasks } from './tasks'
+import { migrateLocalSchedules } from './local-schedules'
 import { migrateNotes } from './notes'
 import { migrateAppSettings } from './app-settings'
 import { runSyncMigrations } from './sync'
@@ -75,6 +76,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // task's chat is a `SET NULL` reference) and after `jobs`, whose `job_runs`
   // table it alters.
   migrateTasks(sqlite)
+  migrateLocalSchedules(sqlite)
   migrateNotes(sqlite)
   migrateAppSettings(sqlite)
   // Sync bookkeeping tables (must come after notes/jobs exist).

@@ -13,7 +13,7 @@ Run a saved dependency graph in main, with a separate conversation for each step
 
 ## User Stories / Flows
 
-1. A programmatic caller creates a local Job with an explicit script router and a [version-1 definition](script_definitions.md). The Job form has no script editor or graph authoring controls.
+1. A programmatic caller or [reviewed local schedule](local_schedules.md) creates a local Job with an explicit script router and a [version-1 definition](script_definitions.md). The Job form has no script editor or graph authoring controls.
 2. Press **Run** on that Job. Main validates the definition, budget and available agent identities before creating the attempt. It records the root, children and checkpoint together, then queues execution. Opening or leaving the conversation does not dispatch another prompt.
 3. Open the root task to browse its children. Each child's conversation contains its full interaction; the root records compact step results and a final summary. Dependency prompts receive only the outputs the graph permits.
 4. Answer a script question or an agent's saved continuation in the Inbox. The answer advances its own step; unrelated running steps and sibling questions retain their state.
@@ -43,4 +43,4 @@ Inbox answer → binding and checkpoint checks → answer/step transaction → q
 - [Autonomous coordination](autonomous_tasks.md) — the other main-owned engine, sharing admission and task controls.
 - [Jobs](../jobs/jobs.md), [Tasks](tasks.md), [Inbox](inbox.md) and [live attachment](../../chat/messaging/live_runs.md) — existing entry, navigation and conversation surfaces.
 
-[Manifest handback](manifest_handback.md) applies only to a coordinator-owned specialist; script steps never receive that eligibility. Schedules, complete token accounting and the phase 7 protocol/driver cleanup remain outside this execution slice.
+[Manifest handback](manifest_handback.md) applies only to a coordinator-owned specialist; script steps never receive that eligibility. [Local schedules](local_schedules.md) supply reviewed timed script admission. Complete token accounting and the phase 7 protocol/driver cleanup remain outside this execution slice.

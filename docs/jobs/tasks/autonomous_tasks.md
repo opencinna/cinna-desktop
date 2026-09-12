@@ -50,4 +50,4 @@ Inbox answer → scoped gate/checkpoint transaction → queued continuation. Tas
 - [Live attachment](../../chat/messaging/live_runs.md) and [turn outcomes](../../chat/messaging/turn_completion.md) — selected-chat visibility and per-turn results.
 - [Remote handoff](remote_handoff.md) — moving the executor to another service is distinct from changing the desktop runner’s next specialist owner.
 
-[Script execution](script_execution.md) shares admission queues and runtime controls, using a fixed dependency graph instead of coordinator decisions. Schedules, complete token accounting, protocol/new-driver work and final cleanup remain separate implementation work.
+[Script execution](script_execution.md) shares admission queues and runtime controls, using a fixed dependency graph instead of coordinator decisions. [Local schedules](local_schedules.md) admit reviewed kit work through the script engine. Complete token accounting, protocol/new-driver work and final cleanup remain separate implementation work.

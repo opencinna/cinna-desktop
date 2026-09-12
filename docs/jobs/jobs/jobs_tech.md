@@ -255,3 +255,7 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 - **External URL open.** `app:open-external` validates `protocol === 'http:' || 'https:'` before invoking `shell.openExternal`, mirroring the renderer's `setWindowOpenHandler` policy.
 - **Logger discipline.** `createLogger('job')` and `createLogger('cinna-api')`. Prompts and Cinna task bodies are NOT logged; only IDs, status, and timing. Network errors include URL + status code, not response bodies beyond the first 200 chars.
 - **Transactional execution.** Local run creation is a single `db.transaction(...)`; a crash mid-way leaves no half-set state for the stream-completion hook to misinterpret.
+
+## Local schedule integration
+
+[Local schedules](../tasks/local_schedules_tech.md) creates one-step script Jobs and admits them through scriptRuntimeService.prepareJob, linking its durable occurrence in the same transaction before launch. jobService.deleteRun notifies taskRunnerBridge.chatRemoved after the repository actually deletes the owned chat, so waiting gates/reservations are cancelled rather than stranded after Job-history deletion.

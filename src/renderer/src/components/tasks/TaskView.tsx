@@ -286,10 +286,11 @@ function TaskPage({
                     <button
                       type="button"
                       onClick={handleBackToJob}
-                      className="inline-flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
+                      title={`Back to ${job.title}`}
+                      className="inline-flex max-w-full items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
                     >
-                      <ArrowLeft size={11} />
-                      Back to {job.title}
+                      <ArrowLeft size={11} className="shrink-0" />
+                      <span className="min-w-0 truncate">Back to {job.title}</span>
                     </button>
                   )}
                 </div>
@@ -304,7 +305,7 @@ function TaskPage({
                 never changes while the user is looking at one.
               */}
               <div className="flex items-center gap-2">
-                <h1 className="text-base font-semibold text-[var(--color-text)] min-w-0">
+                <h1 className="text-base font-semibold text-[var(--color-text)] min-w-0 [overflow-wrap:anywhere]">
                   {task.title}
                 </h1>
                 <TaskStatusPill status={task.status} />

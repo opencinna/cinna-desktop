@@ -24,6 +24,33 @@ function freshDatabase(): DatabaseSync {
   return raw
 }
 
+describe('local schedule migration', () => {
+  it('adds local tables to a populated install and preserves receipts on repeated migration', () => {
+    const raw = freshDatabase()
+    raw.exec(`DROP TABLE local_schedule_occurrences; DROP TABLE local_schedule_bindings;
+      INSERT INTO users (id, type, username, display_name, created_at) VALUES ('scheduler-user', 'local_user', 'scheduler-user', 'Scheduler', 1);
+      INSERT INTO tasks (id,user_id,title,goal,created_at,updated_at) VALUES ('existing-task','scheduler-user','Existing','Keep work',1,1);`)
+    runAllMigrations(adaptDatabase(raw))
+    raw.exec(`INSERT INTO local_schedule_bindings (id,user_id,manifest_id,name,definition,revision,job_id,job_fingerprint,job_ids,enabled,watermark)
+      VALUES ('binding','scheduler-user','manifest','Daily','{}','revision','job','fingerprint','["job"]',1,42);
+      INSERT INTO local_schedule_occurrences (id,binding_id,user_id,civil_key,utc_minute,definition,revision,status,task_id)
+      VALUES ('receipt','binding','scheduler-user','UTC|2026-09-12T09:00',42,'{}','revision','interrupted','existing-task');`)
+    const before = raw.prepare('SELECT * FROM local_schedule_occurrences').all()
+    runAllMigrations(adaptDatabase(raw)); runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT * FROM local_schedule_occurrences').all()).toEqual(before)
+    expect(raw.prepare('SELECT goal FROM tasks WHERE id = ?').get('existing-task')).toEqual({ goal: 'Keep work' })
+    expect(() => raw.exec(`INSERT INTO local_schedule_occurrences (id,binding_id,user_id,civil_key,utc_minute,definition,revision,status)
+      VALUES ('duplicate','binding','scheduler-user','UTC|2026-09-12T09:00',43,'{}','new-revision','prepared')`)).toThrow(/UNIQUE/)
+    raw.exec("DELETE FROM tasks WHERE id = 'existing-task'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM local_schedule_occurrences').get()).toEqual({ n: 1 })
+    raw.exec("DELETE FROM users WHERE id = 'scheduler-user'")
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM local_schedule_bindings').get()).toEqual({ n: 0 })
+    expect(raw.prepare('SELECT COUNT(*) AS n FROM local_schedule_occurrences').get()).toEqual({ n: 0 })
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})
+
 function tableNames(raw: DatabaseSync): Set<string> {
   const rows = raw.prepare("SELECT name FROM sqlite_master WHERE type='table'").all() as Array<{
     name: string

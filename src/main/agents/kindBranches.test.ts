@@ -219,6 +219,12 @@ const ALLOWLIST: string[] = [
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
   {
+    file: 'src/main/services/localScheduleService.ts',
+    category: 'kind',
+    count: 1,
+    why: 'only a kit manifest owns schedule declarations; this validates the definition source, while execution uses the script and driver seams'
+  },
+  {
     file: 'src/main/services/localAgents/runtimeService.ts',
     category: 'engine',
     count: 2,

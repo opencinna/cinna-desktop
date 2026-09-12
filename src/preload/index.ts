@@ -1112,6 +1112,12 @@ const api = {
       ipcRenderer.invoke('noteFolder:reorder', orderedIds)
   },
 
+  localSchedules: {
+    list: (agentId: string): Promise<import('../shared/localSchedules').LocalScheduleItem[]> => ipcRenderer.invoke('local-schedule:list', agentId),
+    enable: (review: import('../shared/localSchedules').LocalScheduleReview): Promise<import('../shared/localSchedules').LocalScheduleItem[]> => ipcRenderer.invoke('local-schedule:enable', review),
+    disable: (id: string): Promise<void> => ipcRenderer.invoke('local-schedule:disable', id)
+  },
+
   /** Tasks: browse, continue locally, hand off, and recover an executor claim. */
   tasks: {
     handoffReceipt: (taskId: string): Promise<import('../shared/taskHandoff').TaskHandoffReceipt | null> =>

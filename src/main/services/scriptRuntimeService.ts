@@ -1,5 +1,5 @@
 import { nanoid } from 'nanoid'
-import { getDb } from '../db/client'
+import { getDb, getRawSqlite } from '../db/client'
 import { taskRepo } from '../db/tasks'
 import { chatRepo } from '../db/chats'
 import { jobsRepo, jobRunsRepo, type JobRow } from '../db/jobs'
@@ -380,6 +380,13 @@ function enqueue(userId: string, taskId: string): void {
 
 export const scriptRuntimeService = {
   startJob(scope: RunScope, job: JobRow): { chatId: string; taskId: string; runId: string } {
+    const prepared = this.prepareJob(scope, job)
+    prepared.launch()
+    return { chatId: prepared.chatId, taskId: prepared.taskId, runId: prepared.runId }
+  },
+
+  /** May join an occurrence transaction. No reservation or driver work until launch. */
+  prepareJob(scope: RunScope, job: JobRow): { chatId: string; taskId: string; runId: string; launch: () => void } {
     jobRuntimeDefinition(job)
     const definition = validateTaskScript(job.script)
     const budget = runtimeBudget(job.budget)
@@ -409,8 +416,21 @@ export const scriptRuntimeService = {
       messageRepo.saveUser({ chatId, content: job.prompt })
       return { chatId, runId, taskId: root.id }
     })
-    enqueue(scope.profileUserId, result.taskId)
-    return result
+    const attemptId = checkpoint(scope.profileUserId, result.taskId).attemptId
+    return { ...result, launch: () => {
+      if (getRawSqlite().inTransaction) throw new Error('Commit the script admission before launching it.')
+      const saved = checkpoint(scope.profileUserId, result.taskId)
+      if (saved.attemptId !== attemptId || saved.settingsUserId !== scope.settingsUserId || saved.state !== 'queued') throw new Error('The prepared script attempt is no longer queued.')
+      assertBindings(scope.profileUserId, result.taskId, saved)
+      enqueue(scope.profileUserId, result.taskId)
+    } }
+  },
+
+  /** A committed admission which lost its scheduler before launch requires review. */
+  interruptPrepared(userId: string, taskId: string, reason: string): void {
+    const saved = checkpoint(userId, taskId)
+    if (saved.state !== 'queued' || executing.has(keyOf(userId, taskId))) throw new Error('The prepared script is no longer awaiting launch.')
+    interrupt(userId, taskId, reason)
   },
 
   recover(): void {
