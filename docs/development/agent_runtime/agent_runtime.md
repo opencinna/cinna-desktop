@@ -35,14 +35,14 @@ The runtime work progressed through unified events, driver extraction, ACP repla
 | Driver files / lines | 16 / 5,362 | 17 / 5,420 | 31 / 7,201 |
 | Engine helper files / lines | 7 / 2,012 | 7 / 2,012 | 7 / 2,012 |
 | Driver implementations / external forms | 2 / 4 | 2 / 4 | 3 / 6 |
-| Chat execution shapes | 3 | 4 | 4 |
+| Chat execution shapes | 3 | 3 | 3 |
 | Full suite passed / skipped / files | 3,326 / 6 / 195 | 3,590 / 6 / 212 | 3,812 / 6 / 225 |
 
-Line counts include non-test TS/TSX files, excluding golden and snapshot directories. Historical branch counts use each revision's own ratchet scanner. The final scanner has seven categories at exact zero, with **98 separately pinned ownership/authoring/presentation comparisons** and **26 allowlisted transport/sync comparisons**. Zero behavioral debt does not mean those legitimate reads vanished.
+Line counts include non-test TS/TSX files, excluding golden and snapshot directories. Historical branch counts use each revision's own ratchet scanner. The final scanner has seven categories at exact zero, with **98 separately pinned ownership/authoring/presentation comparisons** and **26 allowlisted transport/sync comparisons**. This is zero unpinned comparisons, not zero execution branches: `jobDefinitionPolicy` still selects an executor from `job.type`.
 
 The final full suite passed in **84.69 s**, with typechecks and production build clean. It includes migrations **25**, ratchet **5**, Managed contract **16**, custom ACP contract **25** and custom service **18** passing cases. The six A2A skips are inapplicable local-park clauses for a next-message protocol; they are not known failures. ACP, custom and Managed have no common-contract known violations. Driver tests cover results, cancellation, quietness, continuity and parked replies; the main wrappers own root request IDs and terminal delivery.
 
-Final built Electron regression passed **16/16 across eight specs in 66.8 s**: smoke 2, folder-agent 3, agent-permissions 1, human-routing 1, Inbox 1, autonomous-task 2, IPC wire 4 and custom ACP 2. Independent source review is clean. The only final test-count reduction from the preceding custom full suite is intentional: two retired forward cases became one absence assertion. Phase 6's full suite preceded its final duplicate-definition/title-wrapping fixes, which had focused validation; the final phase 7 suite covers the accumulated source.
+The selected built Electron regression passed **16/16 across eight of 44 specs in 66.8 s**: smoke 2, folder-agent 3, agent-permissions 1, human-routing 1, Inbox 1, autonomous-task 2, IPC wire 4 and custom ACP 2. A subsequent post-completion review identified recovery and sync defects; the follow-up fixes and validation are recorded below. The only final test-count reduction from the preceding custom full suite is intentional: two retired forward cases became one absence assertion. Phase 6's full suite preceded its final duplicate-definition/title-wrapping fixes, which had focused validation; the final phase 7 suite covers the accumulated source.
 
 Managed and custom user-facing slices also received their own built UX reviews: Managed **4/4 in 42.3 s**, custom **2/2 in 14.9 s**, both with zero measured control movement. The final cleanup changes architecture names and API wiring rather than introducing another product surface.
 
@@ -54,3 +54,17 @@ Managed and custom user-facing slices also received their own built UX reviews: 
 - Unsupported complete token accounting remains an explicit refusal. Autonomous execution supports the implemented turn/time budgets; unavailable usage is never fabricated.
 
 This tracked record is the durable documentation entry point. Session planning drafts remain local working history, outside the tracked documentation link graph.
+
+## Post-completion review follow-up (2026-09-12)
+
+See the [finding-by-finding resolution and validation record](post_review_fixes.md) for all eight high and twelve medium fixes, the admission-stall regression, and remaining validation limits.
+
+Recovery checks remote Managed status/history, ignores deleted scheduled tasks for overlap, and keeps schedule reads free of writes. Scheduler observations alone revoke approval for confirmed definition changes; transient folder errors skip a pass. Peer edits preserve run-owned artifacts/budgets. App-sync coalesces independently imported remote replicas by a deterministic ID order. Sync watermarks retain writes made during network work, including writes within the same second.
+
+Tool narration uses stable tool identity across permission blocks in both saved and live output. Replay overflow retains request polling; failed watcher delivery reports degraded live updates and switches to saved-message polling. Ownership is checked at watch admission and profile identity remains checked per message. Unsupported launchers report invalid readiness and remain explicit in the Runtime selector.
+
+MCP supports OAuth for SSE and HTTP, serializes calls per provider during token rotation, encrypts client registrations, reuses registered callback ports, and keeps a mismatched callback from canceling the legitimate flow. A2A Stop discloses unconfirmed remote cancellation. Driver contract park coverage follows advertised input capabilities.
+
+`src/main/services/askDelivery.ts` routes answers to their durable delivery owner. `src/main/services/runExecutionState.ts` owns active run maps independently of renderer attachment. `src/main/tasks/jobDefinitionPolicy.ts` centralizes the retained job-type executor policy.
+
+The original phase 2 assertion that every row has a driver after launch was not delivered: unsupported/null drivers remain visible and refuse execution. No ACP session-relaunch E2E was delivered; session loading is covered by unit/peer tests. Engine helpers remain seven files, not just the three helpers named in the early phase 3 plan. Only coordinator-target manifest handback is structural. These are explicit scope limits, not claims of completed coverage.

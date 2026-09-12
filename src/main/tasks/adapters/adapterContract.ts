@@ -62,7 +62,6 @@
  * - `deepLink` is null or an `http(s)` URL — `app:open-external` refuses every
  *   other scheme, so anything else is a control that does nothing
  *   (`deepLink.openable`).
- * - `actionRequiredCount` is a non-negative integer (`count.counts`).
  */
 
 import { describe, expect, it, type TestFunction } from 'vitest'
@@ -95,7 +94,6 @@ export type AdapterContractClause =
   | 'not_ours.no_retry'
   | 'rejected.keeps_binding'
   | 'deepLink.openable'
-  | 'count.counts'
 
 /** The four kinds of `InputRequest` a run can emit. A remote ask is one of these. */
 const INPUT_REQUEST_KINDS = ['permission', 'question', 'auth', 'elicitation']
@@ -231,12 +229,6 @@ const GATED: {
     name: 'answerAsk',
     sameTask: true,
     run: (a, u, b) => a.answerAsk(u, b, 'nothing', { kind: 'rejected' })
-  },
-  {
-    capability: 'actionRequiredCount',
-    name: 'actionRequiredCount',
-    sameTask: true,
-    run: (a, u) => a.actionRequiredCount(u)
   },
   {
     capability: 'assigneeDirectory',
@@ -645,14 +637,6 @@ export function describeAdapterContract(
       await expect(
         world.adapter.putHandoffNote(world.userId, binding, 'Half done.')
       ).resolves.not.toThrow()
-    })
-
-    clause('count.counts', 'counts what is waiting, and never counts backwards', async () => {
-      if (!caps.actionRequiredCount) return
-      const world = makeWorld()
-      const count = await world.adapter.actionRequiredCount(world.userId)
-      expect(Number.isInteger(count)).toBe(true)
-      expect(count).toBeGreaterThanOrEqual(0)
     })
 
     clause('failure.is_domain', 'reports a failing service as a failure, in this app’s words', async () => {

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, or } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, or } from 'drizzle-orm'
 import { getDb } from './client'
 import { jobRuns, tasks, localScheduleBindings, localScheduleOccurrences } from './schema'
 
@@ -30,7 +30,7 @@ export const localScheduleRepo = {
   unfinishedRuns(userId: string, jobIds: string[]): { taskId: string | null }[] {
     if (!jobIds.length) return []
     return getDb().select({ taskId: jobRuns.taskId }).from(jobRuns).leftJoin(tasks, eq(tasks.id, jobRuns.taskId))
-      .where(and(eq(jobRuns.userId, userId), inArray(jobRuns.jobId, jobIds), or(inArray(jobRuns.status, ['pending', 'running']),
+      .where(and(eq(jobRuns.userId, userId), inArray(jobRuns.jobId, jobIds), isNull(tasks.deletedAt), or(inArray(jobRuns.status, ['pending', 'running']),
         inArray(tasks.status, ['new', 'open', 'in_progress', 'blocked'])))).limit(1).all()
   },
   occurrence(userId: string, bindingId: string, civilKey: string): ScheduleOccurrenceRow | undefined {

@@ -28,9 +28,10 @@ describe('bound OAuth callback', () => {
   it.each(['code=code', 'state=wrong&code=code', 'state=expected&state=expected&code=code',
     'state=expected&code=a&code=b', 'state=expected&code=code&iss=a&iss=b'])('rejects invalid callback %s', async (query) => {
     const listener = await startOAuthCallback('expected')
-    const rejection = expect(listener.promise).rejects.toThrow(/did not match/)
     expect((await get(`${listener.redirectUrl}?${query}`)).status).toBe(400)
-    await rejection
+    expect(listener.isPending()).toBe(true)
+    await get(`${listener.redirectUrl}?state=expected&code=real`)
+    expect((await listener.promise).code).toBe('real')
   })
 
   it('returns neutral HTML for OAuth errors and never inserts callback-controlled markup', async () => {

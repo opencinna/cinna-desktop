@@ -34,7 +34,6 @@ Everything the seam describes, with one narrowing: a task attachment on cinna-co
 | `putHandoffNote` | a comment of type `result` |
 | `putArtifact` | upload the bytes, then `POST /api/v1/tasks/{id}/files/{fileId}` |
 | `listOpenAsks` / `answerAsk` | `GET /api/v1/sessions/{id}/messages`, then `POST /api/v1/sessions/{id}/messages/stream` |
-| `actionRequiredCount` | `GET /api/v1/activities/stats` |
 
 Directory reads reject malformed envelopes and ignore entries without a usable string id. A captured credential session that changes before sending maps to `invalid_request`: no task request was dispatched, so the coordinator must not mistake it for a lost execution acknowledgement. See [remote handoff and recovery](remote_handoff.md).
 

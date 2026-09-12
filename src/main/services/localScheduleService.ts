@@ -47,7 +47,7 @@ function scriptFor(definition: LocalScheduleDefinition): TaskScript {
 }
 
 /** Reconcile receipts from durable runtime/job state, independent of renderer watching. */
-function reconcileOccurrence(row: ScheduleOccurrenceRow): ScheduleOccurrenceRow {
+function reconcileOccurrence(row: ScheduleOccurrenceRow, persist = true): ScheduleOccurrenceRow {
   if (finished.has(row.status) || !row.taskId) return row
   const run = row.runId ? jobRunsRepo.getById(row.userId, row.runId) : undefined
   const task = taskRepo.getById(row.userId, row.taskId)
@@ -61,23 +61,23 @@ function reconcileOccurrence(row: ScheduleOccurrenceRow): ScheduleOccurrenceRow 
     status = task.status === 'completed' ? 'completed' : task.status === 'error' ? 'failed' : 'cancelled'
     reason = task.errorMessage
   } else if (!task || task.deletedAt) {
-    status = 'interrupted'; reason = 'The previous task is unavailable. Its execution cannot be confirmed.'
+    if (!held) { status = 'cancelled'; reason = 'The previous task was deleted.' }
   } else if (runtime?.state === 'interrupted') {
     status = 'interrupted'; reason = runtime.reason
   } else if (runtime && runtime.state !== 'completed') {
     status = row.status === 'prepared' && runtime.state === 'queued' ? 'prepared' : 'dispatched'; reason = runtime.reason
   }
-  if (row.status !== status || row.reason !== reason) localScheduleRepo.updateOccurrence(row.userId, row.id, { status, reason })
+  if (persist && (row.status !== status || row.reason !== reason)) localScheduleRepo.updateOccurrence(row.userId, row.id, { status, reason })
   return { ...row, status, reason }
 }
 
 function occurrenceDto(row: ScheduleOccurrenceRow): LocalScheduleOccurrence {
-  const value = reconcileOccurrence(row)
+  const value = reconcileOccurrence(row, false)
   return { id: value.id, utcMinute: value.utcMinute, civilKey: value.civilKey, status: value.status,
     taskId: value.taskId, runId: value.runId, chatId: value.chatId, reason: value.reason }
 }
 
-function rowsFor(scope: RunScope, agentId: string): LocalScheduleItem[] {
+function rowsFor(scope: RunScope, agentId: string, reconcile = false): LocalScheduleItem[] {
   const bindings = localScheduleRepo.list(scope.profileUserId).filter((binding) => binding.definition.agentId === agentId)
   let agent: LocalAgentDto | undefined, failure: string | null = null
   try { agent = localAgentService.get(scope.settingsUserId, agentId) } catch (error) { failure = message(error) }
@@ -102,7 +102,9 @@ function rowsFor(scope: RunScope, agentId: string): LocalScheduleItem[] {
       const job = jobsRepo.getById(scope.profileUserId, binding.jobId)
       reason = problem ?? (revision !== binding.revision ? 'The schedule changed. Review it before enabling again.' :
         !job || job.deletedAt || jobFingerprint(job) !== binding.jobFingerprint ? 'The scheduled job changed or was deleted. Review the schedule again.' : null)
-      if (reason) localScheduleRepo.save({ ...binding, enabled: false, reason })
+      // Only the scheduler persists confirmed definition/job changes. Reads
+      // and transient folder failures cannot revoke the user's opt-in.
+      if (reconcile && reason && agent?.readiness === 'ok') localScheduleRepo.save({ ...binding, enabled: false, reason })
     }
     const value = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {}
     const last = binding ? localScheduleRepo.latest(scope.profileUserId, binding.id) : undefined
@@ -114,7 +116,7 @@ function rowsFor(scope: RunScope, agentId: string): LocalScheduleItem[] {
 }
 
 function overlap(binding: ScheduleBindingRow): { taskId: string | null; reason: string } | null {
-  const prior = localScheduleRepo.unfinished(binding.userId, binding.id).map(reconcileOccurrence).find((row) => !finished.has(row.status))
+  const prior = localScheduleRepo.unfinished(binding.userId, binding.id).map((row) => reconcileOccurrence(row)).find((row) => !finished.has(row.status))
   if (prior) return { taskId: prior.taskId, reason: 'Skipped because a previous scheduled task is unfinished or needs review.' }
   // The generated Job is also visible in Jobs. A manual run must count too,
   // including historical generated jobs retained after a definition review.
@@ -173,9 +175,14 @@ export const localScheduleService = {
     const agentIds = [...new Set(localScheduleRepo.list(scope.profileUserId).filter((binding) => binding.enabled).map((binding) => binding.definition.agentId))]
     for (const agentId of agentIds) {
       if (!valid()) return
-      rowsFor(scope, agentId)
+      const rows = rowsFor(scope, agentId, true)
       for (const binding of localScheduleRepo.list(scope.profileUserId).filter((item) => item.enabled && item.definition.agentId === agentId)) {
         if (!valid()) return
+        const row = rows.find((item) => item.binding?.id === binding.id)
+        // Unreadable/unready folders skip this observation. A parsed revision
+        // change has already been disabled for review by rowsFor.
+        if (!row?.binding?.enabled) continue
+        for (const occurrence of localScheduleRepo.unfinished(binding.userId, binding.id)) reconcileOccurrence(occurrence)
         if (observed <= binding.watermark) continue
         const minute = scheduleMinute(parseScheduleCron(binding.definition.cron), binding.definition.timezone, observed * 60000)
         let prepared: ReturnType<typeof scriptRuntimeService.prepareJob> | undefined

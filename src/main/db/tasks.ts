@@ -1,8 +1,8 @@
 import type { TaskScript } from '../../shared/taskScript'
 import { nanoid } from 'nanoid'
-import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
-import { tasks } from './schema'
+import { tasks, jobRuns, taskInputRequests, localScheduleOccurrences } from './schema'
 import type { JobDepDescriptor } from '../../shared/sync'
 import type { TaskStatus } from '../../shared/taskStatus'
 import type {
@@ -239,7 +239,42 @@ export const taskRepo = {
           eq(tasks.remoteId, remoteId)
         )
       )
+      .orderBy(asc(tasks.id))
       .get()
+  },
+
+  /** Collapse pre-existing independently imported replicas deterministically.
+   * Keep the loser as a synced tombstone so old peer records converge again.
+   * Only remote-owned replicas participate; desktop execution is never moved.
+   */
+  reconcileRemoteBinding(userId: string, adapter: string, remoteId: string): string[] {
+    const db = getDb()
+    return db.transaction(() => {
+      const rows = db.select().from(tasks).where(and(eq(tasks.userId, userId),
+        eq(tasks.remoteAdapter, adapter), eq(tasks.remoteId, remoteId),
+        eq(tasks.executor, 'remote'))).orderBy(asc(tasks.id)).all()
+      if (rows.length < 2) return []
+      const winner = rows[0]
+      const changed: string[] = [winner.id]
+      for (const loser of rows.slice(1)) {
+        const children = db.update(tasks).set({ parentTaskId: winner.id, updatedAt: new Date() })
+          .where(and(eq(tasks.userId, userId), eq(tasks.parentTaskId, loser.id))).returning({ id: tasks.id }).all()
+        changed.push(...children.map((row) => row.id))
+        db.update(jobRuns).set({ taskId: winner.id }).where(and(eq(jobRuns.userId, userId), eq(jobRuns.taskId, loser.id))).run()
+        db.update(taskInputRequests).set({ taskId: winner.id }).where(eq(taskInputRequests.taskId, loser.id)).run()
+        db.update(localScheduleOccurrences).set({ taskId: winner.id }).where(and(eq(localScheduleOccurrences.userId, userId), eq(localScheduleOccurrences.taskId, loser.id))).run()
+        // Chat bindings are local, absent from sync, and must survive coalescing.
+        if (!winner.chatId && loser.chatId) {
+          db.update(tasks).set({ chatId: loser.chatId }).where(eq(tasks.id, winner.id)).run()
+          winner.chatId = loser.chatId
+        }
+        if (!loser.deletedAt) {
+          db.update(tasks).set({ deletedAt: new Date(), updatedAt: new Date() }).where(eq(tasks.id, loser.id)).run()
+          changed.push(loser.id)
+        }
+      }
+      return [...new Set(changed)]
+    })
   },
 
   /** The task running in a chat, if one is. How a stream event finds its task. */

@@ -119,6 +119,24 @@ playwright test -> fixtures/app.ts -> electron.launch(repoRoot, HOME=sandbox, CI
 - `e2e/specs/agent-runtime.spec.ts` — the agent page's "Runs with" panel: two credentials whose catalogues are served by a local HTTP stub (the adapters' base URLs come from the environment), a folder agent declaring the Anthropic one, and the credential switched to the OpenAI one — the manifest on disk loses the model, the reserved status line names what it dropped, the Model select offers only the new credential's models, and the panel's height (so the tab strip's position) does not change. The agent pins a model, so the panel opens on the Advanced **model** picker rather than the Work complexity tier — the manifest decides which of the two is shown
 - `e2e/specs/ollama-credential.spec.ts` — Ollama as a **keyless** credential: a fake Ollama on a port the spec owns, reached by pointing the app's `OLLAMA_HOST` at it through the fixture's `env` option, so the probe answers there and never falls back to whatever Ollama the developer's machine is running. Settings → AI Credentials offers it, one click adds it, the card's **Host** field carries the `baseUrl` that came back across the IPC boundary, the Add form then refuses a second credential for the same host (the detection cache having been invalidated by the write), and the same keyless credential is offered by *both* renderer pickers — the chat-mode form and Local Agents' default AI credential. Only the **running** path: the probe falls back to `127.0.0.1:11434` regardless of `OLLAMA_HOST`, deliberately, so "not running" is not arrangeable in a sandbox and lives in `src/main/services/ollamaService.test.ts` instead
 - `e2e/specs/live.spec.ts` — `@live`: onboarding through the real API-key screen, a one-turn chat round trip, and D2: a folder agent given a secret word in its prompt documents, attached with `@` inside a model chat, answering through the engine
+- `e2e/specs/a2a-silent-stop.spec.ts` — a2a silent stop regression.
+- `e2e/specs/agent-turn-failures.spec.ts` — agent turn failures regression.
+- `e2e/specs/autonomous-task.spec.ts` — autonomous task regression.
+- `e2e/specs/cinna-integration.spec.ts` — cinna integration regression.
+- `e2e/specs/claude-engine.spec.ts` — claude engine regression.
+- `e2e/specs/claude-logged-out.spec.ts` — claude logged out regression.
+- `e2e/specs/connect-intent.spec.ts` — connect intent regression.
+- `e2e/specs/credential-switch.spec.ts` — credential switch regression.
+- `e2e/specs/forget-agent-root.spec.ts` — forget agent root regression.
+- `e2e/specs/human-routing.spec.ts` — human routing regression.
+- `e2e/specs/local-dev.spec.ts` — local dev regression.
+- `e2e/specs/local-schedules.spec.ts` — local schedules regression.
+- `e2e/specs/manifest-handback.spec.ts` — manifest handback regression.
+- `e2e/specs/remote-inbox.spec.ts` — remote inbox regression.
+- `e2e/specs/script-runtime.spec.ts` — script runtime regression.
+- `e2e/specs/task-handoff.spec.ts` — task handoff regression.
+- `e2e/specs/task-live-attach.spec.ts` — task live attach regression.
+- `e2e/specs/task-sync.spec.ts` — task sync regression.
 - `e2e/fixtures/seed.ts` — `addAgentRoot`, `createFolderAgent`
 - `e2e/fixtures/live.ts` — `OPENAI_API_KEY` and `requireLiveKey()`
 - `e2e/fixtures/engine-cache.ts`, `e2e/global-setup.ts` — the engine cache and the one-time fill

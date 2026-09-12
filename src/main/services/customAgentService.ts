@@ -34,6 +34,11 @@ interface Receipt {
 const receipts = new Map<string, Receipt>()
 const probes = new Map<string, AbortController>()
 const readiness = new Map<string, AgentReadiness>()
+function rememberReadiness(binding: string, value: AgentReadiness): void {
+  readiness.delete(binding)
+  if (readiness.size >= 100) readiness.delete(readiness.keys().next().value!)
+  readiness.set(binding, value)
+}
 
 /** Private command configuration and initialize-only probes; no credential form. */
 export const customAgentService = {
@@ -135,7 +140,7 @@ export const customAgentService = {
       for (const [token, receipt] of receipts) if (receipt.expires < Date.now()) receipts.delete(token)
       if (receipts.size >= 100) receipts.delete(receipts.keys().next().value!)
       receipts.set(result.token, { ownerId, profileId, id: input.id, original, config, result, expires: Date.now() + 10 * 60_000 })
-      if (row && digest(config) === digest(parseCustomAgentConfig(row.driverConfig))) readiness.set(this.stateKey(ownerId, row).binding, { state: 'ok', reason: null })
+      if (row && digest(config) === digest(parseCustomAgentConfig(row.driverConfig))) rememberReadiness(this.stateKey(ownerId, row).binding, { state: 'ok', reason: null })
       return result
     } catch (error) {
       // A failed explicit probe supersedes an earlier successful one for the
@@ -143,7 +148,7 @@ export const customAgentService = {
       try {
         validate()
         if (row && digest(config) === digest(parseCustomAgentConfig(row.driverConfig))) {
-          readiness.set(this.stateKey(ownerId, row).binding, { state: 'unreachable', reason: error instanceof Error ? error.message : 'The command did not answer initialization.' })
+          rememberReadiness(this.stateKey(ownerId, row).binding, { state: 'unreachable', reason: error instanceof Error ? error.message : 'The command did not answer initialization.' })
         }
       } catch { /* This result no longer belongs to the active configuration. */ }
       throw error
@@ -167,7 +172,7 @@ export const customAgentService = {
     }
     const row = input.id ? agentRepo.updateRuntime(ownerId, input.id, 'acp', { name, config: { ...config } }) : agentRepo.createRuntime(ownerId, { name, driver: 'acp', config: { ...config } })
     receipts.delete(input.testToken)
-    readiness.set(this.stateKey(ownerId, row).binding, { state: 'ok', reason: null })
+    rememberReadiness(this.stateKey(ownerId, row).binding, { state: 'ok', reason: null })
     agentReadinessService.forget(row.id)
     acpProcessPool.retire(row.id)
     return { id: row.id }

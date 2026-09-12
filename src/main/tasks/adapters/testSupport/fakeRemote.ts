@@ -103,7 +103,6 @@ const FULL: RemoteTaskCapabilities = {
   subtasks: true,
   execute: true,
   asks: true,
-  actionRequiredCount: true
 }
 
 /** The four worked examples from §5.6, as capability sets. */
@@ -123,7 +122,6 @@ export const CAPABILITY_SHAPES: Record<string, Partial<RemoteTaskCapabilities>> 
     subtasks: false,
     execute: false,
     asks: false,
-    actionRequiredCount: false
   },
   // Sessions that park, and an append-only log rather than comments.
   // Comments are an append-only session log, not a thread — but the handoff
@@ -435,12 +433,6 @@ export function createFakeRemote(options: FakeRemoteOptions = {}): FakeRemote {
       // An ask that is no longer open is the commonest thing that happens to
       // one, and not a failure. Same answer a driver gives a local park.
       return { delivered: stored.asks.length < before } satisfies RemoteAnswerOutcome
-    },
-
-    async actionRequiredCount(_userId) {
-      require('actionRequiredCount', 'actionRequiredCount')
-      call()
-      return [...store.values()].reduce((n, t) => n + t.asks.length, 0)
     },
 
     deepLink: (binding) => (binding.key ? `https://fake.test/tasks/${binding.key}` : null)

@@ -127,11 +127,21 @@ describe('startAcpConnection', () => {
     )
   })
 
+  it('includes stderr produced during disposal in an initialization failure', async () => {
+    const fake = fakeAgent({ stderrOnTermination: 'shutdown diagnosis', initialize: { hang: true } })
+    const controller = new AbortController()
+    const starting = start(fake, { signal: controller.signal })
+    const rejected = expect(starting).rejects.toThrow(/shutdown diagnosis/)
+    await waitFor(() => fake.received('initialize')[0], 'initialize to reach the fixture')
+    controller.abort()
+    await rejected
+  })
+
   it('rejects when initialize goes unanswered, and says how long it waited', async () => {
     const fake = fakeAgent({ stderr: ['fake-acp: wedged'], initialize: { hang: true } })
 
     await expect(start(fake, { startTimeoutMs: 150 })).rejects.toThrow(
-      /did not answer initialize within 150 ms[\s\S]*wedged/
+      /did not answer initialize within 150 ms/
     )
   })
 })

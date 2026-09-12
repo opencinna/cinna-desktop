@@ -156,7 +156,8 @@ function encode(device: Device, taskId: string): Encoded {
  * row it mirrors, by the push latency, and a harness that fed the sender's time
  * would be proving a property production does not have. What keeps the replica
  * from being re-pushed is not its timestamp being small; it is that the
- * watermark is taken from `maxUpdatedAt` **after** the apply.
+ * server resolves identical content fingerprints as unchanged. The push
+ * watermark is captured before network work to retain concurrent local writes.
  */
 const SERVER_LAG_MS = 4_000
 
@@ -628,15 +629,8 @@ describe('what the peer ends up with', () => {
     expect(on(deviceB, () => taskRepo.getById(USER, task.id))).toEqual(first)
   })
 
-  /**
-   * And it is the *watermark* that stops it, not the timestamp being small.
-   * The replica is stamped with the server's time, which is newer than the
-   * sender's row — so an argument from "the replica carries an older time"
-   * would be false. What actually holds is the order `syncEngine` does things
-   * in: it advances `lastPushedAt` to `maxUpdatedAt` **after** the pull loop,
-   * so the row it has just applied is already below the line.
-   */
-  it('is not pushed back: the watermark advances past the applied replica', () => {
+  /** Mapper timestamp boundaries are strict; cycle policy is tested separately. */
+  it('reports the server timestamp and excludes rows at an explicit boundary', () => {
     const task = on(deviceA, () =>
       taskService.create(USER, { title: 'Quiet', goal: 'Stay quiet' })
     )
@@ -787,12 +781,15 @@ describe('a replica edit does not overwrite the run the holder is following', ()
     const task = on(deviceA, () => {
       const t = taskService.create(USER, { title: 'Reconcile', goal: 'Reconcile the ledger' })
       taskService.start(USER, t.id)
+      taskService.setRuntimeBudget(USER, t.id, { maxRounds: 3, maxMinutes: 5 })
       taskService.setHandoffNote(USER, t.id, 'step 1 done')
       return t
     })
     applyTo(deviceB, task.id, encode(deviceA, task.id))
     // A's agent gets further while B is looking at the older copy.
     on(deviceA, () => {
+      taskService.setRuntimeBudget(USER, task.id, { maxRounds: 7, maxMinutes: 12 })
+      taskService.setArtifacts(USER, task.id, [{ kind: 'file', name: 'Report', ref: '/tmp/report.md' }])
       taskService.setHandoffNote(USER, task.id, 'step 2 done')
       taskService.setStatus(USER, task.id, 'completed')
     })
@@ -811,6 +808,8 @@ describe('a replica edit does not overwrite the run the holder is following', ()
 
     on(deviceA, () => {
       const row = taskRepo.getById(USER, taskId)
+      expect(row?.artifacts).toEqual([{ kind: 'file', name: 'Report', ref: '/tmp/report.md' }])
+      expect(row?.budget).toMatchObject({ maxRounds: 7, maxMinutes: 12 })
       expect(row?.handoffNote).toBe('step 2 done')
       expect(row?.status).toBe('completed')
       expect(row?.finishedAt).not.toBeNull()
@@ -970,5 +969,31 @@ describe('enrolling a device adopts the work that was nobody’s', () => {
       expect(() => taskService.start(USER, task.id)).toThrow()
     })
     expect(on(deviceA, () => taskService.getById(USER, task.id).runsHere)).toBe(true)
+  })
+})
+
+
+describe('independent imports of one remote binding', () => {
+  it('converges legacy replica ids and refuses delayed resurrection', () => {
+    const a = on(deviceA, () => taskService.create(USER, { id: 'remote-a', title: 'Remote', goal: 'Work',
+      executor: 'remote', origin: 'remote', remoteAdapter: 'cinna', remoteId: 'same-remote' }))
+    const b = on(deviceB, () => taskService.create(USER, { id: 'remote-b', title: 'Remote', goal: 'Work',
+      executor: 'remote', origin: 'remote', remoteAdapter: 'cinna', remoteId: 'same-remote' }))
+    const child = on(deviceB, () => taskService.create(USER, { id: 'child-b', title: 'Child', goal: 'Child work', parentTaskId: b.id }))
+    const staleChild = encode(deviceB, child.id)
+    const fromA = encode(deviceA, a.id), fromB = encode(deviceB, b.id)
+    applyTo(deviceA, b.id, fromB)
+    applyTo(deviceB, a.id, fromA)
+    for (const device of [deviceA, deviceB]) on(device, () => {
+      expect(taskRepo.list(USER).filter((row) => row.remoteId === 'same-remote').map((row) => row.id)).toEqual(['remote-a'])
+      expect(taskRepo.getByRemote(USER, 'cinna', 'same-remote')?.id).toBe('remote-a')
+      expect(taskRepo.getById(USER, 'remote-b')?.deletedAt).not.toBeNull()
+    })
+    on(deviceB, () => expect(taskRepo.getById(USER, child.id)?.parentTaskId).toBe(a.id))
+    applyTo(deviceA, child.id, staleChild)
+    on(deviceA, () => expect(taskRepo.getById(USER, child.id)?.parentTaskId).toBe(a.id))
+    // A delayed pre-merge row cannot resurrect the second replica.
+    applyTo(deviceA, b.id, fromB)
+    expect(on(deviceA, () => taskRepo.list(USER).filter((row) => row.remoteId === 'same-remote').map((row) => row.id))).toEqual(['remote-a'])
   })
 })

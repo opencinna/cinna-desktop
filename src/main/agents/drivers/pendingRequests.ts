@@ -185,36 +185,6 @@ export const pendingRequests = {
   },
 
   /**
-   * Forget a request the **engine** has already settled.
-   *
-   * Deliberately not `resolve()`. The engine tells us about a reply through
-   * `permission.v2.replied` / `question.v2.*`, including replies made from
-   * somewhere other than this window — and by then there is nothing left to
-   * deliver. Routing that through `resolve` would settle the runner's
-   * `answered` promise with a rejection and make it POST a redundant reject at
-   * a request the engine has already closed.
-   *
-   * What this must not do is nothing: an entry left behind lives for the full
-   * park timeout, during which `isPending` keeps returning true, a persisted
-   * block keeps rendering as answerable, and answering it reports success
-   * while the reply 404s.
-   */
-  drop(requestId: string): void {
-    const entry = entries.get(requestId)
-    if (!entry) return
-    // Async acceptance is out-of-band; rejecting its local barrier never posts
-    // a second remote reply. ACP keeps its existing notification-only drop.
-    if (entry.delivery) { entry.settle({ kind: 'rejected' }); return }
-    entries.delete(requestId)
-    entry.controller.abort()
-    const timer = timers.get(requestId)
-    if (timer) {
-      clearTimeout(timer)
-      timers.delete(requestId)
-    }
-  },
-
-  /**
    * Who a request belongs to, without settling it.
    *
    * The IPC handler has to check that the caller owns the chat **before** the

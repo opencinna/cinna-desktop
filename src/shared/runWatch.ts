@@ -16,7 +16,7 @@ export type RunWatchMessage = {
   agentId: string | null
   event: RunEvent
 } | {
-  type: 'accepted' | 'closed'
+  type: 'accepted' | 'closed' | 'watch_error'
   runId: string
   sequence: number
   agentId: string | null
@@ -32,6 +32,6 @@ export function isRunWatchMessage(value: unknown): value is RunWatchMessage {
     Array.isArray(message.baselineMessageIds) && message.baselineMessageIds.every((id) => typeof id === 'string') &&
     Array.isArray(message.events) && message.events.every(isRunEvent)
   if (typeof message.runId !== 'string') return false
-  return message.type === 'accepted' || message.type === 'closed' ||
+  return message.type === 'accepted' || message.type === 'closed' || message.type === 'watch_error' ||
     (message.type === 'event' && isRunEvent(message.event))
 }

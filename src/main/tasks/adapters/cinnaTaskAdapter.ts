@@ -198,7 +198,6 @@ const CINNA_CAPABILITIES: RemoteTaskCapabilities = {
   subtasks: true,
   execute: true,
   asks: true,
-  actionRequiredCount: true
 }
 
 /** A cinna task row, as much of it as this adapter reads. */
@@ -789,36 +788,6 @@ export function createCinnaTaskAdapter(world: CinnaWorld): RemoteTaskAdapter {
         { method: 'POST', body: { content, answers_to_message_id: askId } }
       )
       return { delivered: true }
-    },
-
-    /**
-     * cinna's own "needs a human" number — and **not** the number of open asks.
-     *
-     * `GET /activities/stats` counts unread, unarchived activities whose
-     * `action_required` is set, and three things follow that a caller has to
-     * know before it renders the figure:
-     *
-     *  - it is gated on `is_read`, which only cinna's **web** UI clears, so a
-     *    user who lives in the desktop accrues a number nothing here can reset;
-     *  - one ask raises **two** rows — `answers_required` from the session and
-     *    `task_action_required` from `_TASK_LIFECYCLE_MAP` — so it can say two
-     *    where the inbox shows one;
-     *  - it is profile-wide, so it will not agree with the sum of
-     *    {@link RemoteTaskAdapter.listOpenAsks} in either direction.
-     *
-     * It is still the right probe for "is anything waiting over there", which
-     * is what §5.7 asks of it: it is one cheap call, and it does not have the
-     * `updated_since` cursor's blind spot for comment-only changes. What it is
-     * not is a count the inbox can print beside its own rows.
-     */
-    async actionRequiredCount(userId) {
-      require('actionRequiredCount', 'actionRequiredCount')
-      const stats = await call<{ action_required_count?: unknown }>(
-        userId,
-        '/api/v1/activities/stats'
-      )
-      const count = num(stats?.action_required_count) ?? 0
-      return count > 0 ? Math.floor(count) : 0
     },
 
     deepLink: (binding) => (binding.url && /^https?:\/\//i.test(binding.url) ? binding.url : null)

@@ -27,8 +27,15 @@ export async function withRuntimeAgent<T>(agentId: string, signal: AbortSignal, 
   const releaseAgent = await queue.acquire(signal)
   let releaseGlobal: (() => void) | undefined
   try {
-    releaseGlobal = await agentSlots.acquire(signal)
-    await waitForLocalAgent(agentId, signal)
+    // Interactive turns own turnLock. Waiting for them must not reserve one
+    // of the scarce global slots used by unrelated autonomous agents.
+    do {
+      await waitForLocalAgent(agentId, signal)
+      releaseGlobal = await agentSlots.acquire(signal)
+      if (!turnLock.isLocked(agentId)) break
+      releaseGlobal()
+      releaseGlobal = undefined
+    } while (true)
     if (signal.aborted) throw new Error('The task was stopped.')
     return await run()
   } finally { releaseGlobal?.(); releaseAgent() }

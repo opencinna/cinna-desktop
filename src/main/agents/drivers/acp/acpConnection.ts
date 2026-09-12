@@ -308,6 +308,10 @@ export async function startAcpConnection(
     const lines = stderrPartial ? [...stderrLines, stderrPartial] : stderrLines
     return lines.slice(-ACP_STDERR_TAIL_LINES).join('\n')
   }
+  const stderrClosed = new Promise<void>((resolve) => {
+    if (!child.stderr) resolve()
+    else child.stderr.once('close', resolve)
+  })
   child.stderr?.setEncoding('utf8')
   child.stderr?.on('data', (chunk: string) => pushStderr(chunk))
   child.stderr?.on('error', () => {
@@ -569,8 +573,9 @@ export async function startAcpConnection(
   // ---- initialize ----------------------------------------------------------
 
   const failure = async (reason: string): Promise<never> => {
-    const tail = stderrTail()
     await dispose()
+    await Promise.race([stderrClosed, afterGrace(EXIT_REPORT_GRACE_MS)])
+    const tail = stderrTail()
     throw new Error(
       `${spec.command} ${reason}${tail ? `\n--- stderr ---\n${tail}` : ''}`.trim()
     )

@@ -329,7 +329,7 @@ export function MessageStream({ chatId, bottomPadding }: MessageStreamProps): Re
   // answerable while the turn is still streaming, which is precisely the state
   // `activeQuestionMsgId` below excludes — the two live side by side rather
   // than one replacing the other.
-  const { isPending, answerPermission, answerQuestion } = useAgentRequests(chatId, isStreaming)
+  const { isPending, answerPermission, answerQuestion } = useAgentRequests(chatId, isStreaming || !!chatData?.activeRunId)
 
 
   /**

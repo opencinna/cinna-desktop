@@ -50,7 +50,7 @@ export async function runManagedSession(
   let stopHistory: ManagedEvent[] = []
   let stopTimer: ReturnType<typeof setTimeout> | undefined
   let stopping = false
-  let budget = binding.checkpoint?.state === 'budget'
+  let budget = false
   const options = () => ({ signal: io.signal, timeout: requestMs, maxRetries: 0 })
   const save = (state: ManagedSessionState): void => {
     binding.validate()
@@ -159,6 +159,7 @@ export async function runManagedSession(
     for (const effect of effects) {
       switch (effect.type) {
         case 'text': {
+          if (closed || stopping) break
           const delta = (text ? '\n\n' : '') + effect.text
           text += delta
           emitPart({ kind: 'text', text: delta })
@@ -222,11 +223,8 @@ export async function runManagedSession(
   try {
     io.signal.throwIfAborted()
     binding.validate()
-    if (binding.checkpoint && binding.checkpoint.state !== 'ready') {
-      throw new Error(binding.checkpoint.state === 'budget'
-        ? 'This Managed session is paused at its remote budget. Review it in Claude or start a new chat.'
-        : 'This Managed session has unfinished or uncertain work. Review it in Claude and start a new chat.')
-    }
+    // Durable checkpoints record uncertainty, not permanent admission locks.
+    // Retrieve and reconcile remote history before allowing another message.
     const newlyCreated = !sessionId
     const session = sessionId
       ? await client.beta.sessions.retrieve(sessionId, params, options())

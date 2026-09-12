@@ -53,7 +53,9 @@ log({ dir: 'start', pid: process.pid, cwd: process.cwd(), argv: process.argv, en
 
 for (const line of script.stderr ?? []) err(line)
 
-if (script.ignoreSigterm) {
+if (script.stderrOnTermination) {
+  process.on('SIGTERM', () => { err(script.stderrOnTermination); process.exit(0) })
+} else if (script.ignoreSigterm) {
   // Proves the SIGTERM → SIGKILL escalation: this process will not go quietly.
   process.on('SIGTERM', () => log({ dir: 'signal', signal: 'SIGTERM' }))
 }

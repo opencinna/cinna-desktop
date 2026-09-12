@@ -60,3 +60,18 @@ describe('live run hub', () => {
     expect(() => run.close()).not.toThrow()
   })
 })
+
+it('tells a watcher about a failed delivery before removing it', () => {
+  const hub = createLiveRunHub()
+  const received: RunWatchMessage[] = []
+  hub.watch('u', 'c', (message) => {
+    if (message.type === 'event') throw new Error('DataCloneError')
+    received.push(message)
+  })
+  const run = hub.begin('u', 'c', 'r', [])
+  run.push(delta('first'))
+  expect(received.at(-1)).toMatchObject({ type: 'watch_error', runId: 'r' })
+  const count = received.length
+  run.push(delta('second'))
+  expect(received).toHaveLength(count)
+})

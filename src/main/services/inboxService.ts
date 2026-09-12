@@ -1,3 +1,4 @@
+import { DEFAULT_USER_ID } from '../../shared/userIds'
 import { nanoid } from 'nanoid'
 import { taskInputRequestRepo, type TaskInputRequestRow } from '../db/taskInputRequests'
 import { taskRepo, type TaskRow } from '../db/tasks'
@@ -166,7 +167,7 @@ function taskForChat(ctx: RunEventContext): TaskRow | null {
     return null
   }
   const firstUserMessage = messageRepo.firstByRole(ctx.chatId, 'user')?.content?.trim()
-  const agent = ctx.agentId ? agentRepo.getOwned(ctx.userId, ctx.agentId) : null
+  const agent = ctx.agentId ? (agentRepo.getOwned(ctx.userId, ctx.agentId) ?? agentRepo.getOwned(DEFAULT_USER_ID, ctx.agentId)) : null
   const created = taskService.create(ctx.userId, {
     title: chat.title,
     // A chat with no user message at all is reachable — an agent can speak

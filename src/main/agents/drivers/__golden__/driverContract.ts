@@ -333,6 +333,11 @@ export function describeDriverContract(
   const hasParks = typeof makeSubject().parks === 'function'
 
   describe(`driver contract: ${name}`, () => {
+    it('provides park scenarios whenever capabilities advertise reply input', () => {
+      const { driver, row } = makeSubject().underTest()
+      const caps = driver.capabilities(row)
+      expect(hasParks).toBe(caps.inputResume === 'reply' && Object.values(caps.input).some(Boolean))
+    })
     /** Every `register` call this test made, in order. */
     let registered: { requestId: string; kind: 'permission' | 'question'; timeoutMs?: number }[]
     /** Set by a test to force the park timeout through the real timer path. */

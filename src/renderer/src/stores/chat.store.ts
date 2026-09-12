@@ -7,7 +7,7 @@ import type {
 } from '../../../shared/messageParts'
 import type { InputRequest, InputResumeMode, RunEvent } from '../../../shared/runEvents'
 import type { MessageAttachment } from '../../../shared/attachments'
-import { continuesPart } from '../../../shared/partMerge'
+import { continuingPartIndex } from '../../../shared/partMerge'
 
 export type { ContentKind, ToolStream }
 
@@ -106,11 +106,12 @@ function appendAgentDeltaPart(
 ): MessagePart[] {
   const { kind, text, toolName, toolInput, toolId, toolStream, commandInvocation, file } = delta
   const out = parts.slice()
-  const last = out[out.length - 1]
+  const index = continuingPartIndex(out, { kind, toolName, toolId, toolStream })
+  const last = out[index]
   // The accumulator's own rule (`shared/partMerge.ts`), so the live sub-thread
   // splits exactly where the persisted one will.
-  if (last && continuesPart(last, { kind, toolName, toolId, toolStream })) {
-    out[out.length - 1] = {
+  if (last) {
+    out[index] = {
       ...last,
       text: last.text + text,
       toolInput: last.toolInput ?? toolInput,
@@ -314,11 +315,12 @@ export const useChatStore = create<ChatStore>((set) => ({
   ) =>
     set((state) => {
       const blocks = [...state.streamingBlocks]
-      const last = blocks[blocks.length - 1]
+      const index = continuingPartIndex(blocks.map((block) => block.type === 'text' ? block : undefined), { kind, toolName, toolId, toolStream })
+      const last = blocks[index]
       // The main-process accumulator's rule, from one place
       // (`shared/partMerge.ts`), so live blocks split where persisted parts do.
-      if (last?.type === 'text' && continuesPart(last, { kind, toolName, toolId, toolStream })) {
-        blocks[blocks.length - 1] = {
+      if (last?.type === 'text') {
+        blocks[index] = {
           ...last,
           content: last.content + text,
           toolInput: last.toolInput ?? toolInput,

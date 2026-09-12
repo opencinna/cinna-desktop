@@ -24,7 +24,7 @@ Let the final user install a catalog agent at the exact moment they want to use 
 5. User starts the conversation with the agent immediately.
 
 ### Install with missing credentials
-- No special handling here, by design. If the install lands in `needs_setup` / `publisher_broken`, the agent is still selected; messaging it triggers the agent's own "setup not complete" auto-reply (see [Agents](../agents/agents.md)). The in-chat path stays a single click — the [`CatalogSetupModal`](bundles_catalog.md#setup-modal) is intentionally not shown here (it remains the Settings → Catalog path).
+- No special handling here, by design. If the install lands in `needs_setup` / `publisher_broken`, the agent is still selected; messaging it triggers the agent's own "setup not complete" auto-reply (see [Agents](../agents/agents.md)). The in-chat path stays a single click — the [`CatalogSetupModal`](bundles_catalog.md#quick-install-with-missing-credentials) is intentionally not shown here (it remains the Settings → Catalog path).
 
 ### Install failure (hard error)
 - Auth/network/server errors are caught and surfaced as an inline error row at the top of the Catalog Section (e.g. *"Cinna session expired — re-authenticate in Settings to install."*). The card stops spinning; nothing is selected. The error clears on the next install attempt.

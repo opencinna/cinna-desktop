@@ -140,3 +140,5 @@ renderer: useSyncOnViewOpen (page open, 8s throttle) -> sync.syncNow
 - [The Handoff Note, Exported](handoff_note_export.md) — why the apply path goes through `taskService` and not `taskRepo`
 - [Keeping a Bound Task in Step](remote_sync.md) — the other direction a task can exist twice in, and the columns of that relationship which deliberately stay on one device
 - [Jobs](../jobs/jobs.md) — where tasks come from, and the run history row that opens the task page
+
+Peer edits preserve the claim holder’s artifacts and budget as well as status, timestamps, assignee and handoff note. Independent devices may import a remote task before app-sync arrives. App-sync coalesces those independently minted replicas by a deterministic ID order and remaps local child, job-run and Inbox references; duplicate rows become synced tombstones.

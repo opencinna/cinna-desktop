@@ -63,9 +63,9 @@ export interface DirtyRecord {
  * so where it builds this). It is carried onto the row verbatim — no
  * `new Date()` bump — but that does **not** make an applied copy older than the
  * row it mirrors; `server_updated_at` is monotonic and ≥ the original, so a
- * replica is always *newer*. What keeps it from being pushed straight back is
- * the watermark, which `syncEngine` recomputes from `maxUpdatedAt` **after** the
- * pull loop, so everything just applied is already behind it.
+ * replica is always *newer*. The cycle-start watermark can revisit it; the
+ * server recognizes an unchanged content fingerprint. Advancing past rows
+ * written during the pull would incorrectly hide concurrent local changes.
  *
  * This docstring used to say "the peer's timestamp", and a step-10 test harness
  * built a whole two-device fixture on that reading and proved a property

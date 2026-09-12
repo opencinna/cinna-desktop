@@ -1,3 +1,4 @@
+import { addAgentRoot } from '../fixtures/seed'
 import { test, expect, type CinnaApp } from '../fixtures/app'
 import type { Page } from '@playwright/test'
 
@@ -45,6 +46,7 @@ async function toggleOverlayFromMenu(cinna: CinnaApp): Promise<void> {
 
 test('B1 entries arrive live while the overlay is open', async ({ cinna }) => {
   await cinna.skipOnboarding()
+  await addAgentRoot(cinna)
   await openOverlayFromSidebar(cinna)
   await cinna.page.getByRole('button', { name: 'Clear logs' }).click()
   await expect(cinna.page.getByText('No log entries yet')).toBeVisible()
@@ -64,6 +66,7 @@ test('B1 the ⌘` menu item toggles the overlay', async ({ cinna }) => {
 
 test('B2 history from before the overlay was first opened is present', async ({ cinna }) => {
   await cinna.skipOnboarding()
+  await addAgentRoot(cinna)
   await cinna.relaunch()
   await cinna.skipOnboarding()
   // Use the app for a bit without opening the logs.

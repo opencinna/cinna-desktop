@@ -66,6 +66,7 @@ const here = dirname(fileURLToPath(import.meta.url))
 /** The fake agent script, as `fakeAcpAgent.mjs` reads it. Loosely typed on purpose. */
 export interface FakeAcpScript {
   stderr?: string[]
+  stderrOnTermination?: string
   exitOnStart?: { code?: number; afterMs?: number }
   ignoreSigterm?: boolean
   exitOnClose?: number

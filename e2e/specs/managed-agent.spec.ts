@@ -114,7 +114,7 @@ test('Managed setup needs no folder; permission waits for acknowledgment, then t
   await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   expect((await durable(cinna)).checkpoint).toEqual({ session_id: session().id, state: 'budget' })
   await send(cinna, 'Try to continue this paused session.')
-  await expect(cinna.page.getByText('This Managed session is paused at its remote budget. Review it in Claude or start a new chat.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByText('This Managed session is paused at its remote budget. Review the budget in Claude before continuing.', { exact: true })).toBeVisible()
   await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
   expect(events('user.message')).toHaveLength(3)
   expect(remote.requests.slice(startRequest).filter(row => row.method === 'POST' && row.path === '/v1/sessions')).toHaveLength(1)

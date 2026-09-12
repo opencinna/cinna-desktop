@@ -260,17 +260,7 @@ describe('OpenCode', () => {
     expect(answer?.text).toBe('Answered: Red')
   })
 
-  it('reports the command catalogue with replace semantics', () => {
-    const { updates } = foldAll(new AcpMessageStream(), load('opencode', 'available_commands'))
-    expect(updates[0].commands?.map((c) => c.name)).toEqual([
-      'customize-opencode',
-      'init',
-      'review',
-      'spikehello'
-    ])
-    expect(updates[0].commands?.[3].description).toContain('Spike folder command')
-    expect(updates[0].message).toBeUndefined()
-  })
+
 
   it('reports a mode change', () => {
     const { updates } = foldAll(new AcpMessageStream(), load('opencode', 'mode_update'))
@@ -295,13 +285,13 @@ describe('OpenCode', () => {
 })
 
 describe('Claude', () => {
-  it('accumulates the reply and takes the session title', () => {
+  it('accumulates the reply and ignores unsupported session metadata', () => {
     const stream = new AcpMessageStream({ launcher: 'claude' })
     const { updates, messages } = foldAll(stream, load('claude', 'text_turn'))
     const parts = onlyMessage(messages)
     expect(parts.map(kindOf)).toEqual(['text'])
     expect(parts[0].text).toBe('Secret word: pomegranate; denied: step 4 (Edit).')
-    expect(updates[updates.length - 1]).toEqual({ title: 'Spike test' })
+    expect(updates[updates.length - 1]).toEqual({})
   })
 
   it('prefers _meta.claudeCode.toolName over the title the adapter shows', () => {
@@ -392,16 +382,7 @@ describe('Claude', () => {
     expect(updates.map((u) => u.modeId)).toEqual(['auto', 'default'])
   })
 
-  it('reports the command catalogue, input hint and all', () => {
-    const { updates } = foldAll(new AcpMessageStream(), load('claude', 'available_commands'))
-    expect(updates[0].commands?.map((c) => c.name)).toEqual([
-      'design',
-      'run',
-      'init',
-      'security-review'
-    ])
-    expect(updates[0].commands?.[0].input).toEqual({ hint: 'consent | revoke' })
-  })
+
 
   it('swallows an extension notification whole', () => {
     const fixture = load('claude', 'ext_auth_status')

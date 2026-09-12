@@ -22,7 +22,6 @@
  * contract suite can drive it with fakes.
  */
 
-import type { AsyncRespondContext, AsyncRespondOutcome } from './replyDelivery'
 import type { AgentRow } from '../../db/agents'
 import type { RunAgentTurnResult } from '../../services/a2aStreamingService'
 import type { RunEvent } from '../../../shared/runEvents'
@@ -129,6 +128,4 @@ export interface AgentDriver {
    */
   respond(ask: ParkedAsk, resolution: RequestResolution): RespondOutcome
 
-  /** Remote acceptance only; the common answer path commits before releasing its park. */
-  respondAsync?(ask: ParkedAsk, resolution: RequestResolution, context: AsyncRespondContext): Promise<AsyncRespondOutcome>
 }

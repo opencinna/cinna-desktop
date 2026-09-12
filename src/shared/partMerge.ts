@@ -40,3 +40,15 @@ export function continuesPart(last: PartMergeKey, next: PartMergeKey): boolean {
   if (next.kind === 'tool' && last.toolId && next.toolId) return last.toolId === next.toolId
   return true
 }
+
+/** Stable tool identity survives intervening permission and decision blocks.
+ * Results retain their append order so stdout/stderr chronology is preserved.
+ */
+export function continuingPartIndex(parts: readonly (PartMergeKey | undefined)[], next: PartMergeKey): number {
+  if (next.kind === 'tool' && next.toolId) {
+    const index = parts.findIndex((part) => part?.kind === 'tool' && part.toolId === next.toolId && continuesPart(part, next))
+    if (index >= 0) return index
+  }
+  const index = parts.length - 1
+  return parts[index] && continuesPart(parts[index]!, next) ? index : -1
+}

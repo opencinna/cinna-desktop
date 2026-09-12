@@ -35,7 +35,7 @@ export function registerRunHandlers(): void {
     port.on('close', () => unwatch())
     port.start()
     unwatch = liveRunHub.watch(userId, chatId, (message) => {
-      if (!userActivation.isActivated() || getProfileScopeUserId() !== userId || !chatRepo.getOwned(userId, chatId)) {
+      if (!userActivation.isActivated() || getProfileScopeUserId() !== userId) {
         close()
         throw new Error('Run subscription no longer belongs to the active profile')
       }

@@ -214,8 +214,6 @@ export interface RemoteTaskCapabilities {
   execute: boolean
   /** The remote parks on human input, and this adapter can list and answer those asks. */
   asks: boolean
-  /** Cheap "is anything waiting for me" probe (cinna: `/activities/stats`). */
-  actionRequiredCount: boolean
 }
 
 /**
@@ -534,9 +532,6 @@ export interface RemoteTaskAdapter {
     askId: string,
     resolution: RequestResolution
   ): Promise<RemoteAnswerOutcome>
-
-  /** How many things across this profile are waiting on the user. Drives the badge. */
-  actionRequiredCount(userId: string): Promise<number>
 
   /**
    * Where a person would go to look at this task, or null when there is nowhere.

@@ -1223,3 +1223,9 @@ describe('RuntimePanel', () => {
     })
   })
 })
+
+it('shows an unsupported manifest engine explicitly in Runs on', () => {
+  render(<RuntimePanel agent={agent({ engine: 'gemini' })} />)
+  expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('unsupported-engine')
+  expect(screen.getByText('Unsupported engine: gemini')).toBeTruthy()
+})

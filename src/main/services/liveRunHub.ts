@@ -38,7 +38,10 @@ export function createLiveRunHub(maxBytes = 8 * 1024 * 1024, maxEvents = 5_000) 
     events: run?.replayAvailable ? structuredClone(run.events) : []
   })
   const send = (key: string, sink: Sink, message: RunWatchMessage): void => {
-    try { sink(message) } catch { watchers.get(key)?.delete(sink) }
+    try { sink(message) } catch {
+      watchers.get(key)?.delete(sink)
+      try { sink({ type: 'watch_error', runId: message.runId ?? '', sequence: message.sequence, agentId: message.agentId }) } catch { /* Port already closed. */ }
+    }
   }
   const publish = (key: string, message: RunWatchMessage): void => {
     for (const sink of watchers.get(key) ?? []) send(key, sink, message)

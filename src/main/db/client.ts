@@ -1,3 +1,4 @@
+import { encryptApiKey } from '../security/keystore'
 import { app } from 'electron'
 import { join } from 'path'
 import Database from 'better-sqlite3'
@@ -46,6 +47,16 @@ export function initDatabase(): void {
  * left in place).
  */
 function runConsistencyChecks(): void {
+  safeRun('encrypt-mcp-client-registrations', () => {
+    const rows = sqlite.prepare('SELECT id, client_info FROM mcp_providers WHERE client_info IS NOT NULL').all() as { id: string; client_info: string }[]
+    for (const row of rows) {
+      const registration = JSON.parse(row.client_info)
+      if (typeof registration.encrypted !== 'string') {
+        sqlite.prepare('UPDATE mcp_providers SET client_info = ? WHERE id = ?').run(
+          JSON.stringify({ encrypted: encryptApiKey(row.client_info).toString('base64') }), row.id)
+      }
+    }
+  })
   safeRun('prune-dangling-mcp-ids', () => {
     const touched = chatModeRepo.pruneDanglingMcpProviderIds()
     if (touched > 0) {

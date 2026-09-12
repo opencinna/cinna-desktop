@@ -225,7 +225,7 @@ describe('MCPManager through the real v2 SDK', () => {
       expect(text).toContain('Return to Cinna')
       expect(text).toContain('Continue in the app to check the authorization result.')
       expect(text).not.toMatch(/success|authorized|connected/i)
-      await vi.waitFor(() => expect(manager.getConnection('peer-provider')?.status).toBe('error'))
+      await vi.waitFor(() => expect(manager.getConnection('peer-provider')?.status).toBe(invalid.includes('state') ? 'awaiting-auth' : 'error'))
       expect(remote.requests.filter((row) => row.path === '/token')).toHaveLength(0)
       expect(remote.methods()).not.toContain('tools/list')
       expect(remote.methods()).not.toContain('initialize')
@@ -431,4 +431,39 @@ describe('MCPManager through the real v2 SDK', () => {
     expect(edge.openExternal).not.toHaveBeenCalled()
     expect(manager.getConnection('peer-provider')).toBeUndefined()
   })
+})
+
+it('serializes concurrent OAuth calls across one rotating refresh token', async () => {
+  let release!: () => void
+  const tokenGate = new Promise<void>((resolve) => { release = resolve })
+  const remote = await peer({ protocol: 'modern', oauth: true, tokenGate })
+  const settings = config({ url: remote.url, authType: 'oauth', bearerTokenEncrypted: undefined,
+    authTokensEncrypted: Buffer.from(JSON.stringify({ access_token: BEARER, token_type: 'Bearer', issuer: remote.origin,
+      refresh_token: 'old-peer-refresh-token' })), clientInfo: { client_id: 'peer-public-client', issuer: remote.origin } })
+  expect((await manager.connect(settings)).status).toBe('connected')
+  remote.state.rejectNextAuthorized = 1
+  const first = manager.callTool(settings.id, TOOL_NAME, {})
+  const second = manager.callTool(settings.id, TOOL_NAME, {})
+  try {
+    await vi.waitFor(() => expect(remote.requests.filter((row) => row.path === '/token')).toHaveLength(1))
+    expect(remote.methods().filter((name) => name === 'tools/call')).toHaveLength(1)
+  } finally { release() }
+  await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+  expect(remote.requests.filter((row) => row.path === '/token')).toHaveLength(1)
+})
+
+it('completes OAuth for legacy SSE and encrypts the client registration', async () => {
+  const remote = await peer({ protocol: 'sse', oauth: true })
+  const settings = config({ url: remote.url, transportType: 'sse', authType: 'oauth', bearerTokenEncrypted: undefined })
+  expect((await manager.connect(settings)).status).toBe('awaiting-auth')
+  const authorization = new URL(edge.openExternal.mock.calls[0][0])
+  const callback = new URL(authorization.searchParams.get('redirect_uri')!)
+  callback.searchParams.set('state', authorization.searchParams.get('state')!)
+  callback.searchParams.set('code', 'synthetic-authorized-code')
+  await fetch(callback)
+  await vi.waitFor(() => expect(manager.getConnection(settings.id)?.status).toBe('connected'))
+  expect(await manager.callTool(settings.id, TOOL_NAME, {})).toMatchObject({ content: [{ type: 'text', text: TOOL_TEXT }] })
+  const stored = edge.rows.get(settings.id)!.clientInfo as { encrypted: string }
+  expect(stored).toEqual({ encrypted: expect.any(String) })
+  expect(JSON.parse(Buffer.from(stored.encrypted, 'base64').toString()).client_id).toBe('peer-public-client')
 })

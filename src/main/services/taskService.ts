@@ -386,6 +386,8 @@ function respectingTheClaim(
     finishedAt: local.finishedAt,
     errorMessage: local.errorMessage,
     handoffNote: local.handoffNote,
+    artifacts: local.artifacts,
+    budget: local.budget,
     assigneeAgentId: local.assigneeAgentId,
     assigneeName: local.assigneeName,
     assigneeKind: local.assigneeKind,
@@ -984,6 +986,15 @@ export const taskService = {
     return written(userId, row)
   },
 
+  /** Repair imported aliases and keep derived local views in step. */
+  reconcileRemoteReplicas(userId: string, adapter: string, remoteId: string): void {
+    for (const id of taskRepo.reconcileRemoteBinding(userId, adapter, remoteId)) {
+      const changed = taskRepo.getById(userId, id)
+      if (changed?.deletedAt) taskFileService.removeHandoff(id)
+      else if (changed) written(userId, changed)
+    }
+  },
+
   /**
    * Write a task that arrived from another of the user's devices.
    *
@@ -1018,6 +1029,13 @@ export const taskService = {
    */
   applySyncedTask(userId: string, values: TaskSyncValues): TaskDto | null {
     const device = thisDeviceId(userId)
+    if (values.parentTaskId) {
+      const parent = taskRepo.getById(userId, values.parentTaskId)
+      if (parent?.remoteAdapter && parent.remoteId) {
+        const canonical = taskRepo.getByRemote(userId, parent.remoteAdapter, parent.remoteId)
+        if (canonical) values = { ...values, parentTaskId: canonical.id }
+      }
+    }
     const local = taskRepo.getById(userId, values.id)
     // Branch on the check that was actually made, not on a read-back that came
     // up empty: the two coincide today only because `getById` does not filter
@@ -1029,6 +1047,7 @@ export const taskService = {
       })
       return null
     }
+    if (values.remoteAdapter && values.remoteId) this.reconcileRemoteReplicas(userId, values.remoteAdapter, values.remoteId)
     const row = taskRepo.getById(userId, values.id)
     if (!row) {
       // Not reachable: the upsert above reported that it wrote. Logged rather

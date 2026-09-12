@@ -149,19 +149,22 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
       let client: A2AClient | undefined
       let taskId: string | undefined
       let cancelSent = false
+      let cancelConfirmed = false
+      let cancelAttempt: Promise<void> | undefined
       const onAbort = (): void => {
         if (!signal.aborted || cancelSent || !client || !taskId) return
         cancelSent = true
         const id = taskId
         logger.info('Sending cancelTask to agent', { taskId: id })
-        client
+        cancelAttempt = client
           .cancelTask({ id })
+          .then((task) => { cancelConfirmed = 'result' in task && task.result.status.state === 'canceled' })
           .catch((err) => logger.warn('cancelTask failed', { taskId: id, error: String(err) }))
       }
       signal.addEventListener('abort', onAbort, { once: true })
 
       try {
-        return await deps.runTurn({
+        const result = await deps.runTurn({
           chatId,
           agentId: agent.id,
           agentName: agent.name,
@@ -186,6 +189,16 @@ export function createA2aDriver(deps: A2aDriverDeps): AgentDriver {
             onAbort()
           }
         })
+        if (signal.aborted && cancelAttempt) {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          try {
+            await Promise.race([cancelAttempt, new Promise<void>((resolve) => { timer = setTimeout(resolve, 500) })])
+          } finally { if (timer) clearTimeout(timer) }
+        }
+        if (signal.aborted && !cancelConfirmed) {
+          result.notices = [...result.notices, { partKey: `a2a-stop-${chatId}`, text: 'Stopped waiting locally. The remote agent’s stop was not confirmed; check its task before starting more work.' }]
+        }
+        return result
       } finally {
         signal.removeEventListener('abort', onAbort)
       }

@@ -18,7 +18,7 @@ export interface OAuthCallbackListener {
 }
 
 /** Bind once to an OS-selected loopback port before handing out its redirect URL. */
-export async function startOAuthCallback(expectedState: string, timeoutMs = 120_000): Promise<OAuthCallbackListener> {
+export async function startOAuthCallback(expectedState: string, timeoutMs = 600_000, port = 0): Promise<OAuthCallbackListener> {
   let resolve!: (result: OAuthCallbackResult) => void
   let reject!: (error: Error) => void
   const promise = new Promise<OAuthCallbackResult>((yes, no) => { resolve = yes; reject = no })
@@ -51,14 +51,14 @@ export async function startOAuthCallback(expectedState: string, timeoutMs = 120_
       'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" })
     // No callback-controlled HTML and no success claim before token exchange.
     res.end(CALLBACK_HTML, () => {
-      if (!valid) { finish(new Error('OAuth callback state or parameters did not match this connection.')); return }
+      if (!valid) return // Ignore unsolicited callbacks; keep the real flow pending.
       finish(undefined, { code: params.get('code') ?? '', state: expectedState,
         params: Object.fromEntries(params), searchParams: new URLSearchParams(params) })
     })
   })
   await new Promise<void>((yes, no) => {
     server.once('error', no)
-    server.listen(0, '127.0.0.1', () => {
+    server.listen(port, '127.0.0.1', () => {
       server.off('error', no)
       const address = server.address()
       if (!address || typeof address === 'string') { server.close(); no(new Error('Could not bind OAuth callback')); return }

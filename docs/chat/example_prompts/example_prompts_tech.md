@@ -39,7 +39,7 @@
 
 ## IPC Channels
 
-None added. The feature reads `remoteMetadata` off the existing `agents:list` response; no new main-process endpoints are required.
+None added. The feature reads `remoteMetadata` off the existing `agent:list` response; no new main-process endpoints are required.
 
 ## Services & Key Methods
 
@@ -80,5 +80,5 @@ None added. The feature reads `remoteMetadata` off the existing `agents:list` re
 
 ## Security
 
-- No credentials or secrets cross this surface; example prompts are plain text supplied by the Cinna backend via the already-scoped `agents:list` IPC response
+- No credentials or secrets cross this surface; example prompts are plain text supplied by the Cinna backend via the already-scoped `agent:list` IPC response
 - `#`-inserted text is placed into the textarea as a plain string; no HTML or markdown evaluation occurs at insertion time. It travels the normal messaging pipeline from there

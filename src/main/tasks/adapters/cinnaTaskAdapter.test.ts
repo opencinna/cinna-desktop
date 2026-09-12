@@ -615,15 +615,7 @@ describe('cinnaTaskAdapter — an ask', () => {
     ).rejects.toMatchObject({ code: 'invalid_request' })
   })
 
-  it('counts what is waiting from the activity feed, not from the task cursor', async () => {
-    const { server, adapter, binding } = await bound()
-    expect(await adapter.actionRequiredCount(USER)).toBe(0)
-    server.plantAsk(binding.id)
-    // The cursor has a documented blind spot for comment-only changes; the
-    // activity count is computed server-side and does not.
-    expect(await adapter.actionRequiredCount(USER)).toBe(1)
-    expect(server.calls().map((c) => c.path)).toContain('/api/v1/activities/stats')
-  })
+
 })
 
 describe('cinnaTaskAdapter — an unlinked profile', () => {

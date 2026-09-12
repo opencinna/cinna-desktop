@@ -87,7 +87,7 @@ import {
   type PartLike
 } from '../../streamPartsAccumulator'
 import type { AcpLauncherId, AcpStreamUpdate } from './types'
-import type { AvailableCommand, SessionNotification } from '@agentclientprotocol/sdk'
+import type { SessionNotification } from '@agentclientprotocol/sdk'
 
 /** The message a block belongs to when no chunk has named one yet. */
 const ANON_MESSAGE_ID = 'anon:acp'
@@ -308,18 +308,12 @@ export class AcpMessageStream {
         return this.toolCall(update)
       case 'plan':
         return this.plan(update)
-      case 'available_commands_update':
-        return this.commands(update)
       case 'current_mode_update': {
         const modeId = str(update.currentModeId)
         return modeId ? { modeId } : {}
       }
       case 'config_option_update':
         return this.configOptions(update)
-      case 'session_info_update': {
-        const title = str(update.title)
-        return title ? { title } : {}
-      }
       default:
         // `usage_update`, `compaction_*`, `plan_update`, `plan_removed` and
         // whatever comes next. Silence is the contract, not an oversight.
@@ -477,26 +471,6 @@ export class AcpMessageStream {
     this.notes += 1
     const metadata = { [KIND_METADATA_KEY]: 'notice' }
     return this.writePart(this.owner(), `note:${this.notes}`, metadata, text)
-  }
-
-  private commands(update: Record<string, unknown>): AcpStreamUpdate {
-    const raw = update.availableCommands
-    if (!Array.isArray(raw)) return {}
-    // Rebuilt rather than cast: the agent's own array is `unknown` at runtime,
-    // and one malformed entry must not make the whole catalogue unusable.
-    const commands = raw.flatMap((item): AvailableCommand[] => {
-      const c = record(item)
-      const name = c ? str(c.name) : undefined
-      if (!c || !name) return []
-      const command: AvailableCommand = { name, description: str(c.description) ?? '' }
-      if (c.input !== undefined && c.input !== null) {
-        command.input = c.input as AvailableCommand['input']
-      }
-      const meta = record(c._meta)
-      if (meta) command._meta = meta
-      return [command]
-    })
-    return { commands }
   }
 
   /**

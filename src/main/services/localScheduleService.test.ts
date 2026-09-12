@@ -68,6 +68,31 @@ async function settled(bindingId: string) {
 }
 
 describe('local schedule admission and persistence', () => {
+  it('keeps opt-in across a transient folder failure and makes listing read-only', async () => {
+    const binding = enable()
+    const healthy = state.get.getMockImplementation()!
+    state.get.mockImplementation(() => { throw new Error('EBUSY: manifest is being saved') })
+    expect(localScheduleService.list(scope, AGENT)[0].binding?.reason).toContain('EBUSY')
+    expect(localScheduleRepo.get(USER, binding.id)).toEqual(binding)
+    check()
+    expect(localScheduleRepo.get(USER, binding.id)).toEqual(binding)
+    expect(driverRun).not.toHaveBeenCalled()
+    state.get.mockImplementation(healthy)
+    check(BASE + 120000)
+    await settled(binding.id)
+    expect(driverRun).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not let a soft-deleted blocked task reserve every later occurrence', async () => {
+    const binding = enable()
+    const prepared = scriptRuntimeService.prepareJob(scope, jobsRepo.getById(USER, binding.jobId)!)
+    taskRepo.update(USER, prepared.taskId, { status: 'blocked' })
+    taskRepo.softDelete(USER, prepared.taskId)
+    expect(localScheduleRepo.unfinishedRuns(USER, [binding.jobId])).toEqual([])
+    check()
+    await settled(binding.id)
+  })
+
   it('lists without opt-in, freezes the literal prompt, skips initial minute and dispatches once after commit', async () => {
     expect(review().revision).toBeTruthy()
     check()
@@ -191,10 +216,10 @@ describe('local schedule admission and persistence', () => {
     if (change === 'command') definition.schedule_type = 'script_trigger'
     if (change === 'disabled') definition.enabled = false
     if (change === 'missing') state.get.mockImplementation(() => { throw new Error('Folder unavailable') })
-    if (change === 'duplicate') state.get.mockImplementation(() => ({ id: AGENT, kind: 'kit', manifest: { id: MANIFEST, schedules: [definition, definition] } }))
+    if (change === 'duplicate') state.get.mockImplementation(() => ({ id: AGENT, kind: 'kit', enabled: true, readiness: 'ok', manifest: { id: MANIFEST, schedules: [definition, definition] } }))
     if (change === 'job') jobsRepo.update(USER, binding.jobId, { prompt: 'Edited Job' })
     check()
-    expect(localScheduleRepo.get(USER, binding.id)?.enabled).toBe(false)
+    expect(localScheduleRepo.get(USER, binding.id)?.enabled).toBe(change === 'missing')
     expect(jobRunsRepo.listByJob(USER, binding.jobId)).toEqual([])
     expect(driverRun).not.toHaveBeenCalled()
   })

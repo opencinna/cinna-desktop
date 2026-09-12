@@ -17,6 +17,4 @@ export interface TaskRuntimeCheckpoint extends TaskRuntimeInfo {
   coordinator: { providerId: string; modelId: string; modeId: string | null }
   /** A checkpoint in running state is interrupted on restart, never replayed. */
   activeStartedAt: number | null
-  inputTokens: number
-  outputTokens: number
 }

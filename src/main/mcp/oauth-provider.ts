@@ -53,7 +53,9 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
     this.assertUsable(); return this.stored.clientInfo
   }
   saveClientInformation(clientInfo: StoredOAuthClientInformation): void {
-    this.assertUsable(); this.persist({ clientInfo }); this.stored.clientInfo = clientInfo
+    this.assertUsable()
+    const registration = { ...clientInfo, ...(this.redirect ? { redirect_uris: [this.redirect] } : {}) }
+    this.persist({ clientInfo: registration }); this.stored.clientInfo = registration
   }
   tokens(): StoredOAuthTokens | undefined {
     this.assertUsable(); return this.stored.tokens
@@ -94,7 +96,22 @@ export class ElectronOAuthProvider implements OAuthClientProvider {
     this.cleanup()
     this.assertUsable()
     const state = randomBytes(32).toString('hex')
-    const listener = await startOAuthCallback(state)
+    const registered = (this.stored.clientInfo as { redirect_uris?: string[] } | undefined)?.redirect_uris?.[0]
+    let port = 0
+    if (registered) {
+      try {
+        const url = new URL(registered)
+        if (url.protocol === 'http:' && url.hostname === '127.0.0.1' && url.pathname === '/oauth/callback') port = Number(url.port)
+      } catch { /* Legacy registration: bind a fresh callback. */ }
+    }
+    let listener: OAuthCallbackListener
+    try { listener = await startOAuthCallback(state, undefined, port) }
+    catch (error) {
+      if (!port || (error as NodeJS.ErrnoException).code !== 'EADDRINUSE') throw error
+      this.invalidateCredentials('client')
+      this.invalidateCredentials('tokens')
+      listener = await startOAuthCallback(state)
+    }
     try { this.assertUsable() } catch (error) { listener.abort(); throw error }
     this.expectedState = state
     this.callback = listener

@@ -206,20 +206,12 @@ export class MCPManager {
           args: config.args ?? [],
           env: mergeEnv(shellEnvForChild(shellEnv), config.env)
         })
-      } else if (config.transportType === 'sse') {
-        if (!config.url) throw new Error('URL is required for SSE transport')
-        transport =
-          config.authType === 'bearer'
-            ? new SSEClientTransport(new URL(config.url), {
-                requestInit: { headers: this.bearerAuthHeaders(config) }
-              })
-            : new SSEClientTransport(new URL(config.url))
-      } else if (config.transportType === 'streamable-http' && config.authType === 'bearer') {
+      } else if ((config.transportType === 'streamable-http' || config.transportType === 'sse') && config.authType === 'bearer') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
-        transport = new StreamableHTTPClientTransport(new URL(config.url), {
+        transport = new (config.transportType === 'sse' ? SSEClientTransport : StreamableHTTPClientTransport)(new URL(config.url), {
           requestInit: { headers: this.bearerAuthHeaders(config) }
         })
-      } else if (config.transportType === 'streamable-http') {
+      } else if (config.transportType === 'streamable-http' || config.transportType === 'sse') {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
 
         // Build OAuth provider for streamable-http (supports DCR)
@@ -237,8 +229,10 @@ export class MCPManager {
 
         // Restore persisted client info
         if (config.clientInfo) {
-          storedState.clientInfo = config.clientInfo as
-            import('@modelcontextprotocol/client').StoredOAuthClientInformation
+          storedState.clientInfo = (typeof config.clientInfo.encrypted === 'string'
+            ? JSON.parse(decryptApiKey(Buffer.from(config.clientInfo.encrypted, 'base64')))
+            : config.clientInfo) as import('@modelcontextprotocol/client').StoredOAuthClientInformation
+          if (typeof config.clientInfo.encrypted !== 'string') this.persistOAuth(connection, { clientInfo: storedState.clientInfo })
         }
 
         const oauthProvider = new ElectronOAuthProvider(storedState, {
@@ -249,7 +243,7 @@ export class MCPManager {
         // Prepare callback server before connecting
         connection.oauthProvider = oauthProvider
         await oauthProvider.prepareForAuth()
-        transport = new StreamableHTTPClientTransport(new URL(config.url), {
+        transport = new (config.transportType === 'sse' ? SSEClientTransport : StreamableHTTPClientTransport)(new URL(config.url), {
           authProvider: oauthProvider, onInsufficientScope: 'throw'
         })
       } else {
@@ -361,7 +355,7 @@ export class MCPManager {
     const conn = this.connections.get(providerId)
     if (!conn?.oauthProvider || !conn.transport) return
 
-    const httpTransport = conn.transport as StreamableHTTPClientTransport
+    const httpTransport = conn.transport as StreamableHTTPClientTransport | SSEClientTransport
     const code = await conn.oauthProvider.waitForAuthCode()
     if (this.isSuperseded(providerId, conn)) {
       return this.discardSuperseded(conn, 'oauth callback superseded before token exchange', providerId)
@@ -374,7 +368,7 @@ export class MCPManager {
     }
 
     // Create a fresh transport — the old one is already started and can't be reused
-    const freshTransport = new StreamableHTTPClientTransport(
+    const freshTransport = new (conn.config.transportType === 'sse' ? SSEClientTransport : StreamableHTTPClientTransport)(
       new URL(conn.config.url!),
       { authProvider: conn.oauthProvider, onInsufficientScope: 'throw' }
     )
@@ -419,7 +413,7 @@ export class MCPManager {
     this.assertCurrent(connection)
     const stored: Parameters<typeof mcpProviderRepo.saveOAuthState>[3] = {}
     if ('tokens' in patch) stored.authTokensEncrypted = patch.tokens ? encryptApiKey(JSON.stringify(patch.tokens)) : null
-    if ('clientInfo' in patch) stored.clientInfo = patch.clientInfo ?? null
+    if ('clientInfo' in patch) stored.clientInfo = patch.clientInfo ? { encrypted: encryptApiKey(JSON.stringify(patch.clientInfo)).toString('base64') } : null
     if ('discovery' in patch) stored.oauthDiscoveryState = patch.discovery ?? null
     mcpProviderRepo.saveOAuthState(connection.config.userId, connection.config.id, connection.config.configRevision, stored)
   }
@@ -500,6 +494,14 @@ export class MCPManager {
     toolName: string,
     input: Record<string, unknown>
   ): Promise<{ content: unknown; isError?: boolean }> {
+    const captured = this.connections.get(providerId)
+    return this.enqueue(providerId, () => {
+      if (this.connections.get(providerId) !== captured) throw new Error('The MCP connection changed before this tool call could run.')
+      return this.callToolSerialized(providerId, toolName, input)
+    })
+  }
+
+  private async callToolSerialized(providerId: string, toolName: string, input: Record<string, unknown>): Promise<{ content: unknown; isError?: boolean }> {
     const conn = this.connections.get(providerId)
     if (!conn || !conn.client || conn.status !== 'connected') {
       throw new Error(`MCP provider ${providerId} not connected`)

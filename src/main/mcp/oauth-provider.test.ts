@@ -107,3 +107,20 @@ describe('MCP OAuth durable ownership', () => {
     expect(JSON.parse(Buffer.from(saved.authTokensEncrypted!).toString())).toEqual(tokens)
   })
 })
+
+it('reuses the redirect URI retained with a client registration', async () => {
+  const { id } = mcpProviderRepo.upsert('owner', original)
+  const first = provider(id, 0)
+  let second: ElectronOAuthProvider | undefined
+  try {
+    await first.prepareForAuth()
+    const redirect = first.redirectUrl
+    first.saveClientInformation({ client_id: 'registered-client' })
+    const registration = first.clientInformation()
+    first.cleanup()
+    second = provider(id, 0, { clientInfo: registration })
+    await second.prepareForAuth()
+    expect(second.redirectUrl).toBe(redirect)
+    expect(second.clientInformation()?.client_id).toBe('registered-client')
+  } finally { first.cleanup(); second?.cleanup() }
+})

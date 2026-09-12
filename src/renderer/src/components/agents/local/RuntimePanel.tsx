@@ -533,6 +533,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * OpenCode engine — none of which exists on this path — so this is checked
    * early and branched on rather than woven through each one.
    */
+  const unsupportedEngine = agent.runtime?.engine && !isAgentEngine(agent.runtime.engine) ? agent.runtime.engine : null
   const onClaude = declaredEngine === 'claude'
   /**
    * The `claude` this machine has, or undefined.
@@ -1440,9 +1441,10 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
                     : undefined
             }
             disabled={disabled}
-            value={onClaude ? CLAUDE_OPTION : (selected?.name ?? '')}
+            value={unsupportedEngine ? 'unsupported-engine' : onClaude ? CLAUDE_OPTION : (selected?.name ?? '')}
             onChange={(event) => changeRuntimeTarget(event.target.value)}
           >
+            {unsupportedEngine && <option value="unsupported-engine" disabled>Unsupported engine: {unsupportedEngine}</option>}
             <option value="">
               {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
             </option>
@@ -1561,7 +1563,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               aria-label="Model"
               className={FIELD}
               title={inheritedName ? `Default: ${inheritedName}` : undefined}
-              disabled={disabled}
+              disabled={disabled || !!unsupportedEngine}
               value={declaredModel ?? ''}
               onChange={(event) =>
                 commit(commitCredential(declaredCredential), event.target.value || null, null)
@@ -1595,7 +1597,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               title={WORK_COMPLEXITIES.map(
                 (tier) => `${WORK_COMPLEXITY_LABELS[tier]} — ${WORK_COMPLEXITY_HINTS[tier]}`
               ).join('\n')}
-              disabled={disabled}
+              disabled={disabled || !!unsupportedEngine}
               value={declaredComplexity ?? ''}
               onChange={(event) =>
                 commit(

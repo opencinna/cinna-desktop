@@ -32,7 +32,7 @@ Implementation stays in the main thread — it holds the context, and briefing a
 
 ## Architecture
 
-See `docs/README.md` for the project index, glossary, and domain map. Feature docs live in `docs/{domain}/{feature}/` following the layered documentation structure (see `.claude/commands/cinna-core.feature.doc.md`).
+See `docs/README.md` for the project index, glossary, and domain map. Feature docs live in `docs/{domain}/{feature}/` following the layered documentation structure (see `.claude/commands/cinna-desktop.feature.doc.md`).
 
 **TL;DR**: Electron main process handles SQLite (Drizzle), LLM SDK calls, MCP connections, and API key encryption (safeStorage). Renderer is fully sandboxed React 19 + Tailwind v4 + Zustand + TanStack Query. Communication via typed `window.api.*` (contextBridge) and MessagePort for streaming.
 
@@ -43,6 +43,6 @@ See `docs/README.md` for the project index, glossary, and domain map. Feature do
 - Preload builds to `.mjs` (CJS format) — main process references `../preload/index.mjs`. Must use `format: 'cjs'` in electron.vite.config.ts because sandbox mode doesn't support ESM imports
 - API keys and OAuth tokens never leave the main process — renderer only sees `hasApiKey: boolean` / `hasAuth: boolean`
 - Model lists are hardcoded in each adapter (`src/main/llm/{anthropic,openai,gemini}.ts`)
-- DB migrations are inline SQL in `src/main/db/client.ts` `runMigrations()` — add ALTER TABLE for schema changes
-- `ipcRenderer.postMessage` sends data as the second argument to the `ipcMain.on` handler (not `event.message`) — see `llm.ipc.ts` handler. Ports are on `event.ports`.
+- DB migrations live in `src/main/db/migrations/` — add schema changes to the per-domain modules registered by `runAllMigrations`
+- `ipcRenderer.postMessage` sends data as the second argument to the `ipcMain.on` handler (not `event.message`) — see `run.ipc.ts` handlers. Ports are on `event.ports`.
 - When user says "read core", "read docs", or "read about feature ..." — start context discovery from `docs/README.md` (the project index with glossary, domain map, and feature registry), then follow links from there into the relevant `docs/{domain}/{feature}/` folder

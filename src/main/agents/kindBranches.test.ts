@@ -186,10 +186,6 @@ const ALLOWLIST: string[] = [
   // And an adapter is where a *remote* branch belongs (phase 5). The registry
   // and the null adapter name ids because looking one up is their whole job.
   'src/main/tasks/adapters/',
-  // And the routing helper is where a *routing* branch belongs (phase 4). Its
-  // one read of `orchestrated` is the fallback for a chat DTO that predates
-  // `chats.router` — the whole reason the mirror is still written.
-  'src/shared/chatRouting.ts',
   'src/main/sync/collections.ts',
   'src/main/sync/identity.ts',
   'src/main/sync/manifest.ts',

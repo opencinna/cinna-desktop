@@ -12,7 +12,7 @@
 ### Renderer — hooks
 - `src/renderer/src/hooks/useCapabilityPicker.ts` — builds the picker's `items` / `selectedIds` / `toggle` / `hasCapabilities`. Encapsulates the `@`-mirroring routing (new-chat pending buffers vs active-chat on-demand). Owns its own on-demand read/mutation instances.
 - `src/renderer/src/hooks/useCatalogPicker.ts` — backs the **Catalog** section: filters `useCatalog()` to non-installed bundles, and `install(bundleId)` runs `catalog.quickInstall` → awaits `agents.syncRemote` → invalidates + `fetchQuery(['agents'])` → finds the new agent (`remoteTargetId === installId`) → calls `onInstalled` (wired to `toggleCapability` so the new agent is selected). Awaiting the sync is the reason it doesn't reuse the fire-and-forget `useRefreshCatalogState`; cache writes stay inside React Query's invalidate/fetch flow rather than a direct `setQueryData`. Returns `error` (surfaced inline in the modal). Skips the setup-status gate the settings catalog uses. Cinna-only via `useCatalog`'s gating.
-- `src/renderer/src/hooks/useAgents.ts` — `useAttachAgentToChat` (promote + add on-demand agent), `useChatOnDemandAgents`, `useRemoveOnDemandAgent`, `usePromoteToOrchestrated`.
+- `src/renderer/src/hooks/useAgents.ts` — `useAttachAgentToChat` (promote + add on-demand agent), `useChatOnDemandAgents`, `useRemoveOnDemandAgent`.
 - `src/renderer/src/hooks/useMcp.ts` — `useMcpProviders`, `useAddOnDemandMcp`, `useChatOnDemandMcps`, `useRemoveOnDemandMcp`.
 - `src/renderer/src/hooks/useChatAttachments.ts` — backs the **Attach files** action (`pick`).
 - `src/renderer/src/hooks/useChatModes.ts` / `useDefaultChatMode` — chat-mode list + default for the **Chat mode** sub-menu.

@@ -44,6 +44,22 @@ afterEach(async () => {
 })
 
 describe('Managed run through the official SDK and actual HTTP/SSE', () => {
+  it.each(['inflight', 'uncertain', 'budget'] as const)('recovers a %s checkpoint once remote history is idle', async (state) => {
+    const p = await peer({ pages: [[user('old'), idle('old-end')]] })
+    const run = start(p, { checkpoint: { sessionId: SESSION, state } })
+    await ready(p)
+    p.send(user(), message('new-answer', 'Recovered.'), idle('new-end'))
+    await expect(run.result).resolves.toMatchObject({ text: 'Recovered.', taskState: 'completed' })
+    expect(run.binding.save).toHaveBeenLastCalledWith({ sessionId: SESSION, state: 'ready' })
+  })
+
+  it('refuses recovery while remote history still has pending input', async () => {
+    const p = await peer({ pages: [[user('unprocessed', false)]] })
+    const run = start(p, { checkpoint: { sessionId: SESSION, state: 'inflight' } })
+    await expect(run.result).resolves.toMatchObject({ error: { message: expect.stringContaining('unfinished work') } })
+    expect(p.sends('user.message')).toHaveLength(0)
+  })
+
   it('attaches before all history pages and buffers processed kickoff before its queued HTTP acknowledgment', async () => {
     const ack = deferred<unknown>()
     const p = await peer({ pages: [[message('old-answer', 'Old history must not appear.'), permissionTool('old-tool'),
@@ -160,10 +176,9 @@ describe('Managed run through the official SDK and actual HTTP/SSE', () => {
     p.send(idle('budget', 'budget_reached'))
     await expect(run.result).resolves.toMatchObject({ text: 'Before budget.', stopReason: 'budget' })
     expect(run.binding.save).toHaveBeenLastCalledWith({ sessionId: SESSION, state: 'budget' })
-    const count = p.requests.length
     await expect(start(p, { checkpoint: { sessionId: SESSION, state: 'budget' } }).result)
       .resolves.toMatchObject({ error: { message: expect.stringContaining('remote budget') } })
-    expect(p.requests).toHaveLength(count)
+    expect(p.sends('user.message')).toHaveLength(1)
   })
 
   it.each(['stream processed', 'HTTP processed', 'budget pause'] as const)('confirms one interrupt from %s plus relevant session idle', async (mode) => {

@@ -1098,6 +1098,16 @@ describe('every task write keeps the exported note in step', () => {
       },
       leaves: 'file'
     },
+    reconcileRemoteReplicas: {
+      run: (id) => {
+        taskRepo.update(USER, id, { executor: 'remote' })
+        taskRepo.create(USER, { id: `${id}-duplicate`, title: 'Replica', goal: 'Replica',
+          executor: 'remote', origin: 'remote', remoteAdapter: 'fake', remoteId: 'r-1' })
+        taskService.reconcileRemoteReplicas(USER, 'fake', 'r-1')
+        return id
+      },
+      leaves: 'file'
+    },
     // The app-sync apply path. It is on this list rather than calling
     // `taskRepo.upsertFromSync` from the mapper for exactly the reason the list
     // exists: a peer's edit changes `title`, `status` and `assigneeName`, all

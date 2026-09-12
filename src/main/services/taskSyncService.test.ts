@@ -1043,30 +1043,6 @@ describe('pulling one task', () => {
   })
 })
 
-describe('what is waiting on the user', () => {
-  it('says whether anything is waiting, and does not hand out a number', async () => {
-    const taskId = await bound()
-    expect(await taskSyncService.remoteWork(USER)).toEqual({ waiting: false, complete: true })
-
-    cinna.plantAsk(remoteIdOf(taskId))
-    cinna.plantAsk(remoteIdOf(taskId))
-    // Two asks, and still a boolean. cinna's number is profile-wide, raises two
-    // activity rows per ask, and is cleared only by its own web UI — so for a
-    // user who lives here it can never reach zero however much work they do,
-    // and a badge that cannot be cleared by doing the work teaches its user to
-    // ignore the badge.
-    expect(await taskSyncService.remoteWork(USER)).toEqual({ waiting: true, complete: true })
-  })
-
-  it('says so when a service could not be asked, rather than saying nothing is waiting', async () => {
-    cinna.behave('transport')
-    // A failed read is not an empty inbox. A caller that renders `waiting`
-    // without looking at this tells the user nothing is waiting when the truth
-    // is that nobody knows.
-    expect(await taskSyncService.remoteWork(USER)).toEqual({ waiting: false, complete: false })
-  })
-})
-
 describe('moving the work across the seam (§5.10)', () => {
   describe('handing a task to a service', () => {
     it('creates it, executes it, and only then says the service is running it', async () => {

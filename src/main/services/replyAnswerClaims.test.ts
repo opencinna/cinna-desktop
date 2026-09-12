@@ -122,7 +122,7 @@ describe('claimReplyAnswer with the real pending request registry', () => {
     expect(replyAnswerUncertainty(pendingRequests.registration(ask.requestId))).toBeNull()
   })
 
-  it.each(['cancel', 'timeout', 'drop', 'clear', 'replacement'] as const)('%s invalidates delivery and late acceptance cannot commit or release a new registration', async (action) => {
+  it.each(['cancel', 'timeout', 'clear', 'replacement'] as const)('%s invalidates delivery and late acceptance cannot commit or release a new registration', async (action) => {
     const f = arrange()
     const first = f.answer()
     await f.started.promise
@@ -131,7 +131,6 @@ describe('claimReplyAnswer with the real pending request registry', () => {
     const registerNew = () => pendingRequests.register({ ...ask, delivery: { validate() {}, respondAsync: freshDelivery }, timeoutMs: 20_000 })
     if (action === 'cancel') f.parked.cancel()
     if (action === 'timeout') await vi.advanceTimersByTimeAsync(1_000)
-    if (action === 'drop') pendingRequests.drop(ask.requestId)
     if (action === 'clear') pendingRequests.clear()
     if (action === 'replacement') replacement = registerNew()
     expect(f.registration.signal.aborted).toBe(true)

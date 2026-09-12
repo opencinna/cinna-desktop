@@ -63,7 +63,7 @@ export async function protocolPeer(options: PeerOptions) {
       res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(value))
     }
     if (options.oauth && path.startsWith('/.well-known/oauth-protected-resource')) {
-      json({ resource: `${origin}/mcp`, authorization_servers: [origin] }); return
+      json({ resource: `${origin}/${options.protocol === 'sse' ? 'sse' : 'mcp'}`, authorization_servers: [origin] }); return
     }
     if (options.oauth && path === '/.well-known/oauth-authorization-server') {
       json({ issuer: origin, authorization_endpoint: `${origin}/authorize`, token_endpoint: `${origin}/token`,
@@ -84,6 +84,10 @@ export async function protocolPeer(options: PeerOptions) {
       }); return
     }
     if (options.protocol === 'sse' && req.method === 'GET' && path === '/sse') {
+      if (options.oauth && req.headers.authorization !== `Bearer ${BEARER}`) {
+        res.writeHead(401, { 'www-authenticate': `Bearer resource_metadata="${origin}/.well-known/oauth-protected-resource"` })
+        res.end(); return
+      }
       res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
       res.write('event: endpoint\ndata: /messages?sessionId=peer-session\n\n')
       sseClients.add(res)

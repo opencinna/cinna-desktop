@@ -166,16 +166,14 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
             <input value={name} onChange={(e) => setName(e.target.value)} className={inputClass} />
           </div>
 
-          {transportType === 'stdio' && (
-            <div>
+          <div>
               <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
               <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
                 <option value="stdio">stdio</option>
                 <option value="sse">SSE (deprecated)</option>
                 <option value="streamable-http">Streamable HTTP</option>
               </select>
-            </div>
-          )}
+          </div>
 
           {transportType === 'stdio' ? (
             <>

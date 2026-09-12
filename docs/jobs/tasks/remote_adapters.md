@@ -28,7 +28,6 @@ A task always lives in SQLite here. A task may *additionally* be bound to a syst
 | `subtasks` | `listSubtasks` works, **and** `create` accepts a task that has a parent |
 | `execute` | the remote can be asked to start working on it |
 | `asks` | the remote parks on human input, and this adapter can list and answer those asks |
-| `actionRequiredCount` | a cheap "is anything waiting for me" probe |
 
 Two of them are **lists rather than flags**, and both were flags first. A boolean `attachments` would have said "attachments work" and been wrong half the time: cinna stores files and only files, while Linear's attachments are a URL with a title — so an adapter would have been handed the one kind it cannot store and could pass only by rejecting or by quietly posting it as a comment, which is a different capability wearing this one's flag. An empty list is truthy, so the gate is a helper that asks whether a capability allows *anything*; `caps[capability]` would have read "stores no artifact kind at all" as permission to try.
 

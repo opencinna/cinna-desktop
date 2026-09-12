@@ -163,7 +163,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
         // the row may not have been rescanned yet. `folder` is non-null here —
         // `folderReadiness` refused it above otherwise.
         const launcher = deps.launcher(launcherOfFolder(folder?.runtime))
-        if (!launcher?.readiness) return state
+        if (!launcher) return { state: 'invalid', reason: 'This agent declares an unsupported engine. Choose a supported runtime.' }
+        if (!launcher.readiness) return state
         return await launcher.readiness(options)
       } catch (err) {
         // `readFolder` and the launcher rungs promise not to throw; this is the

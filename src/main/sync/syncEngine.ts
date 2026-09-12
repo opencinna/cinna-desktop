@@ -244,6 +244,7 @@ export async function runSyncCycle(
 
   const state = syncRepo.ensureState(userId)
   const sinceMs = state.lastPushedAt ?? 0
+  const cycleBoundary = Math.max(0, Math.floor(Date.now() / 1000) * 1000 - 1)
   // One resolve cache for the whole cycle so a dependency missing across many
   // applied jobs is auto-created exactly once.
   const cache = newResolveCache()
@@ -296,19 +297,9 @@ export async function runSyncCycle(
   result.pulled += drained.pulled
   result.decryptSkipped += drained.decryptSkipped
 
-  // Advance the dirty watermark from the max *post-apply* updatedAt, and this
-  // is the **whole** mechanism that stops re-push churn — not, as this comment
-  // used to say, that a freshly-pulled replica carries an older timestamp. It
-  // carries the *server's* `server_updated_at` (see `ctx` above), which is
-  // monotonic and ≥ the original, so a replica is always **newer** than the row
-  // it mirrors and would be in every subsequent push batch if the watermark did
-  // not move past it here. Any false re-send still resolves to `unchanged` via
-  // fingerprint.
-  let newWatermark = sinceMs
-  for (const mapper of COLLECTION_MAPPERS) {
-    newWatermark = Math.max(newWatermark, mapper.maxUpdatedAt(userId))
-  }
-  syncRepo.patchState(userId, { lastPushedAt: newWatermark })
+  // Never advance past writes that arrived while push/pull awaited the network.
+  // Revisit the boundary second; fingerprints suppress identical re-sends.
+  syncRepo.patchState(userId, { lastPushedAt: Math.max(sinceMs, cycleBoundary) })
 
   result.changedCollections = [...changed]
   return result

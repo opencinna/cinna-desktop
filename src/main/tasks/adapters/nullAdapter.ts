@@ -39,7 +39,6 @@ const NOTHING: RemoteTaskCapabilities = {
   subtasks: false,
   execute: false,
   asks: false,
-  actionRequiredCount: false
 }
 
 export function createNullAdapter(id: string): RemoteTaskAdapter {
@@ -82,7 +81,6 @@ export function createNullAdapter(id: string): RemoteTaskAdapter {
     putArtifact: async () => refuse('putArtifact'),
     listOpenAsks: async () => refuse('listOpenAsks'),
     answerAsk: async () => refuse('answerAsk'),
-    actionRequiredCount: async () => refuse('actionRequiredCount'),
     deepLink: (_binding: RemoteBinding) => null
   }
 }

@@ -201,7 +201,7 @@ describe('a2a driver — run', () => {
     expect(d.runTurn).not.toHaveBeenCalled()
   })
 
-  it('cancels once when task identity arrives after Stop and does not await cancellation acknowledgement', async () => {
+  it('cancels once when task identity arrives after Stop and bounds an unconfirmed acknowledgement', async () => {
     const controller = new AbortController()
     const cancelTask = vi.fn(() => new Promise(() => {}))
     const d = deps({ runTurn: vi.fn(async (turn: A2ARunAgentTurnInput) => {
@@ -211,7 +211,9 @@ describe('a2a driver — run', () => {
       turn.onTaskId?.('late-task')
       return { text: 'partial', parts: [], notices: [] }
     }) })
-    expect((await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))).text).toBe('partial')
+    const result = await createA2aDriver(d).run('owner-1', REMOTE, input(controller.signal))
+    expect(result.text).toBe('partial')
+    expect(result.notices).toEqual([expect.objectContaining({ text: expect.stringContaining('stop was not confirmed') })])
     expect(cancelTask).toHaveBeenCalledExactlyOnceWith({ id: 'late-task' })
   })
 

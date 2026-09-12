@@ -13,7 +13,6 @@
  */
 
 import type {
-  AvailableCommand,
   CreateElicitationRequest,
   CreateElicitationResponse,
   InitializeRequest,
@@ -177,10 +176,6 @@ export interface AcpProcessPool {
 export interface AcpStreamUpdate {
   /** The cumulative message to re-ingest into `StreamPartsAccumulator`, when this changed one. */
   message?: MessageLike
-  /** `available_commands_update`: the agent's slash commands, replace semantics. */
-  commands?: AvailableCommand[]
   /** `current_mode_update`, or a `config_option_update` for the `mode` option. */
   modeId?: string
-  /** `session_info_update`: the session title the agent chose. */
-  title?: string
 }

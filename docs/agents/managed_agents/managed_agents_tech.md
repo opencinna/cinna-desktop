@@ -62,3 +62,5 @@ API keys decrypt only in main and Claude CLI OAuth tokens are refused. Fingerpri
 ## Verification Boundary
 
 `src/main/agents/drivers/managed/managedRun.peer.test.ts` drives the official SDK against actual fixture HTTP/SSE, including paged history, kickoff gates, sibling permissions, thread routing, local-only commit retry, uncertainty, budgets and Stop. `src/main/services/managedAgentService.test.ts` uses SQLite and actual session IPC for ownership, revisions, rollback and DTO privacy. `src/main/services/accountConfigService.credentialIdentity.test.ts` exercises account sync with randomized encryption. These fixtures do not establish access to a live Claude Managed account.
+
+Recovery revalidates every saved checkpoint against session status and complete baseline history before sending. A local `inflight`, `uncertain`, or `budget` marker is not a permanent lock. Text arriving after Stop is excluded from both content and parts.

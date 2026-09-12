@@ -9,16 +9,15 @@
  * the markers in `tasks.remote_dirty` survive until the remote has actually
  * been told.
  *
- * Five jobs:
+ * Four jobs:
  *
  *  - **push** what this device knows and the remote does not — the dirty
  *    fields, the handoff note, and the status as a *path* rather than a
  *    destination;
  *  - **pull** what changed there, through the adapter's `updated_since` cursor;
  *  - **reconcile** periodically, because a delete is invisible to a cursor;
- *  - **count** what is waiting on the user, for the inbox badge's remote half;
  *  - **hand the work across the seam**, in both directions (§5.10) — which is
- *    the only one of the five a person presses, and the reason it is here is
+ *    the only one of the four a person presses, and the reason it is here is
  *    that it is the only other code allowed to call an adapter. `taskService`
  *    owns the row and the two executor flips; everything that makes a flip
  *    *mean* something — create, note, assign, execute, and the refusal to race
@@ -542,37 +541,6 @@ function patchFrom(snapshot: RemoteTaskSnapshot, parentTaskId: string | null): R
       state: snapshot.binding.state
     }
   }
-}
-
-/**
- * Whether anything on a bound service is waiting on the user — **not how
- * much**, and the difference is not fussiness.
- *
- * Each adapter answers from whatever its own service counts, and cinna's is
- * unread, unarchived activities with `action_required` set. Three things follow
- * and the third decides the shape: it is profile-wide; one ask raises two rows;
- * and **nothing on the desktop clears `is_read` — only the web does.** So for a
- * user who lives here the number can never reach zero however much work they
- * do, and a badge that cannot be cleared by doing the work teaches its user to
- * ignore the badge.
- *
- * The number is still meaningful server-side and is a legitimate cheap trigger,
- * which is all §5.7 step 1 asks of it — so the *adapter* keeps returning a
- * count and the shaping happens here, one layer up, where the desktop's own
- * arithmetic is. A surface counts what it can enumerate (local open asks, plus
- * remote asks it actually pulled) and shows a dot for the rest.
- */
-export interface RemoteWork {
-  waiting: boolean
-  /**
-   * False when at least one bound service could not be asked.
-   *
-   * A failed read is not an empty inbox — the lesson step 5 and step 6 each had
-   * to learn on screen. A caller that renders `waiting` without looking at this
-   * tells the user nothing is waiting on them when the truth is that nobody
-   * knows.
-   */
-  complete: boolean
 }
 
 /**
@@ -1194,26 +1162,6 @@ export const taskSyncService = {
     }
   },
 
-  /** Is anything on a bound service waiting on the user? See {@link RemoteWork}. */
-  async remoteWork(userId: string): Promise<RemoteWork> {
-    let waiting = false
-    let complete = true
-    for (const adapter of allAdapters()) {
-      if (!adapter.capabilities().actionRequiredCount) continue
-      try {
-        if (!(await adapter.availability(userId)).ready) continue
-        if ((await adapter.actionRequiredCount(userId)) > 0) waiting = true
-      } catch (err) {
-        complete = false
-        logger.warn('could not ask a service what is waiting', {
-          adapter: adapter.id,
-          error: err instanceof Error ? err.message : String(err)
-        })
-      }
-    }
-    return { waiting, complete }
-  },
-
   /**
    * Forget a profile's cursors, or every cursor when no profile is named.
    *
@@ -1343,6 +1291,7 @@ function upsert(
   adapter: RemoteTaskAdapter,
   snapshot: RemoteTaskSnapshot
 ): string | null {
+  taskService.reconcileRemoteReplicas(userId, adapter.id, snapshot.binding.id)
   const existing = taskRepo.getByRemote(userId, adapter.id, snapshot.binding.id)
   if (existing?.deletedAt) {
     // The user deleted it here. `getByRemote` deliberately returns soft-deleted

@@ -56,7 +56,7 @@ import type {
 } from '../../shared/messageParts'
 import type { RunDeltaEvent } from '../../shared/runEvents'
 import { stripCinnaAttachTags } from '../../shared/cinnaAttach'
-import { continuesPart } from '../../shared/partMerge'
+import { continuingPartIndex } from '../../shared/partMerge'
 
 export const KIND_METADATA_KEY = 'cinna.content_kind'
 export const TOOL_NAME_METADATA_KEY = 'cinna.tool_name'
@@ -337,8 +337,9 @@ export class StreamPartsAccumulator {
     toolStream?: ToolStream,
     commandInvocation?: string
   ): void {
-    const last = this.parts[this.parts.length - 1]
-    if (last && continuesPart(last, { kind, toolName, toolId, toolStream })) {
+    const index = continuingPartIndex(this.parts, { kind, toolName, toolId, toolStream })
+    const last = this.parts[index]
+    if (last) {
       last.text += delta
       // Backend may attach `tool_input` / `tool_id` / `command_invocation` only
       // on the first frame of a part — preserve once captured rather than

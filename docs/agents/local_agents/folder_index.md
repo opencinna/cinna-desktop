@@ -271,7 +271,7 @@ Both are real and both stay. Further rules:
 
 ### A folder agent is not editable through the agents form
 
-- `agents:upsert` rejects a `folder:` id the way it rejects `remote:`: a folder agent is edited by writing the files its row is derived from
+- `agent:upsert` rejects a `folder:` id the way it rejects `remote:`: a folder agent is edited by writing the files its row is derived from
 - Deleting the row is refused with its own error code (`folder_immutable`, distinct from the sync-managed `remote_immutable`, which the renderer explains with an entirely different story). Deleting the row would only make the next scan re-create it — the folder *is* the agent
 
 ## Architecture Overview

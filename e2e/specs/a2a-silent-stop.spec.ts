@@ -134,6 +134,7 @@ for (const streaming of [true, false]) {
       await expect.poll(fake.closed, { timeout: 5_000 }).toBe(1)
       const expected = [{ role: 'user', content: PROMPT }]
       if (streaming) expected.push({ role: 'assistant', content: PARTIAL })
+      else expected.push({ role: 'agent_transition', content: 'Stopped waiting locally. The remote agent’s stop was not confirmed; check its task before starting more work.' })
       await expect.poll(() => messages(cinna)).toEqual(expected)
       if (streaming) {
         await expect(cinna.page.getByText(PARTIAL, { exact: true })).toBeVisible()

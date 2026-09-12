@@ -29,8 +29,6 @@ import type { InputResumeMode } from './runEvents'
  */
 export type AgentDriverId = 'a2a' | 'acp' | 'managed'
 
-export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp', 'managed']
-
 /** Whether a stored value names a driver this build has. */
 export function isAgentDriverId(value: unknown): value is AgentDriverId {
   return value === 'a2a' || value === 'acp' || value === 'managed'

@@ -58,7 +58,7 @@ export class CoordinatorToolProvider implements ToolProvider {
       ['ask_user', 'Pause the task at a durable Inbox question. End this turn and wait for a human answer.',
         { question: stringSchema('The question the human must answer.', 4000) }, ['question']],
       ['update_task', 'Update the current handoff note or artifact list. Use ask_user to pause and finish to complete the task.',
-        { status: { type: 'string', enum: ['in_progress'] }, note: stringSchema('Current progress and next steps.', 12000),
+        { note: stringSchema('Current progress and next steps.', 12000),
           artifacts: { type: 'array', maxItems: 50, items: { type: 'object', additionalProperties: false,
             properties: { kind: { type: 'string', enum: ['file', 'link'] }, name: stringSchema('Artifact name.', 512), ref: stringSchema('File path or link.', 4096) }, required: ['kind', 'name', 'ref'] } } }, []],
       ['finish', 'Complete the task with a final summary of the result and verification. End this coordinator turn.',

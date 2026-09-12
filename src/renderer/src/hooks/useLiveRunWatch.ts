@@ -64,6 +64,13 @@ export function useLiveRunWatch(): void {
         else void settle()
         return
       }
+      if (message.type === 'watch_error') {
+        replayAvailable = false
+        useChatStore.setState({ isStreaming: false, liveBaselineMessageIds: null, streamingBlocks: [],
+          sendError: 'Live updates were interrupted. Showing saved messages while the task continues.' })
+        refresh()
+        return
+      }
       if (message.runId !== runId || message.sequence <= sequence) return
       sequence = message.sequence
       if (message.type === 'accepted') { refresh(); return }

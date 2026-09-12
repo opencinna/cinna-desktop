@@ -166,13 +166,6 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
       if (outcome.inputRequestReadError) { interrupted(userId, taskId, saved, outcome.inputRequestReadError); return }
       if (outcome.state === 'canceled') { finish(userId, taskId, 'cancelled', null); return }
       if (outcome.state === 'failed' || outcome.state === 'budget') { finish(userId, taskId, 'error', outcome.error?.message ?? 'The task turn failed.', false); return }
-      const maxTokens = saved.budget.maxTokens
-      if (maxTokens !== undefined) {
-        if (!outcome.usage) { finish(userId, taskId, 'error', 'This turn did not report token usage; the task cannot continue under its token limit.'); return }
-        saved = { ...saved, inputTokens: saved.inputTokens + outcome.usage.inputTokens, outputTokens: saved.outputTokens + outcome.usage.outputTokens }
-        store(userId, taskId, saved)
-        if (saved.inputTokens + saved.outputTokens >= maxTokens) { finish(userId, taskId, 'error', 'The task reached its token limit.'); return }
-      }
       const open = taskInputRequestRepo.listOpenForTask(taskId)
       if (outcome.state === 'needs_input' && !open.length) {
         interrupted(userId, taskId, saved, 'The agent needs input, but no answerable question was saved. Review the conversation before resuming.'); return
@@ -289,7 +282,7 @@ export const taskRunnerService = {
       taskService.update(scope.profileUserId, task.id, { router: 'coordinator' })
       const saved: TaskRuntimeCheckpoint = { attemptId: nanoid(), lastRunId: null, pendingRequestIds: [], chatId: chat.id, settingsUserId: scope.settingsUserId,
         state: 'queued', reason: null, ownerTurns: 0, elapsedMs: 0, budget, owner: { kind: 'coordinator' },
-        prompt: input.goal.trim(), promptOrigin: 'user', gateRequestId: null, gateToolCallId: null, activeStartedAt: null, inputTokens: 0, outputTokens: 0,
+        prompt: input.goal.trim(), promptOrigin: 'user', gateRequestId: null, gateToolCallId: null, activeStartedAt: null,
         coordinator: { providerId: chat.providerId!, modelId: chat.modelId!, modeId: chat.modeId } }
       taskRuntimeRepo.save(scope.profileUserId, task.id, saved)
       messageRepo.saveSystem({ chatId: chat.id, content: 'You coordinate this task autonomously. Delegate only to attached agents. Use ask_user for human decisions, handoff to change owner, update_task for progress, and finish with a verified final summary.' })
