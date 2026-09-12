@@ -11,7 +11,7 @@ Let users save reusable units of work (title + description + prompt + execution 
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run creates a local task and hands it to the profile’s available remote adapter. The conversation lives on the service; the desktop keeps the task and its binding, with `cinnaTaskId` + `cinnaShortCode` retained on the run for its existing views.
 - **Autonomous job definition** — A programmatically authored local job can store an explicit script/coordinator router, script and budget. Run admits these definitions in main; the current form has no script or autonomous-definition editor. See [Script Definitions](../tasks/script_definitions.md).
 - **Scheduled Job** — [Local schedules](../tasks/local_schedules.md) creates a one-step script Job after explicit review. The Job may sync as a definition; device-local scheduling consent does not. Manual runs and historical generated Jobs participate in schedule overlap checks.
-- **Job Run** — One execution of a job, with status `pending → running → succeeded | failed | cancelled`. Every new run records its task (`job_runs.task_id`, on the wire as `JobRunData.taskId`): the run is the attempt, the task is the work, and the row opens the task. Local runs also reference the spawned chat; remote runs keep their remote pointer. Older local runs without a task still open their chat. Older remote runs gain a bound task on their next eligible refresh; terminal history requires manual Refresh.
+- **Job Run** — One execution of a job, with status `pending → running → succeeded | failed | cancelled`. Every new run links its durable task. The run keeps its original local/chat or remote/service provenance even if the task later changes executor. Refresh follows the current task binding; origin still determines historical conversation links and deletion disclosures. Active legacy remote runs without a task are adopted while the window is visible; terminal legacy history requires manual Refresh.
 - **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config. A job lives either in exactly one folder or at the root level.
 - **Group** — A bucket the sidebar can address by drag-drop: either the root level (`folderId = null`) or a specific folder. Each group has its own job ordering.
 - **Sidebar Tab Rail** — Two icon-only square tabs (Chats / Jobs) stuck to the sidebar's left edge like the bookmark tabs on a folder. The selected tab visually merges with the sidebar surface (no seam on its right edge); inactive tabs are smaller recessed blocks. Hidden in the settings view.
@@ -116,8 +116,8 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 1. User (on a Cinna-linked profile) clicks "Run" on a job of type `cinna_task`.
 2. Backend verifies the configured remote agent and an available service before creating a task. It then creates the task, hands it across the adapter seam, and records a run linked to that task. The executor changes only after the service accepts the handover.
 3. Renderer stays on the Job Detail view. No local chat is spawned; the new run appears in history and its row opens the task page.
-4. While a non-terminal remote run is visible, the renderer refreshes it every 5s (10s when hidden). Main calls `taskSyncService.pullOne`, then derives the run status from the updated task. A blocked task remains a running job attempt, since waiting for a person is not completion.
-5. **On the service**, visible at rest, opens the service’s conversation inside the app. **Open on Cinna** opens the web task; **Refresh** forces a pull even for terminal history.
+4. The profile task scheduler refreshes bound work and projects remote status into its matching active attempt. Jobs polls the saved rows while an attempt remains active. Only legacy remote runs without tasks need the visible-window adoption timer. A blocked task remains a running job attempt, since waiting for a person is not completion.
+5. **On the service**, visible at rest, opens the service’s conversation inside the app. **Open on Cinna** opens the web task; **Refresh**, when the current binding or legacy-adoption mode permits it, requests a read even for terminal history.
 6. A remote run created before tasks existed is adopted on refresh: reuse an existing binding or create a replica linked to its existing remote id. It does not create a second remote task.
 
 ### Viewing run history
@@ -133,7 +133,7 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 4. Cinna runs:
    - The **entire row is a button** when it has a task or `cinnaTaskId`. A task-linked row opens the task page; **On the service**, visible at rest, opens the [Cinna Task Run View](../cinna_task_view/cinna_task_view.md) with its conversation and attachments. A legacy row with no task still opens that service view directly. The sidebar stays on Jobs and the originating job stays highlighted. The local **Chat** control and **On the service** never appear together: each names the conversation for its run type.
    - Two compact pill badges sit just before the action icons (each only rendered when its count is > 0): a `MessageSquare` badge with the comment count (system/status-change/assignment entries excluded) and a `Paperclip` badge with the attachment count. Counts come from the same cinna-core fetch that powers the task view — opening the view warms the cache for the row and vice versa.
-   - Trailing action icons (hover-revealed): **Refresh** (manual status pull — always hits the network even on terminal runs, with a minimum visible 500ms spin even when the IPC roundtrip is sub-frame); **Open on Cinna** (deep-link to `{cinnaServerUrl}/tasks/{short_code}`); **Trash** ("Delete run") — removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
+   - Trailing action icons (hover-revealed): **Refresh** (manual status pull when the current binding or legacy-adoption mode permits it, including terminal runs, with a minimum visible 500ms spin even when the IPC roundtrip is sub-frame); **Open on Cinna** (deep-link to `{cinnaServerUrl}/tasks/{short_code}`); **Trash** ("Delete run") — removes only the desktop's run record (the upstream cinna-core task stays on the server). Errored runs show the error message inline.
 
 ### Staying inside the jobs context
 - Opening a run's chat (via the run row) or running a job (via the Run button) sets the chat view as the active main pane but **does not** swap the sidebar tab to Chats and **does not** clear `activeJobId`. The Jobs tab stays open in the sidebar with the job's row still highlighted.
@@ -142,6 +142,9 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 - Picking a chat from the main Chats list, starting a fresh chat from the top-bar `+`, or switching profiles drops the jobs anchor (`activeJobId` is cleared), so the highlight only sticks while the user is genuinely working inside that job.
 
 ## Business Rules
+
+- **One dispatch owner.** Main selects the Job executor from the stored definition. Ordinary desktop preparation returns `renderer_turn`; the renderer resolves its existing chat defaults and sends once. Autonomous and remote work return `accepted`; the renderer may navigate but never sends another prompt. Unknown dispositions refuse dispatch. See [execution and refresh internals](execution_tech.md).
+- **Preparation and acceptance have different failure boundaries.** Ordinary desktop chat/run/task preparation is atomic. Remote admission rechecks the Job and connection after availability; work already accepted by the service survives any later local bookkeeping failure and must not be run again as a retry.
 
 - **Profile scope.** Jobs and job runs live in the active profile's `userId` scope — they don't follow the user across profile switches and are invisible from other profiles.
 - **Validation.** `title` and `prompt` must be non-empty; `type` must be `local` or `cinna_task`. Updates that would null these out are rejected with `JobError('invalid_input', ...)`.
@@ -166,8 +169,8 @@ This flow applies to ordinary jobs with null runtime fields. Explicit coordinato
 - **Two mistakes with one consequence, and the rule is one sentence each.** *Suppressing the error surface is not the same as reporting nothing*: both streaming paths were right to refuse to post or persist a cancel as a failure — the user asked for it — but each then returned, finalizing nothing, and the run stayed `running` for the life of the app; nothing reaps a stale run, and `countInProgressByJob` counts `pending` and `running`, so the job advertised itself as busy for ever. And *a stop that returns cleanly is not a success either* — **the usual case, and the one found last**. A cancelled runner returns what it streamed with **no error**; that is the `AgentTurnRunner` contract and both folder runners honour it, so a stopped turn does not reach an error branch at all. It leaves through the success line, which reported `succeeded`. That is the worse of the two: a stale `running` row at least looks unfinished, while a run recorded as finished invites no second look. Both success paths now finalize on the signal, and the same defect had a third instance in the OpenAI adapter, which resolved on abort so the turn was not even known to have been stopped — see [Provider Integration](../../llm/adapters/provider_integration.md#openai-an-abort-is-a-clean-end-of-stream-so-the-adapter-has-to-reject-itself).
 - **Concurrent runs.** Running the same job multiple times in parallel is allowed — each invocation creates its own chat + run.
 - **Soft delete.** Deleting a job sets `deleted_at`; existing job_runs rows are kept (no cascade) so history survives until a hard delete is added.
-- **Remote run status follows its task.** `completed | archived → succeeded`, `error → failed`, `cancelled → cancelled`, `new → pending`, and `refining | open | in_progress | blocked → running`. If refresh loses the task or its binding, the run becomes failed and reports that the service no longer has the work; a transient unreachable service leaves the run unchanged for retry.
-- **Cinna run polling.** Polls every 5s when the window is focused, 10s when hidden. Stops automatically when the active set of non-terminal cinna runs becomes empty. Network failures during polling are silent.
+- **Remote run status follows its task.** Remote status updates affect only the matching active attempt, preserving terminal history and failure details. Confirmed loss of remote work fails that attempt but keeps the locally authored Task, its last-known status and executor. A temporary outage, account relink or desktop takeover is not confirmation that remote work was deleted.
+- **Refresh follows ownership.** The profile task scheduler refreshes bound work; Jobs polls saved rows while attempts remain active. A separate visible-window timer only associates legacy remote runs that have no task, then stops. Manual Refresh is offered for a current remote binding or legacy adoption, including terminal history; an unresolved handoff must be reviewed on the Task page.
 - **External URL safety.** `app:open-external` only forwards `http:`/`https:` URLs (mirrors the renderer's `setWindowOpenHandler` policy).
 - **Folder scope.** Folders are profile-scoped (per-account); they don't follow the user across profile switches.
 - **Folder name.** `name` must be non-empty after trim — both at create and rename. Empty names raise `JobError('invalid_input', 'Folder name is required')`.
@@ -218,7 +221,7 @@ MainArea (activeView === 'job-detail')
             cinna  : row click → setActiveCinnaRunId + setActiveView('cinna-task-run')
             cinna  : count badges via useCinnaTaskView(taskId, { polling: false })
             (all action icons are static: Refresh / Open-external / Inbox / Trash as applicable)
-       -> useCinnaRunPoll  (5s focused / 10s hidden tick while non-terminal cinna runs exist)
+       -> useCinnaRunPoll  (visible-only legacy adoption; bound work uses taskSyncScheduler)
 
 TopBar (always mounted)
   -> JobOriginBanner  (right-aligned no-drag pill; renders only when activeView==='chat'
@@ -237,41 +240,16 @@ MainArea (activeView === 'job-edit')
        -> Delete -> DeleteJobConfirm modal -> useDeleteJob (cleanup routes back to chat view)
        -> on save success -> setActiveView('job-detail')
 
-Run flow (local)
-  Run button -> useExecuteJob -> window.api.jobs.execute(jobId)
-     -> jobService.execute() -> executeLocal()
-        -> read job_agents + job_mcp_providers, drop stale refs
-        -> newChatRouter(agentIds, mcpIds) -> direct | human | coordinator
-        -> jobRunsRepo.createLocalChatAndRun() [single transaction]
-              direct      : chat(agent_id=rootAgent) when there is an agent
-              human       : chat(agent_id=null) + chat_on_demand_agents
-              coordinator : chat(agent_id=null) + chat_on_demand_agents
-              chat_on_demand_mcps whenever the model is the answerer
-              + job_runs + chat.originating_job_run_id
-        -> taskService.create() + start()   [after the chat and the run, so a refusal
-                                             above leaves no orphan task behind]
-        -> jobRunsRepo.setTaskId(runId, taskId)
-  -> execute result.agentId  = who the first message goes to (null = the model)
-  -> renderer resolves provider/model, navigates, fires
-     startRun(chatId, prompt, { target })
-  -> chatStreamingService / a2aStreamingService -> jobService.reportRunCompletion()
-       -> taskService.applyRunState() on the run's task (best-effort)
-  -> a turn refused before either service owns it:
-     runExecutionService.ts reportRefusal -> jobService.reportRunCompletion(chatId, 'failed', message)
-
-Run history row (local, run has a task)
-  -> useOpenTask(taskId) -> setActiveTaskId + setActiveView('task')
-  -> MainArea -> TaskView   (src/renderer/src/components/tasks/TaskView.tsx)
-       -> "Chat" action on the row still opens the spawned chat via useOpenChatFromRun
-
-Run flow (cinna_task)
-  Run button -> useExecuteJob -> jobService.execute() -> executeCinnaTask()
-     -> taskService.create() -> taskSyncService.handOff() -> adapter.create / execute
-     -> jobRunsRepo.create({ type: 'cinna_task', taskId, cinnaTaskId, cinnaShortCode, status })
-     -> taskService.linkJobRun()
-  Polling loop -> useCinnaRunPoll -> window.api.jobs.refreshRun(runId)
-     -> jobService.refreshCinnaRun() -> adopt legacy run if needed -> taskSyncService.pullOne()
-     -> jobRunStatusForTask() -> jobRunsRepo.updateStatus()
+Execution and refresh
+  Run -> activated job:execute -> jobService -> owning JobExecutor
+    desktop ordinary -> atomic chat/run/task preparation -> renderer_turn -> one renderer send
+    desktop autonomous -> coordinator/script prepare + post-commit launch -> accepted
+    remote -> current Job/connection preflight -> durable task handoff -> accepted
+  History row -> current Task; separate original Chat / On the service links remain
+  Profile task scheduler -> bound task snapshots -> matching active attempt projection
+  Visible legacy-adoption timer -> job:refresh-run -> associate missing Task once
+  Manual Refresh -> job:refresh-run -> current bound task / eligible legacy adoption
+  Confirmed remote loss -> unbind + fail matching active attempt; preserve local Task
 ```
 
 ## Integration Points

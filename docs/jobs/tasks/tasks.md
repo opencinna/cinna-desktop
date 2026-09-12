@@ -26,6 +26,8 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Business Rules
 
+- Job history keeps its original provenance when a task changes executor. Bound refresh and completion use the current task and matching active attempt. Confirmed remote loss fails that attempt while retaining a locally authored Task and its last-known status/executor; an account relink is not remote-deletion evidence. See [Job execution](../jobs/execution_tech.md).
+
 - **Browsing does not start work.** Root and child rows open the same task page. Lists show the most recently updated work first, initially twenty rows with **Show more tasks** for another twenty. They exclude archived records by default.
 - **Saved children survive a failed refresh.** Opening Subtasks returns saved rows immediately and refreshes the remote parent’s children in the background. A failure leaves those rows visible with a retry message; an unconfirmed empty read does not claim there are no subtasks.
 - **Starting here keeps the work.** Continue reuses the task and its remote/job provenance; it does not create another job attempt or reuse the remote protocol session. A refused start keeps the selected target and task page open. Changing the target clears the old refusal. Pending controls disable in place.

@@ -88,7 +88,7 @@ export function registerJobHandlers(): void {
     'job:refresh-run',
     async (_event, runId: string, options?: { force?: boolean }) => {
       userActivation.requireActivated()
-      return jobService.refreshCinnaRun(getProfileScopeUserId(), runId, options ?? {})
+      return jobService.refreshRun(getProfileScopeUserId(), runId, options ?? {})
     }
   )
 

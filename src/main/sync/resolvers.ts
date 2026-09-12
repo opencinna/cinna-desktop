@@ -240,8 +240,7 @@ export interface ResolveIndex {
   hasDefaultMode: boolean
 }
 
-export function buildResolveIndex(profileUserId: string): ResolveIndex {
-  const settingsScope = getSettingsScopeUserId()
+export function buildResolveIndex(profileUserId: string, settingsScope = getSettingsScopeUserId()): ResolveIndex {
   const mcp = new Map<string, boolean>()
   for (const p of mcpProviderRepo.list(settingsScope)) {
     mcp.set(mcpIdentityKey(mcpRowToDescriptor(p)), p.enabled)

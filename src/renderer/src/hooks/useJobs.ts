@@ -235,17 +235,13 @@ export function useExecuteJob() {
       // sidebar spinner appears immediately on the row.
       queryClient.invalidateQueries({ queryKey: ['jobs'] })
 
-      if (result.type === 'cinna_task') {
-        // No local chat — the user stays on the Jobs tab and polls.
-        return
-      }
-
-      if (result.execution === 'main') {
-        queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+      if (result.disposition === 'accepted') {
         queryClient.invalidateQueries({ queryKey: ['chats'] })
-        if (navigate) { setActiveChatId(result.chatId); setActiveView('chat') }
+        if (navigate && result.chatId) { setActiveChatId(result.chatId); setActiveView('chat') }
         return
       }
+      if (result.disposition !== 'renderer_turn') throw new Error('The job returned an unsupported execution result.')
 
       const { chatId, prompt, agentId, modeId } = result
 

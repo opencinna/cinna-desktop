@@ -1,4 +1,5 @@
-import type { JobRuntimeDefinition } from '../../shared/jobs'
+import { jobRunRefreshMode } from './jobRunRefresh'
+import type { JobRunRefreshMode, JobRuntimeDefinition } from '../../shared/jobs'
 import { nanoid } from 'nanoid'
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
@@ -14,7 +15,9 @@ import {
   chatOnDemandAgents,
   chatOnDemandMcps,
   agents,
-  mcpProviders
+  mcpProviders,
+  tasks,
+  taskHandoffs
 } from './schema'
 import type { JobSyncManifest } from '../../shared/sync'
 
@@ -671,6 +674,7 @@ export const jobAgentRepo = {
 }
 
 export type JobRunRowWithMeta = JobRunRow & {
+  refreshMode: JobRunRefreshMode
   /**
    * True when this is a local run whose chat is still around but currently
    * hidden from the main Chats list (i.e. not yet promoted via "Move to
@@ -706,13 +710,15 @@ export const jobRunsRepo = {
 
   listByJob(userId: string, jobId: string): JobRunRowWithMeta[] {
     const rows = getDb()
-      .select({ run: jobRuns, chatHidden: chats.hiddenFromList })
+      .select({ run: jobRuns, chatHidden: chats.hiddenFromList, task: { executor: tasks.executor, deletedAt: tasks.deletedAt, remoteAdapter: tasks.remoteAdapter, remoteId: tasks.remoteId }, receipt: taskHandoffs.receipt })
       .from(jobRuns)
-      .leftJoin(chats, eq(chats.id, jobRuns.localChatId))
+      .leftJoin(chats, and(eq(chats.id, jobRuns.localChatId), eq(chats.userId, userId)))
+      .leftJoin(tasks, and(eq(tasks.id, jobRuns.taskId), eq(tasks.userId, userId)))
+      .leftJoin(taskHandoffs, and(eq(taskHandoffs.taskId, jobRuns.taskId), eq(taskHandoffs.userId, userId)))
       .where(and(eq(jobRuns.jobId, jobId), eq(jobRuns.userId, userId)))
       .orderBy(desc(jobRuns.createdAt))
       .all()
-    return rows.map((r) => ({ ...r.run, chatHidden: !!r.chatHidden }))
+    return rows.map((r) => ({ ...r.run, chatHidden: !!r.chatHidden, refreshMode: jobRunRefreshMode(r.run, r.task, r.receipt) }))
   },
 
   getById(userId: string, runId: string): JobRunRow | undefined {

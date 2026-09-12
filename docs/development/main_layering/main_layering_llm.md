@@ -62,6 +62,13 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/
 - `AgentStatusSource.read(intent)` owns the refresh policy; only `manual` can execute a folder command. IPC accepts validated `read | manual | batch | after_turn`, not a renderer-chosen execution boolean. `AgentStatusSnapshot.refreshDescription` is authored by main and shared through preload.
 - The status service retains the two-scope batch aggregation and partial-error contract. Renderer refresh mutations check captured profile identity before applying outcomes; replayed run events do not repeat live status refresh.
 
+### `services/jobExecution/` — Job definition execution
+
+- `tasks/jobDefinitionPolicy.ts` is the pure stored-schema owner; `executorFor` composes it with desktop/remote implementations. Runtime-definition validation does not import effectful services.
+- `JobExecutor` owns preparation and dispatch, not callbacks into `jobService`. Compatibility endpoints require optional executor capabilities before effects. Ordinary desktop preparation is transactional; remote acceptance survives later local bookkeeping failures.
+- Renderer dispatch follows required `renderer_turn | accepted`, never stored run type. `db/jobRunRefresh.ts` derives current bound/adoption/recovery policy; run type remains historical schema. Shared task projection settles only the active matching attempt, including explicit confirmed remote loss.
+- The kind-branch ratchet is zero for counted behavior; exact authoring, provenance, presentation and authority pins remain. [Details](../../jobs/jobs/execution_tech.md).
+
 ### Tool-provider execution and presentation
 
 - `ToolProvider.attribution` supplies optional static history metadata; `eventSink` owns trusted live framing. The model loop calls these contracts without dispatching from a display discriminator.

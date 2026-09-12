@@ -150,9 +150,9 @@ const LIMITS: Record<Category, number> = {
   // `agents/drivers/index.ts`.
   // Phase 7 classifies 42 existing format/authoring cases; no removal claim.
   kind: 0,
-  // Phase 6 adds one validation guard: autonomous routing belongs to a local
-  // job. Phase 7's job-type cleanup moves this to the executor contract.
-  jobType: 30,
+  // Phase 7: eight behavioral consumers replaced; 22 existing provenance/schema
+  // comparisons and three new definition/adoption ownership sites are pinned.
+  jobType: 0,
   // Two behavior sites now consume provider attribution/event delivery.
   // Presentation and trusted coordinator authority remain exactly pinned.
   providerType: 0,
@@ -170,7 +170,7 @@ const LIMITS: Record<Category, number> = {
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
-const LIMIT = 30
+const LIMIT = 0
 
 /**
  * Files where branching on kind is the job, not a leak. Still counted and
@@ -210,6 +210,15 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  { file: 'src/main/tasks/jobDefinitionPolicy.ts', category: 'jobType', count: 2, why: 'selects the stored definition policy and its owning executor' },
+  { file: 'src/main/db/jobRunRefresh.ts', category: 'jobType', count: 1, why: 'only legacy remote-origin pointer rows without a Task require adoption' },
+  { file: 'src/main/services/jobService.ts', category: 'jobType', count: 5, why: 'validates authored type values and projects historical hidden-chat provenance' },
+  { file: 'src/main/db/jobs.ts', category: 'jobType', count: 1, why: 'deletion preserves remote provenance and owns only local-origin chats' },
+  { file: 'src/renderer/src/components/jobs/JobRunRow.tsx', category: 'jobType', count: 7, why: 'presents saved origin, deep links and deletion disclosure; refresh comes from current-task metadata' },
+  { file: 'src/renderer/src/components/jobs/CinnaTaskRunView.tsx', category: 'jobType', count: 3, why: 'presents the original remote conversation using its saved pointer' },
+  { file: 'src/renderer/src/components/jobs/JobDetail.tsx', category: 'jobType', count: 4, why: 'presents the authored definition and dependency editing affordances' },
+  { file: 'src/renderer/src/components/jobs/JobEditForm.tsx', category: 'jobType', count: 2, why: 'owns the authored local versus remote definition fields' },
+  { file: 'src/main/services/jobExecution/dependencies.ts', category: 'source', count: 2, why: 'resolves the account or folder owning portable dependency descriptors' },
   // Phase 7 audit: classification is reported separately from behavior removal.
   { file: 'src/main/engine/engineConfigSource.ts', category: 'kind', count: 1, why: 'owns kit versus bare prompt assembly' },
   { file: 'src/main/services/localAgents/agentsHomeService.ts', category: 'kind', count: 3, why: 'normalizes root layout and its count/cache' },
@@ -266,7 +275,7 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/main/services/jobService.ts',
     category: 'source',
-    count: 4,
+    count: 2,
     why: "a synced job manifest's dependency descriptors name the account or workshop that owns them"
   },
   {

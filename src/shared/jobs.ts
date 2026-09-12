@@ -18,10 +18,10 @@ export type JobRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'can
 
 /** Main-owned work must never be dispatched a second time by the renderer. */
 export type JobExecuteResult =
-  | { type: 'local'; execution: 'main'; chatId: string; runId: string; taskId: string }
-  | { type: 'local'; execution?: 'renderer'; chatId: string; runId: string; taskId: string;
+  | { type: 'local'; disposition: 'accepted'; execution: 'main'; chatId: string; runId: string; taskId: string }
+  | { type: 'local'; disposition: 'renderer_turn'; execution?: 'renderer'; chatId: string; runId: string; taskId: string;
       prompt: string; agentId: string | null; modeId: string | null }
-  | { type: 'cinna_task'; runId: string; taskId: string; cinnaTaskId: string; cinnaShortCode: string | null }
+  | { type: 'cinna_task'; disposition: 'accepted'; chatId?: never; runId: string; taskId: string; cinnaTaskId: string; cinnaShortCode: string | null }
 
 export interface JobData extends JobRuntimeDefinition {
   id: string
@@ -104,7 +104,11 @@ export interface JobFolderPatchDto {
   collapsed?: boolean
 }
 
+export type JobRunRefreshMode = 'none' | 'bound_task' | 'legacy_adoption' | 'handoff_review'
+
 export interface JobRunData {
+  /** Main derives refresh from current task ownership, independently of origin. */
+  refreshMode: JobRunRefreshMode
   id: string
   jobId: string
   userId: string

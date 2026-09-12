@@ -836,18 +836,26 @@ export const taskService = {
    * put a Stop button over nothing. §5.10's Take over is the write that moves
    * it, and it is a person's decision.
    */
-  unbindRemote(userId: string, taskId: string, reason: string): TaskDto {
+  unbindRemote(userId: string, taskId: string, reason: string, options: { confirmedMissing?: boolean } = {}): TaskDto {
     const task = requireTask(userId, taskId)
-    const row = taskRepo.update(userId, taskId, {
-      remoteAdapter: null,
-      remoteId: null,
-      remoteKey: null,
-      remoteUrl: null,
-      remoteState: null,
-      remoteSyncedAt: null,
-      remoteDirty: null
+    const row = getDb().transaction(() => {
+      const row = taskRepo.update(userId, taskId, {
+        remoteAdapter: null, remoteId: null, remoteKey: null, remoteUrl: null,
+        remoteState: null, remoteSyncedAt: null, remoteDirty: null
+      })
+      if (!row) throw new TaskError('not_found', 'Task not found')
+      // Losing remote evidence ends only the current remote attempt. Keep the
+      // Task's last known status and executor; unbinding is not a local restart.
+      const run = task.jobRunId ? jobRunsRepo.getById(userId, task.jobRunId) : null
+      if (options.confirmedMissing && task.remoteAdapter && task.remoteId && task.executor === 'remote' && run &&
+          run.taskId === taskId && run.localChatId === task.chatId &&
+          ['pending', 'running'].includes(run.status) && !taskHandoffRepo.unresolved(userId, taskId)) {
+        jobRunsRepo.updateStatus(run.id, 'failed', {
+          errorMessage: run.errorMessage ?? 'That task is no longer bound to the service that was running it.'
+        })
+      }
+      return row
     })
-    if (!row) throw new TaskError('not_found', 'Task not found')
     logger.warn('task unbound from its service', {
       taskId,
       adapter: task.remoteAdapter ?? undefined,

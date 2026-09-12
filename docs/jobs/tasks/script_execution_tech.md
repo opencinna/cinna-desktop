@@ -21,7 +21,7 @@ Each declared step gets a separate hidden direct chat and child task. The root g
 
 ## IPC Channels
 
-`job:execute` captures profile/settings scope and returns shared JobExecuteResult. Explicit local coordinator/script jobs return the local arm with execution=main and chatId/runId/taskId after admission. The renderer does not send a first prompt for this arm. Ordinary null-router jobs retain the renderer-dispatched local arm; remote Jobs retain their existing remote arm.
+`job:execute` captures profile/settings scope and returns shared JobExecuteResult. Explicit local coordinator/script jobs return disposition=accepted with local provenance and chatId/runId/taskId after admission. The renderer does not send a first prompt for this arm. Ordinary null-router jobs return renderer_turn; accepted remote Jobs never request a renderer send. The [Job executor contract](../jobs/execution_tech.md) owns this disposition independently of provenance.
 
 Existing `task:resume-runtime` and `task:stop-runtime` use taskRuntimeService to find the owning engine. A script child's ID resolves to its root. Existing task reads project TaskRuntimeInfo with controllerTaskId; checkpoint prompts and resolved target details are not exposed. Existing Inbox/transcript answers reach the engine through taskRunnerBridge before live-driver delivery.
 
@@ -39,7 +39,7 @@ Existing `task:resume-runtime` and `task:stop-runtime` use taskRuntimeService to
 
 ## Renderer Components
 
-useExecuteJob invalidates saved Job/task/chat queries and optionally navigates for execution=main, then returns without calling startRun. The existing Job form has no script or autonomous-definition authoring controls. Programmatically stored explicit definitions use the existing Run action. JobDetail respects the explicit coordinator/script router before ordinary attachment inference; the display-only Script routes badge explains graph routing without extending the chat-router execution union.
+useExecuteJob invalidates saved Job/task/chat queries and optionally navigates for disposition=accepted, then returns without calling startRun. The existing Job form has no script or autonomous-definition authoring controls. Programmatically stored explicit definitions use the existing Run action. JobDetail respects the explicit coordinator/script router before ordinary attachment inference; the display-only Script routes badge explains graph routing without extending the chat-router execution union.
 
 TaskRuntimeControl uses controllerTaskId for whole-script Stop/Resume and states that scope on child pages. It retains fixed action columns and the existing error handling. Live child turns use selected-chat attachment; root transition/summary messages are read through saved-chat polling while the working reservation is active. No durable token replay cache or graph editor is introduced.
 

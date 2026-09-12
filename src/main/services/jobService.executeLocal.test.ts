@@ -532,3 +532,15 @@ describe('a local run produces a task', () => {
     expect(jobRunsRepo.listByJob(USER, JOB_ID)).toHaveLength(0)
   })
 })
+
+it('rolls back the chat and run when task preparation fails', async () => {
+  applyIncomingJob([])
+  const { taskService } = await import('./taskService')
+  const failed = vi.spyOn(taskService, 'create').mockImplementationOnce(() => { throw new Error('Task write failed') })
+  const before = chatRepo.list(USER).length
+  expect(() => jobService.executeLocal(USER, JOB_ID)).toThrow('Task write failed')
+  expect(chatRepo.list(USER)).toHaveLength(before)
+  expect(jobRunsRepo.listByJob(USER, JOB_ID)).toEqual([])
+  expect(taskRepo.list(USER)).toEqual([])
+  failed.mockRestore()
+})

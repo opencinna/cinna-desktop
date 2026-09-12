@@ -355,8 +355,7 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
           Delete; local runs get Move-to-Chats (when the spawned chat is
           still hidden) + Delete. */}
       <div className="flex items-center gap-2 shrink-0 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-      {run.type === 'cinna_task' && (
-        <>
+      {(run.refreshMode === 'bound_task' || run.refreshMode === 'legacy_adoption') && (
           <button
             type="button"
             onClick={handleRefreshClick}
@@ -370,6 +369,8 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
               className={refreshSpinning || refreshCinna.isPending ? 'animate-spin' : undefined}
             />
           </button>
+      )}
+      {canOpenCinnaView && (
           <button
             type="button"
             onClick={(e) => {
@@ -383,7 +384,6 @@ export function JobRunRow({ run }: JobRunRowProps): React.JSX.Element {
           >
             <ExternalLink size={16} />
           </button>
-        </>
       )}
 
       {canMoveToChats && (

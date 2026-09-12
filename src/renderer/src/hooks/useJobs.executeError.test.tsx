@@ -158,6 +158,7 @@ describe('a job run the main process refuses', () => {
   it('leaves the successful run alone', async () => {
     execute.mockResolvedValue({
       type: 'local',
+      disposition: 'renderer_turn',
       chatId: 'chat-1',
       runId: 'run-1',
       prompt: 'Check the invoices',
@@ -173,11 +174,13 @@ describe('a job run the main process refuses', () => {
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(logged).toHaveLength(0)
+    expect(startRun).toHaveBeenCalledExactlyOnceWith('chat-1', 'Check the invoices', { target: { kind: 'agent', agentId: 'folder:6f1a-uuid' } })
+    expect(setActiveChatId).not.toHaveBeenCalled()
   })
 })
 
 it.each([false, true])('main-owned execution never sends a second run (navigate=%s)', async (navigate) => {
-  execute.mockResolvedValue({ type: 'local', execution: 'main', chatId: 'script-chat', taskId: 'script-task', runId: 'attempt' })
+  execute.mockResolvedValue({ type: 'local', disposition: 'accepted', execution: 'main', chatId: 'script-chat', taskId: 'script-task', runId: 'attempt' })
   const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   const invalidate = vi.spyOn(client, 'invalidateQueries')
   const { result } = renderHook(() => useExecuteJob(), { wrapper: wrapper(client) })
@@ -194,4 +197,23 @@ it.each([false, true])('main-owned execution never sends a second run (navigate=
     expect(setActiveView).not.toHaveBeenCalled()
   }
   client.clear()
+})
+
+it.each(['cinna_task', 'future_origin'])('accepted work never dispatches by its origin (%s)', async (type) => {
+  execute.mockResolvedValue({ type, disposition: 'accepted', taskId: 'remote-task', runId: 'attempt' })
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  const { result } = renderHook(() => useExecuteJob(), { wrapper: wrapper(client) })
+  result.current.mutate({ jobId: 'job-1' })
+  await waitFor(() => expect(result.current.isSuccess).toBe(true))
+  expect(startRun).not.toHaveBeenCalled()
+  expect(setActiveChatId).not.toHaveBeenCalled()
+})
+it.each([undefined, 'future_action'])('refuses an unrecognized execution disposition (%s)', async (disposition) => {
+  execute.mockResolvedValue({ type: 'local', disposition, chatId: 'chat', prompt: 'Must not run' })
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  const { result } = renderHook(() => useExecuteJob(), { wrapper: wrapper(client) })
+  result.current.mutate({ jobId: 'job-1' })
+  await waitFor(() => expect(result.current.isError).toBe(true))
+  expect(startRun).not.toHaveBeenCalled()
+  expect(setActiveChatId).not.toHaveBeenCalled()
 })

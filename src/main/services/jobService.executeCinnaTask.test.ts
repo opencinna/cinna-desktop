@@ -400,3 +400,138 @@ describe('refreshing a run that is executing on a service', () => {
     expect(taskRepo.list(USER, { includeArchived: true })).toHaveLength(1)
   })
 })
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => { resolve = done })
+  return { promise, resolve }
+}
+
+describe('job execution and refresh ownership', () => {
+  it.each(['edit', 'delete', 'connection'] as const)('refuses stale remote preflight after %s without creating work', async (change) => {
+    makeJob()
+    const gate = deferred<string | null>()
+    const pendingAdapter = vi.spyOn(taskSyncService, 'preferredAdapterId').mockReturnValueOnce(gate.promise)
+    const execution = jobService.execute(USER, JOB_ID)
+    const refused = expect(execution).rejects.toThrow('changed')
+    if (change === 'edit') jobsRepo.update(USER, JOB_ID, { prompt: 'A different instruction' })
+    if (change === 'delete') jobsRepo.softDelete(USER, JOB_ID)
+    if (change === 'connection') taskSyncService.invalidatePending(USER)
+    gate.resolve('cinna')
+    await refused
+    expect(taskRepo.list(USER, { includeArchived: true })).toEqual([])
+    expect(jobRunsRepo.listByJob(USER, JOB_ID)).toEqual([])
+    expect(cinna.requests()).toBe(0)
+    pendingAdapter.mockRestore()
+  })
+
+  it('retains accepted remote work after the local run link fails', async () => {
+    makeJob()
+    holder.current!.raw.exec(`CREATE TRIGGER reject_job_link BEFORE UPDATE OF job_run_id ON tasks
+      WHEN NEW.job_run_id IS NOT NULL BEGIN SELECT RAISE(FAIL, 'link unavailable'); END`)
+    await expect(jobService.execute(USER, JOB_ID)).rejects.toMatchObject({ code: 'handed_over' })
+    const tasks = taskRepo.list(USER, { includeArchived: true })
+    expect(tasks).toHaveLength(1)
+    expect(tasks[0]).toMatchObject({ deletedAt: null, executor: 'remote', jobRunId: null })
+    expect(cinna.task(tasks[0].remoteId!)?.status).toBe('in_progress')
+    expect(jobRunsRepo.listByJob(USER, JOB_ID)).toEqual([])
+    expect(cinna.calls().filter((call) => call.path.endsWith('/execute'))).toHaveLength(1)
+  })
+
+  it.each(['delete', 'repoint', 'terminal'] as const)('creates no orphan when legacy adoption is superseded by %s', async (change) => {
+    makeJob()
+    const remote = cinna.seed({ title: 'Historical work' })
+    const run = jobRunsRepo.create({ jobId: JOB_ID, userId: USER, type: 'cinna_task', cinnaTaskId: remote.id, status: 'running' })
+    const gate = deferred<string | null>()
+    const pendingAdapter = vi.spyOn(taskSyncService, 'preferredAdapterId').mockReturnValueOnce(gate.promise)
+    const refresh = jobService.refreshRun(USER, run.id).catch((error) => error)
+    if (change === 'delete') jobRunsRepo.deleteWithChat(USER, run.id)
+    if (change === 'repoint') holder.current!.raw.prepare('UPDATE job_runs SET cinna_task_id = ? WHERE id = ?').run('replacement', run.id)
+    if (change === 'terminal') jobRunsRepo.updateStatus(run.id, 'cancelled')
+    gate.resolve('cinna')
+    await refresh
+    expect(taskRepo.list(USER, { includeArchived: true })).toEqual([])
+    expect(cinna.requests()).toBe(0)
+    pendingAdapter.mockRestore()
+  })
+
+  it('refreshes a local-origin attempt from the current remote binding in every DTO path', async () => {
+    makeJob({ type: 'local' })
+    const execution = jobService.executeLocal(USER, JOB_ID)
+    const remote = cinna.seed({ title: 'Handed work', status: 'completed' })
+    taskService.bindRemote(USER, execution.taskId, { adapter: 'cinna', id: remote.id, key: remote.short_code, url: null, state: {} })
+    taskService.handOffToRemote(USER, execution.taskId)
+    expect(jobService.listRuns(USER, JOB_ID)[0]).toMatchObject({ type: 'local', refreshMode: 'bound_task' })
+    expect(jobService.getDetail(USER, JOB_ID).recentRuns[0].refreshMode).toBe('bound_task')
+    const refreshed = await jobService.refreshRun(USER, execution.runId)
+    expect(refreshed).toMatchObject({ type: 'local', status: 'succeeded', refreshMode: 'bound_task' })
+  })
+
+  it('does not fail a Job when desktop takeover clears its binding during a refresh', async () => {
+    makeJob()
+    const started = await runOnService()
+    const adapter = holder.adapters[0]
+    const gate = deferred<Awaited<ReturnType<RemoteTaskAdapter['fetch']>>>()
+    const fetch = vi.spyOn(adapter, 'fetch').mockReturnValueOnce(gate.promise)
+    const refreshing = jobService.refreshRun(USER, started.runId)
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalled())
+    const remoteSnapshot = await createCinnaTaskAdapter(cinna.world).fetch(USER, { ...taskService.getById(USER, started.taskId).remote!, state: {} })
+    taskService.takeOver(USER, started.taskId)
+    taskService.unbindRemote(USER, started.taskId, 'local takeover')
+    gate.resolve(remoteSnapshot)
+    expect(await refreshing).toMatchObject({ status: 'running', refreshMode: 'none' })
+    expect(taskRepo.getById(USER, started.taskId)?.executor).toBe('desktop')
+    fetch.mockRestore()
+  })
+
+  it('settles lost remote work through background task reads without opening Jobs', async () => {
+    makeJob()
+    const started = await runOnService()
+    cinna.forget(started.cinnaTaskId)
+    await taskSyncService.pullOne(USER, started.taskId)
+    expect(jobRunsRepo.getById(USER, started.runId)?.status).toBe('failed')
+    expect(jobService.listRuns(USER, JOB_ID)[0].refreshMode).toBe('none')
+    expect(taskRepo.getById(USER, started.taskId)?.deletedAt).toBeNull()
+  })
+
+  it('reconciles vanished locally authored remote work through the profile scheduler path', async () => {
+    makeJob()
+    const started = await runOnService()
+    cinna.forget(started.cinnaTaskId)
+    await taskSyncService.pull(USER)
+    expect(jobRunsRepo.getById(USER, started.runId)?.status).toBe('failed')
+    expect(taskRepo.getById(USER, started.taskId)).toMatchObject({ deletedAt: null, remoteAdapter: null })
+  })
+
+  it('keeps terminal legacy history passive until an explicit forced read', async () => {
+    makeJob()
+    const remote = cinna.seed({ title: 'Old finished work', status: 'completed' })
+    const run = jobRunsRepo.create({ jobId: JOB_ID, userId: USER, type: 'cinna_task', cinnaTaskId: remote.id, status: 'succeeded' })
+    expect((await jobService.refreshRun(USER, run.id)).refreshMode).toBe('legacy_adoption')
+    expect(taskRepo.list(USER)).toEqual([])
+    expect(cinna.requests()).toBe(0)
+    expect((await jobService.refreshRun(USER, run.id, { force: true })).taskId).toBeTruthy()
+  })
+})
+
+it('projects unresolved handoff review and refuses a normal refresh without remote requests', async () => {
+  makeJob()
+  const started = await runOnService()
+  const { taskHandoffRepo } = await import('../db/taskHandoffs')
+  const receipt = taskHandoffRepo.get(USER, started.taskId)!
+  taskHandoffRepo.put(USER, { ...receipt, state: 'uncertain' })
+  const before = cinna.requests()
+  expect(jobService.listRuns(USER, JOB_ID)[0].refreshMode).toBe('handoff_review')
+  expect(jobService.getDetail(USER, JOB_ID).recentRuns[0].refreshMode).toBe('handoff_review')
+  await expect(jobService.refreshRun(USER, started.runId, { force: true })).rejects.toThrow('review its pending handoff')
+  expect(cinna.requests()).toBe(before)
+  expect(jobRunsRepo.getById(USER, started.runId)?.status).toBe('running')
+})
+
+it('does not treat a profile binding reset as confirmed remote loss', async () => {
+  makeJob()
+  const started = await runOnService()
+  taskSyncService.forgetBindings(USER)
+  expect(taskRepo.getById(USER, started.taskId)?.remoteAdapter).toBeNull()
+  expect(jobRunsRepo.getById(USER, started.runId)?.status).toBe('running')
+})

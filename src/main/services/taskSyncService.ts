@@ -622,7 +622,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
     const consequence = consequenceOf(err, what)
     if (consequence !== 'retry') contacted = true
     if (consequence === 'unbind') {
-      taskService.unbindRemote(userId, taskId, `${what}: ${describe(err)}`)
+      taskService.unbindRemote(userId, taskId, `${what}: ${describe(err)}`, { confirmedMissing: true })
       return false
     }
     if (consequence === 'drop') for (const marker of markers) remaining.delete(marker)
@@ -654,7 +654,7 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
         const consequence = consequenceOf(err, 'pushing fields')
         if (consequence !== 'retry') contacted = true
         if (consequence === 'unbind') {
-          taskService.unbindRemote(userId, taskId, `pushing fields: ${describe(err)}`)
+          taskService.unbindRemote(userId, taskId, `pushing fields: ${describe(err)}`, { confirmedMissing: true })
           return 'unbound'
         }
         return consequence === 'drop' ? 'refused' : 'retry'
@@ -779,6 +779,12 @@ async function pushOne(userId: string, taskId: string): Promise<void> {
 }
 
 export const taskSyncService = {
+  /** Captures the same connection lifecycle used by pending task synchronization. */
+  captureConnection(userId: string): () => boolean {
+    const captured = generation(userId)
+    return () => generation(userId) === captured
+  },
+
   pendingHandoffForChat(userId: string, chatId: string): TaskHandoffReceipt | null {
     if (!chatRepo.getOwned(userId, chatId)) throw new TaskError('not_found', 'Conversation not found')
     return taskHandoffRepo.pendingForChat(userId, chatId)
@@ -1438,17 +1444,10 @@ async function dropMissing(
   const locals = taskRepo.list(userId, { remoteAdapter: adapter.id, includeArchived: true })
 
   for (const row of locals) {
-    // Only replicas. A task created here and merely *mirrored* there is this
-    // device's own work: the remote copy vanishing means the **binding** is
-    // stale, not the task, and deleting the user's own task because a mirror
-    // went missing is the one outcome with no way back. Note what that leaves: a stale
-    // binding is discovered by whatever next talks to the service about that
-    // task — a push with something to send, or a pull of that task. A task with
-    // nothing owed and nobody looking at it keeps its binding, its short code
-    // and a deep link that answers 404 until one of those happens. Step 11
-    // shortens that to "the first time anyone opens it", by having the task
-    // page pull the task it is showing.
-    if (row.origin !== 'remote' || !row.remoteId || seen.has(row.remoteId)) continue
+    // Remote execution can originate here. Confirm missing active work for
+    // those tasks too, but preserve locally authored tasks when unbinding.
+    // Desktop-owned mirrors retain the existing lazy confirmation policy.
+    if ((row.origin !== 'remote' && row.executor !== 'remote') || !row.remoteId || seen.has(row.remoteId)) continue
     // Terminal replicas are absent from the active set by construction, so
     // confirming them is a permanent per-poll cost for tasks nobody is waiting
     // on. See the method comment.
@@ -1480,7 +1479,8 @@ async function dropMissing(
           adapter: adapter.id
         })
         bump(revisionKey)
-        taskService.remove(userId, row.id)
+        taskService.unbindRemote(userId, row.id, 'the service no longer has this task', { confirmedMissing: true })
+        if (row.origin === 'remote') taskService.remove(userId, row.id)
       }
     }
   }
@@ -1649,7 +1649,7 @@ async function pullSingleTask(userId: string, taskId: string): Promise<TaskDto |
     if (consequenceOf(err, 'fetching the task') === 'unbind') {
       bump(key)
       refreshErrors.delete(key)
-      taskService.unbindRemote(userId, taskId, `fetching the task: ${describe(err)}`)
+      taskService.unbindRemote(userId, taskId, `fetching the task: ${describe(err)}`, { confirmedMissing: true })
     } else {
       refreshErrors.set(key, 'Could not refresh from the remote service. Showing the saved task.')
     }

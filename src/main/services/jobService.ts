@@ -1,5 +1,9 @@
+import { jobRunRefreshMode } from '../db/jobRunRefresh'
+import { taskHandoffRepo } from '../db/taskHandoffs'
+import { getDb } from '../db/client'
+import { executorFor } from './jobExecution'
+import { unresolvableAgentLabels } from './jobExecution/dependencies'
 import { jobRuntimeDefinition } from '../tasks/jobRuntimeDefinition'
-import { jobRunStatusForTask } from '../../shared/taskStatus'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import {
   jobsRepo,
@@ -19,15 +23,13 @@ import {
 } from '../db/jobs'
 import { chatRepo } from '../db/chats'
 import { mcpProviderRepo } from '../db/mcpProviders'
-import { chatModeRepo } from '../db/chatModes'
 import { agentRepo } from '../db/agents'
 import { taskRepo } from '../db/tasks'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
-import { JobError, TaskError } from '../errors'
-import { newChatRouter, routingOf } from '../../shared/chatRouting'
+import { JobError } from '../errors'
 import type { JobRunOrigin, JobExecuteResult } from '../../shared/jobs'
 import type { RunState } from '../../shared/runEvents'
-import { parseTaskPriority, type TaskDto } from '../../shared/tasks'
+import { parseTaskPriority } from '../../shared/tasks'
 import { cinnaApiService } from './cinnaApiService'
 import { syncService } from './syncService'
 import { taskService } from './taskService'
@@ -42,11 +44,9 @@ import {
   findFolderAgent,
   findLocalAgent,
   buildResolveIndex,
-  manifestNeedsSetup,
-  type ResolveIndex
+  manifestNeedsSetup
 } from '../sync/resolvers'
-import { agentIdentityKey, normalizeUrl } from '../sync/identity'
-import type { JobDependencyStatus, JobSyncManifest } from '../../shared/sync'
+import type { JobDependencyStatus } from '../../shared/sync'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('job')
@@ -93,60 +93,6 @@ function filterExistingAgents(agentIds: string[]): string[] {
   return agentIds.filter((id) => scopes.some((scope) => !!agentRepo.getOwned(scope, id)))
 }
 
-/**
- * Agent dependencies the manifest names that resolve to **nothing** on this
- * device: a folder agent whose workshop directory isn't here, or a remote agent
- * from a server this profile isn't on. Returns their display labels, in
- * manifest order — the labels are the message, see `executeLocal`.
- *
- * This is the same set `getDependencyStatus` reports as
- * `kind: 'agent', state: 'unavailable'`, computed against a prebuilt index so
- * the job *list* can flag every row in one pass instead of one table scan per
- * dependency. `jobService.executeLocal.test.ts` pins the two answers together
- * so an edit to either shows up as a failure rather than as drift.
- *
- * Three things are deliberately **not** here:
- *
- *  - **MCP deps.** A miss auto-creates a disabled shell the user finishes
- *    configuring in the app, so blocking on one would break the ordinary
- *    sync-then-configure path.
- *  - **`source: 'local'` A2A agents.** `resolveLocalAgent` auto-creates a shell
- *    too, so a miss there is the same finish-in-app case as an MCP.
- *  - **A row that is present but disabled.** That is a toggle, not an absence:
- *    the row exists, `getDependencyStatus` calls it `needs-setup`, and its
- *    "Set up" button leads somewhere real.
- *
- * The `serverUrl` guard is not decoration. `ResolveIndex.remoteAgent` is keyed
- * on target type + id alone and carries no server, while `resolveRemoteAgent`
- * — which the detail panel goes through — refuses a descriptor naming a
- * different server. Without the guard here the two would disagree, permissively
- * and in exactly the direction this whole gate exists to close.
- */
-function unresolvableAgentLabels(
-  manifest: JobSyncManifest | null,
-  idx: ResolveIndex,
-  serverUrl: string | null
-): string[] {
-  if (!manifest) return []
-  const out: string[] = []
-  for (const desc of manifest.deps) {
-    if (desc.kind !== 'agent') continue
-    if (desc.source === 'remote') {
-      const foreign =
-        !!desc.serverUrl &&
-        !!serverUrl &&
-        normalizeUrl(desc.serverUrl) !== normalizeUrl(serverUrl)
-      if (foreign || !idx.remoteAgent.has(agentIdentityKey(desc))) {
-        out.push(desc.name ?? 'Remote agent')
-      }
-    } else if (desc.source === 'folder') {
-      if (!idx.folderAgent.has(agentIdentityKey(desc))) {
-        out.push(desc.name ?? 'Agent')
-      }
-    }
-  }
-  return out
-}
 
 const RECENT_RUNS_LIMIT = 10
 
@@ -162,11 +108,14 @@ function requireJob(userId: string, jobId: string): JobRow {
  * local runs with no chat get `false`.
  */
 function enrichRun(userId: string, run: JobRunRow): JobRunRowWithMeta {
+  const task = run.taskId ? taskRepo.getById(userId, run.taskId) ?? null : null
+  const receipt = run.taskId ? taskHandoffRepo.get(userId, run.taskId) : null
+  const refreshMode = jobRunRefreshMode(run, task, receipt)
   if (run.type !== 'local' || !run.localChatId) {
-    return { ...run, chatHidden: false }
+    return { ...run, chatHidden: false, refreshMode }
   }
   const chat = chatRepo.getOwned(userId, run.localChatId)
-  return { ...run, chatHidden: !!chat?.hiddenFromList }
+  return { ...run, chatHidden: !!chat?.hiddenFromList, refreshMode }
 }
 
 function validateCreate(input: JobCreateInput): void {
@@ -428,19 +377,7 @@ export const jobService = {
     settingsUserId = getSettingsScopeUserId()
   ): Promise<JobExecuteResult> {
     const job = requireJob(userId, jobId)
-    if (job.type === 'cinna_task') {
-      const res = await this.executeCinnaTask(userId, jobId)
-      return { type: 'cinna_task', ...res }
-    }
-    if (job.router === 'coordinator') {
-      const { startCoordinatorJob } = await import('./coordinatorJobService')
-      return { type: 'local', execution: 'main', ...await startCoordinatorJob({ profileUserId: userId, settingsUserId }, job) }
-    }
-    if (job.router === 'script') {
-      const { scriptRuntimeService } = await import('./scriptRuntimeService')
-      return { type: 'local', execution: 'main', ...scriptRuntimeService.startJob({ profileUserId: userId, settingsUserId }, job) }
-    }
-    return { type: 'local', ...this.executeLocal(userId, jobId) }
+    return executorFor(job).execute({ profileUserId: userId, settingsUserId }, job)
   },
 
   /**
@@ -479,171 +416,9 @@ export const jobService = {
     agentId: string | null
     modeId: string | null
   } {
-    const job = requireJob(userId, jobId)
-    if (job.type !== 'local') {
-      throw new JobError('unsupported_type', 'executeLocal called on non-local job')
-    }
-    // Definitions must never fall through to the legacy renderer-started turn.
-    if (job.router != null || job.script != null || job.budget != null) {
-      jobRuntimeDefinition(job)
-      throw new JobError('unsupported_type', 'This job requires the autonomous job executor.')
-    }
-
-    // **This is the block.** The `incompleteSetup` flag on the job DTO reports
-    // the same condition to the UI so the user sees it before clicking, but a
-    // flag only tells; this refusal is what actually stops the run, and it is
-    // recomputed here so a renderer working from a stale job list still cannot
-    // start one.
-    //
-    // The check the join rows below cannot make. They are the *resolved*
-    // subset: `collections.ts` pushes a row only when a descriptor resolved, so
-    // an agent that isn't on this device leaves no row and no trace. The
-    // `missing_dependency` throw further down compares those rows against
-    // themselves and is therefore blind to it — both sides are `[]` — and the
-    // run went ahead with no agent, the router answered "a chat with the local
-    // model", and a plain-LLM chat reported success. The manifest is the only record that the
-    // agent was ever part of this job, so the manifest is what gets asked.
-    //
-    // The whole explanation goes in the *message* on purpose. A `DomainError`'s
-    // `code` does not survive the trip to the renderer — `ipcMain.handle`
-    // serialises a rejection to message + stack and `contextBridge` re-clones
-    // it (see the comment in `src/main/ipc/_wrap.ts`) — so a renderer guard on
-    // `err.code` would silently never fire. The code below is for this
-    // process's own log; the sentence is the wire contract, and it names the
-    // agents because "a dependency is missing" without saying which one leaves
-    // the user with nothing to act on.
-    //
-    // The message stops at *what is true*. It does not tell the user to copy
-    // the agent's folder onto this machine, even though that is what would
-    // clear it today: local agents are not synced, and how an agent on one
-    // machine corresponds to one on another is undesigned. Advice that happens
-    // to work is still a promise the product has not made.
-    //
-    // **What this gate deliberately does not cover.** A `source: 'local'` A2A
-    // dependency whose auto-created shell the user later *deletes* resolves to
-    // nothing, leaves no join row, and still runs agentless reporting success —
-    // the identical failure, knowingly left live. It is out because the shell is
-    // repairable inside the app, which is the same reason MCPs are out, and
-    // because `getDependencyStatus` calls that case `needs-setup`: blocking it
-    // would put this gate and the panel the user reads into disagreement. If
-    // that changes, the `getDependencyStatus` local arm moves with it.
-    const blocked = job.syncDeps
-      ? unresolvableAgentLabels(job.syncDeps, buildResolveIndex(userId), profileServerUrl(userId))
-      : []
-    if (blocked.length > 0) {
-      logger.warn('refused to run a job with an unresolvable agent', { jobId, blocked })
-      throw new JobError(
-        'incomplete_setup',
-        `This job can't run on this device. It needs ${
-          blocked.length === 1 ? 'an agent' : 'agents'
-        } that ${blocked.length === 1 ? "isn't" : "aren't"} available here: ${blocked.join(', ')}.`
-      )
-    }
-
-    // Attached agents (multi). A missing reference is a hard dependency break,
-    // matching the single-agent contract — surfaced as an inline run error.
-    const agentIds = jobAgentRepo.listAgentIds(jobId)
-    const existingAgentIds = filterExistingAgents(agentIds)
-    if (existingAgentIds.length !== agentIds.length) {
-      throw new JobError('missing_dependency', 'Agent referenced by job no longer exists')
-    }
-
-    const mode = job.modeId
-      ? chatModeRepo.getOwned(getSettingsScopeUserId(), job.modeId)
-      : null
-    if (job.modeId && !mode) {
-      throw new JobError('missing_dependency', 'Chat mode referenced by job no longer exists')
-    }
-
-    // Drop MCP ids that no longer exist (FK would crash the insert anyway).
-    const rawMcpIds = jobMcpRepo.listProviderIds(jobId)
-    let filteredMcpIds: string[] = []
-    if (rawMcpIds.length > 0) {
-      const validIds = new Set(
-        mcpProviderRepo.list(getSettingsScopeUserId()).map((p) => p.id)
-      )
-      filteredMcpIds = rawMcpIds.filter((id) => validIds.has(id))
-      const dropped = rawMcpIds.length - filteredMcpIds.length
-      if (dropped > 0) {
-        logger.warn('executeLocal: dropped stale mcp ids', { jobId, dropped })
-      }
-    }
-
-    const router = newChatRouter({ agentIds: existingAgentIds, mcpIds: filteredMcpIds })
-    const rootAgentId = router === 'direct' ? (existingAgentIds[0] ?? null) : null
-    const answerer = routingOf({ router, agentId: rootAgentId }).answerer()
-    // Who takes the first message: the root, or — in a chat the user routes —
-    // the first agent attached, matching `startNewChat`.
-    const firstAnswerer = router === 'coordinator' ? null : (existingAgentIds[0] ?? null)
-
-    const { chatId, runId } = jobRunsRepo.createLocalChatAndRun({
-      userId,
-      jobId,
-      title: job.title,
-      prompt: job.prompt,
-      rootAgentId,
-      router,
-      modeId: job.modeId,
-      providerId: mode?.providerId ?? null,
-      modelId: mode?.modelId ?? null,
-      // The root is the chat's own counterparty, not one of its attached
-      // agents; everything else is attached.
-      onDemandAgentIds: existingAgentIds.filter((id) => id !== rootAgentId),
-      // The MCP servers are the **model's** tools; an agent cannot call them.
-      // So they are attached whenever the model is the one answering — which
-      // `router === 'coordinator'` does not cover: a job with connectors and no
-      // agent at all is `direct`, to the model, and dropping its servers there
-      // would run it toolless and report success.
-      onDemandMcpIds: answerer.kind === 'model' ? filteredMcpIds : []
-    })
-
-    // The task, **after** the chat and the run exist.
-    //
-    // §5.8 sketches this the other way round — create the task, then start it —
-    // and that inversion is right, but it belongs with step 11, where the
-    // adapter turns `start` into one dispatch for both executors. Creating the
-    // task first *today* would mean every refusal above (an unresolvable agent,
-    // a deleted MCP, a missing mode) left an orphan task sitting in `new` that
-    // nothing would ever run or clear. Those refusals are load-bearing and are
-    // deliberately left untouched.
-    const task = taskService.create(userId, {
-      title: job.title,
-      goal: job.prompt,
-      router,
-      origin: 'local',
-      executor: 'desktop',
-      chatId,
-      assigneeAgentId: firstAnswerer,
-      assigneeName: firstAnswerer ? (agentRepo.getOwned(userId, firstAnswerer)?.name ?? null) : null,
-      assigneeKind: firstAnswerer ? 'agent' : 'model',
-      priority: parseTaskPriority(job.cinnaPriority),
-      jobId,
-      jobRunId: runId
-    })
-    jobRunsRepo.setTaskId(runId, task.id)
-    // The run is already `running` — `createLocalChatAndRun` writes it that way
-    // — so the task says the same thing rather than sitting at `new` until the
-    // first delta arrives.
-    taskService.start(userId, task.id, { chatId })
-
-    logger.info('job executed (local)', {
-      jobId,
-      chatId,
-      runId,
-      taskId: task.id,
-      router,
-      agents: existingAgentIds.length,
-      mcps: filteredMcpIds.length
-    })
-
-    return {
-      chatId,
-      runId,
-      taskId: task.id,
-      prompt: job.prompt,
-      agentId: firstAnswerer,
-      modeId: job.modeId
-    }
+    const executor = executorFor(requireJob(userId, jobId))
+    if (!executor.prepareRendererTurn) throw new JobError('unsupported_type', 'executeLocal called on non-local job')
+    return executor.prepareRendererTurn({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, requireJob(userId, jobId))
   },
 
   /**
@@ -736,105 +511,9 @@ export const jobService = {
     cinnaShortCode: string | null
   }> {
     const job = requireJob(userId, jobId)
-    if (job.type !== 'cinna_task') {
-      throw new JobError('unsupported_type', 'executeCinnaTask called on non-cinna job')
-    }
-    if (job.router != null || job.script != null || job.budget != null) jobRuntimeDefinition(job)
-    if (!job.cinnaAgentId) {
-      throw new JobError('missing_dependency', 'Cinna agent is required to run this job')
-    }
-    // **Before the task exists.** The hand-over checks this too, and by then the
-    // task has been created — so a profile that is not connected to a service
-    // minted a task and soft-deleted it on *every* press of Run. A soft delete
-    // is not a rollback: the row survives for ever and travels to the user's
-    // other devices as an ordinary upsert carrying `deleted: true`. The task
-    // still cannot be created after the adapter call (`adapter.create` is handed
-    // its id as `external_ref`, which is what makes a retried create
-    // idempotent), so the check moves rather than the creation.
-    if (!(await taskSyncService.preferredAdapterId(userId))) {
-      throw new JobError(
-        'incomplete_setup',
-        "This job runs on a service, and this profile isn't connected to one."
-      )
-    }
-
-    const task = taskService.create(userId, {
-      title: job.title,
-      goal: job.prompt,
-      // The service routes the work; the desktop's own routers describe a chat,
-      // and this task has none.
-      router: 'direct',
-      origin: 'local',
-      executor: 'desktop',
-      // **An id in the space its kind names.** `remote_agent` is an agent that
-      // exists on the service and nowhere here, which is exactly what a job's
-      // configured agent is — there is no local `agents` row to point at.
-      assigneeAgentId: job.cinnaAgentId,
-      assigneeName: null,
-      assigneeKind: 'remote_agent',
-      priority: parseTaskPriority(job.cinnaPriority),
-      jobId
-    })
-
-    let handed: TaskDto
-    try {
-      handed = await taskSyncService.handOff(userId, task.id)
-    } catch (err) {
-      // Soft-deleted rather than left: a task nothing picked up is not a task,
-      // and leaving it would put a permanently `new` row on the user's other
-      // devices for a run that never happened.
-      //
-      // **The cleanup may not replace the failure.** It is a second write on a
-      // path that has already failed once, and a throw from it would surface
-      // instead of the hand-over's own error — so the user would read "Task not
-      // found" where the truth was "that service refused the work". The
-      // original is what the surface needs; an orphan is what the log gets.
-      // **Not for a hand-over that succeeded.** `handed_over` means the service
-      // took the work and only the local record of it was lost, so there is
-      // nothing to clean up and an agent is running right now. Deleting here
-      // would be the app arguing with a row a peer has already removed.
-      if (err instanceof TaskError && (err.code === 'handed_over' || err.code === 'handoff_uncertain')) throw err
-      try {
-        taskService.remove(userId, task.id)
-      } catch (cleanupErr) {
-        logger.warn('a refused hand-over left its task behind', {
-          jobId,
-          taskId: task.id,
-          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
-        })
-      }
-      throw err
-    }
-
-    const run = jobRunsRepo.create({
-      jobId,
-      userId,
-      type: 'cinna_task',
-      taskId: task.id,
-      // The two columns the run row keeps for its deep link. They are fed from
-      // the binding rather than from a server response, so a second adapter
-      // fills them the same way — the names are older than the seam and a
-      // rename belongs with the rest of `job.type` in phase 7.
-      cinnaTaskId: handed.remote?.id ?? null,
-      cinnaShortCode: handed.remote?.key ?? null,
-      status: jobRunStatusForTask(handed.status)
-    })
-    taskService.linkJobRun(userId, task.id, run.id)
-
-    logger.info('job executed (handed to a service)', {
-      jobId,
-      runId: run.id,
-      taskId: task.id,
-      remoteId: handed.remote?.id,
-      shortCode: handed.remote?.key
-    })
-
-    return {
-      runId: run.id,
-      taskId: task.id,
-      cinnaTaskId: handed.remote?.id ?? '',
-      cinnaShortCode: handed.remote?.key ?? null
-    }
+    const executor = executorFor(job)
+    if (!executor.executeRemote) throw new JobError('unsupported_type', 'executeCinnaTask called on non-cinna job')
+    return executor.executeRemote({ profileUserId: userId, settingsUserId: getSettingsScopeUserId() }, job)
   },
 
   /**
@@ -859,65 +538,46 @@ export const jobService = {
    * Skips the network for an already-terminal run unless `force` is set, which
    * is the manual refresh.
    */
-  async refreshCinnaRun(
+  async refreshRun(
     userId: string,
     runId: string,
     options: { force?: boolean } = {}
   ): Promise<JobRunRowWithMeta> {
     const run = jobRunsRepo.getById(userId, runId)
     if (!run) throw new JobError('not_found', 'Job run not found')
-    if (run.type !== 'cinna_task') return enrichRun(userId, run)
-    const isTerminal =
-      run.status === 'succeeded' || run.status === 'failed' || run.status === 'cancelled'
-    if (isTerminal && !options.force) {
-      return enrichRun(userId, run)
-    }
-
-    const taskId = run.taskId ?? (await adoptRemoteRun(userId, run))
-    if (!taskId) return enrichRun(userId, run)
-
-    logger.info('refreshing a run executing on a service', {
-      runId,
-      taskId,
-      prevStatus: run.status,
-      force: options.force ?? false
-    })
+    const saved = enrichRun(userId, run)
+    if (!options.force && !['pending', 'running'].includes(run.status)) return saved
+    if (saved.refreshMode === 'handoff_review') throw new JobError('invalid_input', 'Open this task to review its pending handoff.')
+    if (saved.refreshMode === 'none') return saved
+    const currentConnection = taskSyncService.captureConnection(userId)
+    const taskId = run.taskId ?? await adoptRemoteRun(userId, run, options)
+    const currentRun = jobRunsRepo.getById(userId, runId)
+    if (!currentRun) throw new JobError('not_found', 'Job run not found')
+    if (!taskId || !currentConnection()) return enrichRun(userId, currentRun)
+    const before = taskRepo.getById(userId, taskId)
+    if (!before || before.deletedAt || before.executor !== 'remote' || !before.remoteAdapter || !before.remoteId) return enrichRun(userId, currentRun)
+    if (taskHandoffRepo.unresolved(userId, taskId)) throw new JobError('invalid_input', 'Open this task to review its pending handoff.')
     const task = await taskSyncService.pullOne(userId, taskId)
-    if (task) {
-      // The accepted remote snapshot projects only its matching active attempt.
-      // Repeating that write here would erase its error and overwrite history.
-      logger.info('run refreshed from its task', { runId, taskStatus: task.status })
-    } else {
-      // **A null from `pullOne` is three different things**, and only one of
-      // them is news: the service could not be reached (say nothing and try
-      // again later), the task is no longer bound to anything, or the task row
-      // has gone. Telling them apart matters because the second is terminal —
-      // the pull unbinds on `not_ours`, which is a 404 or an ownership refusal,
-      // and a run whose work has been deleted on the service will never move
-      // again. Left as it was, it polled every five seconds for the life of the
-      // window with the job's badge lit, and every manual Refresh reported
-      // success.
-      //
-      // Asked of the row rather than returned by `pullOne`, because "is this
-      // task still bound" is the fact that decides it and the row is where that
-      // fact lives.
-      const currentTask = taskRepo.getById(userId, taskId)
-      const stillBound = currentTask?.remoteAdapter ?? null
-      if (!stillBound) {
-        const currentRun = jobRunsRepo.getById(userId, runId)
-        if (currentRun && currentRun.taskId === taskId && ['pending', 'running'].includes(currentRun.status) &&
-          (!currentTask || currentRun.localChatId === currentTask.chatId)) {
-          jobRunsRepo.updateStatus(runId, 'failed')
-        }
-        logger.warn('a run lost the work it was executing', { runId, taskId })
-        throw new JobError(
-          'missing_dependency',
-          'That task no longer exists on the service that was running it.'
-        )
-      }
+    const fresh = jobRunsRepo.getById(userId, runId)
+    if (!fresh) throw new JobError('not_found', 'Job run not found')
+    if (!currentConnection()) return enrichRun(userId, fresh)
+    const after = taskRepo.getById(userId, taskId)
+    // Null may mean unavailable, a superseded binding, or desktop takeover.
+    // Only a still-owned remote attempt that was unbound has lost its work.
+    if (!task && after && !after.deletedAt && after.executor === 'remote' &&
+        !after.remoteAdapter && !after.remoteId && after.executorDevice === before.executorDevice &&
+        after.chatId === before.chatId && after.jobRunId === before.jobRunId &&
+        fresh.taskId === taskId && after.jobRunId === runId && fresh.localChatId === after.chatId &&
+        !taskHandoffRepo.unresolved(userId, taskId)) {
+      throw new JobError('missing_dependency', 'That task no longer exists on the service that was running it.')
     }
-    const fresh = jobRunsRepo.getById(userId, runId) ?? run
+    // The task service already projects only its matching active remote attempt.
     return enrichRun(userId, fresh)
+  },
+
+  /** Compatibility method for existing internal callers. */
+  refreshCinnaRun(userId: string, runId: string, options: { force?: boolean } = {}): Promise<JobRunRowWithMeta> {
+    return this.refreshRun(userId, runId, options)
   },
 
   /**
@@ -1086,8 +746,10 @@ export const jobService = {
  * profile can use, which is the same "leave it alone" the old code reached by
  * returning the run unchanged.
  */
-async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | null> {
-  if (!run.cinnaTaskId) return null
+async function adoptRemoteRun(userId: string, run: JobRunRow, options: { force?: boolean }): Promise<string | null> {
+  const currentConnection = taskSyncService.captureConnection(userId)
+  const remoteId = run.cinnaTaskId
+  if (!remoteId) return null
   const adapterId = await taskSyncService.preferredAdapterId(userId)
   if (!adapterId) return null
   // **Read the run again on this side of the await.** Asking the registry which
@@ -1099,14 +761,17 @@ async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | 
   // while the mutation is in flight. It is one read, and "nothing does this
   // today" is how the two duplicated-row defects earlier in this phase started.
   const fresh = jobRunsRepo.getById(userId, run.id)
-  if (fresh?.taskId) return fresh.taskId
+  if (!currentConnection() || !fresh || fresh.jobId !== run.jobId || fresh.cinnaTaskId !== run.cinnaTaskId ||
+      (!options.force && !['pending', 'running'].includes(fresh.status))) return null
+  if (fresh.taskId) return fresh.taskId
+  return getDb().transaction(() => {
   // **And the collision this run knows nothing about.** A pull can already have
   // made a replica for the same remote id — that is what a pull *does* — and
   // binding a second local task to it would leave two tasks pushing to one
   // remote task, each overwriting the other. The re-read above only stops this
   // run adopting itself twice. Latent while nothing schedules `pull`; it comes
   // alive on the same step that owes `pull` its in-flight dedupe.
-  const already = taskRepo.getByRemote(userId, adapterId, run.cinnaTaskId)
+  const already = taskRepo.getByRemote(userId, adapterId, remoteId)
   if (already) {
     jobRunsRepo.setTaskId(run.id, already.id)
     if (!already.jobRunId) taskService.linkJobRun(userId, already.id, run.id)
@@ -1129,7 +794,7 @@ async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | 
   })
   taskService.bindRemote(userId, task.id, {
     adapter: adapterId,
-    id: run.cinnaTaskId,
+    id: remoteId,
     key: run.cinnaShortCode,
     url: null,
     state: {}
@@ -1141,4 +806,5 @@ async function adoptRemoteRun(userId: string, run: JobRunRow): Promise<string | 
     adapter: adapterId
   })
   return task.id
+  })
 }

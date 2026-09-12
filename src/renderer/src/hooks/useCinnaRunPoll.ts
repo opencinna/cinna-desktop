@@ -4,18 +4,13 @@ import { useRefreshCinnaRun } from './useCinna'
 
 const POLL_INTERVAL_MS = 5_000
 
-function isNonTerminalCinna(run: JobRunData): boolean {
-  if (run.type !== 'cinna_task') return false
+function needsLegacyAdoption(run: JobRunData): boolean {
+  if (run.refreshMode !== 'legacy_adoption') return false
   return run.status === 'pending' || run.status === 'running'
 }
 
-/**
- * Poll cinna-core for any non-terminal cinna_task runs in `runs`. Polls every 5s
- * **only while the window is visible**, pausing entirely when hidden and firing
- * an immediate catch-up tick on return — the desktop analog of the mobile app's
- * foreground-only polling. Keeping a background tier meant the poll could start a
- * token refresh just as the machine slept, orphaning it (→ rotation-replay
- * self-logout). Stops automatically when no non-terminal runs remain.
+/** Link active legacy run history to Tasks while visible. Bound work is refreshed
+ * by the profile task scheduler; this timer stops as soon as adoption succeeds.
  */
 export function useCinnaRunPoll(runs: JobRunData[] | undefined): void {
   const refresh = useRefreshCinnaRun()
@@ -23,7 +18,7 @@ export function useCinnaRunPoll(runs: JobRunData[] | undefined): void {
   // interval on every list update — the timer simply reads the freshest ids
   // when it fires.
   const pendingIds = useMemo(
-    () => (runs ?? []).filter(isNonTerminalCinna).map((r) => r.id),
+    () => (runs ?? []).filter(needsLegacyAdoption).map((r) => r.id),
     [runs]
   )
   const pendingIdsRef = useRef<string[]>(pendingIds)

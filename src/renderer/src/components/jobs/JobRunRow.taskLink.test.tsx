@@ -61,6 +61,7 @@ const { JobRunRow } = await import('./JobRunRow')
 
 function run(overrides: Partial<JobRunData> = {}): JobRunData {
   return {
+    refreshMode: 'none',
     id: 'run-1',
     jobId: 'job-1',
     userId: 'u1',

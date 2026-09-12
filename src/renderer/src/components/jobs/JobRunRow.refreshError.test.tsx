@@ -49,6 +49,7 @@ const WIRE = "Error invoking remote method 'job:refresh-run': JobError: " + SENT
 
 function run(): JobRunData {
   return {
+    refreshMode: 'bound_task',
     id: 'run-1',
     jobId: 'job-1',
     type: 'cinna_task',
@@ -90,4 +91,15 @@ describe('a manual Cinna refresh that fails', () => {
     refreshAndFail(new Error('The refresh was cancelled.'))
     expect((logged[0].data as { error: string }).error).toBe('The refresh was cancelled.')
   })
+})
+
+it('refreshes a local-origin attempt using its current binding capability', () => {
+  render(createElement(JobRunRow, { run: { ...run(), type: 'local' } }))
+  fireEvent.click(screen.getByRole('button', { name: /refresh status/i }))
+  expect(refreshMutate).toHaveBeenCalledWith({ runId: 'run-1', force: true }, expect.any(Object))
+  expect(screen.queryByRole('button', { name: 'Open on Cinna' })).toBeNull()
+})
+it.each(['none', 'handoff_review'] as const)('offers no read refresh for %s', (refreshMode) => {
+  render(createElement(JobRunRow, { run: { ...run(), refreshMode } }))
+  expect(screen.queryByRole('button', { name: /refresh status/i })).toBeNull()
 })
