@@ -70,6 +70,7 @@ import { StreamPartsAccumulator, type MessageLike } from '../../streamPartsAccum
 import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
+import type { AgentEngine } from '../../../../shared/engine'
 import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput } from '../driver'
 import { AcpMessageStream } from './acpMessages'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
@@ -129,6 +130,16 @@ export interface AcpDriverDeps {
   }): { answered: Promise<RequestResolution>; cancel: () => void }
   /** Settle a parked ask; false when nothing waits on it. */
   resolveRequest(requestId: string, resolution: RequestResolution): boolean
+  /**
+   * This machine's Default Runtime — what a folder that names no engine runs
+   * on.
+   *
+   * A dependency rather than an import, like everything else this driver needs
+   * from the rest of the app: the golden suites build a driver with no settings
+   * store behind it, and a direct read would make every one of them depend on
+   * one. Absent means the historical default, which is what those suites assert.
+   */
+  defaultEngine?(): AgentEngine
   /** Take the per-agent lock for the streaming part of the turn. */
   withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal): Promise<T>
   /** Override the turn ceiling. Tests only. */
@@ -162,7 +173,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
         // agent to Claude in the Runtime card is asking "can it run now", and
         // the row may not have been rescanned yet. `folder` is non-null here —
         // `folderReadiness` refused it above otherwise.
-        const launcher = deps.launcher(launcherOfFolder(folder?.runtime))
+        const launcher = deps.launcher(launcherOfFolder(folder?.runtime, deps.defaultEngine?.()))
         if (!launcher) return { state: 'invalid', reason: 'This agent declares an unsupported engine. Choose a supported runtime.' }
         if (!launcher.readiness) return state
         return await launcher.readiness(options)
@@ -190,7 +201,10 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       if (folder && (folder.readiness === 'invalid' || folder.readiness === 'contract_too_new')) {
         return fail(folder.readinessReason ?? 'This agent’s folder is not in a state it can be run from.')
       }
-      const launcherId = runtime.type === 'folder' ? launcherOfFolder(runtime.folder.runtime) : 'custom'
+      const launcherId =
+        runtime.type === 'folder'
+          ? launcherOfFolder(runtime.folder.runtime, deps.defaultEngine?.())
+          : 'custom'
       const launcher = deps.launcher(launcherId)
       if (!launcher) {
         logger.warn('an agent names an engine this build cannot run', {

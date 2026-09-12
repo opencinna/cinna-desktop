@@ -2,7 +2,12 @@ import { userActivation } from '../auth/activation'
 import { engineBinaryService } from '../engine/engineBinaryService'
 import { getMainWindow } from '../index'
 import { ipcHandle } from './_wrap'
-import { ENGINE_BINARY_CHANNEL, type EngineBinaryState } from '../../shared/engine'
+import { defaultEngineService } from '../services/localAgents/defaultEngineService'
+import {
+  ENGINE_BINARY_CHANNEL,
+  type DefaultEngineDto,
+  type EngineBinaryState
+} from '../../shared/engine'
 
 /**
  * The local engine's **binary**: whether this machine has one, and asking again.
@@ -43,5 +48,26 @@ export function registerEngineHandlers(): void {
   ipcHandle('engine:resolve', (): Promise<EngineBinaryState> => {
     userActivation.requireActivated()
     return engineBinaryService.refresh()
+  })
+
+  /**
+   * This machine's **Default Runtime**, resolved.
+   *
+   * Resolved here rather than derived in the renderer from the setting plus the
+   * detected tools, even though the renderer holds both. Two reasons, and the
+   * first is the one this area has been bitten by: a panel that computes what
+   * the launcher will do is a second implementation of it, and the two have
+   * drifted before — over a credential reference, and over a model tier. The
+   * second is movement: derived in the renderer, the answer would be "AI
+   * credentials" for the fraction of a second detection is in flight and then
+   * flip, swapping a picker under the pointer (ux_rules rule 1). One value that
+   * is `undefined` until it is known cannot do that.
+   *
+   * It awaits detection, so it is the exact answer rather than the snapshot
+   * `runtimeService` reads.
+   */
+  ipcHandle('engine:default-runtime', (): Promise<DefaultEngineDto> => {
+    userActivation.requireActivated()
+    return defaultEngineService.resolved()
   })
 }

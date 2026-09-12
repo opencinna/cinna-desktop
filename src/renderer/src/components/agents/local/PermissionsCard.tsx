@@ -11,10 +11,14 @@ import { DESKTOP_STATE_FILE } from '../../../../../shared/kit/manifest'
 import { describePermissionAction } from '../../../../../shared/localAgentRequests'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import {
+  DEFAULT_AGENT_ENGINE,
   DEFAULT_CLAUDE_APPROVAL,
+  effectiveEngine,
+  isAgentEngine,
   isClaudeApproval,
   type ClaudeApproval
 } from '../../../../../shared/engine'
+import { useDefaultRuntime } from '../../../hooks/useEngine'
 import { AgentCard } from './AgentCard'
 import { FIELD, LABEL } from './fieldClasses'
 
@@ -77,8 +81,37 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
    * story is a different one — the CLI's own classifier sits in front of the
    * desktop's — so the card says that story rather than the OpenCode
    * profile's, which would describe rules that are not in force.
+   *
+   * **The effective engine, not the declared one.** An agent that names no
+   * engine on a machine whose Default Runtime is Claude Agent runs on Claude
+   * Code, with the CLI's reviewer in front of every ask — and a card reading
+   * only the manifest would describe the OpenCode profile and hide the
+   * Approvals control that is actually in force. `effectiveEngine` is the
+   * shared rule the launcher applies, so this card and the turn cannot
+   * disagree about whose permission system is running.
    */
-  const onClaude = agent.runtime?.engine === 'claude'
+  const { data: defaultRuntime } = useDefaultRuntime()
+  const onClaude =
+    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
+  /**
+   * Nothing can answer "whose permission system" yet: the folder leaves the
+   * engine to this machine, and this machine has not said.
+   *
+   * The claim waits rather than being guessed. Guessing OpenCode renders a
+   * paragraph about a profile and then replaces it with a paragraph *and a
+   * select*, pushing the grants list down a tenth of a second after the tab
+   * opens (ux_rules rule 1) — and on a security surface the retracted sentence
+   * is the one that describes who approves a command.
+   *
+   * Only for an agent whose folder settles nothing: one that names an engine, a
+   * credential or a model is answered by `effectiveEngine` without the machine
+   * default, so it never waits.
+   */
+  const engineUnknown =
+    defaultRuntime === undefined &&
+    !isAgentEngine(agent.runtime?.engine) &&
+    (agent.runtime?.credential ?? '') === '' &&
+    (agent.runtime?.model ?? '') === ''
   const { data: grants } = useLocalAgentGrants(agent.id)
   // Owned by the card rather than by a row: a row unmounts the moment the
   // grant it renders is forgotten, and a mutation owned there would drop its
@@ -144,7 +177,18 @@ export function PermissionsCard({ agent }: { agent: LocalAgentDto }): React.JSX.
         ) : undefined
       }
     >
-      {onClaude ? (
+      {engineUnknown ? (
+        /*
+          Neither claim, and no movement either: the two branches are different
+          heights anyway, so what is reserved here is the smaller of them — the
+          grants list below shifts once when the answer lands, which is a
+          different thing from a sentence being *retracted*. One line, so the
+          tab is never blank.
+        */
+        <div className="min-h-[3.25rem] text-[10px] italic text-[var(--color-text-muted)]">
+          Reading which runtime this agent uses…
+        </div>
+      ) : onClaude ? (
         <ClaudeApprovals agent={agent} />
       ) : (
         <OpenCodeProfile bare={bare} overriddenNames={overriddenNames} />

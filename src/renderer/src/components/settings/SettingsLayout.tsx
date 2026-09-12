@@ -1,5 +1,7 @@
 import { useEffect, type ReactNode, type RefObject } from 'react'
-import { AlertTriangle, CheckCircle2, Circle } from 'lucide-react'
+import { createPortal } from 'react-dom'
+import { AlertTriangle, CheckCircle2, Circle, HelpCircle } from 'lucide-react'
+import { usePopover } from '../ui/usePopover'
 
 /**
  * The shell a Settings tab is built from.
@@ -34,19 +36,27 @@ import { AlertTriangle, CheckCircle2, Circle } from 'lucide-react'
  */
 export function SettingsSection({
   title,
+  info,
   action,
   children
 }: {
   title: string
+  /**
+   * The section's explanation, behind a {@link SettingsInfoTip} beside the
+   * title. Prose that every visit after the first has to scroll past belongs
+   * here rather than in a paragraph under the heading.
+   */
+  info?: ReactNode
   action?: ReactNode
   children: ReactNode
 }): React.JSX.Element {
   return (
     <section>
-      <div className="mb-2 flex min-h-[26px] items-center gap-3">
+      <div className="mb-2 flex min-h-[26px] items-center gap-1.5">
         <h2 className="text-[14px] font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
           {title}
         </h2>
+        {info}
         {action ? (
           <>
             <div className="flex-1" />
@@ -376,4 +386,78 @@ export function useDialogChrome({
       window.removeEventListener('mousedown', onClick)
     }
   }, [modalRef, pending, onDismiss])
+}
+
+/**
+ * The `(?)` beside a title or a label, and the paragraph behind it.
+ *
+ * **Why the prose moved in here.** A settings screen is read once and used many
+ * times: the sentence that explains *why* a setting exists is exactly right on
+ * the first visit and is scrollage on every one after it. Three explanatory
+ * paragraphs stacked above three controls pushed the controls themselves below
+ * the fold, which is the thing ux_rules rule 2 is about — a page is a control
+ * surface first, and what the user can *know* is discoverable rather than
+ * displayed.
+ *
+ * What stays outside it: anything that changes, and anything that is a
+ * consequence rather than an explanation. A warning about *this machine's*
+ * state, a save error, the version of a detected tool — those are facts the user
+ * must not have to hunt for, and they keep their reserved slots on the surface.
+ * A tip holds only the standing explanation, so nothing in it can move.
+ *
+ * Click to open, not hover: hover is not an affordance on a touchpad's first
+ * pass (rule 11), and a popover that opens on hover cannot be read by anyone
+ * who needs to move the pointer into it. Escape and an outside click close it,
+ * through the same `usePopover` every menu on this surface uses.
+ */
+export function SettingsInfoTip({
+  label,
+  children
+}: {
+  /** The accessible name — "About the default runtime". Never bare "?". */
+  label: string
+  children: ReactNode
+}): React.JSX.Element {
+  const popover = usePopover<HTMLButtonElement, HTMLDivElement>('below-right')
+  useEffect(() => {
+    if (!popover.open) return
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') popover.setOpen(false)
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [popover])
+  return (
+    <>
+      <button
+        ref={popover.triggerRef}
+        type="button"
+        aria-label={label}
+        aria-expanded={popover.open}
+        onClick={() => popover.setOpen(!popover.open)}
+        className={`inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition-colors
+          hover:text-[var(--color-text)] ${
+            popover.open ? 'text-[var(--color-text)]' : 'text-[var(--color-text-muted)]'
+          }`}
+      >
+        <HelpCircle size={14} />
+      </button>
+      {popover.open &&
+        popover.style &&
+        createPortal(
+          <div
+            ref={popover.popoverRef}
+            role="dialog"
+            aria-label={label}
+            style={popover.style}
+            className="app-popover-surface z-50 w-[22rem] max-w-[calc(100vw-2rem)] space-y-2 rounded-lg
+              border border-[var(--color-border)] p-3 text-[13px] leading-relaxed
+              text-[var(--color-text-secondary)] shadow-xl"
+          >
+            {children}
+          </div>,
+          document.body
+        )}
+    </>
+  )
 }

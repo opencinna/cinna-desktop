@@ -10,12 +10,19 @@ import { useDefaultChatMode } from '../../../hooks/useChatModes'
 import { useModels } from '../../../hooks/useModels'
 import { useProviders } from '../../../hooks/useProviders'
 import { useClaudeAuth, useLocalTools } from '../../../hooks/useLocalTools'
-import { useEngineBinary } from '../../../hooks/useEngine'
+import { useDefaultRuntime, useEngineBinary } from '../../../hooks/useEngine'
 import { useAppSettings, useSetAppSetting } from '../../../hooks/useAppSettings'
 import { credentialOptionLabel } from '../../../utils/credentialLabel'
 import { findCredentialByReference, isCredentialUsable } from '../../../../../shared/credentials'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
-import { claudeModelForComplexity, isAgentEngine, type AgentEngine, type ClaudeAuthState } from '../../../../../shared/engine'
+import {
+  claudeModelForComplexity,
+  DEFAULT_AGENT_ENGINE,
+  effectiveEngine,
+  isAgentEngine,
+  type AgentEngine,
+  type ClaudeAuthState
+} from '../../../../../shared/engine'
 import { FIELD, LABEL } from './fieldClasses'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isStaleWriteError } from '../../../../../shared/localAgents'
@@ -534,7 +541,58 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * early and branched on rather than woven through each one.
    */
   const unsupportedEngine = agent.runtime?.engine && !isAgentEngine(agent.runtime.engine) ? agent.runtime.engine : null
-  const onClaude = declaredEngine === 'claude'
+  /**
+   * **This machine's Default Runtime**, resolved by main and read here as one
+   * value.
+   *
+   * Not assembled from the setting and the detected tools, which this component
+   * also has: that sum is `resolveDefaultEngine`, the launcher runs it, and a
+   * second copy here is the arrangement that has twice let this panel name a
+   * runtime the engine did not build. `undefined` is *not answered yet*, which
+   * is a third state the panel needs — see `engineUnknown`.
+   */
+  const { data: defaultRuntime } = useDefaultRuntime()
+  /**
+   * The engine the **folder itself** settles, or null when it leaves it to this
+   * machine.
+   *
+   * The same two rungs `effectiveEngine` applies before the default: a declared
+   * engine, then a declared credential or model — either of which is an
+   * OpenCode-shaped answer, because the Claude path spends no credential and
+   * knows no catalogue id. Written out rather than taken from the helper
+   * because the panel needs the *intermediate* answer: whether the file decided,
+   * which is what tells it whether it may claim anything before the machine
+   * default arrives.
+   */
+  const engineFromFile: AgentEngine | null =
+    declaredEngine ??
+    ((agent.runtime?.credential ?? '') !== '' || (agent.runtime?.model ?? '') !== ''
+      ? 'opencode'
+      : null)
+  /**
+   * Nothing can answer "which engine" yet: the folder leaves it to the machine
+   * and the machine has not said.
+   *
+   * The panel withholds its claim rather than guessing, for the reason
+   * `pickerUnknown` exists one screen down — guessing `opencode` renders the
+   * tier-or-model pickers and the OpenCode engine column, and the query then
+   * replaces both a moment later, swapping controls out from under the pointer
+   * (ux_rules rule 1).
+   */
+  const engineUnknown = engineFromFile === null && defaultRuntime === undefined
+  /**
+   * What this agent actually runs on — the file first, this machine second.
+   *
+   * Through the **shared** helper, which `runtimeService.resolve` and the ACP
+   * driver's dispatch also call, so the panel and the launcher cannot disagree
+   * about an agent that names no engine. Everything below branches on this
+   * rather than on the declared value: an agent that declares nothing on a
+   * machine defaulting to Claude Agent *is* a Claude agent, and a panel that
+   * read only the file would explain it with a credential ladder about a key it
+   * will never spend.
+   */
+  const onClaude =
+    effectiveEngine(agent.runtime, defaultRuntime?.engine ?? DEFAULT_AGENT_ENGINE) === 'claude'
   /**
    * The `claude` this machine has, or undefined.
    *
@@ -726,7 +784,8 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    * happening (rule 1). So neither picker is claimed until one is known.
    */
   const pickerUnknown =
-    !onClaude && declaredView === null && view?.agentId !== agent.id && !settingsLoaded
+    engineUnknown ||
+    (!onClaude && declaredView === null && view?.agentId !== agent.id && !settingsLoaded)
 
   /**
    * The Default runtime, flattened the way `runtimeService.resolveDefault`
@@ -945,12 +1004,19 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       if (toolsUnknown) return null
       if (!claudeTool) {
         return {
-          // Names the remedy and stops there. Installing Claude Code is
-          // something only the user can do, and this app must not offer to.
-          // Names both, for the same reason as the healthy line above — and
-          // this is now the *only* place the full explanation lives, since the
-          // Engine column was cut to "Not installed" to stop it truncating.
-          text: 'Claude Agent needs Claude Code, which is not installed on this machine.',
+          /*
+            Names the remedy and where it is. Settings → Local Agents → Runtime
+            now installs Claude Code — the vendor's own installer, behind a
+            confirm that shows the command — so the sentence that used to stop
+            at "not installed" can say what to do about it. It does not offer
+            the install *here*: this panel is a viewer over one agent's runtime,
+            and a machine-wide install button on it would be the second place a
+            single fact is acted on.
+
+            This is still the only place the full explanation lives, since the
+            Engine column was cut to "Not installed" to stop it truncating.
+          */
+          text: 'Claude Agent needs Claude Code. Install it in Settings → Local Agents → Runtime.',
           tone: DANGER
         }
       }
@@ -1092,7 +1158,11 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       return {
         text: declaredComplexity
           ? `${WORK_COMPLEXITY_LABELS[declaredComplexity]} — ${WORK_COMPLEXITY_HINTS[declaredComplexity]}, on ${nameOf(choice.modelId)}.`
-          : `Default — follows your default chat mode, on ${nameOf(choice.modelId)}.`,
+          : // "the Default runtime", not "your default chat mode": since this
+            // machine gained a pinned credential — and now a pinned engine —
+            // the chat mode is only one of the things the default can be, and
+            // naming it outright told users on a pin the wrong source.
+            `Default — follows the Default runtime, on ${nameOf(choice.modelId)}.`,
         tone: NOTE
       }
     }
@@ -1437,16 +1507,49 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
                 : selected
                   ? selected.name
                   : fallbackProvider
-                    ? `Default: ${fallbackProvider.name}`
+                    ? `Default runtime: ${fallbackProvider.name}`
                     : undefined
             }
             disabled={disabled}
-            value={unsupportedEngine ? 'unsupported-engine' : onClaude ? CLAUDE_OPTION : (selected?.name ?? '')}
+            /*
+              **What the file declares, not what it runs on.** `onClaude` is now
+              true for an agent that declares nothing on a machine whose Default
+              Runtime is Claude Agent — and that agent is on the *Default*, which
+              is the option that has to be selected. Reading the effective engine
+              here showed `Claude Agent` over a manifest that names no engine, so
+              the control claimed a pin the file does not hold and clearing it
+              was impossible.
+            */
+            value={
+              unsupportedEngine
+                ? 'unsupported-engine'
+                : declaredEngine === 'claude'
+                  ? CLAUDE_OPTION
+                  : (selected?.name ?? '')
+            }
             onChange={(event) => changeRuntimeTarget(event.target.value)}
           >
             {unsupportedEngine && <option value="unsupported-engine" disabled>Unsupported engine: {unsupportedEngine}</option>}
+            {/*
+              **"Default runtime", the same words Settings uses for the setting
+              this follows** — and then what it currently resolves to, which is
+              either the Claude Agent runtime or the credential the AI-credentials
+              one spends. It named only the credential before, which was the whole
+              truth while there was one runtime and is now the wrong half of it on
+              a machine defaulting to Claude.
+
+              Silent about the name until the machine has answered: claiming
+              `(none set)` while the query is in flight would be a retraction a
+              moment later, on the panel's permanent visible state.
+            */}
             <option value="">
-              {fallbackProvider ? `Default (${fallbackProvider.name})` : 'Default (none set)'}
+              {engineUnknown
+                ? 'Default runtime'
+                : onClaude
+                  ? 'Default runtime (Claude Agent)'
+                  : fallbackProvider
+                    ? `Default runtime (${fallbackProvider.name})`
+                    : 'Default runtime (none set)'}
             </option>
             {/*
               **Two honest lists behind one separator, not one list pretending.**
@@ -1460,7 +1563,14 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
               The status line beneath may still say “Claude Code 2.1.266”,
               because that is a statement about the user's machine.
             */}
-            {(claudeTool || onClaude) && (
+            {/*
+              Offered where a `claude` was detected, or where the **file** names
+              it — not where it is merely this machine's default. A default that
+              resolved to Claude Agent already appears as the first option, and
+              a second entry for it on a machine with no `claude` would be an
+              option that fails after the click (ux_rules rule 4).
+            */}
+            {(claudeTool || declaredEngine === 'claude') && (
               <optgroup label="On this machine">
                 <option value={CLAUDE_OPTION}>Claude Agent</option>
               </optgroup>

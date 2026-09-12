@@ -1,8 +1,14 @@
 import { userActivation } from '../auth/activation'
 import { appSettingsService } from '../services/appSettingsService'
 import { syncTrayFromSettings } from '../services/traySync'
+import { localAgentService } from '../services/localAgents/localAgentService'
+import { defaultEngineService } from '../services/localAgents/defaultEngineService'
+import { getSettingsScopeUserId } from '../auth/scope'
+import { createLogger } from '../logger/logger'
 import type { AppSettingsSchema } from '../../shared/appSettings'
 import { ipcHandle } from './_wrap'
+
+const logger = createLogger('settings-ipc')
 
 /**
  * IPC for the installation-global app settings KV store. The whole schema
@@ -19,6 +25,20 @@ import { ipcHandle } from './_wrap'
 export function registerSettingsHandlers(): void {
   ipcHandle('settings:get-all', async (): Promise<AppSettingsSchema> => {
     userActivation.requireActivated()
+    /**
+     * **Wait for the Default runtime to be decided before answering.**
+     *
+     * On the first launch of an install that setting is `''` — "not decided
+     * yet" — and deciding it means asking the machine what it has, which is a
+     * login-shell probe of about a second. The renderer caches this answer, so
+     * a read that beat the decision would leave the Runtime picker showing
+     * *nothing selected* for the rest of the session, on exactly the install
+     * this feature exists for.
+     *
+     * Memoized in the service and it returns before its first `await` once the
+     * setting exists, so every launch after the first pays nothing.
+     */
+    await defaultEngineService.lockIfUnset()
     return appSettingsService.getAll()
   })
 
@@ -30,6 +50,29 @@ export function registerSettingsHandlers(): void {
       // Settings that gate a main-process side effect run their sync here, so
       // the renderer toggle is enough to drive the change without restart.
       if (key === 'enableTrayIcon') syncTrayFromSettings()
+      /**
+       * **The Default Runtime is cached on every folder agent's row**, as
+       * `driver_config.launcher`, and that cache is what `capabilitiesFor`
+       * answers from — so a change here that did not re-index would leave every
+       * agent that names no engine of its own described as running on the
+       * engine it ran on a moment ago. The visible symptom is the composer: a
+       * Claude agent has a question path and an OpenCode one does not.
+       *
+       * Re-indexing rather than a targeted write, because the launcher is
+       * derived from the folder and the scanner is the one thing that reads
+       * folders. It is a user action taken rarely, and a failure must not fail
+       * the save the user actually asked for — the setting is stored either
+       * way, and the next rescan picks the rows up.
+       */
+      if (key === 'localAgentsDefaultEngine') {
+        try {
+          localAgentService.rescan(getSettingsScopeUserId())
+        } catch (err) {
+          logger.warn('could not re-index agents after the default runtime changed', {
+            error: err instanceof Error ? err.message : String(err)
+          })
+        }
+      }
       return { success: true }
     }
   )

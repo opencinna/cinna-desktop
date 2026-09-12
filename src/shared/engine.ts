@@ -98,6 +98,70 @@ export function isAgentEngine(value: unknown): value is AgentEngine {
 }
 
 /**
+ * **This machine's Default runtime**, out of the setting and what is installed.
+ *
+ * The setting is written **once**, on the first launch that can answer it
+ * (`defaultEngineService.lockIfUnset`), and the empty value means only "not
+ * decided yet". So this function has two callers with two different jobs: the
+ * lock, which passes `''` to ask *what should this machine get*, and every
+ * ordinary read, which passes the stored value and gets it back.
+ *
+ * `claudeAvailable` is passed in rather than looked up, because the two sides
+ * learn it differently — the main process from `toolDetectionService`, the
+ * renderer from the main process — and this function must give the same answer
+ * on both. It is the same rule every other resolution in this area follows: one
+ * function, called twice, so a panel cannot predict a runtime the engine will
+ * not build.
+ *
+ * **The fallback is the OpenCode runner**, never "nothing": that runner is the
+ * one this app installs for itself, so it is the only choice that is true on a
+ * machine with no developer tooling at all. What it spends is the credential
+ * named beside the picker.
+ */
+export function resolveDefaultEngine(setting: string, claudeAvailable: boolean): AgentEngine {
+  const pinned = setting.trim()
+  if (isAgentEngine(pinned)) return pinned
+  return claudeAvailable ? 'claude' : DEFAULT_AGENT_ENGINE
+}
+
+export function effectiveEngine(
+  runtime: { engine?: unknown; credential?: unknown; model?: unknown } | null | undefined,
+  defaultEngine: AgentEngine
+): AgentEngine {
+  const declared = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
+  if (isAgentEngine(declared)) return declared
+  const credential = typeof runtime?.credential === 'string' ? runtime.credential.trim() : ''
+  const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
+  if (credential !== '' || model !== '') return DEFAULT_AGENT_ENGINE
+  return defaultEngine
+}
+
+/**
+ * What the renderer is told about the Default Runtime.
+ *
+ * Resolved in the **main process** and sent whole, rather than derived on each
+ * side from the setting plus the detected tools. The renderer has both of those
+ * facts and could do the sum — and that is exactly the arrangement that put a
+ * label and an engine out of step in this area twice before. It also lands as
+ * one value: a panel that derived it would render `AI credentials` for the
+ * fraction of a second detection is in flight and then swap the picker under
+ * the pointer (ux_rules rule 1), where one `undefined` is simply *not known
+ * yet*.
+ */
+export interface DefaultEngineDto {
+  /**
+   * What an agent that names no engine of its own runs on.
+   *
+   * One field, deliberately. The picker in Settings needs a second fact —
+   * whether each runtime is *installed* — and reads it from the detected-tools
+   * list it already has, which is the same list this was derived from. A second
+   * copy here would be one more thing for the two to disagree about, and this
+   * type exists precisely so that "which engine" has exactly one answer.
+   */
+  engine: AgentEngine
+}
+
+/**
  * Who answers a Claude agent's permission asks before the desktop does.
  *
  * - `auto` — the CLI's own classifier, the same one a terminal `claude` runs

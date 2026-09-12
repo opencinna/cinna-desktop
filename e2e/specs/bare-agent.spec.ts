@@ -610,8 +610,26 @@ test.describe('a bare agent chooses its own credential', () => {
       // second picker at all — it could only report the Default runtime.
       await expect(panel.getByLabel('Work complexity')).toBeEnabled()
       await expect(credential).toHaveValue('')
-      await expect(credential.locator('option')).toHaveCount(3)
-      await expect(credential.locator('option').first()).toHaveText('Default (none set)')
+      /**
+       * **The credentials, scoped to their own group** — not a count of every
+       * option in the select.
+       *
+       * `Runs on` also offers the runtimes this *machine* has, under an "On this
+       * machine" group, and whether the developer running the suite has Claude
+       * Code installed is not something this spec is about. A total count made
+       * the assertion pass or fail on a property of the checkout's laptop; the
+       * group this test is actually about holds exactly the two credentials the
+       * fixture configured.
+       */
+      await expect(credential.locator('optgroup[label="AI credentials"] option')).toHaveText([
+        ANTHROPIC_CRED,
+        OPENAI_CRED
+      ])
+      // "Default runtime", the same words Settings gives the setting this
+      // follows — the option names the machine's default and, once there is
+      // one, what it resolves to. `(none set)` because this profile's default
+      // chat mode names no credential yet.
+      await expect(credential.locator('option').first()).toHaveText('Default runtime (none set)')
       // The one line on the page that says where the answer goes.
       await expect(panel).toContainText(
         'This choice is kept in Cinna, not in the folder — so a folder that moves starts over on the default.'

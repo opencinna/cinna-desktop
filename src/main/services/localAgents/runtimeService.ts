@@ -45,6 +45,7 @@
 
 import { chatModeService } from '../chatModeService'
 import { appSettingsService } from '../appSettingsService'
+import { defaultEngineService } from './defaultEngineService'
 import { providerService, type ProviderDto } from '../providerService'
 import { SECRET_LOOKALIKE } from '../../kit/validator'
 import { findCredentialByReference, isCredentialUsable } from '../../../shared/credentials'
@@ -53,6 +54,7 @@ import type { AgentRuntimeRef, CinnaAgentManifest } from '../../../shared/kit/ma
 import {
   claudeModelForComplexity,
   DEFAULT_AGENT_ENGINE,
+  effectiveEngine,
   isAgentEngine,
   type AgentEngine,
   type LocalAgentRuntimeInput,
@@ -297,7 +299,19 @@ export const runtimeService = {
     const ref = typeof runtime?.credential === 'string' ? runtime.credential.trim() : ''
     const model = typeof runtime?.model === 'string' ? runtime.model.trim() : ''
     const complexity = declaredComplexity(runtime)
-    const engine = declaredEngine(runtime) ?? DEFAULT_AGENT_ENGINE
+    /**
+     * **The manifest first, this machine's Default Runtime second.**
+     *
+     * `effectiveEngine` is the shared rule, not a local one: a runtime naming a
+     * credential or a concrete model is an OpenCode runtime whatever the
+     * machine default says, so switching the default to Claude Agent cannot
+     * take an agent off the key its own file names. The "Runs with" panel calls
+     * the same function on the same fields, which is what stops the panel
+     * labelling an agent one way while the launcher starts the other.
+     */
+    const engine = effectiveEngine(runtime, defaultEngineService.current())
+    /** Whether the engine came from the file or from the machine setting. */
+    const engineDeclared = declaredEngine(runtime) !== null
 
     // **The Claude engine resolves nothing about credentials, because it has
     // none.** Returning early rather than threading `engine` through the ladder
@@ -313,7 +327,12 @@ export const runtimeService = {
     // tolerant, writing is strict — the same asymmetry `complexity` has.
     if (engine === 'claude') {
       return {
-        source: 'manifest',
+        // **What chose this engine, honestly.** An agent whose manifest says
+        // `engine: "claude"` is on its own runtime; one that says nothing and
+        // lands here because this machine's Default Runtime is Claude Agent is
+        // on the *default*, and `source` is the field every caller reads to
+        // tell those apart.
+        source: engineDeclared ? 'manifest' : 'default',
         launcher: engine,
         credentialRef: null,
         credentialId: null,

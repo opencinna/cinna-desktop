@@ -77,6 +77,33 @@ vi.mock('../agents/drivers', () => ({
 }))
 
 vi.mock('../services/localAgents/openInService', () => ({ openInService: { openIn: async () => {} } }))
+/**
+ * The registrar subscribes to installer progress and forwards it to the window,
+ * so both of those have to exist for the module to load at all. Neither is this
+ * file's subject — it is about the order of two refreshes — and `../index` is
+ * the whole main entry point, which pulls Electron in.
+ */
+vi.mock('../services/localAgents/toolInstallService', () => ({
+  toolInstallService: {
+    onProgress: () => () => {},
+    plans: () => [],
+    install: async () => ({ id: 'claude', state: 'done', line: null, error: null })
+  }
+}))
+vi.mock('../index', () => ({ getMainWindow: () => null }))
+/**
+ * The registrar also settles this machine's Default runtime at startup, which
+ * reads the settings store and the agents table. Neither is this file's subject
+ * — it is about the order of two refreshes — and `lockIfUnset` returning null
+ * (already decided) is the state every launch but the first is in.
+ */
+vi.mock('../services/localAgents/defaultEngineService', () => ({
+  defaultEngineService: { lockIfUnset: async () => null }
+}))
+vi.mock('../services/localAgents/localAgentService', () => ({
+  localAgentService: { rescan: () => [] }
+}))
+vi.mock('../auth/scope', () => ({ getSettingsScopeUserId: () => '__default__' }))
 vi.mock('electron', () => ({ app: { on: () => undefined }, shell: {} }))
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })

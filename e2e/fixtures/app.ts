@@ -202,6 +202,28 @@ export const test = base.extend<{ cinna: CinnaApp } & CinnaOptions>({
         await skip.or(shell).first().waitFor()
         if (await skip.isVisible()) await skip.click()
         await shell.waitFor()
+        /**
+         * **Pin the Default runtime to the OpenCode runner for every spec.**
+         *
+         * The sandbox exports the developer's *real* `PATH` into its shell
+         * profiles (see `makeSandbox`) so the app can find `git` and the tools
+         * a spec needs. That means detection inside the sandbox also finds the
+         * developer's real `claude` — and since this userData is fresh, the
+         * first launch would lock the Default runtime to **Claude Agent**. Every
+         * folder agent whose manifest names no engine would then dispatch to
+         * the Claude launcher instead of the `fakeAcpEngine` shim: the suite
+         * would drive the developer's own Claude Code, spend their tokens, and
+         * fail on a machine that has no `claude` at all.
+         *
+         * Set here rather than before launch because `settings:set` requires an
+         * activated user, which is exactly what the line above has just done.
+         * The write re-indexes the agent rows, so anything the startup lock had
+         * already cached is corrected. A spec that wants the Claude engine says
+         * so in the agent's own manifest, which outranks this.
+         */
+        await page.evaluate(() =>
+          window.api.settings.set('localAgentsDefaultEngine', 'opencode')
+        )
       }
     }
 

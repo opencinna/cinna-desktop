@@ -142,8 +142,19 @@ let binary: { state: string; version?: string | null; path?: string; error?: str
   version: '1.0.0',
   path: '/usr/local/bin/opencode'
 }
+/**
+ * This machine's Default Runtime, as main resolves it.
+ *
+ * A fixture with three settings, because the panel has three behaviours: the
+ * AI-credentials default (what every build before the setting did), the Claude
+ * Agent default — where an agent that declares *nothing* is a Claude agent —
+ * and `undefined`, the window before main has answered, in which the panel may
+ * claim neither.
+ */
+let defaultRuntime: { engine: string } | undefined = { engine: 'opencode' }
 vi.mock('../../../hooks/useEngine', () => ({
-  useEngineBinary: () => ({ data: binary })
+  useEngineBinary: () => ({ data: binary }),
+  useDefaultRuntime: () => ({ data: defaultRuntime })
 }))
 
 const { RuntimePanel } = await import('./RuntimePanel')
@@ -238,7 +249,7 @@ describe('RuntimePanel', () => {
 
   it('offers the default mode’s model only where it could actually run', () => {
     const { unmount } = render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
-    expect(screen.getByText('Default — follows your default chat mode, on Claude Sonnet 4.5.')).toBeTruthy()
+    expect(screen.getByText('Default — follows the Default runtime, on Claude Sonnet 4.5.')).toBeTruthy()
     unmount()
 
     // Same page, OpenAI credential: the mode's Anthropic model is not on offer,
@@ -247,7 +258,7 @@ describe('RuntimePanel', () => {
     // that simply had nothing to run on.
     render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
     expect(screen.queryByRole('option', { name: /Claude Sonnet/ })).toBeNull()
-    expect(screen.getByText('Default — follows your default chat mode, on GPT-5.')).toBeTruthy()
+    expect(screen.getByText('Default — follows the Default runtime, on GPT-5.')).toBeTruthy()
     expect(screen.queryByText(/No model set/)).toBeNull()
   })
 
@@ -268,7 +279,7 @@ describe('RuntimePanel', () => {
     // id is the provider's, not the row's, so this pairing runs. Dropping it
     // would take a working agent off the air on an upgrade.
     render(<RuntimePanel agent={agent({ credential: 'My Anthropic' })} />)
-    expect(screen.getByText('Default — follows your default chat mode, on Claude Sonnet 4.5.')).toBeTruthy()
+    expect(screen.getByText('Default — follows the Default runtime, on Claude Sonnet 4.5.')).toBeTruthy()
     expect(screen.queryByText(/No model set/)).toBeNull()
   })
 
@@ -276,7 +287,7 @@ describe('RuntimePanel', () => {
     defaultMode = { providerId: 'p-anthropic', modelId: null }
     providers = [{ ...PROVIDERS[0], defaultModelId: 'claude-sonnet-4-5' }, ...PROVIDERS.slice(1)]
     render(<RuntimePanel agent={agent(null)} />)
-    expect(screen.getByText('Default — follows your default chat mode, on Claude Sonnet 4.5.')).toBeTruthy()
+    expect(screen.getByText('Default — follows the Default runtime, on Claude Sonnet 4.5.')).toBeTruthy()
     expect(screen.queryByText(/No model set/)).toBeNull()
   })
 
@@ -354,7 +365,7 @@ describe('RuntimePanel', () => {
   it('names the chosen credential’s own default model when it has one', () => {
     providers = [...PROVIDERS.slice(0, 2), { ...PROVIDERS[2], defaultModelId: 'gpt-5' }]
     render(<RuntimePanel agent={agent({ credential: 'OpenAI' })} />)
-    expect(screen.getByText('Default — follows your default chat mode, on GPT-5.')).toBeTruthy()
+    expect(screen.getByText('Default — follows the Default runtime, on GPT-5.')).toBeTruthy()
     expect(screen.queryByText(/No model set/)).toBeNull()
   })
 
@@ -367,7 +378,7 @@ describe('RuntimePanel', () => {
   describe('work complexity', () => {
     it('reports the model it resolves to, and flags a tier this credential cannot serve', () => {
       render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
-      expect(screen.getByText('Default — follows your default chat mode, on Claude Sonnet 4.5.')).toBeTruthy()
+      expect(screen.getByText('Default — follows the Default runtime, on Claude Sonnet 4.5.')).toBeTruthy()
       // Nothing Anthropic lists here is a haiku, and saying "Simple" with no
       // model behind it would be the catalogue's problem all over again.
       expect(screen.getByRole('option', { name: 'Simple (none listed)' })).toBeTruthy()
@@ -632,7 +643,7 @@ describe('RuntimePanel', () => {
       // and that appeared nowhere while both read `… (Claude Sonnet 4.5)`.
       const { unmount } = render(<RuntimePanel agent={agent({ credential: 'Anthropic' })} />)
       expect(
-        screen.getByText('Default — follows your default chat mode, on Claude Sonnet 4.5.')
+        screen.getByText('Default — follows the Default runtime, on Claude Sonnet 4.5.')
       ).toBeTruthy()
       unmount()
       render(<RuntimePanel agent={agent({ credential: 'Anthropic', complexity: 'medium' })} />)
@@ -978,7 +989,7 @@ describe('RuntimePanel', () => {
       render(<RuntimePanel agent={agent({ engine: 'claude' })} />)
       // The full sentence lives in the reserved line; the Engine column only
       // names the state, because that column is fixed-width and cannot grow.
-      expect(screen.getByText(/Claude Agent needs Claude Code, which is not installed/)).toBeTruthy()
+      expect(screen.getByText(/Claude Agent needs Claude Code\. Install it in Settings/)).toBeTruthy()
       expect(screen.getByText('Not installed')).toBeTruthy()
     })
 

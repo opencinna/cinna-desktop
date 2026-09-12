@@ -240,7 +240,10 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
 
   await test.step('Local Agents offers it as the default credential for folder agents', async () => {
     await openSettings(cinna, 'Local Agents')
-    const credential = page.getByLabel('Default AI credential')
+    // Renamed from "Default AI credential": the label now says which *runtime*
+    // spends it, because the runtime is a choice the user makes one control
+    // above this one.
+    const credential = page.getByLabel('Credential OpenCode runs on')
     // The whole option list: a keyless credential is offered beside the "follow
     // my chats" default, and there is nothing else on this profile to confuse
     // it with. This is the picker that hand-wrote `hasApiKey` and left Ollama

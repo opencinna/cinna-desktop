@@ -3,7 +3,13 @@ import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
-import type { DetectedTool, OpenInRequest } from '../shared/localTools'
+import type {
+  DetectedTool,
+  OpenInRequest,
+  ToolInstallPlan,
+  ToolInstallProgress
+} from '../shared/localTools'
+import { TOOL_INSTALL_CHANNEL } from '../shared/localTools'
 import type { GitDetail, GitStatus, GitUpdateResult } from '../shared/agentGit'
 import type {
   AddAgentFolderInput,
@@ -33,6 +39,7 @@ import type { StoredPermissionGrant } from '../shared/localAgentRequests'
 import type {
   ClaudeApproval,
   ClaudeAuthStatus,
+  DefaultEngineDto,
   EngineBinaryState,
   LocalAgentRuntimeInput
 } from '../shared/engine'
@@ -1249,7 +1256,29 @@ const api = {
      */
     claudeAuth: (): Promise<ClaudeAuthStatus> => ipcRenderer.invoke('local-tools:claude-auth'),
     openIn: (request: OpenInRequest): Promise<{ success: true }> =>
-      ipcRenderer.invoke('local-tools:open-in', request)
+      ipcRenderer.invoke('local-tools:open-in', request),
+    /**
+     * What this machine would run to install each runtime — the command the
+     * confirm dialog shows before anything runs.
+     *
+     * The command comes *back* across the bridge; it never goes across it.
+     * {@link install} takes an id and main looks the command up in its own
+     * table, so a renderer cannot ask this app to run a string it chose.
+     */
+    installPlans: (): Promise<ToolInstallPlan[]> => ipcRenderer.invoke('local-tools:install-plans'),
+    /**
+     * Run the vendor's installer for one runtime. Resolves with the outcome,
+     * failure included, rather than rejecting — the dialog renders it.
+     */
+    install: (toolId: string): Promise<ToolInstallProgress> =>
+      ipcRenderer.invoke('local-tools:install', toolId),
+    /** Fires with an installer's last output line while it runs. Unsubscribes. */
+    onInstallProgress: (handler: (progress: ToolInstallProgress) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, progress: ToolInstallProgress): void =>
+        handler(progress)
+      ipcRenderer.on(TOOL_INSTALL_CHANNEL, listener)
+      return () => ipcRenderer.off(TOOL_INSTALL_CHANNEL, listener)
+    }
   },
 
   /**
@@ -1465,6 +1494,12 @@ const api = {
      * renders, and a rejection would lose its code crossing the bridge.
      */
     resolve: (): Promise<EngineBinaryState> => ipcRenderer.invoke('engine:resolve'),
+    /**
+     * This machine's Default Runtime — what a folder agent that names no engine
+     * of its own runs on, resolved in main from the setting and what is
+     * installed. One value, so no surface has to do that sum itself.
+     */
+    defaultRuntime: (): Promise<DefaultEngineDto> => ipcRenderer.invoke('engine:default-runtime'),
     /** Fires whenever that state changes. Returns an unsubscribe. */
     onState: (handler: (state: EngineBinaryState) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, state: EngineBinaryState): void => handler(state)

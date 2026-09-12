@@ -1,4 +1,4 @@
-import { and, eq, isNotNull } from 'drizzle-orm'
+import { and, eq, isNotNull, sql } from 'drizzle-orm'
 import { sep } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
@@ -13,7 +13,7 @@ import {
   messages
 } from './schema'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
-import { FOLDER_AGENT_PROTOCOL } from '../../shared/localAgents'
+import { FOLDER_AGENT_PROTOCOL, FOLDER_AGENT_SOURCE } from '../../shared/localAgents'
 import {
   FOLDER_AGENT_DRIVER,
   launcherConfig,
@@ -141,6 +141,26 @@ export interface ReplaceFolderIndexResult {
 }
 
 export const agentRepo = {
+  /**
+   * How many folder agents exist on this machine, across every profile.
+   *
+   * Deliberately unscoped: a folder agent is a directory on this computer, and
+   * the question it answers is about the *install* — "has this desktop been
+   * running folder agents already?" — which is what decides whether the Default
+   * runtime may be locked to a newly detected local runner or has to keep the
+   * behaviour those agents have had (`defaultEngineService.lockIfUnset`).
+   * Scoping it to one profile would let a second profile's first launch move
+   * the first profile's agents onto another engine.
+   */
+  countFolderAgents(): number {
+    const row = getDb()
+      .select({ total: sql<number>`count(*)` })
+      .from(agents)
+      .where(eq(agents.source, FOLDER_AGENT_SOURCE))
+      .get()
+    return row?.total ?? 0
+  },
+
   list(userId: string): AgentRow[] {
     return getDb().select().from(agents).where(eq(agents.userId, userId)).all()
   },

@@ -32,6 +32,7 @@ import { ClaudeAuthProbe } from './acp/claudeAuth'
 import { pendingRequests } from './pendingRequests'
 import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
 import { runtimeService } from '../../services/localAgents/runtimeService'
+import { defaultEngineService } from '../../services/localAgents/defaultEngineService'
 import { providerService } from '../../services/providerService'
 import {
   assembleAgentPrompt,
@@ -342,6 +343,7 @@ export const acpDriver = createAcpDriver({
   pool: acpProcessPool,
   launcher: (id) => acpLaunchers[id],
   readRuntime: readAcpRuntime,
+  defaultEngine: () => defaultEngineService.current(),
   registerRequest: (input) => pendingRequests.register(input),
   resolveRequest,
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal

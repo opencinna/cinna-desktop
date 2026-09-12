@@ -74,7 +74,16 @@ vi.mock('../../services/localAgents/permissionGrantService', () => ({
   permissionGrantService: { covers: () => false, remember: vi.fn() }
 }))
 vi.mock('../../services/localAgents/turnLock', () => ({ turnLock: { withLock: vi.fn() } }))
-vi.mock('../../services/localAgents/toolDetectionService', () => ({ toolDetectionService: { get: vi.fn() } }))
+/**
+ * `snapshot` as well as `get`: the ACP driver asks this machine's Default
+ * Runtime what a folder that names no engine runs on, and that answer is the
+ * last finished detection pass read synchronously. Empty here — these tests are
+ * about dispatch, and an empty snapshot is the historical default (OpenCode),
+ * which is what the engine assertions below expect.
+ */
+vi.mock('../../services/localAgents/toolDetectionService', () => ({
+  toolDetectionService: { get: vi.fn(), snapshot: () => [] }
+}))
 vi.mock('../../services/localAgents/promptAssembly', () => ({
   assembleAgentPrompt: () => 'prompt',
   assembleBareAgentPrompt: () => 'prompt',

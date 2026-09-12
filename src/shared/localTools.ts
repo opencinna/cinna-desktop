@@ -103,3 +103,61 @@ export interface OpenInRequest {
   toolId?: LocalToolId
   action: OpenInAction
 }
+
+/**
+ * The tools that can *run an agent* — the ones Settings → Runtime offers to
+ * install, as opposed to the editors and runtimes it merely reports.
+ *
+ * `opencode` is not here, and that is not an oversight: the desktop downloads
+ * and verifies its own pinned copy when an agent first needs one, so an
+ * "install" button for it would offer to do by hand what the app already does.
+ */
+export const RUNTIME_TOOL_IDS = ['claude', 'codex'] as const
+export type RuntimeToolId = (typeof RUNTIME_TOOL_IDS)[number]
+
+export function isRuntimeToolId(value: unknown): value is RuntimeToolId {
+  return typeof value === 'string' && (RUNTIME_TOOL_IDS as readonly string[]).includes(value)
+}
+
+/**
+ * How this machine would install one runtime, as the confirm dialog shows it.
+ *
+ * The **command is shown to the user before it runs**, verbatim, which is why
+ * it crosses the bridge at all: this app is about to run a third-party
+ * installer that writes to the user's machine, and the least it can do is say
+ * exactly what it will run. It is never taken *from* the renderer — `install`
+ * takes an id, and the command is looked up in the main process against this
+ * same table.
+ *
+ * `command` is null where this platform has no one-line installer the app is
+ * willing to run unattended (Windows). The row then offers the documentation
+ * instead of a button that would have to guess.
+ */
+export interface ToolInstallPlan {
+  id: RuntimeToolId
+  label: string
+  /** A POSIX shell command line, or null when this platform has none. */
+  command: string | null
+  /** The vendor's own install page — the fallback, and the "what is this" link. */
+  docsUrl: string
+}
+
+/**
+ * What an install is doing, pushed to the renderer while it runs.
+ *
+ * `line` is the installer's **last output line**, not its transcript: a
+ * progress bar redrawn a hundred times is not something to accumulate, and the
+ * dialog that shows it has one reserved line for it (ux_rules rule 1). The full
+ * output goes to the app log, where a user reporting a failed install can be
+ * asked for it.
+ */
+export interface ToolInstallProgress {
+  id: RuntimeToolId
+  state: 'running' | 'done' | 'failed'
+  line: string | null
+  /** One sentence, on `failed` only. Never a command the user did not see. */
+  error: string | null
+}
+
+/** Main → renderer push for {@link ToolInstallProgress}. */
+export const TOOL_INSTALL_CHANNEL = 'local-tools:install-progress'

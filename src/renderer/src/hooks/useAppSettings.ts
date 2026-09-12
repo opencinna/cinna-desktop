@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { AppSettingsSchema } from '../../../shared/appSettings'
 import { createLogger } from '../stores/logger.store'
-import { AGENT_CREDENTIAL_BINDINGS_KEY } from './useLocalAgents'
+import { AGENT_CREDENTIAL_BINDINGS_KEY, LOCAL_AGENTS_KEY } from './useLocalAgents'
+import { DEFAULT_RUNTIME_KEY } from './useEngine'
 
 const logger = createLogger('app-settings')
 
@@ -72,6 +73,21 @@ export function useSetAppSetting() {
       // rather than on that one key: this mutation writes one setting at a
       // time, and the query is a synchronous main-side map.
       queryClient.invalidateQueries({ queryKey: AGENT_CREDENTIAL_BINDINGS_KEY })
+      /**
+       * `localAgentsDefaultEngine` is the other setting a *main-side* answer is
+       * derived from: main resolves the Default Runtime out of it plus what is
+       * installed, and every surface that names what an agent runs on reads that
+       * one value. Invalidated here rather than at the Settings screen for the
+       * same reason as the line above — this hook is the one place that knows a
+       * setting was written, and the agent page's panel is a different component
+       * that must not be able to forget.
+       *
+       * Main also re-indexes the agent rows on this key (see `settings:set`),
+       * so the local agent list is asked again too: the row's cached launcher is
+       * what decides whether the composer offers a question path.
+       */
+      queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
+      queryClient.invalidateQueries({ queryKey: LOCAL_AGENTS_KEY })
     }
   })
 }

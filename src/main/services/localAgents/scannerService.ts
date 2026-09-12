@@ -19,6 +19,7 @@ import { existsSync, readdirSync, readFileSync, statSync, type Dirent } from 'no
 import { basename, join } from 'node:path'
 import { agentRepo, type FolderIndexEntry } from '../../db/agents'
 import { launcherOfFolder } from '../../agents/drivers/driverOf'
+import { defaultEngineService } from './defaultEngineService'
 import type { AcpLauncherId } from '../../../shared/agentDrivers'
 import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
 import type { AgentRootRow } from '../../db/agentRoots'
@@ -426,7 +427,15 @@ function bareValidation(agentDir: string, promptText: string | null): LocalAgent
  * the rule written down where a future writer will meet it.
  */
 export function folderIndexLauncher(dto: LocalAgentDto): AcpLauncherId | null {
-  return dto.identity === 'unresolved' ? null : launcherOfFolder(dto.runtime)
+  // **This machine's Default Runtime is part of the answer**, because the row
+  // is what `capabilitiesFor` reads: a folder that names no engine runs on the
+  // machine default, and a row that recorded `opencode` regardless would tell
+  // the composer there is no question path for an agent whose turns are about
+  // to take one. The cache is refreshed when the setting changes — see
+  // `settings:set` — so the row and the launcher cannot sit apart.
+  return dto.identity === 'unresolved'
+    ? null
+    : launcherOfFolder(dto.runtime, defaultEngineService.current())
 }
 
 export const scannerService = {

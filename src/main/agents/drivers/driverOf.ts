@@ -11,7 +11,7 @@ import {
   type AcpLauncherId,
   type AgentDriverId
 } from '../../../shared/agentDrivers'
-import { DEFAULT_AGENT_ENGINE } from '../../../shared/engine'
+import { DEFAULT_AGENT_ENGINE, effectiveEngine, type AgentEngine } from '../../../shared/engine'
 
 /** Known driver identity only. Migration owns legacy backfill; reads never guess. */
 export function driverOfRow(agent: Pick<AgentRow, 'driver'>): AgentDriverId | null {
@@ -46,8 +46,22 @@ export function launcherOfRow(agent: Pick<AgentRow, 'driverConfig'>): AcpLaunche
  * in the Runtime card on the engine they had cleared.
  */
 export function launcherOfFolder(
-  runtime: { engine?: unknown } | null | undefined
+  runtime: { engine?: unknown; credential?: unknown; model?: unknown } | null | undefined,
+  /**
+   * This machine's Default Runtime, for a folder that names no engine.
+   *
+   * Defaulted rather than required, and the default is the historical one, so
+   * the pure callers that have no business reading a setting — tests, and the
+   * scanner's row cache before the setting is known — behave exactly as they
+   * did. The turn's own dispatch passes the real value.
+   */
+  defaultEngine: AgentEngine = DEFAULT_AGENT_ENGINE
 ): AcpLauncherId {
   const raw = typeof runtime?.engine === 'string' ? runtime.engine.trim() : ''
-  return isAcpLauncherId(raw) ? raw : DEFAULT_AGENT_ENGINE
+  // A launcher name this build knows, including the two it has no launcher for
+  // (`gemini`, `codex`): the driver refuses those in words, and reading them
+  // back as "the default" would run the agent on an engine its folder does not
+  // name. Only a runtime naming *nothing* usable reaches the machine default.
+  if (isAcpLauncherId(raw)) return raw
+  return effectiveEngine(runtime, defaultEngine)
 }

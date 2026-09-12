@@ -251,15 +251,15 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx',
     category: 'engine',
-    count: 1,
-    why: 'the editor for that field: the panel offering the choice has to name the values it writes'
+    count: 2,
+    why: "the editor for that field: the panel offering the choice has to name the values it writes, and both reads are of what the *file* declares — which option is selected, and whether the Claude option is offered at all. What the agent effectively *runs* on is no longer a comparison here: it comes from `effectiveEngine`, the shared rule the launcher applies, because this machine's Default Runtime can now decide it"
   },
-  {
-    file: 'src/renderer/src/components/agents/local/PermissionsCard.tsx',
-    category: 'engine',
-    count: 1,
-    why: 'the approvals control exists on one engine only, and the card reads the folder it edits rather than a capability the local-agent DTO does not carry'
-  },
+  // **Gone, and not into a driver**: the approvals control still exists on one
+  // engine only, but the card no longer asks which engine the *manifest* names.
+  // It asks `effectiveEngine` — the shared rule the launcher applies — because
+  // this machine's Default Runtime can now put an agent that declares nothing on
+  // Claude, and a card reading the file alone described the OpenCode permission
+  // profile while the CLI's own reviewer was the one actually in force.
   {
     file: 'src/main/services/agentService.ts',
     category: 'source',

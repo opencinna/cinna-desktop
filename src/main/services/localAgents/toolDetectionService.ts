@@ -251,11 +251,28 @@ async function detect(spec: ToolSpec): Promise<DetectedTool> {
 /** In-flight or completed detection pass; cleared by `refresh()`. */
 let detection: Promise<DetectedTool[]> | null = null
 
+/**
+ * The last pass that **finished**, for the callers that cannot await.
+ *
+ * `list()` is the honest API and everything user-facing uses it. This exists
+ * for the one question asked from synchronous code: which engine an agent that
+ * names none runs on (`defaultEngineService.current`), which is read inside
+ * `runtimeService.resolve` — called from the scanner, the DTO mapper and the
+ * engine's config assembly, none of which can become async for it.
+ *
+ * Null means *nobody has looked yet*, and it is a distinct answer from "nothing
+ * is installed": a caller that cannot tell the two apart would report a machine
+ * with Claude Code on it as having none for the first second after launch.
+ * `warm()` is what keeps that window closed in practice.
+ */
+let lastCompleted: DetectedTool[] | null = null
+
 async function detectAll(): Promise<DetectedTool[]> {
   const tools = await Promise.all(TOOL_SPECS.map(detect))
   logger.info('detected local tools', {
     available: tools.filter((t) => t.available).map((t) => t.id)
   })
+  lastCompleted = tools
   return tools
 }
 
@@ -287,6 +304,19 @@ export const toolDetectionService = {
       )
     })
     return detection
+  },
+
+  /**
+   * The last finished pass, or null when there has not been one.
+   *
+   * Synchronous, and therefore a snapshot — see {@link lastCompleted}. Callers
+   * that can await must call {@link list} instead: this one cannot start a
+   * pass, so a caller that only ever reads it would answer from null for ever.
+   * What keeps it populated is `defaultEngineService.lockIfUnset`, which awaits
+   * a real pass at startup.
+   */
+  snapshot(): DetectedTool[] | null {
+    return lastCompleted
   },
 
   /** Drop the PATH lookup cache and detect again. */

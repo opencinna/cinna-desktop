@@ -4,6 +4,7 @@ import { join } from 'path'
 import { appendFileSync, renameSync, statSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
+import { toolInstallService } from './services/localAgents/toolInstallService'
 import { initDatabase } from './db/client'
 import { mcpManager } from './mcp/manager'
 import { acpProcessPool } from './agents/drivers'
@@ -419,6 +420,10 @@ app.on('will-quit', async () => {
   // only the wait for their exits. Without this, quitting mid-turn leaves a
   // ~260 MB `claude` behind with nobody left to stop it.
   void acpProcessPool.shutdown()
+  // Same rule, and before the first await for the same reason: an installer is
+  // a `curl` piped into a shell that writes the user's home directory, and one
+  // left running after the window closes has nothing left to report to.
+  toolInstallService.shutdown()
   await mcpManager.disconnectAll()
 })
 

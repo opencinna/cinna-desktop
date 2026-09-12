@@ -12,12 +12,23 @@ import {
 } from '../../hooks/useLocalAgents'
 import {
   useDefaultTool,
+  useInstallRuntimeTool,
   useLocalTools,
   useOpenIn,
   useRefreshLocalTools,
-  useSetDefaultTool
+  useSetDefaultTool,
+  useToolInstallPlans
 } from '../../hooks/useLocalTools'
-import { isLocalToolId } from '../../../../shared/localTools'
+import {
+  isLocalToolId,
+  isRuntimeToolId,
+  type RuntimeToolId
+} from '../../../../shared/localTools'
+import {
+  DEFAULT_AGENT_ENGINE,
+  isAgentEngine,
+  type AgentEngine
+} from '../../../../shared/engine'
 import { useProviders } from '../../hooks/useProviders'
 import { useDefaultChatMode } from '../../hooks/useChatModes'
 import { ManageRootAgentsDialog } from './ManageRootAgentsDialog'
@@ -27,6 +38,7 @@ import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgentsHomeStore } from '../../stores/agentsHome.store'
 import { ForgetAgentRootDialog } from './ForgetAgentRootDialog'
+import { InstallRuntimeDialog } from './InstallRuntimeDialog'
 import {
   SettingsAddButton,
   SettingsBadge,
@@ -37,11 +49,31 @@ import {
   SettingsLabel,
   SettingsRow,
   SettingsRows,
+  SettingsInfoTip,
   SettingsSection,
-  SettingsStatusRow,
   settingsInputClass
 } from './SettingsLayout'
+import { RUNTIME_CHOICES, RuntimeChoiceButtons } from './RuntimeChoiceButtons'
 
+/**
+ * The runtimes this screen reports, in the order it reports them, and what each
+ * row says about itself.
+ *
+ * A table rather than three hand-written blocks, because every row has to say
+ * the same *kinds* of thing — what it is, whether it is here, what having it
+ * buys — and three blocks of JSX is how one of them quietly stops doing that.
+ *
+ * The copy is the short form on purpose: the detail column is two reserved
+ * lines at the 800px minimum and a third would move every row under it
+ * (ux_rules rules 1 and 7).
+ *
+ * `codex` is listed and installable but is **not** a runtime here, and the row
+ * says so in its own words rather than by being absent. This build has no Codex
+ * launcher — nothing has run one to measure its command line or its
+ * capabilities — so offering it in the Default Runtime picker would be an
+ * option that fails after the click (rule 4). Installing it still buys the user
+ * something real: Codex is one of the tools an agent folder can be opened in.
+ */
 /**
  * Settings → Local Agents.
  *
@@ -59,9 +91,16 @@ import {
  * changes it:
  *
  *   • **Agent Folders** — where the folders are, and what is in them.
- *   • **Engine Settings** — whether the engine runs, which credential agents
- *     spend by default, and which binary runs them.
- *   • **Developer Tools** — what this machine has, and what opens an agent.
+ *   • **Runtime** — what an agent that names nothing runs on, which runtimes
+ *     this machine has, and the binary behind the AI-credentials one.
+ *   • **Developer Tools** — what else this machine has, and what opens an agent.
+ *
+ * **Runtime was "Engine Settings".** The old name was the implementation's:
+ * there was one engine, and its path was the only thing to set. There are two
+ * runtimes now and the user chooses between them, so the section is named after
+ * the choice — and the three rows that report whether this machine *has* each
+ * runtime moved up out of the Developer Tools table, because a fact belongs in
+ * the section holding the control it feeds (ux_rules rule 12).
  *
  * **A folder row is a summary line and a row of controls.** Everything that
  * used to unfold *under* a row — the "N agents are not in the list / Add them"
@@ -115,6 +154,66 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
    */
   const [rowError, setRowError] = useState<{ rootId: string; message: string } | null>(null)
   const [addError, setAddError] = useState<string | null>(null)
+  /**
+   * The runtime whose install confirm is open, and what the last attempt said.
+   *
+   * Both live here rather than in the dialog, for the reason the Forget confirm
+   * above does: the mutation and the state that closes it have to outlive the
+   * dialog, or the success handler that closes it is dropped by the unmount it
+   * causes (ux_rules rule 5). The failure is kept out here too — a failed
+   * install must leave the dialog open with its sentence beside the button that
+   * was pressed (rule 6), and the sentence arrives after the mutation settles.
+   */
+  const [installing, setInstalling] = useState<RuntimeToolId | null>(null)
+  const [installFailure, setInstallFailure] = useState<string | null>(null)
+  const { data: installPlans } = useToolInstallPlans()
+  const install = useInstallRuntimeTool({
+    onDone: (result) => {
+      // Success closes; a failure keeps the dialog and shows what the installer
+      // said. Main returns both as a resolved value — only a broken bridge
+      // rejects — so the branch is here rather than in an error handler.
+      if (result.state !== 'done') {
+        setInstallFailure(result.error)
+        return
+      }
+      setInstalling(null)
+      /**
+       * **Installing it is choosing it.** The button the user pressed was the
+       * runtime they want their agents on; stopping at "it is now installed"
+       * would leave them to find the same button again and press it a second
+       * time for the thing they had already asked for.
+       *
+       * Except where this build cannot run agents on it — `engine: null`, which
+       * is Codex today. That install is still worth making (Cinna opens agent
+       * folders in it), and selecting a runtime no launcher exists for would
+       * break every agent that names none.
+       */
+      const choice = RUNTIME_CHOICES.find((candidate) => candidate.id === result.id)
+      if (choice?.engine) {
+        setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: choice.engine })
+      }
+    }
+  })
+  /**
+   * The runtime this machine is set to, or null while nothing has decided yet.
+   *
+   * Null covers two moments and deliberately renders the same in both: the
+   * settings query in flight, and the first launch before `lockIfUnset` has
+   * written its answer. Neither is a state to make a claim in — no button is
+   * selected, and the line under them says nothing — because the alternative is
+   * showing one selection and replacing it a moment later (ux_rules rule 1).
+   */
+  const selectedRuntime: AgentEngine | null = isAgentEngine(
+    appSettings?.localAgentsDefaultEngine ?? ''
+  )
+    ? (appSettings?.localAgentsDefaultEngine as AgentEngine)
+    : null
+  const onOpenCode = selectedRuntime === DEFAULT_AGENT_ENGINE
+  const claudeTool = (tools ?? []).find((tool) => tool.id === 'claude' && tool.available)
+  const installingPlan =
+    installing !== null
+      ? ((installPlans ?? []).find((plan) => plan.id === installing) ?? null)
+      : null
 
   const savedEnginePath = appSettings?.localAgentsEnginePath ?? ''
   const [enginePath, setEnginePath] = useState(savedEnginePath)
@@ -195,47 +294,92 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
   const pinnedMissing = pinnedId !== '' && pinnedCredential === null
 
   /**
-   * Not resolved yet is **neutral**, not a warning.
+   * **What the selected runtime is doing**, as one line and one tone.
    *
-   * The ACP launcher resolves a binary at the top of a local turn
-   * (`engineBinaryService.ensure`), so a machine that has simply not looked yet
-   * is in a state that resolves itself the moment anyone chats with a folder
-   * agent. Greeting every visit with an amber triangle over
-   * a state nobody has to act on is the healthy state wearing an alarm, and it
-   * teaches the user to skip the triangle for `failed`, which is the one that
-   * does need them (ux_rules rules 2 and 12).
+   * Only the selected one. A machine running Claude Agent has an `opencode`
+   * binary state too, and reporting it there would be a fact about something
+   * this machine is not using (ux_rules rule 9) — worse, it would be the only
+   * *red* thing on a screen whose agents are all fine.
+   *
+   * **Not resolved yet is muted, not a warning.** The ACP launcher resolves a
+   * binary at the top of a local turn, so a machine that has simply not looked
+   * yet is in a state that resolves itself the moment anyone chats with a folder
+   * agent. Greeting every visit with an alarm over a state nobody has to act on
+   * is the healthy state wearing a siren, and it teaches the user to skip the
+   * one that does need them — `failed`, a path they typed or a download that
+   * could not reach the network (rules 2 and 12).
+   *
+   * Silent while nothing can answer: the settings query in flight, the first
+   * launch before the runtime is locked, detection still running. The claim
+   * waits rather than being made and retracted.
    */
+  const runtimeStatus: { text: string; tone: 'muted' | 'warning' | 'danger' } = ((): {
+    text: string
+    tone: 'muted' | 'warning' | 'danger'
+  } => {
+    /**
+     * **A failed install outranks everything**, and it is here rather than only
+     * in the dialog because the dialog can be closed while the install runs.
+     * A failure that arrived after that would otherwise be reported nowhere at
+     * all — silent failure being the worst outcome (ux_rules rule 6). While the
+     * dialog *is* open it owns the message, and this slot stays out of it.
+     */
+    if (installFailure && installingPlan === null) {
+      return { text: installFailure, tone: 'danger' }
+    }
+    if (selectedRuntime === null) return { text: '', tone: 'muted' }
+    if (onOpenCode) {
+      return {
+        text:
+          binary?.state === 'ready'
+            ? `Ready — opencode ${binary.version ?? 'installed'}${
+                binary.source === 'path'
+                  ? ', your own installation'
+                  : binary.source === 'configured'
+                    ? ', the path set under OpenCode path below'
+                    : ', downloaded by Cinna'
+              }.`
+            : binary?.state === 'resolving'
+              ? 'Downloading OpenCode. This happens once and takes about a minute.'
+              : binary?.state === 'failed'
+                ? binary.error
+                : 'Not resolved yet — chatting with a folder agent resolves it. Cinna uses an opencode on your PATH if you have one, and downloads a verified copy if you do not.',
+        tone: binary?.state === 'failed' ? 'danger' : 'muted'
+      }
+    }
+    // Detection in flight is not "not installed": saying so would put the full
+    // warning on screen for half a second on a machine that has Claude Code.
+    if (tools === undefined) return { text: '', tone: 'muted' }
+    if (!claudeTool) {
+      return {
+        text: `Claude Agent is selected, but no Claude Code was found on this machine. Agents that name no runtime of their own will not run until it is installed.`,
+        tone: 'warning'
+      }
+    }
+    return {
+      // The version, because it is the fact that makes the line diagnosable, and
+      // "no API key", because that is the reason a user chose this runtime.
+      text: `Claude Code ${claudeTool.version ?? 'installed'} — turns run on your own Claude login, and spend no API key.`,
+      tone: 'muted'
+    }
+  })()
+
   /**
-   * **Muted for a binary that is merely not resolved yet.**
+   * Everything the Runtime section does **not** report.
    *
-   * The rule this keeps is the one the old row learned: a machine that has
-   * simply not looked yet is in a state that resolves itself the moment anyone
-   * chats with a folder agent, and greeting every visit with an amber triangle
-   * over a state nobody has to act on is the healthy state wearing an alarm —
-   * which teaches the user to skip the triangle for the one that does need them
-   * (ux_rules rules 2 and 12).
+   * The three assistants moved up there, with versions and an install button,
+   * because "is Claude Code installed" is the fact the Default Runtime is
+   * derived from and it belongs beside that control (ux_rules rule 12). Leaving
+   * them here as well would be one fact on two surfaces, free to disagree while
+   * a refresh is in flight — and the two lists refresh from the same call.
    *
-   * What changed under it is what "ok" means. There is no shared engine to be
-   * running any more: phase 3 of the agent runtime plan gave each folder agent
-   * its own child process, spawned per turn and reaped when idle, so the only
-   * lasting fact is whether this machine has a binary and where it came from.
+   * `opencode` goes with them: it is the binary behind the AI-credentials
+   * runtime, which that section's last row reports in far more detail than a
+   * version cell could.
    */
-  const engineTone: 'ok' | 'warning' | 'neutral' =
-    binary?.state === 'ready' ? 'ok' : binary?.state === 'failed' ? 'warning' : 'neutral'
-  const engineDetail =
-    binary?.state === 'ready'
-      ? `Ready — opencode ${binary.version ?? 'installed'}${
-          binary.source === 'path'
-            ? ', your own installation'
-            : binary.source === 'configured'
-              ? ', the path set under Engine path below'
-              : ', downloaded by Cinna'
-        }.`
-      : binary?.state === 'resolving'
-        ? 'Downloading the engine. This happens once and takes about a minute.'
-        : binary?.state === 'failed'
-          ? binary.error
-          : 'Not resolved yet — chatting with a folder agent resolves it. Cinna uses an opencode on your PATH if you have one, and downloads a verified copy if you do not.'
+  const otherTools = (tools ?? []).filter(
+    (tool) => !isRuntimeToolId(tool.id) && tool.id !== 'opencode'
+  )
 
   const forgettingRoot = roots.find((root) => root.id === forgetting) ?? null
   const managingRoot = roots.find((root) => root.id === managing) ?? null
@@ -255,6 +399,24 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       )}
       {inspectingRoot && (
         <RootRepositoryDialog root={inspectingRoot} onClose={() => setInspecting(null)} />
+      )}
+      {installingPlan && (
+        <InstallRuntimeDialog
+          plan={installingPlan}
+          // Whether this build can put agents on it once it is there. The same
+          // table the buttons are built from answers it, so the dialog cannot
+          // promise a selection the click will not make.
+          willSelect={
+            RUNTIME_CHOICES.find((choice) => choice.id === installingPlan.id)?.engine !== null &&
+            RUNTIME_CHOICES.some((choice) => choice.id === installingPlan.id)
+          }
+          install={install}
+          failure={installFailure}
+          onCancel={() => {
+            setInstalling(null)
+            setInstallFailure(null)
+          }}
+        />
       )}
       <SettingsSection
         title="Agent Folders"
@@ -517,97 +679,243 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
 
       </SettingsSection>
 
-      <SettingsSection title="Engine Settings">
-        <TaskConcurrencySetting />
+      {/*
+        **Runtime**, and it absorbed what used to be "Engine Settings".
+
+        The old name was the implementation's: there was one engine, and its
+        path was the only thing to set. There are two runtimes now and the user
+        picks between them, so the section is named after the choice (ux_rules
+        rule 12). The **Default AI credential** card moved in here too, from the
+        place it had ended up — outside every section, between this one's
+        closing tag and Developer Tools — and is now what it always was: the key
+        the OpenCode runner spends.
+
+        **The prose is behind `(?)` tips.** This screen is read once and used
+        many times; three explanatory paragraphs above three controls pushed the
+        controls below the fold on every visit after the first (rule 2 — a page
+        is a control surface first). What stays on the surface is everything
+        that *changes*: which runtime is selected, which are installed, and every
+        warning about this machine, each in a slot that is always there.
+      */}
+      <SettingsSection
+        title="Runtime"
+        info={
+          <SettingsInfoTip label="About the Runtime section">
+            <p>
+              A folder agent runs on a <strong>runtime</strong>: a program on this machine that
+              drives the model, calls the tools and asks you for permission. Cinna knows two —
+              your own Claude Code, and OpenCode, which it downloads and verifies for itself.
+            </p>
+            <p>
+              An agent whose folder names a runtime always gets that one. Everything on this
+              screen is about the agents that name none.
+            </p>
+          </SettingsInfoTip>
+        }
+        action={
+          <SettingsButton
+            onClick={() => refreshTools.mutate()}
+            disabled={refreshTools.isPending}
+            title="Look again after installing a runtime"
+            // Not "Refresh detected tools", which is the Developer Tools
+            // section's button: two controls on one surface may not announce
+            // themselves identically (ux_rules rule 10). They do the same work
+            // — one detection pass — and each is named for its own section.
+            aria-label="Refresh detected runtimes"
+          >
+            <RefreshCw size={13} className={refreshTools.isPending ? 'animate-spin' : undefined} />
+            Refresh
+          </SettingsButton>
+        }
+      >
         <SettingsCard>
-          {/*
-            An indicator, and one control that only appears when it resolves
-            something.
-
-            There is nothing to start: since phase 3 of the agent runtime plan
-            each folder agent spawns its own child per turn and the pool reaps it
-            when it goes idle, so the row reports a **binary** — is there one,
-            and where from. Start and Stop were buttons for doing by hand what
-            chatting does anyway, and for switching off something the next
-            message switched back on; what is left is *Try again*, on the one
-            state that does not resolve itself.
-          */}
-          <SettingsStatusRow
-            tone={engineTone}
-            label="Local engine"
-            /*
-              **Two lines, always.** The detail is one line when a binary is
-              ready and two when there is none, which moved every card below
-              this one by 21.1px the moment *Try again* succeeded — measured:
-              the row goes 65.375px → 44.25px and "Default AI credential" rises
-              from y=485.9 to y=464.8 (ux_rules rule 1). Reserved here rather
-              than in `SettingsStatusRow`, because the other rows that use it do
-              not vary this way and a blank line under them would be a gap
-              nobody asked for. Every state's sentence fits two lines at the
-              800px minimum; the resolver's own failures were reworded remedy-
-              first for the panel, which shortened them here too.
-            */
-            detail={<span className="block min-h-[2.625rem]">{engineDetail}</span>}
-            action={
-              /*
-                On `failed`, **and for as long as the retry runs**. An unresolved
-                binary resolves itself — the next turn asks for one — but a
-                resolution that failed does not, and a row with nothing to press
-                is exactly what ux_rules rule 12 is about: give the status row
-                the control that resolves it. There is no Start here and never
-                was; what this retries is the *resolution*, which is what the
-                old Try again did too, one indirection down.
-
-                `|| isPending` is not belt and braces. Pressing the button moves
-                the state to `resolving`, so a condition that named only
-                `failed` **unmounted the control on click** — the user pressed
-                it, it vanished, and for up to a minute of downloading the only
-                feedback was a line of text changing (rule 1). The disabled
-                `Looking…` was unreachable for the same reason: it can only
-                render in a state where its own parent no longer does.
-              */
-              binary?.state === 'failed' || resolveBinary.isPending ? (
-                <SettingsButton
-                  onClick={() => resolveBinary.mutate()}
-                  disabled={resolveBinary.isPending}
-                >
-                  {resolveBinary.isPending ? 'Looking…' : 'Try again'}
-                </SettingsButton>
-              ) : undefined
+          <div className="flex items-center gap-1.5">
+            <SettingsLabel>Default runtime</SettingsLabel>
+            <SettingsInfoTip label="About the default runtime">
+              <p>
+                What a folder agent runs on when its own folder names nothing. An agent that names
+                a runtime, or a credential, keeps it — nothing here moves an agent off what its
+                file says.
+              </p>
+              <p>
+                Cinna picks this once, on the first launch that can answer: the first runtime found
+                on this machine wins, so a new install runs agents before you configure anything.
+                After that it stays where it is — installing another CLI later does not move your
+                agents — and this is where you change it.
+              </p>
+              <p>
+                A runtime you do not have yet is still a button: pressing it installs that tool,
+                with its own installer and after showing you the command, and then puts your agents
+                on it.
+              </p>
+            </SettingsInfoTip>
+          </div>
+          <RuntimeChoiceButtons
+            selected={selectedRuntime}
+            tools={tools}
+            installing={install.isPending ? (install.variables ?? null) : null}
+            onSelect={(engine) =>
+              setAppSetting.mutate({ key: 'localAgentsDefaultEngine', value: engine })
             }
+            onInstall={(tool) => {
+              setInstallFailure(null)
+              setInstalling(tool)
+            }}
           />
+          {/*
+            **What the selected runtime is doing**, in a slot that is always two
+            lines high. Only the selected one is reported: the OpenCode binary's
+            state is not a fact about a machine running Claude Agent, and a row
+            per runtime was three states to read where one is in force
+            (ux_rules rule 9). A two-line reservation because every sentence
+            below wraps at the 800px minimum and none reaches three.
+          */}
+          <div className="mt-2 flex min-h-[2.625rem] items-start gap-3">
+            <p
+              className={`min-w-0 flex-1 text-[13px] leading-relaxed ${
+                runtimeStatus.tone === 'warning'
+                  ? 'text-[var(--color-warning)]'
+                  : runtimeStatus.tone === 'danger'
+                    ? 'text-[var(--color-danger)]'
+                    : 'text-[var(--color-text-muted)]'
+              }`}
+            >
+              {runtimeStatus.text}
+            </p>
+            {/*
+              *Try again* belongs to the one state that does not resolve itself
+              — a binary this machine could not get (rule 12: give the status
+              the control that resolves it). `|| isPending` is not belt and
+              braces: pressing it moves the state to `resolving`, so a condition
+              naming only `failed` would unmount the control on click.
+            */}
+            {onOpenCode && (binary?.state === 'failed' || resolveBinary.isPending) && (
+              <SettingsButton
+                onClick={() => resolveBinary.mutate()}
+                disabled={resolveBinary.isPending}
+              >
+                {resolveBinary.isPending ? 'Looking…' : 'Try again'}
+              </SettingsButton>
+            )}
+          </div>
+
+          {/*
+            A divider, not a second card: this is the same question one rung
+            down — which key the OpenCode runner spends — and a card of its own
+            said it was unrelated to the picker above it.
+          */}
+          <div className="mt-3 border-t border-[var(--color-border)] pt-3">
+            <div className="flex items-center gap-1.5">
+              <SettingsLabel htmlFor="local-agents-default-credential">
+                Credential OpenCode runs on
+              </SettingsLabel>
+              <SettingsInfoTip label="About the credential OpenCode runs on">
+                <p>
+                  OpenCode is the runtime; an AI credential is what pays for its turns. This is the
+                  one it spends for agents that name no credential of their own.
+                </p>
+                <p>
+                  A setting of <em>this machine</em>: leave it on the default chat mode and agents
+                  follow whatever your chats use, or pin one here to keep agent work on a
+                  particular key without changing what your chats do.
+                </p>
+                <p>
+                  It applies to any agent running on OpenCode — including one you put there
+                  yourself on its own page — whether or not OpenCode is the default runtime above.
+                </p>
+              </SettingsInfoTip>
+            </div>
+            <select
+              id="local-agents-default-credential"
+              value={appSettings?.localAgentsDefaultCredentialId ?? ''}
+              onChange={(event) =>
+                setAppSetting.mutate({
+                  key: 'localAgentsDefaultCredentialId',
+                  value: event.target.value
+                })
+              }
+              // Credential names run long — the control is 379px at the 800px
+              // minimum and a 58-character name is cut mid-word with no ellipsis.
+              title={pinnedCredential?.name ?? defaultMode?.name ?? undefined}
+              className={`${settingsInputClass} mt-1.5`}
+            >
+              <option value="">
+                {defaultMode?.name ? `Default chat mode (${defaultMode.name})` : 'Default chat mode'}
+              </option>
+              {/*
+                A pinned credential that is no longer offered — its key was
+                removed, or it turned out to be unsupported — still needs an
+                option, or the select matches nothing, renders blank, and says
+                "nothing is pinned" over a pin that is in force.
+              */}
+              {pinnedCredential && !activeProviders.some((p) => p.id === pinnedCredential.id) && (
+                <option value={pinnedCredential.id}>
+                  {credentialOptionLabel(pinnedCredential)}
+                </option>
+              )}
+              {activeProviders.map((provider) => (
+                <option key={provider.id} value={provider.id}>
+                  {provider.name}
+                </option>
+              ))}
+            </select>
+            {/*
+              Two lines of the 13px leading, reserved. Both warnings wrap at the
+              800px minimum, and a one-line slot moved everything below by
+              19.875px when the user cleared the warning by using the control
+              (ux_rules rule 1).
+            */}
+            <div className="mt-1.5 min-h-[2.5rem]">
+              {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
+                /*
+                  Not "agents fall back to your default chat mode" — they do not.
+                  `resolveDefault` falls through to the chat mode only when the
+                  pinned id resolves to no provider at all; a provider that exists
+                  but cannot make a call is returned *as* the runtime, with a
+                  reason. Saying otherwise told the user their agents were safely
+                  running on the chat mode while every turn was about to fail.
+                */
+                <p className="text-[13px] text-[var(--color-warning)]">
+                  {pinnedCredential.name} has no API key this app can use. Agents pinned to it will
+                  not run until it does — pick another credential here, or add a key to it.
+                </p>
+              ) : pinnedCredential && !pinnedCredential.enabled ? (
+                <p className="text-[13px] text-[var(--color-warning)]">
+                  {pinnedCredential.name} is switched off. Agents pinned to it will not run until
+                  you turn it back on in AI Credentials, or pick another credential here.
+                </p>
+              ) : pinnedMissing ? (
+                <p className="text-[13px] text-[var(--color-warning)]">
+                  The credential pinned here is no longer on this machine. Agents are using your
+                  default chat mode.
+                </p>
+              ) : null}
+            </div>
+          </div>
         </SettingsCard>
 
         <SettingsCard>
-          <SettingsLabel htmlFor="local-agents-engine-path">Engine path</SettingsLabel>
-          {/*
-            **Directly under the row that reports on it.** The status row's
-            failure names this field, and it used to sit two cards below with
-            "Default AI credential" wedged between — a message pointing at a
-            control the user has to go and find (ux_rules rule 12). The
-            credential card follows, because it is about which key an agent
-            spends rather than about the engine.
-
-            The hint sits above the field, and every message the field can
-            produce sits below it in a slot that is always there: a save error
-            or the pending note used to appear under the input and push the next
-            card down as the user typed (rule 1).
-          */}
-          <SettingsHint className="mt-0.5 mb-2">
-            Point Cinna at a specific <code className="font-mono">opencode</code> executable. An
-            absolute path, and it overrides both your PATH and the copy Cinna downloads. Leave it
-            empty for the normal behaviour. Whether the file exists is checked the next time an
-            agent runs — or when you press Try again above — not here.
-          </SettingsHint>
+          <div className="flex items-center gap-1.5">
+            <SettingsLabel htmlFor="local-agents-engine-path">OpenCode path</SettingsLabel>
+            <SettingsInfoTip label="About the OpenCode path">
+              <p>
+                Point Cinna at a specific <code className="font-mono">opencode</code> executable.
+                An absolute path, and it overrides both your <code className="font-mono">PATH</code>{' '}
+                and the copy Cinna downloads. Leave it empty for the normal behaviour: Cinna uses an{' '}
+                <code className="font-mono">opencode</code> on your PATH if you have one, and
+                downloads a verified copy if you do not.
+              </p>
+              <p>
+                Whether the file exists is checked the next time an agent runs — or when you press
+                Try again above — not here.
+              </p>
+            </SettingsInfoTip>
+          </div>
           <input
             id="local-agents-engine-path"
             type="text"
             value={enginePath}
             spellCheck={false}
-            /* Just the path. The "leave empty" half is in the hint above, and at
-               the 800px minimum window the full sentence measured 462px in a
-               399px box — it fit at the old 11px and does not at 13px, so the
-               instruction was the half that got cut (ux_rules rule 7). */
             placeholder="/usr/local/bin/opencode"
             onChange={(event) => setEnginePath(event.target.value)}
             onBlur={commitEnginePath}
@@ -619,110 +927,27 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 event.currentTarget.blur()
               }
             }}
-            className={`${settingsInputClass} font-mono`}
+            className={`${settingsInputClass} mt-1.5 font-mono`}
           />
+          {/* Every message this field can produce, below it, in a slot that is
+              always there: a save error arriving after a blur must not push the
+              next card down (ux_rules rule 12). */}
           <div className="mt-1.5 min-h-[1.125rem]">
             {enginePathError ? (
               <p className="text-[13px] text-[var(--color-danger)]">{enginePathError}</p>
             ) : enginePathPending ? (
               <p className="text-[13px] text-[var(--color-warning)]">
-                Cinna will use this path the next time an agent runs. The row above still names the
-                binary it found for the old one.
+                Cinna will use this path the next time an agent runs. The line above still describes
+                the binary it found for the old one.
               </p>
             ) : null}
           </div>
         </SettingsCard>
+
+        {/* How many turns may run at once, whichever runtime runs them. */}
+        <TaskConcurrencySetting />
       </SettingsSection>
 
-        <SettingsCard>
-          <SettingsLabel htmlFor="local-agents-default-credential">
-            Default AI credential
-          </SettingsLabel>
-          <SettingsHint className="mt-0.5 mb-2">
-            Which credential folder agents run on when they do not name one of their own. This is a
-            setting of <em>this machine</em>: leave it on the default chat mode and agents follow
-            whatever your chats use, or pin one here to keep agent work on a particular key without
-            changing what your chats do.
-          </SettingsHint>
-          <select
-            id="local-agents-default-credential"
-            value={appSettings?.localAgentsDefaultCredentialId ?? ''}
-            onChange={(event) =>
-              setAppSetting.mutate({
-                key: 'localAgentsDefaultCredentialId',
-                value: event.target.value
-              })
-            }
-            // Credential names run long — the control is 379px at the 800px
-            // minimum and a 58-character name is cut mid-word with no ellipsis.
-            title={pinnedCredential?.name ?? defaultMode?.name ?? undefined}
-            className={settingsInputClass}
-          >
-            <option value="">
-              {defaultMode?.name ? `Default chat mode (${defaultMode.name})` : 'Default chat mode'}
-            </option>
-            {/*
-              A pinned credential that is no longer offered — its key was
-              removed, or it turned out to be unsupported — still needs an
-              option, or the select matches nothing, renders blank, and says
-              "nothing is pinned" over a pin that is in force.
-            */}
-            {pinnedCredential && !activeProviders.some((p) => p.id === pinnedCredential.id) && (
-              <option value={pinnedCredential.id}>
-                {credentialOptionLabel(pinnedCredential)}
-              </option>
-            )}
-            {activeProviders.map((provider) => (
-              <option key={provider.id} value={provider.id}>
-                {provider.name}
-              </option>
-            ))}
-          </select>
-          {/*
-            The consequence, in a slot that is always there — the same shape as
-            the engine path's message below (ux_rules rule 1). A pinned
-            credential that has since lost its key would otherwise fail at the
-            first turn with nothing here having said so.
-          */}
-          {/*
-            Two lines of the 13px leading: both warnings here wrap at the 800px
-            minimum, and a one-line slot moved everything below by 19.875px when
-            the user cleared the warning by using the control (ux_rules rule 1).
-          */}
-          <div className="mt-1.5 min-h-[2.5rem]">
-            {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
-              /*
-                Not "agents fall back to your default chat mode" — they do not.
-                `resolveDefault` falls through to the chat mode only when the
-                pinned id resolves to no provider at all; a provider that exists
-                but cannot make a call is returned *as* the runtime, with a
-                reason. Saying otherwise told the user their agents were safely
-                running on the chat mode while every turn was about to fail.
-              */
-              <p className="text-[13px] text-[var(--color-warning)]">
-                {pinnedCredential.name} has no API key this app can use. Agents pinned to it will
-                not run until it does — pick another credential here, or add a key to it.
-              </p>
-            ) : pinnedCredential && !pinnedCredential.enabled ? (
-              /*
-                Same shape as the sentence above it, and the same reason it is
-                not "agents fall back to your default chat mode": `resolveDefault`
-                returns the pinned credential *as* the runtime and explains it.
-                The engine is simply not given a switched-off credential, so the
-                agents pinned here have nothing to run on until it is back.
-              */
-              <p className="text-[13px] text-[var(--color-warning)]">
-                {pinnedCredential.name} is switched off. Agents pinned to it will not run until you
-                turn it back on in AI Credentials, or pick another credential here.
-              </p>
-            ) : pinnedMissing ? (
-              <p className="text-[13px] text-[var(--color-warning)]">
-                The credential pinned here is no longer on this machine. Agents are using your
-                default chat mode.
-              </p>
-            ) : null}
-          </div>
-        </SettingsCard>
       <SettingsSection
         title="Developer Tools"
         action={
@@ -742,8 +967,9 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             Detected on this machine
           </div>
           <SettingsHint className="mt-0.5 mb-2.5">
-            What Cinna found installed globally, and the version each one reported. A row reading
-            Not found is a tool this machine does not have — nothing here is installed for you.
+            What else Cinna found installed globally, and the version each one reported. A row
+            reading Not found is a tool this machine does not have — nothing here is installed for
+            you. The runtimes an agent can run on are in the Runtime section above.
           </SettingsHint>
           {/*
             A table, not chips. Chips could only say "present", so a user
@@ -761,7 +987,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 </tr>
               </thead>
               <tbody>
-                {(tools ?? []).map((tool) => (
+                {otherTools.map((tool) => (
                   <tr key={tool.id} className="border-t border-[var(--color-border)]">
                     <td className="truncate px-2.5 py-1.5 text-[var(--color-text)]" title={tool.path ?? undefined}>
                       {tool.label}
@@ -791,7 +1017,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                     </td>
                   </tr>
                 ))}
-                {(tools ?? []).length === 0 && (
+                {otherTools.length === 0 && (
                   <tr>
                     <td colSpan={2} className="px-2.5 py-2 text-[var(--color-text-muted)]">
                       Detecting…

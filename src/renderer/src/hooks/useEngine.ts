@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { EngineBinaryState } from '../../../shared/engine'
+import type { DefaultEngineDto, EngineBinaryState } from '../../../shared/engine'
 
 /**
  * The local engine's binary, as Settings and the Runs-with panel see it.
@@ -58,5 +58,32 @@ export function useResolveEngineBinary() {
   return useMutation<EngineBinaryState>({
     mutationFn: () => window.api.engine.resolve(),
     onSuccess: (state) => queryClient.setQueryData(ENGINE_BINARY_KEY, state)
+  })
+}
+
+export const DEFAULT_RUNTIME_KEY = ['default-runtime'] as const
+
+/**
+ * This machine's **Default Runtime** — what a folder agent that names no engine
+ * of its own runs on.
+ *
+ * Answered by main, not assembled here out of `useAppSettings` and
+ * `useLocalTools`. The renderer holds both halves and could do the sum, and
+ * that is exactly the arrangement that has twice let this area's panel predict
+ * a runtime the launcher did not build. It also arrives as **one** value:
+ * summed here it would read "AI credentials" while tool detection was in flight
+ * and then flip, which on the agent page swaps a picker under the pointer
+ * (ux_rules rule 1). `undefined` is *not known yet*, and every caller renders
+ * that as a claim withheld rather than as a negative.
+ *
+ * Invalidate it whenever either half moves: the setting (`useSetAppSetting`
+ * cannot know, so the Settings screen does it) and detection (a Refresh, or an
+ * install that just succeeded).
+ */
+export function useDefaultRuntime() {
+  return useQuery<DefaultEngineDto>({
+    queryKey: DEFAULT_RUNTIME_KEY,
+    queryFn: () => window.api.engine.defaultRuntime(),
+    staleTime: Infinity
   })
 }

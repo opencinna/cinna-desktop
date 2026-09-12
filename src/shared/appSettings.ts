@@ -84,6 +84,26 @@ export interface AppSettingsSchema {
    */
   localAgentsDefaultCredentialId: string
   /**
+   * This machine's **Default Runtime** — what a folder agent that names no
+   * engine of its own runs on. `'claude'`, `'opencode'`, or empty for
+   * *Automatic*.
+   *
+   * Empty is the default and is a real answer, not an unset one: it means "the
+   * first runtime found on this machine", which resolves to the user's own
+   * Claude Code when they have one and to the AI credentials path when they do
+   * not. That is the whole point of the setting — a fresh install with no API
+   * key configured can still run local agents, on the CLI the user already had.
+   *
+   * Machine-local for the same reason `localAgentsDefaultCredentialId` is:
+   * which runtime exists here is a property of *this* computer, and syncing it
+   * to a profile would pin agents to a `claude` a second machine does not have.
+   *
+   * Validated only as a string here; `resolveDefaultEngine` reads an
+   * unrecognised value as Automatic, so a value written by a newer build cannot
+   * strand this one's agents.
+   */
+  localAgentsDefaultEngine: string
+  /**
    * When true, creating a local agent opens the new folder in the default tool
    * straight away instead of asking which tool to build it with. Meaningless
    * without `localAgentsDefaultTool`; the new-agent flow asks as before when

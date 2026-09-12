@@ -1,11 +1,15 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type {
   DetectedTool,
   LocalToolId,
   LocalToolKind,
-  OpenInRequest
+  OpenInRequest,
+  RuntimeToolId,
+  ToolInstallPlan,
+  ToolInstallProgress
 } from '../../../shared/localTools'
+import { DEFAULT_RUNTIME_KEY } from './useEngine'
 import { useAppSettings, useSetAppSetting } from './useAppSettings'
 import { launchableTools, resolveDefaultTool } from '../utils/localAgents'
 
@@ -106,8 +110,85 @@ export function useRefreshLocalTools() {
       // The main process re-asks the login on this same call, so the cached
       // answer here is stale the moment detection comes back.
       void queryClient.invalidateQueries({ queryKey: CLAUDE_AUTH_KEY })
+      // Detection is half of what the Default Runtime is derived from: on
+      // Automatic, finding a `claude` that was not there a moment ago *is* the
+      // change of runtime. Left stale, Settings would report the new install in
+      // one card and the old default in the one above it.
+      void queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
     }
   })
+}
+
+export const TOOL_INSTALL_PLANS_KEY = ['tool-install-plans'] as const
+
+/**
+ * What this machine would run to install each runtime.
+ *
+ * Fetched rather than written in the renderer, because the command the confirm
+ * dialog shows has to be the command that will actually run: main owns the
+ * table, resolves it for this platform, and the dialog quotes what came back.
+ * A copy here would be a second version of a string whose whole job is to be
+ * exactly what happens next.
+ */
+export function useToolInstallPlans() {
+  return useQuery({
+    queryKey: TOOL_INSTALL_PLANS_KEY,
+    queryFn: () => window.api.localTools.installPlans(),
+    staleTime: Infinity
+  })
+}
+
+/**
+ * Run a vendor's installer for one runtime.
+ *
+ * **Owned above the dialog that triggers it** (ux_rules rule 5): the dialog
+ * closes on success, and a `mutate`-level `onSuccess` would be dropped by that
+ * unmount. The caller passes what closing means.
+ *
+ * It resolves for a *failed* install too — main returns the outcome rather than
+ * rejecting, so the sentence survives the bridge — which is why `onDone` is
+ * handed the outcome instead of being treated as a success callback.
+ */
+export function useInstallRuntimeTool(options: { onDone?: (result: ToolInstallProgress) => void } = {}) {
+  const queryClient = useQueryClient()
+  return useMutation<ToolInstallProgress, Error, RuntimeToolId>({
+    mutationFn: (toolId) => window.api.localTools.install(toolId),
+    onSuccess: (result) => {
+      if (result.state === 'done') {
+        // Main has already re-detected by the time this resolves, so these are
+        // reads of a fresh answer rather than a second detection pass.
+        void queryClient.invalidateQueries({ queryKey: LOCAL_TOOLS_KEY })
+        void queryClient.invalidateQueries({ queryKey: CLAUDE_AUTH_KEY })
+        void queryClient.invalidateQueries({ queryKey: DEFAULT_RUNTIME_KEY })
+      }
+      options.onDone?.(result)
+    }
+  })
+}
+
+/**
+ * The installer's last output line, while it runs.
+ *
+ * A subscription rather than a query: there is nothing to fetch, and the line
+ * changes several times a second. Scoped to one tool so a dialog cannot show
+ * another install's output, and dropped when the subscriber unmounts.
+ */
+export function useToolInstallProgress(toolId: RuntimeToolId | null): ToolInstallProgress | null {
+  const [progress, setProgress] = useState<ToolInstallProgress | null>(null)
+  useEffect(() => {
+    setProgress(null)
+    if (!toolId) return
+    return window.api.localTools.onInstallProgress((next) => {
+      if (next.id === toolId) setProgress(next)
+    })
+  }, [toolId])
+  return progress
+}
+
+/** The install plan for one runtime, or null when this build has none for it. */
+export function useToolInstallPlan(toolId: RuntimeToolId | null): ToolInstallPlan | null {
+  const { data } = useToolInstallPlans()
+  return toolId ? ((data ?? []).find((plan) => plan.id === toolId) ?? null) : null
 }
 
 /**

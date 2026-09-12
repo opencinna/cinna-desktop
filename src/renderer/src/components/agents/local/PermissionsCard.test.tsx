@@ -22,7 +22,17 @@ const grantForget = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const grantsClear = vi.fn<() => Promise<StoredPermissionGrant[]>>()
 const setClaudeApproval = vi.fn<() => Promise<unknown>>()
 ;(window as unknown as { api: unknown }).api = {
-  localAgents: { grantsList, grantForget, grantsClear, setClaudeApproval }
+  localAgents: { grantsList, grantForget, grantsClear, setClaudeApproval },
+  /**
+   * This machine's Default runtime, which the card now reads: an agent whose
+   * folder names no engine runs on whatever this says, and the card describes
+   * *that* engine's permission system rather than the manifest's silence.
+   *
+   * The OpenCode runner here, which is what every test below but the Claude
+   * ones assumes. A card that could not answer at all is its own state — see
+   * the test for it.
+   */
+  engine: { defaultRuntime: async () => ({ engine: 'opencode' }) }
 }
 
 const agent = { id: 'folder:alpha', name: 'Alpha' } as LocalAgentDto
@@ -73,14 +83,21 @@ afterEach(() => {
 })
 
 describe('PermissionsCard', () => {
-  it('says what the agent may do without asking, even with nothing remembered', () => {
+  it('says what the agent may do without asking, even with nothing remembered', async () => {
     // The default profile changed — an agent now works freely inside its own
     // folder — and a user who notices it stopped asking has to be able to find
     // out why on the agent's own page. Mutation: render the sentence only when
     // there are grants fails this.
     grantsList.mockResolvedValue([])
     renderCard()
-    expect(screen.getByText(/runs commands inside its own folder without asking/)).toBeTruthy()
+    // **Awaited, because the card will not say whose permission system this is
+    // until it knows which runtime the agent uses.** An agent whose folder names
+    // no engine runs on this machine's Default runtime, and describing the
+    // OpenCode profile before that answer arrives would be a security sentence
+    // the card then retracts.
+    expect(
+      await screen.findByText(/runs commands inside its own folder without asking/)
+    ).toBeTruthy()
     // **And the limit of that, in the same breath.** The profile allows the
     // shell tool outright and the engine gates a command by its text, not by
     // what it touches — so the file-tool denies above do not hold for a
@@ -112,7 +129,7 @@ describe('PermissionsCard', () => {
     // The keys, not just the warning: "some of these rules may be wrong" tells
     // the user the paragraph above is unreliable and nothing else (ux_rules §7).
     // Mutation: render a bare "some of those rules" fails this.
-    expect(screen.getByText(/replaces the rules for/)).toBeTruthy()
+    expect(await screen.findByText(/replaces the rules for/)).toBeTruthy()
     expect(screen.getByText('bash, webfetch')).toBeTruthy()
   })
 
@@ -202,7 +219,7 @@ describe('PermissionsCard — a bare agent', () => {
     renderCard(bare)
     await waitFor(() => expect(grantsList).toHaveBeenCalled())
 
-    expect(screen.getByText('AGENT.md')).toBeTruthy()
+    expect(await screen.findByText('AGENT.md')).toBeTruthy()
     expect(screen.queryByText('credentials/.env')).toBeNull()
     expect(screen.queryByText(/prompt or manifest/)).toBeNull()
     // The half of the key-file sentence that is true for any folder survives.
@@ -230,12 +247,40 @@ describe('PermissionsCard — a bare agent', () => {
     expect(screen.getByText(/moving or renaming it starts a new agent/i)).toBeTruthy()
   })
 
+  it('claims no permission system until it knows which runtime the agent runs on', async () => {
+    /**
+     * The window this exists for: an agent whose folder names nothing, on a
+     * machine whose Default runtime has not been read yet. Whether the CLI's own
+     * reviewer or the OpenCode profile governs this agent is the card's whole
+     * subject, and a first paint that answers it and is corrected a moment later
+     * is worse than one that waits — this is a security surface, and the
+     * retraction is of the sentence saying who approves a command.
+     *
+     * Mutation: defaulting the unread answer to OpenCode fails this.
+     */
+    grantsList.mockResolvedValue([])
+    const api = (window as unknown as { api: { engine: { defaultRuntime: () => Promise<unknown> } } })
+      .api
+    const answered = api.engine.defaultRuntime
+    api.engine.defaultRuntime = () => new Promise(() => {})
+    try {
+      renderCard()
+      expect(screen.getByText(/Reading which runtime this agent uses/)).toBeTruthy()
+      expect(screen.queryByText(/runs commands inside its own folder without asking/)).toBeNull()
+      // And no Approvals control either: the other branch is just as much a
+      // claim about what is in force.
+      expect(screen.queryByLabelText('Approvals')).toBeNull()
+    } finally {
+      api.engine.defaultRuntime = answered
+    }
+  })
+
   it('keeps the kit copy for a kit agent', async () => {
     grantsList.mockResolvedValue([])
     renderCard()
     await waitFor(() => expect(grantsList).toHaveBeenCalled())
 
-    expect(screen.getByText('credentials/.env')).toBeTruthy()
+    expect(await screen.findByText('credentials/.env')).toBeTruthy()
     expect(screen.getByText('app-data/desktop.json')).toBeTruthy()
     expect(screen.queryByText(/Kept on this machine rather than in the folder/)).toBeNull()
   })

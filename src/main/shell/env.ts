@@ -57,6 +57,18 @@ let resolved: NodeJS.ProcessEnv | null = null
 let resolvedFromShell = false
 let inFlight: Promise<NodeJS.ProcessEnv> | null = null
 
+/**
+ * Bumped by {@link resetShellEnv}, so work already in flight cannot write its
+ * answer into a cache that was cleared while it ran.
+ *
+ * Clearing the maps is not enough on its own: a `which()` or a shell probe
+ * started a moment earlier still holds a reference to its own promise chain and
+ * will happily `set` the pre-reset answer afterwards — which for the case this
+ * exists for (an installer that has just added a directory to `PATH`) is
+ * precisely the wrong answer, cached for the lifetime of the app.
+ */
+let generation = 0
+
 /** Resolved executable paths, keyed by binary name. `null` = looked up, absent. */
 const toolCache = new Map<string, string | null>()
 /** In-flight `which` lookups, so a burst of callers walks PATH once per binary. */
@@ -199,6 +211,7 @@ export async function getShellEnv(): Promise<NodeJS.ProcessEnv> {
   // Deferred to a microtask for the same reason `getCinnaAccessToken` does it:
   // a synchronous throw inside the body would otherwise run the `finally`
   // before `inFlight` was ever assigned.
+  const startedAt = generation
   const run = Promise.resolve()
     .then(resolveShellEnv)
     .catch((err) => {
@@ -206,8 +219,13 @@ export async function getShellEnv(): Promise<NodeJS.ProcessEnv> {
       return { env: process.env, fromShell: false }
     })
     .then(({ env, fromShell }) => {
-      resolved = env
-      resolvedFromShell = fromShell
+      // Only when nothing reset the environment while this probe ran. The
+      // caller still gets this answer — it is the best one *it* can have — but
+      // it does not become the app's.
+      if (startedAt === generation) {
+        resolved = env
+        resolvedFromShell = fromShell
+      }
       return env
     })
     .finally(() => {
@@ -255,6 +273,7 @@ export async function which(bin: string): Promise<string | null> {
   const pending = toolInFlight.get(bin)
   if (pending) return pending
 
+  const startedAt = generation
   const lookup = Promise.resolve()
     .then(async () => {
       const env = await getShellEnv()
@@ -262,7 +281,10 @@ export async function which(bin: string): Promise<string | null> {
         platform: currentWalkPlatform(),
         pathExt: env.PATHEXT
       })
-      toolCache.set(bin, found)
+      // Same guard as the shell probe above: a lookup that spans a reset
+      // answers its own caller and stops there. Caching it would hand the next
+      // caller a "not installed" for a binary that was installed in between.
+      if (startedAt === generation) toolCache.set(bin, found)
       return found
     })
     .catch((err) => {
@@ -299,4 +321,36 @@ export function clearToolCache(): void {
     resolved = null
     logger.info('discarded fallback shell env, will re-probe on next use')
   }
+}
+
+/**
+ * Forget the login-shell environment as well, so the **next** caller re-probes
+ * `PATH` itself.
+ *
+ * The strictly stronger sibling of {@link clearToolCache}, and deliberately not
+ * what Refresh does. It exists for the one event that invalidates the resolved
+ * PATH rather than the lookups under it: this app has just run an installer
+ * that edits the user's shell profile to add a new directory
+ * (`~/.local/bin` — both of today's runtime installers do it). Re-walking the
+ * old PATH cannot find what was installed there, so the tool this app had just
+ * installed would be reported as missing until a restart.
+ *
+ * Not on the Refresh path, because a probe is seconds of an interactive login
+ * shell and the case that needs it is exactly this one: an install *this
+ * process performed*, where something knows the profile changed.
+ */
+export function resetShellEnv(): void {
+  toolCache.clear()
+  // **The in-flight lookups too.** A `which()` started before the install
+  // finished is about to write its pre-install answer — `null` for the binary
+  // that now exists — into the cache this line just emptied, and the detection
+  // pass that follows would join that same promise and report the tool as
+  // missing. Dropping the map means those callers finish against the stale
+  // world while the next one starts a fresh lookup.
+  toolInFlight.clear()
+  resolved = null
+  resolvedFromShell = false
+  inFlight = null
+  generation += 1
+  logger.info('dropped the cached login-shell environment, will re-probe on next use')
 }

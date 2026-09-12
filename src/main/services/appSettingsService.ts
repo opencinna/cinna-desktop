@@ -8,6 +8,7 @@ import { AppSettingsError } from '../errors'
 import { createLogger } from '../logger/logger'
 import { assertUsableRoot } from './localAgents/pathRules'
 import { isLocalToolId } from '../../shared/localTools'
+import { isAgentEngine } from '../../shared/engine'
 
 const logger = createLogger('app-settings')
 
@@ -177,6 +178,23 @@ const VALUE_CHECKS: {
     if (value === '') return
     if (!isLocalToolId(value)) {
       throw new AppSettingsError('invalid_value', 'That is not a tool Cinna knows how to open.')
+    }
+  },
+
+  /**
+   * An engine this build can actually launch, or empty for Automatic.
+   *
+   * Rejected at the boundary rather than read tolerantly and ignored, unlike
+   * `runtime.engine` in a manifest: a *file* naming an engine this build has
+   * never heard of came from another tool and must keep working, while this
+   * value can only have been written by this app's own picker. A name that
+   * resolves to nothing here would leave every defaulted agent on Automatic
+   * with a Settings screen claiming otherwise.
+   */
+  localAgentsDefaultEngine: (value) => {
+    if (value === '') return
+    if (!isAgentEngine(value)) {
+      throw new AppSettingsError('invalid_value', 'That is not a runtime Cinna can run agents on.')
     }
   }
 }
