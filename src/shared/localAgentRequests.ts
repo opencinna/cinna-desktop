@@ -437,6 +437,8 @@ export type RequestResolution =
  * engine would have done.
  */
 export interface LocalPermissionRequest {
+  /** False when this runtime cannot store a standing grant. Omitted for existing ACP asks. */
+  allowRemember?: boolean
   action: string
   resources: string[]
   savable: string[]
@@ -458,5 +460,5 @@ export function parsePermissionRequest(
     ? toolInput.savable.filter((r): r is string => typeof r === 'string')
     : []
   const callId = typeof toolInput.callId === 'string' ? toolInput.callId : undefined
-  return { action, resources, savable, callId }
+  return { action, resources, savable, callId, ...(toolInput.allowRemember === false ? { allowRemember: false } : {}) }
 }

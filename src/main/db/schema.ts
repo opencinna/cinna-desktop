@@ -47,6 +47,7 @@ export const llmProviders = sqliteTable('llm_providers', {
   userId: text('user_id').notNull().default('__default__'),
   type: text('type').notNull(), // 'anthropic' | 'openai' | 'gemini' | 'openai_compatible'
   name: text('name').notNull(),
+  configRevision: integer('config_revision').notNull().default(0),
   apiKeyEncrypted: blob('api_key_enc', { mode: 'buffer' }),
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   defaultModelId: text('default_model_id'),
@@ -393,6 +394,17 @@ export const a2aSessions = sqliteTable('a2a_sessions', {
   updatedAt: integer('updated_at', { mode: 'timestamp' })
     .notNull()
     .$defaultFn(() => new Date())
+})
+
+/** Private remote continuity; credential fingerprints never cross the IPC DTO. */
+export const managedAgentSessions = sqliteTable('managed_agent_sessions', {
+  id: text('id').primaryKey(),
+  chatId: text('chat_id').notNull().references(() => chats.id, { onDelete: 'cascade' }),
+  agentId: text('agent_id').notNull().references(() => agents.id, { onDelete: 'cascade' }),
+  binding: text('binding').notNull(),
+  sessionId: text('session_id').notNull(),
+  state: text('state').notNull(),
+  updatedAt: integer('updated_at', { mode: 'timestamp' }).notNull().$defaultFn(() => new Date())
 })
 
 export const messages = sqliteTable('messages', {

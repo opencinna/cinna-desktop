@@ -22,6 +22,7 @@ const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setActiveLocalAgentId = vi.fn()
 const setSidebarTab = vi.fn()
+vi.mock('../../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({

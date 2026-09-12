@@ -6,7 +6,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 
 ## Core Concepts
 
-- **Driver** — `AgentDriver`: the kind-specific half of running an agent. There are **two**: `a2a` (a hand-added or Cinna-synced agent reached over A2A) and `acp` (every local CLI agent, run as a child process speaking the Agent Client Protocol). There were four for the length of one commit while the ACP driver landed switched off, and three before that — `opencode` and `claude` were separate drivers wrapping separate runners
+- **Driver** — `AgentDriver`: the transport-specific half of running an agent. There are three: `a2a` (hand-added or Cinna-synced remote agents), `acp` (local CLI agents over a child process), and `managed` (Claude workspace agents over SDK sessions/events). A folder engine is an ACP launcher, not a separate driver
 - **Driver id** — `agents.driver`, stored on every row. **`source` still says who owns a row** (`local` / `remote` / `folder`: whether sync may touch it, which settings tab lists it, whether it can be deleted). **`driver` says how the agent runs.** One column used to carry both, and they are separate concerns
 - **Capabilities** — what a driver can do for a given row: stream, cancel, keep a session, which asks it raises and how they are answered, whether a file can be attached, who authenticates the turn, where `/` commands come from, whether it runs in a folder. Answered from the row alone
 - **Agent readiness** — whether an agent can take a turn now. The answer is `ok`, or one of:
@@ -84,7 +84,7 @@ The driver contract retains synchronous `respond` and adds optional `respondAsyn
 
 Equivalent normalized answers join one claim. A conflicting answer refuses; uncertain acceptance never resends. If the service accepted but local commitment failed, retry records that same answer locally without another remote call. Cancellation or registration replacement invalidates the claim and prevents late completion from releasing another occurrence.
 
-Inbox and transcript share the durable answer path. ACP still writes its local grant, resolves its park and commits the request/task update synchronously before the continuation can run. A missing-agent fallback is restricted to an ACP-origin registration and cannot accept a captured asynchronous reply. These are common contracts for future drivers; no Managed driver or real Managed account call is implemented by this prerequisite.
+Inbox and transcript share the durable answer path. ACP still writes its local grant, resolves its park and commits the request/task update synchronously before the continuation can run. A missing-agent fallback is restricted to an ACP-origin registration and cannot accept a captured asynchronous reply. The [Managed driver](../managed_agents/managed_agents.md) supplies captured session/thread/tool confirmation delivery and stops stream continuation at this barrier. It offers once or deny, never a standing grant; uncertain acknowledgment disables further UI decisions without accepting the request.
 
 ### The row is a cache; the folder decides a folder agent's engine
 

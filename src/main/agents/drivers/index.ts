@@ -60,6 +60,8 @@ import {
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
 import { unsupportedDriver } from './unsupportedDriver'
+import { createManagedDriver } from './managed/managedDriver'
+import { managedAgentService } from '../../services/managedAgentService'
 import type { AgentDriver, ParkedAsk, RespondOutcome } from './driver'
 
 const logger = createLogger('agent-driver')
@@ -377,7 +379,12 @@ const drivers: Record<AgentDriverId, AgentDriver> = {
     fetchCard: fetchAgentCard,
     isReauthRequired: (err) => err instanceof CinnaReauthRequired
   }),
-  acp: acpDriver
+  acp: acpDriver,
+  managed: createManagedDriver({
+    prepare: (ownerId, agent, chatId) => managedAgentService.prepare(ownerId, agent, chatId),
+    readiness: (agent) => managedAgentService.readiness(agent),
+    registerRequest: (input) => pendingRequests.register(input)
+  })
 }
 
 /**

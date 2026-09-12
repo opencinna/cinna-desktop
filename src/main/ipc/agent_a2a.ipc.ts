@@ -1,3 +1,4 @@
+import { replyAnswerUncertainty } from '../services/replyAnswerClaims'
 import { chatRepo } from '../db/chats'
 import { inboxService } from '../services/inboxService'
 import { a2aSessionRepo } from '../db/agents'
@@ -12,11 +13,25 @@ import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { AgentError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
 import { ipcHandle } from './_wrap'
+import { managedAgentService } from '../services/managedAgentService'
+import type { ManagedAgentConfig } from '../../shared/managedAgents'
 import type { CliCommand } from '../../shared/cliCommands'
 
 const logger = createLogger('A2A')
 
 export function registerA2AHandlers(): void {
+  ipcHandle('managed-agent:configuration', (_event, id: string) => {
+    userActivation.requireActivated()
+    return managedAgentService.configuration(id)
+  })
+  ipcHandle('managed-agent:choices', (_event, input: { credentialId: string; workspaceId?: string }) => {
+    userActivation.requireActivated()
+    return managedAgentService.choices(input.credentialId, input.workspaceId)
+  })
+  ipcHandle('managed-agent:save', (_event, input: { id?: string; name?: string; config: ManagedAgentConfig }) => {
+    userActivation.requireActivated()
+    return managedAgentService.save(input)
+  })
   // Fetch agent card from URL (for testing / adding a new agent)
   ipcHandle(
     'agent:fetch-card',
@@ -157,6 +172,14 @@ export function registerA2AHandlers(): void {
       return inboxService.answerFromTranscript(userId, data.requestId, parsed)
     }
   )
+
+  // A renderer reload/navigation must retain an uncertain remote confirmation.
+  ipcHandle('agent:reply-uncertainty', (_event, requestId: string): string | null => {
+    userActivation.requireActivated()
+    const owner = pendingRequests.owner(requestId)
+    if (!owner || !chatRepo.getOwned(getProfileScopeUserId(), owner.chatId)) return null
+    return replyAnswerUncertainty(pendingRequests.registration(requestId))
+  })
 
   /** What a chat is currently blocked on, so a reload can re-open the prompt. */
   ipcHandle('agent:pending-requests', async (_event, chatId: string) => {

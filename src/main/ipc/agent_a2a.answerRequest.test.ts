@@ -254,3 +254,17 @@ describe('agent:answer-request — what reaches the driver', () => {
     expect(resolve).not.toHaveBeenCalled()
   })
 })
+
+
+describe('agent:reply-uncertainty ownership', () => {
+  it('does not expose a registered answer from another profile’s chat', async () => {
+    const { chatRepo } = await import('../db/chats')
+    vi.mocked(chatRepo.getOwned).mockReturnValueOnce(undefined)
+    expect(await handlers.get('agent:reply-uncertainty')!({}, 'per_1')).toBeNull()
+    expect(chatRepo.getOwned).toHaveBeenCalledWith('profile-user', 'chat-1')
+  })
+  it('returns no state for an expired registration', async () => {
+    owner.mockReturnValueOnce(null)
+    expect(await handlers.get('agent:reply-uncertainty')!({}, 'per_missing')).toBeNull()
+  })
+})

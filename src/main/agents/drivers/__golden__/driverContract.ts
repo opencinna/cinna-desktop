@@ -76,8 +76,14 @@ export interface HangingTurn extends ContractTurn {
 }
 
 export interface ParkedTurn extends ContractTurn {
-  /** What the suite posts through `pendingRequests.resolve` as the user's answer. */
+  /** What the suite posts as the user's answer. */
   answer: RequestResolution
+  /**
+   * Optional captured asynchronous delivery path. Must use the production
+   * acceptance/commit/release claim, not release the registry directly. ACP
+   * keeps its original synchronous resolve/respond clauses when omitted.
+   */
+  answerRequest?(requestId: string, resolution: RequestResolution): Promise<{ delivered: boolean }>
   /**
    * Whatever has to happen after the ask settles for the turn to end — the
    * engine's end-of-turn frame, the SDK generator's final `result`. Called once
@@ -486,7 +492,8 @@ export function describeDriverContract(
     )
 
     clause('respond.unknown', 'answers an ask nothing is waiting on with delivered: false, and writes no grant', async () => {
-      const { driver, row, grantsWritten } = makeSubject().underTest()
+      const subject = makeSubject()
+      const { driver, row, grantsWritten } = subject.underTest()
       const nobody = {
         requestId: 'per_contract_nobody',
         chatId: CONTRACT_CHAT,
@@ -496,6 +503,23 @@ export function describeDriverContract(
       expect(driver.respond(nobody, { kind: 'permission', reply: 'once' })).toEqual({ delivered: false })
       expect(grantsWritten(), 'grants written for an ask nothing was waiting on').toBe(0)
       if (!hasParks) return
+
+      // An asynchronous driver owns its reply capability on the actual run's
+      // registration. A manually registered ACP ask cannot manufacture it.
+      const turn = subject.parks?.()
+      if (turn?.answerRequest) {
+        const d = drive(turn)
+        await until(() => registered.length > 0, 'the asynchronous ask to be registered', { setup: true })
+        const requestId = registered[0].requestId
+        expect(await turn.answerRequest(requestId, turn.answer)).toEqual({ delivered: true })
+        expect(await turn.answerRequest(requestId, turn.answer)).toEqual({ delivered: false })
+        expect(driver.respond({ ...nobody, requestId }, turn.answer)).toEqual({ delivered: false })
+        await turn.afterSettle?.()
+        await settled(d.promise, 'the asynchronously answered turn')
+        expect(pendingRequests.owner(requestId)).toBeNull()
+        expect(grantsWritten(), 'grants written for a once answer').toBe(0)
+        return
+      }
 
       // An ask that was waiting and has been answered is nothing waiting any
       // more: a second answer — a double click, a stale block — lands nowhere.
@@ -529,11 +553,19 @@ export function describeDriverContract(
         if (chatIdOf) expect(pendingRequests.listForChat(chatIdOf)).toEqual([])
       }
 
+      async function answer(turn: ParkedTurn, requestId: string, resolution: RequestResolution): Promise<void> {
+        if (turn.answerRequest) {
+          expect(await turn.answerRequest(requestId, resolution)).toEqual({ delivered: true })
+        } else {
+          expect(pendingRequests.resolve(requestId, resolution)).not.toBeNull()
+        }
+      }
+
       clause('park.answer', 'is registered once and released when answered', async () => {
         const p = await park()
         const owner = pendingRequests.owner(p.requestId)
         expect(owner).not.toBeNull()
-        expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
+        await answer(p.turn, p.requestId, p.turn.answer)
         await p.turn.afterSettle?.()
         const result = await settled(p.d.promise, 'an answered turn')
         expect(result).toBeDefined()
@@ -552,7 +584,7 @@ export function describeDriverContract(
         expect(asked[0].resume).toBe('reply')
         expect(asked[0].request.kind).toBe(kind)
 
-        expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
+        await answer(p.turn, p.requestId, p.turn.answer)
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'an answered turn')
         // And not again on the way out — an answer is not a second ask.
@@ -563,7 +595,7 @@ export function describeDriverContract(
 
       clause('park.input_resolved', 'answering emits input_resolved', async () => {
         const p = await park()
-        expect(pendingRequests.resolve(p.requestId, p.turn.answer)).not.toBeNull()
+        await answer(p.turn, p.requestId, p.turn.answer)
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'an answered turn')
         // Once, although a driver may hear of the same answer twice — its own
@@ -578,7 +610,7 @@ export function describeDriverContract(
       clause('park.reject', 'is registered once and released when rejected', async () => {
         const p = await park()
         const owner = pendingRequests.owner(p.requestId)
-        expect(pendingRequests.resolve(p.requestId, { kind: 'rejected' })).not.toBeNull()
+        await answer(p.turn, p.requestId, { kind: 'rejected' })
         await p.turn.afterSettle?.()
         await settled(p.d.promise, 'a rejected turn')
         expectReleased(p.requestId, owner?.chatId ?? null)

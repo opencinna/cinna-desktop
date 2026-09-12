@@ -146,17 +146,17 @@ Who writes the column:
 
 ### Capabilities per driver
 
-| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` |
-|---|---|---|---|---|
-| `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes |
-| `sessions` | `context` | `context` | `resumable` | `resumable` |
-| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` |
-| `inputResume` | `next_message` | `next_message` | `reply` | `reply` |
-| `attachments` | `cinna` | `none` | `none` | `none` |
-| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` |
-| `commands` | `card` | `card` | `catalog` | `catalog` |
-| `mcpInjection` | no | no | no | no |
-| `cwd` | no | no | yes | yes |
+| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` | `managed` |
+|---|---|---|---|---| --- |
+| `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
+| `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` |
+| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` | `permission` |
+| `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` |
+| `attachments` | `cinna` | `none` | `none` | `none` | `none` |
+| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) |
+| `commands` | `card` | `card` | `catalog` | `catalog` | `none` |
+| `mcpInjection` | no | no | no | no | no |
+| `cwd` | no | no | yes | yes | no |
 
 **One driver, and still two answers, because a capability is about what the *engine* can do rather than about the protocol.** Both differences are measured and both move opposite to what a transport change would suggest: Claude **gains** questions (the adapter enables `AskUserQuestion` because the launcher declares `elicitation.form`) while OpenCode **loses** them (its `question` tool is not registered under `OPENCODE_CLIENT=acp`, and its ACP layer bridges none to `elicitation/create`). A launcher this build has no implementation for — `gemini`, `codex` — is described as a CLI-authenticated agent **with no question path**, because nothing here has run one and a capability that pretends otherwise would have the composer offer an answer widget for an ask that never arrives.
 
@@ -295,7 +295,7 @@ It also counts comparisons against `FOLDER_AGENT_SOURCE` and calls of the two fo
   - `AgentCard.tsx`, `CatalogSettingsSection.tsx`, `JobEditForm.tsx`, `JobDetail.tsx` — 1 each
 
   These files are not allowlisted, because a whole-file pass would hide the next behavioural branch added beside them. A count that moves in either direction fails until someone reads the branch and decides which kind it is; a behavioural one moves into a driver
-- **`LIMITS`** — every category and aggregate `LIMIT` are zero for counted behavioral debt. The status/tool cleanup replaced six behavioral consumers, classified 42 existing kind/layout/authoring and one presentation comparison, and pinned two status-factory ownership sites plus one newly scanned coordinator-authority check. Job cleanup replaces eight behavioral consumers, classifies 22 existing provenance/schema comparisons, and pins two definition-policy comparisons plus one legacy-adoption site. Physical ownership/presentation comparisons remain visible with exact per-file counts; zero is not a claim that all branches disappeared. See [Job executor ownership](../../jobs/jobs/execution_tech.md).
+- **`LIMITS`** — every category and aggregate `LIMIT` are zero for counted behavioral debt. The status/tool cleanup replaced six behavioral consumers, classified 42 existing kind/layout/authoring and one presentation comparison, and pinned two status-factory ownership sites plus one newly scanned coordinator-authority check. Job cleanup replaces eight behavioral consumers, classifies 22 existing provenance/schema comparisons, and pins two definition-policy comparisons plus one legacy-adoption site. Managed configuration editing adds one explicit source-ownership pin in src/main/db/agents.ts; the behavioral floor stays zero. Physical ownership/presentation comparisons remain visible with exact per-file counts; zero is not a claim that all branches disappeared. See [Job executor ownership](../../jobs/jobs/execution_tech.md).
 - **`NOT_A_KIND_BRANCH`** (`:182`) — drops three named comparisons on unrelated `'local' | 'cinna'` unions
 - **Blind spots**, listed in the file's header — none of these are counted:
   - a `switch` / `case` on a kind
@@ -395,4 +395,4 @@ ResolvedRuntime now calls its derived output launcher. It is not execution autho
 - `src/main/db/taskInputRequests.ts` — `commitReply`: transaction rechecks exact task/chat/agent/rootRun/invocation/createdAt, open driver-owned reply and desktop task; settlement and strict aggregate task update commit together. Service also requires runsHere and blocked/in_progress. Siblings retain needs_input. Failure rolls back the request row, so accepted async delivery keeps its park and retries only local commitment.
 - `src/main/services/inboxReplyDelivery.test.ts` uses real SQLite/registry and the actual ACP responder to pin both surfaces, immediate continuation ordering, effective Always/once, siblings and rollback. `src/main/services/replyAnswerClaims.test.ts` pins acceptance, conflicts, uncertainty, cancellation/replacement and local-only retry.
 
-Claims are memory-only; restart expires live driver reply rows and never replays uncertain confirmation. Future Managed transport must supply unique occurrence addresses, exact captured remote IDs, bounded no-retry HTTP and a stream barrier before normal continuation/end-turn processing. The Anthropic SDK dependency is0.125; this prerequisite does not add a Managed driver or make real Managed account calls.
+Claims are memory-only; restart expires live driver reply rows and never replays uncertain confirmation. The [Managed transport](../managed_agents/managed_agents_tech.md) supplies unique request IDs, captured session/thread/tool addresses, bounded no-retry HTTP and a stream barrier before continuation/end-turn processing. Its SDK0.125 integration and private database continuity are described there.

@@ -523,6 +523,12 @@ const api = {
     delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
   },
 
+  managedAgents: {
+    configuration: (id: string): Promise<{ name: string; config: import('../shared/managedAgents').ManagedAgentConfig }> => ipcRenderer.invoke('managed-agent:configuration', id),
+    choices: (input: { credentialId: string; workspaceId?: string }): Promise<import('../shared/managedAgents').ManagedAgentChoices> => ipcRenderer.invoke('managed-agent:choices', input),
+    save: (input: { id?: string; name?: string; config: import('../shared/managedAgents').ManagedAgentConfig }): Promise<{ id: string }> => ipcRenderer.invoke('managed-agent:save', input)
+  },
+
   agents: {
     list: (): Promise<AgentData[]> => ipcRenderer.invoke('agent:list'),
     upsert: (data: {
@@ -632,6 +638,8 @@ const api = {
     // is the refusal, for a branch that must not be written against copy.
     answerRequest: (data: AskAnswerPayload): Promise<InboxAnswerResult> =>
       ipcRenderer.invoke('agent:answer-request', data),
+    replyUncertainty: (requestId: string): Promise<string | null> =>
+      ipcRenderer.invoke('agent:reply-uncertainty', requestId),
     pendingRequests: (
       chatId: string
     ): Promise<{ requestId: string; kind: 'permission' | 'question' }[]> =>

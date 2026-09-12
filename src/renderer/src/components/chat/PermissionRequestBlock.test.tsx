@@ -11,9 +11,10 @@
  * Every mutation named in a comment was **run**; the table at the bottom
  * records the outcome of each.
  */
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { PermissionRequestBlock } from './PermissionRequestBlock'
+import { AnswerDeliveryError } from '../../utils/answerError'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 
 const request = (over: Partial<LocalPermissionRequest> = {}): LocalPermissionRequest => ({
@@ -24,6 +25,37 @@ const request = (over: Partial<LocalPermissionRequest> = {}): LocalPermissionReq
 })
 
 describe('PermissionRequestBlock', () => {
+  beforeEach(() => { Object.assign(window, { api: { agents: { replyUncertainty: vi.fn().mockResolvedValue(null) } } }) })
+  it('offers no standing-grant promise for a runtime that supports only one decision', () => {
+    render(<PermissionRequestBlock request={request({ allowRemember: false })} requestId="per_managed" interactive onAnswer={async () => {}} />)
+    expect(screen.queryByRole('button', { name: 'Always allow' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Allow once' })).toBeTruthy()
+  })
+
+  it('keeps an uncertain answer visible and blocks every subsequent decision', async () => {
+    const answer = vi.fn().mockRejectedValue(new AnswerDeliveryError({ ok: false, code: 'uncertain', reason: 'Acknowledgment lost. Do not submit again.' }))
+    render(<PermissionRequestBlock request={request({ allowRemember: false })} requestId="per_managed_uncertain" interactive onAnswer={answer} />)
+    await waitFor(() => expect((screen.getByRole('button', { name: 'Allow once' }) as HTMLButtonElement).disabled).toBe(false))
+    fireEvent.click(screen.getByRole('button', { name: 'Allow once' }))
+    expect(await screen.findByText('Acknowledgment lost. Do not submit again.')).toBeTruthy()
+    expect((screen.getByRole('button', { name: 'Allow once' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Deny' }) as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(answer).toHaveBeenCalledTimes(1)
+    expect(screen.queryByText('Allowed once.')).toBeNull()
+  })
+  it('rehydrates main-owned uncertainty on a fresh surface without delivering an answer', async () => {
+    vi.mocked(window.api.agents.replyUncertainty).mockResolvedValue('Confirmation status is unknown. Do not submit it again.')
+    const answer = vi.fn()
+    const view = render(<PermissionRequestBlock request={request({ allowRemember: false })} requestId="per_rehydrated" interactive onAnswer={answer} />)
+    expect((screen.getByRole('button', { name: 'Allow once' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(await screen.findByText('Confirmation status is unknown. Do not submit it again.')).toBeTruthy()
+    view.unmount()
+    render(<PermissionRequestBlock request={request({ allowRemember: false })} requestId="per_rehydrated" interactive onAnswer={answer} />)
+    expect(screen.getByText('Confirmation status is unknown. Do not submit it again.')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Deny' }))
+    expect(answer).not.toHaveBeenCalled()
+  })
   it('offers Allow once and Deny while the request is live', () => {
     render(
       <PermissionRequestBlock

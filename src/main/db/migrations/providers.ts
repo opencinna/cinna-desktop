@@ -16,4 +16,7 @@ export function migrateProviders(sqlite: Database.Database): void {
   if (!hasColumn(sqlite, 'llm_providers', 'default_model_id')) {
     sqlite.exec(`ALTER TABLE llm_providers ADD COLUMN default_model_id TEXT`)
   }
+  if (!hasColumn(sqlite, 'llm_providers', 'config_revision')) {
+    sqlite.exec('ALTER TABLE llm_providers ADD COLUMN config_revision INTEGER NOT NULL DEFAULT 0')
+  }
 }

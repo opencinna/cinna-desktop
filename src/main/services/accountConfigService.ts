@@ -21,6 +21,15 @@ import { createLogger } from '../logger/logger'
 
 const logger = createLogger('account-config')
 
+/** Re-encryption can change ciphertext without changing the credential. */
+function encryptedSyncedKey(profileId: string, providerId: string, apiKey: string): Buffer {
+  const previous = llmProviderRepo.getOwned(profileId, providerId)?.apiKeyEncrypted
+  if (previous) {
+    try { if (decryptApiKey(previous) === apiKey) return previous } catch { /* replace an unreadable envelope */ }
+  }
+  return encryptApiKey(apiKey)
+}
+
 export interface SyncAccountConfigResult {
   providers: number
   modes: number
@@ -176,7 +185,7 @@ export const accountConfigService = {
             id: providerId,
             type,
             name: managedDisplayName(p.display_name, p.credential_name),
-            apiKeyEncrypted: encryptApiKey(p.api_key),
+            apiKeyEncrypted: encryptedSyncedKey(profileUserId, providerId, p.api_key),
             enabled: true,
             defaultModelId: null,
             availableModels: null,
@@ -231,7 +240,7 @@ export const accountConfigService = {
           id: providerId,
           type,
           name: managedDisplayName(p.display_name, p.credential_name),
-          apiKeyEncrypted: encryptApiKey(p.api_key),
+          apiKeyEncrypted: encryptedSyncedKey(profileUserId, providerId, p.api_key),
           enabled: true,
           defaultModelId,
           availableModels,

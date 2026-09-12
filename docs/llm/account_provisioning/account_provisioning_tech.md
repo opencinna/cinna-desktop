@@ -214,9 +214,7 @@ All handlers call `userActivation.requireActivated()` first.
 
 ## Security
 
-- Decrypted `api_key` from the endpoint is re-encrypted immediately via
-  `src/main/security/keystore.ts` `encryptApiKey()` (safeStorage); never logged and
-  never sent to the renderer (`hasApiKey`/`managed`/`adminManaged` only).
+- Synced `api_key` stays encrypted with safeStorage and is never logged or sent to the renderer (`hasApiKey`/`managed`/`adminManaged` only). `accountConfigService.encryptedSyncedKey()` retains the existing envelope when it decrypts to the same key; a replaced or unreadable envelope is encrypted through `src/main/security/keystore.ts`. This preserves provider config_revision and [Managed session identity](../../agents/managed_agents/managed_agents_tech.md) across routine sync while a real credential replacement invalidates held work.
 - Endpoint is desktop-token-gated server-side (the desktop JWT carries
   `client_kind=desktop`); see [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md).
 - Managed rows are read-only for the user: Default-scope write paths can't see

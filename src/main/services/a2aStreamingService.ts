@@ -194,6 +194,8 @@ export interface RunAgentTurnInput {
  *    orchestrated mode).
  */
 export interface RunAgentTurnResult {
+  /** A driver's explicit terminal reason; transport task states remain separate. */
+  stopReason?: 'end_turn' | 'budget' | 'canceled'
   /** Constructed only by a host driver, never spread from remote metadata. */
   handback?: { note: string }
   text: string
@@ -539,10 +541,11 @@ export const a2aStreamingService = {
       // away), and finalizes the job run as `cancelled` — a run left
       // unfinalized stays `running` for the life of the app. Same ending as
       // `chatStreamingService`'s abort branch.
-      const canceled = abortController.signal.aborted || result.taskState === 'canceled'
+      const canceled = abortController.signal.aborted || result.taskState === 'canceled' || result.stopReason === 'canceled'
       const failedState = result.taskState && !['completed', 'input-required', 'auth-required', 'canceled'].includes(result.taskState)
       const state: TurnOutcome['state'] = canceled ? 'canceled'
         : result.error || failedState ? 'failed'
+        : result.stopReason === 'budget' ? 'budget'
         : result.taskState === 'input-required' || result.taskState === 'auth-required' ? 'needs_input' : 'completed'
       const failure = result.error ?? (state === 'failed' ? { message: 'The agent reported that its task failed.', raw: result.taskState ?? '' } : undefined)
       if (failure && !canceled) {
@@ -584,7 +587,7 @@ export const a2aStreamingService = {
       messageRepo.touchChat(chatId)
       port.postMessage({
         type: 'done',
-        stopReason: canceled ? 'canceled' : 'end_turn'
+        stopReason: canceled ? 'canceled' : state === 'budget' ? 'budget' : 'end_turn'
       })
       // **The exit a stop most often takes, and the one the abort branch below
       // does not cover.** A runner that is cancelled cleanly returns what it

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useChatStore } from '../stores/chat.store'
+import { AnswerDeliveryError } from '../utils/answerError'
 
 /**
  * The permission and question asks a **local** agent is currently parked on.
@@ -105,7 +106,7 @@ export function useAgentRequests(
       // block greyed out, the error line said the request had expired, and
       // there was no way to answer it any other way. A refusal has to leave the
       // controls where they were (`ux_rules.md` §6).
-      if (!result.ok) throw new Error(result.reason ?? 'That answer could not be delivered.')
+      if (!result.ok) throw new AnswerDeliveryError(result)
       // Optimistic removal, so the block stops offering buttons immediately
       // rather than at the next poll tick — from both sources that can call it
       // live, since the stream's `input_resolved` echo is not here yet either.

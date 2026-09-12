@@ -32,7 +32,8 @@ There is still one active turn per chat. The [autonomous task runner](../../jobs
 
 - A model response without tool calls finishes naturally. Reaching the ten-round ceiling with more work instead persists a `round_budget` error and returns `budget`; exhausting the loop must not masquerade as a completed task. Stop keeps saved rounds and the current nonblank partial answer, while preserving tool-call/result pairing for future requests.
 - A2A input-required/auth-required endings return `needs_input`. Canceled endings return `canceled`. Failed, rejected or other unfinished task states at transport end return a failed result. A nonstream JSON-RPC error envelope enters the error path instead of producing an empty successful answer.
-- The direct-agent wrapper persists its result/error, reports the typed ending and releases its active request before close. The successful/needs-input catch-up cursor hook remains separate; failure and cancellation do not advance it. Local Stop retains the prior session checkpoint and does not claim that remote cancellation was acknowledged.
+- Managed budget endings preserve partial output and propagate stopReason budget through the direct wrapper into done and TurnOutcome. The agent-as-tool adapter marks the budget pause as an error result, preventing coordinator success from a paused specialist. Managed Stop separately records confirmed ready, budget or unconfirmed uncertain continuity; see [Managed sessions](../../agents/managed_agents/managed_agents.md).
+- The direct-agent wrapper persists its result/error, reports the typed ending and releases its active request before close. The successful/needs-input catch-up cursor hook remains separate; failure and cancellation do not advance it. A2A Stop retains the prior session checkpoint and does not claim that remote cancellation was acknowledged.
 
 ## Request Ownership and Verification
 

@@ -227,11 +227,30 @@ export const agentRepo = {
             : existing.accessTokenEncrypted,
         cardData: input.cardData !== undefined ? input.cardData : existing.cardData,
         skills: input.skills !== undefined ? input.skills : existing.skills,
-        enabled: input.enabled ?? existing.enabled
+        enabled: input.enabled ?? existing.enabled,
+        ...(typeof existing.driverConfig?.revision === 'string' && input.enabled !== undefined && input.enabled !== existing.enabled
+          ? { driverConfig: { ...existing.driverConfig, revision: nanoid() } } : {})
       })
       .where(and(eq(agents.id, agentId), eq(agents.userId, userId)))
       .run()
     return this.getOwned(userId, agentId)
+  },
+
+  /** Main-owned external runtime configuration; the ordinary A2A form cannot set it. */
+  createRuntime(userId: string, input: { name: string; description?: string | null; driver: 'managed' | 'acp'; config: Record<string, unknown> }): AgentRow {
+    const id = nanoid()
+    getDb().insert(agents).values({ id, userId, name: input.name, description: input.description ?? null,
+      source: 'local', protocol: input.driver, driver: input.driver,
+      driverConfig: { ...input.config, revision: nanoid() }, enabled: true, createdAt: new Date() }).run()
+    return this.getOwned(userId, id)!
+  },
+
+  updateRuntime(userId: string, id: string, driver: 'managed' | 'acp', input: { name: string; config: Record<string, unknown> }): AgentRow {
+    const existing = this.getOwned(userId, id)
+    if (!existing || existing.source !== 'local' || existing.driver !== driver) throw new Error('This external agent is no longer available.')
+    getDb().update(agents).set({ name: input.name, driverConfig: { ...input.config, revision: nanoid() } })
+      .where(and(eq(agents.id, id), eq(agents.userId, userId))).run()
+    return this.getOwned(userId, id)!
   },
 
   delete(userId: string, agentId: string): boolean {

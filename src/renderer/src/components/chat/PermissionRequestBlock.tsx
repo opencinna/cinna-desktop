@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Check, Loader2, ShieldAlert, ShieldCheck, X } from 'lucide-react'
+import { AnswerDeliveryError } from '../../utils/answerError'
+import { rememberReplyUncertainty, useReplyUncertainty } from '../../hooks/useReplyUncertainty'
 import {
   describeGrantScope,
   describePermissionAction,
@@ -81,6 +83,8 @@ export function PermissionRequestBlock({
     remembered?: boolean
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const uncertainty = useReplyUncertainty(requestId, interactive && request.allowRemember === false)
+  const uncertain = !!uncertainty.reason || uncertainty.checking
 
   // **Held live while its own answer is in flight.** The stream's
   // `input_resolved`, and the optimistic store update beside it, can land
@@ -104,13 +108,14 @@ export function PermissionRequestBlock({
   const scopeIsWider = grantPatterns.some((entry) => entry.scope !== 'exact')
 
   const answer = async (reply: 'once' | 'always' | 'reject'): Promise<void> => {
-    if (!requestId || busy) return
+    if (!requestId || busy || uncertain) return
     setBusy(reply)
     setError(null)
     try {
       const outcome = await onAnswer(requestId, reply)
       setAnswered({ reply, remembered: outcome?.remembered })
     } catch (err) {
+      if (err instanceof AnswerDeliveryError && err.result.code === 'uncertain') rememberReplyUncertainty(requestId, err.message)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setBusy(null)
@@ -186,8 +191,9 @@ export function PermissionRequestBlock({
             <div className="mt-2.5 flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                disabled={!live || busy !== null}
+                disabled={!live || busy !== null || uncertain}
                 onClick={() => void answer('once')}
+                style={request.allowRemember === false ? { minWidth: 112 } : undefined}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white
                   disabled:opacity-50 transition-colors"
@@ -207,9 +213,9 @@ export function PermissionRequestBlock({
                 this button does not write there. The grant is derived from the
                 resources above and kept in this agent's folder.
               */}
-              <button
+              {request.allowRemember !== false && <button
                 type="button"
-                disabled={!live || busy !== null}
+                disabled={!live || busy !== null || uncertain}
                 onClick={() => void answer('always')}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]
@@ -221,11 +227,12 @@ export function PermissionRequestBlock({
                   <ShieldCheck size={13} />
                 )}
                 {busy === 'always' ? 'Remembering…' : 'Always allow'}
-              </button>
+              </button>}
               <button
                 type="button"
-                disabled={!live || busy !== null}
+                disabled={!live || busy !== null || uncertain}
                 onClick={() => void answer('reject')}
+                style={request.allowRemember === false ? { minWidth: 96 } : undefined}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
                   border border-[var(--color-border)] hover:bg-[var(--color-bg-hover)]
                   text-[var(--color-text-secondary)] disabled:opacity-50 transition-colors"
@@ -245,7 +252,7 @@ export function PermissionRequestBlock({
             rendered above them pushed a refused answer's controls down under
             the pointer the user was about to retry with (ux_rules §1).
           */}
-          {error && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{error}</div>}
+          {(error || (live && uncertainty.reason)) && <div className="mt-2 text-[12px] text-[var(--color-danger)]">{uncertainty.reason ?? error}</div>}
 
           {/*
             Below the buttons, not above them: a line that sits over a control
@@ -254,7 +261,7 @@ export function PermissionRequestBlock({
             function of the ask, not of what has been clicked — so nothing here
             moves while the user decides.
           */}
-          {(live || holding) && scopeIsWider && (
+          {(live || holding) && request.allowRemember !== false && scopeIsWider && (
             <div className="mt-2 text-[11px] text-[var(--color-text-muted)] break-all">
               Always allow remembers {grantScope} for this agent only.
             </div>

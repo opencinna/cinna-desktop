@@ -5,14 +5,16 @@ import { useAgentsHomeStore } from '../../../stores/agentsHome.store'
 import {
   useAgentCredentialBindings,
   useAgentsHomeQuestion,
-  useLocalAgents,
-  useRaiseAgentsHomeQuestion
+  useLocalAgents
 } from '../../../hooks/useLocalAgents'
 import { useProviders } from '../../../hooks/useProviders'
 import { agentSubline, groupAgentsByRoot } from '../../../utils/localAgents'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isCredentialActive } from '../../../../../shared/credentials'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
+import { ManagedAgentModal } from '../ManagedAgentModal'
+import { useAgents } from '../../../hooks/useAgents'
+import { useAuthStore } from '../../../stores/auth.store'
 
 /**
  * Dot colour for a folder's readiness. Severity tokens, never a raw colour.
@@ -150,14 +152,18 @@ export function LocalAgentsList(): React.JSX.Element {
   const { data: bindings } = useAgentCredentialBindings()
   const { data: providers } = useProviders()
   const [creating, setCreating] = useState(false)
+  const [managed, setManaged] = useState<string | true | null>(null)
+  const profileId = useAuthStore((state) => state.currentUser?.id)
+  const { data: allAgents } = useAgents()
+  const managedAgents = (allAgents ?? []).filter((agent) => agent.driver === 'managed')
   const groups = useMemo(
     () => groupAgentsByRoot(data?.roots ?? [], data?.agents ?? []),
     [data]
   )
   const total = data?.agents.length ?? 0
   const homeAccess = useAgentsHomeQuestion()
-  // The Agents tab being open is what makes the folder question worth asking.
-  useRaiseAgentsHomeQuestion()
+  // Folder setup is requested only by the folder creation choice. External
+  // agents have no local agents-home prerequisite.
 
   /**
    * Agents whose resolved credential cannot run.
@@ -190,11 +196,7 @@ export function LocalAgentsList(): React.JSX.Element {
           Agents
         </span>
         <button
-          onClick={() =>
-            homeAccess && homeAccess !== 'ready'
-              ? useAgentsHomeStore.getState().reopen(homeAccess)
-              : setCreating(true)
-          }
+          onClick={() => setCreating(true)}
           className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors"
           // Not "New agent" any more: this opens a choice between scaffolding
           // one and pointing at a folder that already is one. It also has to
@@ -214,6 +216,10 @@ export function LocalAgentsList(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        {managedAgents.length > 0 && <div className="px-1.5 py-1 space-y-px">
+          <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Managed</div>
+          {managedAgents.map((agent) => <button key={agent.id} type="button" onClick={() => setManaged(agent.id)} className="w-full min-w-0 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]"><span className="block truncate text-xs text-[var(--color-text)]">{agent.name}</span><span className="block truncate text-[10px] text-[var(--color-text-muted)]">{agent.readiness?.reason ?? 'Claude workspace'}</span></button>)}
+        </div>}
         {isLoading ? (
           <div className="px-2.5 py-2 text-xs text-[var(--color-text-muted)]">Loading...</div>
         ) : error ? (
@@ -226,7 +232,7 @@ export function LocalAgentsList(): React.JSX.Element {
              user to a `+` that opens a dialog which cannot finish (ux_rules
              rule 9). The button is the way back from the modal's "Not now". */
           <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)] space-y-2">
-            <div>Your agents need a folder.</div>
+            <div>Folder agents need a home.</div>
             {/* Named for the question it opens, not for the button inside it.
                 "Choose folder…" belongs to the control that opens the OS
                 picker; a trigger one click away wearing the same name is two
@@ -241,7 +247,7 @@ export function LocalAgentsList(): React.JSX.Element {
           </div>
         ) : total === 0 && groups.length <= 1 ? (
           <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
-            No agents yet — click + to add one
+            {managedAgents.length ? 'No folder agents yet' : 'No agents yet — click + to add one'}
           </div>
         ) : (
           <div className="px-1.5 py-1 space-y-2">
@@ -280,7 +286,11 @@ export function LocalAgentsList(): React.JSX.Element {
         )}
       </div>
 
-      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} />}
+      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onManaged={() => { setCreating(false); setManaged(true) }} onCreateFolder={() => {
+        if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
+        return true
+      }} />}
+      {managed !== null && <ManagedAgentModal key={`${profileId}:${managed}`} agentId={typeof managed === 'string' ? managed : undefined} onClose={() => setManaged(null)} />}
     </div>
   )
 }

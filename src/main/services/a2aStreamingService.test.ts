@@ -63,6 +63,15 @@ function fakePort(): { posted: RunEvent[]; closed: boolean; port: { postMessage:
 }
 
 describe('a2aStreamingService.streamToAgent', () => {
+  it('preserves a remote budget ending through the common turn wrapper and durable partial answer', async () => {
+    const p = fakePort()
+    const onFinished = vi.fn()
+    await a2aStreamingService.streamToAgent({ chatId: 'chat_1', agentId: 'managed', port: p.port, onFinished,
+      run: async () => ({ text: 'partial', parts: [{ kind: 'text', text: 'partial' }], notices: [], taskState: 'completed', stopReason: 'budget' }) })
+    expect(p.posted.at(-1)).toEqual({ type: 'done', stopReason: 'budget' })
+    expect(onFinished).toHaveBeenCalledWith({ state: 'budget', text: 'partial' })
+    expect(savedAssistant.at(-1)).toMatchObject({ content: 'partial' })
+  })
   beforeEach(() => {
     saved.length = 0
     savedAssistant.length = 0

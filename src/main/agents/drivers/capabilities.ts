@@ -24,6 +24,10 @@ type CapabilityRow = Pick<
 export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
   switch (driverOfRow(agent)) {
     case null: return unsupportedCapabilities()
+    case 'managed':
+      return { streaming: true, cancel: true, sessions: 'resumable',
+        input: { permission: true, question: false, auth: false, elicitation: false },
+        inputResume: 'reply', attachments: 'none', auth: 'token', commands: 'none', mcpInjection: false, cwd: false }
     case 'acp':
       return acpCapabilities(launcherOfRow(agent))
     case 'a2a': {

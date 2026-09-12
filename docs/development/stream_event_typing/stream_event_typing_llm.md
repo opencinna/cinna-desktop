@@ -178,3 +178,7 @@ Live blocks and persisted parts split in the same places because one function de
 - CoordinatorToolProvider emits the existing needs_input reply shape only after persisting a runner-owned gate/checkpoint. The durable row has deliveryOwner:runner and null agentId; ordinary reply cleanup is driver-only. Resume kind alone no longer determines database durability.
 - RunOutcome.inputRequestIds includes both next-message rows and runner gates for the current root. Surviving driver reply rows still produce inputRequestReadError; automatic task progression stops on uncertainty.
 - Coordinator delegate is presented as an agent tool/sub-thread; other fixed tools use providerType:coordinator. Only an internal successful coordinator control ends a model turn. Later calls are paired with persisted not-run results. See [autonomous runtime](../../jobs/tasks/autonomous_tasks_tech.md).
+
+## Managed session events
+
+The [Managed reducer](../../agents/managed_agents/managed_agents_tech.md) converts SDK persisted events into the existing RunEvent vocabulary. Authoritative agent.message text becomes delta; thinking becomes working status; tool permissions carry allowRemember false in needs_input and their persisted tool part. The input_resolved event follows remote acceptance and the shared durable answer commit. Child idle and preview deltas never finish or write the root turn. Remote budget survives the common wrapper as done stopReason budget and a budget TurnOutcome.

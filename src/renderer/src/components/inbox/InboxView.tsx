@@ -6,6 +6,7 @@ import { useRelativeNow } from '../../hooks/useRelativeNow'
 import { useOpenTask } from '../../hooks/useTasks'
 import { formatRelativeFromDate } from '../../utils/cinnaTime'
 import { unwrapIpcError } from '../../utils/ipcError'
+import { AnswerDeliveryError } from '../../utils/answerError'
 import { PermissionRequestBlock } from '../chat/PermissionRequestBlock'
 import { AskUserQuestionBlock } from '../chat/AskUserQuestionBlock'
 import { ASK_NO_LONGER_WAITING } from '../../../../shared/inbox'
@@ -308,7 +309,7 @@ function InboxRow({
       setSettledAs(result.reason ?? ASK_NO_LONGER_WAITING)
       return {}
     }
-    throw new Error(result.reason ?? 'That answer could not be delivered.')
+    throw new AnswerDeliveryError(result)
   }
 
   return (
@@ -395,7 +396,8 @@ function AskBody({
           // written into the agent's own folder. It is not carried on an
           // `InputRequest` and nothing here needs to invent one.
           savable: [],
-          callId: request.callId
+          callId: request.callId,
+          ...(request.allowRemember === false ? { allowRemember: false } : {})
         }}
         requestId={entry.requestId}
         // False only once this row has settled — a live ask is always

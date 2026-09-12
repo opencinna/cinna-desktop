@@ -12,6 +12,13 @@ interface Claim {
 const claims = new WeakMap<object, Claim>()
 const gone = (): InboxAnswerResult => ({ ok: false, code: 'no_longer_waiting', reason: ASK_NO_LONGER_WAITING })
 
+/** Public display state only; the captured transport and answer stay private. */
+export function replyAnswerUncertainty(registration: ReplyRegistration | null): string | null {
+  if (!registration?.isCurrent()) return null
+  const claim = claims.get(registration.token)
+  return claim?.state === 'uncertain' ? claim.reason ?? 'Confirmation status is unknown. Do not submit it again.' : null
+}
+
 /** One remote write per registration/answer, including after a lost acknowledgement. */
 export function claimReplyAnswer(input: {
   registration: ReplyRegistration

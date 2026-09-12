@@ -3,7 +3,7 @@ import { nanoid } from 'nanoid'
 import { getDb } from './client'
 import { llmProviders } from './schema'
 
-export type LlmProviderRow = typeof llmProviders.$inferSelect
+export type LlmProviderRow = Omit<typeof llmProviders.$inferSelect, 'configRevision'> & { configRevision?: number }
 
 export interface UpsertInput {
   id?: string
@@ -94,8 +94,14 @@ export const llmProviderRepo = {
           : existing?.apiKeyEncrypted ?? null
 
       if (existing) {
+        const changed = input.type !== existing.type ||
+          (input.apiKeyEncrypted !== undefined && !input.apiKeyEncrypted?.equals(existing.apiKeyEncrypted ?? Buffer.alloc(0))) ||
+          (input.enabled !== undefined && input.enabled !== existing.enabled) ||
+          (input.baseUrl !== undefined && input.baseUrl !== existing.baseUrl) ||
+          (input.unsupported !== undefined && input.unsupported !== existing.unsupported)
         tx.update(llmProviders)
           .set({
+            configRevision: existing.configRevision + (changed ? 1 : 0),
             name: input.name,
             type: input.type,
             apiKeyEncrypted,

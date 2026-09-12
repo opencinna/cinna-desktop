@@ -47,6 +47,7 @@ export interface InputQuestion {
 export type InputRequest =
   | {
       kind: 'permission'
+      allowRemember?: boolean
       /** The engine's coarse operation — `bash`, `edit`, `Bash`, `WebFetch`, … */
       action: string
       /** What it wants to touch: a command line, a path, a URL. */

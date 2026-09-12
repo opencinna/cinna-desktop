@@ -3,7 +3,7 @@ import type { ParkedAsk } from '../agents/drivers/driver'
 import type { AsyncReplyBinding, AsyncRespondOutcome } from '../agents/drivers/replyDelivery'
 import type { RequestResolution } from '../../shared/localAgentRequests'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
-import { claimReplyAnswer } from './replyAnswerClaims'
+import { claimReplyAnswer, replyAnswerUncertainty } from './replyAnswerClaims'
 
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }) }))
 
@@ -116,6 +116,10 @@ describe('claimReplyAnswer with the real pending request registry', () => {
     expect(f.commit).not.toHaveBeenCalled()
     expect(f.released).not.toHaveBeenCalled()
     expect(f.registration.isCurrent()).toBe(true)
+    expect(replyAnswerUncertainty(pendingRequests.registration(ask.requestId))).toContain('Do not submit it again')
+    f.parked.cancel()
+    expect(replyAnswerUncertainty(f.registration)).toBeNull()
+    expect(replyAnswerUncertainty(pendingRequests.registration(ask.requestId))).toBeNull()
   })
 
   it.each(['cancel', 'timeout', 'drop', 'clear', 'replacement'] as const)('%s invalidates delivery and late acceptance cannot commit or release a new registration', async (action) => {

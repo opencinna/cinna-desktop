@@ -27,13 +27,13 @@ import type { InputResumeMode } from './runEvents'
  * either value is rewritten by `migrations/acp-driver.ts`, which carries the
  * engine into the config before it overwrites the column.
  */
-export type AgentDriverId = 'a2a' | 'acp'
+export type AgentDriverId = 'a2a' | 'acp' | 'managed'
 
-export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp']
+export const AGENT_DRIVER_IDS: readonly AgentDriverId[] = ['a2a', 'acp', 'managed']
 
 /** Whether a stored value names a driver this build has. */
 export function isAgentDriverId(value: unknown): value is AgentDriverId {
-  return value === 'a2a' || value === 'acp'
+  return value === 'a2a' || value === 'acp' || value === 'managed'
 }
 
 /** The driver every folder agent runs on. */
