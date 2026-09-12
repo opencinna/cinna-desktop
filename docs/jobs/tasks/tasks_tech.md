@@ -1,6 +1,6 @@
 # Tasks: Technical Details
 
-The [script definition contract](script_definitions_tech.md) describes the nullable `tasks.script` field, creation-time validation, fixed local script-router choice and sync preservation. Ordinary Continue refuses script-bearing tasks; a DAG executor is not part of this foundation.
+The [script definition contract](script_definitions_tech.md) describes the nullable `tasks.script` field, creation-time validation, fixed local script-router choice and sync preservation. Ordinary Continue refuses script-bearing tasks; [script execution](script_execution_tech.md) owns their DAG checkpoints, isolated children and whole-script controls.
 
 ## File Locations
 
@@ -53,6 +53,7 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 
 ## Services and Key Methods
 
+- `taskRuntimeService` dispatches recovery, Resume and Stop to the owning coordinator/script engine. Script roots and children carry controllerTaskId for whole-script controls; checkpoints live in the separate local task_script_runtimes table. See [script execution](script_execution_tech.md).
 - `taskRunnerService` owns consecutive coordinator/specialist turns, local checkpoints, durable gates and cancellation across turns. `task_runtimes` is separate from synced task definitions; TaskDto includes only its local runtime summary. See [autonomous implementation](autonomous_tasks_tech.md).
 
 - `taskService.create`, `getById`, `list`, `update`, `setStatus`, `applyRunState`, `acceptRemoteStatus`, `start`, `takeOver` and `remove` own task validation and lifecycle. `written` keeps the handoff export current. `start` associates an existing chat. `beginDesktopChat` binds a new direct conversation and assignee within message acceptance; its export is deferred until commit by `taskExecutionService`.
@@ -98,7 +99,7 @@ The authority is [Remote Task Adapters](remote_adapters.md): capability-gated op
 ## Current Gap List
 
 - Takeover and Continue remain separate actions. The remote Hand off picker uses the adapter directory; local Continue chooses an agent or model. An unresolved create can defer discovery until recovery because the remote identity is not yet safely correlated.
-- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. Script routing, schedules, manifest handback and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
+- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. [Script execution](script_execution_tech.md) owns DAG steps through the same completion/admission seams. Schedules, manifest handback and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
 - A failed remote enumeration rejects the complete Inbox array, delaying new local entries too. Partial-result completeness must be carried explicitly before changing that policy.
 - Service-specific limitations, including recent-history bounds and the absence of a subscription, remain in the [Cinna mapping](cinna_adapter.md) and [remote coordination](remote_sync.md) documents.
 

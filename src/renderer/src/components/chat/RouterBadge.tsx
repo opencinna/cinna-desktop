@@ -2,8 +2,10 @@ import { useState } from 'react'
 import { Radio, Users, Workflow } from 'lucide-react'
 import type { ChatRouter } from '../../../../shared/chatRouting'
 
+type DisplayRouter = ChatRouter | 'script'
+
 export interface RouterBadgeInfo {
-  router: ChatRouter
+  router: DisplayRouter
   /** The chat's single counterparty, for `direct`. */
   agentName?: string
   /** Who answers the next message, for `human`. */
@@ -22,7 +24,12 @@ export interface RouterBadgeInfo {
  */
 
 /** Icon, short label and tone per router. The label is what the pill shows. */
-const FACE: Record<ChatRouter, { label: string; icon: typeof Radio; tone: string }> = {
+const FACE: Record<DisplayRouter, { label: string; icon: typeof Radio; tone: string }> = {
+  script: {
+    label: 'Script routes',
+    icon: Workflow,
+    tone: 'text-[var(--color-accent)] border-[var(--color-accent)]/40 bg-[var(--color-accent)]/10'
+  },
   direct: {
     label: 'Direct',
     icon: Radio,
@@ -40,7 +47,8 @@ const FACE: Record<ChatRouter, { label: string; icon: typeof Radio; tone: string
   }
 }
 
-const ARIA: Record<ChatRouter, string> = {
+const ARIA: Record<DisplayRouter, string> = {
+  script: 'Routed by defined script steps',
   direct: 'Direct agent connection',
   human: 'You route this chat',
   coordinator: 'Coordinated by your local model'
@@ -111,6 +119,13 @@ export function RouterBadge({
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
         >
+          {router === 'script' && (
+            <>
+              <p className="text-[var(--color-text)] font-semibold mb-1">Script routes this job</p>
+              <p>Agents follow the saved steps. Independent steps can run together; questions wait in the Inbox.</p>
+              <p className="mt-1.5">Only the agents use models. The script itself makes no model calls.</p>
+            </>
+          )}
           {router === 'direct' && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">Direct agent connection</p>

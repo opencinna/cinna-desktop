@@ -219,6 +219,8 @@ function TaskPage({
    * than an identity and is exactly what it is worth here.
    */
   const assignee = ((): string | null => {
+    if (task.assignee.kind === 'script') return 'Defined script steps'
+    if (task.assignee.kind === 'human') return 'You (via the Inbox)'
     if (task.assignee.kind === 'model') return 'The local model'
     if (task.assignee.agentId && !agentsPending) {
       const found = (agents ?? []).find((a) => a.id === task.assignee.agentId)

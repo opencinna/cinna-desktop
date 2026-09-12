@@ -1,3 +1,4 @@
+import type { JobExecuteResult } from '../shared/jobs'
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
 import type { AutonomousTaskStart } from '../shared/taskRuntime'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
@@ -1032,24 +1033,7 @@ const api = {
       ipcRenderer.invoke('job:dep-status', jobId),
     runOrigin: (runId: string): Promise<JobRunOrigin | null> =>
       ipcRenderer.invoke('job:run-origin', runId),
-    execute: (
-      jobId: string
-    ): Promise<
-      | {
-          type: 'local'
-          chatId: string
-          runId: string
-          prompt: string
-          agentId: string | null
-          modeId: string | null
-        }
-      | {
-          type: 'cinna_task'
-          runId: string
-          cinnaTaskId: string
-          cinnaShortCode: string | null
-        }
-    > => ipcRenderer.invoke('job:execute', jobId),
+    execute: (jobId: string): Promise<JobExecuteResult> => ipcRenderer.invoke('job:execute', jobId),
     cancelRun: (runId: string): Promise<JobRunData> =>
       ipcRenderer.invoke('job:cancel-run', runId),
     deleteRun: (

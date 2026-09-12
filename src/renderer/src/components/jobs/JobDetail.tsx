@@ -252,7 +252,8 @@ function JobSummary({ job }: { job: JobDetailData }): React.JSX.Element {
     [cinnaAgents, job.cinnaAgentId]
   )
 
-  const localRouter = newChatRouter({ agentIds: job.agentIds, mcpIds: job.mcpProviderIds })
+  const localRouter = job.router === 'script' || job.router === 'coordinator' ? job.router
+    : newChatRouter({ agentIds: job.agentIds, mcpIds: job.mcpProviderIds })
 
   const chips: React.ReactNode[] = []
 

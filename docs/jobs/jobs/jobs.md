@@ -9,7 +9,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 - **Job** — A profile-scoped saved spec (title, description, prompt, agents/mode/MCP attachments, color/icon). Two execution types, set once at creation and not editable afterwards:
   - **Local Job** — Runs against the user's local agents / chat mode / MCPs. A job can attach **any number of agents** plus MCPs (`job_agents` + `job_mcp_providers` join tables); at run time `newChatRouter(agentIds, mcpIds)` — the same helper the new-chat composer uses (`src/shared/chatRouting.ts`) — picks the spawned chat's router: one agent and no MCPs binds that agent (`direct`), several agents make a chat the user routes by hand (`human`), and agents mixed with MCP servers need the local model to coordinate (see [Chat Routing](../../chat/chat_routing/chat_routing.md) and [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md)). Each run spawns a new chat seeded with the job's prompt; the existing chat pipeline drives the conversation.
   - **Cinna Task Job** — Only available on Cinna-linked profiles. Each run creates a local task and hands it to the profile’s available remote adapter. The conversation lives on the service; the desktop keeps the task and its binding, with `cinnaTaskId` + `cinnaShortCode` retained on the run for its existing views.
-- **Autonomous job definition** — A programmatically authored local job can store an explicit script/coordinator router, script and budget. These definitions do not yet run through Jobs, and the current form has no script editor. See [Script Definitions](../tasks/script_definitions.md).
+- **Autonomous job definition** — A programmatically authored local job can store an explicit script/coordinator router, script and budget. Run admits these definitions in main; the current form has no script or autonomous-definition editor. See [Script Definitions](../tasks/script_definitions.md).
 - **Job Run** — One execution of a job, with status `pending → running → succeeded | failed | cancelled`. Every new run records its task (`job_runs.task_id`, on the wire as `JobRunData.taskId`): the run is the attempt, the task is the work, and the row opens the task. Local runs also reference the spawned chat; remote runs keep their remote pointer. Older local runs without a task still open their chat. Older remote runs gain a bound task on their next eligible refresh; terminal history requires manual Refresh.
 - **Job Folder** — A user-defined sidebar grouping for jobs (profile-scoped, name + collapsed-state + sort position). Folders are thin collapsible separators — they own ordering but no execution config. A job lives either in exactly one folder or at the root level.
 - **Group** — A bucket the sidebar can address by drag-drop: either the root level (`folderId = null`) or a specific folder. Each group has its own job ordering.
@@ -92,7 +92,7 @@ Let users save reusable units of work (title + description + prompt + execution 
 
 ### Running a local job
 
-This flow applies to ordinary jobs with null runtime fields. Explicit script/coordinator definitions are stored and synced, but execution is currently refused before creating any run state; see [Script Definitions](../tasks/script_definitions.md).
+This flow applies to ordinary jobs with null runtime fields. Explicit coordinator/script Jobs follow the main-owned flow below.
 
 1. User clicks "Run" on the job detail view.
 2. **Backend checks the manifest first.** If `jobs.sync_deps` names an agent — folder or remote — that resolves to nothing here, the run is refused before anything is created: `JobError('incomplete_setup', "This job can't run on this device. It needs an agent that isn't available here: <names>.")`. The renderer strips the IPC transport prefix (`unwrapIpcError`) so the alert shows that sentence and not our channel name.
@@ -103,6 +103,13 @@ This flow applies to ordinary jobs with null runtime fields. Explicit script/coo
    - **MCP servers follow the *model*, not the router.** They are attached whenever the answerer is the local model, which includes a job with connectors and **no agent at all** (that chat is `direct`, to the model). Gating them on `coordinator` would have run such a job toolless and reported a success.
 4. The `execute` result carries `agentId` — who the **first message** goes to, null when that is the local model. The renderer resolves provider/model the same way the new-chat flow does (falling back to the workspace's default chat mode when the job left `modeId` null), navigates into the spawned chat without leaving the Jobs sidebar tab, and fires `startRun` with that target so the run's agent gets the same post-turn status re-read a typed message would.
 5. When the chat's stream finalizes (`done`), the run flips to `succeeded`; on stream error, it flips to `failed` with the error message. A turn that never reaches a stream at all — the chat, its model or its agent is gone by the time the user presses send — also flips it to `failed`, carrying the refusal's own sentence.
+
+### Running an explicit autonomous Job
+
+1. Press **Run** on a programmatically configured coordinator or script Job. The summary badge respects that explicit router; **Script routes** explains that dependencies choose the steps and only participating agents call models.
+2. Main validates the definition, supported budget and required resources. Coordinator jobs resolve their explicit/effective-default model; scripts resolve all declared aliases without installing agents. Refusal leaves no partial attempt.
+3. Main commits the chat, run, task and runtime checkpoint together before launch. Scripts also create isolated child tasks/conversations. The renderer may open the conversation but sends no prompt; main owns execution even if the user leaves the page.
+4. Follow the task and Inbox for progress, questions, Stop or explicit Resume after interruption. Intermediate turns do not finish the Job attempt. See [autonomous coordination](../tasks/autonomous_tasks.md) and [script execution](../tasks/script_execution.md).
 
 ### Running a Cinna Task job
 1. User (on a Cinna-linked profile) clicks "Run" on a job of type `cinna_task`.

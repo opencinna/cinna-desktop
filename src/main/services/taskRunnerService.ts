@@ -7,11 +7,10 @@ import { chatRepo } from '../db/chats'
 import { chatOnDemandAgentRepo } from '../db/chatOnDemandAgent'
 import { messageRepo } from '../db/messages'
 import { agentOverrideRepo } from '../db/agents'
-import { appSettingsRepo } from '../db/appSettings'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { handingOffChats } from './taskOperationState'
 import { runtimeBudget } from '../tasks/runtimeBudget'
-import { ExecutionQueue } from '../tasks/executionQueue'
+import { taskSlots, withRuntimeAgent as withAgent } from '../tasks/runtimeAdmission'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import type { AutonomousTaskStart } from '../../shared/taskRuntime'
 import type { RequestResolution } from '../../shared/localAgentRequests'
@@ -24,19 +23,11 @@ import { installTaskRunnerHooks } from './taskRunnerBridge'
 import { CoordinatorToolProvider, type CoordinatorAgent } from './coordinatorToolProvider'
 import { A2AAsMcpProvider } from './a2aAsMcpProvider'
 import { agentService } from './agentService'
-import { turnLock } from './localAgents/turnLock'
 import { getAdapter } from '../llm/registry'
 import { createLogger } from '../logger/logger'
 
 const logger = createLogger('task-runner')
 const continuation = 'Continue coordinating the task from the saved conversation. Use finish only when the goal is achieved; use ask_user when a human decision is needed.'
-function concurrency(): number {
-  const value = appSettingsRepo.get('taskRunnerConcurrency')
-  return Number.isSafeInteger(value) && value >= 1 && value <= 8 ? value : 2
-}
-const taskSlots = new ExecutionQueue(concurrency)
-const agentSlots = new ExecutionQueue(concurrency)
-const agentQueues = new Map<string, ExecutionQueue>()
 interface Execution { controller: AbortController; handle?: RunHandle; timedOut: boolean; interruptedReason?: string; promise?: Promise<void> }
 const executing = new Map<string, Execution>()
 const keyOf = (userId: string, taskId: string): string => JSON.stringify([userId, taskId])
@@ -62,29 +53,6 @@ function agents(scope: RunScope, chatId: string): CoordinatorAgent[] {
     if (!located || !(agentOverrideRepo.get(scope.profileUserId, id)?.enabled ?? located.row.enabled)) return []
     return [{ id, name: located.row.name }]
   })
-}
-async function waitForLocalAgent(agentId: string, signal: AbortSignal): Promise<void> {
-  while (turnLock.isLocked(agentId)) {
-    await new Promise<void>((resolve, reject) => {
-      const end = (): void => { clearTimeout(timer); signal.removeEventListener('abort', aborted) }
-      const aborted = (): void => { end(); reject(new Error('The task was stopped while waiting for its agent.')) }
-      const timer = setTimeout(() => { end(); resolve() }, 100)
-      if (signal.aborted) aborted()
-      else signal.addEventListener('abort', aborted, { once: true })
-    })
-  }
-}
-async function withAgent<T>(agentId: string, signal: AbortSignal, run: () => Promise<T>): Promise<T> {
-  let queue = agentQueues.get(agentId)
-  if (!queue) { queue = new ExecutionQueue(() => 1); agentQueues.set(agentId, queue) }
-  const releaseAgent = await queue.acquire(signal)
-  let releaseGlobal: (() => void) | undefined
-  try {
-    releaseGlobal = await agentSlots.acquire(signal)
-    await waitForLocalAgent(agentId, signal)
-    if (signal.aborted) throw new Error('The task was stopped.')
-    return await run()
-  } finally { releaseGlobal?.(); releaseAgent() }
 }
 function reserve(userId: string, taskId: string, value: TaskRuntimeCheckpoint): void {
   const prior = taskRunnersByChat.get(value.chatId)
@@ -256,7 +224,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
     release?.()
     executing.delete(keyOf(userId, taskId))
     for (const [chatId, reservation] of taskRunnersByChat) {
-      if (reservation.userId === userId && reservation.taskId === taskId) taskRunnersByChat.delete(chatId)
+      if (reservation.userId === userId && reservation.taskId === taskId && !reservation.controllerTaskId) taskRunnersByChat.delete(chatId)
     }
     const current = taskRuntimeRepo.get(userId, taskId)
     if (current && current.state !== 'completed') {
@@ -291,6 +259,13 @@ export const taskRunnerService = {
   },
 
   start(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string } {
+    const prepared = this.prepare(scope, input)
+    prepared.launch()
+    return { taskId: prepared.taskId, chatId: prepared.chatId }
+  },
+
+  /** Main-only admission seam: a job transaction commits before launch is called. */
+  prepare(scope: RunScope, input: AutonomousTaskStart): { taskId: string; chatId: string; launch(): void } {
     if (!input || typeof input.goal !== 'string' || !input.goal.trim() || input.goal.length > 64000) throw new Error('Enter a task goal of at most 64000 characters.')
     const chat = chatRepo.getOwned(scope.profileUserId, input.chatId)
     if (!chat || chat.deletedAt || chat.router !== 'coordinator' || !chat.providerId || !chat.modelId || !getAdapter(chat.providerId)) {
@@ -318,8 +293,7 @@ export const taskRunnerService = {
       messageRepo.saveSystem({ chatId: chat.id, content: 'You coordinate this task autonomously. Delegate only to attached agents. Use ask_user for human decisions, handoff to change owner, update_task for progress, and finish with a verified final summary.' })
       return task
     })
-    enqueue(scope.profileUserId, task.id)
-    return { taskId: task.id, chatId: chat.id }
+    return { taskId: task.id, chatId: chat.id, launch: () => enqueue(scope.profileUserId, task.id) }
   },
 
   /** Restore waiting gates; never automatically repeat an interrupted turn. */
@@ -421,7 +395,7 @@ installTaskRunnerHooks({
   answer: (userId, requestId, resolution) => taskRunnerService.answer(userId, requestId, resolution),
   chatRemoved: (userId, chatId) => {
     const reservation = taskRunnersByChat.get(chatId)
-    if (reservation?.userId !== userId) return
+    if (reservation?.userId !== userId || !taskRuntimeRepo.get(userId, reservation.taskId)) return
     const active = executing.get(keyOf(userId, reservation.taskId))
     try {
       finish(userId, reservation.taskId, 'cancelled', 'The task conversation was deleted.', false, false)
@@ -431,7 +405,7 @@ installTaskRunnerHooks({
   },
   profileRemoved: (userId) => {
     for (const [chatId, reservation] of taskRunnersByChat) {
-      if (reservation.userId !== userId) continue
+      if (reservation.userId !== userId || !taskRuntimeRepo.get(userId, reservation.taskId)) continue
       const active = executing.get(keyOf(userId, reservation.taskId))
       active?.controller.abort(); active?.handle?.cancel()
       taskRunnersByChat.delete(chatId)
@@ -443,7 +417,7 @@ installTaskRunnerHooks({
       const active = executing.get(keyOf(userId, taskId))
       active?.controller.abort(); active?.handle?.cancel()
       for (const [chatId, reservation] of taskRunnersByChat) {
-        if (reservation.userId === userId && reservation.taskId === taskId) taskRunnersByChat.delete(chatId)
+        if (reservation.userId === userId && reservation.taskId === taskId && !reservation.controllerTaskId) taskRunnersByChat.delete(chatId)
       }
       return
     }

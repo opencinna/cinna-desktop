@@ -227,3 +227,13 @@ describe('the job detail view for a job this device cannot run', () => {
     )
   })
 })
+
+it.each([
+  ['script', 'Routed by defined script steps'],
+  ['coordinator', 'Coordinated by your local model']
+] as const)('shows the explicit %s router even with no ordinary agent joins', (router, label) => {
+  jobState.current = job({ router, agentIds: [], mcpProviderIds: [] })
+  render(<JobDetail />)
+  expect(screen.getByRole('status', { name: label })).toBeTruthy()
+  expect(screen.queryByRole('status', { name: 'Direct agent connection' })).toBeNull()
+})

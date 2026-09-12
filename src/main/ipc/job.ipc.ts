@@ -1,5 +1,5 @@
 import { userActivation } from '../auth/activation'
-import { getProfileScopeUserId } from '../auth/scope'
+import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { jobService } from '../services/jobService'
 import { ipcHandle } from './_wrap'
 import type {
@@ -68,7 +68,7 @@ export function registerJobHandlers(): void {
 
   ipcHandle('job:execute', async (_event, jobId: string) => {
     userActivation.requireActivated()
-    return jobService.execute(getProfileScopeUserId(), jobId)
+    return jobService.execute(getProfileScopeUserId(), jobId, getSettingsScopeUserId())
   })
 
   ipcHandle('job:cancel-run', async (_event, runId: string) => {

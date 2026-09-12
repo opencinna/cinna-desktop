@@ -3,6 +3,8 @@ import type { TaskBudget } from './tasks'
 /** Device-local execution state, separate from the synced task status. */
 export type TaskRuntimeState = 'queued' | 'running' | 'waiting' | 'interrupted' | 'completed'
 export interface TaskRuntimeInfo {
+  /** Script child controls act on the parent execution. */
+  controllerTaskId?: string
   state: TaskRuntimeState
   reason: string | null
   ownerTurns: number

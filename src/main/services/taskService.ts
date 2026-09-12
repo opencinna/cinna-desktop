@@ -1,3 +1,4 @@
+import { scriptRuntimeRepo } from '../db/scriptRuntimes'
 import { validateTaskScript } from '../tasks/scriptRouter'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskRunnerBridge } from './taskRunnerBridge'
@@ -227,10 +228,10 @@ export function toTaskDto(
     name: row.assigneeName,
     kind: parseTaskAssigneeKind(row.assigneeKind)
   }
-  const runtime = taskRuntimeRepo.get(row.userId, row.id)
+  const runtime = taskRuntimeRepo.get(row.userId, row.id) ?? scriptRuntimeRepo.info(row.userId, row.id, row.parentTaskId)
   return {
     id: row.id,
-    ...(runtime ? { runtime: { state: runtime.state, reason: runtime.reason, ownerTurns: runtime.ownerTurns, elapsedMs: runtime.elapsedMs, budget: runtime.budget } } : {}),
+    ...(runtime ? { runtime: { controllerTaskId: runtime.controllerTaskId, state: runtime.state, reason: runtime.reason, ownerTurns: runtime.ownerTurns, elapsedMs: runtime.elapsedMs, budget: runtime.budget } } : {}),
     title: row.title,
     goal: row.goal,
     description: row.description,

@@ -24,7 +24,7 @@ Internal callers can supply `runnerTaskId`. Admission requires a non-deleted, pr
 
 The executor attaches `completionOwner`, root run ID and invocation ID to observed events. A runner-owned turn may record, answer and expire requests, but neither its stream callback nor Inbox terminal observation finishes the whole task/job. Ordinary turns keep their existing job or chat-owned-task finisher. This is per execution, so one caller’s policy cannot suppress another conversation’s completion.
 
-There is still one active turn per chat. The [autonomous task runner](../../jobs/tasks/autonomous_tasks.md) uses this ownership to coordinate consecutive turns, handback and durable gates; its reservation also excludes ordinary sends between turns and during waits. Scripts, schedules and token-budget enforcement remain separate work.
+There is still one active turn per chat. The [autonomous task runner](../../jobs/tasks/autonomous_tasks.md) uses this ownership to coordinate consecutive turns, handback and durable gates; its reservation also excludes ordinary sends between turns and during waits. [Script execution](../../jobs/tasks/script_execution.md) uses the same ownership per isolated child conversation. Schedules and token-budget enforcement remain separate work.
 
 ## Model and Agent Endings
 

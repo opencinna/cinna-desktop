@@ -84,7 +84,7 @@ describe('the unions that cross app-sync are parsed, not trusted', () => {
     ['router', parseTaskRouter, ['direct', 'human', 'coordinator', 'script'], 'direct'],
     ['origin', parseTaskOrigin, ['local', 'remote'], 'local'],
     ['executor', parseTaskExecutor, ['desktop', 'remote'], 'desktop'],
-    ['assignee kind', parseTaskAssigneeKind, ['agent', 'model', 'remote_agent'], 'model']
+    ['assignee kind', parseTaskAssigneeKind, ['agent', 'model', 'remote_agent', 'script', 'human'], 'model']
   ] as Array<[string, (raw: unknown) => string, string[], string]>)(
     '%s takes its own members and falls back for anything else',
     (_label, parse, members, fallback) => {

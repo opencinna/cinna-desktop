@@ -4,7 +4,7 @@
 
 Store a portable plan of agent steps and human questions alongside a reusable job or durable task. Validation rejects ambiguous dependencies and executable expressions before a local definition is saved.
 
-This is a definition foundation. The desktop does not yet execute the graph or offer a script editor. Saving or syncing a script does not start agents or create Inbox questions.
+Explicit script Jobs execute through the [main-owned graph runtime](script_execution.md). The desktop offers no script editor; saving or syncing a definition alone does not start work.
 
 ## Core Concepts
 
@@ -14,12 +14,12 @@ This is a definition foundation. The desktop does not yet execute the graph or o
 - **Template** — literal text with goal or dependency-output substitutions. It contains no JavaScript, shell evaluation or nested scripts.
 - **Autonomous job definition** — an explicit job router (`script` or `coordinator`), optional budget and, for `script`, the script itself. An ordinary job leaves these fields null.
 
-## Authoring Flow
+## User Stories / Flows
 
 1. A programmatic caller supplies a version-1 definition through the existing job create/update contract; the current Job Edit form has no script controls.
 2. Main validates the merged runtime configuration and the entire graph before writing. Invalid local changes leave the saved definition intact.
 3. Job details and task DTOs carry the saved definition. Encrypted app sync transfers its portable data without installing agents or starting work.
-4. Attempting to run a defined autonomous job through the current job executor is refused before a chat, task or job attempt is created. A task carrying a script also cannot use ordinary **Continue**.
+4. Running an explicit script or coordinator Job admits its matching main-owned runtime. Unsupported definitions refuse before attempt creation. A task carrying a script cannot use ordinary **Continue**; its runtime provides whole-script Stop and Resume.
 
 ## Business Rules
 
@@ -29,17 +29,17 @@ This is a definition foundation. The desktop does not yet execute the graph or o
 - **Text stays data.** Substitution is single-pass: braces inside inserted output are not evaluated again. Oversized expanded prompts are refused instead of silently truncating instructions. A separate compact-output helper marks shortened output explicitly.
 - **A task's script choice is fixed locally.** A script task needs a validated definition when created and cannot be a child task. Local task updates cannot switch into or out of the script router; no service-level script edit action is exposed.
 - **Preserve future data without executing it.** Sync stores received script and budget payloads without current-version normalization. Unrelated title edits preserve them. Editing a job's runtime configuration or attempting execution validates supported syntax again, so receiving a newer definition cannot cause a fallback model run.
-- **Portable references do not transport agents.** Script aliases remain inside the definition, separate from the job's ordinary dependency joins. Receiving them does not create agent rows or resolve aliases into execution targets. Folder agents remain local files; see [Local Agents Are Not Synced](../../agents/local_agents/local_only.md).
+- **Portable references do not transport agents.** Script aliases remain inside the definition, separate from the job's ordinary dependency joins. Receiving them does not create agent rows. Execution resolves aliases against already available, enabled resources and refuses missing or ambiguous identities. Folder agents remain local files; see [Local Agents Are Not Synced](../../agents/local_agents/local_only.md).
 
 ## Architecture Overview
 
 Programmatic job/task authoring → main validation → SQLite definition → DTO and encrypted app sync.
 
-Execution request → runtime-definition guard → refusal until the autonomous job/script executor exists.
+Execution request → runtime-definition guard → coordinator or script admission → checkpointed execution.
 
 ## Integration Points
 
 - [Technical contract](script_definitions_tech.md) — exact fields, bounds, parser helpers and persistence paths.
 - [Jobs](../jobs/jobs.md) — reusable definitions and existing attempt history.
 - [Tasks](tasks.md) and [device sync](cross_device.md) — durable work and portable fields.
-- [Autonomous tasks](autonomous_tasks.md) — the existing coordinator-chat runner; storing a coordinator job definition does not invoke it.
+- [Script execution](script_execution.md) and [autonomous tasks](autonomous_tasks.md) — main-owned execution for explicit Job routers; storage alone does not invoke either engine.

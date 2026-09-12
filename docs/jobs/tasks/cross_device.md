@@ -14,7 +14,7 @@ A task travels between the devices of one Cinna account as the fifth [app-sync](
 
 ## What travels and what does not
 
-[Script definitions](script_definitions_tech.md) travel as portable data. Sync preserves future versions and fields without resolving script aliases or creating agents; ordinary local Continue refuses a script-bearing task. Runtime checkpoints and conversations remain on the executing device.
+[Script definitions](script_definitions_tech.md) travel as portable data. Sync preserves future versions and fields without resolving script aliases or creating agents; ordinary local Continue refuses a script-bearing task. Coordinator and script runtime checkpoints and conversations remain on the executing device. A synced definition does not resume a remote device’s graph; [script admission](script_execution_tech.md) resolves available local resources and rechecks root/child bindings before execution.
 
 | Carried | Left behind |
 |---|---|

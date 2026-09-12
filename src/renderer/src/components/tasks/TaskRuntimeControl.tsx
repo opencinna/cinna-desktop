@@ -13,6 +13,8 @@ export function TaskRuntimeControl({ task }: { task: TaskDto }): React.JSX.Eleme
   const [pending, setPending] = useState<'resume' | 'stop' | null>(null)
   const [error, setError] = useState<string | null>(null)
   if (!runtime) return null
+  const controllerTaskId = runtime.controllerTaskId ?? task.id
+  const script = !!runtime.controllerTaskId
   const terminal = ['completed', 'error', 'cancelled', 'archived'].includes(task.status)
   const waiting = !terminal && runtime.state !== 'interrupted' && (runtime.state === 'waiting' || task.status === 'blocked')
   const action = async (kind: 'resume' | 'stop'): Promise<void> => {
@@ -21,9 +23,10 @@ export function TaskRuntimeControl({ task }: { task: TaskDto }): React.JSX.Eleme
     setPending(kind)
     setError(null)
     try {
-      if (kind === 'resume') await window.api.tasks.resumeRuntime(task.id)
-      else await window.api.tasks.stopRuntime(task.id)
+      if (kind === 'resume') await window.api.tasks.resumeRuntime(controllerTaskId)
+      else await window.api.tasks.stopRuntime(controllerTaskId)
       await queryClient.invalidateQueries({ queryKey: TASK_QUERY_KEY(task.id) })
+      if (controllerTaskId !== task.id) void queryClient.invalidateQueries({ queryKey: TASK_QUERY_KEY(controllerTaskId) })
       void queryClient.invalidateQueries({ queryKey: ['tasks'] })
       void queryClient.invalidateQueries({ queryKey: ['inbox'] })
       if (task.chatId) void queryClient.invalidateQueries({ queryKey: ['chat', task.chatId] })
@@ -46,10 +49,11 @@ export function TaskRuntimeControl({ task }: { task: TaskDto }): React.JSX.Eleme
       </div>
     </div>
     <div role="alert" className="h-9 overflow-y-auto text-xs text-[var(--color-danger)]">{error}</div>
+    {controllerTaskId !== task.id && <p className="text-xs text-[var(--color-text-secondary)]">Stop and Resume apply to the whole script.</p>}
     {runtime.reason && <p className="text-xs text-[var(--color-text-secondary)]">{runtime.reason}</p>}
     <details className="text-[11px] text-[var(--color-text-muted)]">
       <summary className="cursor-pointer font-medium text-[var(--color-accent)]">Execution limits</summary>
-      <p className="pt-2">{runtime.ownerTurns} of {runtime.budget.maxRounds} turns used. Time limit: {runtime.budget.maxMinutes} minutes. Time pauses at saved task questions; approvals within a running agent turn still count.</p>
+      <p className="pt-2">{runtime.ownerTurns} of {runtime.budget.maxRounds} turns used. Time limit: {runtime.budget.maxMinutes} minutes. {script ? 'Time pauses when all remaining steps wait for saved answers; approvals within a running agent turn still count.' : 'Time pauses at saved task questions; approvals within a running agent turn still count.'}</p>
     </details>
   </section>
 }

@@ -1,3 +1,4 @@
+import type { ScriptRuntimeCheckpoint } from '../tasks/scriptRuntimeTypes'
 import type { TaskScript } from '../../shared/taskScript'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
@@ -704,6 +705,12 @@ export const taskHandoffs = sqliteTable('task_handoffs', {
   userId: text('user_id').notNull(),
   chatId: text('chat_id'),
   receipt: text('receipt', { mode: 'json' }).$type<TaskHandoffReceipt>().notNull()
+})
+
+export const taskScriptRuntimes = sqliteTable('task_script_runtimes', {
+  taskId: text('task_id').primaryKey().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  checkpoint: text('checkpoint', { mode: 'json' }).$type<ScriptRuntimeCheckpoint>().notNull()
 })
 
 export const taskRuntimes = sqliteTable('task_runtimes', {

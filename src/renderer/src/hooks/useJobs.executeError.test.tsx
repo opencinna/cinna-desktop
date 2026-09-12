@@ -30,6 +30,9 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
  */
 
 const execute = vi.hoisted(() => vi.fn())
+const startRun = vi.hoisted(() => vi.fn())
+const setActiveChatId = vi.hoisted(() => vi.fn())
+const setActiveView = vi.hoisted(() => vi.fn())
 const logged = vi.hoisted(() => [] as Array<{ message: string; data?: unknown }>)
 
 vi.mock('../stores/logger.store', () => ({
@@ -42,14 +45,14 @@ vi.mock('../stores/logger.store', () => ({
 }))
 vi.mock('../stores/ui.store', () => ({
   useUIStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setActiveView: () => undefined })
+    sel({ setActiveView })
 }))
 vi.mock('../stores/chat.store', () => ({
   useChatStore: (sel: (s: Record<string, unknown>) => unknown) =>
-    sel({ setActiveChatId: () => undefined })
+    sel({ setActiveChatId })
 }))
 vi.mock('./useChatStream', () => ({
-  useChatStream: () => ({ startRun: vi.fn(), cancel: vi.fn() })
+  useChatStream: () => ({ startRun, cancel: vi.fn() })
 }))
 vi.mock('./useChatModes', () => ({ useChatModes: () => ({ data: [] }) }))
 vi.mock('./useProviders', () => ({ useProviders: () => ({ data: [] }) }))
@@ -95,6 +98,7 @@ function wrapper(client: QueryClient) {
 beforeEach(() => {
   logged.length = 0
   execute.mockReset()
+  startRun.mockClear(); setActiveChatId.mockClear(); setActiveView.mockClear()
   ;(globalThis as unknown as { window: { api: unknown } }).window.api = {
     jobs: { execute }
   }
@@ -170,4 +174,24 @@ describe('a job run the main process refuses', () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
     expect(logged).toHaveLength(0)
   })
+})
+
+it.each([false, true])('main-owned execution never sends a second run (navigate=%s)', async (navigate) => {
+  execute.mockResolvedValue({ type: 'local', execution: 'main', chatId: 'script-chat', taskId: 'script-task', runId: 'attempt' })
+  const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  const invalidate = vi.spyOn(client, 'invalidateQueries')
+  const { result } = renderHook(() => useExecuteJob(), { wrapper: wrapper(client) })
+  result.current.mutate({ jobId: 'script-job', navigate })
+  await waitFor(() => expect(result.current.isSuccess).toBe(true))
+  expect(startRun).not.toHaveBeenCalled()
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['tasks'] })
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ['chats'] })
+  if (navigate) {
+    expect(setActiveChatId).toHaveBeenCalledExactlyOnceWith('script-chat')
+    expect(setActiveView).toHaveBeenCalledExactlyOnceWith('chat')
+  } else {
+    expect(setActiveChatId).not.toHaveBeenCalled()
+    expect(setActiveView).not.toHaveBeenCalled()
+  }
+  client.clear()
 })

@@ -25,7 +25,7 @@ import { taskRepo } from '../db/tasks'
 import { getSettingsScopeUserId, getAgentLookupScope } from '../auth/scope'
 import { JobError, TaskError } from '../errors'
 import { newChatRouter, routingOf } from '../../shared/chatRouting'
-import type { JobRunOrigin } from '../../shared/jobs'
+import type { JobRunOrigin, JobExecuteResult } from '../../shared/jobs'
 import type { RunState } from '../../shared/runEvents'
 import { parseTaskPriority, type TaskDto } from '../../shared/tasks'
 import { cinnaApiService } from './cinnaApiService'
@@ -423,30 +423,21 @@ export const jobService = {
    */
   async execute(
     userId: string,
-    jobId: string
-  ): Promise<
-    | {
-        type: 'local'
-        chatId: string
-        runId: string
-        taskId: string
-        prompt: string
-        agentId: string | null
-        modeId: string | null
-      }
-    | {
-        type: 'cinna_task'
-        runId: string
-        /** Every run has one now, whichever executor it starts on. */
-        taskId: string
-        cinnaTaskId: string
-        cinnaShortCode: string | null
-      }
-  > {
+    jobId: string,
+    settingsUserId = getSettingsScopeUserId()
+  ): Promise<JobExecuteResult> {
     const job = requireJob(userId, jobId)
     if (job.type === 'cinna_task') {
       const res = await this.executeCinnaTask(userId, jobId)
       return { type: 'cinna_task', ...res }
+    }
+    if (job.router === 'coordinator') {
+      const { startCoordinatorJob } = await import('./coordinatorJobService')
+      return { type: 'local', execution: 'main', ...await startCoordinatorJob({ profileUserId: userId, settingsUserId }, job) }
+    }
+    if (job.router === 'script') {
+      const { scriptRuntimeService } = await import('./scriptRuntimeService')
+      return { type: 'local', execution: 'main', ...scriptRuntimeService.startJob({ profileUserId: userId, settingsUserId }, job) }
     }
     return { type: 'local', ...this.executeLocal(userId, jobId) }
   },

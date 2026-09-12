@@ -240,6 +240,13 @@ export function useExecuteJob() {
         return
       }
 
+      if (result.execution === 'main') {
+        queryClient.invalidateQueries({ queryKey: ['tasks'] })
+        queryClient.invalidateQueries({ queryKey: ['chats'] })
+        if (navigate) { setActiveChatId(result.chatId); setActiveView('chat') }
+        return
+      }
+
       const { chatId, prompt, agentId, modeId } = result
 
       // Resolve provider/model the way the new-chat screen does — the main

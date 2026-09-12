@@ -28,6 +28,8 @@ import type { IpcMainInvokeEvent } from 'electron'
 
 const runner = vi.hoisted(() => ({ start: vi.fn(() => ({ taskId: 't1', chatId: 'c1' })), resume: vi.fn(), cancel: vi.fn() }))
 vi.mock('../services/taskRunnerService', () => ({ taskRunnerService: runner }))
+const runtime = vi.hoisted(() => ({ resume: vi.fn(), cancel: vi.fn() }))
+vi.mock('../services/taskRuntimeService', () => ({ taskRuntimeService: runtime }))
 const markDirty = vi.hoisted(() => vi.fn())
 const startTask = vi.hoisted(() => vi.fn(async () => ({ task: { id: 't1' }, chatId: 'c1', runId: 'run1' })))
 const service = vi.hoisted(() => ({
@@ -162,8 +164,8 @@ describe('autonomous task IPC', () => {
     expect(runner.start).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, input)
     expect(markDirty).toHaveBeenCalledWith('profile-1')
     await invoke('task:resume-runtime', 't1')
-    expect(runner.resume).toHaveBeenCalledWith('profile-1', 't1')
+    expect(runtime.resume).toHaveBeenCalledWith('profile-1', 't1')
     await invoke('task:stop-runtime', 't1')
-    expect(runner.cancel).toHaveBeenCalledWith('profile-1', 't1')
+    expect(runtime.cancel).toHaveBeenCalledWith('profile-1', 't1')
   })
 })

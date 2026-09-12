@@ -841,3 +841,12 @@ describe('autonomous task attention', () => {
     expect(screen.queryByRole('button', { name: 'Open the Inbox' })).toBeNull()
   })
 })
+
+it.each([
+  ['script', 'Defined script steps'],
+  ['human', 'You (via the Inbox)']
+] as const)('identifies the %s assignee without claiming a model runs the task', async (kind, label) => {
+  await renderTask({ assignee: { kind, agentId: null, name: null } })
+  expect(screen.getByText(label)).toBeTruthy()
+  expect(screen.queryByText('The local model')).toBeNull()
+})

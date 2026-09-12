@@ -2,6 +2,8 @@
 export interface TaskRunnerReservation {
   userId: string
   taskId: string
+  /** Parent execution controlling a script child reservation. */
+  controllerTaskId?: string
   id: string
   working: boolean
   cancel(): void

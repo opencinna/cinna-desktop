@@ -150,9 +150,9 @@ export interface TaskAssignee {
   kind: TaskAssigneeKind
 }
 
-export type TaskAssigneeKind = 'agent' | 'model' | 'remote_agent'
+export type TaskAssigneeKind = 'agent' | 'model' | 'remote_agent' | 'script' | 'human'
 
-export const TASK_ASSIGNEE_KINDS: readonly TaskAssigneeKind[] = ['agent', 'model', 'remote_agent']
+export const TASK_ASSIGNEE_KINDS: readonly TaskAssigneeKind[] = ['agent', 'model', 'remote_agent', 'script', 'human']
 
 export function parseTaskAssigneeKind(raw: unknown): TaskAssigneeKind {
   return oneOf(raw, TASK_ASSIGNEE_KINDS, 'model')

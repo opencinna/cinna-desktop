@@ -6,7 +6,7 @@ Let a configured coordinator work toward a goal while the user leaves the conver
 
 ## Core Concepts
 
-- **Autonomous task** — an explicit execution mode for a task linked to an existing coordinator chat. Turning on ordinary coordination alone does not start an autonomous loop.
+- **Autonomous task** — an explicit execution mode for a task linked to a coordinator chat, admitted from that conversation or an explicitly configured local Job. Turning on ordinary coordination alone does not start an autonomous loop.
 - **Owner turn** — one coordinator or handed-off specialist turn. A delegated agent is a tool call within its coordinator turn; it does not become the owner.
 - **Checkpoint** — device-local state recording the current owner, continuation, limits and durable question. It is separate from the task definition that syncs to other devices.
 - **Runner gate** — a persisted coordinator question with its own delivery owner and no invented agent identity. It survives the turn and application restart.
@@ -22,7 +22,8 @@ Let a configured coordinator work toward a goal while the user leaves the conver
 
 ## Business Rules
 
-- **Autonomy is explicit.** Main requires an owned, configured coordinator chat, no active turn/runner and no pending local questions. It uses that chat’s model rather than silently selecting another default. A new task gets the entered goal; reusing a task requires the entered goal to match its immutable original goal after trimming. A different goal requires a new conversation.
+- **Job autonomy is also explicit.** An explicit coordinator Job resolves its model and dependencies in main, creates a new hidden conversation and attempt transactionally, and starts the same runner after commit. Ordinary jobs with a null router retain their existing one-turn behavior. There is no autonomous-definition editor in the Job form.
+- **Autonomy is explicit.** Existing-chat admission requires an owned, configured coordinator chat, no active turn/runner and no pending local questions. It uses that chat’s model rather than silently selecting another default. A new task gets the entered goal; reusing a task requires the entered goal to match its immutable original goal after trimming. A different goal requires a new conversation.
 - **Only the coordinator controls the loop.** Its fixed commands are delegate, handoff, ask_user, update_task and finish. A specialist cannot return a control instruction through its ordinary result. The first successful end-of-turn control wins; later calls in that model response receive persisted non-execution results.
 - **Only explicit finish completes autonomous work.** Ordinary text without a control can start another bounded coordinator turn. Failed or cancelled specialist work does not masquerade as successful handback. Unknown request cleanup or input-needed without an answerable saved ask interrupts progression.
 - **Limits bound admission and active work.** Each owner turn counts once, separately from the model loop’s ten-request ceiling. Turn limits accept integers 1–1000; time limits are positive and at most 1440 minutes. Time includes queue waits and execution but excludes settled human waits. Live approvals inside a running agent turn still count, and the task page offers the Inbox while that turn is blocked. Timeout aborts active work and waits for turn cleanup before finalization. An unclean running checkpoint conservatively charges the unfinished interval through recovery, including downtime.
@@ -48,4 +49,4 @@ Inbox answer → scoped gate/checkpoint transaction → queued continuation. Tas
 - [Live attachment](../../chat/messaging/live_runs.md) and [turn outcomes](../../chat/messaging/turn_completion.md) — selected-chat visibility and per-turn results.
 - [Remote handoff](remote_handoff.md) — moving the executor to another service is distinct from changing the desktop runner’s next specialist owner.
 
-Script/DAG routing, schedules, manifest-driven handback, protocol/new-driver work and the final cleanup remain separate implementation work. This coordinator slice does not complete phase 6 or the whole runtime feature.
+[Script execution](script_execution.md) shares admission queues and runtime controls, using a fixed dependency graph instead of coordinator decisions. Schedules, manifest-driven handback, complete token accounting, protocol/new-driver work and final cleanup remain separate implementation work.

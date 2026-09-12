@@ -153,6 +153,10 @@ export function migrateTasks(sqlite: Database.Database): void {
     CREATE INDEX idx_task_input_requests_open ON task_input_requests(status, created_at);
     CREATE INDEX idx_task_input_requests_task ON task_input_requests(task_id);`))()
   }
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS task_script_runtimes (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL, checkpoint TEXT NOT NULL
+  ); CREATE INDEX IF NOT EXISTS idx_task_script_runtimes_user ON task_script_runtimes(user_id);`)
   sqlite.exec(`CREATE TABLE IF NOT EXISTS task_runtimes (
     task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
     user_id TEXT NOT NULL, checkpoint TEXT NOT NULL

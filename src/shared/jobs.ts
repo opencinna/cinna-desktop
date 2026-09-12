@@ -16,6 +16,13 @@ export interface JobRuntimeDefinition {
 export type JobType = 'local' | 'cinna_task'
 export type JobRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
+/** Main-owned work must never be dispatched a second time by the renderer. */
+export type JobExecuteResult =
+  | { type: 'local'; execution: 'main'; chatId: string; runId: string; taskId: string }
+  | { type: 'local'; execution?: 'renderer'; chatId: string; runId: string; taskId: string;
+      prompt: string; agentId: string | null; modeId: string | null }
+  | { type: 'cinna_task'; runId: string; taskId: string; cinnaTaskId: string; cinnaShortCode: string | null }
+
 export interface JobData extends JobRuntimeDefinition {
   id: string
   userId: string

@@ -1,3 +1,4 @@
+import { taskRuntimeService } from '../services/taskRuntimeService'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
 import { taskService, type TaskFieldPatch } from '../services/taskService'
@@ -58,13 +59,13 @@ export function registerTaskHandlers(): void {
   ipcHandle('task:resume-runtime', async (_event, taskId: string) => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    taskRunnerService.resume(userId, taskId)
+    taskRuntimeService.resume(userId, taskId)
     syncService.markDirty(userId)
   })
   ipcHandle('task:stop-runtime', async (_event, taskId: string) => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()
-    taskRunnerService.cancel(userId, taskId)
+    taskRuntimeService.cancel(userId, taskId)
     syncService.markDirty(userId)
   })
   ipcHandle('task:list', async (_event, query?: TaskListQuery): Promise<TaskDto[]> => {
