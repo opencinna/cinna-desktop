@@ -4,12 +4,13 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSqlite'
 import { createFakeAcp, type FakeAcp, type FakeAcpScript } from '../agents/drivers/acp/testSupport/fakeAcp'
+import { fakeRemoteAcp } from '../agents/drivers/acp/testSupport/fakeRemoteAcp'
 import type { CustomAgentConfig } from '../../shared/customAgents'
 
 const state = vi.hoisted(() => ({ db: null as TestDatabase | null, profile: '__default__', root: '' }))
 vi.mock('../db/client', () => ({ getDb: () => state.db!.db, getRawSqlite: () => state.db!.sqlite }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }))
-vi.mock('electron', () => ({ app: { getPath: () => state.root } }))
+vi.mock('electron', () => ({ app: { getPath: () => state.root }, safeStorage: { isEncryptionAvailable: () => true, encryptString: (value: string) => Buffer.from(value.split('').reverse().join('')), decryptString: (value: Buffer) => value.toString().split('').reverse().join('') } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => state.profile, getSettingsScopeUserId: () => '__default__' }))
 vi.mock('../shell/env', async () => ({ ...(await import('../shell/envMerge')), getShellEnv: async () => ({ PATH: '/usr/bin:/bin', HOME: state.root, SSH_AUTH_SOCK: '/tmp/fixture-agent.sock', ANTHROPIC_API_KEY: 'must-not-inherit' }) }))
 vi.mock('./agentReadinessService', () => ({ agentReadinessService: { forget: vi.fn() } }))
@@ -64,7 +65,7 @@ describe('custom command state with real SQLite and external files', () => {
     expect(JSON.parse(readFileSync(path, 'utf8')).sessions.chat.sessionId).toBe('session-one')
     const newer = agentRepo.updateRuntime(OWNER, agent.id, 'acp', { name: 'Changed', config: { ...config, cwd: '/remote/new' } })
     const next = customAgentService.runtime(OWNER, newer)
-    expect(() => next.readSession('chat')).toThrow(/earlier command/)
+    expect(() => next.readSession('chat')).toThrow(/earlier ACP configuration/)
     expect(next.readSession('new-chat')).toBeNull(); expect(next.isGranted(ask)).toBe(false)
     expect(() => runtime.saveSession('chat', 'late-old')).toThrow(/changed/)
     expect(() => runtime.rememberGrant(ask)).toThrow(/changed/)
@@ -171,5 +172,58 @@ describe('real initialize-only test receipts', () => {
     state.profile = 'other'
     await rejected
     expect(() => process.kill(start.pid!, 0)).toThrow()
+  })
+})
+
+
+describe('remote ACP credentials and saved state', () => {
+  it('tests without creating a session, stores a private token, and binds continuity to its revision', async () => {
+    const peer = await fakeRemoteAcp({ token: 'acp_fixture_secret' })
+    try {
+      const config = { launcher: 'custom' as const, transport: 'websocket' as const, url: peer.url, cwd: '/app/workspace' }
+      const tested = await customAgentService.test({ config, accessToken: 'acp_fixture_secret' })
+      expect(peer.received('session/new')).toHaveLength(0)
+      expect(() => customAgentService.save({ config, accessToken: 'changed', testToken: tested.token })).toThrow(/token changed/)
+      const { id } = customAgentService.save({ config, accessToken: 'acp_fixture_secret', testToken: tested.token })
+      const row = agentRepo.getOwned(OWNER, id)!
+      expect(JSON.stringify(row.driverConfig)).not.toContain('acp_fixture_secret')
+      expect(row.accessTokenEncrypted!.toString()).not.toContain('acp_fixture_secret')
+      expect(customAgentService.configuration(id)).toMatchObject({ config, hasAccessToken: true })
+      expect(JSON.stringify(customAgentService.configuration(id))).not.toContain('acp_fixture_secret')
+      const runtime = customAgentService.runtime(OWNER, row)
+      runtime.saveSession('chat', 'remote-session')
+      runtime.rememberGrant(ask)
+      expect(runtime.readSession('chat')).toBe('remote-session')
+      await expect(customAgentService.test({ id, config, accessToken: 'wrong-replacement' })).rejects.toThrow()
+      if (runtime.type !== 'external') throw new Error('Wrong runtime')
+      expect(await runtime.readiness()).toEqual({ state: 'ok', reason: null })
+      // Routine readiness reads do not open a network connection.
+      const calls = peer.headers.length
+      if (runtime.type !== 'external') throw new Error('Wrong runtime')
+      await runtime.readiness()
+      expect(peer.headers).toHaveLength(calls)
+      // Retaining the token works without reading it back through IPC.
+      const retest = await customAgentService.test({ id, config })
+      customAgentService.save({ id, config, testToken: retest.token })
+      expect(() => runtime.saveSession('chat', 'stale')).toThrow(/changed/)
+      const next = customAgentService.runtime(OWNER, agentRepo.getOwned(OWNER, id)!)
+      expect(() => next.readSession('chat')).toThrow(/earlier ACP configuration/)
+      expect(next.isGranted(ask)).toBe(false)
+      await expect(customAgentService.test({ id, config: { ...config, url: peer.url + '-other' } })).rejects.toThrow(/endpoint changed/)
+      expect(peer.headers).toHaveLength(calls + 1)
+    } finally { await peer.close() }
+  })
+  it('clears a saved token only after the anonymous configuration passes a new test', async () => {
+    const peer = await fakeRemoteAcp()
+    try {
+      const config = { launcher: 'custom' as const, transport: 'websocket' as const, url: peer.url, cwd: '/app/workspace' }
+      const tested = await customAgentService.test({ config, accessToken: 'old-token' })
+      const { id } = customAgentService.save({ config, accessToken: 'old-token', testToken: tested.token })
+      const cleared = await customAgentService.test({ id, config, accessToken: '' })
+      expect(() => customAgentService.save({ id, config, testToken: cleared.token })).toThrow(/token changed/)
+      customAgentService.save({ id, config, accessToken: '', testToken: cleared.token })
+      expect(agentRepo.getOwned(OWNER, id)!.accessTokenEncrypted).toBeNull()
+      expect(peer.headers.at(-1)?.authorization).toBeUndefined()
+    } finally { await peer.close() }
   })
 })

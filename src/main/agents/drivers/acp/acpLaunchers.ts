@@ -78,9 +78,9 @@ export interface AcpAgentFolder {
   kind: LocalAgentKind
 }
 
-export type AcpLaunchContext = { userId: string; agentId: string; binding?: string } & (
+export type AcpLaunchContext = { userId: string; agentId: string; binding?: string; accessToken?: string } & (
   | { folder: AcpAgentFolder; custom?: never }
-  | { folder?: never; custom: CustomAgentConfig }
+  | { folder?: never; custom: CustomAgentConfig; accessToken?: string }
 )
 
 /** What the session needs said to it once it exists, in the order given. */

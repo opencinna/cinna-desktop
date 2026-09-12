@@ -11,11 +11,15 @@ import type { StoredPermissionGrant } from '../../../../shared/localAgentRequest
 const FIELD = 'mt-1 w-full min-w-0 rounded-md border border-[var(--color-border)] bg-[var(--color-bg)] px-2.5 py-2 text-xs text-[var(--color-text)] focus:outline-none focus:border-[var(--color-accent)] disabled:opacity-50'
 const BUTTON = 'min-w-28 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50'
 
-export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClose(): void }): React.JSX.Element {
+export function CustomAgentModal({ agentId, remote = false, onClose }: { agentId?: string; remote?: boolean; onClose(): void }): React.JSX.Element {
   const profile = useAuthStore((state) => state.currentUser?.id)
   const queryClient = useQueryClient()
+  const [websocket, setWebsocket] = useState(remote)
+  const [url, setUrl] = useState('')
+  const [accessToken, setAccessToken] = useState<string | undefined>(undefined)
+  const [hasAccessToken, setHasAccessToken] = useState(false)
   const [command, setCommand] = useState('')
-  const [cwd, setCwd] = useState('')
+  const [cwd, setCwd] = useState(remote ? '/app/workspace' : '')
   const [localCwd, setLocalCwd] = useState('')
   const [name, setName] = useState('')
   const [more, setMore] = useState(false)
@@ -24,7 +28,7 @@ export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClo
   const [busy, setBusy] = useState<'loading' | 'testing' | 'saving' | 'revoking' | null>(agentId ? 'loading' : null)
   const [error, setError] = useState('')
   const mounted = useRef(true), generation = useRef(0)
-  const identity = JSON.stringify([command, cwd, localCwd])
+  const identity = JSON.stringify([command, cwd, localCwd, websocket, url, accessToken])
   const current = (token: number): boolean => mounted.current && generation.current === token && useAuthStore.getState().currentUser?.id === profile
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++ } }, [])
   useEffect(() => {
@@ -37,12 +41,15 @@ export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClo
     const token = ++generation.current
     void window.api.customAgents.configuration(agentId).then((value) => {
       if (!current(token)) return
-      setCommand(JSON.stringify(value.config.command)); setCwd(value.config.cwd)
-      setLocalCwd(value.config.localCwd ?? ''); setName(value.name); setGrants(value.grants)
-    }).catch((err) => { if (current(token)) setError(unwrapIpcError(err, 'Could not read this command.')) })
+      setWebsocket(value.config.transport === 'websocket'); setCwd(value.config.cwd)
+      if (value.config.transport === 'websocket') setUrl(value.config.url)
+      else { setCommand(JSON.stringify(value.config.command)); setLocalCwd(value.config.localCwd ?? '') }
+      setHasAccessToken(value.hasAccessToken); setAccessToken(undefined); setName(value.name); setGrants(value.grants)
+    }).catch((err) => { if (current(token)) setError(unwrapIpcError(err, 'Could not read this ACP agent.')) })
       .finally(() => { if (current(token)) setBusy(null) })
   }, [agentId, profile])
   const config = (): ReturnType<typeof parseCustomAgentConfig> => {
+    if (websocket) return parseCustomAgentConfig({ launcher: 'custom', transport: 'websocket', url, cwd })
     let argv: unknown
     try { argv = JSON.parse(command) } catch { throw new Error('Enter the command as a JSON array, for example ["ssh", "-T", "host", "opencode acp"].') }
     return parseCustomAgentConfig({ launcher: 'custom', command: argv, cwd, ...(localCwd ? { localCwd } : {}) })
@@ -52,9 +59,9 @@ export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClo
     const token = ++generation.current
     setBusy('testing'); setError(''); setTested(null)
     try {
-      const result = await window.api.customAgents.test({ ...(agentId ? { id: agentId } : {}), config: config() })
+      const result = await window.api.customAgents.test({ ...(agentId ? { id: agentId } : {}), config: config(), ...(websocket && accessToken !== undefined ? { accessToken } : {}) })
       if (current(token)) setTested({ identity, result })
-    } catch (err) { if (current(token)) setError(unwrapIpcError(err, 'The command did not answer initialization.')) }
+    } catch (err) { if (current(token)) setError(unwrapIpcError(err, 'The ACP agent did not answer initialization.')) }
     finally { if (current(token)) setBusy(null) }
   }
   const startChat = (id: string): void => {
@@ -65,12 +72,12 @@ export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClo
     const token = ++generation.current
     setBusy('saving'); setError('')
     try {
-      const result = await window.api.customAgents.save({ ...(agentId ? { id: agentId } : {}), ...(name.trim() ? { name: name.trim() } : {}), config: config(), testToken: tested.result.token })
+      const result = await window.api.customAgents.save({ ...(agentId ? { id: agentId } : {}), ...(name.trim() ? { name: name.trim() } : {}), config: config(), ...(websocket && accessToken !== undefined ? { accessToken } : {}), testToken: tested.result.token })
       if (!current(token)) return
       await queryClient.invalidateQueries({ queryKey: ['agents'] })
       if (!current(token)) return
       if (agentId) onClose(); else startChat(result.id)
-    } catch (err) { if (current(token)) setError(unwrapIpcError(err, 'Could not save this command.')) }
+    } catch (err) { if (current(token)) setError(unwrapIpcError(err, 'Could not save this ACP agent.')) }
     finally { if (current(token)) setBusy(null) }
   }
   const revoke = async (key: string): Promise<void> => {
@@ -81,20 +88,25 @@ export function CustomAgentModal({ agentId, onClose }: { agentId?: string; onClo
     catch (err) { if (current(token)) setError(unwrapIpcError(err, 'Could not revoke this permission.')) }
     finally { if (current(token)) setBusy(null) }
   }
+  const title = websocket ? (agentId ? 'Remote ACP agent' : 'Add remote ACP agent') : (agentId ? 'Command-line agent' : 'Add command-line agent')
   const result = tested?.identity === identity ? tested.result : null
   return createPortal(<div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-4">
-    <div role="dialog" aria-modal="true" aria-label={agentId ? 'Command-line agent' : 'Add command-line agent'} className="w-full max-w-[34rem] max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-6 shadow-lg">
-      <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{agentId ? 'Command-line agent' : 'Add command-line agent'}</h2><button type="button" aria-label="Close" disabled={!!busy} onClick={onClose} className="p-1 text-[var(--color-text)] disabled:opacity-50"><X size={16} /></button></div>
-      <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">Run an ACP command as your user, locally or through SSH. SSH uses your existing keys and host configuration.</p>
+    <div role="dialog" aria-modal="true" aria-label={title} className="w-full max-w-[34rem] max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-6 shadow-lg">
+      <div className="flex items-center justify-between gap-3"><h2 className="text-base font-semibold">{title}</h2><button type="button" aria-label="Close" disabled={!!busy} onClick={onClose} className="p-1 text-[var(--color-text)] disabled:opacity-50"><X size={16} /></button></div>
+      <p className="mt-2 text-[11px] text-[var(--color-text-muted)]">{websocket ? 'Connect to Cinna-core or another ACP WebSocket server. In Cinna-core, copy the endpoint and token from the agent’s ACP connector.' : 'Run an ACP command as your user, locally or through SSH. SSH uses your existing keys and host configuration.'}</p>
       <form className="mt-5 space-y-3" onSubmit={(event) => { event.preventDefault(); void save() }}>
-        <label className="block text-xs">Command<textarea autoFocus className={`${FIELD} h-20 resize-none font-mono`} value={command} disabled={!!busy} placeholder={'["ssh", "-T", "-o", "BatchMode=yes", "host", "opencode acp"]'} onChange={(event) => setCommand(event.target.value)} /></label>
-        <p className="text-[11px] text-[var(--color-text-muted)]">Enter executable and arguments as a JSON array. Output must be ACP; diagnostics belong on stderr.</p>
-        <label className="block text-xs">Working directory<input className={FIELD} value={cwd} disabled={!!busy} placeholder="/remote/workspace" onChange={(event) => setCwd(event.target.value)} /></label>
+        {websocket ? <>
+          <label className="block text-xs">ACP endpoint<input autoFocus className={FIELD} value={url} disabled={!!busy} placeholder="wss://api.example.com/acp/connector-id" onChange={(event) => setUrl(event.target.value)} /></label>
+          <label className="block text-xs">Access token<input type="password" autoComplete="off" className={FIELD} value={accessToken ?? ''} disabled={!!busy} placeholder={hasAccessToken && accessToken === undefined ? 'Saved token (leave unchanged to keep)' : 'Bearer token (optional)'} onChange={(event) => setAccessToken(event.target.value)} /></label>
+          {hasAccessToken && <button type="button" className="text-xs text-[var(--color-accent)]" disabled={!!busy} onClick={() => setAccessToken('')}>Clear saved token</button>}
+        </> : <><label className="block text-xs">Command<textarea autoFocus className={`${FIELD} h-20 resize-none font-mono`} value={command} disabled={!!busy} placeholder={'["ssh", "-T", "-o", "BatchMode=yes", "host", "opencode acp"]'} onChange={(event) => setCommand(event.target.value)} /></label>
+        <p className="text-[11px] text-[var(--color-text-muted)]">Enter executable and arguments as a JSON array. Output must be ACP; diagnostics belong on stderr.</p></>}
+        <label className="block text-xs">{websocket ? 'Remote working directory' : 'Working directory'}<input className={FIELD} value={cwd} disabled={!!busy} placeholder="/remote/workspace" onChange={(event) => setCwd(event.target.value)} /></label>
         <button type="button" className="text-xs font-medium text-[var(--color-accent)]" aria-expanded={more} disabled={!!busy} onClick={() => setMore(!more)}>{more ? 'Fewer options' : 'More options'}</button>
-        {more && <div className="space-y-3"><label className="block text-xs">Name<input className={FIELD} value={name} disabled={!!busy} maxLength={200} placeholder="Use the agent’s name" onChange={(event) => setName(event.target.value)} /></label><label className="block text-xs">Local process directory<input className={FIELD} value={localCwd} disabled={!!busy} placeholder="Your home directory" onChange={(event) => setLocalCwd(event.target.value)} /></label><p className="text-[11px] text-[var(--color-text-muted)]">This is where the local command starts. Working directory above is sent to the agent and may be on another machine.</p></div>}
-        <div className="flex justify-end"><button type="button" className={BUTTON} disabled={!!busy || !command || !cwd} onClick={() => void test()}>{busy === 'testing' ? 'Testing…' : 'Test'}</button></div>
+        {more && <div className="space-y-3"><label className="block text-xs">Name<input className={FIELD} value={name} disabled={!!busy} maxLength={200} placeholder="Use the agent’s name" onChange={(event) => setName(event.target.value)} /></label>{!websocket && <><label className="block text-xs">Local process directory<input className={FIELD} value={localCwd} disabled={!!busy} placeholder="Your home directory" onChange={(event) => setLocalCwd(event.target.value)} /></label><p className="text-[11px] text-[var(--color-text-muted)]">This is where the local command starts. Working directory above is sent to the agent and may be on another machine.</p></>}</div>}
+        <div className="flex justify-end"><button type="button" className={BUTTON} disabled={!!busy || !(websocket ? url : command) || !cwd} onClick={() => void test()}>{busy === 'testing' ? 'Testing…' : 'Test'}</button></div>
         <div className="h-24 overflow-y-auto [overflow-wrap:anywhere] text-[11px] leading-4 text-[var(--color-text-secondary)]" aria-live="polite">
-          {result ? <><p className="font-medium break-words">Initialization succeeded: {result.name}{result.version ? ` · ${result.version}` : ''}</p><p>Authentication methods: {result.authMethods.map((method) => method.name).join(', ') || 'None advertised'}.</p><p>This checks the protocol connection. Sign in with the configured CLI separately if it requires authentication.</p></> : <p>Test runs initialization only, then closes the command. It sends no chat message and does not sign in.</p>}
+          {result ? <><p className="font-medium break-words">Initialization succeeded: {result.name}{result.version ? ` · ${result.version}` : ''}</p><p>Authentication methods: {result.authMethods.map((method) => method.name).join(', ') || 'None advertised'}.</p><p>{websocket ? 'Ready to connect. The server controls its models, tools, and workspace.' : 'This checks the protocol connection. Sign in with the configured CLI separately if it requires authentication.'}</p></> : <p>Test runs ACP initialization only, then closes the connection. It sends no chat message.</p>}
         </div>
         <div role="alert" className="h-12 overflow-y-auto [overflow-wrap:anywhere] text-[11px] leading-4 text-[var(--color-danger)]">{error}</div>
         <div className="flex justify-end gap-2">{agentId && <button type="button" className={BUTTON} disabled={!!busy} onClick={() => startChat(agentId)}>Start chat</button>}<button type="submit" className={`${BUTTON} bg-[var(--color-accent)] text-white`} disabled={!!busy || !result}>{busy === 'saving' ? 'Saving…' : agentId ? 'Save' : 'Add agent'}</button></div>

@@ -1,5 +1,7 @@
 # Remote Agents
 
+For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp.md). The automatic discovery and synchronization described below uses A2A.
+
 ## Purpose
 
 Automatically discovers and syncs agents from a connected Cinna backend so users can chat with remote agents (personal, shared, and identity-based) using the same A2A protocol infrastructure as locally-registered agents.

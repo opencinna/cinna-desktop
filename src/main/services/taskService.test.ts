@@ -1084,6 +1084,14 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.markRemoteSynced(USER, id, []).id,
       leaves: 'file'
     },
+    resumeFinishedChat: {
+      run: (id) => {
+        holder.current!.raw.exec("INSERT INTO chats (id, user_id, title, created_at, updated_at) VALUES ('continued-chat', '__default__', 'Continue', 0, 0)")
+        taskRepo.update(USER, id, { status: 'completed', chatId: 'continued-chat', remoteAdapter: null, remoteId: null })
+        return taskService.resumeFinishedChat(USER, id, 'continued-chat').id
+      },
+      leaves: 'file'
+    },
     applyRemoteSnapshot: {
       run: (id) => taskService.applyRemoteSnapshot(USER, id, { title: 'From the web' }).id,
       leaves: 'file'

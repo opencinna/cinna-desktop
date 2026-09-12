@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { realpathSync, writeFileSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CustomAgentConfig } from '../../../../shared/customAgents'
+import type { StdioAcpConfig } from '../../../../shared/customAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
 import { describeDriverContract, type DriverContractSubject, type TurnIO } from '../__golden__/driverContract'
@@ -28,7 +28,7 @@ const ASK: FakeAcpScript = { prompt: { emit: [{ kind: 'permission', toolCall: {
 } }] } }
 interface Options {
   script?: FakeAcpScript
-  config?: Partial<CustomAgentConfig>
+  config?: Partial<StdioAcpConfig>
   enabled?: boolean
   missing?: boolean
   invalid?: boolean
@@ -44,7 +44,7 @@ function world(options: Options = {}) {
   const fake = createFakeAcp(options.script ?? HELLO)
   // An explicitly selected shell stands in for SSH. The launcher must preserve
   // argv, not wrap or join it in another shell; the ACP peer is a real process.
-  const config: CustomAgentConfig = { launcher: 'custom',
+  const config: StdioAcpConfig = { launcher: 'custom',
     command: ['/bin/sh', '-c', 'exec "$@"', 'custom-ssh-fixture', fake.spec.command, ...fake.spec.args, ...SENTINELS],
     cwd: REMOTE_CWD, localCwd: realpathSync(fake.dir), ...options.config }
   const env = { ...fake.spec.env, FAKE_ACP_WIRE_LOG: join(fake.dir, 'stdout.ndjson'), SSH_AUTH_SOCK: '/fixture-only/ssh-agent.sock' }

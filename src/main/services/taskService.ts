@@ -111,7 +111,8 @@ function isSettled(status: TaskStatus): boolean {
 }
 
 /**
- * A task no run can ever start from again.
+ * A task the ordinary start transition cannot reopen. An accepted follow-up
+ * in a local chat has its separate, explicit resumeFinishedChat path.
  *
  * **Narrower than {@link isSettled}, and the difference is `error`.** The
  * transition table gives `error` a way out — `error → in_progress` is what the
@@ -595,6 +596,27 @@ export const taskService = {
 
     logger.debug('run state says nothing this task can act on', { taskId, from, state })
     return toTaskDto(task, thisDeviceId(userId))
+  },
+
+  /**
+   * An accepted user follow-up starts new work in an ordinary chat's task.
+   * Only the acceptance path calls this: late run events still cannot reopen
+   * completed work through applyRunState. Job/remote/archived tasks keep their
+   * separate lifecycle and cannot be restarted through a chat message.
+   */
+  resumeFinishedChat(userId: string, taskId: string, chatId: string): TaskDto {
+    const task = requireTask(userId, taskId)
+    requireRunsHere(userId, task)
+    if (task.chatId !== chatId || task.origin !== 'local' || task.executor !== 'desktop' ||
+      task.jobId || task.jobRunId || task.remoteAdapter || task.router === 'script' ||
+      !['completed', 'cancelled', 'error'].includes(task.status)) {
+      throw new TaskError('invalid_transition', 'This task cannot be continued through this chat.')
+    }
+    const row = taskRepo.update(userId, taskId, {
+      ...statusPatch(task, 'in_progress'), executorDevice: thisDeviceId(userId)
+    })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    return written(userId, row)
   },
 
   setAssignee(userId: string, taskId: string, assignee: TaskAssignee): TaskDto {

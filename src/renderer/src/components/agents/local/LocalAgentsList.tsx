@@ -158,6 +158,7 @@ export function LocalAgentsList(): React.JSX.Element {
   const profileId = useAuthStore((state) => state.currentUser?.id)
   const { data: allAgents } = useAgents()
   const managedAgents = (allAgents ?? []).filter((agent) => agent.driver === 'managed')
+  const [remoteAcp, setRemoteAcp] = useState(false)
   const commandAgents = (allAgents ?? []).filter((agent) => agent.driver === 'acp' && agent.capabilities.cwd === false)
   const groups = useMemo(
     () => groupAgentsByRoot(data?.roots ?? [], data?.agents ?? []),
@@ -220,8 +221,8 @@ export function LocalAgentsList(): React.JSX.Element {
 
       <div className="flex-1 overflow-y-auto">
         {commandAgents.length > 0 && <div className="px-1.5 py-1 space-y-px">
-          <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Command-line</div>
-          {commandAgents.map((agent) => <button key={agent.id} type="button" onClick={() => setCustom(agent.id)} className="w-full min-w-0 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]"><span className="block truncate text-xs text-[var(--color-text)]">{agent.name}</span><span className="block truncate text-[10px] text-[var(--color-text-muted)]">{agent.readiness?.reason ?? 'ACP command'}</span></button>)}
+          <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">ACP agents</div>
+          {commandAgents.map((agent) => <button key={agent.id} type="button" onClick={() => setCustom(agent.id)} className="w-full min-w-0 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]"><span className="block truncate text-xs text-[var(--color-text)]">{agent.name}</span><span className="block truncate text-[10px] text-[var(--color-text-muted)]">{agent.readiness?.reason ?? (agent.acpTransport === 'websocket' ? 'Remote ACP' : 'ACP command')}</span></button>)}
         </div>}
         {managedAgents.length > 0 && <div className="px-1.5 py-1 space-y-px">
           <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Managed</div>
@@ -293,10 +294,11 @@ export function LocalAgentsList(): React.JSX.Element {
         )}
       </div>
 
-      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onCreateFolder={() => {
+      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onRemoteAcp={() => { setCreating(false); setRemoteAcp(true) }} onCreateFolder={() => {
         if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true
       }} />}
+      {remoteAcp && <CustomAgentModal remote onClose={() => setRemoteAcp(false)} />}
       {custom !== null && <CustomAgentModal key={`${profileId}:${custom}`} agentId={typeof custom === 'string' ? custom : undefined} onClose={() => setCustom(null)} />}
       {managed !== null && <ManagedAgentModal key={`${profileId}:${managed}`} agentId={typeof managed === 'string' ? managed : undefined} onClose={() => setManaged(null)} />}
     </div>

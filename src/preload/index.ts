@@ -231,6 +231,7 @@ export interface AgentData {
   remoteTargetId: string | null
   remoteMetadata: RemoteAgentMetadata | null
   /** Which driver runs this agent. */
+  acpTransport?: 'stdio' | 'websocket'
   driver: string | null
   /** What the agent can do — ask this, not `source`, to decide behaviour. */
   capabilities: AgentCapabilities
@@ -531,9 +532,9 @@ const api = {
   },
 
   customAgents: {
-    configuration: (id: string): Promise<{ name: string; config: import('../shared/customAgents').CustomAgentConfig; grants: import('../shared/localAgentRequests').StoredPermissionGrant[] }> => ipcRenderer.invoke('custom-agent:configuration', id),
-    test: (input: { id?: string; config: import('../shared/customAgents').CustomAgentConfig }): Promise<import('../shared/customAgents').CustomAgentTestResult> => ipcRenderer.invoke('custom-agent:test', input),
-    save: (input: { id?: string; name?: string; config: import('../shared/customAgents').CustomAgentConfig; testToken: string }): Promise<{ id: string }> => ipcRenderer.invoke('custom-agent:save', input),
+    configuration: (id: string): Promise<{ name: string; config: import('../shared/customAgents').CustomAgentConfig; hasAccessToken: boolean; grants: import('../shared/localAgentRequests').StoredPermissionGrant[] }> => ipcRenderer.invoke('custom-agent:configuration', id),
+    test: (input: { id?: string; config: import('../shared/customAgents').CustomAgentConfig; accessToken?: string }): Promise<import('../shared/customAgents').CustomAgentTestResult> => ipcRenderer.invoke('custom-agent:test', input),
+    save: (input: { id?: string; name?: string; config: import('../shared/customAgents').CustomAgentConfig; accessToken?: string; testToken: string }): Promise<{ id: string }> => ipcRenderer.invoke('custom-agent:save', input),
     revokeGrant: (input: { id: string; key: string }): Promise<void> => ipcRenderer.invoke('custom-agent:revoke-grant', input)
   },
 

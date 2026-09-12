@@ -1,5 +1,7 @@
 # Remote Agents — Technical Details
 
+For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp.md). The automatic discovery and synchronization described below uses A2A.
+
 ## File Locations
 
 ### Main Process

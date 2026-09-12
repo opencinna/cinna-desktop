@@ -14,6 +14,14 @@ export function createCustomLauncher(deps: {
     async plan(ctx) {
       try {
         const config = parseCustomAgentConfig(ctx.custom)
+        if (config.transport === 'websocket') {
+          const key = createHash('sha256').update(JSON.stringify([ctx.userId, ctx.agentId, ctx.binding, config, ctx.accessToken])).digest('hex')
+          return {
+            spec: { command: 'ACP WebSocket', args: [], env: {}, cwd: config.cwd, key, remote: { ...config, accessToken: ctx.accessToken } },
+            init: { protocolVersion: ACP_PROTOCOL_VERSION, clientInfo: { name: 'cinna-desktop', version: '1' }, clientCapabilities: { elicitation: { form: {} } } },
+            session: { mcpServers: [] }, setup: {}
+          }
+        }
         const cwd = config.localCwd ?? deps.defaultLocalCwd()
         if (!isAbsolute(cwd) || !statSync(cwd).isDirectory()) return { error: 'The local process directory is not an existing absolute directory.' }
         const env = await deps.childEnv()

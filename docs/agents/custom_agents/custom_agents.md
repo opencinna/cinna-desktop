@@ -1,5 +1,7 @@
 # Command-line Agents
 
+For a direct WebSocket endpoint and bearer token, use [Remote ACP agents](../remote_agents/remote_acp.md). This page covers command-line/stdio connections.
+
 ## Purpose
 
 Connect an ACP command to a conversation, including an agent reached through SSH. The same ACP driver handles folder engines and these commands; a command-line agent requires no local Agents Home or scanned folder.

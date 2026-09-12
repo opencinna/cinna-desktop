@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import { Plus, RefreshCw, AlertTriangle } from 'lucide-react'
 import { AgentCard } from './AgentCard'
+import { CustomAgentModal } from '../agents/CustomAgentModal'
+import { RemoteAcpAgentCard } from './RemoteAcpAgentCard'
 import { A2AAgentForm } from './A2AAgentForm'
 import { useAgents, useRemoteSyncStatus, useSyncRemoteAgents } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
@@ -31,7 +33,7 @@ function isCatalogInstall(agent: RemoteAgent): boolean {
 
 interface Props {
   /**
-   * 'default' — shared local A2A agents (settings → Default group).
+   * 'default' — manually added A2A and ACP agents (settings → Default group).
    * 'profile' — remote agents synced from the active Cinna account
    *             (settings → Profile group).
    */
@@ -46,6 +48,7 @@ export function AgentsSettingsSection({ scope = 'default' }: Props): React.JSX.E
 function DefaultAgentsSection(): React.JSX.Element {
   const { data: agents } = useAgents()
   const [showAdd, setShowAdd] = useState(false)
+  const [showAcp, setShowAcp] = useState(false)
 
   const localAgents = (agents ?? []).filter(
     (a) => a.source === 'local' && a.protocol === 'a2a'
@@ -57,6 +60,9 @@ function DefaultAgentsSection(): React.JSX.Element {
         <AgentCard key={agent.id} agent={agent} />
       ))}
 
+      {(agents ?? []).filter((agent) => agent.acpTransport === 'websocket').map((agent) => <RemoteAcpAgentCard key={agent.id} agent={agent} />)}
+      {showAcp && <CustomAgentModal remote onClose={() => setShowAcp(false)} />}
+      <button type="button" onClick={() => setShowAcp(true)} className="w-full rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Add remote ACP agent</button>
       {showAdd ? (
         <A2AAgentForm onClose={() => setShowAdd(false)} />
       ) : (

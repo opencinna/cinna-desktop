@@ -380,6 +380,11 @@ export const inboxService = {
         throw new Error('This task is running elsewhere. Take it over before continuing here.')
       }
     }
+    if (linked && ctx.completionOwner !== 'runner' && linked.origin === 'local' &&
+      !linked.jobId && !linked.jobRunId && !linked.remoteAdapter && linked.router !== 'script' &&
+      ['completed', 'cancelled', 'error'].includes(linked.status)) {
+      taskService.resumeFinishedChat(ctx.userId, linked.id, ctx.chatId)
+    }
     for (const row of taskInputRequestRepo.listOpenForChat(ctx.chatId)) {
       if (row.resume !== 'next_message' || row.agentId !== ctx.agentId) continue
       const task = taskService.getById(ctx.userId, row.taskId)

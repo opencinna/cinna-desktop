@@ -82,6 +82,8 @@ import type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
 export type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
 
 const logger = createLogger('acp-driver')
+// Servers without session/load still retain sessions on their current connection.
+const remoteSessions = new WeakMap<AcpConnection, Set<string>>()
 
 /**
  * The backstop, matching both runners'.
@@ -220,7 +222,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       // sentence naming the remedy instead of queueing behind another chat's
       // turn to be told.
       const plan = await launcher
-        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding }) })
+        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding, accessToken: runtime.accessToken }) })
         .catch((err: unknown) => {
           logger.warn('a launcher failed to plan a turn', {
             agentId: agent.id,
@@ -441,7 +443,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logger.warn('an ACP agent’s process would not start', { agentId: agent.id, error: message })
-      return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(startFailureMessage(ctx.launcherId, message), message)
+      return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message), message)
     }
 
     const handlers = {
@@ -472,7 +474,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
     let unbind: (() => void) | undefined
 
-    if (remembered && canLoad) {
+    if (plan.spec.remote && remembered && remoteSessions.get(connection)?.has(remembered)) {
+      sessionId = remembered
+      unbind = connection.bindSession(remembered, handlers)
+    } else if (plan.spec.remote && remembered && !canLoad) {
+      return fail('This ACP server cannot reload sessions after disconnecting. Start a new chat.')
+    }
+
+    if (!sessionId && remembered && canLoad) {
       // **The gate closes before the bind, not after it.** `bindSession`
       // flushes the pre-bind pen *synchronously*, and the pen for this very
       // session id can be holding the tail of the previous turn — a stop, then
@@ -495,6 +504,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         // without explaining: the user asked a question, not to be told about
         // our bookkeeping. Nothing has streamed yet, because the replay gate
         // was closed for exactly this window.
+        if (plan.spec.remote) { unbind(); throw err }
         logger.info('the remembered ACP session was gone; starting a fresh one', {
           agentId: agent.id,
           chatId,
@@ -517,13 +527,19 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         logger.warn('an ACP session could not be created', { agentId: agent.id, error: message })
-        return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(startFailureMessage(ctx.launcherId, message), message)
+        return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(plan.spec.remote ? `Could not connect to the remote ACP agent: ${message}` : startFailureMessage(ctx.launcherId, message), message)
       }
       // Bound on the response, which is why the connection buffers what
       // arrived before the bind: `available_commands_update` lands in the same
       // read as the answer often enough that a turn binding here would
       // otherwise never see it.
       unbind = connection.bindSession(sessionId, handlers)
+    }
+
+    if (plan.spec.remote) {
+      const known = remoteSessions.get(connection) ?? new Set<string>()
+      known.add(sessionId)
+      remoteSessions.set(connection, known)
     }
 
     /**

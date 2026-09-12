@@ -72,6 +72,7 @@ export interface AgentDto {
    * Which driver runs this agent. `source` above says who owns the row; this
    * says how it runs.
    */
+  acpTransport?: 'stdio' | 'websocket'
   driver: string | null
   /**
    * What the agent can do, from its driver. A surface that needs to decide
@@ -134,6 +135,7 @@ function toDto(row: AgentRow): AgentDto {
     localPath: row.localPath,
     localRootId: row.localRootId,
     driver: row.driver,
+    ...(row.driver === 'acp' && row.driverConfig?.launcher === 'custom' ? { acpTransport: row.driverConfig.transport === 'websocket' ? 'websocket' as const : 'stdio' as const } : {}),
     capabilities: capabilitiesFor(row),
     readiness: driverOfRow(row) ? agentReadinessService.peek(row.id) : unsupportedReadiness(),
     createdAt: row.createdAt

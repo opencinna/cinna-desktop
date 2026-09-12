@@ -34,6 +34,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 interface NewLocalAgentModalProps {
   onClose: () => void
   onManaged?: () => void
+  onRemoteAcp?: () => void
   onCustom?: () => void
   onCreateFolder?: () => boolean
 }
@@ -104,7 +105,7 @@ interface PickedFolder {
  * and "open automatically" on, the second step is skipped entirely: one name,
  * one Enter, and the assistant is running in the new folder.
  */
-export function NewLocalAgentModal({ onClose, onManaged, onCustom, onCreateFolder }: NewLocalAgentModalProps): React.JSX.Element {
+export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, onCreateFolder }: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
   const openIn = useOpenIn()
@@ -427,6 +428,9 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onCreateFolde
                 </span>
               </span>
             </button>
+            {onRemoteAcp && <button type="button" onClick={onRemoteAcp} className={`${CHOICE} items-start border-[var(--color-border)]`}>
+              <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Remote ACP agent</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect to Cinna-core or another ACP server by WebSocket.</span></span>
+            </button>}
             {onCustom && <button type="button" onClick={onCustom} className={`${CHOICE} items-start border-[var(--color-border)]`}>
               <Bot size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
               <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Command-line agent</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Run an ACP agent locally or through SSH.</span></span>

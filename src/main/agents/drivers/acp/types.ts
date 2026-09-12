@@ -69,6 +69,8 @@ export const ACP_STDERR_TAIL_LINES = 40
 
 /** How to start one agent's ACP process. Built by a launcher; opaque to the pool beyond `key`. */
 export interface AcpLaunchSpec {
+  /** When set, connect remotely; command/env/cwd are unused. Credentials never enter key. */
+  remote?: import('../../../../shared/customAgents').RemoteAcpConfig & { accessToken?: string }
   command: string
   args: string[]
   /** The whole child environment — nothing is inherited that is not named here. */

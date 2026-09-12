@@ -29,7 +29,10 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
         input: { permission: true, question: false, auth: false, elicitation: false },
         inputResume: 'reply', attachments: 'none', auth: 'token', commands: 'none', mcpInjection: false, cwd: false }
     case 'acp':
-      return acpCapabilities(launcherOfRow(agent))
+      const capabilities = acpCapabilities(launcherOfRow(agent))
+      return agent.driverConfig?.transport === 'websocket'
+        ? { ...capabilities, auth: agent.accessTokenEncrypted ? 'token' : 'none' }
+        : capabilities
     case 'a2a': {
       const synced = agent.source === 'remote'
       return {

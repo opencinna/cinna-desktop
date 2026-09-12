@@ -1018,3 +1018,32 @@ describe('model child completion integration', () => {
     expect(messageRepo.firstByRole(CHAT, 'tool_call')).toMatchObject({ content: isError ? 'child failed' : 'child output' })
   })
 })
+
+
+describe('permissions in accepted follow-up chat turns', () => {
+  it.each(['completed', 'cancelled', 'error'] as const)('reactivates a %s local chat task only on a new accepted message', async (status) => {
+    const task = makeChatTask()
+    taskService.setStatus(USER, task.id, status)
+    // A stray status/update must not revive a finished task.
+    taskService.applyRunState(USER, task.id, 'needs_input')
+    expect(taskService.getById(USER, task.id).status).toBe(status)
+    const current = ctx({ rootRunId: 'follow-up', turnId: 'follow-up', completionOwner: 'turn' })
+    inboxService.resumeChat(current, 'Continue')
+    expect(taskService.getById(USER, task.id)).toMatchObject({ status: 'in_progress', finishedAt: null })
+    inboxService.recordRunEvent(current, { ...permission, requestId: 'per_follow_up' })
+    expect(taskService.getById(USER, task.id).status).toBe('blocked')
+    expect(await inboxService.answerFromTranscript(USER, 'per_follow_up', { kind: 'permission', reply: 'once' })).toMatchObject({ ok: true })
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+  })
+  it('does not reactivate completed jobs or archived chats', () => {
+    const job = makeTask()
+    taskService.setStatus(USER, job.id, 'completed')
+    inboxService.resumeChat(ctx(), 'Continue')
+    expect(taskService.getById(USER, job.id).status).toBe('completed')
+    expect(() => taskService.resumeFinishedChat(USER, job.id, CHAT)).toThrow()
+    makeChat('chat-other')
+    const task = makeChatTask('chat-other')
+    taskService.setStatus(USER, task.id, 'archived')
+    expect(() => taskService.resumeFinishedChat(USER, task.id, 'chat-other')).toThrow()
+  })
+})

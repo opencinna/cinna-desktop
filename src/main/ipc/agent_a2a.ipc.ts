@@ -23,8 +23,8 @@ const logger = createLogger('A2A')
 
 export function registerA2AHandlers(): void {
   ipcHandle('custom-agent:configuration', (_event, id: string) => { userActivation.requireActivated(); return customAgentService.configuration(id) })
-  ipcHandle('custom-agent:test', (_event, input: { id?: string; config: CustomAgentConfig }) => { userActivation.requireActivated(); return customAgentService.test(input) })
-  ipcHandle('custom-agent:save', (_event, input: { id?: string; name?: string; config: CustomAgentConfig; testToken: string }) => { userActivation.requireActivated(); return customAgentService.save(input) })
+  ipcHandle('custom-agent:test', (_event, input: { id?: string; config: CustomAgentConfig; accessToken?: string }) => { userActivation.requireActivated(); return customAgentService.test(input) })
+  ipcHandle('custom-agent:save', (_event, input: { id?: string; name?: string; config: CustomAgentConfig; accessToken?: string; testToken: string }) => { userActivation.requireActivated(); return customAgentService.save(input) })
   ipcHandle('custom-agent:revoke-grant', (_event, input: { id: string; key: string }) => { userActivation.requireActivated(); customAgentService.revokeGrant(input.id, input.key) })
   ipcHandle('managed-agent:configuration', (_event, id: string) => {
     userActivation.requireActivated()

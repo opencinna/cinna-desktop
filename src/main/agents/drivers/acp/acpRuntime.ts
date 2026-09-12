@@ -30,7 +30,7 @@ export type AcpRuntimeView = AcpRuntimeState & (
   | { type: 'folder'; folder: AcpFolderView }
   | {
       type: 'external'; name: string; enabled: boolean
-      config: CustomAgentConfig; binding: string
+      config: CustomAgentConfig; binding: string; accessToken?: string
       readiness(options?: ReadinessOptions): Promise<AgentReadiness | null>
     }
 )
