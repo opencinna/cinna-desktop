@@ -26,6 +26,8 @@ import type { IpcMainInvokeEvent } from 'electron'
  * nobody.
  */
 
+const runner = vi.hoisted(() => ({ start: vi.fn(() => ({ taskId: 't1', chatId: 'c1' })), resume: vi.fn(), cancel: vi.fn() }))
+vi.mock('../services/taskRunnerService', () => ({ taskRunnerService: runner }))
 const markDirty = vi.hoisted(() => vi.fn())
 const startTask = vi.hoisted(() => vi.fn(async () => ({ task: { id: 't1' }, chatId: 'c1', runId: 'run1' })))
 const service = vi.hoisted(() => ({
@@ -149,5 +151,19 @@ describe('remote handoff outcomes', () => {
     const result = await handlers.get('task:hand-off')!({}, 't1', { adapterId: 'service', ref: 'agent' }, null)
     expect(result).toMatchObject({ kind, message: 'Check the service' })
     expect(markDirty).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('autonomous task IPC', () => {
+  it('captures profile and settings scopes and nudges accepted work', async () => {
+    const input = { chatId: 'c1', goal: 'Ship it', budget: { maxRounds: 4 } }
+    expect(await invoke('task:run-autonomously', input)).toEqual({ taskId: 't1', chatId: 'c1' })
+    expect(runner.start).toHaveBeenCalledWith({ profileUserId: 'profile-1', settingsUserId: 'settings-1' }, input)
+    expect(markDirty).toHaveBeenCalledWith('profile-1')
+    await invoke('task:resume-runtime', 't1')
+    expect(runner.resume).toHaveBeenCalledWith('profile-1', 't1')
+    await invoke('task:stop-runtime', 't1')
+    expect(runner.cancel).toHaveBeenCalledWith('profile-1', 't1')
   })
 })

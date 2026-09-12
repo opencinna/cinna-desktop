@@ -58,6 +58,8 @@ vi.mock('../tasks/adapters', async () => {
   }
 })
 
+const { taskRunnersByChat } = await import('./taskRunnerState')
+const { chatRepo } = await import('../db/chats')
 const { taskSyncService } = await import('./taskSyncService')
 const { taskService } = await import('./taskService')
 const { taskRepo } = await import('../db/tasks')
@@ -84,6 +86,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  taskRunnersByChat.clear()
   holder.current?.close()
   holder.current = null
   if (holder.userData) rmSync(holder.userData, { recursive: true, force: true })
@@ -1375,6 +1378,17 @@ describe('moving the work across the seam (§5.10)', () => {
       // One PATCH would be a request that can only confirm what the create said.
       expect(cinna.calls().filter((c) => c.method === 'PATCH')).toHaveLength(0)
     })
+  })
+
+  it.each([true, false])('refuses remote handoff while a runner reserves the chat (working=%s)', async (working) => {
+    const chat = chatRepo.create(USER, { title: 'Queued task' })
+    const task = taskService.create(USER, { title: 'Queued task', goal: 'Work', chatId: chat.id })
+    taskService.start(USER, task.id)
+    taskRunnersByChat.set(chat.id, { userId: USER, taskId: task.id, id: 'attempt', working, cancel() {} })
+    await expect(taskSyncService.handOff(USER, task.id)).rejects.toMatchObject({ code: 'remote_busy' })
+    expect(cinna.calls().filter((call) => call.method === 'POST')).toEqual([])
+    expect(taskService.getById(USER, task.id).status).toBe('in_progress')
+    expect(taskHandoffRepo.get(USER, task.id)).toBeNull()
   })
 
   describe('taking a task back from a service', () => {

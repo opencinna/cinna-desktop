@@ -5,6 +5,8 @@ import { inboxService } from '../services/inboxService'
 import { syncService } from '../services/syncService'
 import { taskSyncService } from '../services/taskSyncService'
 import { taskExecutionService } from '../services/taskExecutionService'
+import { taskRunnerService } from '../services/taskRunnerService'
+import type { AutonomousTaskStart } from '../../shared/taskRuntime'
 import { parseAnswerPayload } from '../services/askDelivery'
 import { TaskError } from '../errors'
 import type { TaskHandoffTarget, TaskHandoffOutcome } from '../../shared/taskHandoff'
@@ -46,6 +48,25 @@ import type { TaskStatus } from '../../shared/taskStatus'
  * silence there is a minute in which both devices believe they own the run.
  */
 export function registerTaskHandlers(): void {
+  ipcHandle('task:run-autonomously', async (_event, input: AutonomousTaskStart) => {
+    userActivation.requireActivated()
+    const profileUserId = getProfileScopeUserId()
+    const result = taskRunnerService.start({ profileUserId, settingsUserId: getSettingsScopeUserId() }, input)
+    syncService.markDirty(profileUserId)
+    return result
+  })
+  ipcHandle('task:resume-runtime', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    taskRunnerService.resume(userId, taskId)
+    syncService.markDirty(userId)
+  })
+  ipcHandle('task:stop-runtime', async (_event, taskId: string) => {
+    userActivation.requireActivated()
+    const userId = getProfileScopeUserId()
+    taskRunnerService.cancel(userId, taskId)
+    syncService.markDirty(userId)
+  })
   ipcHandle('task:list', async (_event, query?: TaskListQuery): Promise<TaskDto[]> => {
     userActivation.requireActivated()
     const userId = getProfileScopeUserId()

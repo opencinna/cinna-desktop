@@ -104,6 +104,36 @@ export const turnLock = {
     }
   },
 
+  /** Runner admission acquires atomically when free; cancellation removes its waiter. */
+  async withQueuedLock<T>(agentId: string, owner: string, signal: AbortSignal, fn: () => Promise<T> | T): Promise<T> {
+    const handle = await new Promise<TurnLockHandle>((resolve, reject) => {
+      const remove = (): void => {
+        signal.removeEventListener('abort', abort)
+        const waiters = releaseWaiters.get(agentId)?.filter((waiter) => waiter !== acquire)
+        if (waiters?.length) releaseWaiters.set(agentId, waiters)
+        else releaseWaiters.delete(agentId)
+      }
+      const abort = (): void => { remove(); reject(new Error('The task was stopped while waiting for its agent.')) }
+      const acquire = (): void => {
+        if (signal.aborted) { abort(); return }
+        if (held.has(agentId)) {
+          const waiters = releaseWaiters.get(agentId) ?? []
+          waiters.push(acquire)
+          releaseWaiters.set(agentId, waiters)
+          return
+        }
+        remove()
+        resolve(this.acquire(agentId, owner))
+      }
+      signal.addEventListener('abort', abort, { once: true })
+      acquire()
+    })
+    try {
+      if (signal.aborted) throw new Error('The task was stopped.')
+      return await fn()
+    } finally { handle.release() }
+  },
+
   /**
    * True while **any** agent is held.
    *

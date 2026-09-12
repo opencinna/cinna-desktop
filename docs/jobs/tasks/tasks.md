@@ -10,7 +10,7 @@ A task is the durable record of work: its original goal, current status, assigne
 - **Origin** — where the task was created, local or remote. It does not change when execution moves.
 - **Executor** — where execution belongs now, desktop or remote. A desktop task also carries a device claim; claiming work and starting it are separate actions.
 - **Binding** — the adapter and remote task identity that connect the local record to a service. SQLite remains the desktop's store even when the service is unreachable.
-- **Inbox entry** — an open input request associated with a task. Local entries persist a live driver reply address or a durable next-message continuation; remote entries are fetched from the service and create no local request record.
+- **Inbox entry** — an open input request associated with a task. Local entries persist a live driver reply address, durable next-message continuation or runner gate; remote entries are fetched from the service and create no local request record.
 - **Handoff note** — what the next worker needs to continue. Its database value is also exported as a file for tools outside the app.
 
 ## User Stories / Flows
@@ -21,6 +21,8 @@ A task is the durable record of work: its original goal, current status, assigne
 4. **Answer remote work.** A locally known blocked task on an ask-capable adapter contributes its live questions to the same Inbox. Its task page offers **Open the Inbox** separately from takeover. A failed delivery keeps the question dialog and draft available for retry.
 5. **Keep remote work current.** The active profile pushes local edits and discovers remote tasks automatically, with five seconds between completed passes. Focus and wake catch up. A bound task page opens its saved record immediately, refreshes in the background and marks failed remote refreshes as stale.
 6. **Move execution.** On a desktop task, press **Hand off**, choose a remote agent and supply the handoff note. Jobs use the same handoff service. Accepted work moves to the service and leaves a receipt in its existing conversation. An uncertain result offers **Review pending handoff** before execution can continue here. The task page checks remote liveness before offering takeover; a live remote agent cannot be taken over. Taking over claims the task without starting a conversation. For a task with no local chat, choose an available agent or **Default chat model**, then press **Continue**. Main starts one new conversation with the goal, distinct description and handoff note, and opens it after acceptance.
+
+7. **Run on its own.** An existing coordinator chat can start an [autonomous task](autonomous_tasks.md). Main coordinates consecutive owner turns, waits for durable Inbox answers and offers explicit recovery after interruption. Leaving the conversation does not stop it; closing the app does.
 
 ## Business Rules
 
@@ -44,7 +46,7 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- Autonomous multi-turn execution, coordinator handback and the script router remain later runtime work; [live attachment/replay](../../chat/messaging/live_runs.md) now provides visibility into an existing main-owned turn; the existing main-owned path starts one explicit task turn or continues one accepted Inbox answer, not a task-runner loop; protocol updates, managed/SSH drivers and the final kind-branch cleanup are not supplied by task synchronization or live attachment.
+- [Autonomous coordination](autonomous_tasks.md) supplies multi-turn execution, durable runner gates and specialist handback using existing [live attachment/replay](../../chat/messaging/live_runs.md). Script routing, schedules, manifest-driven handback, complete token accounting, protocol updates, managed/SSH drivers and the final kind-branch cleanup remain separate work.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.
@@ -61,6 +63,7 @@ Task writes → device sync and handoff export; activated profile / focus / wake
 
 ## Integration Points
 
+- [Autonomous tasks](autonomous_tasks.md) — coordinator controls, local checkpoints, limits, queues and interruption recovery.
 - [Remote handoff and recovery](remote_handoff.md) — selected remote destination, durable uncertainty, shared jobs path and recovery controls.
 - [Technical details](tasks_tech.md) — schema, IPC and implementation entry points.
 - [The Inbox](inbox.md) — request identities, failure policy, polling and answer retries.

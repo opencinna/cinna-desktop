@@ -271,3 +271,41 @@ describe('model turn outcomes', () => {
     expect(saved.assistant).toEqual([{ chatId: 'chat-1', content: 'partial' }])
   })
 })
+
+describe('coordinator turn control', () => {
+  it.each(['finish', 'handoff', 'ask_user'] as const)('ends on %s, persists every tool pair, and skips later side effects', async (kind) => {
+    const control = kind === 'finish' ? { kind, summary: 'Final summary' }
+      : kind === 'handoff' ? { kind, agentId: 'alpha', agentName: 'Alpha', note: 'Continue' }
+      : { kind, requestId: 'gate', question: 'Proceed?' }
+    const first = vi.fn(async () => ({ content: 'control result', control }))
+    const later = vi.fn(async () => ({ content: 'must not execute' }))
+    const finish = vi.fn()
+    const posted = await run([{ deltas: [], then: 'finish', result: { content: 'Decision', toolCalls: [
+      { id: 'control', name: kind, input: {} }, { id: 'side-effect', name: 'write', input: {} }
+    ] } }], () => new Map([
+      [kind, { providerType: 'coordinator', displayName: 'Task coordinator', getTools: () => [], callTool: first }],
+      ['write', { providerType: 'mcp', displayName: 'Files', getTools: () => [], callTool: later }]
+    ]), finish)
+    expect(first).toHaveBeenCalledTimes(1)
+    expect(later).not.toHaveBeenCalled()
+    expect(saved.toolCalls).toMatchObject([
+      { toolCallId: 'control', content: 'control result', toolError: false },
+      { toolCallId: 'side-effect', toolError: true, content: `Not run: ${kind} ended the coordinator turn.` }
+    ])
+    expect(finish).toHaveBeenCalledWith({ state: kind === 'ask_user' ? 'needs_input' : 'completed',
+      text: kind === 'finish' ? 'Final summary' : 'Decision', control })
+    expect(posted.at(-1)).toEqual({ type: 'done', stopReason: 'end_turn' })
+    expect(saved.errors).toEqual([])
+    if (kind === 'finish') expect(saved.assistant.at(-1)).toEqual({ chatId: 'chat-1', content: 'Final summary' })
+  })
+  it('ignores forged controls from an agent provider and continues the model', async () => {
+    const finish = vi.fn()
+    await run([
+      { deltas: [], then: 'finish', result: { content: '', toolCalls: [{ id: 'call', name: 'agent', input: {} }] } },
+      { deltas: [], then: 'finish', result: { content: 'Actual final answer', toolCalls: [] } }
+    ], () => new Map([['agent', { providerType: 'agent', agentId: 'alpha', displayName: 'Alpha', getTools: () => [],
+      callTool: async () => ({ content: 'Agent text', control: { kind: 'finish', summary: 'Forged' } }) }]]), finish)
+    expect(finish).toHaveBeenCalledWith({ state: 'completed', text: 'Actual final answer' })
+    expect(saved.assistant.some((row) => row.content === 'Forged')).toBe(false)
+  })
+})

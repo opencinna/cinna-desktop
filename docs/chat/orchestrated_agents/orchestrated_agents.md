@@ -10,6 +10,10 @@ Let a single chat mix agents and MCP tools usefully, with the local model as the
 
 A chat arrives here two ways: created that way (any agent mixed with an MCP server, or the composer's explicit "Let the model coordinate"), or moved here later by the same toggle. It is the one router transition that needs a model, so it is the only one that can be refused.
 
+## Autonomous Execution
+
+The composer’s **Run on its own…** action explicitly starts a [task runner](../../jobs/tasks/autonomous_tasks.md). Its coordinator receives fixed delegate/handoff/ask_user/update_task/finish tools instead of the ordinary synthesized per-agent tool set, alongside MCP tools. Ordinary coordination remains the one-turn behavior documented below; enabling the router alone never starts the autonomous loop.
+
 ## Core Concepts
 
 - **Coordinated chat** — an LLM-root chat (`chats.agent_id = null`) whose attached agents are exposed to the local model as emulated MCP tools. `chats.router = 'coordinator'`. It is stable: removing every agent chip does not silently re-route the chat, and the way back off it is the composer's coordinate toggle.

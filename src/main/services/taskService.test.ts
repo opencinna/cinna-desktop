@@ -1034,6 +1034,14 @@ describe('every task write keeps the exported note in step', () => {
       run: (id) => taskService.setHandoffNote(USER, id, 'A newer note.').id,
       leaves: 'file'
     },
+    setArtifacts: {
+      run: (id) => taskService.setArtifacts(USER, id, [{ kind: 'link', name: 'Result', ref: 'https://example.test/result' }]).id,
+      leaves: 'file'
+    },
+    setRuntimeBudget: {
+      run: (id) => taskService.setRuntimeBudget(USER, id, { maxRounds: 5, maxMinutes: 10 }).id,
+      leaves: 'file'
+    },
     start: {
       run: (id) => taskService.start(USER, id).id,
       leaves: 'file'

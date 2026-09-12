@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { TaskConcurrencySetting } from './TaskConcurrencySetting'
 import { FolderOpen, FolderPlus, GitBranch, ListChecks, RefreshCw, X } from 'lucide-react'
 import { isCredentialActive, isCredentialUsable } from '../../../../shared/credentials'
 import { credentialOptionLabel } from '../../utils/credentialLabel'
@@ -517,6 +518,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
       </SettingsSection>
 
       <SettingsSection title="Engine Settings">
+        <TaskConcurrencySetting />
         <SettingsCard>
           {/*
             An indicator, and one control that only appears when it resolves

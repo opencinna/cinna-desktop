@@ -13,12 +13,16 @@
  *    returns the agent's compact text to the orchestrator while forwarding the
  *    full-fidelity `parts[]` + live stream events to the UI sub-thread.
  */
+import type { CoordinatorControl } from '../services/coordinatorToolProvider'
 import type { ToolDefinition } from './types'
 import type { MessagePart } from '../../shared/messageParts'
 import type { RunEvent } from '../../shared/runEvents'
 import { mcpManager } from '../mcp/manager'
 
 export interface ToolCallOptions {
+  queueWhenBusy?: boolean
+  /** Root model tool-call identity for coordinator delegation and gates. */
+  toolCallId?: string
   /**
    * Live sub-thread sink. Agent providers hand it each `RunEvent` of the agent's
    * turn so the orchestrator can forward it to the chat port wrapped in a
@@ -30,6 +34,10 @@ export interface ToolCallOptions {
 }
 
 export interface ToolExecutionResult {
+  /** Only a coordinator provider may return a runner control. */
+  control?: CoordinatorControl
+  /** A completed delegate is waiting for a persisted human continuation. */
+  needsInput?: boolean
   /**
    * Value fed back to the orchestrator LLM as the tool result. Kept
    * **compact** for agent providers (final agent text only) — the rich
@@ -47,7 +55,7 @@ export interface ToolExecutionResult {
 
 export interface ToolProvider {
   /** Discriminates the dispatch path in the orchestrator loop. */
-  readonly providerType: 'mcp' | 'agent'
+  readonly providerType: 'mcp' | 'agent' | 'coordinator'
   /**
    * Stable display name for persistence (`tool_call.toolProvider`) and the
    * `tool_use` event's `provider` field. For MCP this is the connection name;
@@ -59,6 +67,8 @@ export interface ToolProvider {
    * is persisted on the tool_call row). Undefined for MCP providers.
    */
   readonly agentId?: string
+  /** Validated display target for a coordinator's dynamic delegate call. */
+  describeCall?(name: string, input: Record<string, unknown>): { agentId: string; displayName: string } | undefined
   /** LLM-facing tool definitions this provider contributes. */
   getTools(): ToolDefinition[]
   /** Execute one of this provider's tools by its LLM-facing name. */

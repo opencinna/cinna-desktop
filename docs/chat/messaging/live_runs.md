@@ -52,3 +52,7 @@ No new database table, migration or durable event log is introduced. The scope i
 `src/main/services/liveRunHub.test.ts` covers compact replay, sequence continuity, independent scopes/subscribers, idle watches, overflow and serialization failure. `src/renderer/src/hooks/useLiveRunWatch.test.tsx` covers navigation, overlapping delivery, failed-read recovery, stale completion, idle fast sends, fallback and profile changes. Native watch cases in `src/main/ipc/run.routing.test.ts` cover main-started replay, detach without cancellation and ownership revocation.
 
 See [Messaging](messaging.md), [main turn lifetime](../chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance), [task execution](../../jobs/tasks/tasks_tech.md) and [A2A streaming](../../agents/agents/streaming_pipeline.md).
+
+## Autonomous owner turns
+
+[Autonomous tasks](../../jobs/tasks/autonomous_tasks.md) reuse the same selected-chat watch across consecutive owner turns. Their working reservation supplies chat:get activeRunId between individual handles, and cancellation targets the whole runner. Waiting/interrupted reservations still block unrelated sends in main but are not live replay entries; saved runtime controls and the Inbox provide recovery. Restart restores checkpoints/transcripts, never this process-local replay cache.

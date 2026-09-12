@@ -1,0 +1,64 @@
+# Autonomous Tasks: Technical Details
+
+## File Locations
+
+- Main runner: `src/main/services/taskRunnerService.ts`, `src/main/services/taskRunnerState.ts` and `src/main/services/taskRunnerBridge.ts`; `src/main/services/coordinatorToolProvider.ts` supplies typed controls.
+- Contracts and admission: `src/shared/taskRuntime.ts`, `src/main/tasks/runtimeTypes.ts`, `src/main/tasks/runtimeBudget.ts`, `src/main/tasks/executionQueue.ts`.
+- Persistence: `src/main/db/taskRuntimes.ts`, `src/main/db/taskInputRequests.ts`, `src/main/db/messages.ts`, `src/main/db/schema.ts`, `src/main/db/migrations/tasks.ts`.
+- Execution: `src/main/services/runExecutionService.ts`, `src/main/services/chatStreamingService.ts`, `src/main/services/a2aAsMcpProvider.ts`, `src/main/services/threadContextService.ts`, `src/main/services/localAgents/turnLock.ts`, `src/main/agents/drivers/acp/acpDriver.ts`.
+- IPC/preload: `src/main/ipc/task.ipc.ts`, `src/preload/index.ts`.
+- Renderer: `src/renderer/src/components/tasks/AutonomousTaskDialog.tsx`, `src/renderer/src/components/tasks/TaskRuntimeControl.tsx`, `src/renderer/src/components/chat/ChatInput.tsx`, `src/renderer/src/components/chat/ComposerPlusMenu.tsx`, `src/renderer/src/components/settings/TaskConcurrencySetting.tsx`.
+
+## Database Schema
+
+- `task_runtimes` is a device-local table keyed by task id with profile user id and a JSON checkpoint. Task deletion cascades to it. It is not an app-sync collection.
+- TaskRuntimeCheckpoint contains attemptId, lastRunId, pendingRequestIds, chatId, captured settingsUserId, owner, prompt/origin, gate IDs, coordinator provider/model/mode snapshot, ownerTurns, elapsedMs, activeStartedAt and budget. Token counters are reserved bookkeeping, not evidence that token enforcement works.
+- States are queued, running, waiting, interrupted and completed. The runtime’s completed state means execution ended; task status separately distinguishes completed, error or cancelled. Waiting/interrupted retain a blocked task. TaskDto exposes only TaskRuntimeInfo: state/reason, turn/time counters and limits, not the internal prompt or checkpoint.
+- `task_input_requests.delivery_owner` defaults to driver; `agent_id` becomes nullable. The migration rebuilds the older NOT NULL table while retaining addresses, ownership, answers and timestamps. Runner rows require null agent plus reply resume kind; driver rows require an agent.
+- Boot and turn-local reply expiry apply only to driver-owned rows. Task terminal expiry includes both next-message continuations and runner gates. A runner gate is durable despite resume:reply; delivery_owner decides whether it addresses a live process.
+
+## IPC Channels
+
+All three handlers require activation, resolve the profile in main and mark device sync dirty after admission/control.
+
+| Channel / preload | Request → response |
+|---|---|
+| task:run-autonomously / tasks.runAutonomously | AutonomousTaskStart {chatId, goal, budget?} → {taskId, chatId} after local admission; not whole-run completion |
+| task:resume-runtime / tasks.resumeRuntime | taskId → void after explicit recovery is accepted |
+| task:stop-runtime / tasks.stopRuntime | taskId → void after cancellation is requested; active turn cleanup may still be settling |
+
+Existing task:get carries the local runtime projection. Existing chat:get reports an active turn id or working runner reservation id; existing run cancellation routes to the runner before an individual active turn. Existing inbox:answer and transcript agent:answer-request both reach taskRunnerBridge before live-driver delivery; the latter is in `src/main/ipc/agent_a2a.ipc.ts`.
+
+## Services and Key Methods
+
+- `taskRunnerService.start(scope, input)` validates nonempty goal up to 64000 characters, an owned coordinator chat with provider/model/registered adapter, absence of active work/asks and supported budget. It creates or reuses the linked task, starts it, saves limits/checkpoint and coordinator system guidance transactionally, then enqueues. Existing task admission permits new/open/in_progress/error, requires the entered goal to equal its immutable goal after trimming and preserves provenance. Pending/in-flight remote handoff refuses before this start transaction. Start does not invoke taskModelConfig to resolve a missing default.
+- `drive` holds a task slot through consecutive owner turns and releases it for a durable human wait. It awaits RunHandle.completed, not the stream setup return. Explicit runnerTaskId suppresses ordinary task/job finalization for each child turn. A final taskService status write settles only the applicable active linked job attempt.
+- `CoordinatorToolProvider` is first in the tool union, so an MCP collision cannot shadow a control name. Autonomous coordinator turns omit synthesized per-agent tools and use fixed delegate instead; ordinary coordinator turns retain the existing agent-provider union. Internal options, never renderer payloads, grant this capability.
+- Controls: delegate(agent,message,expect?) retains owner and returns child text/parts; expect only appends instructions. handoff(agent,note) ends the turn, stores assignee/note/transition, routes the next turn to the specialist and later restores the captured coordinator provider/model. The handback notice is both a transition row and the prefix of the next coordinator continuation prompt, so it reaches the model despite transition rows being excluded from ordinary model history. ask_user(question) persists a gate before publishing needs_input. Inbox event observation recognizes that existing runner row before applying the ordinary unattributed-agent warning. update_task accepts only in_progress plus validated note/artifacts; finish(summary) persists the final assistant summary. Only this provider’s successful typed result can end a coordinator turn; arbitrary tool text and specialist control fields cannot.
+- `chatStreamingService` saves one error result for every remaining unexecuted call after an end-of-turn control. Natural text continues through the task loop; ten model requests without a natural/control ending remains a typed round-budget failure. Control/provider/request bookkeeping errors cannot be interpreted as explicit finish.
+- Gate IDs include attempt, main turn and tool-call identity. `answer` checks profile/task authority, membership in the checkpoint’s pendingRequestIds, matching chat/gate identity, open state, waiting state and completed cleanup before accepting a nonempty bounded question answer. A transaction settles the address and advances owner/prompt/checkpoint; enqueue follows. A busy settling turn refuses retryably without consuming the answer. Runner questions continue the coordinator; driver next-message asks continue the enabled attached specialist. Waiting carries durable siblings forward across successive root turns in pendingRequestIds; a later sibling answer does not need the newest root ID. Answer settlement removes only its own ID.
+- `recover` restores waits/reservations and turns queued/running checkpoints into interruption without dispatch. `resume` repairs unpaired calls from the last assistant batch: a recorded gate becomes its waiting result; every other missing result is marked not replayed. It expires dead driver reply addresses from the prior root, retains surviving gates, or queues a fresh review instruction. It never re-executes the saved tool call merely to repair history.
+- Runner-generated continuation instructions use transactional messageRepo.saveSystem and skip title generation; actual goals/answers use user rows. The newest runner system row is translated to a conversational user input on the model wire, avoiding accidental replay of the last human message. Runner specialist catch-up includes bounded tool-result text; ordinary catch-up continues to omit payloads. The overall catch-up cap remains 4000 characters.
+- `taskRunnerState` reserves the chat across waits and owner transitions. `chatService` refuses model/routing edits while reserved; `runExecutionService` refuses unrelated sends. `taskRunnerBridge` receives task writes/device apply, chat removal and profile removal, aborting work after lost authority. Chat deletion durably cancels runtime/task and expires gates, even after its chat can no longer pass ordinary live-chat validation. `src/main/index.ts` runs recovery after session/database initialization and checkpoints interruptions synchronously on suspend/quit before cancellation.
+
+## Renderer Components
+
+- AutonomousTaskDialog is opened only for an existing coordinator chat. The goal is editable; More options is collapsed by default. Pending submission guards duplicates and disables edits/dismissal. Failures use unwrapIpcError and the reserved alert; success invalidates task/chat queries without navigation and only clears the unchanged original composer draft.
+- TaskRuntimeControl precedes ordinary local Start/Re-run attention arms, after foreign-device/remote handling. It renders working/queued/waiting/interrupted/ended state, reason and collapsed execution limits. Only a nonterminal interrupted task offers Resume task; waiting checkpoints and blocked live agent turns offer Open the Inbox; nonterminal states offer Stop task. Refused controls retain the page and show their error. There is no limit-editing or terminal-resume UI.
+- Existing selected-chat watch handles live/replayed owner turns; no new renderer send starts the next autonomous round. Existing detached-run polling sees working reservations between turns. Inbox answers keep the Inbox selected and reuse its retained cards and draft-preserving question modal.
+
+## Configuration
+
+- runtimeBudget defaults maxRounds=20, maxMinutes=60; rounds must be safe integers 1–1000, minutes finite and greater than zero up to 1440. Explicit maxTokens is validated structurally but rejected by start/drive before participant dispatch: no supported path currently reports complete task usage. Do not expose it as an enforced limit.
+- Time starts before task-slot acquisition, so queue contention counts. Timer cancellation reaches the active handle. Settled human waits stop the timer and preserve elapsed usage; live agent reply parks remain within the running turn’s time limit; a resumed segment starts from that usage. Unclean recovery of a running interval conservatively includes downtime. A queued checkpoint without activeStartedAt has no recoverable start instant for that interval.
+- app_settings.taskRunnerConcurrency defaults to 2, validates integer 1–8 and is device-wide. Separate FIFO task and runner-agent queues read the limit when admitting waiters. Each agent also has a one-slot queue; ACP withQueuedLock atomically waits for its existing editor/turn lock. Waiting is abortable. Ordinary sends retain their existing lock/refusal behavior; this is not a global cap on every chat.
+
+## Security
+
+Captured profile/settings scopes, owned task/chat and device claims remain authoritative after waits. Attached agent IDs are resolved in those scopes and revalidated before invocation; names must be unambiguous. Internal runner options and coordinator provider instances cannot come from IPC send data. Remote handoff reservations/uncertain receipts block both runner start and the shared executor. taskSyncService also refuses remote handoff while any runner reservation remains, including waiting/interrupted states. Runtime checkpoints and live reservations never travel through device sync; no credentials are exposed by TaskRuntimeInfo. A selected profile change does not retarget a captured run.
+
+## Validation and Boundaries
+
+`src/main/services/taskRunnerService.test.ts` covers headless controls, gates, budgets, transactional terminal rollback, interrupted tool-pair repair and agent revalidation. `src/main/services/coordinatorToolProvider.test.ts` covers fixed tools, validation and specialist control stripping. `e2e/specs/autonomous-task.spec.ts` exercises the public built-app path; test presence is not itself a claim of a completed validation run.
+
+Scripts, schedules, manifest-triggered handback and complete token accounting are not implemented by these contracts. No durable token replay cache is added; application restart uses saved transcript/checkpoint recovery, while the existing live-run hub remains process-local.

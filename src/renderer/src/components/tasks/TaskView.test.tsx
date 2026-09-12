@@ -819,3 +819,25 @@ describe('a task running on another device', () => {
     expect(screen.queryByRole('button', { name: 'Take over' })).toBeNull()
   })
 })
+
+describe('autonomous task attention', () => {
+  it('offers the Inbox for a live agent approval even though the owner turn has not ended', async () => {
+    listInbox.mockResolvedValue([WAITING])
+    await renderTask({ runtime: { state: 'running', reason: null, ownerTurns: 1, elapsedMs: 100,
+      budget: { maxRounds: 20, maxMinutes: 60 } } })
+    expect(screen.getByText('Waiting for your answer')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Open the Inbox' }))
+    expect(useUIStore.getState().activeView).toBe('inbox')
+    expect(screen.queryByRole('button', { name: 'Re-run from the last message' })).toBeNull()
+    expect(runSend).not.toHaveBeenCalled()
+  })
+
+  it('uses checkpoint recovery rather than replay when an interrupted task has no Inbox rows', async () => {
+    listInbox.mockResolvedValue([])
+    await renderTask({ runtime: { state: 'interrupted', reason: 'App closed', ownerTurns: 1, elapsedMs: 100,
+      budget: { maxRounds: 20, maxMinutes: 60 } } })
+    expect(screen.getByRole('button', { name: 'Resume task' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Re-run from the last message' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Open the Inbox' })).toBeNull()
+  })
+})

@@ -6,15 +6,15 @@ A finished turn reports what happened without assuming that its enclosing task i
 
 ## Outcome and Lifetime
 
-`src/main/services/turnCompletion.ts` defines `TurnOutcome`. Its state is `completed`, `needs_input`, `failed`, `canceled` or `budget`; text contains the final assistant answer or the stopped round’s retained partial output. Optional error data carries a message and code. Optional usage means reported input/output tokens; absence means unreported, never zero. Current model adapters do not provide usage.
+`src/main/services/turnCompletion.ts` defines `TurnOutcome`. Its state is `completed`, `needs_input`, `failed`, `canceled` or `budget`; text contains the final assistant answer or the stopped round’s retained partial output. Optional error data carries a message and code. An internal coordinator control records explicit handoff, finish or human-wait intent; arbitrary tool prose cannot supply it. Optional usage means reported input/output tokens; absence means unreported, never zero. Current model adapters do not provide usage.
 
-`src/main/services/runExecutionService.ts` returns separate acceptance and completion promises. Acceptance follows the user-message transaction. Completion waits for the asynchronous stream loop, transcript persistence and stream closure, then resolves a `RunOutcome`: the turn result plus run ID, acceptance flag and durable next-message request IDs for that root run. It is an internal service result, not a new renderer IPC payload. The selected-chat watch still closes and reads the saved transcript independently.
+`src/main/services/runExecutionService.ts` returns separate acceptance and completion promises. Acceptance follows the input-message transaction: human input uses a user row; internal runner continuation uses a system row. Completion waits for the asynchronous stream loop, transcript persistence and stream closure, then resolves a `RunOutcome`: the turn result plus run ID, acceptance flag and durable next-message and runner-gate request IDs for that root run. It is an internal service result, not a new renderer IPC payload. The selected-chat watch still closes and reads the saved transcript independently.
 
 A service’s `onFinished` callback records its first outcome before closure. `createTurnCompletion` prevents double reporting and logs bookkeeping failures without making already saved output fail again. A service caller without a callback retains standalone job reporting. When the shared executor supplies a callback, it reports an ordinary job only after deriving the final result at close. A close without an outcome becomes failed and emits an observed terminal fallback so request cleanup still runs.
 
 ## Remaining Requests and Uncertainty
 
-Normal completion with remaining next-message addresses becomes `needs_input`. Live `reply` addresses must expire when their invocation closes, because their driver parks no longer exist. They are never returned as durable continuation IDs.
+Normal completion with remaining next-message addresses or runner gates becomes `needs_input`. Driver-owned live `reply` addresses must expire when their invocation closes, because their driver parks no longer exist. Driver reply addresses are never returned as durable continuation IDs. Runner-owned reply gates have no live driver and survive invocation closure.
 
 If request enumeration fails, or a dead reply row survives cleanup, `inputRequestReadError` marks the request list as uncertain. It leaves the executed turn’s state intact: a bookkeeping read failure cannot rewrite an already completed execution. A caller must refuse automatic progress while this field is present, even when the returned ID list is empty. Logging an observer failure alone is not proof that all questions were closed.
 
@@ -24,7 +24,7 @@ Internal callers can supply `runnerTaskId`. Admission requires a non-deleted, pr
 
 The executor attaches `completionOwner`, root run ID and invocation ID to observed events. A runner-owned turn may record, answer and expire requests, but neither its stream callback nor Inbox terminal observation finishes the whole task/job. Ordinary turns keep their existing job or chat-owned-task finisher. This is per execution, so one caller’s policy cannot suppress another conversation’s completion.
 
-There is still one active turn per chat. These ownership fields prepare for a task runner; they do not implement autonomous rounds, parallel scripts, durable runner checkpoints, handback, schedules or token-budget enforcement.
+There is still one active turn per chat. The [autonomous task runner](../../jobs/tasks/autonomous_tasks.md) uses this ownership to coordinate consecutive turns, handback and durable gates; its reservation also excludes ordinary sends between turns and during waits. Scripts, schedules and token-budget enforcement remain separate work.
 
 ## Model and Agent Endings
 

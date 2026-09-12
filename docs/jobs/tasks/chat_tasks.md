@@ -7,7 +7,7 @@ An agent asking for input in a conversation opened by hand must reach the same I
 ## Core Concepts
 
 - **Lazy task** — a desktop task created by `inboxService.taskForChat` when a chat with no task raises an ask with an agent id. Ordinary chats without such an ask get no task from this mechanism.
-- **Reply ask** — `resume: reply` addresses a live parked driver. Its address expires when that process or turn ends.
+- **Driver reply ask** — `deliveryOwner: driver`, `resume: reply` addresses a live parked driver. Its address expires when that process or turn ends. A separate runner-owned reply gate is durable; see [autonomous tasks](autonomous_tasks.md).
 - **Next-message ask** — `resume: next_message` records an A2A question or authentication request whose answer starts another turn. Its durable local address survives normal turn completion and app restart.
 - **Chat-owned task** — a task whose current chat is not the local chat of a linked job attempt; it finishes from the root turn’s outcome once no next-message continuation remains. Job-owned tasks keep their existing attempt and completion hook. A task started in a new desktop chat after takeover may retain an older `jobRunId` as provenance without giving that old attempt ownership of the new chat.
 
@@ -24,7 +24,7 @@ An agent asking for input in a conversation opened by hand must reach the same I
 
 - **Start before blocking.** A new task cannot transition directly to blocked; the intermediate `in_progress` also records that this turn is running here.
 - **The goal preserves the original request.** A truncated chat title must not become the immutable goal when the full first user message exists.
-- **Finishing a turn does not finish a question.** Normal completion expires live reply addresses but preserves next-message requests. Boot expires reply addresses only; durable continuations need no surviving driver process.
+- **Finishing a turn does not finish a question.** Normal completion expires live reply addresses but preserves next-message requests. Boot expires driver-owned reply addresses only; durable continuations and runner gates need no surviving driver process.
 - **A repeated question is a new decision.** Next-message addresses include chat, agent, main-owned turn and protocol request identity; child asks also carry their invocation identity. Repeated frames in one invocation deduplicate, while a later identical question cannot reuse an answered card.
 - **Acceptance is atomic.** Saving the continuation message, settling matching requests and checking task status/device authority happen in one database transaction. A refusal rolls back both message and settlement. An already running chat refuses another turn without consuming the ask.
 - **Acceptance is not completion.** Once the message is accepted, the modal can close while main continues the turn. A later driver/network failure is the new turn’s outcome; it does not undo the accepted answer. See [the Inbox](inbox.md).
@@ -33,7 +33,7 @@ An agent asking for input in a conversation opened by hand must reach the same I
 - **Explicit endings do not leave idle jobs running.** Completed/error/cancelled/archived task writes expire next-message requests and settle a linked pending/running job attempt. Archive maps that active attempt to cancelled; a terminal attempt keeps its outcome. Manual job completion/cancellation updates a desktop-owned task through the claim-checked task service before writing the job.
 - **Inbox event observation never throws into the stream.** A deleted chat creates no task; an event-bookkeeping failure is logged. Acceptance bookkeeping is different: it may refuse inside the transaction so no unaccepted message survives.
 - **Pending remote handoff blocks local admission.** The shared executor checks both the active chat reservation and its durable unresolved receipt before starting a turn. Chat input offers receipt recovery even after the task is deleted; recovery cannot take over known-live remote work. See [remote handoff](remote_handoff.md).
-- **This is one-turn continuation, not autonomous orchestration.** It creates a parent for persisted asks and continues their owner. The separate [task-start service](tasks_tech.md) supplies explicit Continue after takeover. Neither path supplies coordinator handback, a task runner or scripts. [Live-run replay](../../chat/messaging/live_runs.md) independently attaches the selected conversation.
+- **This is one-turn continuation, not autonomous orchestration.** It creates a parent for persisted asks and continues their owner. The separate [task-start service](tasks_tech.md) supplies explicit Continue after takeover. The separate [autonomous runner](autonomous_tasks.md) supplies coordinator handback, durable gates and consecutive owner turns; scripts remain unimplemented. [Live-run replay](../../chat/messaging/live_runs.md) independently attaches the selected conversation.
 
 ## Architecture Overview
 

@@ -86,6 +86,15 @@ function getNextSortOrder(chatId: string): number {
 }
 
 export const messageRepo = {
+  saveSystem(msg: { chatId: string; content: string; addressedAgentId?: string }, onSaved?: () => void): string {
+    return getDb().transaction(() => {
+      const id = nanoid()
+      getDb().insert(messages).values({ id, chatId: msg.chatId, role: 'system', content: msg.content,
+        addressedAgentId: msg.addressedAgentId ?? null, sortOrder: getNextSortOrder(msg.chatId), createdAt: new Date() }).run()
+      onSaved?.()
+      return id
+    })
+  },
   saveUser(msg: SaveUserMessage, onSaved?: () => void): string {
     if (onSaved) {
       return getDb().transaction(() => {

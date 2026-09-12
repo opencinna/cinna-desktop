@@ -1,4 +1,5 @@
 import { PendingHandoffControl } from '../tasks/PendingHandoffControl'
+import { AutonomousTaskDialog } from '../tasks/AutonomousTaskDialog'
 import { useState, useRef, useEffect, useCallback, useMemo, useImperativeHandle, useId, forwardRef } from 'react'
 import { SendHorizontal, Square, Bot } from 'lucide-react'
 import { useChatDetail, useSetChatRouter } from '../../hooks/useChat'
@@ -159,6 +160,7 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
   ref
 ) {
   const [input, setInput] = useState('')
+  const [autonomousGoal, setAutonomousGoal] = useState<string | null>(null)
   const [capabilityPickerOpen, setCapabilityPickerOpen] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const lastEscapeAt = useRef(0)
@@ -1397,6 +1399,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         />
       )}
 
+      {chatId && autonomousGoal !== null && <AutonomousTaskDialog key={chatId} chatId={chatId} initialGoal={autonomousGoal}
+        onClose={() => setAutonomousGoal(null)} onStarted={() => setInput((current) => current === autonomousGoal ? '' : current)} />}
       <AgentPickerModal
         open={capabilityPickerOpen}
         title="Add agents & tools"
@@ -1429,6 +1433,8 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
             onOpenCapabilityPicker={() => setCapabilityPickerOpen(true)}
             modeMenu={hintedModeMenu}
             coordinateToggle={coordinateToggle}
+            autonomousRun={chatId && chatRouting.router === 'coordinator'
+              ? { disabled: isStreaming, onStart: () => setAutonomousGoal(input) } : undefined}
             activeModeColor={modeColor ? { border: modeColor.border } : null}
           />
           {chatId && boundAgent ? (

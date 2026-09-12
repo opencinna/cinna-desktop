@@ -35,6 +35,7 @@ import { TaskStatusPill } from './TaskStatusPill'
 import { PendingHandoffControl } from './PendingHandoffControl'
 import { HandOffTaskControl } from './HandOffTaskControl'
 import { TaskList } from './TaskList'
+import { TaskRuntimeControl } from './TaskRuntimeControl'
 import type { TaskArtifact, TaskDto } from '../../../../shared/tasks'
 import type { TaskStatus } from '../../../../shared/taskStatus'
 
@@ -564,6 +565,8 @@ function Attention({ task, asks }: { task: TaskDto; asks: AskState }): React.JSX
   if (task.executor === 'remote' && CLAIM_MATTERS.includes(task.status)) {
     return <RemoteBanner task={task} asks={asks} />
   }
+
+  if (task.runtime && task.executor === 'desktop' && task.runsHere) return <TaskRuntimeControl key={task.id} task={task} />
 
   if (!task.chatId && task.executor === 'desktop' && task.runsHere &&
     ['new', 'refining', 'open', 'in_progress', 'blocked', 'error'].includes(task.status)) {

@@ -29,6 +29,8 @@ export interface InboxEntry {
   /** The address an answer is posted to. Unique across the inbox. */
   requestId: string
   source: InboxSource
+  /** Local runner gates survive closing a turn and restarting the app. */
+  deliveryOwner?: 'driver' | 'runner'
   taskId: string
   /** The task's title, so a row reads as a sentence without a second query. */
   taskTitle: string

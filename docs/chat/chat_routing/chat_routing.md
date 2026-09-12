@@ -81,7 +81,7 @@ A local job run makes the same decision from the job's attached agents and MCP s
 
 - **It does not parse mentions out of the message text.** The address is set by a pick and nothing else, so no hint appears or moves per keystroke.
 - **It does not let one message address two agents**, and there is no agent-to-agent protocol. In a `human` chat the agents never speak to each other; the user is the only router, and the packet is the only thing that crosses between them.
-- **It does not carry a structured handoff note.** The packet is a transcript. A coordinator handing off gets a structured note in a later phase; the cursor mechanism stays either way.
+- **A handoff note supplements catch-up.** The packet remains a transcript. An [autonomous coordinator](../../jobs/tasks/autonomous_tasks.md) supplies the specialist’s handoff note separately, and its catch-up includes bounded tool-result text so delegated findings are available. Ordinary routing still omits tool payloads.
 - **It does not own how the coordinator runs.** Tool naming, sub-threads, dual output and the depth guard are [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md).
 - **It does not order a job's agents.** `job_agents` records no order, so a `human` job run addresses the first of a stable-but-arbitrary list. Stated honestly rather than dressed up: a run is one prompt, so it has to pick somebody, and the user routes the rest in the chat it spawns.
 

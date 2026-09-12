@@ -1,3 +1,4 @@
+import { taskRunnerBridge } from './taskRunnerBridge'
 import { nanoid } from 'nanoid'
 import { chatRepo, ChatRow, ChatMetaUpdate, MessageRow } from '../db/chats'
 import { chatMcpRepo } from '../db/chatMcp'
@@ -11,6 +12,7 @@ import { getSettingsScopeUserId } from '../auth/scope'
 import { ChatError, McpError, AgentError } from '../errors'
 import { routerOf, type ChatRouter } from '../../shared/chatRouting'
 import { createLogger } from '../logger/logger'
+import { taskRunnersByChat } from './taskRunnerState'
 import { activeRunsByChat } from './runExecutionState'
 
 const logger = createLogger('chat')
@@ -38,7 +40,7 @@ export const chatService = {
     const chat = chatRepo.getOwned(userId, chatId)
     if (!chat) return null
     const messages = chatRepo.listMessages(chatId)
-    return { ...chat, messages, activeRunId: activeRunsByChat.get(chatId)?.id ?? null }
+    return { ...chat, messages, activeRunId: activeRunsByChat.get(chatId)?.id ?? (taskRunnersByChat.get(chatId)?.working ? taskRunnersByChat.get(chatId)!.id : null) }
   },
 
   create(userId: string): ChatRow {
@@ -50,6 +52,7 @@ export const chatService = {
   delete(userId: string, chatId: string): void {
     const ok = chatRepo.softDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
+    taskRunnerBridge.chatRemoved(userId, chatId)
     logger.info('chat moved to trash', { chatId })
   },
 
@@ -66,6 +69,7 @@ export const chatService = {
   permanentDelete(userId: string, chatId: string): void {
     const ok = chatRepo.permanentDelete(userId, chatId)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
+    taskRunnerBridge.chatRemoved(userId, chatId)
     logger.info('chat permanently deleted', { chatId })
   },
 
@@ -75,6 +79,10 @@ export const chatService = {
   },
 
   update(userId: string, chatId: string, updates: ChatMetaUpdate): void {
+    requireOwnedChat(userId, chatId)
+    if (taskRunnersByChat.has(chatId) && Object.keys(updates).some((key) => key !== 'title')) {
+      throw new ChatError('not_configured', 'Stop the autonomous task before changing its model or routing.')
+    }
     const ok = chatRepo.updateMeta(userId, chatId, updates)
     if (!ok) throw new ChatError('not_found', 'Chat not found')
   },
@@ -184,6 +192,7 @@ export const chatService = {
     const chat = requireOwnedChat(userId, chatId)
     const current = routerOf(chat)
     if (current === router) return
+    if (taskRunnersByChat.has(chatId)) throw new ChatError('not_configured', 'Stop the autonomous task before changing who coordinates it.')
 
     let providerId: string | undefined
     let modelId: string | undefined

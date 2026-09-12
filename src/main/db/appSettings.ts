@@ -14,6 +14,7 @@ import type { AppSettingKey, AppSettingsSchema } from '../../shared/appSettings'
  */
 
 export const DEFAULTS: AppSettingsSchema = {
+  taskRunnerConcurrency: 2,
   autoChatTitles: false,
   enableTrayIcon: true,
   showHints: true,

@@ -103,6 +103,7 @@ import { chatRepo } from '../db/chats'
 import { getDb } from '../db/client'
 import { taskFileService } from './taskFileService'
 import { activeRunsByChat } from './runExecutionState'
+import { taskRunnersByChat } from './taskRunnerState'
 import { handingOffChats, handingOffTasks, taskOperationKey } from './taskOperationState'
 import { canTransition } from '../../shared/taskStatus'
 import type { TaskHandoffOptions, TaskHandoffTarget, TaskHandoffReceipt } from '../../shared/taskHandoff'
@@ -1679,6 +1680,7 @@ async function performHandoff(
     if (!task.runsHere) throw new TaskError('running_elsewhere', 'Take over this task before handing it off.')
     if (!canTransition(task.status, 'in_progress')) throw new TaskError('invalid_transition', 'This task cannot be handed off in its current state.')
     if (task.chatId && activeRunsByChat.has(task.chatId)) throw new TaskError('remote_busy', 'Stop this task’s current turn before handing it off.')
+    if (task.chatId && taskRunnersByChat.has(task.chatId)) throw new TaskError('remote_busy', 'Stop this task’s autonomous execution before handing it off.')
     if (taskInputRequestRepo.listOpen(userId).some(({ row: ask }) => ask.taskId === taskId)) {
       throw new TaskError('remote_busy', 'Answer this task’s pending question before handing it off.')
     }

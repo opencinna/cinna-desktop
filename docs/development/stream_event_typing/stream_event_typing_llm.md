@@ -46,7 +46,7 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 - `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, `chatStreamingService`). The id `cancel` takes
 - `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by A2A only. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records
 - `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file? }` — already a true delta. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
-- `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent', providerAgentId? }` — LLM path only, posted before the call resolves
+- `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent' | 'coordinator', providerAgentId? }` — LLM path only, posted before the call resolves
 - `tool_result { id, result: unknown }`, `tool_error { id, error }` — pair with `tool_use` by `id`. Not the `tool_result` **content kind**, which is a `delta`
 - `needs_input { requestId, request: InputRequest, resume: 'reply' | 'next_message' }` — see the contract below
 - `input_resolved { requestId, resolution: RequestResolution }` — `RequestResolution` is declared in `src/shared/localAgentRequests.ts` because it crosses the wire; `pendingRequests.ts` re-exports it
@@ -62,6 +62,8 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 - `elicitation { message, schema }` — declared, posted by nothing yet
 
 ## The `needs_input` / `input_resolved` Contract
+
+The table describes driver-originated events. Runner-owned durable questions also use reply events; their distinct persistence/delivery contract is below in Autonomous coordinator gates.
 
 | | `resume: 'reply'` | `resume: 'next_message'` |
 |---|---|---|
@@ -163,3 +165,9 @@ Live blocks and persisted parts split in the same places because one function de
 - Receiver: `src/renderer/src/hooks/useChatStream.ts`, `src/renderer/src/stores/chat.store.ts`, `src/renderer/src/components/chat/MessageStream.tsx`, `src/renderer/src/hooks/useAgentRequests.ts`
 - Contract tests: `src/main/services/agentTurn/__golden__/driverContract.ts` (`describeDriverContract`, run through each agent driver), `src/renderer/src/hooks/useChatStream.events.test.tsx`
 - Adjacent: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) (the `cinna.*` metadata behind `delta`), [The Agent Turn Runner](../../agents/local_agents/agent_turn.md) (parking and answering), [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) (`child`), [Messaging](../../chat/messaging/messaging.md) (LLM streaming flow)
+
+## Autonomous coordinator gates
+
+- CoordinatorToolProvider emits the existing needs_input reply shape only after persisting a runner-owned gate/checkpoint. The durable row has deliveryOwner:runner and null agentId; ordinary reply cleanup is driver-only. Resume kind alone no longer determines database durability.
+- RunOutcome.inputRequestIds includes both next-message rows and runner gates for the current root. Surviving driver reply rows still produce inputRequestReadError; automatic task progression stops on uncertainty.
+- Coordinator delegate is presented as an agent tool/sub-thread; other fixed tools use providerType:coordinator. Only an internal successful coordinator control ends a model turn. Later calls are paired with persisted not-run results. See [autonomous runtime](../../jobs/tasks/autonomous_tasks_tech.md).

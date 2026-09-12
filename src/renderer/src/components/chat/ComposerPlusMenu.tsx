@@ -49,6 +49,7 @@ interface ComposerPlusMenuProps {
   modeMenu?: PlusModeMenu
   /** "Let the model coordinate" — omitted where there is no agent to coordinate. */
   coordinateToggle?: PlusCoordinateToggle
+  autonomousRun?: { disabled: boolean; onStart(): void }
   /** Tints the [+] button border to the active chat-mode color, if any. */
   activeModeColor?: { border: string } | null
 }
@@ -69,6 +70,7 @@ export function ComposerPlusMenu({
   onOpenCapabilityPicker,
   modeMenu,
   coordinateToggle,
+  autonomousRun,
   activeModeColor
 }: ComposerPlusMenuProps): React.JSX.Element | null {
   const [open, setOpen] = useState(false)
@@ -104,7 +106,7 @@ export function ComposerPlusMenu({
 
   const hasModes = !!modeMenu && modeMenu.modes.length > 0
   // Nothing to offer → no button at all.
-  if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle) return null
+  if (!canAttachFiles && !hasCapabilities && !hasModes && !coordinateToggle && !autonomousRun) return null
 
   const rowCls =
     'w-full flex items-center gap-2.5 px-3 py-2 text-left text-[13px] ' +
@@ -194,6 +196,11 @@ export function ComposerPlusMenu({
                 </button>
               )}
 
+              {autonomousRun && <button type="button" role="menuitem" className={rowCls}
+                aria-disabled={autonomousRun.disabled || undefined}
+                onClick={() => { if (!autonomousRun.disabled) { autonomousRun.onStart(); setOpen(false) } }}>
+                <Workflow size={16} className={iconCls} /><span>Run on its own…</span>
+              </button>}
               {coordinateToggle && (
                 <button
                   type="button"

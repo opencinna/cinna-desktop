@@ -67,6 +67,8 @@ export interface PrepareAgentSendInput {
   attachments?: MessageAttachment[]
   /** Runs inside the user-message transaction; throwing rolls that message back. */
   onPersisted?: () => void
+  /** Internal runner notices are recorded as system messages. */
+  origin?: 'user' | 'runner'
 }
 
 export interface PrepareLlmSendInput {
@@ -76,6 +78,8 @@ export interface PrepareLlmSendInput {
   attachments?: MessageAttachment[]
   /** Runs inside the user-message transaction; throwing rolls that message back. */
   onPersisted?: () => void
+  /** Internal runner notices are recorded as system messages. */
+  origin?: 'user' | 'runner'
 }
 
 export interface PreparedSend {
@@ -100,7 +104,9 @@ export const messageRoutingService = {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const userMessageId = messageRepo.saveUser({
+    const userMessageId = input.origin === 'runner'
+      ? messageRepo.saveSystem({ chatId, content: userContent, ...( 'agentId' in input && typeof input.agentId === 'string' ? { addressedAgentId: input.agentId } : {}) }, input.onPersisted)
+      : messageRepo.saveUser({
       chatId,
       content: userContent,
       addressedAgentId: agentId,
@@ -114,7 +120,7 @@ export const messageRoutingService = {
       attachmentCount: attachments?.length ?? 0
     })
 
-    fireTitleGenInBackground(userId, chatId)
+    if (input.origin !== 'runner') fireTitleGenInBackground(userId, chatId)
 
     return { wireContent: userContent, userMessageId }
   },
@@ -126,7 +132,9 @@ export const messageRoutingService = {
       throw new ChatError('not_found', 'Chat not found')
     }
 
-    const userMessageId = messageRepo.saveUser({
+    const userMessageId = input.origin === 'runner'
+      ? messageRepo.saveSystem({ chatId, content: userContent, ...( 'agentId' in input && typeof input.agentId === 'string' ? { addressedAgentId: input.agentId } : {}) }, input.onPersisted)
+      : messageRepo.saveUser({
       chatId,
       content: userContent,
       attachments: attachments && attachments.length > 0 ? attachments : null
@@ -138,7 +146,7 @@ export const messageRoutingService = {
       attachmentCount: attachments?.length ?? 0
     })
 
-    fireTitleGenInBackground(userId, chatId)
+    if (input.origin !== 'runner') fireTitleGenInBackground(userId, chatId)
 
     return { wireContent: userContent, userMessageId }
   }

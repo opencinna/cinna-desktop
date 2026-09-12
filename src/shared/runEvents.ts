@@ -122,7 +122,7 @@ export interface RunToolUseEvent {
    * `'agent'` tools render as an expandable sub-thread (their work arrives as
    * `child` events keyed by `id`); `'mcp'` tools as the ordinary tool block.
    */
-  providerType?: 'mcp' | 'agent'
+  providerType?: 'mcp' | 'agent' | 'coordinator'
   /** Agent id backing an agent tool — drives the sub-thread's hash color. */
   providerAgentId?: string
 }

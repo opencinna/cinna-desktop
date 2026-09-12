@@ -70,6 +70,9 @@ function assertValueShape<K extends AppSettingKey>(
 const VALUE_CHECKS: {
   [K in AppSettingKey]?: (value: AppSettingsSchema[K]) => void
 } = {
+  taskRunnerConcurrency: (value) => {
+    if (!Number.isSafeInteger(value) || value < 1 || value > 8) throw new AppSettingsError('invalid_value', 'Concurrent task limit must be an integer from 1 to 8.')
+  },
   localAgentsHome: (value) => {
     // Empty means "use the built-in default", which is always valid.
     if (value.trim() === '') return

@@ -1,4 +1,5 @@
 import { chatRepo } from '../db/chats'
+import { taskRunnerBridge } from '../services/taskRunnerBridge'
 import { a2aSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
@@ -152,7 +153,8 @@ export function registerA2AHandlers(): void {
       // Ownership, the kind check and the driver call live in `askDelivery`,
       // because the inbox answers the same ask with the chat closed and the two
       // must not drift — above all on what *Always allow* means.
-      return deliverAnswer(getProfileScopeUserId(), data.requestId, parsed)
+      const userId = getProfileScopeUserId()
+      return taskRunnerBridge.answer(userId, data.requestId, parsed) ?? deliverAnswer(userId, data.requestId, parsed)
     }
   )
 

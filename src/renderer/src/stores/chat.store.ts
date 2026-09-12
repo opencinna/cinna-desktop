@@ -75,7 +75,7 @@ export interface ToolCallBlock {
   provider?: string
   status: 'pending' | 'done' | 'error'
   /** Tool source — `'agent'` tools accumulate a `subParts` sub-thread. */
-  providerType?: 'mcp' | 'agent'
+  providerType?: 'mcp' | 'agent' | 'coordinator'
   /** Agent id backing an agent tool — drives the sub-thread hash color. */
   agentId?: string
   /**
@@ -221,7 +221,7 @@ interface ChatStore {
     name: string
     input: Record<string, unknown>
     provider?: string
-    providerType?: 'mcp' | 'agent'
+    providerType?: 'mcp' | 'agent' | 'coordinator'
     agentId?: string
   }) => void
   resolveToolCall: (id: string, result: unknown) => void

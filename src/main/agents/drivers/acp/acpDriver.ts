@@ -155,7 +155,7 @@ export interface AcpDriverDeps {
   /** Settle a parked ask; false when nothing waits on it. */
   resolveRequest(requestId: string, resolution: RequestResolution): boolean
   /** Take the per-agent lock for the streaming part of the turn. */
-  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>): Promise<T>
+  withLock<T>(agentId: string, owner: string, fn: () => Promise<T>, queuedSignal?: AbortSignal): Promise<T>
   /** Override the turn ceiling. Tests only. */
   turnCeilingMs?: number
   /** Override the wait for a `session/cancel` acknowledgement. Tests only. */
@@ -247,6 +247,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       if (isRefusal(plan)) return fail(plan.error)
 
       try {
+        if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
+          runTurn(deps, { userId, agent, folder, launcherId, plan, input }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
           runTurn(deps, { userId, agent, folder, launcherId, plan, input })
         )
@@ -1168,4 +1170,3 @@ export function folderReadiness(folder: AcpFolderView | null): AgentReadiness {
       }
   }
 }
-

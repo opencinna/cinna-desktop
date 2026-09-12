@@ -39,6 +39,8 @@ export type { AgentCapabilities, AgentDriverId, AgentReadiness }
 
 /** One turn's input. The agent row and its owner are separate arguments. */
 export interface RunInput {
+  /** Internal autonomous admission; interactive turns keep immediate busy refusal. */
+  queueWhenBusy?: boolean
   chatId: string
   wireContent: string
   /** Cinna file ids to attach (A2A `metadata.cinna_file_ids`). */

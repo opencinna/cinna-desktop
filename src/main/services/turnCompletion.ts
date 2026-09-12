@@ -1,3 +1,4 @@
+import type { CoordinatorControl } from './coordinatorToolProvider'
 import { jobService } from './jobService'
 import { createLogger } from '../logger/logger'
 
@@ -5,6 +6,7 @@ const logger = createLogger('turn-completion')
 
 /** A single turn's result, independent of the task that may own many turns. */
 export interface TurnOutcome {
+  control?: CoordinatorControl
   state: 'completed' | 'needs_input' | 'failed' | 'canceled' | 'budget'
   /** Final assistant text, or the stopped round's retained partial text. */
   text: string

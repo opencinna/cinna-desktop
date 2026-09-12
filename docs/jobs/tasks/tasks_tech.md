@@ -16,7 +16,7 @@
 
 - `tasks` in `src/main/db/schema.ts` stores profile ownership, title, immutable goal, current description, status, priority, origin, executor, executor device, router and assignee. The parent id expresses one level of subtasks; DTO counts are derived from child rows. Optional chat/job/run links retain navigation without owning the task's lifetime.
 - The same row holds handoff note, artifacts, budget and timestamps; binding columns hold adapter/id/key/url and opaque state. `remote_dirty` and `remote_synced_at` are device-local bookkeeping and do not travel through app-sync.
-- `task_input_requests` holds request id, required task id, chat/agent references, serialized input request, resume kind, status, resolution, nullable root-run/invocation ownership and timestamps. `migrations/tasks.ts` adds ownership columns idempotently; legacy rows remain null. Exact invocation cleanup and task-wide sibling aggregation are described in [the Inbox](inbox.md#invocation-ownership-and-cleanup). Reads scope through the owning task. The boot sweep expires open `reply` rows because no parked driver survives restart; `next_message` rows survive and resume through main’s shared executor. Remote asks write no rows here.
+- `task_input_requests` holds request id, required task id, chat/agent references, serialized input request, resume kind, status, resolution, nullable root-run/invocation ownership and timestamps. `migrations/tasks.ts` adds ownership columns idempotently; legacy rows remain null. Exact invocation cleanup and task-wide sibling aggregation are described in [the Inbox](inbox.md#invocation-ownership-and-cleanup). Reads scope through the owning task. The boot sweep expires only driver-owned open `reply` rows because no parked driver survives restart. `next_message` rows and runner-owned gates survive; `delivery_owner` distinguishes the latter despite their reply resume kind. Runner rows have nullable agent identity. See [autonomous storage](autonomous_tasks_tech.md#database-schema). Remote asks write no rows here.
 - Task migrations live in `src/main/db/migrations/tasks.ts`, invoked by `src/main/db/client.ts`. Existing local run history is not backfilled with invented tasks; legacy remote runs are adopted when refreshed. Repository access is isolated in the task repositories. Device apply passes through `taskService` so the exported handoff note follows incoming writes too.
 - `task_handoffs` stores one local receipt per task, scoped by user and indexed by user/chat. It survives task deletion, is excluded from app-sync, and is deleted with the owning account. The repository refuses late writes after account deletion. See [handoff journal and recovery](remote_handoff.md).
 - See [device sync and claims](cross_device.md) for the fields deliberately omitted from transport and [handoff export](handoff_note_export.md) for the file's location and lifetime.
@@ -30,6 +30,9 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 | `task:list` | optional `TaskListQuery` → `TaskDto[]`; renderer filters are rebuilt field by field |
 | `task:children` | parent task id → `TaskListSnapshot` (`tasks`, `refreshed`, optional `refreshError`); saved child rows immediately, remote refresh in background |
 | `task:get` | task id → saved `TaskDto` immediately; `getWatched` starts a bound-task refresh and carries any previous ephemeral refresh error |
+| `task:run-autonomously` | `AutonomousTaskStart` → `{taskId, chatId}` after runner admission |
+| `task:resume-runtime` | task id → void after explicit checkpoint recovery |
+| `task:stop-runtime` | task id → void after requesting whole-runner cancellation |
 | `task:start` | task id, `DesktopTaskTarget` → `TaskStartResult` (`task`, `chatId`, main turn `runId`) after acceptance; captures profile and settings scopes |
 | `task:update` | task id, `TaskFieldPatch` → updated task; title, description, priority and router |
 | `task:set-status` | task id, `TaskStatus` → updated task after ownership/transition validation |
@@ -47,6 +50,8 @@ All handlers are registered by `src/main/ipc/task.ipc.ts`, require activation an
 `parseAnswerPayload` accepts exactly one of permission reply or question answers. Task IPC mutations nudge device sync; stream bookkeeping uses its normal periodic device cycle. That encrypted device-sync cycle is distinct from the active-profile remote-adapter scheduler, which also runs while app-sync is locked.
 
 ## Services and Key Methods
+
+- `taskRunnerService` owns consecutive coordinator/specialist turns, local checkpoints, durable gates and cancellation across turns. `task_runtimes` is separate from synced task definitions; TaskDto includes only its local runtime summary. See [autonomous implementation](autonomous_tasks_tech.md).
 
 - `taskService.create`, `getById`, `list`, `update`, `setStatus`, `applyRunState`, `acceptRemoteStatus`, `start`, `takeOver` and `remove` own task validation and lifecycle. `written` keeps the handoff export current. `start` associates an existing chat. `beginDesktopChat` binds a new direct conversation and assignee within message acceptance; its export is deferred until commit by `taskExecutionService`.
 - `taskExecutionService.start(scope, taskId, target)` reserves a profile/task start, validates ownership/status/no current conversation/no local ask/non-script router, and preflights the target. It rechecks activation, profile, claim and configuration after awaits and during acceptance. `taskContinuationPrompt` includes the full goal, a nonempty distinct description, and a nonempty handoff note once each. The new chat’s first user message and task binding commit together; refused acceptance rolls back both and removes only that new chat. Export follows acceptance. Origin, binding and historical job/run links remain; no job attempt is created.
@@ -91,7 +96,7 @@ The authority is [Remote Task Adapters](remote_adapters.md): capability-gated op
 ## Current Gap List
 
 - Takeover and Continue remain separate actions. The remote Hand off picker uses the adapter directory; local Continue chooses an agent or model. An unresolved create can defer discovery until recovery because the remote identity is not yet safely correlated.
-- The later orchestration phase still owns autonomous task execution, handback and script routing; the shared executor owns one explicitly started or continued turn; subsequent cleanup/protocol/new-driver work is separate from this scheduler.
+- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. Script routing, schedules, manifest handback and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
 - A failed remote enumeration rejects the complete Inbox array, delaying new local entries too. Partial-result completeness must be carried explicitly before changing that policy.
 - Service-specific limitations, including recent-history bounds and the absence of a subscription, remain in the [Cinna mapping](cinna_adapter.md) and [remote coordination](remote_sync.md) documents.
 

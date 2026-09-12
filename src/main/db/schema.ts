@@ -1,3 +1,4 @@
+import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
 import type { MessagePart } from '../../shared/messageParts'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
@@ -700,6 +701,12 @@ export const taskHandoffs = sqliteTable('task_handoffs', {
   receipt: text('receipt', { mode: 'json' }).$type<TaskHandoffReceipt>().notNull()
 })
 
+export const taskRuntimes = sqliteTable('task_runtimes', {
+  taskId: text('task_id').primaryKey().references(() => tasks.id, { onDelete: 'cascade' }),
+  userId: text('user_id').notNull(),
+  checkpoint: text('checkpoint', { mode: 'json' }).$type<TaskRuntimeCheckpoint>().notNull()
+})
+
 export const taskInputRequests = sqliteTable('task_input_requests', {
   /** The run's `requestId`, verbatim. */
   id: text('id').primaryKey(),
@@ -707,7 +714,8 @@ export const taskInputRequests = sqliteTable('task_input_requests', {
     .notNull()
     .references(() => tasks.id, { onDelete: 'cascade' }),
   chatId: text('chat_id').notNull(),
-  agentId: text('agent_id').notNull(),
+  agentId: text('agent_id'),
+  deliveryOwner: text('delivery_owner').$type<'driver' | 'runner'>().notNull().default('driver'),
   rootRunId: text('root_run_id'),
   invocationId: text('invocation_id'),
   /** The `InputRequest` from `shared/runEvents.ts`, verbatim — not a second union. */

@@ -35,6 +35,10 @@ Settings screen for managing chat modes, agents (local A2A, folder agents and re
 2. Sidebar reverts to chat list mode
 3. Main content area returns to active chat or welcome screen
 
+## Autonomous task concurrency
+
+Local Agents → Engine Settings exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path, disables while loading/saving and retains a reserved error slot. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).
+
 ## Business Rules
 
 - Switching settings sections always resets the page — open forms, partial input, expanded cards are all discarded on navigation

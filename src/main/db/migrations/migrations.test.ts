@@ -417,6 +417,7 @@ describe('tasks on an install that predates them', () => {
         'agent_id',
         'root_run_id',
         'invocation_id',
+        'delivery_owner',
         'request',
         'resume',
         'status',
@@ -507,6 +508,34 @@ describe('tasks on an install that predates them', () => {
 })
 
 describe('input request ownership on an existing install', () => {
+  it('rebuilds the old NOT NULL agent column without losing open or answered requests', () => {
+    const raw = freshDatabase()
+    raw.exec(`DROP TABLE task_input_requests;
+      CREATE TABLE task_input_requests (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+        chat_id TEXT NOT NULL, agent_id TEXT NOT NULL, request TEXT NOT NULL,
+        resume TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', resolution TEXT,
+        created_at INTEGER NOT NULL, resolved_at INTEGER
+      );
+      INSERT INTO tasks (id, user_id, title, goal, created_at, updated_at)
+        VALUES ('old-task', '__default__', 'Task', 'Goal', 1, 1);
+      INSERT INTO task_input_requests VALUES
+        ('open-ask', 'old-task', 'chat', 'agent', '{"kind":"question","questions":[]}', 'next_message', 'open', NULL, 12, NULL),
+        ('answered-ask', 'old-task', 'chat', 'agent', '{"kind":"question","questions":[]}', 'reply', 'answered', '{"kind":"question","answers":[["yes"]]}', 10, 11);`)
+    const before = raw.prepare('SELECT * FROM task_input_requests ORDER BY id').all()
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare('SELECT * FROM task_input_requests ORDER BY id').all()).toEqual(before.map((row) => ({
+      ...row, delivery_owner: 'driver', root_run_id: null, invocation_id: null
+    })))
+    expect(() => raw.prepare(`INSERT INTO task_input_requests (id, task_id, chat_id, agent_id, delivery_owner, request, resume, created_at)
+      VALUES ('gate', 'old-task', 'chat', NULL, 'runner', '{"kind":"question","questions":[]}', 'reply', 15)`).run()).not.toThrow()
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.prepare("DELETE FROM tasks WHERE id = 'old-task'").run()
+    expect(raw.prepare('SELECT COUNT(*) AS count FROM task_input_requests').get()).toEqual({ count: 0 })
+    raw.close()
+  })
+
   it('preserves legacy requests without assigning them to a new run, and replays idempotently', () => {
     const raw = freshDatabase()
     raw.exec('DROP INDEX idx_task_input_requests_run')
@@ -522,7 +551,7 @@ describe('input request ownership on an existing install', () => {
     expect(raw.prepare('SELECT * FROM task_input_requests').all()).toEqual([{
       id: 'legacy-ask', task_id: 'legacy-task', chat_id: 'legacy-chat', agent_id: 'legacy-agent',
       request, resume: 'reply', status: 'open', resolution: null, created_at: 42, resolved_at: null,
-      root_run_id: null, invocation_id: null
+      root_run_id: null, invocation_id: null, delivery_owner: 'driver'
     }])
     expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     raw.close()

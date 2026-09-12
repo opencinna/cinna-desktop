@@ -6,6 +6,7 @@ import { jobRunsRepo } from '../db/jobs'
 import { messageRepo } from '../db/messages'
 import { agentRepo } from '../db/agents'
 import { routerOf } from '../../shared/chatRouting'
+import { taskRunnerBridge } from './taskRunnerBridge'
 import { taskService } from './taskService'
 import { deliverAnswer } from './askDelivery'
 import { remoteInboxService } from './remoteInboxService'
@@ -70,6 +71,7 @@ function toEntry(row: TaskInputRequestRow, taskTitle: string): InboxEntry {
   return {
     requestId: row.id,
     source: 'local',
+    deliveryOwner: row.deliveryOwner,
     taskId: row.taskId,
     taskTitle,
     chatId: row.chatId,
@@ -266,6 +268,11 @@ export const inboxService = {
         resume: event.resume
       })
     } else if (event.resume === 'reply') {
+      const gate = taskInputRequestRepo.getById(event.requestId)
+      if (gate?.deliveryOwner === 'runner' && gate.taskId === task.id && gate.chatId === ctx.chatId && gate.rootRunId === ctx.rootRunId) {
+        markTask(ctx.userId, task.id, 'needs_input')
+        return
+      }
       // An address with nobody to send an answer to. The model does not park,
       // so this is a driver emitting an ask outside a turn the send path could
       // attribute — worth a warning rather than a row nothing can answer.
@@ -388,7 +395,7 @@ export const inboxService = {
     const local = taskInputRequestRepo
       .listOpen(userId)
       .filter(({ row }) => {
-        if (row.resume === 'reply') return true
+        if (row.resume === 'reply' && row.deliveryOwner !== 'runner') return true
         const task = taskService.getById(userId, row.taskId)
         return task.executor === 'desktop' && task.runsHere && ['blocked', 'in_progress'].includes(task.status)
       })
@@ -433,6 +440,11 @@ export const inboxService = {
         reason: 'This request has already been answered.',
         code: 'already_answered'
       }
+    }
+    const runnerAnswer = taskRunnerBridge.answer(userId, requestId, resolution)
+    if (runnerAnswer) return runnerAnswer
+    if (row.deliveryOwner === 'runner' || !row.agentId) {
+      return { ok: false, code: 'unavailable', reason: 'This task must be resumed by its local runner.' }
     }
     if (row.resume === 'next_message') {
       if (!['blocked', 'in_progress'].includes(task.status)) {

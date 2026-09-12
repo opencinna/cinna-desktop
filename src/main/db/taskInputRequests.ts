@@ -23,7 +23,8 @@ export interface OpenInputRequestInput {
   requestId: string
   taskId: string
   chatId: string
-  agentId: string
+  agentId: string | null
+  deliveryOwner?: 'driver' | 'runner'
   rootRunId?: string
   invocationId?: string
   request: InputRequest
@@ -56,11 +57,15 @@ export const taskInputRequestRepo = {
    * currently parked on.
    */
   open(input: OpenInputRequestInput): TaskInputRequestRow {
+    if (input.deliveryOwner === 'runner' ? input.agentId !== null || input.resume !== 'reply' : !input.agentId) {
+      throw new Error('The request needs a valid driver or runner delivery owner.')
+    }
     const row: TaskInputRequestRow = {
       id: input.requestId,
       taskId: input.taskId,
       chatId: input.chatId,
       agentId: input.agentId,
+      deliveryOwner: input.deliveryOwner ?? 'driver',
       rootRunId: input.rootRunId ?? null,
       invocationId: input.invocationId ?? null,
       request: input.request,
@@ -134,7 +139,7 @@ export const taskInputRequestRepo = {
   expireNextMessageForTask(taskId: string): void {
     getDb().update(taskInputRequests).set({ status: 'expired', resolvedAt: new Date() })
       .where(and(eq(taskInputRequests.taskId, taskId), eq(taskInputRequests.status, 'open'),
-        eq(taskInputRequests.resume, 'next_message'))).run()
+        or(eq(taskInputRequests.resume, 'next_message'), eq(taskInputRequests.deliveryOwner, 'runner')))).run()
   },
 
   listOpenForChat(chatId: string): TaskInputRequestRow[] {
@@ -158,7 +163,7 @@ export const taskInputRequestRepo = {
   expireOpenForRun(chatId: string, rootRunId: string, replyOnly: boolean, invocationId?: string): number {
     return getDb().update(taskInputRequests).set({ status: 'expired', resolvedAt: new Date() })
       .where(and(eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.rootRunId, rootRunId),
-        eq(taskInputRequests.status, 'open'), replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
+        eq(taskInputRequests.status, 'open'), eq(taskInputRequests.deliveryOwner, 'driver'), replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
         invocationId ? eq(taskInputRequests.invocationId, invocationId) : undefined)).run().changes
   },
 
@@ -183,7 +188,7 @@ export const taskInputRequestRepo = {
       .update(taskInputRequests)
       .set({ status: 'expired', resolvedAt: new Date() })
       .where(and(eq(taskInputRequests.chatId, chatId), eq(taskInputRequests.status, 'open'),
-        replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
+        eq(taskInputRequests.deliveryOwner, 'driver'), replyOnly ? eq(taskInputRequests.resume, 'reply') : undefined,
         nextMessageAgentId ? or(eq(taskInputRequests.resume, 'reply'), eq(taskInputRequests.agentId, nextMessageAgentId)) : undefined))
       .run().changes
   },
@@ -196,7 +201,7 @@ export const taskInputRequestRepo = {
     return getDb()
       .update(taskInputRequests)
       .set({ status: 'expired', resolvedAt: new Date() })
-      .where(and(eq(taskInputRequests.status, 'open'), eq(taskInputRequests.resume, 'reply')))
+      .where(and(eq(taskInputRequests.status, 'open'), eq(taskInputRequests.resume, 'reply'), eq(taskInputRequests.deliveryOwner, 'driver')))
       .run().changes
   }
 }

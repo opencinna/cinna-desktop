@@ -1,3 +1,4 @@
+import { taskRunnerBridge } from './taskRunnerBridge'
 import { nanoid } from 'nanoid'
 import { userRepo, UserRow } from '../db/users'
 import { hashPassword, verifyPassword, getCurrentUserId } from '../auth/session'
@@ -462,6 +463,7 @@ export const authService = {
       // `deleteWithCascade` also clears `llmProviders`/`mcpProviders`/`chatModes`
       // by userId — a no-op for Cinna profiles, since those are Default-scope
       // (stored under `__default__`, never under a Cinna userId).
+      taskRunnerBridge.profileRemoved(input.userId)
       userRepo.deleteWithCascade(input.userId)
       logger.info(signOut ? 'user.signed_out' : 'user.deleted', {
         userId: input.userId,
@@ -476,6 +478,7 @@ export const authService = {
       }
       clearCinnaTokens(input.userId)
       userActivation.forgetUnlock(input.userId)
+      taskRunnerBridge.profileRemoved(input.userId)
       userRepo.deleteWithCascade(input.userId)
       logger.info('user.deleted', { userId: input.userId, username: row.username, type: row.type })
     }

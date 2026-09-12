@@ -1,3 +1,7 @@
+import { taskRuntimeRepo } from '../db/taskRuntimes'
+import { taskRunnerBridge } from './taskRunnerBridge'
+import { runtimeBudget } from '../tasks/runtimeBudget'
+import type { TaskArtifact, TaskBudget } from '../../shared/tasks'
 import { getDb } from '../db/client'
 import { taskHandoffRepo } from '../db/taskHandoffs'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
@@ -222,8 +226,10 @@ export function toTaskDto(
     name: row.assigneeName,
     kind: parseTaskAssigneeKind(row.assigneeKind)
   }
+  const runtime = taskRuntimeRepo.get(row.userId, row.id)
   return {
     id: row.id,
+    ...(runtime ? { runtime: { state: runtime.state, reason: runtime.reason, ownerTurns: runtime.ownerTurns, elapsedMs: runtime.elapsedMs, budget: runtime.budget } } : {}),
     title: row.title,
     goal: row.goal,
     description: row.description,
@@ -301,6 +307,7 @@ function persistRemotePatch(userId: string, taskId: string, patch: TaskPatch): T
 function written(userId: string, row: TaskRow): TaskDto {
   const dto = toTaskDto(row, thisDeviceId(userId))
   taskFileService.exportHandoff(dto)
+  taskRunnerBridge.taskChanged(userId, row.id)
   return dto
 }
 
@@ -618,6 +625,22 @@ export const taskService = {
     if (!row) throw new TaskError('not_found', 'Task not found')
     // Export after acceptance commits; a filesystem write cannot roll back.
     return toTaskDto(row, thisDeviceId(userId))
+  },
+
+  setRuntimeBudget(userId: string, taskId: string, budget: TaskBudget): TaskDto {
+    const task = requireTask(userId, taskId)
+    requireRunsHere(userId, task)
+    const row = taskRepo.update(userId, taskId, { budget: runtimeBudget(budget) })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    return written(userId, row)
+  },
+
+  setArtifacts(userId: string, taskId: string, artifacts: TaskArtifact[]): TaskDto {
+    const task = requireTask(userId, taskId)
+    requireRunsHere(userId, task)
+    const row = taskRepo.update(userId, taskId, { artifacts })
+    if (!row) throw new TaskError('not_found', 'Task not found')
+    return written(userId, row)
   },
 
   /**
@@ -1004,6 +1027,7 @@ export const taskService = {
     // is no note, but a *deleted* task with a note still has one.
     if (row.deletedAt) taskFileService.removeHandoff(row.id)
     else taskFileService.exportHandoff(dto)
+    taskRunnerBridge.taskChanged(userId, row.id)
     return dto
   },
 
@@ -1074,7 +1098,10 @@ export const taskService = {
     // install — so a tombstone carrying an id that belongs to a *different*
     // profile would leave that profile's row intact and delete its note, with
     // nothing that could ever put the file back.
-    if (taskRepo.deleteOwned(userId, taskId)) taskFileService.removeHandoff(taskId)
+    if (taskRepo.deleteOwned(userId, taskId)) {
+      taskFileService.removeHandoff(taskId)
+      taskRunnerBridge.taskChanged(userId, taskId)
+    }
   },
 
   /**
@@ -1088,6 +1115,7 @@ export const taskService = {
   remove(userId: string, taskId: string): void {
     requireTask(userId, taskId)
     taskRepo.softDelete(userId, taskId)
+    taskRunnerBridge.taskChanged(userId, taskId)
     // The row survives as a tombstone; the file is a view of a task the user
     // can no longer open, so it goes. A soft delete is still a delete to
     // anything reading the folder.

@@ -142,6 +142,7 @@ export class A2AAsMcpProvider implements ToolProvider {
       chatId: this.chatId,
       wireContent: message,
       signal,
+      ...(opts?.queueWhenBusy ? { queueWhenBusy: true } : {}),
       onEvent: opts?.onEvent
     })
 

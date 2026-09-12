@@ -15,8 +15,8 @@ import type { MessageRow } from '../db/messages'
  * smaller packet — an agent's own turns and the messages addressed to it are
  * dropped, because its session already has them.
  *
- * Phase 6 replaces the packet with a structured handoff note when a coordinator
- * hands off; the cursor mechanism stays either way.
+ * A coordinator handoff carries its note in addition to this packet. Runner
+ * packets include bounded tool results, since those results are delegated work.
  */
 
 /** Default ceiling on the packet, in characters. See {@link buildCatchUpPacket}. */
@@ -41,6 +41,7 @@ export interface CatchUpInput {
   names?: ReadonlyMap<string, string>
   /** Character ceiling for the whole packet. Defaults to {@link CATCH_UP_CAP}. */
   cap?: number
+  includeToolResults?: boolean
 }
 
 /**
@@ -66,7 +67,7 @@ export function buildCatchUpPacket(input: CatchUpInput): string | null {
 
   const lines: string[] = []
   for (const row of gap) {
-    const line = renderRow(row, agentId, input.names)
+    const line = renderRow(row, agentId, input.names, input.includeToolResults)
     if (line) lines.push(line)
   }
   if (lines.length === 0) return null
@@ -107,7 +108,8 @@ export function buildCatchUpPacket(input: CatchUpInput): string | null {
 function renderRow(
   row: MessageRow,
   agentId: string,
-  names: ReadonlyMap<string, string> | undefined
+  names: ReadonlyMap<string, string> | undefined,
+  includeToolResults = false
 ): string | null {
   if (row.sourceAgentId === agentId) return null
   if (row.role === 'error') return null
@@ -131,7 +133,8 @@ function renderRow(
       // thread and none of what the next agent needs from it.
       const who = nameOf(row.toolAgentId ?? row.sourceAgentId, names)
       const tool = row.toolName ?? 'a tool'
-      return `[${who}] used ${tool}${row.toolError ? ' (failed)' : ''}`
+      const result = includeToolResults ? clip(row.content.trim(), PER_MESSAGE_CAP) : ''
+      return `[${who}] used ${tool}${row.toolError ? ' (failed)' : ''}${result ? `: ${result}` : ''}`
     }
     case 'agent_transition': {
       const text = clip(row.content.trim(), PER_MESSAGE_CAP)

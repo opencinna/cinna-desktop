@@ -1,4 +1,4 @@
-import { test, expect } from '../fixtures/app'
+import { test, expect, answerAgentsFolder } from '../fixtures/app'
 
 test('launches into onboarding, then the main shell, inside the sandbox', async ({ cinna }) => {
   const { page, electronApp, sandbox } = cinna
@@ -14,6 +14,10 @@ test('launches into onboarding, then the main shell, inside the sandbox', async 
   // developer's real profile or agents folder is asserting against their data.
   const userData = await electronApp.evaluate(({ app }) => app.getPath('userData'))
   expect(userData).toBe(sandbox.userData)
+  // A fresh profile waits for the user's folder choice before creating a root.
+  expect(await page.evaluate(() => window.api.localAgents.rootsList())).toEqual([])
+  await page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await answerAgentsFolder(cinna)
   const roots = await page.evaluate(() => window.api.localAgents.rootsList())
   expect(roots.length).toBeGreaterThan(0)
   for (const root of roots) expect(root.path.startsWith(sandbox.home)).toBe(true)

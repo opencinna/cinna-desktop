@@ -1,4 +1,5 @@
 import { isRunWatchMessage, type RunWatchMessage } from '../shared/runWatch'
+import type { AutonomousTaskStart } from '../shared/taskRuntime'
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import type { MessagePart } from '../shared/messageParts'
 import type { DetectedTool, OpenInRequest } from '../shared/localTools'
@@ -1143,6 +1144,9 @@ const api = {
     list: (query?: TaskListQuery): Promise<TaskDto[]> =>
       ipcRenderer.invoke('task:list', query),
     get: (taskId: string): Promise<TaskDto> => ipcRenderer.invoke('task:get', taskId),
+    runAutonomously: (input: AutonomousTaskStart): Promise<{ taskId: string; chatId: string }> => ipcRenderer.invoke('task:run-autonomously', input),
+    resumeRuntime: (taskId: string): Promise<void> => ipcRenderer.invoke('task:resume-runtime', taskId),
+    stopRuntime: (taskId: string): Promise<void> => ipcRenderer.invoke('task:stop-runtime', taskId),
     start: (taskId: string, target: import('../shared/tasks').DesktopTaskTarget): Promise<import('../shared/tasks').TaskStartResult> =>
       ipcRenderer.invoke('task:start', taskId, target),
     update: (

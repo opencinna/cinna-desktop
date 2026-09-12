@@ -19,6 +19,7 @@ import {
 } from '../llm/types'
 import { ChatError } from '../errors'
 import { createTurnCompletion, type TurnCompletion } from './turnCompletion'
+import type { CoordinatorToolProvider, CoordinatorControl } from './coordinatorToolProvider'
 import { attachmentToMediaPart } from './fileStore'
 import { createLogger } from '../logger/logger'
 import type { MessageAttachment } from '../../shared/attachments'
@@ -59,6 +60,10 @@ export interface StreamInput {
   wireContent: string
   port: StreamPort
   onFinished?: TurnCompletion
+  /** Internal runner capability; never populated from renderer send data. */
+  coordinator?: CoordinatorToolProvider
+  wireRole?: 'user' | 'system'
+  settingsUserId?: string
 }
 
 export interface StreamHandle {
@@ -88,9 +93,9 @@ interface ResolvedAnnounce {
  */
 function resolvePendingAnnounce(
   chatId: string,
-  agentProviders: A2AAsMcpProvider[]
+  agentProviders: A2AAsMcpProvider[],
+  settingsUserId: string
 ): ResolvedAnnounce {
-  const settingsUserId = getSettingsScopeUserId()
 
   const mcpResolvedIds: string[] = []
   const mcpNames: string[] = []
@@ -150,6 +155,7 @@ export const chatStreamingService = {
    */
   async stream(input: StreamInput): Promise<StreamHandle> {
     const { userId, chatId, wireContent, port } = input
+    const settingsUserId = input.settingsUserId ?? getSettingsScopeUserId()
     const finish = createTurnCompletion(chatId, input.onFinished)
 
     // **A refusal is an ending, and the three below are endings nobody used to
@@ -198,7 +204,8 @@ export const chatStreamingService = {
     const onDemandMcpIds = chatOnDemandMcpRepo.listProviderIds(chatId)
     const mcpProviderIds = Array.from(new Set([...baseMcpIds, ...onDemandMcpIds]))
 
-    const providers: ToolProvider[] = []
+    // Control names are first in the union, before any external provider.
+    const providers: ToolProvider[] = input.coordinator ? [input.coordinator] : []
     for (const id of mcpProviderIds) {
       const conn = mcpManager.getConnection(id)
       if (conn && conn.status === 'connected') {
@@ -211,9 +218,9 @@ export const chatStreamingService = {
     // MCP tool already took.
     const reservedNames = new Set<string>()
     for (const p of providers) for (const t of p.getTools()) reservedNames.add(t.name)
-    const agentProviders = buildAgentToolProviders(
+    const agentProviders = input.coordinator ? [] : buildAgentToolProviders(
       chatId,
-      getSettingsScopeUserId(),
+      settingsUserId,
       userId,
       reservedNames
     )
@@ -240,7 +247,7 @@ export const chatStreamingService = {
     // `_runStreamLoop` so a pre-flight failure (auth error, network down)
     // does not silently burn the one-shot announcement — the user can retry
     // and the LLM will still see the prefix.
-    const announce = resolvePendingAnnounce(chatId, agentProviders)
+    const announce = resolvePendingAnnounce(chatId, agentProviders, settingsUserId)
     const augmentedWireContent = announce.prefix
       ? `${announce.prefix}${wireContent}`
       : wireContent
@@ -289,7 +296,9 @@ export const chatStreamingService = {
       augmentedWireContent,
       announce.mcpIds,
       announce.agentIds,
-      finish
+      finish,
+      input.wireRole,
+      settingsUserId
     ).catch((error) => {
       // Persistence itself can fail in the normal error handler. Still return
       // a terminal result and release the handle; never strand a runner.
@@ -328,11 +337,14 @@ export const chatStreamingService = {
     pendingAnnounceMcpIds: string[],
     /** On-demand agent ids whose `pendingAnnounce` to clear — same timing. */
     pendingAnnounceAgentIds: string[],
-    onFinished?: TurnCompletion
+    onFinished?: TurnCompletion,
+    wireRole: 'user' | 'system' = 'user',
+    settingsUserId = getSettingsScopeUserId()
   ): Promise<void> {
     const finish = createTurnCompletion(chatId, onFinished)
     let lastAssistantText = ''
     let naturalEnd = false
+    let control: CoordinatorControl | undefined
     // What the current round has streamed and nothing has saved yet. An adapter
     // rejects when its signal fires, so a stop mid-reply lands in the `catch`
     // with this text on the user's screen and nowhere in the database — see the
@@ -361,7 +373,6 @@ export const chatStreamingService = {
           agentToolByAgentId.set(p.agentId, { name: p.displayName, toolName })
         }
       }
-      const settingsUserId = getSettingsScopeUserId()
       // Cache fallback name lookups so a long chat with repeated turns from the
       // same detached agent doesn't re-hit `findAgent` per turn.
       const fallbackNameCache = new Map<string, string>()
@@ -433,8 +444,12 @@ export const chatStreamingService = {
       // content (catch-up prepended) is what the LLM sees, without polluting
       // the persisted row.
       for (let i = currentMessages.length - 1; i >= 0; i--) {
-        if (currentMessages[i].role === 'user') {
-          currentMessages[i] = { ...currentMessages[i], content: wireContent }
+        if (currentMessages[i].role === wireRole) {
+          // Runner prompts are stored as system rows to avoid inventing human
+          // transcript messages. On the wire they start a conversational turn:
+          // providers that extract system instructions would otherwise resend
+          // the previous answer (or attempt an assistant prefill).
+          currentMessages[i] = { ...currentMessages[i], role: 'user', content: wireContent }
           break
         }
       }
@@ -527,9 +542,10 @@ export const chatStreamingService = {
           }
 
           const provider = toolRouting.get(tc.name)
-          const providerName = provider?.displayName ?? ''
+          const presentation = provider?.describeCall?.(tc.name, tc.input)
+          const providerName = presentation?.displayName ?? provider?.displayName ?? ''
           const isAgent = provider?.providerType === 'agent'
-          const providerAgentId = provider?.agentId
+          const providerAgentId = presentation?.agentId ?? provider?.agentId
 
           port.postMessage({
             type: 'tool_use',
@@ -537,7 +553,7 @@ export const chatStreamingService = {
             name: tc.name,
             input: tc.input,
             provider: providerName,
-            providerType: provider?.providerType,
+            providerType: presentation ? 'agent' : provider?.providerType,
             providerAgentId
           })
 
@@ -565,7 +581,8 @@ export const chatStreamingService = {
             // provider that did not would run buffered rather than post a
             // `child` with an invented id.
             const onEvent =
-              isAgent && providerAgentId
+              provider?.providerType === 'coordinator' ? (event: RunEvent): void => { port.postMessage(event) }
+              : isAgent && providerAgentId
                 ? (event: RunEvent): void => {
                     port.postMessage({
                       type: 'child',
@@ -578,11 +595,13 @@ export const chatStreamingService = {
 
             const exec = await provider.callTool(tc.name, tc.input, {
               onEvent,
+              toolCallId: tc.id,
               signal: abortController.signal
             })
             if (exec.parts && exec.parts.length > 0) toolParts = exec.parts
             toolContent =
               typeof exec.content === 'string' ? exec.content : JSON.stringify(exec.content)
+            if (!exec.isError && provider.providerType === 'coordinator') control = exec.control
 
             if (exec.isError) {
               toolError = true
@@ -603,6 +622,7 @@ export const chatStreamingService = {
               port.postMessage({ type: 'tool_result', id: tc.id, result: exec.content })
             }
           } catch (err) {
+            control = undefined
             toolContent = err instanceof Error ? err.message : String(err)
             toolError = true
             logger.error('tool failed', {
@@ -637,18 +657,37 @@ export const chatStreamingService = {
           })
 
           currentMessages.push(toolMsg)
+          if (control) {
+            // The whole assistant row is already durable. Every later call
+            // needs a paired result, but no later side effect may execute.
+            for (const skipped of result.toolCalls.slice(index + 1)) {
+              const skippedProvider = toolRouting.get(skipped.name)
+              const content = `Not run: ${tc.name} ended the coordinator turn.`
+              messageRepo.saveToolCall({ chatId, content, toolCallId: skipped.id, toolName: skipped.name,
+                toolInput: skipped.input, toolError: true, toolProvider: skippedProvider?.displayName,
+                toolAgentId: skippedProvider?.agentId })
+              port.postMessage({ type: 'tool_error', id: skipped.id, error: content })
+            }
+            if (control.kind === 'finish') {
+              messageRepo.saveAssistant({ chatId, content: control.summary })
+              lastAssistantText = control.summary
+              port.postMessage({ type: 'delta', kind: 'text', text: control.summary })
+            }
+            break
+          }
         }
 
-        if (abortController.signal.aborted) break
+        if (abortController.signal.aborted || control) break
       }
 
       const canceled = abortController.signal.aborted
-      const budget = !canceled && !naturalEnd
+      const budget = !canceled && !naturalEnd && !control
       const budgetMessage = `The turn reached its limit of ${MAX_TOOL_ROUNDS} model rounds.`
       if (budget) messageRepo.saveError({ chatId, short: budgetMessage, code: 'round_budget' })
       messageRepo.touchChat(chatId)
       port.postMessage({ type: 'done', stopReason: canceled ? 'canceled' : budget ? 'budget' : 'end_turn' })
-      finish({ state: canceled ? 'canceled' : budget ? 'budget' : 'completed', text: lastAssistantText,
+      finish({ state: canceled ? 'canceled' : budget ? 'budget' : control?.kind === 'ask_user' || control?.kind === 'await_input' ? 'needs_input' : 'completed', text: lastAssistantText,
+        ...(!canceled && control ? { control } : {}),
         ...(budget ? { error: { message: budgetMessage, code: 'round_budget' } } : {}) })
     } catch (err) {
       if (abortController.signal.aborted) {

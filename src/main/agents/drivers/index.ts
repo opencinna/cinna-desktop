@@ -360,7 +360,8 @@ export const acpDriver = createAcpDriver({
   rememberGrant,
   registerRequest: (input) => pendingRequests.register(input),
   resolveRequest,
-  withLock: (agentId, owner, fn) => turnLock.withLock(agentId, owner, fn)
+  withLock: (agentId, owner, fn, queuedSignal) => queuedSignal
+    ? turnLock.withQueuedLock(agentId, owner, queuedSignal, fn) : turnLock.withLock(agentId, owner, fn)
 })
 
 /* ------------------------------------------------------------ the resolver */

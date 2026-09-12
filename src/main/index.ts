@@ -1,3 +1,4 @@
+import { taskRunnerService } from './services/taskRunnerService'
 import { app, shell, BrowserWindow, Menu, dialog, powerMonitor } from 'electron'
 import { join } from 'path'
 import { appendFileSync, renameSync, statSync } from 'fs'
@@ -349,6 +350,7 @@ function startup(): void {
 
   initDatabase()
   initSession()
+  taskRunnerService.recover()
   registerAllIpcHandlers()
   // Providers are activated through auth flow (auth:get-startup / auth:login)
 
@@ -371,6 +373,7 @@ function startup(): void {
   // mid-flight and orphaned (→ rotation-replay self-logout on wake); re-arm +
   // catch up on resume. `powerMonitor` is only available after the app is ready.
   powerMonitor.on('suspend', () => {
+    taskRunnerService.interruptAll('Execution paused when this device went to sleep. Review the conversation before resuming.')
     syncService.setSystemSuspended(true)
     taskSyncScheduler.setSuspended(true)
   })
@@ -400,6 +403,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', async () => {
+  taskRunnerService.interruptAll('Execution stopped when the app closed. Review the conversation before resuming.')
   taskSyncScheduler.stop()
   // **The ACP processes first, and not awaited.** Each folder agent runs in a
   // child of its own — `opencode acp`, or the Claude adapter and the `claude`

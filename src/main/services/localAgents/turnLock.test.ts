@@ -105,4 +105,30 @@ describe('turnLock', () => {
     expect(turnLock.isLocked('b')).toBe(false)
     expect(ran).toHaveBeenCalledOnce()
   })
+  it('queues runner acquisition atomically while ordinary callers still refuse', async () => {
+    const held = turnLock.acquire('a', 'editor')
+    const signal = new AbortController().signal
+    const entered: string[] = []
+    const first = turnLock.withQueuedLock('a', 'runner', signal, async () => { entered.push('first'); await Promise.resolve() })
+    const second = turnLock.withQueuedLock('a', 'runner', signal, () => { entered.push('second') })
+    expect(entered).toEqual([])
+    expect(() => turnLock.acquire('a', 'interactive')).toThrow(/busy/i)
+    held.release()
+    await Promise.all([first, second])
+    expect(entered).toEqual(['first', 'second'])
+    expect(turnLock.isLocked('a')).toBe(false)
+  })
+
+  it('removes a cancelled queued runner and never runs its callback', async () => {
+    const held = turnLock.acquire('a', 'editor')
+    const controller = new AbortController()
+    const callback = vi.fn()
+    const queued = turnLock.withQueuedLock('a', 'runner', controller.signal, callback)
+    controller.abort()
+    await expect(queued).rejects.toThrow('stopped')
+    held.release()
+    expect(callback).not.toHaveBeenCalled()
+    expect(turnLock.isLocked('a')).toBe(false)
+  })
+
 })

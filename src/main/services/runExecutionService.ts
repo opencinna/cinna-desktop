@@ -1,4 +1,5 @@
 import { nanoid } from 'nanoid'
+import { taskRunnersByChat } from './taskRunnerState'
 import { liveRunHub } from './liveRunHub'
 import { reportStandaloneTurn, type TurnCompletion, type TurnOutcome } from './turnCompletion'
 import { taskRepo } from '../db/tasks'
@@ -25,6 +26,7 @@ import type { RunEventContext } from './inboxService'
 import { activeRunsByChat as activeChats } from './runExecutionState'
 import { handingOffChats } from './taskOperationState'
 import { taskHandoffRepo } from '../db/taskHandoffs'
+import type { CoordinatorToolProvider } from './coordinatorToolProvider'
 
 const logger = createLogger('run')
 export interface RunScope { profileUserId: string; settingsUserId: string }
@@ -48,11 +50,13 @@ export interface RunHandle {
 
 /** Main owns the turn. A renderer is an optional subscriber, never its lifetime. */
 export const runExecutionService = {
-  isRunning(chatId: string): boolean { return activeChats.has(chatId) },
+  isRunning(chatId: string): boolean { return activeChats.has(chatId) || !!taskRunnersByChat.get(chatId)?.working },
 
   cancelChat(userId: string, chatId: string): void {
     if (!chatRepo.getOwned(userId, chatId)) throw new Error('Chat not found')
-    activeChats.get(chatId)?.cancel()
+    const runner = taskRunnersByChat.get(chatId)
+    if (runner?.userId === userId) runner.cancel()
+    else activeChats.get(chatId)?.cancel()
   },
 
   start(scope: RunScope, payload: RunSendPayload, options: {
@@ -66,13 +70,25 @@ export const runExecutionService = {
     agentId?: string
     /** Internal runner admission. Never accepted from an IPC payload. */
     runnerTaskId?: string
+    coordinator?: CoordinatorToolProvider
+    inputOrigin?: 'user' | 'runner'
   }): RunHandle {
+    if ((options.coordinator || options.inputOrigin === 'runner') && !options.runnerTaskId) {
+      throw new Error('Coordinator tools require an owning task runner.')
+    }
     if (handingOffChats.has(payload.chatId) || taskHandoffRepo.unresolvedForChat(scope.profileUserId, payload.chatId)) {
       throw new Error('This conversation has a pending remote handoff. Resolve it on the task page first.')
+    }
+    const reservation = taskRunnersByChat.get(payload.chatId)
+    if (reservation && (reservation.userId !== scope.profileUserId || reservation.taskId !== options.runnerTaskId)) {
+      throw new Error('This conversation belongs to an autonomous task. Answer in the Inbox or use the task controls.')
     }
     if (activeChats.has(payload.chatId)) throw new Error('This conversation already has a turn running.')
     const chat = chatRepo.getOwned(scope.profileUserId, payload.chatId)
     if (!chat) throw new Error('Chat not found')
+    if (options.coordinator && (routingOf(chat).router !== 'coordinator' || options.agentId)) {
+      throw new Error('Coordinator tools are only available to the coordinator model.')
+    }
     if (options.runnerTaskId) {
       const task = taskRepo.getById(scope.profileUserId, options.runnerTaskId)
       if (!task || task.deletedAt || !['in_progress', 'blocked'].includes(task.status) ||
@@ -147,8 +163,8 @@ export const runExecutionService = {
         let inputRequestReadError: string | undefined
         try {
           const requests = taskInputRequestRepo.listOpenForRun(payload.chatId, handle.id)
-          inputRequestIds = requests.filter((row) => row.resume === 'next_message').map((row) => row.id)
-          if (requests.some((row) => row.resume === 'reply')) {
+          inputRequestIds = requests.filter((row) => row.resume === 'next_message' || row.deliveryOwner === 'runner').map((row) => row.id)
+          if (requests.some((row) => row.resume === 'reply' && row.deliveryOwner !== 'runner')) {
             inputRequestReadError = 'The turn left input requests whose live reply addresses have closed.'
           }
         }
@@ -183,7 +199,10 @@ export const runExecutionService = {
       persisted: (ctx) => options.onAccepted?.({ ...ctx, turnId: handle.id, rootRunId: handle.id, completionOwner: options.runnerTaskId ? 'runner' : 'turn' }),
       accepted: () => { accepted = true; accept(); live.accepted() },
       refusal,
-      agentId: options.agentId
+      agentId: options.agentId,
+      coordinator: options.coordinator,
+      inputOrigin: options.inputOrigin,
+      runnerOwned: !!options.runnerTaskId
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
       if (context) observe(context, { type: 'error', error: message })
@@ -197,9 +216,12 @@ export const runExecutionService = {
 }
 
 interface RunLifecycle {
+  runnerOwned: boolean
+  inputOrigin?: 'user' | 'runner'
   observe: RunObserver
   finish: TurnCompletion
   agentId?: string
+  coordinator?: CoordinatorToolProvider
   context(ctx: RunEventContext): void
   persisted(ctx: RunEventContext): void
   accepted(): void
@@ -247,11 +269,12 @@ async function resolveAndRun(
       chatId,
       userContent,
       attachments,
+      origin: lifecycle.inputOrigin,
       onPersisted: () => lifecycle.persisted(context)
     })
     lifecycle.accepted()
     await handOff(observed, () =>
-      chatStreamingService.stream({ userId: profileUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish }),
+      chatStreamingService.stream({ userId: profileUserId, settingsUserId, chatId, wireContent, port: observed, onFinished: lifecycle.finish, coordinator: lifecycle.coordinator, wireRole: lifecycle.inputOrigin === 'runner' ? 'system' : 'user' }),
       (message) => lifecycle.refusal(chatId, message)
     )
     return
@@ -265,6 +288,9 @@ async function resolveAndRun(
     accepted: () => lifecycle.accepted(),
     refusal: lifecycle.refusal,
     finish: lifecycle.finish,
+    inputOrigin: lifecycle.inputOrigin,
+    includeToolResults: lifecycle.runnerOwned,
+    queueWhenBusy: lifecycle.runnerOwned,
     agentId: target.agentId,
     userContent,
     attachments,
@@ -292,6 +318,9 @@ function observeAsks(port: StreamPort, ctx: RunEventContext, observe: RunObserve
 }
 
 interface AgentTurnInput {
+  queueWhenBusy?: boolean
+  includeToolResults?: boolean
+  inputOrigin?: 'user' | 'runner'
   chatId: string
   profileUserId: string
   settingsUserId: string
@@ -338,7 +367,8 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         messages: chatRepo.listMessages(chatId),
         agentId,
         cursorMessageId: chatAgentCursorRepo.get(chatId, agentId)?.lastMessageId ?? null,
-        names: agentNames(settingsUserId, profileUserId)
+        names: agentNames(settingsUserId, profileUserId),
+        includeToolResults: input.includeToolResults
       })
     : null
 
@@ -350,6 +380,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
     agentId,
     userContent,
     attachments,
+    origin: input.inputOrigin,
     onPersisted: input.persisted
   })
   input.accepted()
@@ -375,6 +406,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         wireContent: withCatchUp(packet, wireContent),
         fileIds,
         signal: io.signal,
+        ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
         onEvent: io.onEvent
       })
   )

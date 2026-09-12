@@ -128,6 +128,33 @@ export function migrateTasks(sqlite: Database.Database): void {
       sqlite.exec(`ALTER TABLE task_input_requests ADD COLUMN ${column} TEXT`)
     }
   }
+  if (!hasColumn(sqlite, 'task_input_requests', 'delivery_owner')) {
+    sqlite.exec("ALTER TABLE task_input_requests ADD COLUMN delivery_owner TEXT NOT NULL DEFAULT 'driver'")
+  }
+  const agentColumn = (sqlite.prepare('PRAGMA table_info(task_input_requests)').all() as { name: string; notnull: number }[])
+    .find((column) => column.name === 'agent_id')
+  if (agentColumn?.notnull) {
+    // SQLite cannot relax NOT NULL in place. Keep all addresses, ownership,
+    // answers and timestamps while allowing a genuine coordinator (no agent).
+    sqlite.transaction(() => sqlite.exec(`CREATE TABLE task_input_requests_next (
+      id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+      chat_id TEXT NOT NULL, agent_id TEXT, root_run_id TEXT, invocation_id TEXT,
+      delivery_owner TEXT NOT NULL DEFAULT 'driver', request TEXT NOT NULL, resume TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open', resolution TEXT, created_at INTEGER NOT NULL, resolved_at INTEGER
+    );
+    INSERT INTO task_input_requests_next
+      (id, task_id, chat_id, agent_id, root_run_id, invocation_id, delivery_owner, request, resume, status, resolution, created_at, resolved_at)
+      SELECT id, task_id, chat_id, agent_id, root_run_id, invocation_id, delivery_owner, request, resume, status, resolution, created_at, resolved_at
+      FROM task_input_requests;
+    DROP TABLE task_input_requests;
+    ALTER TABLE task_input_requests_next RENAME TO task_input_requests;
+    CREATE INDEX idx_task_input_requests_open ON task_input_requests(status, created_at);
+    CREATE INDEX idx_task_input_requests_task ON task_input_requests(task_id);`))()
+  }
+  sqlite.exec(`CREATE TABLE IF NOT EXISTS task_runtimes (
+    task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL, checkpoint TEXT NOT NULL
+  ); CREATE INDEX IF NOT EXISTS idx_task_runtimes_user ON task_runtimes(user_id);`)
   sqlite.exec(`CREATE INDEX IF NOT EXISTS idx_task_input_requests_run
     ON task_input_requests(chat_id, root_run_id, invocation_id, status)`)
 

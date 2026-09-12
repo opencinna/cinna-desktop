@@ -1,5 +1,9 @@
 # Orchestrated Agents — Technical Details
 
+## Runner-owned coordinator turns
+
+`src/main/services/coordinatorToolProvider.ts` supplies fixed controls only through internal runner admission. `chatStreamingService` places it first in the tool union, preserving its names over MCP collisions, and omits the ordinary synthesized agent providers for these turns. `describeCall` gives delegate calls the existing agent sub-thread presentation; returned specialist controls are stripped. End-of-turn controls settle all later tool pairs without running them. See [autonomous implementation](../../jobs/tasks/autonomous_tasks_tech.md); the ordinary provider path below remains unchanged.
+
 ## File Locations
 
 ### Main process

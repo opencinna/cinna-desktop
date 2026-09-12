@@ -79,7 +79,7 @@ export interface ToolDefinition {
    * `mcpManager.callTool`; `'agent'` tools are emulated MCP wrappers around a
    * remote A2A agent (orchestrated mode) and execute via `A2AAsMcpProvider`.
    */
-  providerType: 'mcp' | 'agent'
+  providerType: 'mcp' | 'agent' | 'coordinator'
 }
 
 export interface ToolUseEvent {

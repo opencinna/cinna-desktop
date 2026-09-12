@@ -5,6 +5,8 @@
  * `appSettingsRepo` defaults.
  */
 export interface AppSettingsSchema {
+  /** Concurrent autonomous tasks and agent calls on this device. */
+  taskRunnerConcurrency: number
   /**
    * When true, the chat-title autogeneration feature runs in the background
    * after the first user message in a chat.

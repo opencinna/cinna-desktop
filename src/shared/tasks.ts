@@ -1,3 +1,4 @@
+import type { TaskRuntimeInfo } from './taskRuntime'
 /**
  * The Task — the unit of work that outlives a chat view.
  *
@@ -207,6 +208,8 @@ export interface TaskRemoteRef {
 
 /** One task, as every surface sees it. */
 export interface TaskDto {
+  /** Device-local checkpoint state, absent on ordinary or remote tasks. */
+  runtime?: TaskRuntimeInfo
   id: string
   title: string
   /** The original ask, immutable once created (cinna's `original_message`). */

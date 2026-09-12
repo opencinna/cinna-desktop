@@ -140,7 +140,7 @@ Who writes the column:
 | `run(userId, agent, input)` | Never throws. `userId` is the scope that owns the row. Every failure, including the pre-flight, is `result.error` |
 | `respond(ask, resolution)` | **Synchronous on purpose** — see [Permissions: ordering](../local_agents/permissions_tech.md#ordering-constraint-on-the-answer-path). Answers `{delivered: false}` when nothing is waiting |
 
-`RunInput` is `{chatId, wireContent, fileIds?, signal, onEvent?}`. The row and its owner are separate arguments.
+`RunInput` is `{chatId, wireContent, fileIds?, signal, onEvent?, queueWhenBusy?}`. The internal autonomous runner sets queueWhenBusy so ACP acquires the existing per-agent lock through abortable withQueuedLock; ordinary calls retain immediate lock refusal. Separate runner task/agent queues and budgets are documented in [autonomous execution](../../jobs/tasks/autonomous_tasks_tech.md). The row and its owner are separate arguments.
 
 ### Capabilities per driver
 
