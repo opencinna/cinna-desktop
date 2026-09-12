@@ -109,13 +109,13 @@ describe('capabilitiesFor', () => {
     })
   })
 
-  it('reads the launcher out of driver_config, and falls back by ownership', () => {
+  it('reads the launcher from config without guessing a missing driver', () => {
     // The config wins: the row's driver says how it runs, its launcher which
     // engine.
     expect(capabilitiesFor(claude).auth).toBe('cli')
-    // No driver set: a folder row runs on the ACP driver, anything else on A2A.
-    expect(capabilitiesFor(row({ source: 'folder', driver: null })).commands).toBe('catalog')
-    expect(capabilitiesFor(row({ source: 'remote', driver: null })).attachments).toBe('cinna')
+    // Missing drivers are unsupported regardless of ownership.
+    expect(capabilitiesFor(row({ source: 'folder', driver: null })).commands).toBe('none')
+    expect(capabilitiesFor(row({ source: 'remote', driver: null })).attachments).toBe('none')
     // An ACP row with no launcher recorded runs on the default engine, which is
     // the one the desktop pays for rather than the user's own CLI login.
     expect(capabilitiesFor(row({ source: 'folder', driver: 'acp' })).auth).toBe('none')
@@ -137,5 +137,7 @@ describe('hasRunConfig', () => {
     expect(hasRunConfig(row({ driver: 'a2a', cardUrl: 'https://x/card' }))).toBe(true)
     expect(hasRunConfig(opencode)).toBe(true)
     expect(hasRunConfig(claude)).toBe(true)
+    expect(hasRunConfig(row({ driver: null, cardUrl: 'https://x/card' }))).toBe(false)
+    expect(hasRunConfig(row({ driver: 'future-driver', cardUrl: 'https://x/card' }))).toBe(false)
   })
 })

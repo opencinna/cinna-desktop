@@ -39,14 +39,10 @@ export function isChatRouter(value: unknown): value is ChatRouter {
  * The fields of a chat the routing rule reads. Both the main-process row and
  * the renderer's cached DTO satisfy it, which is the point.
  *
- * `orchestrated` is still here because it is still written — as a mirror of
- * `router`, for one phase — and because a DTO produced by an older preload
- * carries it and no `router` at all. {@link routerOf} reads it only then.
  */
 export interface RoutableChat {
   router?: string | null
   agentId?: string | null
-  orchestrated?: boolean | null
 }
 
 /** Where a run goes: one agent, or the local model. */
@@ -89,13 +85,12 @@ export interface ChatRouting {
 /**
  * The router a chat runs on.
  *
- * Falls back to the `orchestrated` mirror rather than to the default, so a DTO
- * from an older preload — or a row read by code that selected the column list
- * by hand — still routes the way its chat has always routed.
+ * Unknown or absent values use the persisted column default. Legacy rows are
+ * backfilled before this helper is used.
  */
 export function routerOf(chat: RoutableChat): ChatRouter {
   if (isChatRouter(chat.router)) return chat.router
-  return chat.orchestrated ? 'coordinator' : DEFAULT_CHAT_ROUTER
+  return DEFAULT_CHAT_ROUTER
 }
 
 /**

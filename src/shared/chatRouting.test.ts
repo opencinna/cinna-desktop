@@ -20,16 +20,12 @@ describe('routerOf — reading the router off a chat', () => {
     expect(routerOf({ router: 'direct' })).toBe('direct')
   })
 
-  it('falls back to the orchestrated mirror, not to the default', () => {
-    // A DTO from a preload that predates `chats.router` carries only the flag.
-    // Falling back to the column default would route a coordinated chat's
-    // messages straight at an agent it detached.
-    expect(routerOf({ orchestrated: true })).toBe('coordinator')
-    expect(routerOf({ orchestrated: false })).toBe('direct')
+  it('uses the default when the router is absent', () => {
+    expect(routerOf({})).toBe('direct')
   })
 
   it('treats a value it does not know as no value at all', () => {
-    expect(routerOf({ router: 'switchboard', orchestrated: true })).toBe('coordinator')
+    expect(routerOf({ router: 'switchboard' })).toBe('direct')
     expect(routerOf({ router: null })).toBe('direct')
   })
 })

@@ -49,7 +49,7 @@
  * a migration.
  */
 
-import { PERMISSION_ID_PREFIX, type LocalPermissionRequest } from '../../../shared/localAgentRequests'
+import { PERMISSION_ID_PREFIX, type LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 
 /**
  * Which input field names the thing a tool is about to touch, per tool.

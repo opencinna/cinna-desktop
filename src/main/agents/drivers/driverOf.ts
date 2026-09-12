@@ -5,7 +5,6 @@
  */
 import type { AgentRow } from '../../db/agents'
 import {
-  FOLDER_AGENT_DRIVER,
   isAcpLauncherId,
   isAgentDriverId,
   launcherOfConfig,
@@ -14,17 +13,9 @@ import {
 } from '../../../shared/agentDrivers'
 import { DEFAULT_AGENT_ENGINE } from '../../../shared/engine'
 
-/**
- * The driver a row names, falling back by ownership for a row whose `driver`
- * is not set or not one this build has.
- *
- * The migration backfills every row and every insert writes one, so the
- * fallback is for a database touched by a newer build (an unknown id) — never
- * a reason to leave the column empty.
- */
-export function driverOfRow(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriverId {
-  if (isAgentDriverId(agent.driver)) return agent.driver
-  return agent.source === 'folder' ? FOLDER_AGENT_DRIVER : 'a2a'
+/** Known driver identity only. Migration owns legacy backfill; reads never guess. */
+export function driverOfRow(agent: Pick<AgentRow, 'driver'>): AgentDriverId | null {
+  return isAgentDriverId(agent.driver) ? agent.driver : null
 }
 
 /**

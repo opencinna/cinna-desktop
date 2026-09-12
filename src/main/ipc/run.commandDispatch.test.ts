@@ -81,7 +81,7 @@ const FOLDER_AGENT: AgentRow = {
   id: 'folder:alpha',
   name: 'Alpha',
   source: 'folder',
-  driver: 'opencode',
+  driver: 'acp', driverConfig: { launcher: 'opencode' },
   cardUrl: null
 } as unknown as AgentRow
 

@@ -5,7 +5,6 @@ import { drizzle, BetterSQLite3Database } from 'drizzle-orm/better-sqlite3'
 import * as schema from './schema'
 import { runAllMigrations } from './migrations'
 import { chatModeRepo } from './chatModes'
-import { agentRepo } from './agents'
 import { taskInputRequestRepo } from './taskInputRequests'
 import { createLogger } from '../logger/logger'
 
@@ -51,14 +50,6 @@ function runConsistencyChecks(): void {
     const touched = chatModeRepo.pruneDanglingMcpProviderIds()
     if (touched > 0) {
       logger.info('boot-cleanup:pruned-dangling-mcp-ids-from-chat-modes', { touched })
-    }
-  })
-  // Every agent row names its driver after one launch. The migration backfills
-  // and every insert writes one; this catches a writer that forgot.
-  safeRun('agents-driver-populated', () => {
-    const filled = agentRepo.healMissingDrivers()
-    if (filled > 0) {
-      logger.warn('boot-cleanup:filled-missing-agent-drivers', { filled })
     }
   })
   // An open ask is an address inside a driver process, and no driver process

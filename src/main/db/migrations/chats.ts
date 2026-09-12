@@ -47,10 +47,6 @@ export function migrateChats(sqlite: Database.Database): void {
     sqlite.exec(`ALTER TABLE chats ADD COLUMN agent_id TEXT`)
   }
 
-  if (!hasColumn(sqlite, 'chats', 'orchestrated')) {
-    sqlite.exec(`ALTER TABLE chats ADD COLUMN orchestrated INTEGER NOT NULL DEFAULT 0`)
-  }
-
   // Multi-agent switchboard removed: agents-as-tools orchestration is now the
   // only multi-counterparty engine, so the per-chat active-agent target, the
   // Smart Rewrite toggle, and the catch-up cursor table are all obsolete.

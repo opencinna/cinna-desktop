@@ -16,7 +16,7 @@ Four things here will produce a silent, green-suite failure if changed carelessl
 ## File Locations
 
 ### Shared
-- `src/shared/engine.ts` — the wire contract. `EngineBinarySource`, `EngineBinaryState` (`unresolved | resolving | ready | failed`), `ENGINE_BINARY_CHANNEL` (`'engine:binary-state'`), `PINNED_ENGINE_VERSION` (`'1.18.27'`), `RuntimeSource`, `ResolvedRuntime` (with `engine`, `modelSource: ModelOrigin` and `replacedModelId`), `LocalAgentRuntimeInput`, and the `AgentEngine` axis itself (`isAgentEngine`, `DEFAULT_AGENT_ENGINE`, `claudeModelForComplexity`, `ClaudeApproval`). **`EngineStatus`, `EngineState` and `EngineSkips` are gone** — there is no server to have a status, and a skip list described one shared config. Type-only or plain constants; nothing key-shaped, no address
+- `src/shared/engine.ts` — the wire contract. `EngineBinarySource`, `EngineBinaryState` (`unresolved | resolving | ready | failed`), `ENGINE_BINARY_CHANNEL` (`'engine:binary-state'`), `PINNED_ENGINE_VERSION` (`'1.18.27'`), `RuntimeSource`, `ResolvedRuntime` (with derived `launcher`, `modelSource: ModelOrigin` and `replacedModelId`), `LocalAgentRuntimeInput`, and the `AgentEngine` axis itself (`isAgentEngine`, `DEFAULT_AGENT_ENGINE`, `claudeModelForComplexity`, `ClaudeApproval`). **`EngineStatus`, `EngineState` and `EngineSkips` are gone** — there is no server to have a status, and a skip list described one shared config. Type-only or plain constants; nothing key-shaped, no address
 - `src/shared/agentDrivers.ts` — `AcpLauncherId` (`opencode | claude | gemini | codex`), `ACP_LAUNCHER_IDS`, `isAcpLauncherId`, `launcherConfig`, `launcherOfConfig`. The launcher lives here rather than beside the ACP code because it is a **stored row value** and the row model may not import the ACP SDK
 - `src/shared/runtimeDefaults.ts` — `resolveRuntimeModel(input)` → `{modelId, origin, replaced}`, the one entry point both sides use; plus `inheritedModelId`, `defaultRuntimeModelId`, `modelBelongsElsewhere`, `COMPLEXITY_FLOOR` (`'medium'`) and the `ModelOrigin` union
 - `src/shared/modelFamilies.ts` — the work-complexity classifier: `classifyModel`, `bestInTier`, `sameFamilyFallback`, the labels and hints. No network, no filesystem — the catalogue is always passed in
@@ -264,3 +264,7 @@ Generated files, none of which is ever inside an agent folder:
 - The per-turn cost of generating a config
 
 **Gone with the server, and worth knowing if you are looking for it:** `engineManager.test.ts` spawned real subprocesses, bound real loopback ports and spoke real HTTP, because every question worth asking about a shared server needed one. The equivalent for the ACP era is `acpConnection.test.ts` and the driver's own suite, which drive a scriptable fake ACP agent over real stdio — see [The Agent Turn (technical)](agent_turn_tech.md).
+
+## Resolved launcher and authored engine
+
+ResolvedRuntime.launcher describes the launcher derived while resolving the folder configuration; its previous engine output is retired. This changes no dispatch: existing production consumers use the resolution's model/credential values. Driver configuration remains authoritative for execution. Keep manifest runtime.engine, the runtime editor, validation and Claude's credential-free resolution semantics; no folder rewrite accompanies an internal output rename.

@@ -20,12 +20,12 @@ import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { LocalPermissionRequest } from '../../../../shared/localAgentRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
 import type { AgentDriver } from '../driver'
-import { pendingRequests } from '../../../services/agentTurn/pendingRequests'
+import { pendingRequests } from '../pendingRequests'
 import {
   describeDriverContract,
   type DriverContractSubject
-} from '../../../services/agentTurn/__golden__/driverContract'
-import { goldenRow } from '../../../services/agentTurn/__golden__/driverWorld'
+} from '../__golden__/driverContract'
+import { goldenRow } from '../__golden__/driverWorld'
 import { createAcpDriver, type AcpDriverDeps, type AcpFolderView } from './acpDriver'
 import { createAcpProcessPool } from './acpProcessPool'
 import { startAcpConnection } from './acpConnection'

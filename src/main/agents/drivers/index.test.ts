@@ -115,14 +115,14 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
     createClaudeLauncher: marker('claude')
   }
 })
-vi.mock('../../services/agentTurn/claudeAgents', () => ({ readFolderAgents: () => ({ agents: {} }) }))
-vi.mock('../../services/agentTurn/claudeAuth', () => ({
+vi.mock('./acp/claudeAgents', () => ({ readFolderAgents: () => ({ agents: {} }) }))
+vi.mock('./acp/claudeAuth', () => ({
   ClaudeAuthProbe: class {
     status = async (): Promise<{ state: string }> => ({ state: 'unknown' })
     refresh = async (): Promise<{ state: string }> => ({ state: 'unknown' })
   }
 }))
-vi.mock('../../services/agentTurn/claudeEnv', () => ({ buildClaudeEnv: () => ({}) }))
+vi.mock('./acp/claudeEnv', () => ({ buildClaudeEnv: () => ({}) }))
 vi.mock('../../services/localAgents/runtimeService', () => ({
   runtimeService: { resolve: () => ({ modelId: 'sonnet' }) }
 }))
@@ -180,6 +180,17 @@ describe('driverFor', () => {
     expect(driverFor(folderRow('opencode'))).toBe(driverFor(folderRow('claude')))
     // Not set: a folder row still runs on the ACP driver.
     expect(driverFor(folderRow(null)).id).toBe('acp')
+  })
+
+  it.each([null, '', 'future-driver'])('refuses driver %s without reading a folder or dispatching', async (driver) => {
+    const agent = { ...folderRow('claude'), driver }
+    const chosen = driverFor(agent)
+    expect(chosen.id).toBe('unsupported')
+    expect(await chosen.readiness('user-1', agent)).toMatchObject({ state: 'invalid' })
+    expect((await chosen.run('user-1', agent, turn)).error?.code).toBe('unsupported_driver')
+    expect(state.ran).toEqual([])
+    expect(state.gets).toBe(0)
+    expect(agent.driver).toBe(driver)
   })
 
   it('reads the exact handback declaration afresh and never grants it to a bare folder', async () => {

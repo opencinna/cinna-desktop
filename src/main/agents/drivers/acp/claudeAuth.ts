@@ -58,10 +58,10 @@
  */
 
 import { execFile } from 'node:child_process'
-import { createLogger } from '../../logger/logger'
-import type { ClaudeAuthStatus } from '../../../shared/engine'
+import { createLogger } from '../../../logger/logger'
+import type { ClaudeAuthStatus } from '../../../../shared/engine'
 
-export type { ClaudeAuthState, ClaudeAuthStatus } from '../../../shared/engine'
+export type { ClaudeAuthState, ClaudeAuthStatus } from '../../../../shared/engine'
 
 /**
  * **States and durations only — never `stdout`.** The CLI's answer carries the

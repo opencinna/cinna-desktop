@@ -141,13 +141,6 @@ export const chats = sqliteTable('chats', {
    */
   router: text('router').$type<ChatRouter>().notNull().default('direct'),
   /**
-   * The previous shape of {@link router}, kept as a **mirror** for one phase:
-   * `orchestrated` is exactly `router === 'coordinator'` and is written by the
-   * same repo call. Nothing decides anything from it any more — a downgrade to
-   * the build before phase 4 is the only reader left, and phase 7 drops it.
-   */
-  orchestrated: integer('orchestrated', { mode: 'boolean' }).notNull().default(false),
-  /**
    * When a chat is spawned by a Job's `executeLocal`, this carries the
    * `job_runs.id` so the stream-completion hook can flip the run's status
    * without the renderer having to remember the pairing.
@@ -267,14 +260,12 @@ export const agents = sqliteTable('agents', {
    *  from. No SQL FK on purpose — see `migrations/agent-roots.ts`. */
   localRootId: text('local_root_id'),
   /**
-   * Which driver runs this agent — an `AgentDriverId` (`'a2a' | 'opencode' |
-   * 'claude'`), see `src/main/agents/drivers/`. `source` above still says who
-   * owns the row; this says how it runs. Written on every insert, backfilled by
-   * `migrations/agent-drivers.ts`; a folder row's value is the engine its
-   * runtime names, rewritten by the scanner.
+   * Which driver runs this agent. Every insert writes it; migrations backfill
+   * legacy rows. Unknown values remain stored and visible but refuse execution.
+   * Folder agents use ACP with their launcher in driverConfig.
    */
   driver: text('driver'),
-  /** The driver's own settings, JSON, opaque outside `src/main/agents/drivers/`. Unused until phase 3. */
+  /** Driver-owned settings. Includes the ACP launcher; never a secret store. */
   driverConfig: text('driver_config', { mode: 'json' }).$type<Record<string, unknown>>(),
   createdAt: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -688,7 +679,7 @@ export const tasks = sqliteTable('tasks', {
 
 /**
  * One open (or settled) human-input request against a task — the persistent
- * twin of `agentTurn/pendingRequests`, which is in-memory and dies with the
+ * twin of `agents/drivers/pendingRequests`, which is in-memory and dies with the
  * turn.
  *
  * The id **is** the run's `requestId`, because that is already the address an

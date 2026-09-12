@@ -3,6 +3,7 @@ import { migrateProviders } from './providers'
 import { migrateMcp } from './mcp'
 import { migrateChats } from './chats'
 import { migrateChatRouter } from './chat-router'
+import { migrateRetireChatMirror } from './retire-chat-mirror'
 import { migrateMessages } from './messages'
 import { migrateChatModes } from './chat-modes'
 import { migrateAgents } from './agents'
@@ -93,6 +94,7 @@ export function runAllMigrations(sqlite: Database.Database): void {
   // exist (the cursor table references each), and after the driver migrations
   // so the whole agent-runtime set reads in plan order.
   migrateChatRouter(sqlite)
+  migrateRetireChatMirror(sqlite)
   // Backfill `user_id` on legacy tables — must run AFTER table creation so
   // fresh installs don't ALTER tables that don't exist yet.
   migrateUserIdColumns(sqlite)

@@ -91,7 +91,7 @@ What changed is **who writes it**: previously `agentRepo.syncRemote` only, for `
 
 ## IPC Channels
 
-None added or changed. `src/preload/index.ts`, `src/main/ipc/**`, `src/main/services/agentTurn/**` and `src/main/engine/**` are untouched by this slice.
+None added or changed. `src/preload/index.ts`, `src/main/ipc/**`, the then-current agent-turn helpers (now `src/main/agents/drivers/`) and `src/main/engine/**` are untouched by this slice.
 
 The existing channels carry the new data unchanged: `agent:list` already returns `remoteMetadata` on every row, and `job:dep-status` already returns `JobDependencyStatus[]` — whose `localId` field, which already existed, is what makes the renderer's routing decision possible without a new discriminator.
 

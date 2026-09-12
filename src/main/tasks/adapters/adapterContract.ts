@@ -2,7 +2,7 @@
  * The remote-task adapter contract — what every `RemoteTaskAdapter` promises
  * its callers, asserted the same way for each implementation.
  *
- * Modelled on `services/agentTurn/__golden__/driverContract.ts`, which does the
+ * Modelled on `agents/drivers/__golden__/driverContract.ts`, which does the
  * same job one layer down, and written for the same reason phase 0 wrote that
  * one: **the suite exists before the first real implementation**. `cinna` is
  * the only adapter this phase ships, and an interface shaped by one remote

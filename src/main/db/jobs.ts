@@ -802,9 +802,6 @@ export const jobRunsRepo = {
           modeId: input.modeId,
           agentId: input.rootAgentId,
           router: input.router,
-          // The mirror, written by the same statement that writes the router —
-          // see the column's comment in `schema.ts`.
-          orchestrated: input.router === 'coordinator',
           originatingJobRunId: null,
           // Job-spawned chats are hidden from the chat list by default; the
           // user can promote them via the "Move to Chats" button on the run.

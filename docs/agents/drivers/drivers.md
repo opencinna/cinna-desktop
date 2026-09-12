@@ -61,9 +61,9 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 
 ## Business Rules
 
-### Nothing outside the drivers decides behaviour by kind
+### Turn behavior belongs to drivers
 
-The decisions about the turn, readiness, authentication, attachments and commands all live in `src/main/agents/drivers/`. Code elsewhere asks for capabilities — "does this agent take a file?", "is its token a Cinna session?", "do its commands come from a folder catalog?" — instead of comparing `source`, `engine` or `kind` to a literal.
+The turn decisions about readiness, authentication, attachments and commands live in `src/main/agents/drivers/`. Code elsewhere asks for capabilities — "does this agent take a file?", "is its token a Cinna session?", "do its commands come from a folder catalog?" — instead of comparing `source`, `engine` or `kind` to a literal.
 
 This replaced callers that each branched on `source` again, for endpoints, tokens, the re-auth flag, command catalogs and attachments, and two of those callers disagreed.
 
@@ -71,7 +71,7 @@ What is still allowed, and where, is enforced by a test, not by review — see [
 
 ### One dispatch point, and it reads the row
 
-`driverFor(agent)` picks the driver from `agents.driver`. It falls back by ownership only when a row's value is empty or names a driver this build does not have. The three callers of `run` and `respond` all use it:
+`driverFor(agent)` picks the driver from `agents.driver`. A null, empty or unknown value resolves to an unsupported driver. The row stays visible with its raw identity, inert capabilities and a clear readiness refusal; it never falls through to another transport based on ownership. The three callers of `run` and `respond` all use it:
 - the direct-chat handler
 - the orchestrator's agent tool
 - the answer path
@@ -148,19 +148,19 @@ Each agent in the list carries whatever readiness is already known. Listing star
 
 ### The index says which driver runs a row
 
-- **Every insert writes `driver`:** `a2a` for a hand-added or synced agent, and the engine its runtime names for a folder
-- **The migration** filled the column for existing rows: `a2a` for hand-added and synced agents, and the default engine for folders, whose next scan writes the engine they really name. **A boot-time check** fills any row something inserted without one
+- **Every insert writes `driver`:** `a2a` for a hand-added or synced agent, `acp` for a folder agent, with the launcher in driver_config.
+- **Migrations alone backfill legacy driver values.** NULL rows take the historical mapping, then ACP migration moves old engine IDs into launcher configuration. Unknown non-null drivers stay unchanged. There is no boot-time heal or runtime fallback.
 - **A scan writes each folder's driver, except when the folder's manifest could not be read.** Then the row keeps its value. A scan may change readiness, never identity, and a Claude folder whose manifest is unparseable for a moment must not come back as an OpenCode row
 - **An engine chosen in the app updates the row immediately**, not at the next scan. The agent's capabilities are read from the row, and a bare agent's runtime is stored outside its folder, where no watcher sees it change
 - **The driver adds nothing to the folder index's list of values a rebuild cannot recover.** A rescan reads it back from the folder: from the manifest for a kit agent, or from the bare agent's own state
-- **`agents.driver_config`** exists for a driver's own settings, and nothing reads or writes it yet
+- **`agents.driver_config`** exists for a driver's own settings, and ACP uses its launcher field to choose the CLI process
 
 ## Architecture Overview
 
 ```
 Renderer
   useAgents ── agent:list ─────────────► agentService.listMerged
-     ▲                                     ├─ toDto: driver, capabilities, readiness = peek(id)
+     ▲                                     ├─ toDto: driver, capabilities, readiness = supported ? peek(id) : invalid
      │                                     └─ agentReadinessService.kick(rows)
      │                                            │ enabled only; one start per macrotask, ≤ 4 at once
      │                                            ▼
@@ -205,7 +205,7 @@ Renderer
 - [Agents](../agents/agents.md) — the Settings → Agents card that shows readiness beside Test Connection
 - [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — the flow the composer's Re-authenticate runs
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — the agent tool goes through `driverFor` too, and is never refused on readiness
-- [Database Migrations](../../development/migrations/migrations_llm.md) — `migrations/agent-drivers.ts` and its boot check
+- [Database Migrations](../../development/migrations/migrations_llm.md) — the legacy-only driver backfill and routing-mirror retirement
 - [Main-Process Layering](../../development/main_layering/main_layering_llm.md) — where the drivers folder sits and what it may import
 
 ## What is not verified
@@ -213,3 +213,9 @@ Renderer
 - **The readiness push has no end-to-end test of its own.** Every renderer surface the E2E spec drives also re-reads the list for another reason — Check again finishing, a query observer mounting — so the spec would still pass with `agent:readiness-changed` broken. Only unit tests cover one list read per push
 - **Only an unreachable hand-added A2A agent is driven end to end** (`e2e/specs/driver-readiness.spec.ts`). The folder, Claude and synced-agent branches, the five-second wait before a refusal is re-checked, and the TTLs are covered only by unit tests with fakes and an injected clock
 - **A synced agent's check refreshing or clearing the Cinna session** comes from the token resolver. Nobody has watched it happen during a list render against a real server
+
+## Unsupported identity and legacy storage
+
+Only migrations backfill a legacy null driver; there is no boot repair or read-time ownership fallback. Unknown non-null identities remain stored as written by the newer tool. Listing, editing and removal stay available, but readiness and execution refuse without opening a process or network request. A stale cached ready answer cannot override that refusal. This avoids interpreting a future driver as A2A or ACP merely because the row has familiar ownership.
+
+The remaining status, Job-execution and tool-provider behavioral ratchet work is separate. Relocating helpers and retiring compatibility fields does not remove those behavioral sites.

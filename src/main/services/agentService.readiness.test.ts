@@ -76,7 +76,7 @@ function row(id: string, source: string, over: Record<string, unknown> = {}): Re
     skills: null,
     enabled: true,
     source,
-    driver: source === 'folder' ? 'opencode' : 'a2a',
+    driver: source === 'folder' ? 'acp' : 'a2a',
     remoteTargetType: null,
     remoteTargetId: null,
     remoteMetadata: null,
@@ -105,6 +105,17 @@ describe('agentService readiness', () => {
     const dtos = agentService.listMerged('default', 'default')
     expect(dtos.find((d) => d.id === 'local-1')?.readiness).toEqual(down)
     expect(dtos.find((d) => d.id === 'folder:a')?.readiness).toBeNull()
+  })
+
+  it.each([null, '', 'future-driver'])('lists unsupported driver %s without substituting identity or stale readiness', (driver) => {
+    db.rows.set('default', [row('local-future', 'local', { driver })])
+    readiness.peek.mockReturnValue({ state: 'ok', reason: null })
+    const [dto] = agentService.listMerged('default', 'default')
+    expect(dto.id).toBe('local-future')
+    expect(dto.driver).toBe(driver)
+    expect(dto.readiness).toMatchObject({ state: 'invalid', reason: expect.stringContaining('supported') })
+    expect(dto.capabilities).toMatchObject({ streaming: false, attachments: 'none', commands: 'none', cwd: false })
+    expect(db.update).not.toHaveBeenCalled()
   })
 
   it('asks for readiness in the background, each row in the scope it was listed from', () => {

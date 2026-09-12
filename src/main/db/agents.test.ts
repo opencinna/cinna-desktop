@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { createTestDatabase, type TestDatabase } from './testSupport/nodeSqlite'
+import { migrateAgentDrivers } from './migrations/agent-drivers'
+import { migrateAcpDriver } from './migrations/acp-driver'
 import type { RemoteAgentMetadata } from '../../shared/agentMetadata'
 
 /**
@@ -372,7 +374,8 @@ describe('the driver a row names', () => {
     insert.run('from-newer-build', USER, 'N', 'local', 'managed', Date.now())
     insert.run('other-user', 'someone-else', 'O', 'local', null, Date.now())
 
-    expect(agentRepo.healMissingDrivers()).toBe(4)
+    migrateAgentDrivers(holder.current!.sqlite)
+    migrateAcpDriver(holder.current!.sqlite)
     expect(driverOf('bare-local')).toBe('a2a')
     expect(driverOf('bare-remote')).toBe('a2a')
     expect(driverOf('bare-folder')).toBe('acp')
@@ -380,6 +383,9 @@ describe('the driver a row names', () => {
     expect(driverOf('set-acp')).toBe('acp')
     expect(driverOf('from-newer-build')).toBe('managed')
     expect(agentRepo.getOwned('someone-else', 'other-user')?.driver).toBe('a2a')
-    expect(agentRepo.healMissingDrivers()).toBe(0)
+    const before = raw.prepare('SELECT driver,driver_config FROM agents ORDER BY id').all()
+    migrateAgentDrivers(holder.current!.sqlite)
+    migrateAcpDriver(holder.current!.sqlite)
+    expect(raw.prepare('SELECT driver,driver_config FROM agents ORDER BY id').all()).toEqual(before)
   })
 })

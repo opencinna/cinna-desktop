@@ -53,11 +53,9 @@ import { fileURLToPath } from 'node:url'
  *                    thing that turns `cinna` from a file into a concept.
  * - `routing`      — every read of `.orchestrated`, the boolean that used to say
  *                    who answers in a chat. `chat.agentId && !chat.orchestrated`
- *                    was re-derived in five places before phase 4; the column
- *                    survives one more phase as a mirror of `chats.router`, and
- *                    the four sites that *write* the mirror are pinned in
- *                    `OWNERSHIP` rather than counted, because writing it is
- *                    their job. A read is a re-derivation, and there are none.
+ *                    was re-derived in five places before phase 4; the legacy
+ *                    mirror is retired after its guarded migration backfill.
+ *                    Keep the pattern to catch a reintroduced runtime read.
  *
  * Comments are blanked before matching: a doc comment quoting
  * `source === 'remote'` is not a branch, and three of them were in the first
@@ -136,7 +134,7 @@ const LIMITS: Record<Category, number> = {
   // branches moved into `agents/drivers/` (allowlisted); the ownership reads
   // that remain are pinned in `OWNERSHIP` instead of held here. What is left is
   // how *agent status* refreshes — `agentStatusService`, `statusViews`,
-  // `useAgentStatus`, `useChatStream` — which no driver owns yet (phase 7).
+  // `useAgentStatus`, `useLiveRunWatch` — which no driver owns yet (phase 7).
   // The count also includes `source === FOLDER_AGENT_SOURCE`, counted since
   // phase 2: previously unseen, not new.
   source: 4,
@@ -160,12 +158,8 @@ const LIMITS: Record<Category, number> = {
   // job. Phase 7's job-type cleanup moves this to the executor contract.
   jobType: 30,
   providerType: 3,
-  // **Zero from the day it was added.** Phase 4 replaced every read of
-  // `orchestrated` with `chats.router` behind `src/shared/chatRouting.ts`; what
-  // is left is the four statements that keep the mirror in step with the
-  // router, pinned per file in `OWNERSHIP`. The category exists so the next
-  // read of the column — in the phase before it is dropped — has to be
-  // deliberate.
+  // Phase 4 replaced runtime reads with chats.router. Phase 7 retires the
+  // mirror column and its writers; this pattern prevents reintroduction.
   routing: 0,
   // **Zero from the day it was added**, and phase 5 step 8 is the step that
   // added it. `cinna` is a file, not a concept: `adapterFor(id)` is the one

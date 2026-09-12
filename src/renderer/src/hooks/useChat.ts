@@ -161,7 +161,6 @@ export function useSetChatRouter() {
         queryClient.setQueryData<CachedChat>(['chat', chatId], {
           ...prev,
           router,
-          orchestrated: router === 'coordinator',
           // Only the way *out* of `direct` is guessed here. Arriving at it binds
           // a root the renderer would have to pick, and the settle below is
           // soon enough for a transition nothing races.

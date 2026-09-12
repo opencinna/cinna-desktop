@@ -13,8 +13,8 @@
 - `src/main/services/chatStreamingService.ts` — orchestrator: builds `ToolProvider[]`, unions tools + routing map, combined announce (`resolvePendingAnnounce`), dispatch loop routing by `providerType`, sub-event forwarding, parts persistence, depth guard (`MAX_TOOL_ROUNDS`)
 - `src/main/services/chatService.ts` — `listOnDemandAgents`, `addOnDemandAgent` (validates via `agentService.findAgent`), `removeOnDemandAgent`, `setRouter` (the transition on and off `'coordinator'`)
 - `src/main/services/agentService.ts` — `findAgent` (dual-scope resolve), `resolveEndpointIfNeeded`, `resolveAccessToken` (reused by the agent provider); `syncRemoteAgents` carries `target.mcp` into `remote_metadata.cinna_mcp`
-- `src/main/db/schema.ts` — `chatOnDemandAgents` table; `messages.toolAgentId` column; `chats.router` (`'coordinator'` is this feature; the `chats.orchestrated` column beside it is a write-only mirror — see [Chat Routing](../chat_routing/chat_routing_tech.md))
-- `src/main/db/migrations/chats.ts` / `migrations/messages.ts` — `ALTER TABLE` for `chats.orchestrated` / `messages.tool_agent_id`; `migrations/chat-router.ts` adds `chats.router` and backfills `'coordinator'` from it
+- `src/main/db/schema.ts` — `chatOnDemandAgents` table; `messages.toolAgentId` column; `chats.router` (`'coordinator'` is this feature; the legacy mirror is retired — see [Chat Routing](../chat_routing/chat_routing_tech.md))
+- `src/main/db/migrations/chat-router.ts` backfills chats.router from the legacy flag; `src/main/db/migrations/retire-chat-mirror.ts` drops the flag afterward. messages.tool_agent_id remains in the messages migration.
 - `src/main/db/migrations/chats.ts` — `CREATE TABLE IF NOT EXISTS chat_on_demand_agents`
 - `src/main/db/migrations/messages.ts` — `ALTER TABLE messages ADD COLUMN tool_agent_id`
 - `src/main/db/chatOnDemandAgent.ts` — `chatOnDemandAgentRepo` (add/remove/list/listAgentIds/peekPending/clearPending). `list` orders by `created_at, agent_id`: without it SQLite returns composite-primary-key order — by a nanoid — which a `human` chat's "first attached answers" fallback made user-visible

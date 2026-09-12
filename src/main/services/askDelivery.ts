@@ -1,7 +1,7 @@
 import { chatRepo } from '../db/chats'
 import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
 import { agentService } from './agentService'
-import { pendingRequests } from './agentTurn/pendingRequests'
+import { pendingRequests } from '../agents/drivers/pendingRequests'
 import { getSettingsScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import type { PermissionReply, RequestResolution } from '../../shared/localAgentRequests'

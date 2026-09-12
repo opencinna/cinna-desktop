@@ -16,7 +16,7 @@ Implementation reference for [Agents Home, Scanner & Folder Index](folder_index.
 - `src/main/db/migrations/migrations.test.ts` — fresh-install replay, idempotency, `PRAGMA foreign_key_check`
 - `src/main/db/testSupport/nodeSqlite.ts` — **test support only**; adapts `node:sqlite` to the narrow `better-sqlite3` surface Drizzle and the migrations use
 - `src/main/db/agentRoots.ts` — `agentRootRepo`, `userId`-scoped, no business logic
-- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, the module-private `pruneFolderRows()`, plus `FolderIndexEntry.launcher`, `setFolderLauncher()` and `healMissingDrivers()`
+- `src/main/db/agents.ts` — `listFolder()`, `replaceFolderIndex()`, `updateFolderIndex()`, `pruneFolderIndexForRoot()`, the module-private `pruneFolderRows()`, plus `FolderIndexEntry.launcher`, `setFolderLauncher()`; legacy missing drivers are backfilled only by migrations, not a boot repository heal
 - `src/main/db/agents.test.ts` — the index transaction: insert, update-in-place, `enabled` preservation, per-root prune scoping, protected paths, rollback; and *the driver a row names*
 - `src/main/db/schema.ts` — `agentRoots` table; `agents.localPath` / `agents.localRootId`; `agents.driver` / `agents.driverConfig`
 - `src/main/db/migrations/agent-drivers.ts` — `agents.driver` + `agents.driver_config` and their backfill; owned by [Agent Drivers](../drivers/drivers_tech.md#database-schema)

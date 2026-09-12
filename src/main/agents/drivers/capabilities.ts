@@ -14,6 +14,7 @@
 import type { AgentRow } from '../../db/agents'
 import type { AgentCapabilities } from '../../../shared/agentDrivers'
 import { driverOfRow, launcherOfRow } from './driverOf'
+import { unsupportedCapabilities } from './unsupportedDriver'
 
 type CapabilityRow = Pick<
   AgentRow,
@@ -22,6 +23,7 @@ type CapabilityRow = Pick<
 
 export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
   switch (driverOfRow(agent)) {
+    case null: return unsupportedCapabilities()
     case 'acp':
       return acpCapabilities(launcherOfRow(agent))
     case 'a2a': {
@@ -121,5 +123,6 @@ function folderCapabilities(): Omit<AgentCapabilities, 'input' | 'auth'> {
  * before that a bare `!row.cardUrl`, which skipped every folder agent.
  */
 export function hasRunConfig(agent: Pick<AgentRow, 'driver' | 'source' | 'cardUrl'>): boolean {
-  return driverOfRow(agent) !== 'a2a' || !!agent.cardUrl
+  const driver = driverOfRow(agent)
+  return driver !== null && (driver !== 'a2a' || !!agent.cardUrl)
 }

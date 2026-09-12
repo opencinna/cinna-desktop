@@ -238,10 +238,10 @@ export type RuntimeSource =
 export interface ResolvedRuntime {
   source: RuntimeSource
   /**
-   * The engine this agent's turns run on. Always `opencode` unless the manifest
+   * The launcher resolved from this folder's authoring configuration. Always `opencode` unless the manifest
    * says otherwise, so an agent written before the axis existed is unchanged.
    */
-  engine: AgentEngine
+  launcher: AgentEngine
   /** Verbatim from the manifest, when it declares one. Never a key. */
   credentialRef: string | null
   /** The provider row the reference resolved to. */

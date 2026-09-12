@@ -40,7 +40,7 @@ function a2aRow(id: string, over: Partial<AgentRow> = {}): AgentRow {
 }
 
 function folderRow(id: string, over: Partial<AgentRow> = {}): AgentRow {
-  return a2aRow(id, { driver: 'opencode', source: 'folder', ...over })
+  return a2aRow(id, { driver: 'acp', driverConfig: { launcher: 'opencode' }, source: 'folder', ...over })
 }
 
 /** A probe whose answers the test releases by hand. */

@@ -2,13 +2,13 @@
  * `/run:<name>` — execute one `docs/CLI_COMMANDS.yaml` entry as a subprocess
  * cwd'd to the agent's folder, and turn its outcome into a
  * {@link RunAgentTurnResult} the runner seam already knows how to persist and
- * stream (see `agentTurn/runner.ts`).
+ * stream (see `agents/drivers/driver.ts`).
  *
  * ## Why this returns a turn result instead of a new shape
  *
  * `commandService` is never called through `AgentTurnRunner.runTurn` —
  * `/run:<name>` is intercepted *before* the runner is reached (see
- * `agent_a2a.ipc.ts`), specifically so `src/main/services/agentTurn/**`, which
+ * `agent_a2a.ipc.ts`), specifically so `src/main/agents/drivers/**`, which
  * Phase 6's mutation audit hardened, stays untouched. But `streamToAgent`
  * downstream only knows how to persist and post one shape, so this module
  * produces that shape directly rather than inventing a second one the caller
@@ -464,7 +464,7 @@ export const commandService = {
  * catch it, and the IPC handler itself is not unit-testable without spinning
  * up `ipcMain`.
  *
- * Never touches the agent's driver or anything under `agentTurn/**` — an
+ * Never touches the agent's driver or anything under `agents/drivers/**` — an
  * agent whose commands do not come from a folder catalog, or a catalog
  * agent's message that is not a bare `/run:<name>`, returns `fallback`
  * unchanged. Decided on the driver's `capabilities.commands`, not on what kind

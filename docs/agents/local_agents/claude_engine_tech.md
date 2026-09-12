@@ -19,13 +19,13 @@ Implementation reference for [The Claude Engine](claude_engine.md). What the SDK
 | File | Role |
 |---|---|
 | `src/main/agents/drivers/acp/acpLaunchers.ts` | `createClaudeLauncher(deps)` — everything engine-specific left on this path: the spawn spec (this build's Node running the ACP adapter, with `CLAUDE_CODE_EXECUTABLE` naming the user's binary), the `initialize` capabilities, the `_meta.claudeCode.options`, the session mode, and the two readiness rungs. It **plans or refuses**; it never runs a turn |
-| `src/main/services/agentTurn/claudeAuth.ts` | `parseClaudeAuthStatus()`, `probeClaudeAuth()`, `ClaudeAuthProbe` — the free login probe, its parse rules and its short-lived cache |
+| `src/main/agents/drivers/acp/claudeAuth.ts` | `parseClaudeAuthStatus()`, `probeClaudeAuth()`, `ClaudeAuthProbe` — the free login probe, its parse rules and its short-lived cache |
 | `src/main/ipc/local_tools.ipc.ts` | `local-tools:claude-auth`, and the ordering rule that makes `local-tools:refresh` re-ask the login *after* detection has been rebuilt |
 | `src/main/agents/drivers/acp/acpMessages.ts` | The translator, now shared with OpenCode. What is Claude-specific in it is where a tool's real name is read from (`_meta.claudeCode.toolName`, then `name`, then the first title) |
-| `src/main/services/agentTurn/claudeAgents.ts` | `readFolderAgents()`, `CLAUDE_AGENTS_DIR`, `CLAUDE_AGENT_FIELDS_DROPPED`, `FolderAgentDefinition` — `.claude/agents/*.md` read into `options.agents`, with the permission-moving fields left out |
+| `src/main/agents/drivers/acp/claudeAgents.ts` | `readFolderAgents()`, `CLAUDE_AGENTS_DIR`, `CLAUDE_AGENT_FIELDS_DROPPED`, `FolderAgentDefinition` — `.claude/agents/*.md` read into `options.agents`, with the permission-moving fields left out |
 | `src/main/kit/miniYaml.ts` | `parseFrontmatter()` now returns `issues` beside `data` and `body` — the same list `parseWithIssues` reports — so a caller acting on the values can refuse a file the reader could not represent. See [Kit Contract (tech)](kit_contract_tech.md#srcmainkitminiyamlts) |
-| `src/main/services/agentTurn/claudeEnv.ts` | `buildClaudeEnv()`, `auditClaudeEnv()`, `CLAUDE_STRIPPED_ENV`, `ENGINE_KEY_PREFIX`, `CLIENT_APP_ENV` |
-| `src/main/services/agentTurn/claudePermissions.ts` | `toClaudePermissionRequest()`, `claudePermissionResources()`, `mintPermissionRequestId()` |
+| `src/main/agents/drivers/acp/claudeEnv.ts` | `buildClaudeEnv()`, `auditClaudeEnv()`, `CLAUDE_STRIPPED_ENV`, `ENGINE_KEY_PREFIX`, `CLIENT_APP_ENV` |
+| `src/main/agents/drivers/acp/claudePermissions.ts` | `toClaudePermissionRequest()`, `claudePermissionResources()`, `mintPermissionRequestId()` |
 | `src/main/agents/drivers/index.ts` | Production wiring: `claudeAuthProbe`, the Claude launcher's deps (including `approval`, which reads the setting off the agent's desktop state and applies the default), `claudeAdapterEntry()` and `electronNodeRuntime()`, and the exported `acpProcessPool` that `will-quit` shuts down |
 | `src/main/agents/drivers/acp/acpDriver.ts` | The one driver behind both engines. It asks the **folder** which launcher to use, so a Claude agent is never dispatched on a stale row |
 | `src/main/agents/drivers/driverOf.ts` | `launcherOfFolder(runtime)` — the tolerant read of the folder's `runtime.engine`, which never answers null; `launcherOfRow` for the cached value a capability answer has to use |

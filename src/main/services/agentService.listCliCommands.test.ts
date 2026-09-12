@@ -88,7 +88,7 @@ beforeEach(() => {
     return { root: { path: workshop }, agentDir }
   }
   getOwnedImpl.current = (_userId, agentId) =>
-    agentId === FOLDER_AGENT_ID ? { id: FOLDER_AGENT_ID, source: 'folder' } : undefined
+    agentId === FOLDER_AGENT_ID ? { id: FOLDER_AGENT_ID, source: 'folder', driver: 'acp', driverConfig: { launcher: 'opencode' } } : undefined
 })
 
 afterEach(() => {
@@ -117,7 +117,7 @@ describe('listCliCommands — folder agent branch', () => {
     // else throws, simulating a folder-index row whose folder or root moved
     // or was deleted outside the app.
     getOwnedImpl.current = (_u, agentId) =>
-      agentId === 'folder:broken' ? { id: 'folder:broken', source: 'folder' } : undefined
+      agentId === 'folder:broken' ? { id: 'folder:broken', source: 'folder', driver: 'acp', driverConfig: { launcher: 'opencode' } } : undefined
     const commands = await agentService.listCliCommands(USER, 'folder:broken')
     expect(commands).toEqual([])
   })

@@ -86,7 +86,7 @@ const owner = vi.fn((): unknown => ({
   kind: 'permission' as const,
   request: ASK
 }))
-vi.mock('../services/agentTurn/pendingRequests', () => ({
+vi.mock('../agents/drivers/pendingRequests', () => ({
   pendingRequests: {
     owner: (...args: unknown[]) => owner(...(args as [])),
     listForChat: vi.fn(() => [])

@@ -117,7 +117,6 @@ async function mount(opts: MountOptions): Promise<void> {
   chatDetail.current = {
     id: 'chat-1',
     router: opts.router,
-    orchestrated: opts.router === 'coordinator',
     agentId: opts.agentId ?? null,
     modeId: null,
     providerId: null,

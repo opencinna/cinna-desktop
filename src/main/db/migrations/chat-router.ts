@@ -19,10 +19,8 @@ import { hasColumn, hasTable } from './helpers'
  * after this migration, so nothing here has to guess which of a chat's agents
  * was being addressed.
  *
- * `orchestrated` is deliberately **not** dropped. It is written as a mirror for
- * one phase (see `chatRepo.setRouter`), so a downgrade to the previous build
- * still routes every chat the way it was routing; phase 7 drops the column once
- * nothing reads it.
+ * The following retire-chat-mirror migration drops the legacy column after
+ * this guarded backfill has preserved its routing meaning.
  *
  * `chat_agent_cursors` is the table the orphaned comment in `schema.ts` has
  * described since the multi-agent switchboard was removed — its predecessor

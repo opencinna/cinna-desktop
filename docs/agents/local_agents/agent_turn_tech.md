@@ -48,8 +48,8 @@ Emission side: `acpMessages.ts` writes `PERMISSION_TOOL_NAME` into the ask part'
 ### Main process — elsewhere
 - `src/main/agents/drivers/index.ts` — production wiring: `acpProcessPool` (exported, so `will-quit` can reach it), `acpLaunchers` (`opencode`, `claude`; no entry for `gemini` or `codex`), `acpDriver`, `driverFor`, `respondToOrphanedAsk`, `readAcpFolder`, `readSession` / `saveSession`, `isGranted` / `rememberGrant`, `electronNodeRuntime`, `claudeAdapterEntry`
 - `src/main/index.ts` — `void acpProcessPool.shutdown()` on `will-quit`, **fired and not awaited**: Electron does not await that handler, so `shutdown` disposes every *running* process before its first `await` and only then waits out the starts in flight. A single pass that waited on each start before killing anything yielded on the first entry and left every running agent alive
-- `src/main/services/agentTurn/pendingRequests.ts` — the module-level ask registry, unchanged. `REQUEST_PARK_TIMEOUT_MS` is 10 minutes
-- `src/main/services/agentTurn/claudePermissions.ts`, `claudeAuth.ts`, `claudeEnv.ts`, `claudeAgents.ts` — what survives of the Claude runner: the permission vocabulary, the login probe, the stripped child environment and the folder's own subagent definitions. All four are now launcher inputs
+- `src/main/agents/drivers/pendingRequests.ts` — the module-level ask registry, unchanged. `REQUEST_PARK_TIMEOUT_MS` is 10 minutes
+- `src/main/agents/drivers/acp/claudePermissions.ts`, `claudeAuth.ts`, `claudeEnv.ts`, `claudeAgents.ts` — what survives of the Claude runner: the permission vocabulary, the login probe, the stripped child environment and the folder's own subagent definitions. All four are now launcher inputs
 - `src/main/ipc/agent_a2a.ipc.ts` — `agent:send-message` (the dispatch seam; `driverFor(agent)`), `agent:cancel-message`, `agent:answer-request` (through `driverFor(row).respond`, or `respondToOrphanedAsk` for a pruned row), `agent:pending-requests`
 - `src/main/services/a2aStreamingService.ts` — the direct-chat wrapper every turn passes through, and the A2A implementation behind it. `RunAgentTurnInput` / `RunAgentTurnResult` are the shared shapes; its `catch` does not trust a driver to keep its own contract
 - `src/main/services/a2aAsMcpProvider.ts` — the orchestrated-tool call site: `driverFor(this.agent).run(…)`. A folder agent works as an orchestrated tool with no change of its own
@@ -74,7 +74,7 @@ Emission side: `acpMessages.ts` writes `PERMISSION_TOOL_NAME` into the ask part'
 - `src/main/agents/drivers/acp/acpProcessPool.test.ts` — lazy start, one shared start, the spec-key replacement, holds, the injected reap clock, restart-on-next-turn, `shutdown`
 - `src/main/agents/drivers/acp/acpMessages.test.ts` — the fixtures folded into parts: tool names, the text/tool ordering rule, unknown kinds ignored
 - `src/main/agents/drivers/acp/acpPermissions.test.ts`, `acpQuestions.test.ts`, `acpLaunchers.test.ts`, `shutdown.test.ts` (that `will-quit` really reaches the pool, read the way `registration.test.ts` reads the IPC modules)
-- `src/main/services/agentTurn/golden.a2a.test.ts` with `__golden__/a2a/` — the one golden suite left
+- `src/main/agents/drivers/golden.a2a.test.ts` with `__golden__/a2a/` — the one golden suite left
 - `src/main/agents/kindBranches.test.ts` — the kind-branch ratchet
 - `src/renderer/src/components/chat/PermissionRequestBlock.test.tsx`, `src/renderer/src/utils/localAgentRequests.test.ts`
 - `e2e/specs/run-events.spec.ts` with `e2e/fixtures/fakeAcpEngine.ts` — the same fake agent, driven through the built app
@@ -129,7 +129,7 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 
 `acquire(agentId, spec, init)` returns the live connection when its spec key still matches, else starts one; concurrent callers for the same agent and key share one start. `hold(agentId)` returns a release and suspends reaping. `retire(agentId)` stops the process now if nothing holds it, else on the last release. `status` / `onStatus` are what an agent page would render. A process that exited is **not** restarted here — the next `acquire` starts a fresh one.
 
-### `src/main/services/agentTurn/pendingRequests.ts`
+### `src/main/agents/drivers/pendingRequests.ts`
 
 Unchanged, and still the one door: `register({requestId, chatId, agentId, kind, request?})` → `{answered, cancel}`, `resolve`, `owner`, `listForChat`, `drop`. The ACP driver's park **is** the unresolved `answered` promise, and the blocked JSON-RPC request is what waits on it.
 ## Data Shapes
@@ -204,7 +204,7 @@ These pin what the drivers and the renderer's stream handler **currently do**, n
 
 ### Golden streams
 
-- **One golden suite is left**, `src/main/services/agentTurn/golden.a2a.test.ts` with `__golden__/a2a/`. The OpenCode and Claude suites went with their runners
+- **One golden suite is left**, `src/main/agents/drivers/golden.a2a.test.ts` with `__golden__/a2a/`. The OpenCode and Claude suites went with their runners
 - **They were diffed by content before deletion**, not merely deleted: all 32 cases reduced to their final text, part kinds, tool names, asks and notices, each matched to where the behaviour is asserted now. 26 map straight across; three are gone by construction (an SSE drop healed by a durable cursor, a shared server that could be cold, a mid-turn engine restart); and three that were **missing** are now covered in the ACP suite — an explicit Deny, an ask arriving after the agent has already replied (the "Stream closed" bug this phase fixes, kept as a named regression), and the notice that says the CLI fell back from automatic approvals
 - **Data** for the surviving suite: `<scenario>.fixture.json` (input), `<scenario>.expected.json` (`{events, result}`), and an `effects` sidecar. Shared plumbing is `__golden__/harness.ts`, whose `normalise` turns wall-clock keys into `<time>` and minted ids into `<label#n>` in order of first appearance
 - **Expectations are JSON compared with `toEqual`, never Vitest snapshots.** A snapshot rewrites itself under `-u`, and a refactor that changes the stream is exactly when someone reaches for `-u`. `GOLDEN_WRITE=1` writes a *missing* file only and the test still fails on that run, naming the path
@@ -212,7 +212,7 @@ These pin what the drivers and the renderer's stream handler **currently do**, n
 
 ### The driver contract
 
-`src/main/services/agentTurn/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. Both subjects reach the driver through `driver.run(userId, row, input)`, the call production dispatches to, with the row and small world from `__golden__/driverWorld.ts`.
+`src/main/agents/drivers/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. Both subjects reach the driver through `driver.run(userId, row, input)`, the call production dispatches to, with the row and small world from `__golden__/driverWorld.ts`.
 
 What it asserts for every driver:
 
@@ -233,3 +233,5 @@ What it asserts for every driver:
 
 - `src/main/agents/kindBranches.test.ts` counts literal comparisons on an agent's `source`, `engine`, `kind`, job `type` and `providerType`, plus calls of the retired helpers. **Each category must equal its entry in `LIMITS`, not merely stay under it** — a change that removes branches lowers the limit in the same commit, so freed headroom cannot be spent later without a reviewer seeing it. `src/main/agents/drivers/` and four sync files are allowlisted; the count runs in Node, not shell `grep`. Full account: [Agent Drivers — Technical Details](../drivers/drivers_tech.md#the-kind-branch-ratchet)
 - `src/renderer/src/hooks/useChatStream.events.test.tsx` feeds every `RunEvent` variant through `useChatStream.handleRun` in an agent table and an LLM table, pinning exactly which chat-store fields each one moves
+
+The old services/agentTurn directory is gone. The shared pending registry and A2A golden contract live under agents/drivers; the surviving Claude launcher helpers live under agents/drivers/acp. This is a module relocation with one registry identity, not a new answer-delivery protocol.

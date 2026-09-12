@@ -51,7 +51,7 @@
  * "authenticates as nobody".
  */
 
-import { shellEnvForChild } from '../../shell/env'
+import { shellEnvForChild } from '../../../shell/env'
 
 /**
  * Variables stripped from the child no matter where they came from.

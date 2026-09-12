@@ -13,8 +13,8 @@
 - `src/main/db/chatAgentCursors.ts` — `chatAgentCursorRepo.{get,list,advance}`
 - `src/main/db/migrations/chat-router.ts` — `migrateChatRouter(sqlite)`: `chats.router` + backfill, `CREATE TABLE IF NOT EXISTS chat_agent_cursors`
 - `src/main/db/migrations/index.ts` — registers it after the agent-driver migrations
-- `src/main/db/schema.ts` — `chats.router`, the `chats.orchestrated` mirror, `chatAgentCursors` table
-- `src/main/db/chats.ts` — `chatRepo.setRouter(userId, chatId, router, { detachRoot?, bindRoot?, providerId?, modelId? })` (transaction), `updateMeta` (mirrors `orchestrated` whenever `router` is written), `create({ router })`
+- `src/main/db/schema.ts` — `chats.router`, `chatAgentCursors` table
+- `src/main/db/chats.ts` — `chatRepo.setRouter(userId, chatId, router, { detachRoot?, bindRoot?, providerId?, modelId? })` (transaction), `updateMeta` (writes router directly), `create({ router })`
 - `src/main/db/messages.ts` — `lastId(chatId)` (where a cursor lands), `lastAddressedAgentId(chatId)` (the sticky default)
 - `src/main/db/chatOnDemandAgent.ts` — `list` is now explicitly ordered `created_at, agent_id`
 - `src/main/services/chatService.ts` — `setRouter(userId, chatId, router)` (replaces `promoteToOrchestrated`)
@@ -44,7 +44,7 @@
 - `src/shared/chatRouting.test.ts` — the rule itself, including the stale-address and no-agents-left cases
 - `src/main/ipc/run.routing.test.ts` — who answers, the packet, the cursor, port ownership on a throw, and both forwarded channels reaching the same decision
 - `src/main/services/threadContextService.test.ts` — packet contents, drops, cap, unknown cursor
-- `src/main/services/chatService.setRouter.test.ts` — every transition, the mirror, the refusals, and the attached-agent ordering
+- `src/main/services/chatService.setRouter.test.ts` — every transition, the refusals, and the attached-agent ordering
 - `src/main/ipc/chat.router.test.ts` — router validation on both channels
 - `src/main/db/migrations/migrations.test.ts` — the backfill on an install that predates the column
 - `src/renderer/src/components/chat/ChatInput.routing.test.tsx` — badge, chips, toggle, addressing, no-layout-shift
@@ -54,7 +54,7 @@
 
 Column: `chats.router` (TEXT NOT NULL DEFAULT `'direct'`; see `src/main/db/migrations/chat-router.ts`). Backfill is the old two values verbatim — `orchestrated = 1` → `'coordinator'`, everything else stays on the default. **No row becomes `'human'`**: that value is only ever reached by a gesture made after the migration, so nothing has to guess which of a chat's agents was being addressed. The backfill `UPDATE` is guarded by the `ADD COLUMN` rather than by a data predicate, so a chat the user has since moved off `coordinator` is never dragged back on a later boot.
 
-Column: `chats.orchestrated` (INTEGER boolean) — **kept, as a mirror**. Exactly `router === 'coordinator'`, written by the same repo call; the only reader left is a downgrade to the pre-phase-4 build. Dropped in a later phase.
+The former chats.orchestrated column is removed by `src/main/db/migrations/retire-chat-mirror.ts`, immediately after guarded legacy router backfill. migrateChats no longer adds it on fresh/repeated startup. Tests preserve an already-routed populated chat even when the mirror disagrees and check foreign keys after repeat migration.
 
 Table: `chat_agent_cursors`
 - `chat_id` (TEXT, FK `chats.id ON DELETE CASCADE`)
@@ -77,7 +77,7 @@ Table: `chat_agent_cursors`
 ## Services & Key Methods
 
 - `routingOf(chat)` (`src/shared/chatRouting.ts`) — returns `{ router, rootAgentId, attachmentTarget, needsModel, answerer }`. `answerer` is a function rather than a value because only `human` needs the addressing, and most callers want the rest without having it
-- `routerOf(chat)` — falls back to the `orchestrated` mirror rather than to the default, so a DTO from an older preload still routes the way its chat has always routed
+- `routerOf(chat)` returns a known router or the direct default. Legacy migration happens before use; there is no runtime fallback to an older mirror-only DTO.
 - `newChatRouter({ agentIds, mcpIds, coordinate })` — no agent → `direct`; any MCP alongside an agent → `coordinator`; one agent → `direct`; more → `human`; an explicit `coordinate` wins over all of it
 - `dispatchRun(port, payload)` (`run.ipc.ts`) — native port/activation boundary. Passes `inboxService.recordRunEvent` as observer and `resumeChat` as transactional acceptance bookkeeping; pending next-message asks enable preservation on pre-acceptance refusal.
 - `runExecutionService.start(scope, payload, options)` — synchronously reserves the chat, then resolves owned chat → routing → human addressing or validated internal continuation target → model/agent preparation. Returns a handle before execution finishes; see the lifetime contract below.
@@ -85,7 +85,7 @@ Table: `chat_agent_cursors`
 - `buildCatchUpPacket({ messages, agentId, cursorMessageId, names?, cap? })` — returns `string | null`; **null, not `''`**, because "nothing to catch up on" is the ordinary case and the caller must send the user's text unchanged. Per-message clip 600 chars, whole-packet cap 4000, dropped from the front under `[…earlier messages dropped to fit]`; if nothing fits, the newest line is kept truncated rather than returning a header and a marker
 - `withCatchUp(packet, userContent)` — the packet, a blank line, then the text. The stored user message is what the user typed; the packet travels on the wire only
 - `chatService.setRouter(userId, chatId, router)` — no-op on the current router; resolves a provider/model only for `coordinator` (the only refusable transition, `ChatError('not_configured', …)`); refuses `direct` with more than one attached agent; computes `detachRoot` (leaving `direct`) and `bindRoot` (arriving at `direct`)
-- `chatRepo.setRouter(...)` — one transaction: re-expose the former root as a pending-announce on-demand agent / delete the newly-bound root's on-demand row, set `router` + the `orchestrated` mirror, null or set `agent_id`, apply a resolved provider/model. `a2a_sessions` is never touched
+- `chatRepo.setRouter(...)` — one transaction: re-expose the former root as a pending-announce on-demand agent / delete the newly-bound root's on-demand row, set `router`, null or set `agent_id`, apply a resolved provider/model. `a2a_sessions` is never touched
 - `a2aStreamingService.streamToAgent(...).onCompleted` — fires once, after the rows are persisted and **only** after a successful or needs-input ending (not errored, not stopped). Anything it throws is logged and swallowed: a bookkeeping write must not turn a finished turn into a failed one
 
 ## Shared Turn Lifetime and Acceptance
@@ -99,7 +99,7 @@ Table: `chat_agent_cursors`
 - An Inbox continuation passes its verified asking `agentId` as an internal target override. This continues that agent even in a coordinator chat, without asking the model to choose who answers the human’s reply. Human routing and non-root internal continuations receive catch-up built before the new message is saved. Renderer `addressedAgentId` remains subject to ordinary attached-agent routing; it is not this override.
 - Internal `runnerTaskId` requires a non-deleted, runnable task linked to this owned chat and device. Its per-execution callback and observed `completionOwner` suppress whole-task/job finalization while retaining request bookkeeping; it is never accepted from renderer payloads. Ordinary calls report their job once after the final close decision. See [completion ownership](../messaging/turn_completion.md#completion-owner).
 - `inboxService.endTurn` preserves durable next-message requests after normal completion. Sibling requests restore blocked status at turn end and defer `jobService.reportRunCompletion`. A coordinator’s agent tool refuses re-entry while that agent awaits a human answer. See [Inbox continuation](../../jobs/tasks/inbox.md#durable-continuation-and-refusal).
-- This service runs one turn and now feeds a profile/chat-scoped event hub. Selected-chat watches attach/replay and survive idle gaps; [Live Run Attachment and Replay](../messaging/live_runs.md) owns the bounded cache, transcript baseline and settlement rules. `useChatDetail` polling remains the fallback when replay is unavailable. `RunHandle.completed` carries the [typed outcome](../messaging/turn_completion.md), and internal callers can explicitly own task completion. [The autonomous runner](../../jobs/tasks/autonomous_tasks_tech.md) owns consecutive turns, time/turn limits and handoff/handback above this executor. Scripts, scheduling and complete token accounting remain separate work.
+- This service runs one turn and now feeds a profile/chat-scoped event hub. Selected-chat watches attach/replay and survive idle gaps; [Live Run Attachment and Replay](../messaging/live_runs.md) owns the bounded cache, transcript baseline and settlement rules. `useChatDetail` polling remains the fallback when replay is unavailable. `RunHandle.completed` carries the [typed outcome](../messaging/turn_completion.md), and internal callers can explicitly own task completion. [The autonomous runner](../../jobs/tasks/autonomous_tasks_tech.md) owns consecutive turns, time/turn limits and handoff/handback above this executor. [Script execution](../../jobs/tasks/script_execution.md) and [local schedules](../../jobs/tasks/local_schedules.md) use the shared executor. Complete token accounting remains unsupported.
 
 ## Renderer Components
 
@@ -112,7 +112,7 @@ Table: `chat_agent_cursors`
   - `directTarget` — the router's own answer in an active chat; the first agent picked on the new-chat screen otherwise
   - `showsReadinessLine` — an active chat: whenever it holds an agent at all. Gating it on the agent that would *answer* lifted the whole composer by 21px when the user handed the chat to the model
 - `ChatInput.selectAgent` (the `@` pick, active chat) — order matters. An agent already in a `human` chat is simply **addressed**; re-attaching it would be a no-op that also re-armed its announce flag. An agent that is not in the chat yet is attached *and* addressed. The address is computed from the router the pick **lands on**, not the one it started from: a `direct` chat with an agent becomes `human` the moment a second arrives, and reading the current router there meant the address was never set on exactly that transition, so the sticky default sent the message back to the old root
-- `useSetChatRouter` — optimistic `onMutate` writes `router` + the mirror, and nulls `agentId` only on the way *out* of `direct`. Without the optimism, picking an agent then immediately pressing Enter races the refetch. `onSettled` invalidates `['chat', id]`, `['chat-on-demand-agent', id]` and `['chats']`
+- `useSetChatRouter` — optimistic `onMutate` writes `router`, and nulls `agentId` only on the way *out* of `direct`. Without the optimism, picking an agent then immediately pressing Enter races the refetch. `onSettled` invalidates `['chat', id]`, `['chat-on-demand-agent', id]` and `['chats']`
 - `useAttachAgentToChat` — `direct` + this same agent → no-op; `direct` + an agent → `'human'`; `direct` + none → `'coordinator'`; already `human`/`coordinator` → just add
 - `useChatComposer.submit` — no longer decides where the message goes. `answererFor` produces the renderer's own `RunTarget` from caches it already holds, used for the post-turn bookkeeping in `useChatStream` (whose status and readiness to re-read) and for `addressedAgentId`. Both processes read the same helper, so they cannot drift into different rules — only onto a cache that is a moment stale, and main's answer is the one that runs
 - `useChatStream.startRun` — one entry point, because there is one channel. `target` is optional: omit it and main still routes the message, the renderer just does no per-agent bookkeeping afterwards

@@ -32,7 +32,7 @@ export interface OpenInputRequestInput {
 }
 
 /**
- * `task_input_requests` — the persistent twin of `agentTurn/pendingRequests`.
+ * `task_input_requests` — the persistent twin of `agents/drivers/pendingRequests`.
  *
  * The registry is the live address and dies with the turn; this table is what
  * the user sees, and it outlives the chat view. Nothing here reaches a driver:

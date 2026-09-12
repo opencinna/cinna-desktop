@@ -50,7 +50,7 @@ import {
   QUESTION_ID_PREFIX,
   type LocalPermissionRequest
 } from '../../../../shared/localAgentRequests'
-import { toClaudePermissionRequest } from '../../../services/agentTurn/claudePermissions'
+import { toClaudePermissionRequest } from './claudePermissions'
 import type { AcpLauncherId } from './types'
 
 /**

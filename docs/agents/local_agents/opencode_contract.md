@@ -14,7 +14,7 @@ second with a live OpenAI credential (real turns, real tools, real permissions).
 > with what replaced them. Nothing unmarked here is stale.
 
 This document exists because **the engine contract is the one part of Local Agents that our tests
-cannot check.** Every test in `src/main/services/agentTurn/**` and `src/main/engine/**` runs against
+cannot check.** Every test in `src/main/agents/drivers/**` and `src/main/engine/**` runs against
 a fake at the HTTP boundary. A fake built from the OpenAPI document is faithful to the *document* —
 and the document declares at least one endpoint that does not exist and omits nothing about an event
 that is never emitted. So a wrong assumption here passes the entire suite and fails in the app.

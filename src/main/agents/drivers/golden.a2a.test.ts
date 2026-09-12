@@ -91,12 +91,12 @@ vi.mock('../../db/agents', () => ({
   }
 }))
 vi.mock('../../db/messages', () => ({ messageRepo: {} }))
-vi.mock('../jobService', () => ({ jobService: {} }))
+vi.mock('../../services/jobService', () => ({ jobService: {} }))
 
-import { runAgentTurn, type RunAgentTurnResult } from '../a2aStreamingService'
-import { fetchAgentCard } from '../../agents/a2a-client'
-import { createA2aDriver, type A2aDriverDeps } from '../../agents/drivers/a2aDriver'
-import type { AgentDriver } from '../../agents/drivers/driver'
+import { runAgentTurn, type RunAgentTurnResult } from '../../services/a2aStreamingService'
+import { fetchAgentCard } from '../a2a-client'
+import { createA2aDriver, type A2aDriverDeps } from './a2aDriver'
+import type { AgentDriver } from './driver'
 import type { AgentRow } from '../../db/agents'
 import { expectGolden, listScenarios, readFixture, type NormaliseOptions } from './__golden__/harness'
 import {

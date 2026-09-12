@@ -1,4 +1,4 @@
-import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
+import { and, eq, isNotNull } from 'drizzle-orm'
 import { sep } from 'node:path'
 import { nanoid } from 'nanoid'
 import { getDb } from './client'
@@ -531,31 +531,6 @@ export const agentRepo = {
         )
         .run().changes > 0
     )
-  },
-
-  /**
-   * Fill `driver` on any row that has none, with the migration's own rule: a
-   * hand-added or synced row runs on A2A, a folder row on the ACP driver with
-   * the default engine as its launcher (the scanner corrects the launcher on
-   * its next pass). A value this build does not recognise is left alone — a
-   * newer build wrote it.
-   *
-   * Across every user, like the other boot-time consistency checks: it heals
-   * the table, not one scope. Returns how many rows it filled.
-   */
-  healMissingDrivers(): number {
-    const db = getDb()
-    const a2a = db
-      .update(agents)
-      .set({ driver: 'a2a' })
-      .where(and(isNull(agents.driver), inArray(agents.source, ['local', 'remote'])))
-      .run().changes
-    const folder = db
-      .update(agents)
-      .set({ driver: FOLDER_AGENT_DRIVER, driverConfig: launcherConfig(DEFAULT_AGENT_ENGINE) })
-      .where(and(isNull(agents.driver), eq(agents.source, 'folder')))
-      .run().changes
-    return a2a + folder
   },
 
   /**

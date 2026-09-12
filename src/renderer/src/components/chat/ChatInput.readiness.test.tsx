@@ -126,7 +126,6 @@ function mountActive(target: Record<string, unknown>, router: ChatRouter = 'dire
     // bound where the router is `direct` — the same shape the row has in the app.
     agentId: router === 'direct' ? target.id : null,
     router,
-    orchestrated: router === 'coordinator',
     modeId: null,
     providerId: null,
     modelId: null,

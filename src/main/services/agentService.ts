@@ -6,7 +6,8 @@ import { fetchAgentCard, resolveProtocol, type ProtocolResolution } from '../age
 import { resolveAccessToken, rethrowAsReauthIfCinna401 } from '../agents/drivers/a2aConnection'
 import { capabilitiesFor } from '../agents/drivers/capabilities'
 import { driverOfRow } from '../agents/drivers/driverOf'
-import type { AgentCapabilities, AgentDriverId, AgentReadiness } from '../../shared/agentDrivers'
+import { unsupportedReadiness } from '../agents/drivers/unsupportedDriver'
+import type { AgentCapabilities, AgentReadiness } from '../../shared/agentDrivers'
 import { agentReadinessService } from './agentReadinessService'
 import { AgentError, CinnaApiError } from '../errors'
 import { getCinnaAccessToken } from '../auth/cinna-tokens'
@@ -71,7 +72,7 @@ export interface AgentDto {
    * Which driver runs this agent. `source` above says who owns the row; this
    * says how it runs.
    */
-  driver: AgentDriverId
+  driver: string | null
   /**
    * What the agent can do, from its driver. A surface that needs to decide
    * behaviour — whether to offer an attach, where `/` commands come from —
@@ -132,9 +133,9 @@ function toDto(row: AgentRow): AgentDto {
     remoteMetadata: row.remoteMetadata,
     localPath: row.localPath,
     localRootId: row.localRootId,
-    driver: driverOfRow(row),
+    driver: row.driver,
     capabilities: capabilitiesFor(row),
-    readiness: agentReadinessService.peek(row.id),
+    readiness: driverOfRow(row) ? agentReadinessService.peek(row.id) : unsupportedReadiness(),
     createdAt: row.createdAt
   }
 }

@@ -36,7 +36,7 @@
 
 import { readdirSync, readFileSync, type Dirent } from 'node:fs'
 import { join } from 'node:path'
-import { parseFrontmatter, type MiniYamlValue } from '../../kit/miniYaml'
+import { parseFrontmatter, type MiniYamlValue } from '../../../kit/miniYaml'
 
 /** Where a terminal `claude` looks, relative to the working directory. */
 export const CLAUDE_AGENTS_DIR = join('.claude', 'agents')

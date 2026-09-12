@@ -29,8 +29,8 @@ import { permissionGrantService } from '../../services/localAgents/permissionGra
 import { turnLock } from '../../services/localAgents/turnLock'
 import { runAgentTurn } from '../../services/a2aStreamingService'
 import { createLogger } from '../../logger/logger'
-import { ClaudeAuthProbe } from '../../services/agentTurn/claudeAuth'
-import { pendingRequests } from '../../services/agentTurn/pendingRequests'
+import { ClaudeAuthProbe } from './acp/claudeAuth'
+import { pendingRequests } from './pendingRequests'
 import { toolDetectionService } from '../../services/localAgents/toolDetectionService'
 import { runtimeService } from '../../services/localAgents/runtimeService'
 import { providerService } from '../../services/providerService'
@@ -40,8 +40,8 @@ import {
   resolveDesktopPromptContext
 } from '../../services/localAgents/promptAssembly'
 import { getShellEnv, shellEnvForChild } from '../../shell/env'
-import { buildClaudeEnv } from '../../services/agentTurn/claudeEnv'
-import { readFolderAgents } from '../../services/agentTurn/claudeAgents'
+import { buildClaudeEnv } from './acp/claudeEnv'
+import { readFolderAgents } from './acp/claudeAgents'
 import { app } from 'electron'
 import { fetchAgentCard } from '../a2a-client'
 import type { LocalAgentKind } from '../../../shared/localAgents'
@@ -59,6 +59,7 @@ import {
 } from './acp/acpLaunchers'
 import { resolveAccessToken, resolveEndpointIfNeeded } from './a2aConnection'
 import { driverOfRow } from './driverOf'
+import { unsupportedDriver } from './unsupportedDriver'
 import type { AgentDriver, ParkedAsk, RespondOutcome } from './driver'
 
 const logger = createLogger('agent-driver')
@@ -390,7 +391,8 @@ const drivers: Record<AgentDriverId, AgentDriver> = {
  * from what the folder says then.
  */
 export function driverFor(agent: Pick<AgentRow, 'driver' | 'source'>): AgentDriver {
-  return drivers[driverOfRow(agent)]
+  const id = driverOfRow(agent)
+  return id ? drivers[id] : unsupportedDriver
 }
 
 /**

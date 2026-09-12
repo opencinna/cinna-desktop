@@ -43,7 +43,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { expect } from 'vitest'
 import type { RunEvent } from '../../../../shared/runEvents'
-import type { RunAgentTurnResult } from '../../a2aStreamingService'
+import type { RunAgentTurnResult } from '../../../services/a2aStreamingService'
 
 export type GoldenRunner = 'a2a' | 'opencode' | 'claude'
 

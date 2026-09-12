@@ -91,7 +91,7 @@ export interface ReadinessOptions {
 }
 
 export interface AgentDriver {
-  readonly id: AgentDriverId
+  readonly id: AgentDriverId | 'unsupported'
 
   /** Pure and stable for a row: no I/O, same answer every call. */
   capabilities(agent: AgentRow): AgentCapabilities

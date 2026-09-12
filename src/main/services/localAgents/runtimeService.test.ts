@@ -720,13 +720,13 @@ describe('applyToManifest — work complexity', () => {
  */
 describe('resolve — the engine axis', () => {
   it('defaults to opencode when the manifest names no engine', () => {
-    expect(runtimeService.resolve(null, []).engine).toBe('opencode')
-    expect(runtimeService.resolve({ model: 'gpt-5' }, []).engine).toBe('opencode')
+    expect(runtimeService.resolve(null, []).launcher).toBe('opencode')
+    expect(runtimeService.resolve({ model: 'gpt-5' }, []).launcher).toBe('opencode')
   })
 
   it('reads an engine the manifest declares', () => {
-    expect(runtimeService.resolve({ engine: 'claude' }, []).engine).toBe('claude')
-    expect(runtimeService.resolve({ engine: 'opencode' }, []).engine).toBe('opencode')
+    expect(runtimeService.resolve({ engine: 'claude' }, []).launcher).toBe('claude')
+    expect(runtimeService.resolve({ engine: 'opencode' }, []).launcher).toBe('opencode')
   })
 
   it('reads an unrecognised engine as no engine rather than failing', () => {

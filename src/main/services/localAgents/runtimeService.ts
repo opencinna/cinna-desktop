@@ -74,7 +74,7 @@ const MAX_MODEL_ID = 200
 
 const UNRESOLVED: ResolvedRuntime = {
   source: 'none',
-  engine: DEFAULT_AGENT_ENGINE,
+  launcher: DEFAULT_AGENT_ENGINE,
   credentialRef: null,
   credentialId: null,
   credentialName: null,
@@ -213,7 +213,7 @@ export const runtimeService = {
     if (override) {
       return {
         source: 'default',
-        engine: DEFAULT_AGENT_ENGINE,
+        launcher: DEFAULT_AGENT_ENGINE,
         credentialRef: null,
         credentialId: override.id,
         credentialName: override.name,
@@ -249,7 +249,7 @@ export const runtimeService = {
     }
     return {
       source: 'default',
-      engine: DEFAULT_AGENT_ENGINE,
+      launcher: DEFAULT_AGENT_ENGINE,
       credentialRef: null,
       credentialId: provider.id,
       credentialName: provider.name,
@@ -314,7 +314,7 @@ export const runtimeService = {
     if (engine === 'claude') {
       return {
         source: 'manifest',
-        engine,
+        launcher: engine,
         credentialRef: null,
         credentialId: null,
         credentialName: null,
@@ -426,7 +426,7 @@ export const runtimeService = {
       return {
         ...fallback,
         source: fallback.credentialId ? 'default' : 'none',
-        engine,
+        launcher: engine,
         credentialRef: ref,
         modelId: choice.modelId,
         modelSource: choice.origin,
@@ -437,7 +437,7 @@ export const runtimeService = {
 
     return {
       source: source === 'default' && !fallback.credentialId ? 'none' : source,
-      engine,
+      launcher: engine,
       credentialRef: ref === '' ? null : ref,
       credentialId,
       credentialName: chosen?.name ?? fallback.credentialName,

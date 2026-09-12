@@ -13,6 +13,7 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). What the A
   - `AGENT_READINESS_CHANGED_CHANNEL` (`:103`), `AgentReadinessChangedPayload` (`:106`)
 
 ### Main process — `src/main/agents/drivers/`
+- `unsupportedDriver.ts` — inert capabilities, invalid readiness, unsupported_driver result without I/O, canceled outcome for an already aborted input, and refused reply delivery. It is a total registry fallback, not an executable driver kind.
 - `driver.ts` — the interface, type-only:
   - `RunInput` (`:38`)
   - `RunResult` (`:54`) — `RunAgentTurnResult` unchanged, so the golden expectations stay byte-identical
@@ -67,10 +68,10 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). What the A
   - `FolderIndexEntry.launcher`
   - `driver: 'a2a'` on the hand-added insert (`:181`) and the sync insert (`:330`)
   - the folder writes in `replaceFolderIndex` (`:429` update, `:464` insert) and in `updateFolderIndex` (`:497`)
-  - `setFolderLauncher()`, `healMissingDrivers()`
+  - `setFolderLauncher()`
   - `agentSessionRepo` (`:846`) — the same object as `a2aSessionRepo`, under a driver-neutral name
 - `src/main/db/client.ts` — `runConsistencyChecks()` runs the `agents-driver-populated` check (`:57`)
-- `src/main/services/agentTurn/pendingRequests.ts` — the parked-ask registry both the ACP driver and the answer path use. `runner.ts` — the seam that existed to hold three transports — is gone with them
+- `src/main/agents/drivers/pendingRequests.ts` — the parked-ask registry both the ACP driver and the answer path use. `runner.ts` — the seam that existed to hold three transports — is gone with them
 
 ### Preload
 - `src/preload/index.ts` — `AgentData.driver` (`:219`), `.capabilities` and `.readiness` (`:227`); `window.api.agents.checkReadiness(agentId)` (`:664`); `onReadinessChanged(handler)` (`:667`)
@@ -95,7 +96,7 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). What the A
 
 | Column | Notes |
 |---|---|
-| `driver` | `TEXT`, an `AgentDriverId`. Nullable in SQLite, but written on every insert and filled for existing rows by the migration's backfill. `driverOfRow` still falls back for a value this build does not recognise, which only a newer build can have written |
+| `driver` | TEXT, nullable in storage; known values select drivers. AgentDto/AgentData preserve the raw string or null. Migrations backfill legacy nulls, while unknown identities stay visible and refuse through unsupportedDriver. |
 | `driver_config` | `TEXT`, JSON (`mode: 'json'` in Drizzle). The driver's own settings, opaque outside `src/main/agents/drivers/`. Since phase 3 it holds `{"launcher": …}` for every folder agent — which engine an ACP row runs |
 
 The migration is placed after every table-creation migration, returns early without `hasTable('agents')`, and gates each `ADD COLUMN` with `hasColumn`. Its backfill is `UPDATE … WHERE driver IS NULL`: `a2a` for `source IN ('local', 'remote')`, and `opencode` for `source = 'folder'`. That predicate is also what makes it idempotent — a row that names a driver is never rewritten, so a scanner's correction of a Claude folder backfilled as `opencode` survives every later launch. See [Database Migrations](../../development/migrations/migrations_llm.md).
@@ -112,7 +113,7 @@ Who writes the column:
 | `replaceFolderIndex`, update | `driver = 'acp'`, launcher = `entry.launcher ?? launcherOfConfig(existing.driverConfig) ?? DEFAULT_AGENT_ENGINE` — a row that had none takes the default rather than staying unset |
 | `updateFolderIndex` | `driver = 'acp'`; the launcher is written only when `entry.launcher` is not null, so an unreadable manifest keeps what the row had |
 | `setFolderLauncher(userId, agentId, launcher)` | The write a watcher never sees — a bare agent's runtime lives outside its folder. Folder rows only (`source = 'folder'` is in the `WHERE`); returns whether a row changed |
-| `healMissingDrivers()` | Rows where `driver IS NULL`, **across every user**: a hand-added or synced row gets `a2a`, a folder row `acp` plus the default launcher (the scanner corrects the launcher on its next pass). A value this build does not recognise is left alone. Called by the `agents-driver-populated` boot check, which logs `boot-cleanup:filled-missing-agent-drivers` at `warn` when it fills anything |
+| Driver migrations | agent-drivers backfills NULL by legacy ownership; acp-driver then converts old engine driver IDs and launcher config. No separate boot-time heal or read-time guess remains. |
 
 `FolderIndexEntry.launcher` is `null` for exactly one state: an `unresolved` folder, whose manifest could not be read (`folderIndexLauncher`). Neither index writer reaches an `unresolved` folder today — `scanRoot` holds it back, and `reindexAgent` finds no row for its placeholder id — so the null is the rule written down where a future writer will meet it.
 
@@ -160,10 +161,10 @@ Who writes the column:
 
 Capabilities read the **stored** launcher (`launcherOfRow`), because a row is all they have and the answer must be the same on every call.
 
-"Synced" means `source === 'remote'` on an `a2a` row. That check lives here, which is where the kind branch belongs. `hasRunConfig(row)` is `driverOfRow(row) !== 'a2a' || !!row.cardUrl`: a folder agent legitimately has no card URL.
+"Synced" means `source === 'remote'` on an `a2a` row. That check lives here, which is where the kind branch belongs. hasRunConfig first requires a supported driver, then requires a card URL only for A2A; a valid ACP agent legitimately has no card URL.
 
 ### `driverOf.ts`
-- `driverOfRow(agent)` returns `agents.driver` when `isAgentDriverId` accepts it. Otherwise it falls back by ownership: a `folder` row gets `FOLDER_AGENT_DRIVER` (`acp`), anything else `a2a`. The migration backfills every row and every insert writes one, so the fallback is for a database touched by a newer build
+- `driverOfRow(agent)` returns a supported explicit AgentDriverId or null. It never consults source. driverFor returns unsupportedDriver for null; capabilitiesFor returns inert capabilities and hasRunConfig returns false. toDto preserves row.driver and directly supplies unsupported readiness even when the readiness cache contains an older ok.
 - `launcherOfRow(agent)` reads `driver_config.launcher`, falling back to the **default engine** rather than refusing: the value is a cache of what the folder said, and a stricter read would only produce a broken agent list while a rescan caught up
 - `launcherOfFolder(runtime)` trims a string `runtime.engine`; an unrecognised or missing engine is the default engine. The same tolerant read `runtimeService` makes — and **never null**, which is the distinction `folderIndexLauncher` exists to keep
 
@@ -287,7 +288,7 @@ It also counts comparisons against `FOLDER_AGENT_SOURCE` and calls of the two fo
   - `AgentCard.tsx`, `CatalogSettingsSection.tsx`, `JobEditForm.tsx`, `JobDetail.tsx` — 1 each
 
   These files are not allowlisted, because a whole-file pass would hide the next behavioural branch added beside them. A count that moves in either direction fails until someone reads the branch and decides which kind it is; a behavioural one moves into a driver
-- **`LIMITS`** — `source` 4, **`engine` 0**, `kind` 42, `jobType` 29, `providerType` 3, and `LIMIT` 78. **Each is asserted by equality, not as a ceiling**: a branch removed without lowering its limit would leave room for a new one to arrive unnoticed, and raising one needs a comment beside it naming what pays it back. `engine` reaching **zero** is what phase 3 paid for: the config source no longer filters by engine (the launcher is asked about one agent it was chosen for), and the shared engine's own state — the row that said *Running* and offered *Start* — went with the server. What remains of `runtime.engine` is read by the two places that own that field (the service that resolves and validates it, the panel that edits it) and by the one card whose control exists on one engine only; those are pinned per file rather than held against `LIMITS`, for the same reason sync's `source` reads are. The `source` branches that remain are how agent status refreshes, which no driver owns
+- **`LIMITS`** — `source` 4, **`engine` 0**, `kind` 42, `jobType` 30, `providerType` 3, and `LIMIT` 79. **Each is asserted by equality, not as a ceiling**: a branch removed without lowering its limit would leave room for a new one to arrive unnoticed, and raising one needs a comment beside it naming what pays it back. `engine` reaching **zero** is what phase 3 paid for: the config source no longer filters by engine (the launcher is asked about one agent it was chosen for), and the shared engine's own state — the row that said *Running* and offered *Start* — went with the server. What remains of `runtime.engine` is read by the two places that own that field (the service that resolves and validates it, the panel that edits it) and by the one card whose control exists on one engine only; those are pinned per file rather than held against `LIMITS`, for the same reason sync's `source` reads are. The `source` branches that remain are how agent status refreshes, which no driver owns
 - **`NOT_A_KIND_BRANCH`** (`:182`) — drops three named comparisons on unrelated `'local' | 'cinna'` unions
 - **Blind spots**, listed in the file's header — none of these are counted:
   - a `switch` / `case` on a kind
@@ -336,7 +337,7 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
   - `run`: the pre-flight handed through; a stream 401 treated as a re-auth only for a synced agent; a missing card refused before anything is resolved; no endpoint; a token failure; a stop during the pre-flight sending nothing; cancel sent once, and not before a task exists; `respond` never delivering
   - `readiness`: `ok`; a disabled row probed like any other; no card; an expired session as a state; a 401 for synced versus hand-added agents; unreachable, with `detail`; `null` when the card times out and when the token hangs; 4xx versus 5xx; an unusable card; never throwing, even synchronously
 - `src/main/services/a2aCancellation.test.ts` — actual loopback HTTP through the installed SDK and logging fetch: stalled card/JSON headers and bodies, silent SSE, and Stop inside the first task-message or artifact delta. Requires prompt settlement, exact partial output, no checkpoint update and an actual cancel RPC after abort
-- `src/main/services/agentTurn/golden.a2a.test.ts` — held-stream abort must settle without another frame; its fake honors fetch signals and returns a distinct cancellation response. Cancel goldens retain partial output and do not advance sessions. Task-failed and nonstreaming JSON-RPC errors now require failed outcomes; their former known-failure exemptions are removed. See [typed completion](../../chat/messaging/turn_completion.md)
+- `src/main/agents/drivers/golden.a2a.test.ts` — held-stream abort must settle without another frame; its fake honors fetch signals and returns a distinct cancellation response. Cancel goldens retain partial output and do not advance sessions. Task-failed and nonstreaming JSON-RPC errors now require failed outcomes; their former known-failure exemptions are removed. See [typed completion](../../chat/messaging/turn_completion.md)
 - `src/main/services/agentReadinessService.test.ts` — the cache:
   - nothing known before a check, and nothing probed before install
   - overlapping checks coalesced
@@ -353,7 +354,7 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
   - `src/main/db/migrations/migrations.test.ts` — *adds the driver columns*, and *agents.driver on an install that predates it*: mapped by source, a no-op on replay, never rewriting a row that names a driver
   - `src/main/services/localAgents/scannerService.test.ts` — *the driver a folder row names*: the manifest's engine; the default engine, following an edit; no answer for an unreadable manifest; staying on Claude while the manifest is unparseable; a bare folder's desktop state
   - `src/main/services/localAgents/localAgentService.test.ts` — *the driver follows an engine chosen in the app*, and moving the row to the engine an edit on disk names
-- **Contract:** `src/main/services/agentTurn/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. It runs every turn through `driver.run`. Its three driver clauses are `capabilities.stable`, `readiness.never_throws` and `respond.unknown`, and its subjects are built with `__golden__/driverWorld.ts`. See [the driver contract](../local_agents/agent_turn_tech.md#the-driver-contract)
+- **Contract:** `src/main/agents/drivers/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. It runs every turn through `driver.run`. Its three driver clauses are `capabilities.stable`, `readiness.never_throws` and `respond.unknown`, and its subjects are built with `__golden__/driverWorld.ts`. See [the driver contract](../local_agents/agent_turn_tech.md#the-driver-contract)
 - **Renderer:**
   - `ChatInput.readiness.test.tsx` —
     - refused and not refused; the reason never moving while the user types; the tooltip
@@ -370,3 +371,9 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
   - `useAgents.readinessPush.test.tsx` — one list read per push
   - `useChatStream.readinessRecheck.test.tsx` — a re-check after `error`, none after `done`, and a refused re-check leaving the turn's ending intact
 - **E2E:** `e2e/specs/driver-readiness.spec.ts` — an unreachable hand-added A2A agent, end to end, with a negative control: deleting the refusal term from Send's `disabled` fails the spec at `toBeDisabled()`
+
+## Compatibility cleanup boundaries
+
+The shared pending registry and A2A golden/contract files live at the driver root; Claude auth, environment, permissions and subagent-reading helpers live under acp. All 75 former agent-turn helper/fixture files were relocated; golden bytes and runtime behavior are retained, with only relative imports changing. There is no services/agentTurn implementation directory.
+
+ResolvedRuntime now calls its derived output launcher. It is not execution authority: current consumers use model/credential outputs, while drivers resolve their own configuration. The manifest still authors runtime.engine. The counted ratchet remains 79; moving already shared helpers and removing the driver fallback does not pay the separately counted status/Job/tool-provider debt. Tests for unsupported identity cover direct refusal and raw DTO visibility despite stale ready cache; populated migration tests preserve old and unknown IDs.

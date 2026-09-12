@@ -158,16 +158,6 @@ describe('chatService.setRouter', () => {
     expect(chatOnDemandAgentRepo.listAgentIds(chatId)).toEqual(['a-1'])
   })
 
-  it('writes the orchestrated mirror beside the router, both ways', () => {
-    // The mirror is what a downgrade to the previous build reads. A chat that
-    // moved to `human` must not read as orchestrated there.
-    const chatId = directChat()
-    chatService.setRouter(USER, chatId, 'coordinator')
-    expect(chatRepo.getOwned(USER, chatId)!.orchestrated).toBe(true)
-    chatService.setRouter(USER, chatId, 'human')
-    expect(chatRepo.getOwned(USER, chatId)!.orchestrated).toBe(false)
-  })
-
   it('turns coordination off onto human, keeping the attached agents', () => {
     const chatId = directChat()
     chatService.setRouter(USER, chatId, 'coordinator')

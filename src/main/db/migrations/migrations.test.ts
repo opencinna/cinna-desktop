@@ -276,6 +276,7 @@ describe('chats.router on an install that predates it', () => {
     const raw = freshDatabase()
     raw.exec('PRAGMA foreign_keys = OFF')
     raw.exec('ALTER TABLE chats DROP COLUMN router')
+    raw.exec('ALTER TABLE chats ADD COLUMN orchestrated INTEGER NOT NULL DEFAULT 0')
     const now = Date.now()
     for (const [id, orchestrated, agentId] of [
       ['c-plain', 0, null],
@@ -342,8 +343,8 @@ describe('chats.router on an install that predates it', () => {
     const now = Date.now()
     raw
       .prepare(
-        `INSERT INTO chats (id, user_id, title, router, orchestrated, hidden_from_list, created_at, updated_at)
-         VALUES ('c-1', '__default__', 'A chat', 'human', 0, 0, ?, ?)`
+        `INSERT INTO chats (id, user_id, title, router, hidden_from_list, created_at, updated_at)
+         VALUES ('c-1', '__default__', 'A chat', 'human', 0, ?, ?)`
       )
       .run(now, now)
     raw
@@ -498,8 +499,8 @@ describe('tasks on an install that predates them', () => {
     const now = Date.now()
     raw
       .prepare(
-        `INSERT INTO chats (id, user_id, title, router, orchestrated, hidden_from_list, created_at, updated_at)
-         VALUES ('c-1', '__default__', 'A chat', 'direct', 0, 1, ?, ?)`
+        `INSERT INTO chats (id, user_id, title, router, hidden_from_list, created_at, updated_at)
+         VALUES ('c-1', '__default__', 'A chat', 'direct', 1, ?, ?)`
       )
       .run(now, now)
     raw
@@ -580,6 +581,32 @@ describe('input request ownership on an existing install', () => {
       request, resume: 'reply', status: 'open', resolution: null, created_at: 42, resolved_at: null,
       root_run_id: null, invocation_id: null, delivery_owner: 'driver'
     }])
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+})
+
+
+describe('retired chat routing mirror', () => {
+  it('is absent on fresh installs and never added back on repeated startup', () => {
+    const raw = freshDatabase()
+    expect(columnNames(raw, 'chats')).not.toContain('orchestrated')
+    runAllMigrations(adaptDatabase(raw))
+    expect(columnNames(raw, 'chats')).not.toContain('orchestrated')
+    expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+    raw.close()
+  })
+
+  it('preserves an already-routed populated chat even when its old mirror disagrees', () => {
+    const raw = freshDatabase()
+    raw.exec(`ALTER TABLE chats ADD COLUMN orchestrated INTEGER NOT NULL DEFAULT 0;
+      INSERT INTO chats (id,user_id,title,router,orchestrated,created_at,updated_at)
+      VALUES ('retained','__default__','Keep route','human',1,1,1);`)
+    runAllMigrations(adaptDatabase(raw))
+    runAllMigrations(adaptDatabase(raw))
+    expect(raw.prepare("SELECT title,router FROM chats WHERE id = 'retained'").get())
+      .toEqual({ title: 'Keep route', router: 'human' })
+    expect(columnNames(raw, 'chats')).not.toContain('orchestrated')
     expect(raw.prepare('PRAGMA foreign_key_check').all()).toEqual([])
     raw.close()
   })

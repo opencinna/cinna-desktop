@@ -45,7 +45,6 @@ import type { CliCommand } from '../shared/cliCommands'
 import {
   AGENT_READINESS_CHANGED_CHANNEL,
   type AgentCapabilities,
-  type AgentDriverId,
   type AgentReadiness,
   type AgentReadinessChangedPayload
 } from '../shared/agentDrivers'
@@ -122,8 +121,6 @@ export interface ChatData {
   agentId: string | null
   /** Who answers a message here — see `src/shared/chatRouting.ts`. */
   router: ChatRouter
-  /** The `router === 'coordinator'` mirror, written for one phase. Do not read it. */
-  orchestrated: boolean
   /** The job run that spawned this chat, if any (drives the chat-page job-origin banner). */
   originatingJobRunId: string | null
   deletedAt: Date | null
@@ -227,7 +224,7 @@ export interface AgentData {
   remoteTargetId: string | null
   remoteMetadata: RemoteAgentMetadata | null
   /** Which driver runs this agent. */
-  driver: AgentDriverId
+  driver: string | null
   /** What the agent can do — ask this, not `source`, to decide behaviour. */
   capabilities: AgentCapabilities
   /**

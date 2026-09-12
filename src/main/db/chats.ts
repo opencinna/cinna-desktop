@@ -18,8 +18,7 @@ export interface ChatMetaUpdate {
   agentId?: string | null
   /**
    * Who answers in this chat. Written through {@link chatRepo.setRouter} rather
-   * than here wherever the caller only means to change the router, so the
-   * `orchestrated` mirror cannot be left behind; accepted here because
+   * than here wherever the caller only means to change the router; accepted here because
    * `chat:update` is one channel and a new chat sets several fields at once.
    */
   router?: ChatRouter
@@ -95,7 +94,6 @@ export const chatRepo = {
       modeId: init?.modeId ?? null,
       agentId: init?.agentId ?? null,
       router: init?.router ?? 'direct',
-      orchestrated: init?.router === 'coordinator',
       originatingJobRunId: init?.originatingJobRunId ?? null,
       hiddenFromList: init?.hiddenFromList ?? false,
       deletedAt: null,
@@ -151,14 +149,9 @@ export const chatRepo = {
   },
 
   updateMeta(userId: string, chatId: string, updates: ChatMetaUpdate): boolean {
-    // The `orchestrated` mirror travels with every write of `router`, never on
-    // its own — see the column's comment in `schema.ts`.
-    const mirrored = updates.router
-      ? { ...updates, orchestrated: updates.router === 'coordinator' }
-      : updates
     const result = getDb()
       .update(chats)
-      .set({ ...mirrored, updatedAt: new Date() })
+      .set({ ...updates, updatedAt: new Date() })
       .where(and(eq(chats.id, chatId), eq(chats.userId, userId)))
       .run()
     return result.changes > 0
@@ -216,7 +209,6 @@ export const chatRepo = {
       }
       const set: Partial<typeof chats.$inferInsert> = {
         router,
-        orchestrated: router === 'coordinator',
         updatedAt: new Date()
       }
       if (opts.detachRoot) set.agentId = null

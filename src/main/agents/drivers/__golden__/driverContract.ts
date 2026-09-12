@@ -48,8 +48,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type TestFunction } fr
 import { pendingRequests, type RequestResolution } from '../pendingRequests'
 import type { RunEvent } from '../../../../shared/runEvents'
 import type { AgentReadinessState } from '../../../../shared/agentDrivers'
-import type { RunAgentTurnResult } from '../../a2aStreamingService'
-import type { AgentDriver, AgentReadiness } from '../../../agents/drivers/driver'
+import type { RunAgentTurnResult } from '../../../services/a2aStreamingService'
+import type { AgentDriver, AgentReadiness } from '../driver'
 import type { AgentRow } from '../../../db/agents'
 
 /** The sink and signal the suite hands a turn. */
