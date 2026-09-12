@@ -236,24 +236,8 @@ export interface AgentData {
   createdAt: Date
 }
 
-export type AgentStatusSeverity = 'ok' | 'warning' | 'error' | 'info' | 'unknown'
-
-export interface AgentStatusSnapshot {
-  agentId: string
-  remoteAgentId: string
-  name: string
-  environmentId: string | null
-  severity: AgentStatusSeverity | null
-  summary: string | null
-  reportedAt: string | null
-  reportedAtSource: 'frontmatter' | 'file_mtime' | null
-  fetchedAt: string | null
-  raw: string | null
-  body: string | null
-  hasStructuredMetadata: boolean
-  prevSeverity: string | null
-  severityChangedAt: string | null
-}
+export type { AgentStatusSeverity, AgentStatusSnapshot } from '../shared/agentStatus'
+import type { AgentStatusSnapshot, StatusRefreshIntent } from '../shared/agentStatus'
 
 export interface UserData {
   id: string
@@ -706,7 +690,7 @@ const api = {
     }> => ipcRenderer.invoke('agent-status:list'),
     get: (data: {
       agentId: string
-      forceRefresh?: boolean
+      intent?: StatusRefreshIntent
     }): Promise<{
       success: boolean
       item?: AgentStatusSnapshot | null

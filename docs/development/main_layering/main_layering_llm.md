@@ -56,6 +56,17 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/
 - **A service that needs a driver's answer has it installed from the IPC layer.** `agent.ipc.ts` installs `agentReadinessService`'s probe (`driverFor(row).readiness`) and its broadcast (`webContents.send`), so the service names neither the drivers' wiring nor Electron
 - **Callers that run or answer a turn import `driverFor` from `agents/drivers`** (`agent_a2a.ipc.ts`, `services/a2aAsMcpProvider.ts`). `ipc/local_tools.ipc.ts` imports `claudeAuthProbe` from the same module
 
+### `agents/status/` — optional reported data
+
+- `statusSourceFor(userId, freshOwnedRow)` resolves folder or synced Cinna data ownership. Status is separate from driver transport: a supported transport does not imply a file or remote environment status source.
+- `AgentStatusSource.read(intent)` owns the refresh policy; only `manual` can execute a folder command. IPC accepts validated `read | manual | batch | after_turn`, not a renderer-chosen execution boolean. `AgentStatusSnapshot.refreshDescription` is authored by main and shared through preload.
+- The status service retains the two-scope batch aggregation and partial-error contract. Renderer refresh mutations check captured profile identity before applying outcomes; replayed run events do not repeat live status refresh.
+
+### Tool-provider execution and presentation
+
+- `ToolProvider.attribution` supplies optional static history metadata; `eventSink` owns trusted live framing. The model loop calls these contracts without dispatching from a display discriminator.
+- Ordinary agent events are child-framed once; coordinator delegates already frame themselves and question gates stay at root. MCP output is content only. `providerType` remains relevant to transcript presentation and the explicit trusted coordinator-control check.
+
 ## Errors — `src/main/errors.ts`
 
 Every domain has a typed error class with a string-literal code union:

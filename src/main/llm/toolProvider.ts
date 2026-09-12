@@ -54,7 +54,7 @@ export interface ToolExecutionResult {
 }
 
 export interface ToolProvider {
-  /** Discriminates the dispatch path in the orchestrator loop. */
+  /** Transcript/presentation identity; live delivery is owned by eventSink. */
   readonly providerType: 'mcp' | 'agent' | 'coordinator'
   /**
    * Stable display name for persistence (`tool_call.toolProvider`) and the
@@ -67,6 +67,10 @@ export interface ToolProvider {
    * is persisted on the tool_call row). Undefined for MCP providers.
    */
   readonly agentId?: string
+  /** Static specialist attribution; dynamic coordinator targets are per-call presentation only. */
+  readonly attribution?: { agentId: string; displayName: string }
+  /** Trusted provider wiring owns framing. Tool result content cannot choose this sink. */
+  eventSink?(toolCallId: string, publish: (event: RunEvent) => void): (event: RunEvent) => void
   /** Validated display target for a coordinator's dynamic delegate call. */
   describeCall?(name: string, input: Record<string, unknown>): { agentId: string; displayName: string } | undefined
   /** LLM-facing tool definitions this provider contributes. */

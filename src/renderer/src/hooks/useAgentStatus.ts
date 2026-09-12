@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { isFolderAgentId } from '../../../shared/localAgents'
+import type { StatusRefreshIntent } from '../../../shared/agentStatus'
+import { useAuthStore } from '../stores/auth.store'
 
 type ListResult = Awaited<ReturnType<typeof window.api.agentStatus.list>>
 export type AgentStatusSnapshot = NonNullable<ListResult['items']>[number]
@@ -134,46 +135,37 @@ export function useAgentStatus(): {
   }
 }
 
-function useAgentStatusFetch(forceRefresh: boolean) {
+function useAgentStatusFetch(intent: StatusRefreshIntent) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (agentId: string) => window.api.agentStatus.get({ agentId, forceRefresh }),
-    onSuccess: (result) => {
-      if (!result.success || !result.item) return
-      patchAgentStatusCache(queryClient, [result.item])
+    mutationFn: async (agentId: string) => {
+      const profile = useAuthStore.getState().currentUser
+      try {
+        const result = await window.api.agentStatus.get({ agentId, intent })
+        if (useAuthStore.getState().currentUser !== profile) return { success: true as const, item: null }
+        if (result.success && result.item) patchAgentStatusCache(queryClient, [result.item])
+        return result
+      } catch (error) {
+        if (useAuthStore.getState().currentUser !== profile) return { success: true as const, item: null }
+        throw error
+      }
     }
   })
 }
 
-/**
- * One-shot per-agent refresh. For a remote agent `force_refresh=true` asks the
- * platform to re-read STATUS.md from the running env, rate-limited server-side
- * to 1/30s; 429s are swallowed upstream and return `item: null`. For a folder
- * agent it runs the manifest's `status_refresh_command`. **A user has to have
- * asked for this** — see {@link useRereadAgentStatus} for the cheap variant.
- * On success, patches the batch cache so list consumers update in place.
- */
+/** Explicit per-agent gesture; the source may execute its declared refresh command. */
 export function useForceRefreshAgentStatus() {
-  return useAgentStatusFetch(true)
+  return useAgentStatusFetch('manual')
 }
 
-/**
- * One agent's status *without* forcing a refresh — for a folder agent that is a
- * read of `app-data/storage/STATUS.md` off local disk and nothing else.
- *
- * This exists because "the turn ended, re-read the status" and "the user pressed
- * Refresh" are different requests, and for a folder agent the difference is a
- * subprocess. `status_refresh_command` runs under the agent's turn lock, so
- * firing it after every chat turn would (a) run the agent's own health check —
- * the template's `collect()`, which is where real work goes — on every message
- * nobody asked for it on, and (b) hold the lock the user's *next* message needs,
- * so a background refresh could refuse a message the user just sent. It is also
- * redundant in the common case: an agent that updates its own STATUS.md does so
- * during the turn, which is the whole design. A disk re-read gets that to the
- * tray immediately, takes no lock, and spawns nothing.
- */
+/** Passive read of already reported status. */
 export function useRereadAgentStatus() {
-  return useAgentStatusFetch(false)
+  return useAgentStatusFetch('read')
+}
+
+/** The source decides what a completed turn should refresh; never runs a local command. */
+export function useAfterTurnAgentStatus() {
+  return useAgentStatusFetch('after_turn')
 }
 
 /** Outcome of a "Refresh all" fan-out, so callers can give honest feedback. */
@@ -186,44 +178,12 @@ export interface ForceRefreshAllResult {
   reauthRequired: boolean
 }
 
-/**
- * Mass refresh used by the overlay and tray "Refresh all" buttons. The batch
- * `list` route is cache-only, so a genuine refresh has to fan out per-agent
- * calls (one per currently-known agent). Each fresh snapshot is patched back
- * into the batch cache as it lands. When nothing is cached yet there is nothing
- * to fan out to, so we fall back to the cache-only list refetch to populate the
- * grid.
- *
- * **A folder agent is deliberately re-read here, not force-refreshed** — the
- * one place the two agent kinds are asked different questions, because
- * `forceRefresh: true` does not mean the same thing for both. For a remote
- * agent it means *fetch what exists now*: it wakes a suspended env so the
- * platform re-reads its STATUS.md, and it is the only way past a server-side
- * cache. For a folder agent it means *make the agent recompute its status*,
- * running `status_refresh_command` as a subprocess under that agent's turn
- * lock — the scaffolded script's `collect()` is where an author's real health
- * check goes. "Refresh all" is a glance-level gesture asking for the panel to
- * be current, and for a folder agent the file on disk already is the truth, so
- * a re-read answers it completely and instantly.
- *
- * Two consequences settle it. This is `Promise.allSettled` over *every* cached
- * agent, so one click would start every folder agent's script at once — the
- * per-agent locks make that safe, not cheap — and each running script refuses
- * that agent's chat and page-editor saves for as long as it takes. And the
- * tray's spinner holds until the whole batch settles, so a single 30-second
- * status script makes a menu-bar button spin for 30 seconds. Running the
- * command stays on the overlay's **per-card** Refresh: singular, targeted,
- * explicitly aimed at one agent — and the one surface that reports when it
- * fails.
- *
- * Returns a {@link ForceRefreshAllResult} (never throws on per-agent failure, so
- * one dead env doesn't abort the batch) — callers branch on it to flash
- * success/error and surface an expired session.
- */
+/** Refresh the visible set. Main enforces each source's passive batch policy. */
 export function useForceRefreshAllAgentStatuses() {
   const queryClient = useQueryClient()
   return useMutation<ForceRefreshAllResult>({
     mutationFn: async () => {
+      const profile = useAuthStore.getState().currentUser
       const cached = queryClient.getQueryData<AgentStatusCache>(AGENT_STATUS_KEY)?.items ?? []
       const agentIds = cached.map((s) => s.agentId)
       if (agentIds.length === 0) {
@@ -234,9 +194,10 @@ export function useForceRefreshAllAgentStatuses() {
       }
       const results = await Promise.allSettled(
         agentIds.map((agentId) =>
-          window.api.agentStatus.get({ agentId, forceRefresh: !isFolderAgentId(agentId) })
+          window.api.agentStatus.get({ agentId, intent: 'batch' })
         )
       )
+      if (useAuthStore.getState().currentUser !== profile) return { refreshed: 0, failed: 0, reauthRequired: false }
       const fresh: AgentStatusSnapshot[] = []
       let failed = 0
       let reauthRequired = false

@@ -166,6 +166,13 @@ Live blocks and persisted parts split in the same places because one function de
 - Contract tests: `src/main/agents/drivers/__golden__/driverContract.ts` (`describeDriverContract`, run through each agent driver), `src/renderer/src/hooks/useChatStream.events.test.tsx`
 - Adjacent: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) (the `cinna.*` metadata behind `delta`), [The Agent Turn Runner](../../agents/local_agents/agent_turn.md) (parking and answering), [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) (`child`), [Messaging](../../chat/messaging/messaging.md) (LLM streaming flow)
 
+## Trusted tool event delivery
+
+- `src/main/llm/toolProvider.ts`: optional `attribution` supplies static specialist history identity; optional `eventSink(toolCallId, publish)` selects live framing. These are trusted provider methods, never fields interpreted from tool output.
+- `A2AAsMcpProvider` wraps driver events once in `child`; `CoordinatorToolProvider` passes events through because its delegate already wraps once and its question gate belongs at root. Actual `McpToolProvider` supplies no sink.
+- `chatStreamingService` consumes the sink without testing presentation type. Dynamic `describeCall` attribution is per-call only. Successful coordinator controls still require the trusted coordinator provider; MCP content and specialist results cannot acquire that authority.
+- `useLiveRunWatch` invokes semantic `after_turn` status refresh only for live terminal events. Replaying a snapshot updates the projection without repeating the status side effect.
+
 ## Autonomous coordinator gates
 
 - CoordinatorToolProvider emits the existing needs_input reply shape only after persisting a runner-owned gate/checkpoint. The durable row has deliveryOwner:runner and null agentId; ordinary reply cleanup is driver-only. Resume kind alone no longer determines database durability.

@@ -117,7 +117,7 @@ Renderer
 ## Integration Points
 
 - [Chat Routing](../chat_routing/chat_routing.md) — who answers a message in a chat, and where `coordinator` sits among the three answers. The transitions in and out of this mode, the badge and the `[+]` toggle all live there.
-- [Messaging](../messaging/messaging.md) — `chatStreamingService` is the orchestrator; it now unions MCP + agent tool providers and routes dispatch by provider type. A sub-turn's events reach the renderer wrapped in `child` — see [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md).
+- [Messaging](../messaging/messaging.md) — `chatStreamingService` is the orchestrator; it now unions MCP + agent tool providers and calls their execution and event-delivery contracts. A sub-turn's events reach the renderer wrapped in `child` — see [Stream Event Typing](../../development/stream_event_typing/stream_event_typing_llm.md).
 - [On-Demand MCP](../../mcp/on_demand/on_demand.md) — `chat_on_demand_agents` is a verbatim mirror; the announce prefix is combined across MCPs and agents. The former root agent is added as a pending-announce on-demand agent, so it is announced like any freshly attached agent.
 - [Agents](../../agents/agents/agents.md) — Agent turns reuse the A2A client, endpoint/token resolution, and the `a2a_sessions` table via the port-free `runAgentTurn` core.
 - [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md) — The agent's rich `parts[]` (`cinna.content_kind`) stream over the same external A2A surface; orchestrated mode just stops collapsing them.

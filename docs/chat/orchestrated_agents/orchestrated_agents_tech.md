@@ -7,10 +7,10 @@
 ## File Locations
 
 ### Main process
-- `src/main/llm/toolProvider.ts` — `ToolProvider` interface (`providerType`, `displayName`, optional `agentId`, `getTools`, `callTool`), `ToolCallOptions`/`ToolExecutionResult` types, and `McpToolProvider` (wraps one connected MCP provider, delegates to `mcpManager.callTool`)
+- `src/main/llm/toolProvider.ts` — `ToolProvider` (display identity, optional static `attribution`, trusted `eventSink`, dynamic `describeCall`, tools and execution), result/options types, and `McpToolProvider`.
 - `src/main/services/a2aAsMcpProvider.ts` — `A2AAsMcpProvider` (implements `ToolProvider`, one per attached agent), `buildAgentToolProviders` factory, `sanitizeToolSlug`, collision-suffix logic
 - `src/main/services/a2aStreamingService.ts` — `runAgentTurn` (port-free dual-output core) + `streamToAgent` (thin direct-A2A wrapper driving `runAgentTurn`) + `cancel`
-- `src/main/services/chatStreamingService.ts` — orchestrator: builds `ToolProvider[]`, unions tools + routing map, combined announce (`resolvePendingAnnounce`), dispatch loop routing by `providerType`, sub-event forwarding, parts persistence, depth guard (`MAX_TOOL_ROUNDS`)
+- `src/main/services/chatStreamingService.ts` — builds the tool-routing map, rebuilds attributed history, dispatches through provider methods/sinks and persists tool results/parts. Only trusted coordinator controls may end a coordinator turn.
 - `src/main/services/chatService.ts` — `listOnDemandAgents`, `addOnDemandAgent` (validates via `agentService.findAgent`), `removeOnDemandAgent`, `setRouter` (the transition on and off `'coordinator'`)
 - `src/main/services/agentService.ts` — `findAgent` (dual-scope resolve), `resolveEndpointIfNeeded`, `resolveAccessToken` (reused by the agent provider); `syncRemoteAgents` carries `target.mcp` into `remote_metadata.cinna_mcp`
 - `src/main/db/schema.ts` — `chatOnDemandAgents` table; `messages.toolAgentId` column; `chats.router` (`'coordinator'` is this feature; the legacy mirror is retired — see [Chat Routing](../chat_routing/chat_routing_tech.md))
@@ -77,9 +77,9 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 ## Services & Key Methods
 
 - `chatStreamingService.stream(input)` — builds `McpToolProvider`s for connected MCPs, calls `buildAgentToolProviders(chatId, settingsUserId, profileUserId, reservedNames)`, unions `getTools()` into `tools[]` + `toolRouting: Map<name, ToolProvider>`, resolves combined announce, threads pending ids into `_runStreamLoop`
-- `chatStreamingService._runStreamLoop(...)` — dispatch routes via `provider.callTool(name, input, { onEvent, signal })`; agent providers get an `onEvent` that posts `{ type: 'child', toolCallId, agentId: providerAgentId, event }` — wired only when the provider has an agent id, so a provider without one runs buffered rather than post a `child` naming an invented agent; persists `saveToolCall({ ..., toolAgentId, parts })`; clears both MCP + agent pending sets on `round === 0`
+- `chatStreamingService._runStreamLoop(...)` — invokes `provider.eventSink(toolCallId, publish)` when supplied, passes it with the abort signal to `callTool`, and persists result identity/parts. Static history attribution uses `provider.attribution`; dynamic `describeCall` targets only describe the current call. The loop does not choose framing from `providerType`.
 - `buildAgentToolProviders(...)` (`a2aAsMcpProvider.ts`) — reads `chatOnDemandAgentRepo.listAgentIds`, resolves each via `agentService.findAgent`, skips unresolved/no-card-url with a warn, assigns collision-free slugs (id-derived suffix), constructs providers
-- `A2AAsMcpProvider.getTools()` — synthesizes one tool from `remote_metadata.cinna_mcp` (description/input_schema) or a fallback `{ message }` schema from name/description/example_prompts; `mcpProviderId` field set to the agent id (unused for routing, never shown to LLM)
+- `A2AAsMcpProvider.attribution` supplies the attached agent’s stable ID/name. Its `eventSink` wraps raw driver events once as `child { toolCallId, agentId, event }`. `getTools()` synthesizes the descriptor or fallback tool as before.
 - `A2AAsMcpProvider.callTool(name, input, opts)` — refuses re-entry if this agent already has an open next-message request in this chat, returning a tool error that directs the coordinator to wait for the human’s Inbox answer. Otherwise calls `driverFor(agent).run` with signal/events and returns compact content plus rich parts. Driver-owned endpoint/token and cancellation details stay behind that seam.
 - `runAgentTurn(input)` (`a2aStreamingService.ts`) — port-free A2A pump: creates client, streams via `StreamPartsAccumulator`, upserts `a2aSessionRepo`, returns `{ text, parts, notices, contextId, taskId, taskState, error? }` — a thrown failure returns empty `text` / `parts` / `notices` beside the `error`, **except** when the turn had already been stopped: then the throw is how the stop ended (a server dropping the connection after `tasks/cancel`), and what the accumulator streamed is returned so the stopped text is kept (golden `a2a/canceled_then_stream_error`); honors `signal`, forwards delta/status via `onEvent`, surfaces client/taskId via `onClient`/`onTaskId`
 - `a2aStreamingService.streamToAgent(input)` — direct-A2A wrapper: registers the request for `cancel`, drives `runAgentTurn`, persists notices + assistant message, posts port events, reports job completion, which defers while durable next-message requests remain
@@ -103,6 +103,10 @@ None. No env vars, no settings. Coordination is available whenever a chat-mode p
 
 ## Security
 
+- Provider contracts are trusted main-process wiring. `McpToolProvider` supplies no attribution or event sink and wraps manager output as content; result fields cannot select event identity or framing.
+- Coordinator delegates already frame their events once inside `CoordinatorToolProvider.callTool`; its sink passes them through, while durable question events stay at the root. Specialists cannot return coordinator authority: delegate results strip their controls.
+- `providerType` still describes transcript presentation and gates successful coordinator `exec.control`. Removing it from event delivery does not remove that authority check. Static attribution and dynamic target metadata are separate so a delegated call cannot rewrite historical attribution.
+
 - Tokens/endpoints stay main-side: `A2AAsMcpProvider` runs the agent's driver (`driverFor(agent).run`). For an A2A agent, the driver's pre-flight resolves the token and endpoint at call time, through `resolveAccessToken` / `resolveEndpointIfNeeded` in `src/main/agents/drivers/a2aConnection.ts`; the orchestrator LLM and renderer never see them.
 - The orchestrator LLM only ever receives `{ message }` for an agent tool — no `context_id`, no credentials. Continuity is injected by the desktop via `a2a_sessions`.
 - Ownership: the on-demand-agent IPC channels call `requireActivated()` then route through `chatService` which calls `requireOwnedChat`; `addOnDemandAgent` rejects unknown agent ids via `agentService.findAgent` before the FK.
@@ -116,3 +120,7 @@ None. No env vars, no settings. Coordination is available whenever a chat-mode p
 - **Why `a2aAsMcpProvider` lives in `services/` not `llm/`**: it orchestrates an A2A turn (a service concern). `toolProvider.ts` stays in `llm/` as a pure contract; keeping the provider in `services/` avoids an `llm/ → services/` layering inversion.
 - **Compact vs rich split**: only the agent's final text re-enters orchestrator context each round (token safety, no runaway recursion); the rich `parts[]` are persisted/streamed for the UI only — the reason `runAgentTurn` returns dual output.
 - **Notices excluded from sub-thread parts**: `runAgentTurn` returns notices separately (not in `parts[]`), and `appendToolSubEvent` drops `notice`-kind deltas, so the live sub-thread matches the reloaded one.
+
+### Provider-contract regression coverage
+
+`src/main/services/a2aAsMcpProvider.test.ts` checks the real agent wrapper’s static identity and one child envelope. `src/main/services/coordinatorToolProvider.test.ts` checks delegate framing through its actual sink. `src/main/services/chatStreamingService.stop.test.ts` checks sink-driven delivery independent of presentation type, static versus dynamic history attribution and refusal of coordinator control embedded in ordinary content.

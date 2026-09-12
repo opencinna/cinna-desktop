@@ -6,16 +6,9 @@ import type { RunEvent } from '../../../shared/runEvents'
 import type { RunWatchMessage } from '../../../shared/runWatch'
 
 /**
- * What `useChatStream` does to the status surfaces when an agent turn ends.
- *
- * This was `isCinnaUser && forceRefreshAgentStatus.mutate(agentId)` — dead for a
- * folder agent under a local account. Widening it is not simply flipping the
- * condition, because for a folder agent `forceRefresh: true` **runs the
- * manifest's `status_refresh_command` as a subprocess under the agent's turn
- * lock**. After every single chat message that would run the agent's own health
- * check nobody asked for, and hold the lock the user's *next* message needs —
- * a background refresh refusing a message the user just sent. The re-read is
- * what belongs here; running the command belongs to the Refresh buttons.
+ * Live turn completion requests a semantic after_turn refresh. Main decides
+ * whether that reads a folder file or asks Cinna for existing environment
+ * status. Neither snapshot replay nor an in-progress delta requests a refresh.
  */
 
 ;(window as unknown as { api: Record<string, unknown> }).api = {
@@ -59,7 +52,7 @@ beforeEach(() => {
     run: { watch: send, cancel: vi.fn() },
     agentStatus: { list: vi.fn().mockResolvedValue({ success: true, items: [] }), get: statusGet },
     agents: { checkReadiness: vi.fn().mockResolvedValue(null) },
-    chat: { get: vi.fn() }
+    chat: { get: vi.fn().mockResolvedValue(null) }
   }
 })
 
@@ -85,7 +78,7 @@ describe('useChatStream — the post-turn status pull', () => {
     await waitFor(() =>
       // The consequence that matters: `forceRefresh` is false, so no subprocess
       // is spawned and no turn lock is taken behind the user's next message.
-      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'after_turn' })
     )
   })
 
@@ -95,7 +88,7 @@ describe('useChatStream — the post-turn status pull', () => {
     signInAs('cinna_user')
     await runTurn('folder:alpha')
     await waitFor(() =>
-      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'after_turn' })
     )
   })
 
@@ -103,14 +96,14 @@ describe('useChatStream — the post-turn status pull', () => {
     signInAs('cinna_user')
     await runTurn('a-remote')
     await waitFor(() =>
-      expect(statusGet).toHaveBeenCalledWith({ agentId: 'a-remote', forceRefresh: true })
+      expect(statusGet).toHaveBeenCalledWith({ agentId: 'a-remote', intent: 'after_turn' })
     )
   })
 
-  it('asks for nothing at all for a remote agent under a local account', async () => {
+  it('lets main resolve optional status even under a local account', async () => {
     signInAs('local_user')
     await runTurn('a-remote')
-    expect(statusGet).not.toHaveBeenCalled()
+    expect(statusGet).toHaveBeenCalledWith({ agentId: 'a-remote', intent: 'after_turn' })
   })
 
   it('pulls on an errored turn too — the agent may have written its status first', async () => {
@@ -118,7 +111,7 @@ describe('useChatStream — the post-turn status pull', () => {
     ending = { type: 'error', error: 'failed' }
     await runTurn('folder:alpha')
     await waitFor(() =>
-      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+      expect(statusGet).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'after_turn' })
     )
   })
 
@@ -128,4 +121,16 @@ describe('useChatStream — the post-turn status pull', () => {
     await runTurn('folder:alpha')
     expect(statusGet).not.toHaveBeenCalled()
   })
+})
+
+it('replaying a finished turn does not request another status refresh', async () => {
+  signInAs('local_user')
+  useChatStore.getState().setActiveChatId('chat-1')
+  send.mockImplementation((_chatId: string, cb: StreamCallback) => {
+    cb({ type: 'snapshot', runId: 'old-run', sequence: 2, agentId: 'folder:alpha', active: false,
+      replayAvailable: true, baselineMessageIds: [], events: [{ type: 'done' }] })
+    return () => {}
+  })
+  await act(async () => { renderHook(() => useLiveRunWatch(), { wrapper }) })
+  expect(statusGet).not.toHaveBeenCalled()
 })

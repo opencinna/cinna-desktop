@@ -369,8 +369,8 @@ export const chatStreamingService = {
       // and are left untouched; agent tool outputs are `tool_call` rows.)
       const agentToolByAgentId = new Map<string, { name: string; toolName: string }>()
       for (const [toolName, p] of toolRouting) {
-        if (p.providerType === 'agent' && p.agentId) {
-          agentToolByAgentId.set(p.agentId, { name: p.displayName, toolName })
+        if (p.attribution) {
+          agentToolByAgentId.set(p.attribution.agentId, { name: p.attribution.displayName, toolName })
         }
       }
       // Cache fallback name lookups so a long chat with repeated turns from the
@@ -544,7 +544,6 @@ export const chatStreamingService = {
           const provider = toolRouting.get(tc.name)
           const presentation = provider?.describeCall?.(tc.name, tc.input)
           const providerName = presentation?.displayName ?? provider?.displayName ?? ''
-          const isAgent = provider?.providerType === 'agent'
           const providerAgentId = presentation?.agentId ?? provider?.agentId
 
           port.postMessage({
@@ -570,28 +569,9 @@ export const chatStreamingService = {
               providerType: provider.providerType
             })
 
-            // Agent tools forward each event of the agent's turn into the chat
-            // port as a `child` keyed by this tool-call id, so the renderer can
-            // stream the agent's work into a nested sub-thread. MCP tools
-            // ignore the sink. The orchestrator's `AbortController` is threaded
-            // through so aborting cancels the in-flight agent sub-turn.
-            //
-            // `child` names the agent, so the sink is wired only when the
-            // provider has an id to give it. `A2AAsMcpProvider` always does; a
-            // provider that did not would run buffered rather than post a
-            // `child` with an invented id.
-            const onEvent =
-              provider?.providerType === 'coordinator' ? (event: RunEvent): void => { port.postMessage(event) }
-              : isAgent && providerAgentId
-                ? (event: RunEvent): void => {
-                    port.postMessage({
-                      type: 'child',
-                      toolCallId: tc.id,
-                      agentId: providerAgentId,
-                      event
-                    })
-                  }
-                : undefined
+            // Only trusted provider code chooses framing and identity. MCP has no
+            // sink; agent turns are children; coordinator gates are root events.
+            const onEvent = provider.eventSink?.(tc.id, (event) => port.postMessage(event))
 
             const exec = await provider.callTool(tc.name, tc.input, {
               onEvent,

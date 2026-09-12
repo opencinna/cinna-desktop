@@ -1,3 +1,4 @@
+import type { RunEvent } from '../../shared/runEvents'
 import type { ToolCallOptions, ToolExecutionResult, ToolProvider } from '../llm/toolProvider'
 import type { ToolDefinition } from '../llm/types'
 import type { TaskArtifact } from '../../shared/tasks'
@@ -41,6 +42,11 @@ export class CoordinatorToolProvider implements ToolProvider {
   readonly providerType = 'coordinator' as const
   readonly displayName = 'Task coordinator'
   constructor(private readonly taskId: string, private readonly agents: readonly CoordinatorAgent[], private readonly actions: CoordinatorActions) {}
+
+  /** Delegates are already child-framed by callTool; gates belong directly to the root. */
+  eventSink(_toolCallId: string, publish: (event: RunEvent) => void): (event: RunEvent) => void {
+    return publish
+  }
 
   getTools(): ToolDefinition[] {
     const agent = stringSchema(`Attached agent ID or unique name. Available: ${this.agents.map((entry) => `${entry.name} (${entry.id})`).join(', ') || 'none'}.`, 512)

@@ -67,7 +67,7 @@ The turn decisions about readiness, authentication, attachments and commands liv
 
 This replaced callers that each branched on `source` again, for endpoints, tokens, the re-auth flag, command catalogs and attachments, and two of those callers disagreed.
 
-What is still allowed, and where, is enforced by a test, not by review — see [the kind-branch ratchet](drivers_tech.md#the-kind-branch-ratchet). Sync keeps reading `source`, because ownership is exactly what sync decides. So do a handful of files whose reads are about who may edit, delete or list a row, and each of those is pinned to an exact count. The one behavioural branch on `source` still outside a driver is how agent status refreshes.
+What is still allowed, and where, is enforced by a test, not by review — see [the kind-branch ratchet](drivers_tech.md#the-kind-branch-ratchet). Sync keeps reading `source`, because ownership is exactly what sync decides. So do a handful of files whose reads are about who may edit, delete or list a row, and each of those is pinned to an exact count. Reported status is owned separately by an optional data source: a folder file or a synced Cinna environment. Callers express refresh intent; a transport choice cannot grant a local command or imply a Cinna endpoint. See [Agent Status](../agent_status/agent_status.md).
 
 ### One dispatch point, and it reads the row
 

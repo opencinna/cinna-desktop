@@ -3,8 +3,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useChatStore } from '../stores/chat.store'
 import { useAuthStore } from '../stores/auth.store'
 import { useRunEventHandler } from './useChatStream'
-import { useForceRefreshAgentStatus, useRereadAgentStatus } from './useAgentStatus'
-import { isFolderAgentId } from '../../../shared/localAgents'
+import { useAfterTurnAgentStatus } from './useAgentStatus'
 
 /** Mounted once by MainArea. Switching views only changes the subscription. */
 export function useLiveRunWatch(): void {
@@ -12,8 +11,7 @@ export function useLiveRunWatch(): void {
   const userId = useAuthStore((state) => state.currentUser?.id)
   const handleRun = useRunEventHandler()
   const queryClient = useQueryClient()
-  const { mutate: refreshStatus } = useForceRefreshAgentStatus()
-  const { mutate: rereadStatus } = useRereadAgentStatus()
+  const { mutate: refreshStatus } = useAfterTurnAgentStatus()
   useEffect(() => {
     if (!chatId || !userId) return
     let disposed = false
@@ -82,12 +80,11 @@ export function useLiveRunWatch(): void {
       if (message.event.type === 'done' || message.event.type === 'error') {
         const agentId = message.agentId
         if (agentId) {
-          if (isFolderAgentId(agentId)) rereadStatus(agentId)
-          else if (useAuthStore.getState().currentUser?.type === 'cinna_user') refreshStatus(agentId)
+          refreshStatus(agentId)
           if (message.event.type === 'error') void window.api.agents.checkReadiness(agentId).catch(() => {})
         }
       }
     })
     return () => { disposed = true; stopReading(); unwatch() }
-  }, [chatId, userId, handleRun, queryClient, refreshStatus, rereadStatus])
+  }, [chatId, userId, handleRun, queryClient, refreshStatus])
 }

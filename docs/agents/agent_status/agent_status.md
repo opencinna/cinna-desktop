@@ -16,11 +16,11 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 - **`status_refresh_command`** — An optional manifest field on a folder agent naming the command that recomputes its status. Only the `/run:<name>` form — a reference into the agent's own `docs/CLI_COMMANDS.yaml` catalog — is executed. It runs as a subprocess in the agent folder under that agent's turn lock. <!-- nocheck -->
 - **Worst severity** — The highest-ranked severity across all snapshots, shown as a coloured dot on the sidebar-footer icon and painted into the menu-bar tray icon. A `null` severity is skipped.
 - **Batch list** — The cache-only, poll-safe list every surface consumes. It is the **union** of the folder leg (local disk) and the remote leg (one HTTP call). It runs **no** commands — see the polling rule below.
-- **Force refresh** — A one-shot per-agent request. It asks a *different question of each agent kind*: for a remote agent "fetch what exists now" (wake the env, re-read its STATUS.md, bypass the server cache); for a folder agent "**recompute**" (run `status_refresh_command`).
+- **Manual refresh** — An explicit refresh of one agent. The status data owner decides its meaning: a Cinna environment is refreshed; a folder agent runs its declared status command before the file is read.
 - **Re-read** — A folder agent's status without forcing anything: read `STATUS.md` off disk. Takes no lock, spawns nothing. This is what the post-turn pull and "Refresh all" use for a folder agent.
-- **Partial failure / degradation strip** — The Cinna leg failing no longer costs the user the rows it did not invalidate. The list returns folder rows plus a `remoteError`, and both panels render the failure as a **strip above** the rows instead of a panel instead of them.
+- **Partial failure / degradation strip** — The Cinna leg failing no longer costs the user the rows it did not invalidate. The list returns folder rows plus a `remoteError`, and the overlay renders a bounded error footer below the grid or detail while the tray keeps its strip above the rows. Both preserve surviving snapshots.
 - **Sentinel snapshot** — A remote row with both `severity == null` *and* `raw == null` — the agent has never published. Hidden. A folder agent with no `STATUS.md` is omitted for the same reason.
-- **`environmentId: 'local'`** — A **sentinel, not data**. See the business rules.
+- **`environmentId: 'local'` is a sentinel, not data.** The renderer reads `null` as a stopped remote environment. Folder snapshots use the non-null sentinel so a local file does not falsely claim that its environment is down; the value itself is not displayed.
 - **Status overlay** — Full-window frosted-glass modal opened from the sidebar-footer activity icon: a responsive grid of agent cards, each expandable into a detail view with the full markdown body.
 - **Tray popup** — The macOS menu-bar popover showing the same list. See [Menu-Bar Tray](../../ui/tray/tray.md).
 
@@ -47,7 +47,7 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 2. The icon spins. For a **remote** agent this is `force_refresh=true` against the platform. For a **folder** agent this runs its `status_refresh_command`, then re-reads `STATUS.md` — in that order, because reading first would show the status the refresh was about to replace
 3. **Each card's spinner reports its own agent.** In-flight state is tracked per agent id, so starting a refresh on one card does not stop another card's spinner or re-enable its button mid-flight, and a second click on an already-refreshing card is a no-op. The stakes are highest for a folder agent: a second concurrent run is refused by that agent's turn lock, swallowed as `busy`, and comes back as a **success** carrying the on-disk snapshot — a click that looks like it worked and did nothing
 4. On success the shared batch cache is patched in place, so the card, the detail view and the dot update without a full re-poll
-4. **A failure is now reported, in the grid *and* in the detail view.** A broken refresh script, a `/run:` name that is not in the catalog, a folder that has moved, or a manifest asking for something the app will not run all surface as a red strip naming the reason. (Until 7b this button spun, stopped, and said nothing — for remote agents too. The detail view kept the defect one commit longer, which matters because a tray card click opens the overlay *straight into* the detail view: the surface people check instead of opening the app was the one place a broken `status_refresh_command` stayed silent.)
+4. **A failure is now reported, in the grid *and* in the detail view.** A broken refresh script, a `/run:` name that is not in the catalog, a folder that has moved, or a manifest asking for something the app will not run all surface as a red error naming the reason in the shared footer below the grid or detail. Refresh, Start Chat and navigation controls stay in place while the cached content remains visible. (Until 7b this button spun, stopped, and said nothing — for remote agents too. The detail view kept the defect one commit longer, which matters because a tray card click opens the overlay *straight into* the detail view: the surface people check instead of opening the app was the one place a broken `status_refresh_command` stayed silent.)
 5. **Three outcomes, and only the first two are quiet.** *Nothing to report* — a remote 429, or a folder agent that has never written a STATUS.md — returns no snapshot and shows nothing: the same legitimate nothing the batch list omits rather than rendering a blank card. *Not now* — a folder agent whose turn lock is held by a streaming turn, an editor save or another command — is also silent, but the on-disk snapshot comes back, so the card keeps showing what the file says. *Not any more* — the folder has been moved or deleted — is a **fault**, and surfaces on the card with a reason. This is the same cut the severity rule draws one level down between *claimed nothing* and *claimed something unreadable*: an absence and an unreadable answer are different facts, and collapsing either loses the one that needed acting on
 
 ### Refreshing everything
@@ -69,7 +69,7 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 
 1. A user with both kinds of agent loses network, or their Cinna session expires
 2. The folder agents' rows **stay on screen** — their status came off local disk and nothing the remote leg did invalidates it
-3. A red strip appears above them carrying the same message and the same **Re-authenticate** button the full-panel error carries, plus a line saying the agents below are the ones on this machine
+3. A red error footer appears below the active grid or detail carrying the same message and the same **Re-authenticate** button the full-panel error carries, plus a line saying the local agents shown are the ones on this machine
 4. With nothing left to show, the error is still the whole panel, exactly as before
 
 ### Starting a chat from a status tile
@@ -95,17 +95,17 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 
 - **Background polling** runs every **45 s** over the union of both legs. Stale after 15 s, so mounting a new consumer (opening the overlay) reuses the cache. Focus events refetch.
 - **The poll runs no commands.** The remote batch route is cache-only by contract; the folder leg is cache-only by decision. `commandService.run()` takes the per-agent turn lock, so a tick that ran `status_refresh_command` would make an editor save — and the user's very next message — refuse **on a timer**, for work nobody asked for. A folder agent's status therefore refreshes on the poll only as fast as the agent itself rewrites the file.
-- **`forceRefresh` does not mean the same thing for both kinds.** Remote: *fetch what exists now.* Folder: *make the agent recompute.* Both buttons' tooltips used to say "force refresh from running environments", which was never true of an agent that has no environment; they now say what each kind gets.
+- **Refresh names the user’s intent.** A passive read, one-agent Refresh, Refresh all and a completed-turn read are distinct requests. Main owns what each source may do. A transport choice cannot grant permission to run a local status command, and tooltips use the source’s description rather than guessing from the agent ID.
 - **The per-card Refresh is the only surface that runs a folder agent's command**, and the only one that reports when it fails. It is singular, targeted and explicitly aimed at one agent.
 - **"Refresh all" re-reads folder agents.** Two consequences settle it: the fan-out is over *every* cached agent, so one menu-bar click would otherwise start every folder agent's status script simultaneously — per-agent locks make that safe, not cheap, and each running script refuses that agent's chat and page-editor saves for as long as it takes; and the tray's spinner holds until the whole batch settles, so one 30-second script would spin a menu-bar button for 30 seconds.
-- **The post-turn pull is a re-read, not a force.** When an agent turn ends (`done` or `error`) the desktop pulls a fresh snapshot for that agent. For a remote agent that stays a force refresh (Cinna accounts only, 429s swallowed). For a folder agent it is a **disk re-read**: a force would run the agent's own health check after every message nobody asked for it on, and hold the lock the user's next message needs — a background refresh refusing a message the user just sent. It is redundant besides, since an agent that updates its own STATUS.md does it during the turn.
+- **A live turn ending requests a status update without running a folder command.** Both successful and failed turns may have written status. Folder agents are re-read from disk; a Cinna source refreshes its environment, with rate limits still treated as a no-op. Replaying a saved turn does not repeat that request. A late refresh from a replaced profile cannot update the current profile’s status cache or show its old authentication error.
 - **Rate limits.** User-initiated remote force refresh always fetches; the backend's 1 call / 30 s per-env limit throttles only event-driven refreshes. A 429 is logged at info and treated as a no-op. A folder agent's equivalent of a 429 is a **busy** turn lock, and it is swallowed identically.
 - **Refresh cache patch.** A successful per-agent fetch is written back into the batch cache by `agentId`, so cards and the open detail view update in place. A per-agent success says nothing about the batch route's health, so a standing partial-failure marker survives the patch.
 - **A failed refresh never costs the user the status they already had** — the failure leaves the cache untouched and the last good snapshot stays on screen behind the error.
 
 ### Failure shape
 
-- **Partial results, not a blank panel.** The service returns folder rows plus a `remoteError` when the Cinna leg fails; the overlay and the tray decide the failure's *shape* by whether there is anything left to look at, and by that alone. Rows on screen → a strip above them. Nothing on screen → the whole panel, exactly as before. Nothing is softened: same message, same colour, same Re-authenticate button, which the strip carries too.
+- **Partial results, not a blank panel.** The service returns folder rows plus a `remoteError` when the Cinna leg fails; the overlay and the tray decide the failure's *shape* by whether there is anything left to look at, and by that alone. Rows on screen → a bounded, scrollable footer below the overlay grid or detail; the tray retains a strip above its rows. Nothing on screen → the whole panel, exactly as before. The overlay footer appears only when an error exists and keeps the triggering controls fixed. The message, colour and Re-authenticate action remain available.
 - **A failure arrives through one of two doors, and the rule above covers both.** Either the handler **returns** it (`{success:false, code}`), or the *invoke itself rejects* — which is what a handler throwing above its own `try` produces. On the rejecting path the `code` is already gone by the time the renderer sees it: IPC serialises a rejection down to a message and a stack, so a thrown code cannot survive the trip. The hook therefore maps **any** unrecognised rejection onto the same typed error every consumer already branches on, rather than leaving it unclassified. Both doors matter because a reader who knows only the returned path will not think to check the other — and an unclassified rejection does not render as an error, it renders as an empty, healthy-looking panel saying *"No agents have reported status yet."*, which is the worst thing a status surface can say about a session that is simply not activated.
 - **An unexpected rejection's message is passed through raw**, IPC plumbing prefix and all. It is meant to be ugly: such a rejection reaching a user is a bug, and a tidied message is a bug that looks handled.
 - **This repairs pre-existing behaviour and will read as a regression if you don't know that.** Before 7b, both surfaces rendered *error instead of list*, so a **single transient poll failure blanked a panel full of perfectly good cached snapshots** — for remote-only users as well. Folder agents made the flaw obvious (their status is unaffected by anything the Cinna leg does), but the fix was always owed to remote agents too.
@@ -118,7 +118,7 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 - **Severity is derived from a free-form word, anchored in the contract.** The kit contract's own `scripts/update_status.py` declares `STATUSES = ("ok", "attention", "error", "unknown")` and normalises anything else to `unknown` *before writing*, so those four are normative and a compliant agent can only write one of them. `attention` maps to `warning`; the rest map to themselves. A small, explicit synonym table (`healthy`/`green`/`pass`/`passing`/`success` → `ok`; `warn`/`degraded`/`blocked` → `warning`; `fail`/`failed`/`failure`/`critical` → `error`; `info` → `info`) is a tolerance layer for files that do not go through that script. Matching is trimmed and case-insensitive.
 - **An unrecognised word maps to `unknown`, never to `ok`** — an instance of *say less rather than guess*. This feeds a menu-bar dot someone glances at *instead of* opening the app; green over a word nobody read is silent false reassurance — strictly worse than grey, because grey is a question and green is an answer.
 - **No word at all maps to `null`**, which the worst-severity computation skips and which sorts *below* `unknown`. "Claimed nothing" and "claimed something unreadable" are different facts and the type had room for both.
-- **`environmentId: 'local'` is a sentinel, not data** — the same rule again. The renderer reads `environmentId === null` as *the remote environment is not running* and prints "· env not running" / "Environment is not running — showing last cached status". Over a file read off this machine's disk a second ago that is a confident, visible falsehood on every folder-agent card. Nothing renders the value itself; the non-null sentinel is how "not applicable" is said without adding a field to a type that is declared in two places.
+- **`environmentId: 'local'` is a sentinel, not data.** The renderer reads `null` as a stopped remote environment. Folder snapshots use the non-null sentinel so a local file does not falsely claim that its environment is down; the value itself is not displayed.
 - **Timestamps.** `readStatus` accepts `timestamp` first, then the synonyms `updated` / `updated_at` / `last_updated` / `generated_at`. **`timestamp` is the only key the contract's own `update_status.py` ever writes** — and it was not in that list until 7b, so *every* status a scaffolded agent has produced since Phase 3 arrived with no time on it: no time on the agents-list sub-line, no time on the agent page's Status card. Users of scaffolded agents will now see a reported time where there was none. The defect survived because the test that covered the field used the `updated` **synonym** rather than the bytes the emitter writes — the transferable lesson being that a fixture written from a format's *documentation* instead of its *emitter* passes while the real bytes fail.
 - **A missing timestamp falls back to the file's mtime**, reported as `file_mtime` and labelled in the UI as inferred — the same treatment the remote platform gives it.
 - **Severity history is not invented.** `prevSeverity` / `severityChangedAt` stay `null` for a folder agent: that history is the remote platform's, kept server-side across polls, and claiming a transition from a single read would claim something never observed. `raw` is `null` too — nothing reads it, and re-reading the file to fill it would cost a second syscall on a 45-second poll.
@@ -149,10 +149,10 @@ Main process
              failure → { items: folderRows, remoteError } (degrade)
              failure + no folder rows → throw
 
-  agentStatusService.get(userId, agentId, forceRefresh)
-      ├── folder agent → forceRefresh ? runStatusRefresh() then read : read
-      │                   (/run:<name> only; busy + aborted are no-ops)
-      └── remote agent → GET /api/v1/agents/{uuid}/status?force_refresh=…
+  agentStatusService.get(scope, agentId, intent)
+      → fresh owned row → optional status source
+      ├── folder → manual: command then read; all other intents: read
+      └── Cinna → source-owned environment refresh policy
 
 IPC
   agent-status:list  ← { success, items, remoteError } | { success:false, code, error }
@@ -161,15 +161,16 @@ IPC
 Renderer
   useAgentStatus()                 ── 45 s poll, EVERY account, re-raises remoteError
   useForceRefreshAgentStatus       ── per-card Refresh: force both kinds (folder = run command)
-  useRereadAgentStatus             ── post-turn pull for a folder agent (no lock, no subprocess)
+  useRereadAgentStatus             ── passive read
+  useAfterTurnAgentStatus          ── live ending only; folder read, Cinna refresh
   useForceRefreshAllAgentStatuses  ── "Refresh all": force remote, re-read folder
 
   Sidebar footer → AgentStatusButton (dot = worst severity, no account gate)
         │ click
         ▼
-  AgentStatusOverlay      grid + detail; failure is a STRIP when rows survive,
+  AgentStatusOverlay      grid + detail; failure is a FOOTER when rows survive,
                           a PANEL when nothing does
-  TrayPanel / useTrayIcon same list, same rule, same dot in the menu bar
+  TrayPanel / useTrayIcon same list; tray keeps strip above rows; same menu-bar dot
 
   "Start chat" → setActiveView('chat') + setPendingAgentId(agentId) → MainArea
 ```
@@ -180,7 +181,7 @@ Stated as limitations rather than omitted:
 
 - **A folder agent whose `STATUS.md` is only ever written by `status_refresh_command` looks static on the poll.** The batch path deliberately runs nothing, so such an agent's tile never changes on its own and only updates when the user presses its card's Refresh. The decision behind it is right — a 45-second tick that took every agent's turn lock would refuse editor saves and the user's next message on a timer — but nothing on screen tells the user the design is asking them to press Refresh, so **this is correct behaviour that will attract a bug report**. The cure, if one is wanted later, is on the agent's side: have it write its status during its turn, which is what the scaffolded template encourages.
 - **The per-agent failure strip does not say which agent failed.** With two Refreshes in flight, the mutation's `variables` names the latest *call* while its `data` holds the latest *settled result*, and the two can disagree — so attributing the message to an agent would sometimes name the wrong one, which is worse than naming none (*say less rather than guess*, again). The strip is therefore shared and deliberately un-attributed; with one refresh at a time, the ordinary case, there is no ambiguity to resolve. **This is permanent rather than pending:** attributing it properly means carrying `{agentId, message}` per call, which reworks the very error path that was mutation-pinned two commits before — so the cost is known and was weighed, not deferred. `AgentStatusOverlay.tsx`'s own comment points here for this reason.
-- **Nothing in 7b has been through a live `npm run dev` run.** The behaviour above is what the code and its tests say; none of it has been watched in the running app.
+- **Built-app coverage is local.** Electron checks exercise real folder commands, bulk reads, ACP completion and saved tool replay. Measured grid/detail checks at 800 and 1200 pixels cover held refresh, actual command failure, retained content and successful retry. Remote Cinna environment wake and rate limiting have not been exercised by these checks.
 - **`useTrayIcon` is not directly tested.** It reads the same hook as everything else and therefore inherits the widened gate, but no test asserts that the menu-bar icon repaints for a folder agent's severity.
 - **`runStatusRefresh`'s abort branch has no production caller.** The function accepts an `AbortSignal` and treats a cancel as a soft no-op, but the only caller passes none, so that branch is exercised by tests alone.
 - **The severity mapping rests on agents actually writing the contract's vocabulary.** An agent that invents its own word lands on `unknown` by design — correct, but it means a bespoke status vocabulary shows grey until either the agent or the synonym table changes.
@@ -194,7 +195,7 @@ Stated as limitations rather than omitted:
 - [The Agent Turn Runner](../local_agents/agent_turn.md) — the post-turn re-read hangs off the end of a folder-agent turn, and the turn lock it declines to take is that runner's.
 - [Remote Agents](../remote_agents/remote_agents.md) — the remote leg is keyed by the `remoteTargetId` written on each `agents` row during `agent:sync-remote`.
 - [Agents](../agents/agents.md) — "Start Chat" uses the existing `pendingAgentId` → `MainArea` → agent-preselect flow.
-- [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the remote leg authenticates per request; `reauth_required` reaches the overlay and the tray as a Re-authenticate affordance, now in strip form when rows survive.
-- [Menu-Bar Tray](../../ui/tray/tray.md) — the third surface for this list; it shows the same union and the same degradation rule, and its "Refresh all" is the one place a folder agent is re-read rather than asked to recompute.
+- [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the remote leg authenticates per request; `reauth_required` reaches the overlay and the tray as a Re-authenticate affordance, in the shared overlay footer or tray strip when rows survive.
+- [Menu-Bar Tray](../../ui/tray/tray.md) — the third status surface; it shares the union, partial-failure rule and passive folder policy for Refresh all.
 - [UI — Settings / Theming](../../ui/settings/settings.md) — severity and overlay tokens live alongside the existing `--color-*` palette.
 - [Logger](../../development/logger/logger.md) — remote requests, folder skips, unsupported command forms and failed refreshes all log through scoped loggers visible in the in-app overlay.

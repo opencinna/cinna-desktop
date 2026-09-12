@@ -330,9 +330,9 @@ describe('Refresh all asks the two agent kinds different questions', () => {
     // A menu-bar click must not start every folder agent's status script at
     // once: for a folder agent `forceRefresh` spawns a subprocess under that
     // agent's turn lock, which then refuses its chat and its editor saves.
-    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'batch' })
     // For a remote agent it is the only way past the server-side cache.
-    expect(api.get).toHaveBeenCalledWith({ agentId: 'a-remote', forceRefresh: true })
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'a-remote', intent: 'batch' })
   })
 })
 
@@ -343,17 +343,61 @@ describe('the two per-agent fetches are not the same request', () => {
     await act(async () => {
       await result.current.mutateAsync('folder:alpha')
     })
-    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: true })
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'manual' })
   })
 
   it('useRereadAgentStatus does not', async () => {
-    // For a folder agent `forceRefresh: true` spawns `status_refresh_command`
+    // For a folder agent `intent: 'manual'` spawns `status_refresh_command`
     // under the agent's turn lock. This one is a disk read.
     const api = stubApi()
     const { result } = renderHook(() => useRereadAgentStatus(), { wrapper })
     await act(async () => {
       await result.current.mutateAsync('folder:alpha')
     })
-    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: false })
+    expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'read' })
+  })
+})
+
+describe('refresh completion belongs to its captured profile', () => {
+  it.each(['success', 'error'] as const)('discards a late single-agent %s after profile replacement', async (outcome) => {
+    signInAs('local_user')
+    let finish!: (value: unknown) => void
+    const api = stubApi({ get: vi.fn(() => new Promise((resolve) => { finish = resolve })) })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const wrap = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const { result } = renderHook(() => useForceRefreshAgentStatus(), { wrapper: wrap })
+    let pending!: ReturnType<typeof result.current.mutateAsync>
+    act(() => { pending = result.current.mutateAsync('folder:alpha') })
+    await waitFor(() => expect(api.get).toHaveBeenCalledTimes(1))
+    signInAs('cinna_user')
+    const current = { items: [{ agentId: 'current', summary: 'Current profile' }], remoteError: null }
+    client.setQueryData(['agent-status'], current)
+    await act(async () => {
+      finish(outcome === 'success' ? { success: true, item: { agentId: 'old', summary: 'Old profile' } }
+        : { success: false, code: 'reauth_required', error: 'Old account expired' })
+      expect(await pending).toEqual({ success: true, item: null })
+    })
+    expect(client.getQueryData(['agent-status'])).toEqual(current)
+  })
+
+  it('does not merge a late batch into the next profile', async () => {
+    signInAs('local_user')
+    let finish!: (value: unknown) => void
+    const api = stubApi({ get: vi.fn(() => new Promise((resolve) => { finish = resolve })) })
+    const client = new QueryClient()
+    client.setQueryData(['agent-status'], { items: [{ agentId: 'folder:alpha' }], remoteError: null })
+    const wrap = ({ children }: { children: ReactNode }) => createElement(QueryClientProvider, { client }, children)
+    const { result } = renderHook(() => useForceRefreshAllAgentStatuses(), { wrapper: wrap })
+    let pending!: ReturnType<typeof result.current.mutateAsync>
+    act(() => { pending = result.current.mutateAsync() })
+    await waitFor(() => expect(api.get).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'batch' }))
+    signInAs('cinna_user')
+    const current = { items: [{ agentId: 'current' }], remoteError: null }
+    client.setQueryData(['agent-status'], current)
+    await act(async () => {
+      finish({ success: true, item: { agentId: 'old' } })
+      expect(await pending).toEqual({ refreshed: 0, failed: 0, reauthRequired: false })
+    })
+    expect(client.getQueryData(['agent-status'])).toEqual(current)
   })
 })

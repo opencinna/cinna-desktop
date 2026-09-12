@@ -1,3 +1,4 @@
+import type { RunEvent } from '../../shared/runEvents'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 /**
  * Exposes an agent to the orchestrator LLM as an *emulated* MCP tool
@@ -78,6 +79,14 @@ export class A2AAsMcpProvider implements ToolProvider {
   /** Routing key — the stable agent id. Never shown to the LLM. */
   get agentId(): string {
     return this.agent.id
+  }
+
+  get attribution(): { agentId: string; displayName: string } {
+    return { agentId: this.agent.id, displayName: this.agent.name }
+  }
+
+  eventSink(toolCallId: string, publish: (event: RunEvent) => void): (event: RunEvent) => void {
+    return (event) => publish({ type: 'child', toolCallId, agentId: this.agent.id, event })
   }
 
   getTools(): ToolDefinition[] {

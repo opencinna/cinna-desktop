@@ -1,3 +1,4 @@
+import { FOLDER_STATUS_REFRESH_DESCRIPTION, type AgentStatusSnapshot } from '../../../../shared/agentStatus'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
@@ -50,7 +51,8 @@ function seededWrapper(items: unknown[]) {
     createElement(QueryClientProvider, { client }, children)
 }
 
-const folderRow = {
+const folderRow: AgentStatusSnapshot = {
+  refreshDescription: FOLDER_STATUS_REFRESH_DESCRIPTION,
   agentId: 'folder:alpha',
   remoteAgentId: 'folder:alpha',
   name: 'Alpha',
@@ -224,7 +226,7 @@ describe('AgentStatusOverlay — the per-card Refresh', () => {
     // Mechanism first here, unusually: without it a missing error message is
     // ambiguous between "not rendered" and "the refresh never ran".
     await waitFor(() =>
-      expect(get).toHaveBeenCalledWith({ agentId: 'folder:alpha', forceRefresh: true })
+      expect(get).toHaveBeenCalledWith({ agentId: 'folder:alpha', intent: 'manual' })
     )
     expect(
       await screen.findByText('"uv run scripts/update_status.py" exited with code 3.')

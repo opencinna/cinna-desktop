@@ -268,6 +268,12 @@ Its wiring: `createA2aDriver({runTurn: runAgentTurn, resolveEndpoint: resolveEnd
 - **`useCheckAgentReadiness`** — `onSettled` invalidates `['agents']` whatever the answer. The push fires only when an answer *changed*, and a check the user asked for should visibly finish even when it did not
 - **`useChatStream`** — after `error` on a direct agent turn it calls `window.api.agents.checkReadiness(agentId).catch(() => undefined)` inside a `try`, so a re-check that cannot run leaves the turn's own ending untouched
 
+## Optional status and tool-provider contracts
+
+`src/main/agents/status/contract.ts` defines reported-status access independently of `AgentDriver`. `statusSourceFor` selects an optional owner from a fresh scoped row; caller intent controls what is requested while the source decides whether to read a file or refresh a Cinna environment. Only explicit per-agent manual intent runs a folder command. See [Agent Status technical details](../agent_status/agent_status_tech.md).
+
+Agent-as-tool wrappers provide static history attribution and an event sink through `ToolProvider`. The wrapper frames driver events as children; the model loop does not choose this behavior from presentation type. Coordinator authority remains an explicit separate check. See [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents_tech.md).
+
 ## The kind-branch ratchet
 
 `src/main/agents/kindBranches.test.ts` counts literal comparisons of these names against their kind values, across `src/main`, `src/shared` and `src/renderer/src`:
@@ -280,7 +286,7 @@ Its wiring: `createA2aDriver({runTurn: runAgentTurn, resolveEndpoint: resolveEnd
 It also counts comparisons against `FOLDER_AGENT_SOURCE` and calls of the two folder-agent predicates its header names. Test files, `__golden__` and `__snapshots__` are skipped, and comments are blanked before matching. The walk runs in Node, never in shell `grep`.
 
 - **`ALLOWLIST`** (`:108`) — `src/main/agents/drivers/` and four sync files. Their counts are printed but never held against a limit: a driver is where a kind branch belongs, and ownership is what sync decides
-- **`OWNERSHIP`** (`:130`) — files whose `source` reads are about ownership (who may edit, delete or list a row, which account a synced job's dependency belongs to), each pinned to an **exact** count:
+- **`OWNERSHIP`** — exact per-file/category pins for data ownership, schema authoring, presentation and trusted execution authority. The earlier source ownership examples include:
   - `agentService.ts` 7
   - `localAgentService.ts` 3
   - `jobService.ts` 4
@@ -288,7 +294,7 @@ It also counts comparisons against `FOLDER_AGENT_SOURCE` and calls of the two fo
   - `AgentCard.tsx`, `CatalogSettingsSection.tsx`, `JobEditForm.tsx`, `JobDetail.tsx` — 1 each
 
   These files are not allowlisted, because a whole-file pass would hide the next behavioural branch added beside them. A count that moves in either direction fails until someone reads the branch and decides which kind it is; a behavioural one moves into a driver
-- **`LIMITS`** — `source` 4, **`engine` 0**, `kind` 42, `jobType` 30, `providerType` 3, and `LIMIT` 79. **Each is asserted by equality, not as a ceiling**: a branch removed without lowering its limit would leave room for a new one to arrive unnoticed, and raising one needs a comment beside it naming what pays it back. `engine` reaching **zero** is what phase 3 paid for: the config source no longer filters by engine (the launcher is asked about one agent it was chosen for), and the shared engine's own state — the row that said *Running* and offered *Start* — went with the server. What remains of `runtime.engine` is read by the two places that own that field (the service that resolves and validates it, the panel that edits it) and by the one card whose control exists on one engine only; those are pinned per file rather than held against `LIMITS`, for the same reason sync's `source` reads are. The `source` branches that remain are how agent status refreshes, which no driver owns
+- **`LIMITS`** — `source`, `engine`, `kind`, `providerType`, `routing` and `remoteAdapter` are 0; `jobType` is 30, so `LIMIT` is 30. Exact equality remains required. Six old behavioral consumers now use status intent or provider attribution/event delivery. Forty-two existing kind/layout/authoring comparisons and one transcript presentation comparison are classified, not removed. Two status-factory ownership comparisons are new exact pins; the previously unscanned coordinator authority check is now scanned and pinned once. The remaining Job behavior/provenance work is still open.
 - **`NOT_A_KIND_BRANCH`** (`:182`) — drops three named comparisons on unrelated `'local' | 'cinna'` unions
 - **Blind spots**, listed in the file's header — none of these are counted:
   - a `switch` / `case` on a kind
@@ -376,4 +382,4 @@ The Claude login probe's own 30-second window (`CLAUDE_AUTH_TTL_MS`) is document
 
 The shared pending registry and A2A golden/contract files live at the driver root; Claude auth, environment, permissions and subagent-reading helpers live under acp. All 75 former agent-turn helper/fixture files were relocated; golden bytes and runtime behavior are retained, with only relative imports changing. There is no services/agentTurn implementation directory.
 
-ResolvedRuntime now calls its derived output launcher. It is not execution authority: current consumers use model/credential outputs, while drivers resolve their own configuration. The manifest still authors runtime.engine. The counted ratchet remains 79; moving already shared helpers and removing the driver fallback does not pay the separately counted status/Job/tool-provider debt. Tests for unsupported identity cover direct refusal and raw DTO visibility despite stale ready cache; populated migration tests preserve old and unknown IDs.
+ResolvedRuntime now calls its derived output launcher. It is not execution authority: current consumers use model/credential outputs, while drivers resolve their own configuration. The manifest still authors runtime.engine. The compatibility-only change did not reduce the counted ratchet. The separate status/tool contract cleanup brings it to 30 with the classifications described above; the Job work remains open. Tests for unsupported identity cover direct refusal and raw DTO visibility despite stale ready cache; populated migration tests preserve old and unknown IDs.

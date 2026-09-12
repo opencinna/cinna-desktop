@@ -193,7 +193,7 @@ describe('scope — folder agents are default-scoped, and the profile is not', (
     asLocalUser()
     withFolderAgent()
 
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', true)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'manual')
 
     expect(item?.agentId).toBe('folder:alpha')
     expect(runStatusRefreshMock).toHaveBeenCalledWith(DEFAULT_USER, 'folder:alpha', '/run:status')
@@ -375,7 +375,7 @@ describe('get — the folder branch is above both gates', () => {
   it('answers for a local-only account', async () => {
     asLocalUser()
     withFolderAgent()
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', false)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'read')
     expect(item?.agentId).toBe('folder:alpha')
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -385,7 +385,7 @@ describe('get — the folder branch is above both gates', () => {
     // agent never has one, so a branch placed after it would be dead code.
     asCinnaUser()
     withFolderAgent()
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', false)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'read')
     expect(item?.agentId).toBe('folder:alpha')
     expect(fetchMock).not.toHaveBeenCalled()
   })
@@ -393,14 +393,14 @@ describe('get — the folder branch is above both gates', () => {
   it('does not run the refresh command unless asked', async () => {
     asLocalUser()
     withFolderAgent()
-    await agentStatusService.get(SCOPE, 'folder:alpha', false)
+    await agentStatusService.get(SCOPE, 'folder:alpha', 'read')
     expect(runStatusRefreshMock).not.toHaveBeenCalled()
   })
 
   it('runs the manifest’s status_refresh_command on a force refresh', async () => {
     asLocalUser()
     withFolderAgent()
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', true)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'manual')
     expect(runStatusRefreshMock).toHaveBeenCalledWith(DEFAULT_USER, 'folder:alpha', '/run:status')
     expect(item?.agentId).toBe('folder:alpha')
   })
@@ -417,7 +417,7 @@ describe('get — the folder branch is above both gates', () => {
       order.push('read')
       return snapshot(agentId)
     })
-    await agentStatusService.get(SCOPE, 'folder:alpha', true)
+    await agentStatusService.get(SCOPE, 'folder:alpha', 'manual')
     // Reading first would show the user the status the refresh just replaced.
     expect(order).toEqual(['refresh', 'read'])
   })
@@ -426,7 +426,7 @@ describe('get — the folder branch is above both gates', () => {
     asLocalUser()
     withFolderAgent()
     runStatusRefreshMock.mockResolvedValue({ ran: false, skipped: false, error: 'exited with code 3' })
-    await expect(agentStatusService.get(SCOPE, 'folder:alpha', true)).rejects.toThrow(
+    await expect(agentStatusService.get(SCOPE, 'folder:alpha', 'manual')).rejects.toThrow(
       'exited with code 3'
     )
   })
@@ -437,7 +437,7 @@ describe('get — the folder branch is above both gates', () => {
     asLocalUser()
     withFolderAgent()
     runStatusRefreshMock.mockResolvedValue({ ran: false, skipped: true, error: null })
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', true)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'manual')
     expect(item?.agentId).toBe('folder:alpha')
   })
 
@@ -447,7 +447,7 @@ describe('get — the folder branch is above both gates', () => {
     manifestMock.mockImplementation(() => {
       throw new Error('manifest_unreadable')
     })
-    const item = await agentStatusService.get(SCOPE, 'folder:alpha', true)
+    const item = await agentStatusService.get(SCOPE, 'folder:alpha', 'manual')
     // An unreadable manifest is the agent page's finding to report; withholding
     // a STATUS.md that is sitting right there helps nobody.
     expect(item?.agentId).toBe('folder:alpha')
@@ -468,7 +468,7 @@ describe('get — the folder branch is above both gates', () => {
     locateMock.mockImplementation(() => {
       throw new Error('That agent is no longer in your agents folder.')
     })
-    await expect(agentStatusService.get(SCOPE, 'folder:alpha', false)).rejects.toThrow(
+    await expect(agentStatusService.get(SCOPE, 'folder:alpha', 'read')).rejects.toThrow(
       'no longer in your agents folder'
     )
   })
@@ -480,7 +480,7 @@ describe('get — the folder branch is above both gates', () => {
     asLocalUser()
     withFolderAgent()
     readSnapshotMock.mockReturnValue(null)
-    expect(await agentStatusService.get(SCOPE, 'folder:alpha', false)).toBeNull()
+    expect(await agentStatusService.get(SCOPE, 'folder:alpha', 'read')).toBeNull()
   })
 
   it('guards get’s response.json the way list’s is guarded', async () => {
@@ -502,7 +502,7 @@ describe('get — the folder branch is above both gates', () => {
       }
     })
     await expect(
-      agentStatusService.get(SCOPE, 'remote:agent:r1', false)
+      agentStatusService.get(SCOPE, 'remote:agent:r1', 'read')
     ).rejects.toBeInstanceOf(AgentStatusError)
   })
 
@@ -528,8 +528,47 @@ describe('get — the folder branch is above both gates', () => {
       status: 200,
       json: async () => ({ agent_id: 'r1', severity: 'ok', summary: 'fine' })
     })
-    const item = await agentStatusService.get(SCOPE, 'remote:agent:r1', false)
+    const item = await agentStatusService.get(SCOPE, 'remote:agent:r1', 'read')
     expect(item?.remoteAgentId).toBe('r1')
+    expect(readSnapshotMock).not.toHaveBeenCalled()
+  })
+})
+
+
+describe('status source owns refresh intent', () => {
+  it.each(['read', 'batch', 'after_turn'] as const)('%s cannot execute a folder command', async (intent) => {
+    asCinnaUser()
+    withFolderAgent()
+    expect(await agentStatusService.get(SCOPE, 'folder:alpha', intent)).toMatchObject({ agentId: 'folder:alpha' })
+    expect(readSnapshotMock).toHaveBeenCalledTimes(1)
+    expect(runStatusRefreshMock).not.toHaveBeenCalled()
+    expect(manifestMock).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['manual', 'batch', 'after_turn'] as const)('%s refreshes existing Cinna environment status', async (intent) => {
+    asCinnaUser()
+    putOwned(PROFILE, 'remote:agent:r1', { id: 'remote:agent:r1', name: 'Remote', source: 'remote', remoteTargetId: 'r1' })
+    fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ agent_id: 'r1', severity: 'ok' }) })
+    const item = await agentStatusService.get(SCOPE, 'remote:agent:r1', intent)
+    expect(fetchMock.mock.calls[0][0]).toBe('https://cinna.example.com/api/v1/agents/r1/status?force_refresh=true')
+    expect(item?.refreshDescription).toContain('running environment')
+    expect(runStatusRefreshMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['a2a', 'acp', 'managed'])('a local %s transport does not imply Cinna or folder status ownership', async (driver) => {
+    asCinnaUser()
+    putOwned(DEFAULT_USER, 'hand-added', { id: 'hand-added', name: 'External', source: 'local', driver, remoteTargetId: 'stray-id' })
+    expect(await agentStatusService.get(SCOPE, 'hand-added', 'manual')).toBeNull()
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(locateMock).not.toHaveBeenCalled()
+    expect(runStatusRefreshMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses invalid intent before status access', async () => {
+    withFolderAgent()
+    await expect(agentStatusService.get(SCOPE, 'folder:alpha', 'recompute' as never)).rejects.toThrow('Unknown agent status refresh intent')
+    expect(runStatusRefreshMock).not.toHaveBeenCalled()
     expect(readSnapshotMock).not.toHaveBeenCalled()
   })
 })

@@ -40,7 +40,7 @@ import { fileURLToPath } from 'node:url'
  * - `jobType`      — the bare name `type` against `'local' | 'cinna_task'`; no
  *                    `…Type` suffix, because `remoteTargetType === 'agent'` and
  *                    every `mimeType` would come with it
- * - `providerType` — `providerType` against `'mcp' | 'agent'`
+ * - `providerType` — `providerType` against `'mcp' | 'agent' | 'coordinator'`
  * - `remoteAdapter` — an **equality comparison against an adapter id** (`'cinna'`,
  *                    and the ids §5.6 names as the reason the seam is an
  *                    interface): `remoteAdapter === 'cinna'`, `adapter.id ===
@@ -130,14 +130,9 @@ const ADAPTER_CONSTANT = '(?:[A-Z][A-Z0-9_]*ADAPTER[A-Z0-9_]*|[a-z]\\w*Adapter\\
 
 /** Non-allowlisted branch sites per category, exactly as measured. Lowered by each phase. */
 const LIMITS: Record<Category, number> = {
-  // Phase 2: 36 → 4. The turn, readiness, auth, attachment and command
-  // branches moved into `agents/drivers/` (allowlisted); the ownership reads
-  // that remain are pinned in `OWNERSHIP` instead of held here. What is left is
-  // how *agent status* refreshes — `agentStatusService`, `statusViews`,
-  // `useAgentStatus`, `useLiveRunWatch` — which no driver owns yet (phase 7).
-  // The count also includes `source === FOLDER_AGENT_SOURCE`, counted since
-  // phase 2: previously unseen, not new.
-  source: 4,
+  // Phase 7: all four status consumers ask the data owner's intent contract.
+  // The source factory's two ownership resolutions are pinned separately.
+  source: 0,
   // **Zero, and the four reads that remain are pinned in `OWNERSHIP`.**
   //
   // Phase 3 owned this target and paid it: the config source no longer filters
@@ -153,11 +148,14 @@ const LIMITS: Record<Category, number> = {
   engine: 0,
   // Phase 2: the `bare` prompt branch moved with the Claude wiring into
   // `agents/drivers/index.ts`.
-  kind: 42,
+  // Phase 7 classifies 42 existing format/authoring cases; no removal claim.
+  kind: 0,
   // Phase 6 adds one validation guard: autonomous routing belongs to a local
   // job. Phase 7's job-type cleanup moves this to the executor contract.
   jobType: 30,
-  providerType: 3,
+  // Two behavior sites now consume provider attribution/event delivery.
+  // Presentation and trusted coordinator authority remain exactly pinned.
+  providerType: 0,
   // Phase 4 replaced runtime reads with chats.router. Phase 7 retires the
   // mirror column and its writers; this pattern prevents reintroduction.
   routing: 0,
@@ -172,7 +170,7 @@ const LIMITS: Record<Category, number> = {
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
-const LIMIT = 79
+const LIMIT = 30
 
 /**
  * Files where branching on kind is the job, not a leak. Still counted and
@@ -212,6 +210,23 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  // Phase 7 audit: classification is reported separately from behavior removal.
+  { file: 'src/main/engine/engineConfigSource.ts', category: 'kind', count: 1, why: 'owns kit versus bare prompt assembly' },
+  { file: 'src/main/services/localAgents/agentsHomeService.ts', category: 'kind', count: 3, why: 'normalizes root layout and its count/cache' },
+  { file: 'src/main/services/localAgents/desktopStateService.ts', category: 'kind', count: 1, why: 'owns the actual kit versus userData desktop-state path' },
+  { file: 'src/main/services/localAgents/localAgentService.ts', category: 'kind', count: 11, why: 'owns folder schema, instruction edits, adoption and trash semantics' },
+  { file: 'src/main/services/localAgents/scannerService.ts', category: 'kind', count: 1, why: 'owns root layout traversal' },
+  { file: 'src/main/services/localAgents/watcherService.ts', category: 'kind', count: 3, why: 'owns folder layout event classification and watch paths' },
+  { file: 'src/renderer/src/components/agents/local/AgentActionsMenu.tsx', category: 'kind', count: 5, why: 'owns folder Remove versus Trash actions and consent' },
+  { file: 'src/renderer/src/components/agents/local/FolderTab.tsx', category: 'kind', count: 7, why: 'presents actual file and state ownership' },
+  { file: 'src/renderer/src/components/agents/local/LocalAgentPage.tsx', category: 'kind', count: 4, why: 'owns manifest versus bare instruction editing and declaration tabs' },
+  { file: 'src/renderer/src/components/agents/local/PermissionsCard.tsx', category: 'kind', count: 1, why: 'presents the actual grants state source' },
+  { file: 'src/renderer/src/components/agents/local/ReadOnlyCards.tsx', category: 'kind', count: 1, why: 'presents the actual desktop state storage' },
+  { file: 'src/renderer/src/components/agents/local/RuntimePanel.tsx', category: 'kind', count: 1, why: 'writes manifest versus desktop-owned runtime configuration' },
+  { file: 'src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx', category: 'kind', count: 3, why: 'owns registered root layout and adoption controls' },
+  { file: 'src/main/agents/status/index.ts', category: 'source', count: 2, why: 'resolves ownership of optional folder or synced Cinna status data; source implementations own read/refresh behavior' },
+  { file: 'src/renderer/src/components/chat/MessageStream.tsx', category: 'providerType', count: 1, why: 'presents agent subthreads from the persisted/wire tool representation' },
+  { file: 'src/main/services/chatStreamingService.ts', category: 'providerType', count: 1, why: 'accepts runner controls only from a trusted coordinator provider; tool content grants no authority' },
   {
     file: 'src/main/services/localScheduleService.ts',
     category: 'kind',
@@ -337,7 +352,7 @@ const PATTERNS: Record<Category, RegExp[]> = {
   engine: comparisons('(?:engine|\\w*Engine)', ['opencode', 'claude']),
   kind: comparisons('(?:kind|\\w*Kind)', ['kit', 'bare', 'workshop', 'external']),
   jobType: comparisons('type', ['local', 'cinna_task']),
-  providerType: comparisons('providerType', ['mcp', 'agent']),
+  providerType: comparisons('providerType', ['mcp', 'agent', 'coordinator']),
   remoteAdapter: [
     ...comparisons('(?:adapter|\\w*Adapter)', ADAPTER_IDS),
     // The same branch reached through the object: `adapter.id === 'cinna'`.

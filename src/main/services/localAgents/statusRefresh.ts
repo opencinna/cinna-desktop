@@ -1,3 +1,4 @@
+import { FOLDER_STATUS_REFRESH_DESCRIPTION } from '../../../shared/agentStatus'
 /**
  * A folder agent's `app-data/storage/STATUS.md`, shaped into the
  * {@link AgentStatusSnapshot} the status overlay, the sidebar-footer button and
@@ -155,6 +156,7 @@ export function toStatusSnapshot(
     // No remote id exists; the local id is the only identifier this snapshot
     // has, and nothing renders this field.
     remoteAgentId: agentId,
+    refreshDescription: FOLDER_STATUS_REFRESH_DESCRIPTION,
     name,
     environmentId: 'local',
     severity: severityFromState(status.state),

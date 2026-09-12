@@ -27,7 +27,7 @@ describe('coordinator tools', () => {
     })
     const events: RunEvent[] = []
     expect(await provider.callTool('delegate', { agent: 'Analyst', message: 'Analyse', expect: 'Evidence' },
-      { toolCallId: 'tool-1', onEvent: (event) => events.push(event) })).toEqual({ content: 'analysis', parts: undefined, isError: undefined })
+      { toolCallId: 'tool-1', onEvent: provider.eventSink('tool-1', (event) => events.push(event)) })).toEqual({ content: 'analysis', parts: undefined, isError: undefined })
     expect(events).toEqual([{ type: 'child', agentId: 'alpha', toolCallId: 'tool-1', event: { type: 'delta', kind: 'text', text: 'Working' } }])
     expect(actions.askUser).not.toHaveBeenCalled()
     expect(actions.updateTask).not.toHaveBeenCalled()

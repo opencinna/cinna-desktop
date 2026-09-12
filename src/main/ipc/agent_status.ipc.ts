@@ -1,3 +1,4 @@
+import { isStatusRefreshIntent, type StatusRefreshIntent } from '../../shared/agentStatus'
 import {
   agentStatusService,
   type AgentStatusScope,
@@ -64,7 +65,7 @@ export function registerAgentStatusHandlers(): void {
     'agent-status:get',
     async (
       _event,
-      data: { agentId: string; forceRefresh?: boolean }
+      data: { agentId: string; intent?: StatusRefreshIntent }
     ): Promise<
       | { success: true; item: AgentStatusSnapshot | null }
       | { success: false; code: string; error: string }
@@ -74,10 +75,12 @@ export function registerAgentStatusHandlers(): void {
         // guard was outside the try here too. Reached by every per-card Refresh
         // and by "Refresh all"'s fan-out.
         userActivation.requireActivated()
+        const intent = data.intent ?? 'read'
+        if (!isStatusRefreshIntent(intent)) throw new Error('Unknown agent status refresh intent.')
         const item = await agentStatusService.get(
           statusScope(),
           data.agentId,
-          data.forceRefresh ?? false
+          intent
         )
         return { success: true as const, item }
       } catch (err) {

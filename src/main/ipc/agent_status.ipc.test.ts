@@ -134,3 +134,15 @@ describe('agent-status:get — the same guard, the same placement', () => {
     expect(result.item).toEqual({ agentId: 'folder:alpha' })
   })
 })
+
+
+it('validates status intent before calling the service', async () => {
+  const result = await invoke('agent-status:get', { agentId: 'folder:alpha', intent: 'execute' })
+  expect(result).toMatchObject({ success: false, error: 'Unknown agent status refresh intent.' })
+  expect(getMock).not.toHaveBeenCalled()
+})
+
+it('defaults a status request to a passive read', async () => {
+  await invoke('agent-status:get', { agentId: 'folder:alpha' })
+  expect(getMock).toHaveBeenCalledWith({ defaultUserId: '__default__', profileUserId: 'u-named-profile' }, 'folder:alpha', 'read')
+})
