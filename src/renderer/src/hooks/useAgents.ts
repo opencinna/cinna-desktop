@@ -135,9 +135,24 @@ export function useSetAgentEnabled() {
 export function useDeleteAgent() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: (agentId: string) => window.api.agents.delete(agentId),
+    mutationFn: async (agentId: string) => {
+      const result = await window.api.agents.delete(agentId)
+      if (!result.success) throw new Error(result.error ?? 'Could not delete agent.')
+      return result
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['agents'] })
+    }
+  })
+}
+
+export function useDeleteRemoteAgent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (agentId: string) => window.api.agents.deleteRemote(agentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['agents'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog'] })
     }
   })
 }

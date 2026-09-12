@@ -24,7 +24,7 @@ This is general infrastructure, not agent-specific. Installed-tool detection, th
 4. The user sees `claude`, `uv`, `opencode` … detected exactly as their terminal sees them
 
 ### The user installs a tool while the app is running
-1. User installs, say, Claude Code, then hits **Refresh** (Settings → Local Agents)
+1. User installs, say, Claude Code, then hits **Refresh** (Settings → Default → Agents)
 2. The executable-lookup cache is dropped and every tool is probed again
 3. **The resolved environment itself is not re-resolved.** An install into a directory already on `PATH` (the normal Homebrew / npm / cargo case) is picked up by re-walking alone; editing the shell profile to add a *new* `PATH` entry still needs an app restart
 

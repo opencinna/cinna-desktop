@@ -5,21 +5,21 @@
 ### Renderer — Components
 
 - `src/renderer/src/components/settings/SettingsPage.tsx` — Shell component: reads `settingsTab`, renders section title (`sectionTitles`) and active section
-- `src/renderer/src/components/settings/SettingsLayout.tsx` — The section/card/row/status primitives a tab is built from (`SettingsSection`, `SettingsCard`, `SettingsRows`/`SettingsRow`, `SettingsLabel`, `SettingsInfoTip`, `SettingsToggleRow`, `SettingsHint`, `SettingsStatusRow`, `SettingsButton`/`SettingsAddButton`/`SettingsIconButton`/`SettingsBadge`, `settingsInputClass`), plus `useDialogChrome` — the shared modal behaviour (initial focus, Escape and outside-click dismissal, both suppressed while a write is pending). `SettingsLabel`'s `info` prop puts a control's standing explanation behind a `SettingsInfoTip` beside the label, named `About <label>`; the prop type is a union, so a label that is not a plain string must name its tip through `infoLabel` rather than fall back to a generic name. `SettingsToggleRow` is a one-line row for a `SettingsRows` list — label, tip and `role="switch"` — with `id` required so the label names the switch and `title` carrying the branching state sentence. `SettingsHint` is one line of live value, never standing prose. Local Agents, Features and Development are built from these, and Local Development puts a `SettingsInfoTip` on its own section title; see [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) for the pattern and the settings type scale
+- `src/renderer/src/components/settings/SettingsLayout.tsx` — The section/card/row/status primitives a tab is built from (`SettingsSection`, `SettingsCard`, `SettingsRows`/`SettingsRow`, `SettingsLabel`, `SettingsInfoTip`, `SettingsToggleRow`, `SettingsHint`, `SettingsStatusRow`, `SettingsButton`/`SettingsAddButton`/`SettingsIconButton`/`SettingsBadge`, `settingsInputClass`), plus `useDialogChrome` — the shared modal behaviour (initial focus, Escape and outside-click dismissal, both suppressed while a write is pending). `SettingsLabel`'s `info` prop puts a control's standing explanation behind a `SettingsInfoTip` beside the label, named `About <label>`; the prop type is a union, so a label that is not a plain string must name its tip through `infoLabel` rather than fall back to a generic name. `SettingsToggleRow` is a one-line row for a `SettingsRows` list — label, tip and `role="switch"` — with `id` required so the label names the switch and `title` carrying the branching state sentence. `SettingsHint` is one line of live value, never standing prose. The Default Agents, Features and Development tabs are built from these, and Local Development puts a `SettingsInfoTip` on its own section title; see [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) for the pattern and the settings type scale
 - `src/renderer/src/components/settings/LLMSettingsSection.tsx` — LLM providers list + add-provider form toggle (Default scope: user-created providers only)
 - `src/renderer/src/components/settings/MCPSettingsSection.tsx` — MCP providers list + add-remote form + add-local button; contains private `AddRemoteMcpForm`
 - `src/renderer/src/components/settings/LLMProviderCard.tsx` — Expandable card: enable/disable, default toggle, API key management, model selection. Switching **off** raises `DisableCredentialDialog` when a chat mode or folder agent depends on the credential; a standing line under the controls counts what is inactive for as long as it is off
 - `src/renderer/src/components/settings/DisableCredentialDialog.tsx` — that confirm, built on `useDialogChrome` (focus on Cancel, dismissal ignored while the write runs) plus `describeDependents()`, the counted form the card's line uses
 - `src/renderer/src/components/settings/LLMProviderForm.tsx` — New provider wizard: type selection → API key → model picker
 - `src/renderer/src/components/settings/MCPProviderCard.tsx` — Expandable card: transport config, env vars, connect/disconnect, tools list
-- `src/renderer/src/components/settings/AgentsSettingsSection.tsx` — Agents list + add-agent form toggle
-- `src/renderer/src/components/settings/AgentCard.tsx` — Expandable card: agent details, access token, test connection
-- `src/renderer/src/components/settings/A2AAgentForm.tsx` — New agent wizard: card URL fetch → save
+- `src/renderer/src/components/settings/AgentsSettingsSection.tsx` — Profile-only Cinna visibility rows (including hidden agents), grouped by `serverLabel`, plus sync and reauthentication; has no scope prop or direct-connection creation
+- `src/renderer/src/components/settings/AgentCard.tsx` — A2A/Cinna connection details, Authentication and Connection test sections; `connectionOnly` omits the expandable header, skills and agent-wide controls for the external page
+- `src/renderer/src/components/settings/A2AAgentForm.tsx` — Portaled Add A2A Agent dialog launched by the sidebar Add an agent flow: card URL + optional token, optional card test, save. Labels use `useId`; token visibility has an accessible name. Escape/outside click/Cancel cannot dismiss a pending save; returned failures and thrown errors leave the dialog open.
 - `src/renderer/src/components/settings/ChatModesSection.tsx` — Chat modes list + add-mode form toggle
 - `src/renderer/src/components/settings/ChatModeCard.tsx` — Expandable card: name, color, provider/model, MCP bindings
 - `src/renderer/src/components/settings/ChatModeForm.tsx` — New chat mode form: name, color, provider, MCP selection
 - `src/renderer/src/components/settings/UserAccountsSection.tsx` — User accounts list with expandable cards per user
-- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Opt-in toggles in two titled sections (AI Functions, Interface), each one `SettingsRows` list of `SettingsToggleRow`s. Reset hints is a row of its own under Show hints, present only while hints are on. A failed settings read is said once, as the last row of the last list: every switch reads the same query, and a copy under each of the four labels moved every switch down when it arrived. See [Auto Chat Titles](../../chat/auto_titles/auto_titles.md)
+- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Feature toggles in two titled sections (AI Functions, Interface), each one `SettingsRows` list of `SettingsToggleRow`s. Reset hints is a row of its own under Show hints, present only while hints are on. A failed settings read is said once, as the last row of the last list: every switch reads the same query, and a copy under each label moved every switch down when it arrived. Save errors use `unwrapIpcError` and a final `role="alert"` row; `Unknown app setting:` gets restart guidance, other failures retain their reason. The Interface list includes `showAgentSidebarSections` (default on). See [Auto Chat Titles](../../chat/auto_titles/auto_titles.md)
 - `src/renderer/src/components/settings/DevelopmentSettingsSection.tsx` — Two sections: **About** (repository and website links) and **Testing**, one `SettingsToggleRow` that arms force-onboarding (`isForceOnboardingArmed` / `setForceOnboarding` in `constants/onboarding`, localStorage-backed — not an `app_settings` key)
 - `src/renderer/src/components/settings/LocalAgentsSettingsSection.tsx` — Agent Folders, Runtime and Developer Tools; see [Agents Tab](../../agents/local_agents/agents_tab.md)
 - `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — The Repository dialog opened from an Agent Folders row: remote, branches, head commit, Check and Update; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
@@ -61,8 +61,8 @@
 
 | State | Type | Default | Purpose |
 |-------|------|---------|---------|
-| `activeView` | `'chat' \| 'settings'` | `'chat'` | Controls sidebar mode and main content |
-| `settingsTab` | `SettingsMenu` (15 members — see `ui.store.ts`) | `'chats'` | Active settings section |
+| `activeView` | `ActiveView` (see UI store) | `'chat'` | Controls sidebar mode and main content |
+| `settingsTab` | `SettingsMenu` (14 members — see `ui.store.ts`) | `'chats'` | Active settings section |
 
 `SettingsMenu` is the single source of truth for the tab ids; `sectionTitles` in `SettingsPage.tsx` must give every member a title, or the `sectionTitles[settingsTab]` lookup fails to compile. `PROFILE_SCOPE_TABS` lists the five profile-scope members and drives the sidebar's stale-tab guard.
 
@@ -78,8 +78,7 @@ Two static arrays, rendered under their group headers by the shared `renderMenuB
 
 `defaultMenuItems`:
 - `{ id: 'chats', label: 'Chats', icon: MessageSquare }`
-- `{ id: 'agents', label: 'Agents', icon: Bot }`
-- `{ id: 'local-agents', label: 'Local Agents', icon: FolderCog }`
+- `{ id: 'local-agents', label: 'Agents', icon: FolderCog }`
 - `{ id: 'local-dev', label: 'Local Development', icon: TerminalSquare }`
 - `{ id: 'llm', label: 'AI Credentials', icon: Sparkles }`
 - `{ id: 'mcp', label: 'MCP Providers', icon: Plug }`
@@ -89,18 +88,18 @@ Two static arrays, rendered under their group headers by the shared `renderMenuB
 
 `profileMenuItems` (rendered only when `showProfileGroup = isCinnaUser && !!profileLabel`):
 - `{ id: 'profile-chats', label: 'Chats', icon: MessageSquare }`
-- `{ id: 'profile-agents', label: 'Remote Agents', icon: Bot }`
+- `{ id: 'profile-agents', label: 'Agents', icon: Waypoints }`
 - `{ id: 'profile-llm', label: 'AI Credentials', icon: Sparkles }`
 - `{ id: 'profile-catalog', label: 'Catalog', icon: Package }`
 - `{ id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }`
 
 `'trash'` is not in either array — it is a separate footer button below a separator.
 
-Active item highlighted with `bg-[var(--color-bg-tertiary)]`. Back button calls `setActiveView('chat')`. An effect snaps `settingsTab` back to `'chats'` when the profile group disappears while a `PROFILE_SCOPE_TABS` member is selected.
+Active item highlighted with `app-nav-active`. Back button calls `setActiveView('chat')`. An effect snaps `settingsTab` back to `'chats'` when the profile group disappears while a `PROFILE_SCOPE_TABS` member is selected.
 
 ### SettingsPage (`SettingsPage.tsx`)
 
-Thin shell — looks the title up in `sectionTitles`, then conditionally renders one of the fourteen section components (`AgentsSettingsSection` serves two tabs via its `scope` prop). Each is given a `key` equal to its tab id, which is what makes a tab switch a remount.
+Thin shell — looks the title up in `sectionTitles`, then conditionally renders one of the fourteen section components (`LocalAgentsSettingsSection` renders Default Agents; `AgentsSettingsSection` renders Profile Agents only). Each is given a `key` equal to its tab id, which is what makes a tab switch a remount.
 
 ### LLMSettingsSection (`LLMSettingsSection.tsx`)
 
@@ -113,9 +112,25 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 - Local state `showAddRemoteMcp` toggles inline `AddRemoteMcpForm`
 - "Add Local MCP" button directly creates a disabled stdio provider via `useUpsertMcpProvider()`
 
+### Agent page settings
+
+`src/renderer/src/components/agents/ExternalAgentPage.tsx` owns the page's Overview/Connection tab and shared chat/settings mode. A2A/Cinna uses `AgentCard connectionOnly` for visible structured fields, authentication and connection testing. ACP and Managed agents use Configure to open their existing dialogs. Agent-wide disable/delete/uninstall actions belong to `ExternalAgentActionsMenu` in the page header. This page mode is independent of `settingsTab`; hiding its composer preserves the draft while app-settings tab changes unmount their previous section. See [Shared chat workspace](../app_shell/app_shell_tech.md#shared-chat-workspace).
+
+## Database Schema
+
+The section preference adds an installation-wide `app_settings` key, not a profile column or new table. `src/shared/appSettings.ts` types `showAgentSidebarSections`; `src/main/db/appSettings.ts` supplies `true` for missing values. Existing agent repositories/configuration own saved connections and visibility overrides; see [Agents](../../agents/agents/agents_tech.md).
+
+## Configuration
+
+`showAgentSidebarSections` is a boolean and defaults to true. `useAppSettings` reads it for Features and the Agents list; `useSetAppSetting` optimistically updates the cache and restores the previous snapshot on failure. Settings controls disable while loading or writing. The restart message is triggered by the actual unknown-key error; it does not diagnose every failed switch as an old backend.
+
+## Security
+
+Connection fields reuse existing typed preload APIs. The A2A modal accepts a token for main-process storage; saved secret values are not loaded into its fields. Cinna rows retain profile-scoped ownership and expose visibility controls only for server-provided agents. Agent-page connection tooltips display only host, auth method/presence and credential names; see [Routing details](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+
 ## IPC Channels
 
-Settings components interact with these IPC channels via `window.api.*`. The list below covers the tabs documented here; the tabs with their own feature docs carry their own channel lists — `window.api.localAgents.*` / `localTools.*` / `engine.*` in [Agents Tab](../../agents/local_agents/agents_tab_tech.md) (the `home-state` / `home-grant` / `home-choose` channels behind Local Agents' recovery row are in [The Agents Folder Question](../../agents/local_agents/home_access_tech.md)), `localDev.*` in [Local Development](../../agents/local_dev/local_dev.md), `catalog.*` in [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) and `sync.*` in [Data Sync](../../sync/data_sync/data_sync.md).
+Settings components interact with these IPC channels via `window.api.*`. The list below covers the tabs documented here; the tabs with their own feature docs carry their own channel lists — `window.api.localAgents.*` / `localTools.*` / `engine.*` in [Agents Tab](../../agents/local_agents/agents_tab_tech.md) (the `home-state` / `home-grant` / `home-choose` channels behind Default Agents' recovery row are in [The Agents Folder Question](../../agents/local_agents/home_access_tech.md)), `localDev.*` in [Local Development](../../agents/local_dev/local_dev.md), `catalog.*` in [Bundles Catalog](../../agents/bundles_catalog/bundles_catalog.md) and `sync.*` in [Data Sync](../../sync/data_sync/data_sync.md).
 
 ### LLM Providers (`window.api.providers.*`)
 

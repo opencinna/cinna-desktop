@@ -48,8 +48,8 @@ Its corollary is the rule the pruning code is written around: **a scan can only 
 
 ### Opening the Agents tab for the first time
 1. The home is resolved from the `localAgentsHome` setting, or the built-in default
-2. On macOS, where the home sits in a folder the system guards and this install has never created it, **nothing is written yet**: the app explains the folder first and the list comes back empty with the reason. See [The Agents Folder Question](home_access.md)
-3. The folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and `.cinna-kit/` is populated from the bundled contract
+2. On macOS, where the home sits in a folder the system guards and this install has never created it, **nothing is written yet**: the list reports the home access reason while retaining any other registered roots. The explainer opens only from an explicit folder setup action, such as **+ → New agent** or **Set one up**. See [The Agents Folder Question](home_access.md)
+3. Once access is ready (after consent when required), the folder is created if missing, the root templates (`AGENTS.md`, `CLAUDE.md`, `README.md`, `.gitignore`, `Local/`, `Cloud/`) are installed, and `.cinna-kit/` is populated from the bundled contract
 4. Each root is scanned; every folder becomes a list entry and (where its identity could be read) an `agents` row
 5. Each root starts being watched
 

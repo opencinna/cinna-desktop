@@ -9,15 +9,17 @@ const HEALTHY = {
 }
 let settings: Record<string, boolean> | undefined = HEALTHY
 let isError = false
+let saveError: Error | null = null
 const setSetting = vi.fn()
 beforeEach(() => {
   settings = HEALTHY
   isError = false
+  saveError = null
   setSetting.mockReset()
 })
 vi.mock('../../hooks/useAppSettings', () => ({
   useAppSettings: () => ({ data: settings, isLoading: false, isError }),
-  useSetAppSetting: () => ({ mutate: setSetting, isPending: false })
+  useSetAppSetting: () => ({ mutate: setSetting, isPending: false, error: saveError })
 }))
 
 const { FeaturesSettingsSection } = await import('./FeaturesSettingsSection')
@@ -33,7 +35,7 @@ describe('FeaturesSettingsSection', () => {
 
     expect(screen.getByRole('heading', { name: 'AI Functions' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: 'Interface' })).toBeTruthy()
-    expect(screen.getAllByRole('switch')).toHaveLength(4)
+    expect(screen.getAllByRole('switch')).toHaveLength(5)
     // The label names the switch (rule 10), not the branching title.
     expect(screen.getByRole('switch', { name: 'Auto-generate chat titles' })).toBeTruthy()
     expect(screen.queryByText(/Couldn’t load settings/)).toBeNull()
@@ -50,10 +52,27 @@ describe('FeaturesSettingsSection', () => {
   it('keeps the title attribute on the switch and toggles the setting', () => {
     render(<FeaturesSettingsSection />)
 
+    const sections = screen.getByRole('switch', { name: 'Show sections in Agents sidebar' })
+    expect(sections.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(sections)
+    expect(setSetting).toHaveBeenCalledWith({ key: 'showAgentSidebarSections', value: false })
+
     const tray = screen.getByRole('switch', { name: 'Enable Tray Icon' })
     expect(tray.getAttribute('title')).toBe('Menu-bar tray icon is hidden')
     fireEvent.click(tray)
     expect(setSetting).toHaveBeenCalledWith({ key: 'enableTrayIcon', value: true })
+  })
+
+  it('explains a rejected setting instead of silently resetting the switch', () => {
+    saveError = new Error("Error invoking remote method 'settings:set': Error: Unknown app setting: showAgentSidebarSections")
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByRole('alert').textContent).toContain('Restart Cinna Desktop')
+  })
+
+  it('shows other save errors with their actionable reason', () => {
+    saveError = new Error('Could not write settings database')
+    render(<FeaturesSettingsSection />)
+    expect(screen.getByRole('alert').textContent).toContain('Could not write settings database')
   })
 
   it('adds the Reset hints row under Show hints while hints are on', () => {

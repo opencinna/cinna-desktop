@@ -238,8 +238,8 @@ test('a detected Ollama is added in one click, keeps its host across the boundar
     ])
   })
 
-  await test.step('Local Agents offers it as the default credential for folder agents', async () => {
-    await openSettings(cinna, 'Local Agents')
+  await test.step('Agents offers it as the default credential for folder agents', async () => {
+    await openSettings(cinna, 'Agents')
     // Renamed from "Default AI credential": the label now says which *runtime*
     // spends it, because the runtime is a choice the user makes one control
     // above this one.

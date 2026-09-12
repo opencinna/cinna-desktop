@@ -78,13 +78,13 @@ Settings UI (ChatModesSection / ChatModeCard / ChatModeForm)
   -> IPC chatmode:* handlers
   -> SQLite chat_modes table
 
-New Chat Screen (MainArea -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
+New Chat Screen (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
   -> User selects mode from the sub-menu (or via the `~` shortcut popup)
   -> Mode's provider/model/MCPs are applied to the new chat
   -> Chat input border/bg + `[+]` button tint to mode color
   -> On send: chat created with mode_id, provider, model, MCPs
 
-Active Chat (MainArea -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
+Active Chat (ChatWorkspace -> ChatInput -> ComposerPlusMenu "Chat mode" sub-menu)
   -> Chat has mode_id -> "Chat mode" sub-menu offered; ChatControls hidden
   -> Chat without mode_id -> no "Chat mode" item; ChatControls shown (model + MCP)
   -> User switches mode -> chat's provider/model/MCPs updated

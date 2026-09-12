@@ -99,7 +99,7 @@ cinna-core on Cinna-user activation and every 5 minutes.
   `profile-chats`), `LLMSettingsSection.tsx` / `ChatModesSection.tsx` (filter to
   non-managed), `FeaturesSettingsSection.tsx` (precedence toggle).
 - `src/renderer/src/components/layout/Sidebar.tsx` (Profile-group menu items),
-  `MainArea.tsx` (derived `modeSelection` → `activeMode`).
+  `ChatWorkspace.tsx` (derived `modeSelection` → `activeMode`).
 - `src/renderer/src/stores/ui.store.ts` — `SettingsMenu` adds `profile-llm` /
   `profile-chats`; both added to `PROFILE_SCOPE_TABS`.
 

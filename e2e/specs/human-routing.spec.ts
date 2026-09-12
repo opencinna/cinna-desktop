@@ -40,7 +40,7 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  *
  * ## What it proves
  *
- * - Picking a second agent in the composer moves the badge from `Direct agent
+ * - Picking a second agent in the composer moves the badge from `Remote agent
  *   connection` to `You route this chat` — no model, no credential, no chat mode.
  * - The first message goes to the first agent picked, and its reply is labelled
  *   with that agent's name in the transcript.
@@ -218,13 +218,13 @@ test('two agents in one chat, routed by the user, with no LLM provider configure
       expect(await page.evaluate(() => window.api.chatModes.list())).toEqual([])
     })
 
-    await test.step('picking a second agent moves the badge from Direct to You route', async () => {
+    await test.step('picking a second agent moves the badge from Remote to You route', async () => {
       const page = cinna.page
       await mention(page, LEDGER)
-      await expect(page.getByRole('status', { name: 'Direct agent connection' })).toBeVisible()
+      await expect(page.getByRole('status', { name: 'Remote agent connection' })).toBeVisible()
       await mention(page, SCRIBE)
       await expect(page.getByRole('status', { name: 'You route this chat' })).toBeVisible()
-      await expect(page.getByRole('status', { name: 'Direct agent connection' })).toHaveCount(0)
+      await expect(page.getByRole('status', { name: 'Remote agent connection' })).toHaveCount(0)
     })
 
     await test.step('the first message goes to the first agent picked, and its reply is labelled', async () => {

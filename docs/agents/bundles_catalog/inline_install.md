@@ -51,7 +51,7 @@ New chat → [+] → Add agents / MCP → AgentPickerModal (Catalog section)
         → invalidate ['catalog'] + ['agents']
         → fetchQuery(['agents'])  → find a.remoteTargetId === installId
         → onInstalled(agentId)  ==  toggleCapability(agentId)
-              new chat  → pending buffer (MainArea)
+              new chat  → pending buffer (ChatWorkspace)
               active    → on-demand attach / orchestrate
     → card flips from Catalog Install card → selected capability card
   On error → setError → inline error row in the Catalog section

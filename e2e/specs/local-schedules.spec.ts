@@ -67,6 +67,7 @@ async function arrange(cinna: CinnaApp, host: string) {
 async function openSchedules(cinna: CinnaApp) {
   await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
   await cinna.page.getByRole('button', { name: AGENT, exact: true }).click()
+  await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
   await cinna.page.getByRole('tablist', { name: 'Agent details', exact: true }).getByRole('tab', { name: 'Schedules', exact: true }).click()
   await expect(cinna.page.getByRole('region', { name: 'Local schedules', exact: true })).toBeVisible()
 }

@@ -18,17 +18,24 @@ import type { AgentRootDto, LocalAgentDto } from '../../../../../shared/localAge
  * reachable by keyboard.
  */
 
+const setAgentPageMode = vi.fn()
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setActiveLocalAgentId = vi.fn()
 const setSidebarTab = vi.fn()
-vi.mock('../../../hooks/useAgents', () => ({ useAgents: () => ({ data: [] }) }))
+let externalAgents: Array<Record<string, unknown>> = []
+let showAgentSidebarSections = true
+vi.mock('../../../hooks/useAppSettings', () => ({ useAppSettings: () => ({ data: { showAgentSidebarSections } }) }))
+const setActiveExternalAgentId = vi.fn()
+vi.mock('../../../hooks/useAgents', () => ({ useAgents: () => ({ data: externalAgents }) }))
 vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       activeLocalAgentId: null,
       activeView: 'local-agent',
       setActiveLocalAgentId,
+      setActiveExternalAgentId,
+      setAgentPageMode,
       setActiveView,
       setPendingAgentId,
       setSidebarTab
@@ -75,11 +82,12 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
 vi.mock('../../../hooks/useProviders', () => ({ useProviders: () => ({ data: [] }) }))
 vi.mock('./NewLocalAgentModal', () => ({ NewLocalAgentModal: () => null }))
 
+const { useAuthStore } = await import('../../../stores/auth.store')
 const { LocalAgentsList } = await import('./LocalAgentsList')
 
-function renderList(): void {
+function renderList(): ReturnType<typeof render> {
   const client = new QueryClient()
-  render(createElement(QueryClientProvider, { client }, createElement(LocalAgentsList)))
+  return render(createElement(QueryClientProvider, { client }, createElement(LocalAgentsList)))
 }
 
 const CHAT = /start a new chat with alpha/i
@@ -88,6 +96,43 @@ describe('LocalAgentsList — the row’s chat button', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     AGENTS = [AGENT]
+    externalAgents = []
+    showAgentSidebarSections = true
+    useAuthStore.setState({ currentUser: null })
+  })
+
+  it('groups Cinna agents under the active server immediately after Local', () => {
+    useAuthStore.setState({ currentUser: { id: 'p1', type: 'cinna_user', username: 'u', displayName: 'U', hasPassword: false, cinnaServerUrl: 'https://core.example.com/api' } })
+    externalAgents = [{ id: 'remote:1', name: 'Cloud helper', source: 'remote', protocol: 'a2a', enabled: true }]
+    const view = renderList()
+    const local = screen.getByText('Local')
+    const server = screen.getByText('core.example.com')
+    expect(local.compareDocumentPosition(server) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Cloud helper' }))
+    expect(setActiveExternalAgentId).toHaveBeenCalledWith('remote:1')
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
+    const orderedButtons = screen.getAllByRole('button').map((button) => button.textContent)
+    view.unmount()
+    showAgentSidebarSections = false
+    renderList()
+    expect(screen.queryByText('Local')).toBeNull()
+    expect(screen.queryByText('core.example.com')).toBeNull()
+    expect(screen.getAllByRole('button').map((button) => button.textContent)).toEqual(orderedButtons)
+  })
+
+  it.each([
+    { protocol: 'a2a', description: 'A2A', driver: 'a2a' },
+    { protocol: 'acp', description: 'Remote ACP', driver: 'acp', acpTransport: 'websocket', capabilities: { cwd: false } }
+  ])('opens saved $protocol agents from the sidebar', (connection) => {
+    externalAgents = [{ id: 'external-1', name: 'Remote helper', source: 'local', enabled: true, ...connection }]
+    renderList()
+    const local = screen.getByRole('button', { name: 'Alpha' })
+    const remote = screen.getByRole('button', { name: /^Remote helper/ })
+    expect(local.compareDocumentPosition(remote) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(remote)
+    expect(setActiveExternalAgentId).toHaveBeenCalledWith('external-1')
+    expect(setActiveView).toHaveBeenCalledWith('external-agent')
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
   })
 
   it('lends the row nothing: the row is a button named by the agent alone', () => {

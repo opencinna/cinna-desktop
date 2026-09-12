@@ -25,8 +25,8 @@ Universal agent integration that lets users chat with external AI agents through
 
 ### Adding an A2A Agent
 
-1. User navigates to Settings > Agents
-2. Clicks "Add A2A Agent"
+1. User opens the Agents sidebar and presses **+** to open **Add an agent**
+2. Chooses **A2A agent**, opening the **Add A2A Agent** dialog
 3. Enters the agent's card URL (base URL or direct `.well-known/agent-card.json` path)
 4. Optionally enters an access token for authenticated agents
 5. Clicks "Test Connection" — app fetches the agent card, negotiates protocol, and displays:
@@ -37,25 +37,27 @@ Universal agent integration that lets users chat with external AI agents through
    - Streaming support indicator
    - Number of skills and their names
 6. Clicks "Save Agent" — agent is persisted with cached card metadata
-7. Agent appears in the settings list and the chat agent selector
+7. On success the dialog closes and the agent appears in the sidebar and chat picker. Failed saves keep the dialog and entered values; dismissal and input edits are blocked while saving.
 
 ### Managing Agents
 
-- **Enable/Disable** — Toggle controls agent visibility in the chat selector
-- **Update Token** — Expand card, enter new token, save
-- **Test Connection** — Re-fetches card, re-runs protocol negotiation, and updates cached metadata (skills, endpoint, protocol version, transport). The same press re-asks the agent's readiness, so the status dot and the composer follow the test just run
-- **Readiness** — The status dot is green for an enabled agent its driver has not refused, the refusal's colour when it has (warning for something the user fixes, such as a rejected token; danger for an agent that cannot be reached or has no usable card), and muted for a switched-off agent. Expanded, the reason sits beside Test Connection, with the raw error as its tooltip. **A failed test does not replace it**: the test's own error ("fetch failed") said less than the reason and explained nothing. Only a passing test shows *Connected* in its place, since the re-check the same press started clears the reason moments later. A failed test's error is shown only when readiness has nothing to say. A healthy card shows no line at all. The composer refuses a direct send to a refused agent — see [Agent Drivers & Readiness](../drivers/drivers.md)
-- **Delete** — Removes agent permanently
+- **Open agent** — Select its sidebar row to open a composer bound to the agent. **Settings** reveals Overview and Connection; **Start chat** returns to the composer without creating an empty conversation. Switching modes keeps the current draft mounted.
+- **Overview** — Description, readiness and advertised skills.
+- **Update Token** — Open **Settings → Connection → Authentication**, enter a replacement token and save. Connection details and Connection test are separate visible sections.
+- **Test Connection** — Re-fetches card, re-runs protocol negotiation, and updates cached metadata (skills, endpoint, protocol version, transport). The same press re-asks the agent's readiness, so the page readiness and the composer follow the test just run
+- **Readiness** — Sidebar rows and page headers use type icons without status dots. Overview names readiness, and Connection test shows a refusal beside Test Connection with the raw error as its tooltip. **A failed test does not replace it**: the test's own error ("fetch failed") said less than the reason and explained nothing. Only a passing test shows *Connected* in its place, since the re-check the same press started clears the reason moments later. A failed test's error is shown only when readiness has nothing to say. A healthy card shows no line at all. The composer refuses a direct send to a refused agent — see [Agent Drivers & Readiness](../drivers/drivers.md)
+- **Delete agent** — The header **More actions** menu asks before removing the Desktop connection. Existing chats and the remote server/workspace remain; those chats can no longer reach this binding. Failure keeps the confirmation open with its error; pending deletion blocks dismissal.
+- **Visibility** — Enabled direct connections have no Disable action. Previously disabled direct connections remain reachable in the sidebar and get an enable-only recovery action. Cinna-synced visibility and server deletion follow [Remote Agents](../remote_agents/remote_agents.md).
 
 ### Chatting with an Agent
 
-There are two ways to select an agent for a new chat:
+Open the agent from the Agents sidebar for its chat landing page, or use its hover **Start chat** shortcut to open the new-chat screen with that agent selected. The shortcut does not also activate the row. Chat selection also works through the [composer menu](../../chat/composer_menu/composer_menu.md) and @-mentions.
 
-**Via Bot icon:**
+**Via composer menu:**
 
-1. On the new chat screen, user clicks the Bot icon button (next to the [+] chat mode button)
-2. Dropdown shows all enabled agents with name, protocol badge, and description
-3. User selects an agent (click again to deselect)
+1. On the new chat screen, open **[+] → Add agents**
+2. The capability picker lists available agents
+3. User selects the agent for the conversation
 
 **Via @-mention shortcut:**
 
@@ -65,24 +67,20 @@ There are two ways to select an agent for a new chat:
 4. User selects an agent via click, Enter, or Tab (Arrow keys navigate the list, Escape dismisses)
 5. The `@...` token is removed from the input and the agent is selected
 
-> The `@` shortcut is extensible — additional reference types beyond agents may be added in the future.
+The same capability gesture can attach an agent to an existing chat; the shared routing flow determines any required router change.
 
-**After selection (either method):**
+**After selection:**
 
-- The Bot icon button expands horizontally with an animation, showing the selected agent's name and a dismiss (X) button
-- Only one agent can be selected at a time
-- Clicking the X button deselects the agent (shrink animation) and returns focus to the text input
-- User types a message and sends
-- App creates a new chat, routes the message through the A2A protocol
-- Response streams in real-time (if agent supports streaming) or arrives as a single response
-- Both user and assistant messages are saved to the chat history
-- An A2A session is created/updated after each exchange, storing the server's `contextId` and `taskId`
+- The composer keeps an ordered set of agents; selecting one from its landing page seeds that set with the page's agent. Picks appear in the composer capability strip and can be removed before sending.
+- A single selected agent uses direct routing. Multiple agents and attached capabilities follow [Chat Routing](../../chat/chat_routing/chat_routing.md); there is no single-agent-only selection rule.
+- Sending creates the chat and starts a main-owned run. Merely selecting an agent or returning from Settings creates no empty conversation.
+- A2A responses stream when supported, otherwise arrive as a single response. Messages are saved in the shared history and the A2A driver saves remote context/task IDs for continuity.
 
 ### Continuing an Agent Chat
 
 1. User opens an existing agent chat — the controls row below the input shows a read-only agent badge (Bot icon + agent name) instead of the usual model/MCP selectors
 2. User types a follow-up message
-3. The system detects this is an agent chat by looking up the A2A session for this chat
+3. Main resolves the answerer from the persisted chat router; the A2A driver then loads its protocol session
 4. The stored `contextId` and `taskId` are sent with the new message so the remote agent maintains conversation context
 5. The agent responds within the same context — the session is updated with any new task/context IDs from the response
 
@@ -97,34 +95,33 @@ There are two ways to select an agent for a new chat:
 - **Network error translation** — When the A2A request fails at the socket/transport layer (server disconnect mid-response, refused, reset, DNS failure, timeout), the raw undici message (e.g. `TypeError: terminated`) is mapped to a short user-readable message shown in the chat error; the raw string is retained as `detail` for debugging
 - **Agent selection is per-chat** — Selecting an agent applies only to the new chat being created; the agent binding is persisted on the chat (`agentId`) and in the `a2a_sessions` table so subsequent messages route through the agent automatically
 - **Session continuity** — Each agent chat has an associated A2A session that stores the remote server's `contextId` and `taskId`. These are sent with every subsequent message so the remote agent maintains full conversation context. The session is created on the first successful message exchange and updated after each response.
-- **Session lookup for routing** — When a user sends a message in an existing chat, the system looks up the `a2a_sessions` table. If a session exists, the message is routed through the A2A agent channel; otherwise it goes through the LLM channel. This is the source of truth for distinguishing agent chats from LLM chats.
-- **Agent vs Chat Mode** — These are independent: user can select a chat mode OR an agent (or neither); when an agent is selected, the LLM provider/model from chat modes is bypassed
-- **Single agent selection** — Only one agent can be active at a time; selecting a new agent replaces the previous selection
+- **Routing and protocol sessions are separate** — Main routes from `chats.router`; A2A session rows hold remote conversation checkpoints, not the choice between an agent and a model. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
+- **Agent and chat mode** — A direct A2A turn uses the agent's own execution; model-coordinated chats may also use the configured model and capabilities. Multiple selected agents follow the shared routing rules.
 - **@-mention trigger** — The `@` character triggers the mention popup only when it appears at the start of input or immediately after whitespace; `@` inside a word (e.g. `email@`) does not trigger it
-- **@-mention scope** — The mention popup is only active on the new chat screen (not inside existing chats); the feature is extensible for future reference types beyond agents
-- **Agent chip animation** — Selection expands the Bot icon into a chip (expand-in 200ms); deselection plays a shrink animation (shrink-out 200ms) and then returns focus to the text input
+- **@-mention scope** — New-chat picks enter the pending capability set. Existing-chat agent picks use the shared attach-agent flow and may change routing; MCP picks use on-demand MCP.
 - **Token security** — Access tokens never leave the main process; renderer only sees `hasAccessToken: boolean`
 - **Card caching** — Agent card JSON is cached in the DB to avoid re-fetching on every operation; refreshed on "Test Connection"
 - **Streaming detection** — The A2A client checks `card.capabilities.streaming` to decide between SSE streaming and single-response fallback
 - **Per-part delta routing** — Each A2A `TextPart` can carry `metadata['cinna.content_kind']`; the client routes each fragment to a distinct rendering block (assistant text, thinking, tool narration). When metadata is absent, parts default to `text` — keeps backward compatibility with non-Cinna A2A servers. Full pipeline detailed in [Streaming Pipeline](streaming_pipeline.md)
 - **Structured parts persisted** — Assistant messages from A2A agents store a `parts[]` JSON list on the message row in addition to the concatenated `content` text used for previews/search. Renderer prefers `parts[]` when present, falls back to `content` otherwise (LLM messages, legacy agent rows)
 - **Cancellation** — In-flight agent requests can be cancelled via the same stop button used for LLM streaming
-- **Bound agent badge** — When viewing an active agent chat, the controls row shows a read-only agent badge (Bot icon + agent name) styled like the AgentSelector's expanded state. The badge has no dismiss button and no dropdown — the agent is permanently bound to the session. Model and MCP selectors are hidden since they don't apply to agent chats
+- **Bound agent badge** — When viewing an active agent chat, the controls row shows a read-only agent badge (Bot icon + agent name) alongside the routing/location controls. The badge has no dismiss button and no dropdown — the badge itself does not edit the binding. Participant and routing changes belong to the capability controls
 
 ## Architecture Overview
 
 ```
 Settings Flow:
-  Sidebar → AgentsSettingsSection → AgentCard / A2AAgentForm
+  Sidebar + → NewLocalAgentModal → A2AAgentForm
+  Sidebar row → ExternalAgentPage → Settings → AgentCard(connectionOnly)
     → window.api.agents.* → IPC → agent.ipc.ts → DB + a2a-client.ts
 
 Protocol Negotiation (on fetch-card / test):
   fetchRawCard(url) → raw JSON → resolveProtocol(card) → { url, version }
     → patch card.url for SDK → A2AClient(patchedCard)
 
-Chat Flow — First Message (agent selection via Bot icon or @-mention):
+Chat Flow — First Message (agent page, capability picker or @-mention):
   ChatInput (@-mention popup) ─┐
-  AgentSelector (Bot icon)     ─┤→ selectedAgent → MainArea.handleNewChat()
+  Composer capability picker     ─┤→ selectedAgent → ChatWorkspace → useNewChatFlow.startNewChat()
                                 └→ chat:create + chat:update(agentId)
                                 └→ run.start → main executor → run.watch (MessagePort)
                                    → agent_a2a.ipc.ts → createA2AClient() → External Agent
@@ -147,5 +144,5 @@ Chat Flow — Subsequent Messages:
 - **Streaming infrastructure** — Reuses the `MessagePort` streaming pattern from [Messaging](../../chat/messaging/messaging.md), including `chat.store` streaming state (`startStreaming`, `appendDelta`, `stopStreaming`). Agent deltas extend the protocol with `kind` and `toolName` fields — see [Streaming Pipeline](streaming_pipeline.md)
 - **Conversation rendering** — `thinking` and `tool` parts render via dedicated collapsible blocks (`ThinkingBlock`, `ToolNarrationBlock`) — see [Conversation UI](../../chat/conversation_ui/conversation_ui.md)
 - **Security** — Token encryption uses the same `encryptApiKey`/`decryptApiKey` from [safeStorage keystore](../../llm/adapters/adapters.md) as LLM API keys
-- **Settings UI** — Follows the same card/form pattern as [LLM Provider settings](../../ui/settings/settings.md)
-- **Sidebar navigation** — "Agents" tab appears between "Chats" and "LLM Providers" in the settings sidebar
+- **Settings UI** — [Settings](../../ui/settings/settings.md) separates installation-wide **Default → Agents** configuration from the active server visibility list in **Profile → Agents**. Direct A2A connection configuration belongs to its agent page.
+- **Other agent kinds** — ACP and Managed agents share the chat landing page and Overview/Connection tabs; Connection opens their existing configuration dialogs.

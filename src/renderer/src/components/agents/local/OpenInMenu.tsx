@@ -50,7 +50,7 @@ function ToolIcon({ tool }: { tool: DetectedTool }): React.JSX.Element {
  * primary action is the default tool and the menu behind the chevron is for
  * the exception. Picking from the menu **also makes that tool the default** —
  * the setting exists so the button says the right thing next time, and the
- * pick is the clearest statement of what "right" is. Settings → Local Agents
+ * pick is the clearest statement of what "right" is. Settings → Agents
  * can change or clear it.
  *
  * With no default (never picked, or the tool was uninstalled) the primary is
@@ -249,7 +249,7 @@ export function OpenInMenu({ agent, onError }: OpenInMenuProps): React.JSX.Eleme
           {launchable.length === 0 && (
             <div className="px-2 pb-1 text-[10px] text-[var(--color-text-muted)]">
               No coding assistant or editor found. Install one, then Refresh in Settings →
-              Local Agents.
+              Agents.
             </div>
           )}
         </div>

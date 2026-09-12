@@ -1,11 +1,14 @@
-import { useState } from 'react'
-import { Radio, Users, Workflow } from 'lucide-react'
+import { useId, useState } from 'react'
+import { Radio, SquareTerminal, Users, Waypoints, Workflow } from 'lucide-react'
+import type { AgentData } from '../../../../preload'
+import { AgentConnectionDetails, agentLocation } from './AgentConnectionDetails'
 import type { ChatRouter } from '../../../../shared/chatRouting'
 
 type DisplayRouter = ChatRouter | 'script'
 
 export interface RouterBadgeInfo {
   router: DisplayRouter
+  connectionAgent?: AgentData | null
   /** The chat's single counterparty, for `direct`. */
   agentName?: string
   /** Who answers the next message, for `human`. */
@@ -13,15 +16,6 @@ export interface RouterBadgeInfo {
   /** The model that would conduct, for `coordinator`. */
   modelName?: string
 }
-
-/**
- * `CommPatternBadge` carried a `tooltipPlacement` prop here, and it is gone: its
- * only caller — the job detail footer — stopped passing it in `f2c3144` when
- * that footer was reworked, so the branch had been unreachable for months and
- * its docstring described a layout that no longer exists. Carrying a dead
- * option into a new file because the old one had it is how a component acquires
- * a surface nobody can explain.
- */
 
 /** Icon, short label and tone per router. The label is what the pill shows. */
 const FACE: Record<DisplayRouter, { label: string; icon: typeof Radio; tone: string }> = {
@@ -54,34 +48,21 @@ const ARIA: Record<DisplayRouter, string> = {
   coordinator: 'Coordinated by your local model'
 }
 
-/**
- * Who answers the next message in this chat.
- *
- * Replaced `CommPatternBadge`, whose two values (`A2A` / `AI`) could not say
- * the difference between "several agents, and you route them" and "several
- * agents, and the model conducts" — it called both `AI`, and required a model
- * for both.
- *
- * **The pill's box does not change size when the router does.** The three
- * labels are different lengths and Send sits immediately right of it, so the
- * label reserves the width of the longest; a chat switching from `Direct` to
- * `You route` when a second agent arrives moves nothing beside it. Colors via
- * `var(--color-*)` only.
- *
- * `Model routes` rather than `Model`, because the composer's own model picker
- * sits in the same row under the word **Model** and means something else
- * entirely — which model the chat runs on, not who is answering. All three
- * labels are verb phrases about routing for the same reason.
- */
+/** Direct chats describe the agent's location; multi-agent chats explain routing. */
 export function RouterBadge({
   router,
+  connectionAgent,
   agentName,
   answererName,
   modelName
 }: RouterBadgeInfo): React.JSX.Element {
   const [hovered, setHovered] = useState(false)
-
-  const face = FACE[router]
+  const [focused, setFocused] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  const tooltipId = useId()
+  const open = (hovered || focused) && !dismissed
+  const location = router === 'direct' && connectionAgent ? agentLocation(connectionAgent) : null
+  const face = location ? { ...FACE.direct, label: location, icon: location === 'Local' ? SquareTerminal : Waypoints } : FACE[router]
   const Icon = face.icon
   const who = agentName ? `“${agentName}”` : 'the agent'
   const next = answererName ? `“${answererName}”` : 'the agent you last wrote to'
@@ -90,31 +71,33 @@ export function RouterBadge({
   return (
     <div
       className="relative"
-      onMouseEnter={() => setHovered(true)}
+      onMouseEnter={() => { setHovered(true); setDismissed(false) }}
       onMouseLeave={() => setHovered(false)}
       // The tooltip is the only place the three routers are explained, and a
       // hover is not a gesture a keyboard has. Focus opens it too — on the
       // wrapper, so the badge stays one stop rather than two.
-      onFocus={() => setHovered(true)}
-      onBlur={() => setHovered(false)}
+      onFocus={() => { setFocused(true); setDismissed(false) }}
+      onBlur={() => setFocused(false)}
+      onKeyDown={(event) => { if (event.key === 'Escape') setDismissed(true) }}
     >
       <div
         className={`flex items-center gap-1 px-1.5 py-1 rounded-lg border
           focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-accent)] ${face.tone}`}
         role="status"
         tabIndex={0}
-        aria-label={ARIA[router]}
+        aria-label={location ? `${location} agent connection` : ARIA[router]}
+        aria-describedby={open ? tooltipId : undefined}
       >
         <Icon size={12} className="shrink-0" />
-        {/* Wide enough for the longest of the three labels, so a router change
-            moves neither this pill's edge nor Send beside it. */}
-        <span className="text-[11px] font-semibold tracking-wide min-w-[5.5rem] text-center">
+        <span className="text-[11px] font-semibold tracking-wide whitespace-nowrap">
           {face.label}
         </span>
       </div>
 
-      {hovered && (
+      {open && (
         <div
+          id={tooltipId}
+          role="tooltip"
           className={`absolute bottom-full mb-1.5 right-0 z-50 w-72 rounded-lg border
             border-[var(--color-border)] bg-[var(--color-overlay-panel)] backdrop-blur-xl
             shadow-xl px-3 py-2.5 text-[11px] leading-relaxed text-[var(--color-text-secondary)]`}
@@ -126,7 +109,8 @@ export function RouterBadge({
               <p className="mt-1.5">Only the agents use models. The script itself makes no model calls.</p>
             </>
           )}
-          {router === 'direct' && (
+          {router === 'direct' && connectionAgent && <AgentConnectionDetails agent={connectionAgent} />}
+          {router === 'direct' && !connectionAgent && (
             <>
               <p className="text-[var(--color-text)] font-semibold mb-1">Direct agent connection</p>
               <p>

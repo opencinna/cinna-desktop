@@ -12,6 +12,8 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 | Sync logic (fetch + transactional upsert/prune) | `src/main/services/agentService.ts` — `agentService.syncRemoteAgents()` |
 | Transactional remote upsert/prune | `src/main/db/agents.ts` — `agentRepo.syncRemote(userId, targets)` |
 | A2A client (shared) | `src/main/agents/a2a-client.ts` |
+| Server deletion | `src/main/services/remoteAgentActions.ts` — profile-owned cached target validation and server-first delete |
+| Shared eligibility | `src/shared/agentDevelopment.ts` — `canDevelopAgent`; `src/shared/agentPresentation.ts` — `isBundleAgent` |
 | IPC handlers (CRUD + sync) | `src/main/ipc/agent.ipc.ts` |
 | IPC handlers (A2A + JWT routing) | `src/main/ipc/agent_a2a.ipc.ts` |
 | User activation (sync trigger) | `src/main/auth/activation.ts` |
@@ -23,6 +25,7 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 
 | Purpose | File |
 |---------|------|
+| Bridge API (server delete) | `src/preload/index.ts` — `api.agents.deleteRemote(agentId)` |
 | Bridge API (manual sync) | `src/preload/index.ts` — `api.agents.syncRemote()` |
 | Bridge API (sync event) | `src/preload/index.ts` — `api.agents.onRemoteSyncComplete(handler)` |
 | Type definition | `src/preload/index.ts` — `AgentData` interface (remote fields) |
@@ -33,7 +36,9 @@ For manually added ACP WebSocket connections, see [Remote ACP agents](remote_acp
 |---------|------|
 | Sync mutation hook | `src/renderer/src/hooks/useAgents.ts` — `useSyncRemoteAgents()` |
 | Sync-complete listener | `src/renderer/src/hooks/useAgents.ts` — `useAgents()` auto-invalidation via `onRemoteSyncComplete` |
-| Settings section (remote grouping) | `src/renderer/src/components/settings/AgentsSettingsSection.tsx` |
+| Shared agent page and actions | `src/renderer/src/components/agents/ExternalAgentPage.tsx`, `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` |
+| Desktop visibility | `src/renderer/src/hooks/useAgentDesktopVisibility.ts`, `src/renderer/src/utils/agentNavigation.ts` |
+| Settings section (server visibility) | `src/renderer/src/components/settings/AgentsSettingsSection.tsx` |
 | Agent card (remote mode) | `src/renderer/src/components/settings/AgentCard.tsx` |
 | In-chat agent picker | `src/renderer/src/components/chat/AgentMentionPopup.tsx` (`@`-mention) + `src/renderer/src/components/agents/AgentPickerModal.tsx` (Capability Picker) |
 | Auth store (user type check) | `src/renderer/src/stores/auth.store.ts` |
@@ -57,12 +62,20 @@ Remote agents use deterministic IDs: `remote:{target_type}:{target_id}` — ensu
 |---------|------|--------|---------|
 | `agent:sync-remote` | handle | — | `{ success, synced?, removed?, error? }`. Also emits `agents:remote-sync-complete` (success → `{}`, reauth → `{ error: 'reauth_required' }`, other failure → `{ error: 'sync_failed' }`) via `notifyRemoteSyncComplete`, so a renderer-triggered sync refreshes the UI identically to the periodic runner |
 | `agent:list` | handle | — | `AgentData[]` — now includes `source`, `remoteTargetType`, `remoteTargetId`, `remoteMetadata` |
-| `agent:delete` | handle | `agentId` | Returns `{ success: false, error }` for `source='remote'` agents |
+| `agent:delete` | handle | `agentId` | Returns `{ success: false, error }` for `source='remote'` agents; direct connections use this channel |
+| `agent:delete-remote` | handle | nonempty `agentId: string` | `{ success: true }`; requires activation, resolves profile internally, throws failures and broadcasts `agents:remote-sync-complete` after success |
 | `agents:remote-sync-complete` | send (main→renderer) | — | Fired after **every** successful (or failed) remote sync — initial activation, the 5-minute periodic tick, **and** the on-demand `agent:sync-remote` IPC handler. The single refresh signal `useAgents` listens on |
 
 Shared run:start/watch and agent test/discovery work for remote agents; the A2A driver owns JWT routing.
 
 ## Services & Key Methods
+
+### Server Deletion and Desktop Visibility
+
+- `src/main/services/remoteAgentActions.ts:deleteRemoteAgent(userId, agentId)` uses `agentRepo.getOwned`, requires `source=remote`, `remoteTargetType=agent` and a target ID, and rejects `isBundleAgent`. It sends DELETE `/api/v1/agents/{encoded remoteTargetId}` through `cinnaFetch`, then deletes the local row and forgets readiness. Server failure leaves the row intact. The cached ID selects the request target; the renderer supplies neither a server URL nor server target ID.
+- `src/shared/agentPresentation.ts` — `isBundleAgent` recognizes `bundle_uuid` or `bundle_id`, only on remote agent targets, excluding explicit publisher installs. The header routes these to `useUninstallBundle`; other remote removal is offered only when `canDevelopAgent` passes. Main deletion deliberately leaves developer-role/ownership enforcement to the server rather than treating UI metadata as authorization.
+- `useDeleteAgent` throws on returned `{success:false}` as well as IPC rejection. `useDeleteRemoteAgent` invalidates agents/catalog after success; the IPC broadcast refreshes other listeners. A successful removal clears the selected external agent only if profile and selection still match.
+- `useAgentDesktopVisibility` rejects disabling non-remote connections; old disabled direct rows can still be enabled. It snapshots sidebar order before the optimistic mutation, invalidates agent-status on success, and uses `nextAgentAfterHiding` for the selected page. Profile and current-view checks protect unrelated navigation. Enabled folders remain candidates even when they cannot run yet; current cache filtering excludes remote rows hidden during the request.
 
 ### Sync Logic — `src/main/services/agentService.ts`
 
@@ -97,9 +110,9 @@ Shared run:start/watch and agent test/discovery work for remote agents; the A2A 
 
 ## Renderer Components
 
-- `AgentsSettingsSection` — Splits agents into remote (grouped by target type: My Agents / Shared with Me / People) and local sections. Remote section shown only for `cinna_user`. Includes "Sync" button that calls `useSyncRemoteAgents()`.
-- `AgentCard` — Detects `agent.source === 'remote'` to: show "Remote" badge, hide delete button, hide access token section (JWT is automatic).
-- `AgentMentionPopup` / `AgentPickerModal` — In-chat agent selection (the `@`-mention popup and the Capability Picker). Remote agents surface here once synced; the source/`remoteTargetType` grouping now lives in `AgentsSettingsSection` rather than the in-chat picker.
+- `AgentsSettingsSection` — Filters `source === 'remote'`, groups under `serverLabel(currentUser.cinnaServerUrl)`, and retains disabled rows with Enable. Enabled rows open the agent in Settings mode. Includes sync/reauthentication controls for the active Cinna profile; it has no default-scope variant or direct connection forms.
+- `ExternalAgentPage` uses `AgentCard(connectionOnly)` for A2A Connection; the Authentication section explains active-profile JWT use without a token editor. Overview owns skills. Header More actions owns visibility and removal.
+- `AgentMentionPopup` / `AgentPickerModal` — In-chat agent selection (the `@`-mention popup and the Capability Picker). Remote agents surface here once synced; target type remains metadata; the profile visibility list uses one server-domain group.
 - `useAgents()` — Subscribes to `onRemoteSyncComplete` via `useEffect`, calling `queryClient.invalidateQueries({ queryKey: ['agents'] })` on each event (and mirroring `payload.error` into the shared sync-status cache). This auto-refreshes the agent list after **any** sync — initial, periodic, or on-demand — without manual invalidation. Callers that trigger a sync (`useRefreshCatalogState`, `useApplyBundleUpdate`) deliberately rely on this broadcast instead of invalidating `['agents']` directly, avoiding a stale-read race during the sync window.
 
 ## Security

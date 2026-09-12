@@ -143,7 +143,7 @@ New-chat — pick or drag-drop:
        → fileService.resolvePaths()             [stat + MIME guess]
     → PendingAttachment[] (id = absolute path)
   Send:
-  MainArea.handleNewChat → useNewChatFlow.startNewChat
+  ChatWorkspace.handleNewChat → useNewChatFlow.startNewChat
     → createChat / updateChat / mcp flush
     → resolvePendingAttachments(chatId, scope, attachments)
        → files:ingest-paths                     [swaps pending for real]

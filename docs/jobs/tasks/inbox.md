@@ -15,7 +15,7 @@ The Inbox is one list of open questions and permissions belonging to tasks, answ
 
 ## User Flow
 
-1. Open the Inbox from the fixed-width sidebar entry, or from a blocked task with a known ask. Local and remote requests render through the same permission/question components.
+1. Open the Inbox from the compact square top-bar button between the sidebar toggle and New Chat (available even with the sidebar collapsed or Settings open), or from a blocked task with a known ask. Local and remote requests render through the same permission/question components.
 2. Enter an answer. While it is sending, the question modal disables editing, sending again, closing, Escape and backdrop dismissal.
 3. On success, the modal closes and the card records the outcome. A stale/settled refusal also ends the card; malformed or unavailable delivery keeps the controls and draft for retry.
 4. A next-message question starts a new turn in main after acceptance, leaving the Inbox open. Authentication asks use the same modal with the agent’s message followed by **Reply when you are ready to continue.** A textless question becomes **What should the agent do next?**; textless authentication uses the sign-in fallback.
@@ -25,7 +25,7 @@ The Inbox is one list of open questions and permissions belonging to tasks, answ
 
 `inboxService.list` awaits remote enumeration, then reads current local rows and sorts the merged array newest first. `useInboxList` supplies both the view and badge from one five-second query with one retry, subject to the window visibility gate.
 
-**A failed read rejects the complete list.** TanStack retains its previous data, so the error state must take precedence over a cached count. The sidebar shows an exclamation mark, the Inbox omits its waiting-count label and names the failed refresh, and task actions use `isSuccess` before claiming no asks remain. A cold failure shows a retry state instead of an empty Inbox. The deliberate limitation is that a remote outage also prevents new local entries from reaching that complete array until a successful read; partial results require a separate completeness field, not a successful local-only array.
+**A failed read rejects the complete list.** TanStack retains its previous data, so the error state must take precedence over a cached count. The top-bar Inbox button shows an exclamation mark, the Inbox omits its waiting-count label and names the failed refresh, and task actions use `isSuccess` before claiming no asks remain. A cold failure shows a retry state instead of an empty Inbox. The deliberate limitation is that a remote outage also prevents new local entries from reaching that complete array until a successful read; partial results require a separate completeness field, not a successful local-only array.
 
 **A UI deadline does not release the network lock.** Remote reads share one in-flight operation per profile. The UI stops waiting after ten seconds, but retries join the same operation until all fan-out branches settle. `Promise.allSettled` matters: rejecting at the first failed task previously released the lock while slower siblings still ran, allowing every retry to duplicate their network work. Cinna's JSON transport aborts a fetch, including a stalled body, after thirty seconds; a multi-request enumeration can last longer than one transport call.
 
@@ -40,6 +40,8 @@ An async driver reply captures its original delivery binding and one registratio
 The durable transaction rechecks the exact request/run/invocation/task/chat/agent binding and local active task ownership, then settles the effective answer and updates aggregate task state. An open sibling keeps the task blocked. Only a successful transaction releases an asynchronous park; rollback preserves it. ACP retains its synchronous grant/resolve/commit order so the immediately resumed continuation sees the durable answer before closeAsk/endTurn. Its grant semantics remain unchanged; the durable effective once resolution includes the actual remembered boolean, matching the park/stream result. Async normalization also preserves that metadata in the committed/released permission.
 
 Cancellation, replacement or expiry invalidates the claim. Dropping an asynchronous registration also rejects its local barrier; ACP's notification-only drop remains unchanged. Claims do not survive restart: ordinary driver reply rows expire rather than replay remote confirmations. The [Managed driver](../../agents/managed_agents/managed_agents.md) uses this route for exact session/thread/tool confirmations. Its requests carry allowRemember false, so both Inbox and transcript offer once or deny. An uncertain answer remains visibly unresolved with all decisions disabled. Transcript and Inbox share the warning immediately and restore it from main after renderer reload through agent:reply-uncertainty, which checks active-profile chat ownership. A newly mounted live Managed block is inert until that authoritative read succeeds or returns a known warning; failed reads retain the guard and retry. Main still prevents another remote submission regardless of renderer cache/navigation state. This renderer reload behavior does not persist claims across a main-process restart.
+
+The top-bar count is an overlay on a fixed-size button: blank at zero, the count through 99, and `99+` above that. Its accessible name announces the complete count or the read failure; updates do not move neighboring controls.
 
 ## Answer Outcomes
 
@@ -72,7 +74,7 @@ Every answer, typed continuation, resolution and expiry recomputes blocked/worki
 
 ## Architecture and Files
 
-Inbox view / sidebar / task page → `useInboxList` → `inbox:list` → `inboxService.list` → local request repository and `remoteInboxService.list` → adapter.
+Inbox view / top bar / task page → `useInboxList` → `inbox:list` → `inboxService.list` → local request repository and `remoteInboxService.list` → adapter.
 
 Shared request block → `useAnswerAsk` → `inbox:answer` → parsed resolution → persisted local address / driver, next-message address / `runExecutionService`, or `remoteInboxService.answer` / adapter.
 

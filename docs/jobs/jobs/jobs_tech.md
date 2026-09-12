@@ -244,6 +244,8 @@ JobDetail uses an explicit coordinator/script router before ordinary newChatRout
 
 `useJobList` and `useJobRuns` in `src/renderer/src/hooks/useJobs.ts` refetch every five seconds while cached data includes an active attempt, then stop when all attempts settle. Remote projection therefore updates the sidebar count and history for a local job handed to a service, without relying on a Cinna-only refresh control. See [remote status projection](../tasks/remote_sync.md#remote-status-finishes-the-current-attempt).
 
+`JobDependencyStatus` in `src/renderer/src/components/jobs/JobDetail.tsx` routes Set up by the resolved dependency: MCP → `settingsTab: mcp`; folder id → `settingsTab: local-agents` (visible Default → Agents); other agent → `agentPageMode: settings`, `activeExternalAgentId: localId`, `sidebarTab: agents`, `activeView: external-agent`. A2A connection repair therefore opens the selected agent's own Settings page.
+
 ## Configuration
 
 - Legacy adoption: `POLL_INTERVAL_MS = 5_000` in `useCinnaRunPoll.ts`, only while visible and only for active `legacy_adoption` rows. Bound task reads belong to `taskSyncScheduler`; Job queries separately poll saved rows while attempts remain active.

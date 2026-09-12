@@ -21,7 +21,8 @@ Connect an ACP command to a conversation, including an agent reached through SSH
 3. Press **Test**. Cinna starts the command, exchanges ACP initialize and closes the process. It shows the advertised agent name/version and authentication methods. It sends no session or chat message and performs no sign-in.
 4. If initialization succeeds, press **Add agent** to save and open a chat. An edit to command or directories requires a fresh Test. Failed Test or Save retains the dialog and its values.
 5. Send a message. The shared ACP driver starts or reuses the process, creates or loads the session, streams output and handles permission/question requests.
-6. **Always allow** remembers a permission for this binding in Cinna, while the remote ACP answer is still once. Reopen the Command-line entry and use **Remembered permissions → Revoke** to remove a rule. **Start chat** opens the saved agent; Test then Save edits it.
+6. **Always allow** remembers a permission for this binding in Cinna, while the remote ACP answer is still once. Select the Command-line sidebar entry, then **Settings → Connection → Configure → Remembered permissions → Revoke** to remove a rule. The row opens its chat landing page; Settings reveals Overview/Connection, and Start chat returns to the preserved draft. Test then Save edits the connection.
+7. The header **More actions → Delete agent** removes the Desktop connection after confirmation, retaining existing chats and the external workspace. Enabled direct connections have no Disable action; previously disabled ones have an enable-only recovery action.
 
 ## Business Rules
 

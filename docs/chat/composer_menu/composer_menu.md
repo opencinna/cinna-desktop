@@ -57,7 +57,7 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 - See [Chat Routing](../chat_routing/chat_routing.md).
 
 ### Capability selection & routing (mirrors `@`)
-- **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `MainArea`; flushed onto the chat row at creation. The router is derived at send time from the whole selection — one agent with no MCPs binds it directly, several agents make a chat the user routes, agents mixed with MCPs need the model to coordinate.
+- **New chat**: toggles buffer in the renderer-only pending lists (`pendingAgentIds`, `pendingMcpIds`) owned by `ChatWorkspace`; flushed onto the chat row at creation. The router is derived at send time from the whole selection — one agent with no MCPs binds it directly, several agents make a chat the user routes, agents mixed with MCPs need the model to coordinate.
 - **Active chat**: toggles hit the on-demand DB tables. Engaging an agent moves the chat onto the router that shape needs — a chat that already has an agent becomes `human` (**no model involved**), a plain chat with the model becomes coordinated — and then adds the on-demand row; engaging an MCP adds it to the on-demand set. Detaching removes the on-demand row.
 - **Bound root agent**: in an active chat, the chat's root agent shows as selected and is non-removable from the picker — same constraint as the `@` popup.
 - **Chat-mode baseline MCPs**: shown selected and locked too (toggling is a no-op), so the picker states what the chat actually has rather than only what the user added on top. They're detached by editing the chat mode, not here. Only surfaced when `ChatControls` is hidden — a mode-less chat manages its own baseline through the model/MCP pills instead.
@@ -72,10 +72,10 @@ A single left-side `[+]` button on the chat composer that consolidates all chat-
 User clicks [+]  ->  ChatInput  ->  ComposerPlusMenu
    ├─ "Attach files"      -> pickAttachments()            (file picker)
    ├─ "Chat mode"         -> inline sub-menu -> onSelectMode(mode|null)
-   │                          (MainArea: handleSelectMode / handleActiveChatModeChange)
+   │                          (ChatWorkspace: handleSelectMode / handleActiveChatModeChange)
    ├─ "Add agents / MCP"  -> AgentPickerModal (activeFirst, multiSelect)
    │                          -> useCapabilityPicker.toggle(id)
-   │                               new chat  -> pending buffers (MainArea)
+   │                               new chat  -> pending buffers (ChatWorkspace)
    │                               active    -> chat:on-demand-* IPC (engage/detach)
    └─ "Let the model coordinate" -> chat:set-router 'coordinator'
                                     (off -> 'human' with agents, 'direct' without;

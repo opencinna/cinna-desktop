@@ -43,7 +43,7 @@ Normal agent send/readiness and Inbox/transcript answer channels execute the sha
 
 ## Renderer Components
 
-The Agents creation chooser offers Command-line agent independently of folder setup. LocalAgentsList groups external ACP rows by cwd capability and opens a profile/agent-keyed CustomAgentModal. The modal parses the JSON command, holds current test identity across command/cwd/localCwd and disables Save after a change. Request generations and mounted/profile guards ignore stale completions. Test output and errors use bounded reserved areas; failures retain entered values. Auth methods are informational. Existing entries offer Start chat, tested edits and binding-specific permission revocation.
+The Agents creation chooser offers Command-line agent independently of folder setup. LocalAgentsList groups external ACP rows by cwd capability and opens `ExternalAgentPage` in chat mode. Its Settings → Connection → Configure action opens `CustomAgentModal`; the row hover Start chat action opens the dashboard with the agent selected. The modal parses the JSON command, holds current test identity across command/cwd/localCwd and disables Save after a change. Request generations and mounted/profile guards ignore stale completions. Test output and errors use bounded reserved areas; failures retain entered values. Auth methods are informational. The shared page owns chat/settings switching and lifecycle actions; the configuration dialog owns tested edits and binding-specific permission revocation.
 
 ## Configuration and Security
 

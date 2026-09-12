@@ -1,5 +1,5 @@
 import { net } from 'electron'
-import { agentRepo } from '../db/agents'
+import { agentRepo, agentOverrideRepo } from '../db/agents'
 import { CinnaReauthRequired } from '../auth/cinna-oauth'
 import { AgentStatusError, ipcErrorShape } from '../errors'
 import { createLogger } from '../logger/logger'
@@ -205,7 +205,8 @@ export const agentStatusService = {
       )
     }
 
-    const localAgents = agentRepo.listRemote(scope.profileUserId)
+    const hidden = new Set(agentOverrideRepo.listForUser(scope.profileUserId).filter((row) => !row.enabled).map((row) => row.agentId))
+    const localAgents = agentRepo.listRemote(scope.profileUserId).filter((agent) => agent.enabled !== false && !hidden.has(agent.id))
     const byRemoteId = new Map(localAgents.map((a) => [a.remoteTargetId!, a]))
 
     const snapshots: AgentStatusSnapshot[] = [...folderItems]

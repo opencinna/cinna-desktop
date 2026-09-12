@@ -1240,3 +1240,27 @@ it('shows an unsupported manifest engine explicitly in Runs on', () => {
   expect((screen.getByLabelText('Runs on') as HTMLSelectElement).value).toBe('unsupported-engine')
   expect(screen.getByText('Unsupported engine: gemini')).toBeTruthy()
 })
+
+
+describe('runtime badges on the agent chat page', () => {
+  it('names a verified Claude subscription and the selected model without editing controls', () => {
+    claudeAuth = { state: 'logged_in', authMethod: 'claude.ai', subscriptionType: 'max', email: 'me@example.com' }
+    render(<RuntimePanel agent={agent({ engine: 'claude', complexity: 'complex' })} compact />)
+    expect(screen.getByText('Claude Agent with subscription')).toBeTruthy()
+    expect(screen.getByText('opus')).toBeTruthy()
+    expect(screen.queryByRole('combobox')).toBeNull()
+    expect(save).not.toHaveBeenCalled()
+  })
+  it('does not claim a subscription when authentication is unknown', () => {
+    claudeAuth = undefined
+    render(<RuntimePanel agent={agent({ engine: 'claude' })} compact />)
+    expect(screen.getByText('Claude Agent')).toBeTruthy()
+    expect(screen.queryByText(/with subscription/)).toBeNull()
+  })
+  it('uses the same credential and model as the full form', () => {
+    render(<RuntimePanel agent={agent({ credential: 'Anthropic', model: 'claude-sonnet-4-5' })} compact />)
+    expect(screen.getByText('OpenCode with Anthropic')).toBeTruthy()
+    expect(screen.getByTitle('Model: Claude Sonnet 4.5')).toBeTruthy()
+    expect(screen.queryByRole('combobox')).toBeNull()
+  })
+})

@@ -74,6 +74,7 @@ async function openAgentPage(cinna: CinnaApp): Promise<void> {
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
 }
 
 test('the Permissions tab counts standing grants, and revoking one takes it off disk', async ({

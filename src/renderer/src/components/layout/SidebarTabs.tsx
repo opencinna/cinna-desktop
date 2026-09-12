@@ -52,6 +52,7 @@ export function SidebarTabs(): React.JSX.Element {
   const setActiveCinnaRunId = useUIStore((s) => s.setActiveCinnaRunId)
   const setActiveTaskId = useUIStore((s) => s.setActiveTaskId)
   const setActiveNoteId = useUIStore((s) => s.setActiveNoteId)
+  const activeExternalAgentId = useUIStore((s) => s.activeExternalAgentId)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const setActiveChatId = useChatStore((s) => s.setActiveChatId)
 
@@ -79,7 +80,7 @@ export function SidebarTabs(): React.JSX.Element {
     // send a user who answered one ask back to a different conversation than
     // the one they left.
     if (target === sidebarTab) {
-      setActiveView(VIEW_FOR_TAB[target])
+      setActiveView(target === 'agents' && activeExternalAgentId ? 'external-agent' : VIEW_FOR_TAB[target])
       return
     }
     setActiveCinnaRunId(null)

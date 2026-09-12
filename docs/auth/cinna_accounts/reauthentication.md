@@ -27,7 +27,7 @@ When a Cinna account's stored OAuth tokens become unusable — token replay dete
 
 ### Trigger: remote agents fail to sync
 1. The periodic remote-agent sync (or a manual Sync click) hits `getCinnaAccessToken()` which throws `CinnaReauthRequired`
-2. Settings → Agents (profile group) renders a banner: *"Cinna session expired. Re-authenticate to resume remote agent sync — your chats and settings will be preserved."*
+2. Settings → Profile → Agents renders a banner: *"Cinna session expired. Re-authenticate to resume remote agent sync — your chats and settings will be preserved."*
 3. User clicks "Re-authenticate" → OAuth flow runs → on success the renderer immediately kicks off a fresh `agent:sync-remote` so the previously-known agents reappear
 
 ### Trigger: Agent Status overlay fails to load

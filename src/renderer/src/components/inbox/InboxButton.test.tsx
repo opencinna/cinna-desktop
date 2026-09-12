@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InboxEntry } from '../../../../shared/inbox'
 
 /**
- * The sidebar's Inbox entry.
+ * The top bar's Inbox button.
  *
  * The count on it is the one number in this app that changes **while the user
  * is doing something else** — an agent parks on a permission ask in a job run
@@ -72,9 +72,8 @@ afterEach(() => {
 
 describe('InboxButton', () => {
   it('keeps the count in a slot of one width at 0, 9 and 99', async () => {
-    // Mutation: drop `w-7` from the slot's class and this fails on the first
-    // count — there is then no reserved width at all and the label shifts as
-    // soon as a digit arrives.
+    // Mutation: drop `w-5` from the slot's class and this fails on the first
+    // count — the overlay no longer has a fixed footprint for its count.
     const widths: string[] = []
     for (const count of [0, 9, 99]) {
       mountWith(count)
@@ -85,7 +84,7 @@ describe('InboxButton', () => {
       widths.push(slot.className.split(/\s+/).filter((c) => c.startsWith('w-')).join(' '))
       cleanup()
     }
-    expect(widths).toEqual(['w-7', 'w-7', 'w-7'])
+    expect(widths).toEqual(['w-5', 'w-5', 'w-5'])
   })
 
   it('says "99+" rather than growing the slot past two digits', async () => {
@@ -112,8 +111,8 @@ describe('InboxButton', () => {
     })
     const button = await screen.findByRole('button', { name: 'Inbox — could not be read' })
     await waitFor(() => expect(slotOf(button).textContent).toBe('!'))
-    // Still the same slot: a failure must not move the row either.
-    expect(slotOf(button).className).toContain('w-7')
+    // Still the same slot: a failure must not resize the badge either.
+    expect(slotOf(button).className).toContain('w-5')
   })
 
   it('opens the inbox view', async () => {

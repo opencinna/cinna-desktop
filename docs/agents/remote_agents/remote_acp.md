@@ -5,12 +5,12 @@ Connect Cinna Desktop directly to a Cinna-core ACP connector or another ACP WebS
 ## Connect to Cinna-core
 
 1. In Cinna-core, create or open the agent's **ACP connector** and issue an ACP token. Copy its WebSocket endpoint, such as `wss://api.example.com/acp/{connector_id}`.
-2. In Desktop, open **Agents → + → Remote ACP agent**, or **Settings → Default → Agents → Add remote ACP agent**.
+2. In Desktop, open **Agents → + → Remote ACP Agent** in **Add an agent**.
 3. Paste the **ACP endpoint** and **Access token** separately. Keep **Remote working directory** at `/app/workspace` for Cinna-core. Other servers can use a different absolute server-side path.
 4. Press **Test**. Desktop opens a connection, sends `initialize`, displays the advertised name/version, then closes the connection. Testing creates no remote session and sends no prompt.
 5. Press **Add agent**, then send a message. Text, thought and tool updates stream into the conversation; ACP permission and form-question requests use the existing reply widgets. **Stop** sends `session/cancel`.
 
-Use the entry under **Agents → ACP agents**, or **Configure** in settings, to edit the connection. The password field never receives the stored token: leave it unchanged to retain it, enter a replacement, or choose **Clear saved token**. Changing the endpoint requires explicitly entering or clearing the token, so a saved credential is not silently forwarded to another endpoint. Test the resulting configuration before saving. Settings also offers enable/disable and deletion.
+Select the entry under **Agents → ACP agents** to open its chat landing page. Use **Settings → Connection → Configure** to edit the connection; **Start chat** returns to the preserved draft. The password field never receives the stored token: leave it unchanged to retain it, enter a replacement, or choose **Clear saved token**. Changing the endpoint requires explicitly entering or clearing the token, so a saved credential is not silently forwarded to another endpoint. Test the resulting configuration before saving. The header **More actions → Delete agent** confirms removal of the Desktop connection while preserving chats and the server workspace. Enabled direct connections have no Disable action; previously disabled ones retain an Enable action.
 
 These agents are manually managed in the default/settings scope, like manually added A2A agents. They are not part of the Cinna account's automatic A2A synchronization and use the ACP connector token, not the account JWT. Session and permission state is additionally bound to the active profile and configuration revision. Changing a saved configuration requires a new chat instead of reusing the former token's sessions or permissions.
 
@@ -32,7 +32,7 @@ A live connection reuses the same session. After the idle connection closes or t
 - `src/main/agents/drivers/acp/acpWebSocketConnection.ts`: authenticated native WebSocket streams, bounded startup/send waits, framing checks and disposal. Limits: 256 KiB outgoing frame, 1 MiB incoming frame, 8 MiB incoming queue, 15-second send wait, 30-second initialization wait.
 - `src/main/agents/drivers/acp/acpClient.ts`: shared SDK request and notification routing for stdio and WebSocket, including traffic received before session handlers bind.
 - Existing ACP driver/pool: streaming translation, session reuse/load, permissions/questions, cancellation, idle cleanup, account/configuration lifetime.
-- `CustomAgentModal`, `RemoteAcpAgentCard`, `NewLocalAgentModal`: add/test/edit and settings entry points. The agent DTO exposes only `acpTransport` and `hasAccessToken`, never the token or private configuration.
+- `CustomAgentModal`, `NewLocalAgentModal`, `ExternalAgentPage`: add/test/edit and agent-page entry points. `RemoteAcpAgentCard` remains in the source but is not the routed Settings surface. The agent DTO exposes only `acpTransport` and `hasAccessToken`, never the token or private configuration.
 
 The repository tests use a real loopback WebSocket server whose contract mirrors Cinna-core's `/acp/{connector_id}` dispatcher: bearer authentication, `initialize`, hosted cwd/no-MCP rules, UUID session IDs, replay, text updates and cancel notifications. They cover credential replacement/clearing, stale binding isolation, peer errors, malformed traffic, partial disconnects, permission replies and session continuity. The Electron end-to-end test creates an agent through the UI, tests wrong/correct tokens, checks credential redaction, and completes two permission-bearing turns in the same remote session. No live Cinna-core account or model is needed for these tests.
 

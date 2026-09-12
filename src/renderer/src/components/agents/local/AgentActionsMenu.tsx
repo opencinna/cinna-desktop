@@ -143,7 +143,7 @@ function DeleteAgentDialog({ agent, remove, onCancel }: DeleteAgentDialogProps):
                   // down a dead end for the choice offered as the recoverable
                   // one (ux_rules rule 5) — which is what this hint did while
                   // re-picking a registered folder was refused.
-                  hint: 'The folder stays exactly where it is. Add the agent back by picking the folder again in + → Add a folder, or from Settings → Local Agents.'
+                  hint: 'The folder stays exactly where it is. Add the agent back by picking the folder again in + → Add a folder, or from Settings → Agents.'
                 },
                 {
                   value: true,

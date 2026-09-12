@@ -196,6 +196,8 @@ Both carry the `describeEngineSkip` sentences the refusal uses. A list-time chec
 
 ## Renderer Components
 
+The full runtime form and Permissions tab live in agent **Settings**. Chat mode uses `RuntimePanel compact`; its “with subscription” suffix requires `logged_in` plus `authMethod === claude.ai` or a nonempty subscription type. Unknown authentication remains unqualified. The compact model badge derives from complexity; it does not render a manually declared model override.
+
 | Component / helper | Renders / manages |
 |---|---|
 | `RuntimePanel` | The first select is labelled **`Runs on`** (was `Credential`) and carries two `optgroup`s: `On this machine` with a single `Claude Agent` option valued `engine:claude`, and `AI credentials` with the existing list. The pending model placeholder was renamed `Model choice`, because two controls on one surface must not announce the same name |

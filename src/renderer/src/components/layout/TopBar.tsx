@@ -2,6 +2,7 @@ import { Plus, PanelLeft, PanelLeftClose } from 'lucide-react'
 import { useUIStore } from '../../stores/ui.store'
 import { useStartNewChat } from '../../hooks/useStartNewChat'
 import { JobOriginBanner } from '../chat/JobOriginBanner'
+import { InboxButton } from '../inbox/InboxButton'
 
 // macOS traffic lights at x=15, y=10 (~58 px cluster). 76 px clears them.
 const TRAFFIC_LIGHT_GUTTER = 'pl-[76px]'
@@ -29,6 +30,7 @@ export function TopBar(): React.JSX.Element {
       >
         {sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeft size={15} />}
       </button>
+      <InboxButton className={TOPBAR_BTN} />
       <button onClick={startNewChat} title="New Chat" className={TOPBAR_BTN}>
         <Plus size={15} />
       </button>

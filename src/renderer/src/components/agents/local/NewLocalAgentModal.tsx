@@ -11,6 +11,7 @@ import {
   FolderOpen,
   Sparkles,
   TerminalSquare,
+  Waypoints,
   X
 } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
@@ -34,6 +35,7 @@ import { unwrapIpcError } from '../../../utils/ipcError'
 interface NewLocalAgentModalProps {
   onClose: () => void
   onManaged?: () => void
+  onA2A?: () => void
   onRemoteAcp?: () => void
   onCustom?: () => void
   onCreateFolder?: () => boolean
@@ -105,7 +107,7 @@ interface PickedFolder {
  * and "open automatically" on, the second step is skipped entirely: one name,
  * one Enter, and the assistant is running in the new folder.
  */
-export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, onCreateFolder }: NewLocalAgentModalProps): React.JSX.Element {
+export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, onA2A, onCreateFolder }: NewLocalAgentModalProps): React.JSX.Element {
   const { data: roots } = useAgentRoots()
   const createAgent = useCreateLocalAgent()
   const openIn = useOpenIn()
@@ -360,7 +362,7 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
         ref={cardRef}
         role="dialog"
         aria-label={DIALOG_LABEL[step.kind]}
-        className="w-full max-w-[30rem] rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
+        className="w-full max-w-[30rem] max-h-[90vh] overflow-y-auto rounded-xl border border-[var(--color-border)] bg-[var(--color-bg-secondary)] shadow-lg p-6"
       >
         <div className="flex justify-end">
           <button
@@ -428,7 +430,17 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
                 </span>
               </span>
             </button>
+            {onA2A && (
+              <button type="button" onClick={onA2A} className={`${CHOICE} items-start border-[var(--color-border)]`}>
+                <Waypoints size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
+                <span className="min-w-0">
+                  <span className="block font-medium text-[var(--color-text)]">A2A agent</span>
+                  <span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect using an Agent Card URL.</span>
+                </span>
+              </button>
+            )}
             {onRemoteAcp && <button type="button" onClick={onRemoteAcp} className={`${CHOICE} items-start border-[var(--color-border)]`}>
+              <Waypoints size={16} className="mt-0.5 shrink-0 text-[var(--color-accent)]" />
               <span className="min-w-0"><span className="block font-medium text-[var(--color-text)]">Remote ACP agent</span><span className="block text-[11px] leading-relaxed text-[var(--color-text-muted)]">Connect to Cinna-core or another ACP server by WebSocket.</span></span>
             </button>}
             {onCustom && <button type="button" onClick={onCustom} className={`${CHOICE} items-start border-[var(--color-border)]`}>
@@ -619,7 +631,7 @@ export function NewLocalAgentModal({ onClose, onManaged, onCustom, onRemoteAcp, 
               {launchable.length === 0 && (
                 <div className="rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2.5 text-[11px] text-[var(--color-text-muted)]">
                   No coding assistant or editor was found on this machine. Install Claude Code,
-                  Codex, OpenCode, VS Code or Cursor, then Refresh in Settings → Local Agents.
+                  Codex, OpenCode, VS Code or Cursor, then Refresh in Settings → Agents.
                 </div>
               )}
               <div className="flex gap-1.5">

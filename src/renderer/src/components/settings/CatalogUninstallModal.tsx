@@ -31,6 +31,9 @@ export function CatalogUninstallModal({
       onClick={pending ? undefined : onClose}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Uninstall ${agentName}`}
         className="w-[440px] max-w-[92vw] rounded-lg border border-[var(--color-border)]
           bg-[var(--color-bg-secondary)] shadow-xl"
         onClick={(e) => e.stopPropagation()}

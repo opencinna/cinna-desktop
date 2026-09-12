@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   Trash2,
   ChevronDown,
@@ -36,10 +36,23 @@ const PROTOCOL_LABELS: Record<string, string> = {
 
 interface AgentCardProps {
   agent: AgentData
+  initiallyExpanded?: boolean
+  connectionOnly?: boolean
 }
 
-export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
-  const [expanded, setExpanded] = useState(false)
+function ConnectionRow({ label, children, technical = false }: { label: string; children: ReactNode; technical?: boolean }): React.JSX.Element {
+  return <div className="grid grid-cols-[8rem_minmax(0,1fr)] gap-4 py-2.5 text-xs">
+    <dt className="text-[var(--color-text-muted)]">{label}</dt>
+    <dd className={`min-w-0 break-words text-[var(--color-text)] ${technical ? 'font-mono text-[11px] [overflow-wrap:anywhere]' : ''}`}>{children}</dd>
+  </div>
+}
+
+function ConnectionBody({ standalone, open, children }: { standalone: boolean; open: boolean; children: ReactNode }): React.JSX.Element {
+  return standalone ? <>{children}</> : <AnimatedCollapse open={open}>{children}</AnimatedCollapse>
+}
+
+export function AgentCard({ agent, initiallyExpanded = false, connectionOnly = false }: AgentCardProps): React.JSX.Element {
+  const [expanded, setExpanded] = useState(initiallyExpanded)
   const [accessToken, setAccessToken] = useState('')
   const [showToken, setShowToken] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -66,8 +79,9 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
         accessToken
       },
       {
-        onSuccess: () => {
-          setAccessToken('')
+        onSuccess: (result) => {
+          if (!result.success) setSaveError(result.error ?? 'Could not save access token.')
+          else setAccessToken('')
         },
         onError: (err) => setSaveError(String(err))
       }
@@ -149,8 +163,8 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
     | undefined
 
   return (
-    <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden">
-      <div
+    <div className={connectionOnly ? 'space-y-4' : 'rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] overflow-hidden'}>
+      {!connectionOnly && <div
         className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-[var(--color-bg-hover)] transition-colors"
         onClick={() => setExpanded(!expanded)}
       >
@@ -216,10 +230,10 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
         <div className={`p-1 text-[var(--color-text-muted)] transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`}>
           <ChevronDown size={12} />
         </div>
-      </div>
+      </div>}
 
-      <AnimatedCollapse open={expanded}>
-        <div className="border-t border-[var(--color-border)] px-4 py-3 space-y-2.5">
+      <ConnectionBody standalone={connectionOnly} open={expanded}>
+        <div className={connectionOnly ? 'space-y-4' : 'border-t border-[var(--color-border)] px-4 py-3 space-y-3'}>
           {/* Bundle update banner — applies the publisher's latest revision in
               place (App Data + credentials preserved). */}
           {showUpdate && (
@@ -260,63 +274,24 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
             </div>
           )}
 
-          {/* Agent details */}
-          {agent.description && (
-            <div className="text-[12px] text-[var(--color-text-muted)]">
-              {agent.description}
-            </div>
-          )}
-
-          {agent.cardUrl && (
-            <div className="text-[12px] text-[var(--color-text-muted)]">
-              Card URL: <span className="text-[var(--color-text-secondary)]">{agent.cardUrl}</span>
-            </div>
-          )}
-
-          {/* Protocol & connection details */}
-          <div className="space-y-0.5">
-            {agent.protocolInterfaceVersion && (() => {
-              const matchedIface = cardData?.supportedInterfaces?.find(
-                (i) => i.url === agent.protocolInterfaceUrl
-              )
-              const transport = matchedIface?.protocolBinding ?? matchedIface?.transport ?? 'JSONRPC'
-              return (
-                <div className="text-[12px] text-[var(--color-text-muted)]">
-                  Protocol:{' '}
-                  <span className="text-[var(--color-text-secondary)]">
-                    A2A v{agent.protocolInterfaceVersion}
-                  </span>
-                  {' · '}
-                  <span className="text-[var(--color-text-secondary)]">{transport}</span>
-                  {cardData?.protocolVersions && cardData.protocolVersions.length > 1 && (
-                    <span>
-                      {' '}(agent supports: {cardData.protocolVersions.join(', ')})
-                    </span>
-                  )}
-                </div>
-              )
-            })()}
-            {agent.protocolInterfaceUrl && (
-              <div className="text-[12px] text-[var(--color-text-muted)]">
-                Endpoint: <span className="text-[var(--color-text-secondary)]">{agent.protocolInterfaceUrl}</span>
-              </div>
-            )}
-            {cardData?.version && (
-              <div className="text-[12px] text-[var(--color-text-muted)]">
-                Agent version: <span className="text-[var(--color-text-secondary)]">v{cardData.version}</span>
-              </div>
-            )}
-          </div>
-
-          {/* Capabilities */}
-          {cardData?.capabilities?.streaming && (
-            <div className="text-[12px] text-[var(--color-success)]">
-              Streaming supported
-            </div>
-          )}
+          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-4 py-3">
+            <h2 className="mb-1 text-sm font-medium">Connection details</h2>
+            <dl className="divide-y divide-[var(--color-border)]">
+              <ConnectionRow label="Protocol">{PROTOCOL_LABELS[agent.protocol] ?? agent.protocol}{agent.protocolInterfaceVersion && ` v${agent.protocolInterfaceVersion}`}</ConnectionRow>
+              {agent.protocolInterfaceVersion && <ConnectionRow label="Transport">{(() => {
+                const iface = cardData?.supportedInterfaces?.find((item) => item.url === agent.protocolInterfaceUrl)
+                return iface?.protocolBinding ?? iface?.transport ?? 'JSONRPC'
+              })()}</ConnectionRow>}
+              {(agent.protocolInterfaceUrl || agent.endpointUrl) && <ConnectionRow label="Endpoint" technical>{agent.protocolInterfaceUrl || agent.endpointUrl}</ConnectionRow>}
+              {agent.cardUrl && <ConnectionRow label="Agent card URL" technical>{agent.cardUrl}</ConnectionRow>}
+              {cardData?.version && <ConnectionRow label="Agent version">{cardData.version}</ConnectionRow>}
+              {!!cardData?.protocolVersions?.length && <ConnectionRow label="Supported versions">{cardData.protocolVersions.join(', ')}</ConnectionRow>}
+              {typeof cardData?.capabilities?.streaming === 'boolean' && <ConnectionRow label="Streaming">{cardData.capabilities.streaming ? 'Supported' : 'Not supported'}</ConnectionRow>}
+            </dl>
+          </section>
 
           {/* Skills */}
-          {agent.skills && agent.skills.length > 0 && (
+          {!connectionOnly && agent.skills && agent.skills.length > 0 && (
             <div>
               <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
                 Skills ({agent.skills.length})
@@ -335,10 +310,11 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
           )}
 
           {/* Access token update — hidden for remote agents (they use Cinna JWT) */}
-          {!isRemote && (
-            <>
+          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 space-y-3">
+            <h2 className="text-sm font-medium">Authentication</h2>
+            {isRemote ? <p className="text-xs text-[var(--color-text-secondary)]">Uses your active Cinna profile. Desktop manages the connection with your Cinna session.</p> : <>
               <div>
-                <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+                <label htmlFor={`agent-token-${agent.id}`} className="block text-[12px] text-[var(--color-text-muted)] mb-1.5">
                   Access Token{' '}
                   {agent.hasAccessToken && (
                     <span className="text-[var(--color-success)]">(saved)</span>
@@ -347,6 +323,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                 <div className="flex gap-1.5">
                   <div className="flex-1 relative">
                     <input
+                      id={`agent-token-${agent.id}`}
                       type={showToken ? 'text' : 'password'}
                       value={accessToken}
                       onChange={(e) => setAccessToken(e.target.value)}
@@ -355,6 +332,7 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                     />
                     <button
                       type="button"
+                      aria-label={showToken ? 'Hide access token' : 'Show access token'}
                       onClick={() => setShowToken(!showToken)}
                       className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
                     >
@@ -381,11 +359,13 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
                   <span>{saveError}</span>
                 </div>
               )}
-            </>
-          )}
+            </>}
+          </section>
 
-          {/* Test connection */}
-          <div className="flex items-center gap-3">
+          <section className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)] p-4 space-y-3">
+          <h2 className="text-sm font-medium">Connection test</h2>
+          <p className="text-xs text-[var(--color-text-muted)]">Check that Desktop can reach this agent with the current connection settings.</p>
+          <div className="flex flex-wrap items-center gap-3">
             <button
               type="button"
               onClick={handleTest}
@@ -444,8 +424,9 @@ export function AgentCard({ agent }: AgentCardProps): React.JSX.Element {
               </span>
             ) : null}
           </div>
+          </section>
         </div>
-      </AnimatedCollapse>
+      </ConnectionBody>
     </div>
   )
 }

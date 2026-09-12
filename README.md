@@ -34,11 +34,13 @@ Local-first by design:
 - Markdown rendering, syntax-highlighted code blocks, per-message provider/model binding
 - Persistent conversations in local SQLite (Drizzle ORM)
 
-### Agents (A2A)
-- Register external agents by Agent Card URL — A2A Protocol v1.0 discovery and streaming
-- `@-mention` an agent directly from the new-chat input to route the conversation through it
-- Remote agents auto-synced from your connected Cinna server, categorized for quick access
-- JWT-based authentication for Cinna-hosted agents
+### Agents
+- One sidebar for folder agents, active-server Cinna agents, direct A2A connections, ACP and Managed agents
+- Select an agent to open its chat composer; Settings opens its configuration and Start chat restores the draft
+- Add A2A connections by Agent Card URL through Add an agent; `@`-mention available agents from the composer
+- Cinna agents sync automatically under the server domain; Profile → Agents controls Desktop visibility and sync
+- Local/Remote composer badges expose connection details; folder runtime summaries lead to full settings
+- [Agent documentation](docs/agents/local_agents/agents_tab.md) covers navigation, setup and lifecycle actions
 
 ### MCP Connectors
 - Connect to MCP servers over stdio, SSE, or streamable-HTTP transports

@@ -607,3 +607,12 @@ describe('NewLocalAgentModal — add a folder', () => {
     expect(addFolder).not.toHaveBeenCalled()
   })
 })
+
+it('offers A2A setup without requiring a local agents folder', () => {
+  const onA2A = vi.fn()
+  const onCreateFolder = vi.fn(() => false)
+  render(createElement(NewLocalAgentModal, { onClose: vi.fn(), onA2A, onCreateFolder }))
+  fireEvent.click(screen.getByRole('button', { name: /A2A agent/ }))
+  expect(onA2A).toHaveBeenCalledOnce()
+  expect(onCreateFolder).not.toHaveBeenCalled()
+})

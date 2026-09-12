@@ -9,10 +9,10 @@
 
 ### Renderer — Layout
 
-- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
-- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders `ChatList` (chat view) or settings menu (settings view); footer composes `UserMenu`, `AgentStatusButton`, `InterfaceMenu`
+- `src/renderer/src/components/layout/TopBar.tsx` — Persistent top strip; sidebar toggle + Inbox + new chat icons; `app-drag-strip` makes the area draggable, traffic-light gutter via `pl-[76px]`. Absolutely positioned (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) so it overlays the sidebar/main row rather than stealing height from it
+- `src/renderer/src/components/layout/Sidebar.tsx` — Floating sidebar; renders Chats/Jobs/Notes/Agents tab content or the settings menu; footer composes `UserMenu`, `AgentStatusButton`, local-development/update status and `InterfaceMenu`
 - `src/renderer/src/components/layout/InterfaceMenu.tsx` — Sliders icon + portaled popover with Console / Verbose / Theme toggles
-- `src/renderer/src/components/layout/MainArea.tsx` — Chat or settings content area (untouched by this feature)
+- `src/renderer/src/components/layout/MainArea.tsx` — View router for chat, settings, Inbox, task/job/note and local/external agent pages; mounts `useLiveRunWatch` once above the individual workspaces
 
 ### Renderer — Sidebar Footer Sub-components
 
@@ -48,14 +48,18 @@
 | State | Purpose |
 |-------|---------|
 | `sidebarOpen` | Drives `.is-collapsed` on the sidebar wrapper |
-| `activeView` | `'chat' \| 'settings'` — switches sidebar content + main area |
+| `activeView` | `ActiveView` — chat, settings, inbox, task, job-detail, job-edit, cinna-task-run, note-detail, local-agent or external-agent |
+| `sidebarTab` | Chats / Jobs / Notes / Agents, retained when opening a cross-tab view such as Inbox |
+| `activeLocalAgentId`, `activeExternalAgentId` | Mutually exclusive agent selections; each setter clears the other |
+| `agentPageMode` | `chat` or `settings`, initially `chat`; row selection sets chat mode explicitly |
+| `pendingAgentId` | One-shot dashboard preselection consumed only by the non-embedded workspace |
 | `settingsTab` | Active settings sub-section (consumed by `Sidebar` + `SettingsPage`) |
 | `theme` | `'dark' \| 'light'` — toggled from `InterfaceMenu`; written to `localStorage('cinna-theme')`, applied via `data-theme` on `<html>`, and propagated to main process via `window.api.app.setTheme(theme)` so `appIconService.apply()` swaps the macOS dock + window icon to the matching `cinna-desktop-icon-{dark,light}.png` asset |
 | `verboseMode` | Toggled from `InterfaceMenu`; persisted via `localStorage` |
 | `logsOpen` | Toggled from `InterfaceMenu` and via ⌘\` |
 | `agentStatusOpen` | Toggled from `AgentStatusButton` |
 
-All shell consumers select individual keys (`useUIStore((s) => s.x)`) rather than destructuring the whole store, to avoid render-storm on unrelated updates.
+Most shell components select individual store keys to limit unrelated renders; `ChatWorkspace` also reads the whole UI store for its view and pending selection.
 
 ## IPC Channels
 
@@ -71,6 +75,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 - Absolutely positioned overlay (`absolute top-2 left-2 right-2 h-[var(--topbar-h)] z-30`) — sits on top of the sidebar card and MainArea so the chat scroll viewport keeps full window height. Inset by 8 px on top/left/right to match the Shell's `p-2` window border
 - Reads `sidebarOpen` to pick icon (`PanelLeftClose` vs `PanelLeft`)
+- Renders `InboxButton` between sidebar toggle and `+`. Its 29×29 px control overlays an aria-hidden count (blank at zero, `99+` above 99, `!` on read error), exposes the full count/error in its title and accessible name, and sets `aria-pressed` for the Inbox view.
 - Calls `useStartNewChat()` for the `+` button
 - Buttons share the `TOPBAR_BTN` class string: slight-tint background at rest, solid background + subtle border on hover
 - Background is transparent — content scrolling at the very top of MainArea is visible behind the bar's drag region; child views (`MessageStream`, `SettingsPage`, new-chat default) add their own `pt-[…var(--topbar-h)…]` so visible content starts below the buttons
@@ -81,8 +86,10 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 - `overflow: hidden` on the inner sidebar is required so its rounded corners clip child content; popovers escape this via `createPortal`
 - Two body modes:
   - `activeView === 'settings'` — Back button, "Settings" header, vertical menu items + Trash with a divider
-  - otherwise — `pt-2` + `ChatList`
-- Footer is a single 3-slot row: `UserMenu compact` / spacer / `AgentStatusButton` (cinna users only) / `InterfaceMenu`
+  - otherwise — the tab rail and the list selected by `sidebarTab`: `ChatList`, `JobsList`, `NotesList` or `LocalAgentsList`
+- Footer is `UserMenu compact` / spacer / `AgentStatusButton` / `LocalDevStatusButton` / `UpdateStatusButton` / `InterfaceMenu`. Agent status is not account-gated; a local-only profile can refresh folder statuses.
+- Returning to the already selected Agents tab from Inbox restores `external-agent` when `activeExternalAgentId` exists; otherwise it uses the tab's folder-agent view.
+- `LocalAgentsList` reads `showAgentSidebarSections` from `useAppSettings`, defaulting on unless explicitly false. The same group ordering renders with or without headers; flattening adds no empty-group placeholder.
 
 ### InterfaceMenu (`InterfaceMenu.tsx`)
 
@@ -99,7 +106,7 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 ### AgentStatusButton (`AgentStatusButton.tsx`)
 
-- Only rendered by `Sidebar` when `currentUser?.type === 'cinna_user'`
+- Always rendered by `Sidebar`, including empty/default/local profiles. With no reporting agents its glyph has no severity dot.
 - Reads `useAgentStatus()` for severity dot; calls `refetch()` when opening the overlay so the indicator matches what the user is about to see
 
 ### usePopover (`usePopover.ts`)
@@ -117,9 +124,26 @@ Other shell features (status indicator, profile menu, etc.) consume existing IPC
 
 Layout is unmeasurable in jsdom, so the behaviour is covered by an E2E assertion instead: `e2e/specs/connect-intent.spec.ts` resizes to 620 px, opens the local-dev explainer and asserts the popover's box stays within the viewport.
 
+### Shared chat workspace
+
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` owns the former chat branch of `MainArea`: pending agent/MCP lists, reactive chat-mode selection, example prompts, tilde popup state, send errors, new-chat submission and active-chat layout/composer measurement.
+- `agentId` seeds the pending agent list. `embedded` forces the new-chat branch regardless of the stored active chat, omits the dashboard welcome heading and HintBar, and leaves the global `pendingAgentId` handoff to the dashboard instance. Agent selection remains editable through the shared composer.
+- `src/renderer/src/components/agents/local/LocalAgentPage.tsx` embeds a workspace keyed by agent id; `src/renderer/src/components/agents/ExternalAgentPage.tsx` keys it by profile and agent id. Both hide its wrapper in settings mode instead of unmounting it. Drafts survive chat/settings toggling for that mounted page, not navigation away or a different workspace key.
+- On a successful embedded send, `handleNewChat` switches `activeView` to chat and `sidebarTab` to chats, then clears pending selections. A shared send error leaves the page in place. The ordinary workspace reads the active chat id and renders its transcript.
+- `RuntimePanel compact` is the folder landing/connection-tooltip summary; the full runtime form mounts only in folder Settings. Shared resolution supplies engine, credential/model and setup state. Claude subscription wording requires logged-in authentication with `authMethod === 'claude.ai'` or a subscription type; unknown auth is not a confirmed subscription.
+- `ExternalAgentPage` uses Overview for description/readiness/skills and Connection for `AgentCard connectionOnly` (A2A/Cinna) or Configure buttons opening ACP/Managed dialogs. The Cinna header host opens through `window.api.system.openExternal`; failures stay on the page.
+
+### Desktop visibility notification
+
+- `src/renderer/src/hooks/useAgentDesktopVisibility.ts` handles Cinna hide/restore, snapshots sidebar order before the optimistic update, invalidates status data, and navigates after successful hide only if profile and selected external page still match. It picks the nearest preceding remaining agent, then another available agent, then the empty dashboard. Non-remote agents can be re-enabled from legacy disabled state but cannot be disabled here.
+- `src/renderer/src/utils/agentNavigation.ts` owns `sidebarAgentOrder`, `nextAgentAfterHiding` and server host labeling, keeping hide navigation consistent with the grouped/flat sidebar.
+- `src/renderer/src/components/ui/DesktopToast.tsx` mounts in `Shell` above every view. The single toast in `src/renderer/src/stores/toast.store.ts` replaces any previous toast, uses `role="status"`, dismisses after ten seconds or manually, and offers Settings → Profile → Agents for restoring hidden Cinna agents.
+- `e2e/specs/agent-landing.spec.ts` checks local/A2A landing, settings transitions and draft preservation; `e2e/specs/agent-sidebar-sections.spec.ts` checks the setting through real UI, label activation and restart persistence.
+
 ## Configuration
 
 - **macOS traffic-light position** — `src/main/index.ts` `BrowserWindow` config: `titleBarStyle: 'hiddenInset'`, `trafficLightPosition: { x: 15, y: 10 }`. The renderer's `pl-[76px]` gutter in `TopBar.tsx` mirrors this offset (~58 px cluster width + small margin). Keep them in sync.
+- **Agent sidebar sections** — `showAgentSidebarSections: boolean`, default `true`, in `src/shared/appSettings.ts` and `src/main/db/appSettings.ts`; persisted via installation-wide `app_settings`. Features settings surfaces read/save failures, including the restart guidance for an unknown key.
 - **Base font size** — `html { font-size: 17px }` in `main.css`. Scales every rem-based size.
 - **Sidebar width** — `--sidebar-page-width: 240px` and `--sidebar-tab-rail: 28px` on `.app-sidebar-wrap`; `--sidebar-width` is their sum. The wrapper `width` uses the sum, the inner card uses the page width (inset by the rail), and the collapse animation translates the wrapper by the sum so rail + card leave together.
 - **Shell layering** — `App.tsx` `Shell` is a `relative` flex column with symmetric `p-2` (8 px) window padding. The sidebar/main row is the only in-flow child; `TopBar` is absolutely positioned with the same 8 px inset (`top-2 left-2 right-2`) so the row claims the full Shell height instead of losing it to a flex-sibling header. The horizontal `gap-2` between Sidebar and MainArea stays at 8 px. Visible content in each view clears the bar through `var(--topbar-h)`-derived top padding (sidebar card via CSS `top`, `MessageStream` / `SettingsPage` / new-chat view via `pt-[calc(var(--topbar-h)+12px)]`).

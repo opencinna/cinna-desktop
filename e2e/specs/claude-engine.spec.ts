@@ -307,6 +307,7 @@ test('choosing the Claude engine rewrites the manifest both ways, and does not m
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
 
   const panel = page.getByRole('region', { name: 'Runs with' })
   const runsOn = panel.getByLabel('Runs on')

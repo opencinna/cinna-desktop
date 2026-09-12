@@ -2,16 +2,16 @@
 
 ## Purpose
 
-The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (new chat, sidebar toggle), the profile/account menu, the agent-status indicator, and an interface-preferences popover.
+The window-level chrome that frames every view: a permanent top bar next to the macOS traffic lights, a floating left sidebar that slides in/out, and a main working area. Hosts global actions (sidebar toggle, Inbox, new chat), the profile/account menu, the agent-status indicator, and an interface-preferences popover.
 
 ## Core Concepts
 
-- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar** and **New Chat** icon buttons. Its position and contents never change with sidebar state.
+- **Top Bar** — A persistent ~36 px strip across the window top. Holds the macOS traffic-light gutter plus the **Collapse/Expand Sidebar**, **Inbox** and **New Chat** icon buttons, in that order. Its position and contents never change with sidebar state.
 - **Floating Sidebar** — A rounded, slightly inset panel on the left. Always slot-reserves its position; expanding/collapsing only animates its visibility (slide + fade), not the surrounding layout.
-- **Sidebar Footer** — Bottom row of the sidebar with three slots: profile menu (left), agent-status button (only for Cinna users), and the Interface menu (right).
+- **Sidebar Footer** — Bottom row of the sidebar with the profile menu on the left and agent status, local-development status, update status and Interface controls on the right. Agent status is available to every profile; folder agents can report without a Cinna account.
 - **Profile Menu** — Avatar-only trigger that opens an upward dropdown listing local profiles, the Settings entry, "Add Account", and "Sign Out".
 - **Interface Menu** — Popover above the gear-toggle button containing three preference toggles: **Console** (app logs overlay), **Verbose**, and **Theme**.
-- **Main Area** — Everything to the right of the sidebar; renders either the chat view or the settings page.
+- **Main Area** — Everything to the right of the sidebar; routes chats, app settings, Inbox, tasks, jobs, notes and folder/external agent pages.
 
 ## User Stories / Flows
 
@@ -38,13 +38,26 @@ The window-level chrome that frames every view: a permanent top bar next to the 
 2. Interface popover appears above the button with three small icon toggles: Console, Verbose, Theme.
 3. User clicks any toggle to flip the matching preference. Popover stays open until the user clicks outside.
 
-### Checking Agent Status (Cinna users only)
+### Checking Agent Status
 
 1. Status icon shows a colored dot when there is a non-OK agent status.
 2. User clicks the icon; the agent-status overlay opens. See [Agent Status](../../agents/agent_status/agent_status.md).
 
+### Opening an agent
+
+1. User selects an agent in the Agents sidebar. Its page opens a new-chat composer with that agent selected; no empty chat is created.
+2. **Settings** switches the page body to configuration. **Start chat** returns to the same composer with its draft intact. Folder agents show a compact runtime summary while chatting and full runtime controls in Settings; non-folder agents expose Overview and Connection tabs in Settings.
+3. Sending uses the shared chat flow and opens the resulting conversation under Chats. The row's hover Start chat shortcut opens the dashboard composer directly and does not also select the row's page.
+
+### Opening Inbox
+
+1. User clicks the top-bar Inbox icon, including with the sidebar collapsed or settings open.
+2. The main area shows all waiting asks; the selected sidebar tab is retained. The count overlays the fixed-size control so arriving asks do not move the surrounding controls. A failed read shows **!**, not an empty Inbox.
+
 ## Business Rules
 
+- **Agent rows show stable identity.** Name plus type icon replaces description/credential sublines and readiness dots. Folder agents use a terminal, A2A/Cinna/WebSocket ACP a network icon, and other ACP/Managed agents a bot. Readiness remains in agent details and the separate status surface.
+- **Agent grouping is optional.** Settings → Features → Interface → **Show sections in Agents sidebar** is installation-wide and on by default. Turning it off removes headings and section spacing without changing order: default Local folder root, active Cinna server, other folder roots, direct A2A, ACP connections, Managed agents. Hidden Cinna agents remain in Settings → Profile → Agents.
 - **Top bar is always present.** Buttons do not shift when the sidebar toggles — they share a row with the macOS traffic lights via a fixed left gutter.
 - **Sidebar reserves its slot.** Collapse animates the inner panel away (translate + fade) and shrinks the wrapper width, but it does not unmount; the main area reflows in step.
 - **Sidebar always renders.** Even when collapsed the wrapper exists in the flex layout (width 0); the inner panel uses `pointer-events: none` when invisible.
@@ -61,20 +74,22 @@ App
 └── Shell
     ├── TopBar (always visible, draggable, contains traffic-light gutter + icons)
     │     ├── Collapse/Expand button → ui.store.toggleSidebar()
+    │     ├── Inbox button          → ui.store.setActiveView('inbox')
     │     └── New Chat button       → useStartNewChat()
     └── flex row
         ├── Sidebar (animated wrapper)
-        │     ├── Settings menu OR ChatList (based on activeView)
+        │     ├── Settings menu OR Chats / Jobs / Notes / Agents tab content
         │     └── Footer
         │           ├── UserMenu compact (portaled dropdown)
-        │           ├── AgentStatusButton (Cinna users only)
+        │           ├── AgentStatusButton + local-dev/update controls
         │           └── InterfaceMenu (portaled popover)
-        └── MainArea (chat view or SettingsPage)
+        └── MainArea (view router + live-run watch; ChatWorkspace or selected feature page)
 ```
 
 ## Integration Points
 
 - **UI Store** — Owns `sidebarOpen`, `activeView`, `settingsTab`, `theme`, `verboseMode`, `logsOpen`, `agentStatusOpen`. See `src/renderer/src/stores/ui.store.ts`.
+- [Inbox](../../jobs/tasks/inbox.md) — Global waiting asks, opened from the top bar.
 - [Settings](../settings/settings.md) — The settings page rendered in the main area; entered via the profile dropdown.
 - [Verbose Mode](../verbose_mode/verbose_mode.md) — Toggled from the Interface popover.
 - [Keyboard Shortcuts](../keyboard_shortcuts/keyboard_shortcuts.md) — ⌘\` opens the logs overlay regardless of the Console toggle.

@@ -256,7 +256,7 @@ describe('composer readiness refusal', () => {
     expect(line).toBeTruthy()
     // The controls row holds the + menu, the chips, the badge and Send.
     const controlsRow = send().parentElement!.parentElement!
-    expect(controlsRow.contains(screen.getByRole('status', { name: 'Direct agent connection' }))).toBe(true)
+    expect(controlsRow.contains(screen.getByRole('status', { name: 'Remote agent connection' }))).toBe(true)
     expect(controlsRow.contains(reason)).toBe(false)
     expect(controlsRow.compareDocumentPosition(line) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })

@@ -1,4 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useId, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { unwrapIpcError } from '../../utils/ipcError'
 import {
   X,
   Eye,
@@ -14,6 +16,8 @@ interface A2AAgentFormProps {
 }
 
 export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element {
+  const cardUrlId = useId()
+  const accessTokenId = useId()
   const [cardUrl, setCardUrl] = useState('')
   const [accessToken, setAccessToken] = useState('')
   const [showToken, setShowToken] = useState(false)
@@ -21,6 +25,14 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
 
   const upsert = useUpsertAgent()
   const fetchCard = useFetchAgentCard()
+
+  useEffect(() => {
+    const escape = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !upsert.isPending) onClose()
+    }
+    document.addEventListener('keydown', escape)
+    return () => document.removeEventListener('keydown', escape)
+  }, [onClose, upsert.isPending])
 
   const handleTest = (): void => {
     if (!cardUrl) return
@@ -70,8 +82,11 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
         enabled: true
       },
       {
-        onSuccess: () => onClose(),
-        onError: (err) => setSaveError(String(err))
+        onSuccess: (result) => {
+          if (result.success) onClose()
+          else setSaveError(result.error ?? 'Could not save this A2A agent.')
+        },
+        onError: (err) => setSaveError(unwrapIpcError(err, 'Could not save this A2A agent.'))
       }
     )
   }
@@ -94,172 +109,183 @@ export function A2AAgentForm({ onClose }: A2AAgentFormProps): React.JSX.Element 
     | { url?: string; version?: string }
     | undefined
 
-  return (
-    <div className="rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)]">
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
-        <span className="font-medium text-[14px]">Add A2A Agent</span>
-        <button
-          type="button"
-          onClick={onClose}
-          className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
-        >
-          <X size={12} />
-        </button>
-      </div>
-
-      <div className="px-4 py-3 space-y-2.5">
-        {/* Card URL */}
-        <div>
-          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-            Agent Card URL
-          </label>
-          <input
-            type="text"
-            value={cardUrl}
-            onChange={(e) => setCardUrl(e.target.value)}
-            placeholder="https://agent.example.com or full card URL"
-            autoFocus
-            className={inputClass}
-          />
-        </div>
-
-        {/* Access Token (optional) */}
-        <div>
-          <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
-            Access Token <span className="text-[var(--color-text-muted)]">(optional)</span>
-          </label>
-          <div className="relative">
-            <input
-              type={showToken ? 'text' : 'password'}
-              value={accessToken}
-              onChange={(e) => setAccessToken(e.target.value)}
-              placeholder="Bearer token for authentication"
-              className={`${inputClass} pr-8`}
-            />
-            <button
-              type="button"
-              onClick={() => setShowToken(!showToken)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
-            >
-              {showToken ? <EyeOff size={12} /> : <Eye size={12} />}
-            </button>
-          </div>
-        </div>
-
-        {/* Test result */}
-        {fetchCard.isPending && (
-          <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
-            <Loader2 size={10} className="animate-spin" /> Fetching agent card...
-          </div>
-        )}
-        {fetchCard.data && (
-          <div>
-            {fetchCard.data.success ? (
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-1.5 text-[12px]">
-                  <CheckCircle size={10} className="text-[var(--color-success)]" />
-                  <span className="text-[var(--color-success)]">Connected</span>
-                </div>
-                {cardData && (
-                  <div className="rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] px-3 py-2 space-y-1">
-                    <div className="text-[14px] font-medium">{cardData.name}</div>
-                    {cardData.description && (
-                      <div className="text-[12px] text-[var(--color-text-muted)] line-clamp-2">
-                        {cardData.description}
-                      </div>
-                    )}
-                    {cardData.version && (
-                      <div className="text-[12px] text-[var(--color-text-muted)]">
-                        Agent version: v{cardData.version}
-                      </div>
-                    )}
-                    {protocolData?.version && (() => {
-                      const matchedIface = cardData.supportedInterfaces?.find(
-                        (i) => i.url === protocolData.url
-                      )
-                      const transport = matchedIface?.protocolBinding ?? matchedIface?.transport ?? 'JSONRPC'
-                      return (
-                        <div className="text-[12px] text-[var(--color-text-muted)]">
-                          Protocol: A2A v{protocolData.version} · {transport}
-                          {cardData.protocolVersions && cardData.protocolVersions.length > 1 && (
-                            <span> (supports: {cardData.protocolVersions.join(', ')})</span>
-                          )}
-                        </div>
-                      )
-                    })()}
-                    {protocolData?.url && (
-                      <div className="text-[12px] text-[var(--color-text-muted)]">
-                        Endpoint: <span className="text-[var(--color-text-secondary)]">{protocolData.url}</span>
-                      </div>
-                    )}
-                    {cardData.capabilities?.streaming && (
-                      <div className="text-[12px] text-[var(--color-success)]">
-                        Streaming supported
-                      </div>
-                    )}
-                    {cardData.skills && cardData.skills.length > 0 && (
-                      <div className="text-[12px] text-[var(--color-text-muted)]">
-                        {cardData.skills.length} skill{cardData.skills.length > 1 ? 's' : ''}:{' '}
-                        {cardData.skills.map((s) => s.name).join(', ')}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="flex items-center gap-1.5 text-[12px]">
-                <XCircle size={10} className="text-[var(--color-danger)]" />
-                <span className="text-[var(--color-danger)] truncate">{fetchCard.data.error}</span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Save error */}
-        {saveError && (
-          <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
-            <XCircle size={10} />
-            <span>{saveError}</span>
-          </div>
-        )}
-
-        {/* Buttons */}
-        <div className="flex justify-end gap-2 pt-1">
+  return createPortal(
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/25 p-4">
+      <div role="dialog" aria-modal="true" aria-label="Add A2A Agent" className="w-full max-w-[34rem] max-h-[90vh] overflow-y-auto rounded-lg border border-[var(--color-accent)]/40 bg-[var(--color-bg-secondary)]">
+        <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--color-border)]">
+          <span className="font-medium text-[14px]">Add A2A Agent</span>
           <button
             type="button"
             onClick={onClose}
-            className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-muted)]
-              hover:text-[var(--color-text-secondary)] transition-colors"
+            aria-label="Close"
+            disabled={upsert.isPending}
+            className="p-1 rounded hover:bg-[var(--color-bg-hover)] text-[var(--color-text-muted)] transition-colors"
           >
-            Cancel
-          </button>
-          <button
-            type="button"
-            onClick={handleTest}
-            disabled={!cardUrl || fetchCard.isPending}
-            className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)]
-              text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
-              disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            Test Connection
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={!cardUrl || upsert.isPending}
-            className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
-              text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            {upsert.isPending ? (
-              <span className="flex items-center gap-1">
-                <Loader2 size={10} className="animate-spin" /> Saving...
-              </span>
-            ) : (
-              'Save Agent'
-            )}
+            <X size={12} />
           </button>
         </div>
+
+        <div className="px-4 py-3 space-y-2.5">
+          {/* Card URL */}
+          <div>
+            <label htmlFor={cardUrlId} className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+              Agent Card URL
+            </label>
+            <input
+              id={cardUrlId}
+              type="text"
+              disabled={upsert.isPending}
+              value={cardUrl}
+              onChange={(e) => setCardUrl(e.target.value)}
+              placeholder="https://agent.example.com or full card URL"
+              autoFocus
+              className={inputClass}
+            />
+          </div>
+
+          {/* Access Token (optional) */}
+          <div>
+            <label htmlFor={accessTokenId} className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">
+              Access Token <span className="text-[var(--color-text-muted)]">(optional)</span>
+            </label>
+            <div className="relative">
+              <input
+                id={accessTokenId}
+                disabled={upsert.isPending}
+                type={showToken ? 'text' : 'password'}
+                value={accessToken}
+                onChange={(e) => setAccessToken(e.target.value)}
+                placeholder="Bearer token for authentication"
+                className={`${inputClass} pr-8`}
+              />
+              <button
+                type="button"
+                aria-label={showToken ? 'Hide access token' : 'Show access token'}
+                onClick={() => setShowToken(!showToken)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]"
+              >
+                {showToken ? <EyeOff size={12} /> : <Eye size={12} />}
+              </button>
+            </div>
+          </div>
+
+          {/* Test result */}
+          {fetchCard.isPending && (
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-text-muted)]">
+              <Loader2 size={10} className="animate-spin" /> Fetching agent card...
+            </div>
+          )}
+          {fetchCard.data && (
+            <div>
+              {fetchCard.data.success ? (
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-[12px]">
+                    <CheckCircle size={10} className="text-[var(--color-success)]" />
+                    <span className="text-[var(--color-success)]">Connected</span>
+                  </div>
+                  {cardData && (
+                    <div className="rounded-md bg-[var(--color-bg)] border border-[var(--color-border)] px-3 py-2 space-y-1">
+                      <div className="text-[14px] font-medium">{cardData.name}</div>
+                      {cardData.description && (
+                        <div className="text-[12px] text-[var(--color-text-muted)] line-clamp-2">
+                          {cardData.description}
+                        </div>
+                      )}
+                      {cardData.version && (
+                        <div className="text-[12px] text-[var(--color-text-muted)]">
+                          Agent version: v{cardData.version}
+                        </div>
+                      )}
+                      {protocolData?.version && (() => {
+                        const matchedIface = cardData.supportedInterfaces?.find(
+                          (i) => i.url === protocolData.url
+                        )
+                        const transport = matchedIface?.protocolBinding ?? matchedIface?.transport ?? 'JSONRPC'
+                        return (
+                          <div className="text-[12px] text-[var(--color-text-muted)]">
+                            Protocol: A2A v{protocolData.version} · {transport}
+                            {cardData.protocolVersions && cardData.protocolVersions.length > 1 && (
+                              <span> (supports: {cardData.protocolVersions.join(', ')})</span>
+                            )}
+                          </div>
+                        )
+                      })()}
+                      {protocolData?.url && (
+                        <div className="text-[12px] text-[var(--color-text-muted)]">
+                          Endpoint: <span className="text-[var(--color-text-secondary)]">{protocolData.url}</span>
+                        </div>
+                      )}
+                      {cardData.capabilities?.streaming && (
+                        <div className="text-[12px] text-[var(--color-success)]">
+                          Streaming supported
+                        </div>
+                      )}
+                      {cardData.skills && cardData.skills.length > 0 && (
+                        <div className="text-[12px] text-[var(--color-text-muted)]">
+                          {cardData.skills.length} skill{cardData.skills.length > 1 ? 's' : ''}:{' '}
+                          {cardData.skills.map((s) => s.name).join(', ')}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="flex items-center gap-1.5 text-[12px]">
+                  <XCircle size={10} className="text-[var(--color-danger)]" />
+                  <span className="text-[var(--color-danger)] truncate">{fetchCard.data.error}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Save error */}
+          {saveError && (
+            <div className="flex items-center gap-1.5 text-[12px] text-[var(--color-danger)]">
+              <XCircle size={10} />
+              <span>{saveError}</span>
+            </div>
+          )}
+
+          {/* Buttons */}
+          <div className="flex justify-end gap-2 pt-1">
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={upsert.isPending}
+              className="px-3 py-1.5 rounded-md text-[14px] font-medium text-[var(--color-text-muted)]
+                hover:text-[var(--color-text-secondary)] transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleTest}
+              disabled={!cardUrl || fetchCard.isPending || upsert.isPending}
+              className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)]
+                text-[var(--color-text-secondary)] hover:bg-[var(--color-bg-hover)]
+                disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              Test Connection
+            </button>
+            <button
+              type="button"
+              onClick={handleSave}
+              disabled={!cardUrl || upsert.isPending || fetchCard.isPending}
+              className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)]
+                text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+            >
+              {upsert.isPending ? (
+                <span className="flex items-center gap-1">
+                  <Loader2 size={10} className="animate-spin" /> Saving...
+                </span>
+              ) : (
+                'Save Agent'
+              )}
+            </button>
+          </div>
+        </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

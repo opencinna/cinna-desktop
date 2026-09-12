@@ -1063,6 +1063,21 @@ async function reconcileOnce(
 }
 
 export const localDevService = {
+  /** Execution context for an explicitly requested agent development action. */
+  async executionContext(userId: string) {
+    const current = state
+    const user = userRepo.get(userId)
+    if (current.phase !== 'ready' || current.protocol !== 'json' || !user?.cinnaServerUrl ||
+        current.workspacePath !== workspacePathFor(userId, new URL(user.cinnaServerUrl).host)) {
+      throw new Error('Set up local development in Settings before developing this agent. A cinna-cli with JSON workspace support is required.')
+    }
+    const localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
+    if (!localDev?.cinna_cli_version || !localDev.mutagen_version) throw new Error('This server does not support local development.')
+    const env = await toolchain.toolchainEnv({ cinnaCliVersion: localDev.cinna_cli_version, mutagenVersion: localDev.mutagen_version })
+    if (state !== current) throw new Error('Local development changed. Try again once setup finishes.')
+    return { state: current, env }
+  },
+
   getState(): LocalDevState {
     return state
   },

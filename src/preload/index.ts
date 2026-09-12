@@ -561,6 +561,8 @@ const api = {
       enabled?: boolean
     }): Promise<{ id?: string; success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:upsert', data),
+    deleteRemote: (agentId: string): Promise<{ success: true }> =>
+      ipcRenderer.invoke('agent:delete-remote', agentId),
     delete: (agentId: string): Promise<{ success: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:delete', agentId),
     setEnabled: (
@@ -1206,6 +1208,7 @@ const api = {
    * rejection would lose the reason on the way over.
    */
   localDev: {
+    developAgent: (agentId: string): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:develop-agent', agentId),
     getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
     /** Answer the per-host consent prompt. `false` is remembered too. */
     consent: (host: string, accepted: boolean): Promise<LocalDevState> =>

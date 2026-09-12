@@ -83,12 +83,12 @@ User types '@' in any chat context
                    -> chatOnDemandMcpRepo.add (pendingAnnounce=true)
          -> ActiveMcpChips reads DB via React Query, renders the chip
        New chat (no chatId yet):
-         -> onTogglePendingMcp pushes id into MainArea's buffer
+         -> onTogglePendingMcp pushes id into ChatWorkspace's buffer
          -> ActiveMcpChips (pending mode) reads the buffer, renders the chip
 
 ChatInput resolves the mode-owned baseline once:
   Active chat: useChatMcpProviders(chatId), unless ChatControls is showing
-  New chat:    MainArea's `baselineMcpIds` (the selected mode's list)
+  New chat:    ChatWorkspace's `baselineMcpIds` (the selected mode's list)
   -> passed to BOTH ActiveMcpChips (locked chips) and useCapabilityPicker
      (locked selections), so the two surfaces can't disagree
 
@@ -113,7 +113,7 @@ chatStreamingService.stream:
 
 User clicks × on a chip
   Active chat: useRemoveOnDemandMcp -> chat:on-demand-mcp-remove
-  New chat:    onRemovePendingMcp removes from MainArea buffer
+  New chat:    onRemovePendingMcp removes from ChatWorkspace buffer
 ```
 
 ## Integration Points

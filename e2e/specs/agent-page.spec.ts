@@ -68,6 +68,7 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
     await expect(
       page.getByRole('button', { name: 'No description yet — add one under Overview.' })
     ).toBeVisible()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
     const tabs = page.getByRole('tablist', { name: 'Agent details' })
     // Two tabs wear count badges: the scaffold ships one command, and a fresh
     // folder has two validation warnings (no example prompts, no router

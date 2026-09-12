@@ -80,7 +80,7 @@
   - Active-chat narrow: `attachmentsToSend.filter((a): a is MessageAttachment => a.source !== 'pending')` before `composer.submit` (pending impossible by gating but the narrow keeps types honest)
 - `src/renderer/src/components/chat/MessageBubble.tsx` — Renders `AttachmentList` with `onClick={(a) => void download(a)}`; surfaces `useFileDownload.error` only when `errorFileId` matches a badge
 - `src/renderer/src/components/chat/MessageStream.tsx` — Passes `msg.attachments` to `MessageBubble` for user rows only
-- `src/renderer/src/components/layout/MainArea.tsx` — `handleNewChat(message, attachments?: ComposerAttachment[])` forwards to `startNewChat`
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — `handleNewChat(message, attachments?: ComposerAttachment[])` forwards to `startNewChat`
 
 ## Database Schema
 

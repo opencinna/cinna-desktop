@@ -52,14 +52,14 @@ The reported symptom — a local agent streaming a long markdown table, the chat
 - **No smooth scrolling anywhere in the transcript**, at any moment. There is no "gentle" variant held in reserve — the animation *was* the bug.
 - **No remembered scroll position.** Chat switches land at the bottom; there is no "continue where you left off", and no per-message read anchor.
 - **No auto-scroll to anything but the bottom.** Nothing scrolls a specific message into view.
-- **The composer's height belongs to `MainArea`**, which measures it and passes it down as the transcript's bottom padding and the pill's offset. The scroll model only reacts to that padding changing.
+- **The composer's height belongs to `ChatWorkspace`**, which measures it and passes it down as the transcript's bottom padding and the pill's offset. The scroll model only reacts to that padding changing.
 - **Nested scrollers own their own scrolling.** The transcript neither delegates to them nor takes wheel events from them; it only declines to treat their gestures as its own.
 - **The transcript is not the only scroller in the app**, but it is the only one that follows. The scrollbar thickness rule is global; the following behaviour is not.
 
 ## Architecture Overview
 
 ```
-MainArea (relative container, owns composer height)
+ChatWorkspace (relative container, owns composer height)
   ├── MessageStream  ──uses──>  useStickToBottom(chatId, { hold })
   │      hold = a top-level, unsettled `reply` ask in the chat store's inputRequests
   │      scroll container (ref) ── ResizeObserver ──> stick (instant, pre-paint)

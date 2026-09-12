@@ -16,12 +16,11 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
  * 1. `agents.list()` answers `readiness: null` at first and kicks a background
  *    check; the check lands as `unreachable` with a reason sentence. Polled over
  *    IPC, never slept on.
- * 2. Settings → Agents: the expanded card shows that reason beside **Test
- *    Connection** (read from the list row, not hard-coded here), and the status
- *    dot carries the unreachable tone (`--color-danger`, `READINESS_TONE` in
- *    `ComposerReadiness.tsx`) rather than the healthy `--color-success`.
+ * 2. Agent page → Settings → Connection shows the reason beside **Test
+ *    Connection** (read from the list row, not hard-coded here). The header
+ *    shows a stable A2A type icon instead of a readiness dot.
  * 3. The new-chat composer, with that agent as the single agent (the routing
- *    badge reads `Direct agent connection`): **Send is disabled**, its accessible
+ *    badge reads `Remote agent connection`): **Send is disabled**, its accessible
  *    description is the reason, **Check again** is offered, and Enter creates
  *    no chat and leaves the typed message in the textarea.
  * 4. Recovery: the fake agent starts on the port, **Check again** is pressed,
@@ -128,14 +127,16 @@ async function startFakeAgent(port: number): Promise<{ server: Server; sends: st
   return { server, sends }
 }
 
-/** Footer user menu → Settings → Agents. The trigger is the profile's generated name. */
+/** Sidebar agent → its own Settings → Connection. */
 async function openAgentsSettings(cinna: CinnaApp): Promise<void> {
   const page = cinna.page
-  const user = await page.evaluate(() => window.api.auth.getCurrent())
-  await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  await expect(page.getByRole('heading', { level: 1, name: 'Agents', exact: true })).toBeVisible()
+  await page.getByRole('button', { name: AGENT, exact: true }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('tab', { name: 'Connection', exact: true }).click()
+  const heading = page.getByRole('heading', { level: 1, name: AGENT, exact: true })
+  await expect(heading.getByTitle('A2A agent')).toBeVisible()
+  await expect(heading.locator('svg.lucide-circle')).toHaveCount(0)
 }
 
 async function chatCount(page: Page): Promise<number> {
@@ -186,21 +187,10 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
       return { state: answer!.state, reason: answer!.reason!, detail: answer!.detail ?? null }
     })
 
-    await test.step('Settings → Agents shows the reason beside Test Connection, and a danger dot', async () => {
+    await test.step('agent Settings → Connection shows the readiness reason and a stable type icon', async () => {
       const page = cinna.page
       await openAgentsSettings(cinna)
-      const name = page.getByText(AGENT, { exact: true })
-      // The innermost element holding both the name and the chevron header: the card.
-      const card = page
-        .locator('div.rounded-lg')
-        .filter({ has: name })
-        .last()
-      const dot = card.locator('svg.lucide-circle').first()
-      await expect(dot).toHaveClass(/--color-danger/)
-      await expect(dot).not.toHaveClass(/--color-success/)
-
-      await name.click()
-      const testConnection = card.getByRole('button', { name: 'Test Connection', exact: true })
+      const testConnection = page.getByRole('button', { name: 'Test Connection', exact: true })
       await expect(testConnection).toBeVisible()
       // The row Test Connection sits in: "beside Test" is being in that row.
       const row = testConnection.locator('..')
@@ -210,7 +200,7 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
       await expect(reasonText).toBeVisible()
       await expect(reasonText).toHaveAttribute('title', readiness.detail ?? readiness.reason)
 
-      await page.getByRole('button', { name: 'Back', exact: true }).click()
+      await page.getByRole('button', { name: 'New Chat', exact: true }).click()
     })
 
     await test.step('the composer refuses a direct send, with the reason and Check again', async () => {
@@ -219,7 +209,7 @@ test('an unreachable A2A agent is refused in the composer, and Check again lets 
       await composer.fill('@')
       const mentions = page.getByRole('listbox', { name: 'Agents and MCP servers' })
       await mentions.getByRole('option').filter({ hasText: AGENT }).click()
-      await expect(page.getByRole('status', { name: 'Direct agent connection' })).toBeVisible()
+      await expect(page.getByRole('status', { name: 'Remote agent connection' })).toBeVisible()
 
       await composer.fill(MESSAGE)
       const send = page.getByRole('button', { name: 'Send', exact: true })

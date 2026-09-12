@@ -27,14 +27,14 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 ### Profile-Specific Extension (Cinna)
 
 1. Cinna user activates → background sync upserts remote agents into Profile scope.
-2. Settings sidebar gains a "Profile {displayName}" group with a single "Agents" entry showing those remote agents.
+2. Settings sidebar gains a "Profile {displayName}" group. Its Agents entry shows only Cinna-synced agents, including hidden ones; the group also offers account Chats, AI Credentials, Catalog and Cloud Sync. Default → Agents configures this installation's folders, runtimes and Open in tools. Direct A2A connections are added through Agents → Add an agent and configured on their own agent pages.
 3. User signs out → the Profile group disappears; Default settings (providers, MCP, modes, local agents) stay untouched.
 
 ### Toggle a Remote Agent
 
-1. User opens Settings → Profile → Agents and disables a synced agent.
+1. User opens Settings → Profile → Agents and hides a synced agent, or chooses Disable in Desktop App in that agent page's header menu.
 2. The toggle moves immediately (optimistic UI) and writes a row to `agent_overrides` keyed by `(profileUserId, agentId)`.
-3. Agent disappears from the chat agent selector.
+3. Agent disappears from the chat agent selector, Agents sidebar and status listing. A toast names Settings → Profile → Agents as the recovery location. If its page was open, successful completion selects the preceding available agent (or another agent, then an empty new-chat screen when none remain), guarded against profile/selection changes during the request.
 4. Next background sync rewrites the agent's metadata but leaves the override untouched — the toggle stays off.
 
 ### Switch Profile
@@ -53,7 +53,8 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 
 - **Default scope is the only write target for shared settings.** Mutations to LLM providers, MCP providers, chat modes, and locally-registered agents always target `__default__` regardless of which profile is active.
 - **Profile scope is the only read/write target for profile-bound data.** Chats, remote agents, agent overrides, and Cinna tokens always use the active profile's id.
-- **Remote agents are not editable via the standard `agent:upsert` IPC.** Their metadata is owned by Cinna sync; only the enable/disable toggle is user-controlled (routed to `agent:set-enabled` → override table).
+- **Remote agents are not editable via the standard `agent:upsert` IPC.** Their metadata is owned by Cinna sync. Desktop visibility uses `agent:set-enabled` → override table; eligible server deletion uses the separate `agent:delete-remote` path and removes the cache only after server success. Consumer bundles use uninstall. See [Remote Agents](../../agents/remote_agents/remote_agents.md).
+- **UI lifecycle actions follow ownership.** Cinna agents have a reversible Desktop visibility toggle; direct connections offer deletion instead. Previously disabled direct connections have an enable-only recovery action. The underlying enablement IPC still supports local rows.
 - **Agent enable/disable routing:**
   - Local agents (id without `remote:` prefix) → update `agents.enabled` in Default scope.
   - Remote agents (id starts with `remote:`) → upsert `(profileUserId, agentId, enabled)` in `agent_overrides`.
@@ -62,6 +63,7 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
 - **Reload on activation loads Default-scope providers/MCP.** The adapter registry and `mcpManager` are populated from Default scope on every activation, so the set never depends on which profile is active.
 - **Profile group visibility.** The sidebar only renders "Profile {name}" when the active profile is a Cinna user (only profile-scope settings shipped so far). When hidden, the renderer auto-resets `settingsTab` to a Default-scope tab.
 - **The default guest user is treated as the only profile when active.** No "Profile" group is shown; the agent list collapses to Default-scope-only.
+- **Sidebar section headings are installation-wide.** `showAgentSidebarSections` is a boolean in `app_settings`, defaults to true, and is edited under Settings → Features → Interface. It changes labels/spacing without changing scope or group ordering.
 - **Theme is not scoped.** Stored in `localStorage` and shared across all profiles on the machine (unchanged from prior behavior).
 
 ## Architecture Overview
@@ -90,8 +92,8 @@ Cross-cutting model that splits app data into two scopes: **Default** (shared ac
                         └──────────────────────────────┘
 
 Sidebar (Settings view)
-  ├─ Default  ──► chats / agents (local) / llm / mcp / accounts / development
-  └─ Profile {name}  ──► agents (remote)   [Cinna users only]
+  ├─ Default ──► Chats / Agents (folders and runtime) / Local Development / AI Credentials / MCP Providers / User Accounts / Features / Development
+  └─ Profile {name} ──► Chats / Agents (Cinna visibility) / AI Credentials / Catalog / Cloud Sync [Cinna users only]
 ```
 
 ## Integration Points

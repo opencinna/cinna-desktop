@@ -1,5 +1,6 @@
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId } from '../auth/scope'
+import { developAgent } from '../localdev/developAgentService'
 import { localDevService } from '../localdev/localDevService'
 import type { LocalDevState } from '../../shared/localDevState'
 import { ipcHandle } from './_wrap'
@@ -19,6 +20,12 @@ import { ipcHandle } from './_wrap'
  * of these is something the UI renders rather than something it catches.
  */
 export function registerLocalDevHandlers(): void {
+  ipcHandle('localdev:develop-agent', async (_event, agentId: string) => {
+    userActivation.requireActivated()
+    if (typeof agentId !== 'string' || !agentId) throw new Error('Choose an agent to develop.')
+    return developAgent(agentId)
+  })
+
   /**
    * The one channel here not behind `requireActivated()`, deliberately.
    *

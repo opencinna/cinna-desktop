@@ -61,7 +61,7 @@ Two writers, one column:
 
 Renderer:
   useAgents() → AgentData.remoteMetadata.example_prompts
-    ├─ MainArea (new-chat screen)
+    ├─ ChatWorkspace (new-chat screen)
     │    extractExamplePrompts(selectedAgent)
     │    └─ ExamplePromptTags
     │         tag click → useNewChatFlow.startNewChat(prompt.full)

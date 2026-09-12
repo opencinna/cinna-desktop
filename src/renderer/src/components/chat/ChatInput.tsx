@@ -1472,9 +1472,10 @@ export const ChatInput = forwardRef<ChatInputHandle, ChatInputProps>(function Ch
         </div>
 
         <div className="flex items-center gap-1.5">
-          {badgeInfo && (
+          {badgeInfo && (badgeInfo.router !== 'direct' || (chatId ? boundAgent : selectedAgent)) && (
             <RouterBadge
               router={badgeInfo.router}
+              connectionAgent={chatId ? boundAgent : selectedAgent}
               agentName={badgeInfo.agentName}
               answererName={badgeInfo.answererName}
               modelName={badgeInfo.modelName}

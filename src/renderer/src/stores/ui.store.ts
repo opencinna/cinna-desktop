@@ -16,12 +16,12 @@ export type ActiveView =
   | 'cinna-task-run'
   | 'note-detail'
   | 'local-agent'
+  | 'external-agent'
 export type SidebarTab = 'chats' | 'jobs' | 'notes' | 'agents'
 export type SettingsMenu =
   | 'chats'
   | 'llm'
   | 'mcp'
-  | 'agents'
   | 'local-agents'
   | 'local-dev'
   | 'accounts'
@@ -52,6 +52,7 @@ const VERBOSE_KEY = 'cinna-verbose-mode'
 
 interface UIStore {
   activeView: ActiveView
+  agentPageMode: 'chat' | 'settings'
   settingsTab: SettingsMenu
   sidebarTab: SidebarTab
   activeJobId: string | null
@@ -60,6 +61,8 @@ interface UIStore {
   /** The task whose page is open (when activeView === 'task'). */
   activeTaskId: string | null
   activeNoteId: string | null
+  /** A2A or remote ACP agent selected in the Agents sidebar. */
+  activeExternalAgentId: string | null
   /** Folder agent whose page is open (when activeView === 'local-agent'). */
   activeLocalAgentId: string | null
   /**
@@ -77,6 +80,7 @@ interface UIStore {
   agentStatusDetailId: string | null
   pendingAgentId: string | null
   verboseMode: boolean
+  setAgentPageMode: (mode: 'chat' | 'settings') => void
   setActiveView: (view: ActiveView) => void
   setSettingsMenu: (tab: SettingsMenu) => void
   setSidebarTab: (tab: SidebarTab) => void
@@ -84,6 +88,7 @@ interface UIStore {
   setActiveCinnaRunId: (id: string | null) => void
   setActiveTaskId: (id: string | null) => void
   setActiveNoteId: (id: string | null) => void
+  setActiveExternalAgentId: (id: string | null) => void
   setActiveLocalAgentId: (id: string | null) => void
   setPendingDraftAgentId: (id: string | null) => void
   toggleSidebar: () => void
@@ -97,12 +102,14 @@ interface UIStore {
 
 export const useUIStore = create<UIStore>((set) => ({
   activeView: 'chat',
+  agentPageMode: 'chat',
   settingsTab: 'chats',
   sidebarTab: 'chats',
   activeJobId: null,
   activeCinnaRunId: null,
   activeTaskId: null,
   activeNoteId: null,
+  activeExternalAgentId: null,
   activeLocalAgentId: null,
   pendingDraftAgentId: null,
   sidebarOpen: true,
@@ -112,6 +119,7 @@ export const useUIStore = create<UIStore>((set) => ({
   agentStatusDetailId: null,
   pendingAgentId: null,
   verboseMode: localStorage.getItem(VERBOSE_KEY) === '1',
+  setAgentPageMode: (mode) => set({ agentPageMode: mode }),
   setActiveView: (view) => set({ activeView: view }),
   setSettingsMenu: (tab) => set({ settingsTab: tab }),
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
@@ -119,7 +127,8 @@ export const useUIStore = create<UIStore>((set) => ({
   setActiveCinnaRunId: (id) => set({ activeCinnaRunId: id }),
   setActiveTaskId: (id) => set({ activeTaskId: id }),
   setActiveNoteId: (id) => set({ activeNoteId: id }),
-  setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id }),
+  setActiveExternalAgentId: (id) => set({ activeExternalAgentId: id, activeLocalAgentId: null }),
+  setActiveLocalAgentId: (id) => set({ activeLocalAgentId: id, activeExternalAgentId: null }),
   setPendingDraftAgentId: (id) => set({ pendingDraftAgentId: id }),
   toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
   toggleTheme: () =>

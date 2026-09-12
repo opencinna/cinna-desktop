@@ -51,7 +51,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 ## User Stories / Flows
 
 ### Putting an agent on Claude
-1. On the agent page, the **Runs with** panel's first control is now **Runs on** rather than *Credential*: it offers this machine's Claude Code above a separator, and the AI credentials below it
+1. Open the agent and select **Settings**. The **Runs with** panel's first control is **Runs on**: it offers this machine's Claude Code above a separator, and the AI credentials below it
 2. The Claude option is offered **only where a `claude` was actually detected** — an absent install means an absent option, never an option that fails after the click. An agent whose manifest already names the engine keeps its option regardless, or the select would render blank over a file that plainly says what it runs on
 3. Choosing it writes `runtime.engine: "claude"` and **clears the credential**, because that path spends none. A concrete model is dropped too, and the status line says which model went and why: an id from a provider's catalogue means nothing to a plan addressed by alias
 4. The **work complexity** survives the move in both directions. `medium` means the same thing on either engine, so a change of runtime must not silently discard the user's answer to "how hard is this work"
@@ -86,7 +86,7 @@ Both were live hazards and the second is the one that actually bit. The child en
 5. The user goes and does it — which is the reason the panel keeps asking while the answer is *logged out*. Coming back to a red alarm about a machine that is now fine is the failure that rule exists to prevent
 
 ### Choosing who approves
-1. On a Claude agent's **Permissions** tab, the paragraph describing the OpenCode profile is not shown — it describes rules that are not in force on this engine. In its place: a sentence that reading and searching never ask, then one paragraph describing **both** settings before the control rather than whichever is chosen under it, so the card does not resize on every toggle and a user choosing reads both anyway
+1. On a Claude agent's **Settings → Permissions** tab, the paragraph describing the OpenCode profile is not shown — it describes rules that are not in force on this engine. In its place: a sentence that reading and searching never ask, then one paragraph describing **both** settings before the control rather than whichever is chosen under it, so the card does not resize on every toggle and a user choosing reads both anyway
 2. The description of *Automatic* is deliberately blunt — that in testing it approved everything it was shown, including a force push and a change to the global git config, so treat it as running the agent without a gate and give it work you would run yourself. *Ask every time* is described as bringing every command, edit and fetch to a permission block in the chat, where **Always allow** remembers it in the list below
 3. An **Approvals** select offers *Automatic* and *Ask every time*. No choice made reads as *Automatic*, never as a blank option. A change saves at once and the control holds the picked value for the whole round trip — main re-scans the folder before it answers, and rendering the stored value alone snapped the select back to the old setting until the answer landed, then flipped it
 4. A refused save — the agent is mid-turn in another chat — leaves the control on the stored value and puts one line under it: *"Nothing was changed — that agent is busy in a chat."* One line, truncated with the full text on hover, in a slot that is always rendered, because the turn-lock sentence wrapped at the 800 px minimum and moved the grants list down by a line
@@ -156,7 +156,7 @@ The two are asked **in that order**, and both **before the per-agent turn lock**
 
 **The probe runs in the same constructed child environment the turn will.** This is not tidiness — it is the `USER` finding applied to the check itself. The binary answers differently depending on its child environment, so a probe run under the full login-shell environment would cheerfully report a login for a child that then cannot authenticate, and readiness would be answering about a different process than the one the turn spawns.
 
-**Settings → Local Agents → Developer Tools → Refresh re-asks the login too, and nothing on that screen says so.** That table has two columns, Tool and Version, so the one control in the app that deliberately re-checks the login sits on a screen that never displays it. It is recorded here as a decision rather than left to be found as a bug: the button means *"go and look at this machine again"*, and after it a stale login answer beside fresh detection would be the inconsistency — most of all on the machine the button exists for, where Claude Code has just been installed and is about to be logged into. A **login column is deliberately not added** to that table. It would be a second surface for a fact the agent page already carries, and it is not needed as a recovery path: the panel's own poll clears a stale alarm within about ten seconds, without the user going to Settings at all.
+**Settings → Agents → Developer Tools → Refresh re-asks the login too, and nothing on that screen says so.** That table has two columns, Tool and Version, so the one control in the app that deliberately re-checks the login sits on a screen that never displays it. It is recorded here as a decision rather than left to be found as a bug: the button means *"go and look at this machine again"*, and after it a stale login answer beside fresh detection would be the inconsistency — most of all on the machine the button exists for, where Claude Code has just been installed and is about to be logged into. A **login column is deliberately not added** to that table. It would be a second surface for a fact the agent page already carries, and it is not needed as a recovery path: the panel's own poll clears a stale alarm within about ten seconds, without the user going to Settings at all.
 
 The answer is **cached for a short window, not for the app's lifetime** the way detection is. Whether a binary exists barely changes while the app is open; whether it is logged in changes precisely *because* the app has just told the user to go and log in. A permanently cached "no" would leave them staring at the alarm they had already fixed. One probe is shared by the turn path and the panel, so a render and a turn starting together spawn one child rather than two.
 
@@ -336,7 +336,7 @@ These are open:
 ## Architecture Overview
 
 ```
-Agent page → "Runs with" panel
+Agent page → Settings → "Runs with" panel
    │  Runs on: [ On this machine: Claude Agent | AI credentials: … ]
    │  tier picker, status line, detected-install column
    ▼
@@ -403,7 +403,7 @@ parts accumulator → message repository → renderer   (all unchanged)
 - [Local Agent Permissions](permissions.md) — the standing grants the permission callback consults, the Approvals setting that decides whether the CLI's reviewer stands in front of them, and why *Always* is never written into a tool's own store
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.engine` as an additive 1.2.0 field, and the tolerant-read rule that keeps a newer folder running
 - [Agents Tab & Agent Page](agents_tab.md) — the "Runs with" panel and its one reserved status line
-- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all. The login probe is its sibling and rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings → Local Agents re-asks both
+- [Open in… (Local Agent Tools)](open_in_tools.md) — the tool detection that already found `claude` for a menu item and is now load-bearing for whether an agent can run at all. The login probe is its sibling and rides the same `local-tools:*` surface (`local-tools:claude-auth`), so pressing **Refresh** in Settings → Agents re-asks both
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — the login-shell environment and the child allowlist the constructed environment starts from
 - [UX Rules](../../development/ui_guidelines/ux_rules.md) — rule 1 in particular, for a picker that changes which controls exist beneath it
 - Technical details: [The Claude Engine (tech)](claude_engine_tech.md)

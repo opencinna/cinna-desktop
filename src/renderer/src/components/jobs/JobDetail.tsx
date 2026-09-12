@@ -429,6 +429,9 @@ function MissingChip({ label }: { label: string }): React.JSX.Element {
 function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | null {
   const { data: deps } = useJobDependencyStatus(jobId)
   const setActiveView = useUIStore((s) => s.setActiveView)
+  const setAgentPageMode = useUIStore((s) => s.setAgentPageMode)
+  const setActiveExternalAgentId = useUIStore((s) => s.setActiveExternalAgentId)
+  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
   const setSettingsMenu = useUIStore((s) => s.setSettingsMenu)
 
   const pending = useMemo(
@@ -439,26 +442,21 @@ function JobDependencyStatus({ jobId }: { jobId: string }): React.JSX.Element | 
   const hasUnavailable = pending.some((d) => d.state === 'unavailable')
   if (pending.length === 0) return null
 
-  /**
-   * Where "Set up" goes, decided by the dependency's **resolved local id**
-   * rather than by its `kind`.
-   *
-   * `kind` is `'agent'` for three different sources that live on three
-   * different settings pages. Settings → Agents renders only
-   * `source === 'local' && protocol === 'a2a'`, which is exactly what the
-   * auto-created shells from `resolveLocalAgent` are — so that route stays
-   * right for them. A folder agent is `source: 'folder'`, appears there under
-   * no circumstances, and belongs on Settings → Local Agents. Its row id is
-   * `folder:<manifest id>`, which is the one thing here that can tell them
-   * apart, and it is already on the DTO.
-   */
+  // Folder runtime setup remains in Settings; A2A connection controls now
+  // live on the agent's page, reached through the Agents sidebar.
   const openSetup = (dep: JobDependencyStatusDto): void => {
-    setActiveView('settings')
     if (dep.kind === 'mcp') {
+      setActiveView('settings')
       setSettingsMenu('mcp')
-      return
+    } else if (isFolderAgentId(dep.localId ?? '')) {
+      setActiveView('settings')
+      setSettingsMenu('local-agents')
+    } else {
+      setAgentPageMode('settings')
+      setActiveExternalAgentId(dep.localId)
+      setSidebarTab('agents')
+      setActiveView('external-agent')
     }
-    setSettingsMenu(isFolderAgentId(dep.localId ?? '') ? 'local-agents' : 'agents')
   }
 
   return (

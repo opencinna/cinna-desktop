@@ -143,10 +143,10 @@ beforeEach(() => {
 })
 
 describe('the composer badge — who answers', () => {
-  it('says Direct in a chat with one bound agent', async () => {
+  it('says Remote for a directly added A2A agent', async () => {
     await mount({ router: 'direct', agentId: 'a-1' })
-    expect(badge()?.getAttribute('aria-label')).toBe('Direct agent connection')
-    expect(badge()?.textContent).toContain('Direct')
+    expect(badge()?.getAttribute('aria-label')).toBe('Remote agent connection')
+    expect(badge()?.textContent).toContain('Remote')
   })
 
   it('shows no badge in a plain chat with the local model', async () => {

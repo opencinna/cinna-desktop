@@ -17,8 +17,8 @@ Phase 7a of Local Agents. Phase 3 already listed the catalog on the agent page; 
 ## User Stories / Flows
 
 ### Running a command from the agent page
-1. The user opens a folder agent's page and presses **Run** on one of the Commands card's entries
-2. The screen switches to the chat view and a new chat is started, bound directly to this agent, with `/run:<name>` as the first message — the same entry point a remote agent's card-derived commands already use for a bound chat. The sidebar moves to **Chats** with it: a run leaves the user in a conversation, and an agents list beside one relates to nothing on screen — the same landing both **Start chat** buttons make ([Agents Tab & Agent Page](agents_tab.md#a-chat-from-the-row-without-opening-the-page))
+1. The user opens a kit folder agent, selects **Settings → Commands**, and presses **Run** on an entry
+2. The screen switches to the chat view and a new chat is started, bound directly to this agent, with `/run:<name>` as the first message — the same entry point a remote agent's card-derived commands already use for a bound chat. The sidebar moves to **Chats** with it: a run leaves the user in a conversation, and an agents list beside one relates to nothing on screen — the same main-chat destination the sidebar chat shortcut opens ([Agents Tab & Agent Page](agents_tab.md#a-chat-from-the-row-without-opening-the-page))
 3. The command streams in as a bordered command-output block, exactly like any other synchronous platform command
 
 ### Running a command from the chat composer
@@ -81,7 +81,7 @@ The agent page's **Start chat** button had been hard-coded disabled since Phase 
 ## Architecture Overview
 
 ```
-Agent page — Commands card "Run"          Chat composer "/" popup
+Agent page Settings — Commands card "Run"          Chat composer "/" popup
   │ startNewChat({message:'/run:<name>'})    │ useCliCommands(agentId)
   ▼                                          ▼
                           window.api.agents.*

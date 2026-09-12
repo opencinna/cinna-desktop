@@ -32,7 +32,7 @@ Server reference: `workflow-runner-core/backend/app/models/external/external_age
 - `src/renderer/src/hooks/useAgents.ts` — `useApplyBundleUpdate()` mutation
 - `src/renderer/src/components/settings/CatalogSettingsSection.tsx` — joins catalog entries to synced agents' `bundle_version`; `handleUpdate`; `updatingBundleId`
 - `src/renderer/src/components/settings/CatalogCard.tsx` — `bundleVersion` prop; the "Update to v\<latest>" header action
-- `src/renderer/src/components/settings/AgentCard.tsx` — header "Update" pill + expanded update banner from `agent.remoteMetadata.bundle_version`
+- `src/renderer/src/components/settings/AgentCard.tsx` — Connection update banner from `agent.remoteMetadata.bundle_version`
 
 ## Database Schema
 
@@ -81,8 +81,8 @@ Inline error shape mirrors `agent:sync-remote`. `installId` is the cinna-server 
 
 ### `AgentCard`
 - Reads `agent.remoteMetadata.bundle_version` directly; `showUpdate = isBundleInstall && bundleUpdate.updateAvailable`
-- Header: amber "Update" pill next to the green "Bundle" pill when `showUpdate`
-- Expanded body: amber banner "Bundle update available · v1.0 → v1.2" + "Update to v\<latest>" button (`useApplyBundleUpdate`, `applyUpdate.isPending` spinner). `updateError` local state renders inline; `reauth_required` code maps to a re-auth message
+- The routed agent page passes `connectionOnly`: its legacy header pills are hidden, and Profile → Agents renders visibility rows instead of cards.
+- Settings → Connection: amber banner "Bundle update available · v1.0 → v1.2" + "Update to v\<latest>" button (`useApplyBundleUpdate`, `applyUpdate.isPending` spinner). `updateError` local state renders inline; `reauth_required` code maps to a re-auth message
 
 ## Security
 - The apply-update call runs only in the main process; the Bearer JWT never reaches the renderer. Server owner-gates the install (403 for non-owner) and the desktop validates UUID shape before issuing the request

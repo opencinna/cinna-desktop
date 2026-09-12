@@ -18,7 +18,7 @@ The routing question used to be a boolean, `chats.orchestrated`: on meant "the l
 - **Sticky default** — with nothing addressed, the message goes to whoever the **last user message** addressed; failing that, to the first attached agent. Read from the transcript rather than kept on the chat row, because the transcript is already the record and a second copy of it could disagree with what the user can see.
 - **Catch-up packet** — the compact transcript of what an agent missed while somebody else was answering, put in front of the user's text on the wire. It is what lets two agents share a thread with no protocol between them.
 - **Catch-up cursor** — per `(chat, agent)`, the last message that agent has been shown (`chat_agent_cursors`). No row means it has seen nothing.
-- **Router badge** — the pill left of Send saying who answers next: **Direct** / **You route** / **Model routes**, with a hover-or-focus tooltip explaining the behaviour and the cost of each.
+- **Connection / router badge** — the pill left of Send. A resolved single-agent composer shows **Local** or **Remote** with connection details; **You route** / **Model routes** describe multi-agent routing. Job consumers can also show **Script routes** or the generic **Direct** fallback.
 - **Coordinate toggle** — the composer `[+]` menu's "Let the model coordinate" row: the one router transition a user takes deliberately, and the only way back off `coordinator`.
 
 ## User Stories / Flows
@@ -26,7 +26,7 @@ The routing question used to be a boolean, `chats.orchestrated`: on meant "the l
 ### One agent (`direct`)
 
 1. User picks a single agent on the new-chat screen and attaches no MCP servers.
-2. The badge reads **Direct**. No model is needed, and no model picker is offered.
+2. The badge reads **Local** or **Remote**, based on the selected agent's execution transport. The internal router remains `direct`: no coordinating model is needed, and no model picker is offered.
 3. The message streams straight to the agent, with full per-part fidelity.
 
 ### Bringing a second agent in — the chat the user routes (`human`)
@@ -85,10 +85,18 @@ A local job run makes the same decision from the job's attached agents and MCP s
 - **It does not own how the coordinator runs.** Tool naming, sub-threads, dual output and the depth guard are [Orchestrated Agents](../orchestrated_agents/orchestrated_agents.md).
 - **It does not order a job's agents.** `job_agents` records no order, so a `human` job run addresses the first of a stable-but-arbitrary list. Stated honestly rather than dressed up: a run is one prompt, so it has to pick somebody, and the user routes the rest in the chat it spawns.
 
+### Connection details in a single-agent composer
+
+- **Local** means a folder agent or a non-WebSocket ACP process that Desktop launches. **Remote** means A2A (including directly registered connections), Cinna, WebSocket ACP or Claude Managed Agents. Registration ownership is not execution location: `source: local` does not make an A2A endpoint local. A stdio command may itself invoke SSH; Local does not inspect the command's eventual destination.
+- Hover or keyboard focus shows the agent name and relevant details: folder path and the shared runtime summary; A2A protocol/version, domain and authentication method; ACP transport, folder/workspace and token presence; or Managed API, provider domain, credential name and environment.
+- Remote domains contain only the URL host, including a port when present. User information, endpoint paths, queries and secret values are excluded. Missing configuration shows loading or unavailable feedback; the tooltip does not guess a subscription or credential.
+- The badge is one keyboard stop, associates its tooltip with `aria-describedby`, stays open while hovered or focused, and dismisses on Escape. Labels use their natural width and stay on one line.
+- The composer withholds a direct badge until it has the selected/bound agent. Other `RouterBadge` callers without agent data retain **Direct**; the presentation does not change routing or readiness.
+
 ## Architecture Overview
 
 ```
-New chat (MainArea)
+New chat (ChatWorkspace)
   pendingAgentIds + pendingMcpIds -> newChatRouter() -> direct | human | coordinator
                                                      -> RouterBadge (preview)
   send -> useNewChatFlow.startNewChat

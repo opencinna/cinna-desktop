@@ -40,7 +40,7 @@ Trigger-driven floating picker family that appears above the chat input when the
 
 ### `~` — Chat mode picker (shortcut)
 
-1. User types `~` into an empty chat input. The chat-modes popup opens **above the textarea** (same anchoring as `@` / `#` / `/`) — distinct from the popup that opens above the `+` button when ChatConfigMenu is clicked.
+1. User types `~` into an empty chat input. The chat-modes popup opens **above the textarea** (same anchoring as `@` / `#` / `/`) — distinct from the Chat mode submenu inside the `[+]` composer menu.
 2. **Arrow Up / Down** navigates the mode list; **Enter** / **Tab** applies the highlighted mode AND wipes the `~` from the textarea.
 3. **Continuing to type a non-nav character**: the popup closes and the `~` stays in place — the user is interpreted as having meant to type the character.
 4. **Esc**: closes the popup, leaves the `~` in place.

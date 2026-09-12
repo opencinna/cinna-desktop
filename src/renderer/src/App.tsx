@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { QueryClient, QueryCache, MutationCache, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/layout/Sidebar'
+import { DesktopToast } from './components/ui/DesktopToast'
 import { TopBar } from './components/layout/TopBar'
 import { MainArea } from './components/layout/MainArea'
 import { LoginScreen } from './components/auth/LoginScreen'
@@ -116,6 +117,7 @@ function Shell(): React.JSX.Element {
         <MainArea />
       </div>
       <TopBar />
+      <DesktopToast />
     </div>
   )
 }

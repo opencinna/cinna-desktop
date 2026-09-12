@@ -62,7 +62,7 @@ If the file is under `src/renderer/src/components/settings/`, or renders inside 
 
 **A settings tab is a stack of titled sections, not a stack of cards.** The section title is what a user scans for ("where do I set the engine path?"); a card is one setting, or one list, inside the answer. A tab of five unlabelled cards has no scannable structure and forces the user to read all of it to find one thing — that is the defect that produced this pattern.
 
-Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, and move an existing one over when you next touch it (Local Agents, Features and Development are built on it and Local Development takes `SettingsInfoTip` on its own section titles; AI Credentials matches the scale and the shapes with its own markup):
+Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, and move an existing one over when you next touch it (Default → Agents, Features and Development are built on it and Local Development takes `SettingsInfoTip` on its own section titles; AI Credentials matches the scale and the shapes with its own markup):
 
 | Export | What it is |
 |--------|-----------|
@@ -209,15 +209,15 @@ relative w-9 h-5 rounded-full transition-colors shrink-0
 Settings page at `src/renderer/src/components/settings/SettingsPage.tsx`.
 
 ### Tabs (sidebar menu items)
-Default group: `chats` | `llm` | `agents` | `local-agents` | `local-dev` | `mcp` | `accounts` | `features` | `development` | `trash`.
+Default group: `chats` | `llm` | `local-agents` | `local-dev` | `mcp` | `accounts` | `features` | `development` | `trash`.
 Profile group: `profile-chats` | `profile-llm` | `profile-agents` | `profile-catalog` | `profile-sync`.
-The authoritative list is `sectionTitles` in `SettingsPage.tsx`; each tab renders one `*SettingsSection` component.
+The `local-agents` tab is labeled Agents and configures local folders/runtime/tools; `profile-agents` is also labeled Agents and controls server visibility/sync. Direct connections use their agent pages. The authoritative list is `sectionTitles` in `SettingsPage.tsx`; each tab renders one `*SettingsSection` component.
 
 ### Two shapes of tab
 1. **A list of configurable items** — AI Credentials, MCP Providers, Chat Modes, User Accounts. Expandable cards plus a dashed Add button that toggles an inline form.
-2. **A set of unrelated settings** — Features, Local Agents, Local Development. Titled `SettingsSection`s, each holding cards, toggles or a list.
+2. **A set of unrelated settings** — Features, Default → Agents, Local Development. Titled `SettingsSection`s, each holding cards, toggles or a list.
 
-Most tabs are one or the other; a tab that is both (Local Agents: a folder list, an engine, a tool default) is the second shape with a list inside one of its sections.
+Most tabs are one or the other; a tab that is both (Default → Agents: a folder list, an engine, a tool default) is the second shape with a list inside one of its sections.
 
 ### Add Button Style
 `SettingsAddButton` in `SettingsLayout.tsx`:

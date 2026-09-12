@@ -3,7 +3,7 @@ import {
   Plug,
   Trash2,
   MessageSquare,
-  Bot,
+  Waypoints,
   Users,
   Wrench,
   Sparkles,
@@ -22,7 +22,6 @@ import { JobsList } from '../jobs/JobsList'
 import { NotesList } from '../notes/NotesList'
 import { LocalAgentsList } from '../agents/local/LocalAgentsList'
 import { SidebarTabs } from './SidebarTabs'
-import { InboxButton } from '../inbox/InboxButton'
 import { UserMenu } from '../auth/UserMenu'
 import { AgentStatusButton } from '../agents/AgentStatusButton'
 import { UpdateStatusButton } from '../updater/UpdateStatusButton'
@@ -32,8 +31,7 @@ import { DEFAULT_USER_ID } from '../../../../shared/userIds'
 
 const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'chats', label: 'Chats', icon: MessageSquare },
-  { id: 'agents', label: 'Agents', icon: Bot },
-  { id: 'local-agents', label: 'Local Agents', icon: FolderCog },
+  { id: 'local-agents', label: 'Agents', icon: FolderCog },
   { id: 'local-dev', label: 'Local Development', icon: TerminalSquare },
   { id: 'llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'mcp', label: 'MCP Providers', icon: Plug },
@@ -44,7 +42,7 @@ const defaultMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles
 
 const profileMenuItems: { id: SettingsMenu; label: string; icon: typeof Sparkles }[] = [
   { id: 'profile-chats', label: 'Chats', icon: MessageSquare },
-  { id: 'profile-agents', label: 'Remote Agents', icon: Bot },
+  { id: 'profile-agents', label: 'Agents', icon: Waypoints },
   { id: 'profile-llm', label: 'AI Credentials', icon: Sparkles },
   { id: 'profile-catalog', label: 'Catalog', icon: Package },
   { id: 'profile-sync', label: 'Cloud Sync', icon: Cloud }
@@ -154,10 +152,6 @@ export function Sidebar(): React.JSX.Element {
           </>
         ) : (
           <>
-            {/* Above the tab's list, not inside it: an ask belongs to no tab.
-                The job that raised it is under Jobs, its chat under Chats, and
-                the inbox exists so the user does not have to know which. */}
-            <InboxButton />
             <div className="flex-1 overflow-y-auto">
               {sidebarTab === 'chats' ? (
                 <ChatList />

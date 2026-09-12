@@ -253,7 +253,7 @@ Renderer
     ProfileChatModesSection) → ManagedProviderCard (read-only, "Not supported"
     badge) / ManagedChatModeCard (expand → model picker) →
     chatModes.setManagedEnabled / chatModes.setManagedModel (managed_overrides)
-  Composer mode picker (MainArea availableModes) lists managed modes too — they
+  Composer mode picker (ChatWorkspace availableModes) lists managed modes too — they
     are usable exactly like Default-scope modes (disabled ones are filtered out).
 ```
 

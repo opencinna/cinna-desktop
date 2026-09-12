@@ -1,5 +1,6 @@
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
+import { unwrapIpcError } from '../../utils/ipcError'
 import {
   SettingsButton,
   SettingsRow,
@@ -28,10 +29,12 @@ export function FeaturesSettingsSection(): React.JSX.Element {
   const setSetting = useSetAppSetting()
 
   const disabled = isLoading || setSetting.isPending
+  const saveError = setSetting.error ? unwrapIpcError(setSetting.error, 'Could not save this setting.') : null
 
   const autoChatTitles = settings?.autoChatTitles === true
   const enableTrayIcon = settings?.enableTrayIcon === true
   const showHints = settings?.showHints === true
+  const showAgentSidebarSections = settings?.showAgentSidebarSections !== false
   const prioritizeAccountDefaults = settings?.prioritizeAccountDefaults === true
 
   // Hint retirement counters live in localStorage (renderer-local UI state),
@@ -110,6 +113,18 @@ export function FeaturesSettingsSection(): React.JSX.Element {
             }
           />
           <SettingsToggleRow
+            id="feature-agent-sidebar-sections"
+            label="Show sections in Agents sidebar"
+            description="Group agents by their folder or connection. Turn off to show a flat list in the same order."
+            checked={showAgentSidebarSections}
+            disabled={disabled}
+            onToggle={() => {
+              if (!settings || disabled) return
+              setSetting.mutate({ key: 'showAgentSidebarSections', value: !showAgentSidebarSections })
+            }}
+            title={showAgentSidebarSections ? 'Agents are shown in sections' : 'Agents are shown in a flat list'}
+          />
+          <SettingsToggleRow
             id="feature-show-hints"
             label="Show hints"
             description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
@@ -144,6 +159,13 @@ export function FeaturesSettingsSection(): React.JSX.Element {
           {isError && (
             <SettingsRow className="text-[13px] text-[var(--color-danger)]">
               Couldn’t load settings — try reopening this page.
+            </SettingsRow>
+          )}
+          {saveError && (
+            <SettingsRow className="text-[13px] text-[var(--color-danger)]">
+              <p role="alert">{saveError.startsWith('Unknown app setting:')
+                ? 'This running version does not recognize the setting. Restart Cinna Desktop to load the updated app, then try again.'
+                : `Couldn’t save the setting: ${saveError}`}</p>
             </SettingsRow>
           )}
         </SettingsRows>

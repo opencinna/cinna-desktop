@@ -23,6 +23,8 @@ export interface AppSettingsSchema {
    * Per-hint retirement counters live in localStorage, not here.
    */
   showHints: boolean
+  /** Show source/root section labels in the Agents sidebar. */
+  showAgentSidebarSections: boolean
   /**
    * When true, an account-provisioned (Cinna) default chat mode takes precedence
    * over the local default-profile default. Off by default — the local default

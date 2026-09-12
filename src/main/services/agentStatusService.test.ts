@@ -38,12 +38,14 @@ vi.mock('../db/users', () => ({
  *
  * Rows are keyed by `userId` here for the same reason.
  */
+const visibilityOverrides = vi.hoisted(() => vi.fn(() => [] as Array<{ agentId: string; enabled: boolean }>))
 const agents = vi.hoisted(() => ({
   folder: new Map<string, Array<{ id: string; name: string }>>(),
   owned: new Map<string, Map<string, unknown>>(),
   remote: new Map<string, Array<{ id: string; name: string; remoteTargetId: string }>>()
 }))
 vi.mock('../db/agents', () => ({
+  agentOverrideRepo: { listForUser: visibilityOverrides },
   agentRepo: {
     listFolder: (userId: string) => agents.folder.get(userId) ?? [],
     getOwned: (userId: string, agentId: string) =>
@@ -152,6 +154,7 @@ beforeEach(() => {
   agents.folder = new Map()
   agents.owned = new Map()
   agents.remote = new Map()
+  visibilityOverrides.mockReturnValue([])
   tokens.impl = async () => 'tok'
   readSnapshotMock.mockImplementation((agentId: string) => snapshot(agentId))
   runStatusRefreshMock.mockResolvedValue({ ran: true, skipped: false, error: null })
@@ -571,4 +574,14 @@ describe('status source owns refresh intent', () => {
     expect(runStatusRefreshMock).not.toHaveBeenCalled()
     expect(readSnapshotMock).not.toHaveBeenCalled()
   })
+})
+
+
+it('omits hidden remote agents from Desktop status surfaces', async () => {
+  asCinnaUser()
+  agents.remote.set(PROFILE, [{ id: 'remote:agent:r1', name: 'Hidden', remoteTargetId: 'r1' }])
+  visibilityOverrides.mockReturnValue([{ agentId: 'remote:agent:r1', enabled: false }])
+  fetchMock.mockResolvedValue({ ok: true, status: 200, json: async () => ({ items: [{ agent_id: 'r1', severity: 'ok', raw: 'x', summary: 'fine' }] }) })
+  expect((await agentStatusService.list(SCOPE)).items).toEqual([])
+  expect(visibilityOverrides).toHaveBeenCalledWith(PROFILE)
 })

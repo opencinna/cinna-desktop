@@ -30,3 +30,25 @@ test('safeStorage encrypts inside the sandbox (mock keychain)', async ({ cinna }
   })
   expect(roundTrip).toBe('sk-probe')
 })
+
+
+test('Inbox remains reachable with the sidebar collapsed and from Settings', async ({ cinna }) => {
+  await cinna.skipOnboarding()
+  const page = cinna.page
+  const inbox = page.getByRole('button', { name: 'Inbox', exact: true })
+  await expect(inbox).toBeVisible()
+  await page.getByRole('button', { name: 'Collapse sidebar', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'Open sidebar', exact: true })).toBeVisible()
+  await inbox.click()
+  await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+  await expect(inbox).toHaveAttribute('aria-pressed', 'true')
+  await page.getByRole('button', { name: 'Open sidebar', exact: true }).click()
+  const user = await page.evaluate(() => window.api.auth.getCurrent())
+  await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(page.getByRole('button', { name: 'MCP Providers', exact: true })).toBeVisible()
+  await expect(inbox).toHaveAttribute('aria-pressed', 'false')
+  await inbox.click()
+  await expect(page.getByRole('heading', { name: 'Inbox', exact: true })).toBeVisible()
+  await expect(inbox).toHaveAttribute('aria-pressed', 'true')
+})

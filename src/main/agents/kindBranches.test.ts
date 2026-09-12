@@ -195,7 +195,8 @@ const ALLOWLIST: string[] = [
 /**
  * Files outside sync whose `source` reads are about **ownership** — who may
  * edit or delete a row, which settings page lists it, which account a synced
- * job's dependency belongs to — and not about how the agent runs.
+ * job's dependency belongs to — plus presentation of that identity and its
+ * connection details, never choosing how a turn runs or authenticates.
  *
  * `source` keeps exactly that meaning after the plan, so these are not debt a
  * later phase pays back. They are not allowlisted either: a file-wide pass
@@ -206,6 +207,29 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  // Agents UI refactor: exact lifecycle/identity/presentation pins, not a
+  // transport exception. Location icons and auth labels describe a connection;
+  // sending, authenticating and answering its turns remain driver-owned.
+  { file: 'src/main/services/remoteAgentActions.ts', category: 'source', count: 1,
+    why: 'server deletion requires a cached agent owned by this Cinna profile; deleting a local connection cannot select this authority' },
+  { file: 'src/shared/agentDevelopment.ts', category: 'source', count: 1,
+    why: 'development eligibility belongs to a Cinna-owned agent workspace, with publisher versus consumer ownership checked separately' },
+  { file: 'src/shared/agentPresentation.ts', category: 'source', count: 1,
+    why: 'consumer bundle ownership selects uninstall instead of deleting a connection or publisher working copy' },
+  { file: 'src/renderer/src/components/agents/AgentTypeIcon.tsx', category: 'source', count: 2,
+    why: 'presents a folder or network type icon; protocol and ACP transport refine identity without dispatching work' },
+  { file: 'src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx', category: 'source', count: 4,
+    why: 'owns visibility availability, removal eligibility, server versus local deletion authority and the matching confirmation disclosure' },
+  { file: 'src/renderer/src/components/agents/ExternalAgentPage.tsx', category: 'source', count: 2,
+    why: 'excludes folder-owned pages and presents the owning Cinna profile domain link' },
+  { file: 'src/renderer/src/components/agents/local/LocalAgentsList.tsx', category: 'source', count: 3,
+    why: 'applies server-owned visibility and groups Cinna versus directly registered A2A rows in sidebar order' },
+  { file: 'src/renderer/src/components/chat/AgentConnectionDetails.tsx', category: 'source', count: 4,
+    why: 'presents location, folder runtime details, the owning profile domain fallback and an authentication label; it never resolves or sends turn credentials' },
+  { file: 'src/renderer/src/hooks/useAgentDesktopVisibility.ts', category: 'source', count: 4,
+    why: 'restricts hiding to server-owned rows, preserves folder selections and filters hidden server rows before choosing the next folder or external page' },
+  { file: 'src/renderer/src/utils/agentNavigation.ts', category: 'source', count: 3,
+    why: 'mirrors server visibility and Cinna versus direct A2A sidebar groups to select a neighboring page after hiding' },
   { file: 'src/main/services/customAgentService.ts', category: 'source', count: 1,
     why: 'Command configuration, probes and private runtime state belong only to locally owned external rows; folder and synced rows retain their own authority.' },
   { file: 'src/main/db/agents.ts', category: 'source', count: 1,
@@ -281,8 +305,8 @@ const OWNERSHIP: { file: string; category: Category; count: number; why: string 
   {
     file: 'src/renderer/src/components/settings/AgentsSettingsSection.tsx',
     category: 'source',
-    count: 2,
-    why: 'which settings tab lists, and lets the user edit, a row'
+    count: 1,
+    why: 'Profile Agents lists only Cinna-owned rows; direct connections moved to the sidebar and their own settings pages'
   },
   {
     file: 'src/renderer/src/components/settings/AgentCard.tsx',

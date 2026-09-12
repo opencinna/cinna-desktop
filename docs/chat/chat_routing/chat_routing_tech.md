@@ -32,7 +32,7 @@
 - `src/renderer/src/components/chat/OnDemandAgentChips.tsx` — `ChipAddressing { addressedId, onAddress }`; a chip becomes a button only when addressing is supplied
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — `PlusCoordinateToggle { coordinating, pending?, onToggle }` → the "Let the model coordinate" `menuitemcheckbox` row
 - `src/renderer/src/components/chat/ChatInput.tsx` — one `routingOf(chatData)` read feeding the badge, chip addressing, the coordinate toggle, `attachScope`, `showsChatControls`, `directTarget` and `showsReadinessLine`
-- `src/renderer/src/components/layout/MainArea.tsx` — new-chat preview: `newChatRouter(...)` → `routerInfo`; the send-time model requirement; the example-prompt refusal
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — new-chat preview: `newChatRouter(...)` → `routerInfo`; the send-time model requirement; the example-prompt refusal
 - `src/renderer/src/hooks/useChat.ts` — `useSetChatRouter()` (optimistic, replaces `usePromoteToOrchestrated`); `useUpdateChat` takes `router`
 - `src/renderer/src/hooks/useAgents.ts` — `useAttachAgentToChat(chatId)` (the `@`/picker gesture and its router switch)
 - `src/renderer/src/hooks/useChatComposer.ts` — `submit` + private `answererFor` (the renderer's own copy of the answer, for bookkeeping)
@@ -102,7 +102,7 @@ Table: `chat_agent_cursors`
 ## Renderer Components
 
 - `ChatInput` — `chatRouting = routingOf(chatData ?? {})` is the single read. `answerTarget = chatRouting.answerer({ addressed, lastAddressed, attached })`, where `addressed` comes from the store, `lastAddressed` is scanned backwards out of the cached messages (the same rows main reads) and `attached` from `useChatOnDemandAgents`. It feeds:
-  - `badgeInfo` — an active chat reads its own row; the new-chat screen is told by `MainArea`. A `direct` chat with no agent shows **no badge at all**, as it always has: there is no routing decision to report
+  - `badgeInfo` — an active chat reads its own row; the new-chat screen is told by `ChatWorkspace`. A `direct` composer shows no badge until `chatId ? boundAgent : selectedAgent` resolves. It passes that actual agent as `connectionAgent`, avoiding a location claim from an id or name alone
   - `chipAddressing` — supplied only on `human`; the ring follows the *resolved* answerer, not the raw click
   - `coordinateToggle` — offered only where there is something to coordinate (an agent attached or bound). Uses `mutateAsync().catch(setSendError)` rather than a `mutate`-level `onError`, which is dropped if the caller has unmounted and would swallow the only explanation of a refusal
   - `attachScope = chatRouting.attachmentTarget`
@@ -114,10 +114,18 @@ Table: `chat_agent_cursors`
 - `useAttachAgentToChat` — `direct` + this same agent → no-op; `direct` + an agent → `'human'`; `direct` + none → `'coordinator'`; already `human`/`coordinator` → just add
 - `useChatComposer.submit` — no longer decides where the message goes. `answererFor` produces the renderer's own `RunTarget` from caches it already holds, used for the post-turn bookkeeping in `useChatStream` (whose status and readiness to re-read) and for `addressedAgentId`. Both processes read the same helper, so they cannot drift into different rules — only onto a cache that is a moment stale, and main's answer is the one that runs
 - `useChatStream.startRun` — one entry point, because there is one channel. `target` is optional: omit it and main still routes the message, the renderer just does no per-agent bookkeeping afterwards
-- `RouterBadge` — `Direct` / `You route` / `Model routes`. The label span reserves `min-w-[5.5rem]`, the width of the longest, so a router change moves neither the pill's edge nor Send beside it. `Model routes` rather than `Model` because the composer's own model picker sits in the same row under the word *Model* and means something else; all three labels are verb phrases for that reason. Tooltip opens on hover **and focus**, on the wrapper, so the badge stays one tab stop
+- `RouterBadge` — `connectionAgent?: AgentData | null` changes only a `direct` badge into **Local** (`SquareTerminal`) or **Remote** (`Waypoints`); absent agent data retains **Direct** for generic callers. Other labels are **You route**, **Model routes**, **Script routes**. The label uses natural content width and `whitespace-nowrap`, with no reserved minimum. Separate hovered/focused/dismissed state keeps the tooltip available to keyboard users; Escape dismisses it. `useId`, `role="tooltip"` and conditional `aria-describedby` associate it with the one focusable status badge.
 - `OnDemandAgentChips` — with `addressing`, the chip's name becomes a `button` (`aria-pressed`, explicit `cursor-pointer`, since preflight gives every button a default cursor) and the addressed one takes `ring-2 ring-[var(--color-text)]`. The ring is the **foreground** colour, not the agent's: two agents can hash to the same preset, and a ring in the chip's own colour then reads as a slightly thicker border
 - `ComposerPlusMenu` — the toggle row is `role="menuitemcheckbox"` and uses `aria-disabled` while pending, never `disabled`: a row that disables itself while focused drops focus to the page body mid-switch. The tick's slot is always present so ticking it moves no text
-- `MainArea` — the new-chat send requires a model only when `newRouter === 'coordinator'` or nothing is selected; the refusal for the agent case now names the way out ("Removing the MCP servers lets the agents answer you directly instead")
+- `ChatWorkspace` — the new-chat send requires a model only when `newRouter === 'coordinator'` or nothing is selected; the refusal for the agent case now names the way out ("Removing the MCP servers lets the agents answer you directly instead")
+
+### Connection detail lookup
+
+- `src/renderer/src/components/chat/AgentConnectionDetails.tsx` — `agentLocation()` returns Local exactly for `source === 'folder'` or `driver === 'acp' && acpTransport !== 'websocket'`; every other agent is Remote. This describes the spawned ACP process, not an inspection of its command.
+- `domainOf()` parses URLs and returns the first nonempty `URL.host`, never the raw URL. A2A precedence is protocol interface URL, endpoint URL, card URL, then the active Cinna server for a remote registration. Authentication reads source and token-presence booleans only.
+- Detail children mount only while the tooltip is open. Folder details use `useLocalAgent` and `RuntimePanel compact`; ACP uses `window.api.customAgents.configuration`; Managed uses `window.api.managedAgents.configuration` plus `useProviders`. Configuration queries use `['agents', agent.id, 'connection', profileId]` so profile changes cannot reuse another profile's details. There is no new IPC channel.
+- ACP shows transport, host for WebSocket, configured cwd and token presence or agent-managed authentication. Managed resolves the saved credential id to its name, host (`https://api.anthropic.com` when no base URL is set) and environment id. Missing folder/configuration data has loading/error copy. No secrets are rendered.
+- `src/renderer/src/components/chat/RouterBadge.test.tsx` — classification, redacted domain detail, runtime/configuration states and keyboard tooltip coverage.
 
 ## Configuration
 

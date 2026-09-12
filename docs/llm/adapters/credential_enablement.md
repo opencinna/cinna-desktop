@@ -24,10 +24,10 @@ An AI credential's on/off switch is a statement about **spending**, not about ca
 
 ### Finding out later why something stopped
 
-1. **Agents sidebar** — the agent's dot turns red and its sub-line reads `AI credential switched off`
-2. **Agent page, "Runs with"** — the status line reads "This credential is switched off. Turn it back on in Settings → AI Credentials."
+1. **Agent chat landing page** — the compact runtime summary shows `Setup needed`; its tooltip carries the runtime problem. Sidebar rows show names and type icons, so open the agent to inspect its setup.
+2. **Agent page → Settings, "Runs on"** — the status line reads "This credential is switched off. Turn it back on in Settings → AI Credentials."
 3. **Settings → Chats** — the chat mode's card shows an `Inactive` badge and a short cause (`credential switched off`); expanding it repeats the whole sentence under the credential select
-4. **Settings → Local Agents** — a pinned agent default that has been switched off says so, and a switched-off credential is no longer offered in that picker
+4. **Settings → Default → Agents** — a pinned agent default that has been switched off says so, and a switched-off credential is no longer offered in that picker
 
 ### Switching it back on
 
@@ -41,17 +41,17 @@ One click, always. There is no confirm on the way in: nothing is at risk, and ev
 
 The check was missing for as long as the collector existed, and it was worst where it mattered most: a **canonical** type (`anthropic`, `openai`) carries a real, decryptable key into the generated config, so a folder agent pinned to a credential the user had switched off in Settings kept running — and kept billing — after they turned it off. A **custom** entry (a gateway, Gemini, Ollama) was inert by accident rather than by design: `providerService.upsert` unregisters the adapter on disable and the config's model map is built from the registry, so the entry existed and could address nothing.
 
-**The alternative position was considered and rejected.** The engine config is otherwise a *catalogue of what can be addressed*, with the runner deciding what actually runs — which is exactly why an **agent**'s own `enabled` is still not consulted when the config is generated (see [The Local Engine](../../agents/local_agents/engine.md)). That argument does not carry over to credentials: a user who switches a credential off has said something about **spending**, and there is no runner gate anywhere that would honour it. An agent left with no credential is emitted as a *skip* with a reason, so the "Runs with" panel can say why rather than the agent silently vanishing.
+**The alternative position was considered and rejected.** The engine config is otherwise a *catalogue of what can be addressed*, with the runner deciding what actually runs — which is exactly why an **agent**'s own `enabled` is still not consulted when the config is generated (see [The Local Engine](../../agents/local_agents/engine.md)). That argument does not carry over to credentials: a user who switches a credential off has said something about **spending**, and there is no runner gate anywhere that would honour it. An agent left with no credential is emitted as a *skip* with a reason, so the "Runs on" panel can say why rather than the agent silently vanishing.
 
 ### Usable and active are two questions, and stay two functions
 
-`isCredentialUsable` is deliberately not a test of `enabled`, because some callers legitimately ignore enablement — the "Runs with" panel lists a switched-off credential precisely so an agent pointing at one can say so, and a picker that hid it would leave the user unable to see what their agent is set to. `isCredentialActive` is the `enabled && usable` conjunction under a name, so a caller that means *both* says so visibly instead of merging a second term into the first predicate. Merging them is what let two copies of the rule drift apart the first time.
+`isCredentialUsable` is deliberately not a test of `enabled`, because some callers legitimately ignore enablement — the "Runs on" panel lists a switched-off credential precisely so an agent pointing at one can say so, and a picker that hid it would leave the user unable to see what their agent is set to. `isCredentialActive` is the `enabled && usable` conjunction under a name, so a caller that means *both* says so visibly instead of merging a second term into the first predicate. Merging them is what let two copies of the rule drift apart the first time.
 
-Call `isCredentialActive` where an off credential must be treated as absent: the chat-mode pickers, the pinned agent default, the attach-destination check, the sidebar's status join. Call `isCredentialUsable` where the question really is about the key alone. `collectEngineProviders` spells the two terms out separately rather than calling the conjunction, because each of its refusals carries its own reasoning.
+Call `isCredentialActive` where an off credential must be treated as absent: the chat-mode pickers, the pinned agent default, the attach-destination check. Call `isCredentialUsable` where the question really is about the key alone. `collectEngineProviders` spells the two terms out separately rather than calling the conjunction, because each of its refusals carries its own reasoning.
 
 ### A credential reference is resolved in one place, by both processes
 
-A folder agent's runtime stores a credential **reference** — an id, a name, or a provider type — and two things resolve it: the main process, building the engine config, and the renderer's "Runs with" panel, labelling its pickers. `findCredentialByReference` in `src/shared/credentials.ts` is the single implementation both call.
+A folder agent's runtime stores a credential **reference** — an id, a name, or a provider type — and two things resolve it: the main process, building the engine config, and the renderer's "Runs on" panel, labelling its pickers. `findCredentialByReference` in `src/shared/credentials.ts` is the single implementation both call.
 
 It had been written twice. The copies drifted the moment main's tie-break learned to prefer a credential that is switched **on**: with two rows named `Anthropic`, one of them off, the engine ran one and the panel described the other — the wrong key, the wrong catalogue and a spurious warning, on the one screen a user reads to find out which key they are billed for.
 
@@ -100,15 +100,13 @@ A chat mode is a preset over a credential, so switching the credential off stops
 
 A `<select>` whose value matches no option falls back to displaying the first one. A chat mode bound to a switched-off credential therefore read as **None (use default)** — wrong, and unrecoverable, because the card never admitted what it was set to. Two synthetic options fix it: the bound credential itself, labelled `— inactive`, when it is not one the user may pick; and a plain `Missing credential` when the row is gone from this machine and only its id survives.
 
-The same suffix is used by every settings select that can list a credential that cannot run — the chat mode's, the pinned agent default, and "Runs with". They had each solved it differently (one marker, one bare name, one silence), so the same credential was described three ways across three screens reached from the same settings list. It is a wording fix and not a colour one because an `<option>` cannot be styled portably.
+The same suffix is used by every settings select that can list a credential that cannot run — the chat mode's, the pinned agent default, and "Runs on". They had each solved it differently (one marker, one bare name, one silence), so the same credential was described three ways across three screens reached from the same settings list. It is a wording fix and not a colour one because an `<option>` cannot be styled portably.
 
-### One meaning of "credentials" per line
+### Keep AI credentials separate from folder secrets
 
-In the agents sidebar, `AI credential switched off` ranks **above** the folder's own `credentials needed` readiness label. Two different meanings of one word collided: an agent that was both showed a red dot — which the AI credential owns — over a sub-line pointing the user at the folder's `credentials/.env`, two screens away from the switch that actually stopped it.
+Runtime diagnostics belong on the agent page. Its chat landing shows a compact warning, and Settings shows the full runtime status and controls. The Agents sidebar has no readiness dot or credential sub-line.
 
-It stays **below** the `invalid` folder's own reason and below whatever the agent last said about itself. A folder that does not validate is never handed to the engine at all, so its credential is not yet the problem.
-
-The dot is red rather than amber, because amber on that row means "missing something optional and still runs", and this agent does not run at all.
+An AI credential switched off in Settings → AI Credentials and an unsatisfied variable in the agent folder's `credentials/.env` require different repairs. The runtime status explains the former; the separate credential-slot controls explain the latter. Mixing those meanings once sent users to a folder secret when the switch blocking the agent was two screens away.
 
 ### What this deliberately does not do
 
@@ -137,7 +135,6 @@ Engine config build
                              → describeCredential ladder
 
 Renderer surfaces
-  LocalAgentsList   bindings ⨝ providers → red dot + sub-line
   RuntimePanel      findCredentialByReference + describeCredential
   ChatModeCard      chatModeInactiveReason → badge + cause + detail
   ManagedChatModeCard   the same function
@@ -158,7 +155,7 @@ Only what this aspect added or moved; the surrounding machinery is in the tech d
 - `src/renderer/src/utils/chatModeStatus.ts` — `chatModeInactiveReason()`, `INACTIVE_BADGE_CLASS`, `INACTIVE_CAUSE_CLASS`
 - `src/renderer/src/utils/credentialLabel.ts` — `credentialOptionLabel()`
 - `src/renderer/src/components/settings/DisableCredentialDialog.tsx` — the dialog and `describeDependents()`
-- `src/renderer/src/utils/localAgents.ts` — `agentSubline(agent, credentialInactive)`
+- `src/renderer/src/utils/localAgents.ts` — `agentSubline(agent, credentialInactive)` (retained utility; the name-only sidebar no longer consumes it)
 
 The bindings query is invalidated wherever the runtime chain can move: a credential write or delete (`useProviders`), an account-config sync (`useProviders`, `useChatModes`), any chat-mode write or the managed-mode enable toggle (`useChatModes`), an app-setting write (`useAppSettings`, for the pinned agent default), and every `local-agent:changed` push.
 
@@ -167,7 +164,7 @@ The bindings query is invalidated wherever the runtime chain can move: a credent
 - [Adapters](adapters.md) — the registry lifecycle `enabled` drives, and where the adapter is unregistered
 - [Local Models & Keyless Credentials](../local_models/local_models.md) — `isCredentialUsable`, and why enablement was kept out of it
 - [The Local Engine](../../agents/local_agents/engine.md) — the config's admission rules, runtime resolution, and the still-open agent-`enabled` obligation
-- [Agents Tab & Agent Page](../../agents/local_agents/agents_tab.md) — the sidebar sub-line order and the "Runs with" panel
+- [Agents Tab & Agent Page](../../agents/local_agents/agents_tab.md) — compact runtime summaries and the Settings "Runs on" panel
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — what a mode binds to
 - [Account-Provisioned Providers & Chat Modes](../account_provisioning/account_provisioning.md) — managed credentials, and where their local preference lives
 - [Settings](../../ui/settings/settings.md) — the AI Credentials tab the card and dialog live in

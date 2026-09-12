@@ -230,6 +230,7 @@ test('a bare agent has no Commands tab, its README on Overview and AGENT.md on P
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Exchange Rates Agent')
 
   await test.step('four tabs, and Commands is not one of them', async () => {
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
     const tabs = page.getByRole('tablist', { name: 'Agent details' })
     // No badges: a bare folder with an `AGENT.md` has no errors and no
     // warnings, and has granted no permissions.
@@ -363,7 +364,7 @@ test('removing a bare agent from the list leaves the folder, and Settings puts i
     const user = await page.evaluate(() => window.api.auth.getCurrent())
     await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
     await page.getByRole('button', { name: 'Settings', exact: true }).click()
-    await page.getByRole('button', { name: 'Local Agents', exact: true }).click()
+    await page.getByRole('button', { name: 'Agents', exact: true }).click()
 
     // "not in the list", not "removed from it": the same hidden state also
     // holds an agent the user simply did not tick when adopting the folder, so
@@ -556,6 +557,7 @@ test.describe('a bare agent chooses its own credential', () => {
     await answerAgentsFolder(cinna)
     await page.getByRole('button', { name: AGENT, exact: true }).click()
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
     return page.getByRole('region', { name: 'Runs with' })
   }
 

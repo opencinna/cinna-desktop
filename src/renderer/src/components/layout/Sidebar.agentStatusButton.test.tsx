@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, fireEvent } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 
@@ -108,5 +108,30 @@ describe('Sidebar — the agent status button', () => {
     signInAs('cinna_user')
     render(createElement(Sidebar), { wrapper })
     expect(screen.getByTitle(/Agent status/)).toBeTruthy()
+  })
+})
+
+
+describe('agent settings scope', () => {
+  it('keeps the second Agents menu under Profile for a Cinna account', () => {
+    signInAs('cinna_user')
+    useUIStore.setState({ activeView: 'settings', settingsTab: 'local-agents' })
+    render(createElement(Sidebar), { wrapper })
+    const agents = screen.getAllByRole('button', { name: 'Agents' })
+    expect(agents).toHaveLength(2)
+    const profile = screen.getByRole('heading', { name: 'Profile U' })
+    expect(agents[0].compareDocumentPosition(profile) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(profile.compareDocumentPosition(agents[1]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    fireEvent.click(agents[1])
+    expect(useUIStore.getState().settingsTab).toBe('profile-agents')
+    expect(screen.queryByRole('button', { name: 'Remote agents' })).toBeNull()
+  })
+  it('has only local Agents settings without a Cinna profile', () => {
+    signInAs('local_user')
+    useUIStore.setState({ activeView: 'settings', settingsTab: 'profile-agents' })
+    render(createElement(Sidebar), { wrapper })
+    expect(screen.getAllByRole('button', { name: 'Agents' })).toHaveLength(1)
+    expect(screen.queryByRole('button', { name: 'Remote agents' })).toBeNull()
+    expect(useUIStore.getState().settingsTab).toBe('chats')
   })
 })

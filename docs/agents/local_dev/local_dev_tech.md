@@ -67,6 +67,14 @@ Progress plumbing, end to end: `downloadToFile(url, dest, onProgress?)` in `mana
 - `src/renderer/src/components/settings/SettingsPage.tsx`, `src/renderer/src/components/layout/Sidebar.tsx`, `src/renderer/src/stores/ui.store.ts` — the `'local-dev'` settings tab
 - `src/renderer/src/App.tsx` — `<LocalDevConsentModal />`, mounted **inside** `OnboardingGate` so it and the onboarding step never ask the same question at once
 
+### Remote-to-local Development
+
+- `src/main/localdev/developAgentService.ts` — `developAgent`, `syncedAgentPath` and profile/agent single-flight preparation.
+- `src/shared/agentDevelopment.ts` — `canDevelopAgent`, shared between renderer presentation and service validation.
+- `src/renderer/src/components/agents/ExternalAgentPage.tsx` — Develop action, inline errors, query invalidation and guarded destination navigation.
+- `src/main/services/customAgentService.ts` — tests/saves the resulting stdio ACP connection using an ordinary exact-configuration receipt.
+- `src/main/localdev/developAgentService.test.ts` — mocked CLI/path/service coverage of reuse, sync, refusal, profile changes and concurrent calls.
+
 ## Database Schema
 
 No new tables and no migration. One new key in the existing installation-global `app_settings` store:
@@ -79,6 +87,7 @@ No new tables and no migration. One new key in the existing installation-global 
 
 | Channel | Signature | Notes |
 |---|---|---|
+| `localdev:develop-agent` | `(agentId: string) → { agentId: string }` | Activated profile, nonempty ID; returns the prepared default-scope ACP connection ID or rejects with an actionable error |
 | `localdev:get-state` | `() → LocalDevState` | The one channel **not** behind `requireActivated()`; the state is `idle` until a Cinna profile is active anyway |
 | `localdev:consent` | `(host: string, accepted: boolean) → LocalDevState` | Records the answer, then reconciles. Returns the next state |
 | `localdev:reset-consent` | `(host: string) → LocalDevState` | Forgets the answer, then reconciles |
@@ -91,7 +100,17 @@ No new tables and no migration. One new key in the existing installation-global 
 Two rules hold across all of them:
 
 - **Every verb resolves the active profile itself** (`getProfileScopeUserId()`), and there is no `userId` parameter. The reconciler mints setup tokens with that profile's OAuth bearer and writes into that profile's agents home, so a renderer-supplied id would be a confused deputy — the same rule `authService.reauthCinna` follows
-- **Nothing throws for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and every one of these is something the UI renders rather than catches
+- **Reconcile/state verbs do not throw for an ordinary failure.** A refused install, a rejected token and a missing role all come back as `LocalDevState`, because a thrown `DomainError`'s code does not survive the IPC boundary and those states are something the UI renders rather than catches. `localdev:develop-agent` is a separate command: failures reject, and `ExternalAgentPage` unwraps them beside the action
+
+### Develop Preparation Contract
+
+- Preload exposes `window.api.localDev.developAgent(agentId)`. No profile, path, executable or server URL comes from this caller. `developAgent` resolves profile scope and joins the in-flight promise keyed by profile plus agent ID; `finally` removes it so a later action can recheck real state.
+- `localDevService.executionContext(userId)` requires the current state to be `ready`, protocol `json`, a server URL and the exact expected account workspace for that profile/server. It rediscovers required CLI/Mutagen versions, builds `toolchainEnv`, and refuses a state object changed during the await.
+- `syncedAgentPath` requires exit code zero, final JSON `result=ok`, and an `agents` array. It selects the entry whose `agent_id` matches the cached target and returns a string path; unsupported output gets an update-tooling error. The service executes `account status --json` in the account workspace, with `CINNA_NO_INPUT=1`. Only a missing reported path invokes `agent sync <targetId>`, then status again.
+- `realpath` resolves the account and returned folder concurrently. Equality or failure of `isWithin(root, folder)` rejects before creating a connection. This prevents an outside or symlink-escaped CLI path from becoming a coding assistant working directory.
+- Profile, eligibility and unchanged target ID are checked after context creation, each CLI operation, path resolution, binary resolution and connection Test. Engine resolution uses the existing configured-path/login-shell/pinned fallback.
+- The saved configuration is a custom stdio launcher with `/usr/bin/env`, explicit toolchain PATH, resolved engine binary and `acp`; both `cwd` and `localCwd` are the canonical agent folder. Reuse searches default/settings scope for ACP + custom launcher + exact cwd + generated `Develop <name>` (capped at 200 characters). It does not compare the entire command or retest an existing match. Otherwise `customAgentService.test` supplies the receipt consumed by `save`. No new database mapping or migration is added.
+- Renderer success invalidates the agents query and opens the returned external agent in chat mode only if profile and source-agent selection still match. Preparation is not a chat send. These tests mock CLI/server behavior; they do not establish a live account deletion/development round trip.
 
 ## Services & Key Methods
 

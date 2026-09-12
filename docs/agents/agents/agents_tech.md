@@ -44,10 +44,14 @@
 | Chat agent selector | `src/renderer/src/components/chat/ComposerPlusMenu.tsx` (the `[+]` menu) → `src/renderer/src/components/agents/AgentPickerModal.tsx` (the picker); the standalone `AgentSelector` dropdown was folded into these — see [Composer Menu](../../chat/composer_menu/composer_menu.md) |
 | @-mention popup | `src/renderer/src/components/chat/AgentMentionPopup.tsx` |
 | Chat input (mention detection) | `src/renderer/src/components/chat/ChatInput.tsx` — `findMentionToken()`, `@`-mention state, `forwardRef` with `ChatInputHandle` |
-| Chat integration | `src/renderer/src/components/layout/MainArea.tsx` — `selectedAgent` state, `chatInputRef`, agent message flow |
+| Chat integration | `src/renderer/src/components/layout/ChatWorkspace.tsx` — shared dashboard/agent composer and new-chat creation; `src/renderer/src/components/layout/MainArea.tsx` routes views |
 | Sidebar menu | `src/renderer/src/components/layout/Sidebar.tsx` — `'agents'` menu item |
 | Settings routing | `src/renderer/src/components/settings/SettingsPage.tsx` — `AgentsSettingsSection` |
-| UI store | `src/renderer/src/stores/ui.store.ts` — `SettingsMenu` type includes `'agents'` |
+| UI store | `src/renderer/src/stores/ui.store.ts` — external-agent selection, chat/settings page mode, and settings routing |
+
+- `src/renderer/src/components/agents/ExternalAgentPage.tsx` — chat/settings landing and Overview/Connection tabs.
+- `src/renderer/src/components/agents/ExternalAgentActionsMenu.tsx` — visibility, delete and uninstall confirmations.
+- `src/renderer/src/components/agents/AgentTypeIcon.tsx` — shared agent identity icon.
 
 ## Database Schema
 
@@ -128,7 +132,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 
 ### IPC Agent Handler — `src/main/ipc/agent.ipc.ts`
 
-- `registerAgentHandlers()` — Registers CRUD + sync `agent:*` channels using `ipcHandle()`. All handlers `requireActivated()` then delegate to `agentService`. `agent:upsert`, `agent:delete`, `agent:sync-remote` catch errors via `ipcErrorShape()` and return `{ success: false, error }` for inline display in the settings UI. Delegates to `registerA2AHandlers()`.
+- `registerAgentHandlers()` — Registers CRUD + sync `agent:*` channels using `ipcHandle()`. All handlers `requireActivated()`; CRUD delegates to `agentService`, while `agent:delete-remote` delegates to `remoteAgentActions.deleteRemoteAgent` (see [Remote Agents](../remote_agents/remote_agents_tech.md)). `agent:upsert`, `agent:delete`, `agent:sync-remote` catch errors via `ipcErrorShape()` and return `{ success: false, error }` for inline display in the settings UI. Delegates to `registerA2AHandlers()`.
 
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
@@ -147,18 +151,19 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 
 ## Renderer Components
 
-- `AgentsSettingsSection` — Filters agents by `protocol === 'a2a'`, renders `AgentCard` list + toggle for `A2AAgentForm`.
-- `A2AAgentForm` — Card URL + access token inputs, test connection shows card preview: name, description, agent version, resolved protocol version + transport (e.g. "A2A v0.3.0 · JSONRPC"), all supported versions, endpoint URL, streaming badge, skills. Passes `protocolInterfaceUrl` and `protocolInterfaceVersion` on save.
-- `AgentCard` — Expandable card. Collapsed: status dot, name, protocol label with version (e.g. "A2A v0.3.0"). Expanded: description, card URL, protocol version + transport + supported versions, resolved endpoint URL, agent version, streaming badge, skills list, token management, test connection. Transport is derived by matching `protocolInterfaceUrl` against `cardData.supportedInterfaces`. **Readiness on the card:**
-  - The status dot is muted when the agent is off, takes the refusal's colour (`readinessTone`) when it is on and refused, and is success otherwise
-  - Expanded, the reason renders beside Test Connection (`readinessText`, `title={readinessTitle}`) — `AlertTriangle` for a warning state, `XCircle` for a danger one — while `readinessIssue && !testAgent.data?.success`. A failed test never replaces it and a passing test shows *Connected*; a failed test's error (with itself as its `title`) renders only when there is no refusal
+- `AgentsSettingsSection` — Profile-only visibility list for `source === 'remote'`; direct connection creation is in the sidebar chooser.
+- `A2AAgentForm` — Portalled dialog opened by `NewLocalAgentModal` through `LocalAgentsList`. Escape/close and inputs are disabled while saving; rejected IPC and returned `{success:false}` keep the form open with an error. Card URL + access token inputs, test connection shows card preview: name, description, agent version, resolved protocol version + transport (e.g. "A2A v0.3.0 · JSONRPC"), all supported versions, endpoint URL, streaming badge, skills. Passes `protocolInterfaceUrl` and `protocolInterfaceVersion` on save.
+- `ExternalAgentPage` — Shared non-folder page; keeps `ChatWorkspace` mounted behind `hidden` in Settings mode, keyed by profile/agent to preserve mode-switch drafts without sharing them between agents. Overview owns description/readiness/skills. ACP/Managed Connection opens the corresponding edit modal; A2A uses `AgentCard(connectionOnly)`. The server host opens via `system.openExternal`.
+- `ExternalAgentActionsMenu` — Header lifecycle actions and guarded confirmation dialogs; see [Remote Agents](../remote_agents/remote_agents_tech.md).
+- `AgentCard` — Its routed use passes `connectionOnly`, hiding the legacy expandable header, status dot, toggle, delete button and duplicated skills. Visible sections are Connection details, Authentication and Connection test; bundle update banner remains above them. Transport matches `protocolInterfaceUrl` against `cardData.supportedInterfaces`. **Readiness:**
+  - The reason renders beside Test Connection (`readinessText`, `title={readinessTitle}`) — `AlertTriangle` for a warning state, `XCircle` for a danger one — while `readinessIssue && !testAgent.data?.success`. A failed test never replaces it and a passing test shows *Connected*; a failed test's error (with itself as its `title`) renders only when there is no refusal
   - `handleTest` also calls `useCheckAgentReadiness().mutate(agent.id)`
 
   See [Agent Drivers — Technical Details](../drivers/drivers_tech.md#readiness-and-renderer-behavior).
-- `AgentSelector` — Bot icon button in chat input area. Dropdown lists enabled agents. Click to toggle selection. Hidden when no agents are enabled. When an agent is selected, the button expands into a chip showing the agent name + X dismiss button (expand-in/shrink-out CSS animations). Fires `onCollapsed` callback after the shrink animation completes (used to return focus to text input).
+- `ComposerPlusMenu` / `AgentPickerModal` — The composer capability picker replaces the standalone AgentSelector. Agent picks join the ordered pending capability set; the first selected agent supplies example prompts and direct-agent presentation.
 - `AgentMentionPopup` — Popup rendered above the text input when user types `@`. Shows filtered enabled agents with name, protocol tag, and description. Supports keyboard navigation (Arrow keys, Enter/Tab to select, Escape to dismiss) and outside-click dismissal.
-- `ChatInput` — Exposes `ChatInputHandle` via `forwardRef`/`useImperativeHandle` with a `focus()` method. Contains `@`-mention detection: `findMentionToken()` walks backwards from cursor to find `@` preceded by whitespace or at start of input; extracts filter text. Manages mention popup state (open, filter, selected index). On agent selection, removes the `@...` token from input and calls `onSelectAgent`. The mention popup is only active on the new chat screen (`chatId === null`). For active agent chats, resolves the bound agent via `useChatDetail(chatId).agentId` + `useAgents()` lookup, and renders a read-only agent badge (Bot icon + name) in place of `ChatControls` (model/MCP selectors are hidden).
-- `MainArea` — Holds `selectedAgent` state and `chatInputRef` (ref to `ChatInputHandle`). Passes `onSelectAgent` to `ChatInput` and `onCollapsed={focusChatInput}` to `AgentSelector`. When agent is selected and user sends first message, creates chat, stores `agentId` on the chat row via `chat:update`, and starts the routed main run through window.api.run.start. Resets agent selection after chat creation.
+- `ChatInput` — Exposes `ChatInputHandle` via `forwardRef`/`useImperativeHandle` with a `focus()` method. Contains `@`-mention detection: `findMentionToken()` walks backwards from cursor to find `@` preceded by whitespace or at start of input; extracts filter text. Manages mention popup state (open, filter, selected index). On agent selection, removes the mention token and updates pending agents for a new chat or uses `useAttachAgentToChat` for an existing one. For active agent chats, resolves the bound agent via `useChatDetail(chatId).agentId` + `useAgents()` lookup, and renders a read-only agent badge (Bot icon + name) with separate capability and routing controls.
+- `ChatWorkspace` — Owns pending agent/MCP IDs, chat-mode intent and composer reference. Embedded agent pages force a new-chat context and seed `pendingAgentIds` from their agent ID. `useNewChatFlow.startNewChat` owns creation; the shared `newChatRouter` predicts the same routing shown by the composer badge. Page mode switching keeps this component mounted; sending changes to the created conversation.
 - **Routing a subsequent message is not the renderer's job.** `useSendMessage`, which looked up an A2A session and picked the agent channel over the LLM one, is gone: every send goes out on `run:send`, and main reads `chats.router` to decide who answers. The session lookup was one of five copies of that decision. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
 
 ## Dependencies

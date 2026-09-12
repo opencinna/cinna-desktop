@@ -175,6 +175,7 @@ test('a Claude agent on a logged-out install is told to log in, and still names 
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
 
   const panel = page.getByRole('region', { name: 'Runs with' })
   await expect(panel.getByLabel('Runs on')).toHaveValue(CLAUDE_VALUE)

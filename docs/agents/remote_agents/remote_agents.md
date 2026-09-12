@@ -29,27 +29,27 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 3. Remote agents are upserted into the local database with deterministic IDs (`remote:{target_type}:{target_id}`)
 4. On sync completion, main process sends `agents:remote-sync-complete` event to the renderer
 5. The renderer's `useAgents()` hook listens for this event and auto-invalidates the TanStack Query cache, causing an immediate re-fetch
-6. Agents appear in the chat agent selector and Settings > Agents under "Remote Agents" — no page refresh needed
+6. Enabled agents appear in the Agents sidebar under the active server domain and in the chat picker. **Settings → Profile → Agents** keeps both shown and hidden server agents under that domain — no page refresh needed
 7. Periodic sync runs every 5 minutes to keep the list current; each periodic sync also triggers the same event-driven UI refresh
 
 ### Toggle a Remote Agent
 
 1. User opens Settings → Profile → Agents
-2. Clicks the toggle on a remote agent card
+2. Presses **Disable** on its row, or **Disable in Desktop App** in its page header More actions menu
 3. UI flips optimistically; main process writes a row to `agent_overrides` keyed by `(profileUserId, agentId)` via `agent:set-enabled` (see `agentService.setEnabled`)
-4. Agent vanishes from the chat agent selector
+4. Agent vanishes from the sidebar, chat picker and agent status listing. A toast names **Settings → Profile → Agents** as the recovery path. If its page is selected, navigation moves to the nearest preceding available agent in sidebar order, otherwise another agent, or an unbound new-chat screen when none remain. A delayed completion cannot redirect another profile or unrelated page
 5. Future syncs upsert agent metadata but never touch `agent_overrides` — the toggle persists across syncs, app restarts, and re-appearances of the agent
 
 ### Manual Sync
 
-1. User navigates to Settings > Agents
-2. Clicks the "Sync" button next to the "Remote Agents" heading
+1. User navigates to **Settings → Profile → Agents**
+2. Clicks **Sync** beside "Synced from your Cinna account"
 3. App fetches the latest agent list from the backend
 4. New agents appear, removed agents disappear, updated agents reflect new metadata
 
 ### Chatting with a Remote Agent
 
-1. User selects a remote agent from the agent selector (grouped under "My Agents", "Shared with Me", or "People")
+1. User selects a remote agent in the Agents sidebar to open its chat composer, or chooses it from the chat picker
 2. Types a message and sends
 3. App fetches a fresh JWT via `getCinnaAccessToken()` (not a stored per-agent token)
 4. If the agent's protocol endpoint hasn't been resolved yet (no `endpointUrl`), the app automatically fetches the agent card from `cardUrl`, extracts the endpoint, and caches it in the DB — no manual "Test" step required
@@ -57,19 +57,20 @@ Automatically discovers and syncs agents from a connected Cinna backend so users
 6. Response streams back identically to local agent chats
 7. A2A session (contextId, taskId) is stored locally for conversation continuity
 
-### Agent Categories in Selector
+### Agent Page and Profile Settings
 
-When remote agents are present, the agent selector dropdown groups agents into sections:
-- **My Agents** — user's personal agents (`target_type='agent'`)
-- **Shared with Me** — agents shared via App MCP routes (`target_type='app_mcp_route'`)
-- **People** — identity contacts (`target_type='identity'`)
-- **Local** — manually-registered local agents
+- The page opens in chat mode; **Settings** exposes Overview and Connection, and **Start chat** returns to the same draft. Overview contains skills and readiness. Connection contains labeled protocol/endpoint details, automatic profile authentication and connection testing.
+- Profile → Agents is a visibility and sync list for the active Cinna server only. Enabled rows have a Settings shortcut; hidden rows remain available to Enable. Sync failures and reauthentication remain on this page. Target types are backend metadata, not separate My Agents/Shared with Me/People settings groups.
+- The header server domain opens the configured Cinna server externally.
+- **Develop** prepares an eligible remote agent as a local coding connection when Local Development is ready; see [Local Development](../local_dev/local_dev.md#develop-a-remote-agent).
 
 ## Business Rules
 
 - **Cinna-only feature** — Remote agent sync only activates for `cinna_user` accounts with a valid `cinnaServerUrl`
 - **Deterministic IDs** — Remote agents use `remote:{target_type}:{target_id}` as their local ID, ensuring stable identity across syncs
-- **Sync-managed lifecycle** — Remote agents cannot be manually deleted; they appear/disappear based on backend state. Users can only enable/disable them locally via the `agent_overrides` table (sync never writes there)
+- **Server-owned lifecycle** — Disable changes only the per-profile Desktop override; server state is retained. The header offers **Uninstall agent** for consumer bundle installs and **Delete agent** for eligible ordinary agents or publisher working copies. Both confirm the server effect and retain failures in the dialog; dismissal is blocked while pending. Existing Desktop chats remain. A shared route or identity has no Delete action.
+- **Deletion eligibility** — UI eligibility requires a remote `agent` target with a target ID, no explicit `can_build: false`, no `is_foreign_install: true`, and either no bundle marker or `is_publisher_install: true`. This is presentation gating, not proof of ownership/developer roles; the server authorizes the operation. Main independently checks the cached target belongs to this profile and rejects consumer bundles.
+- **Delete on the server first** — Desktop calls the owning Cinna server and prunes its cache only after success; deleting the cache alone would let the next sync restore the agent. Consumer bundles use [uninstall](../bundles_catalog/bundles_catalog.md), preserving bundle App Data under that server contract.
 - **Override survives re-add** — `agent_overrides` has no FK / no cascade against `agents.id`; if a remote agent is removed and later re-synced under the same id, the prior override re-applies on the next list. Per-user cleanup happens in `userRepo.deleteWithCascade` only
 - **Dynamic JWT auth** — Remote agents never store an access token in `accessTokenEncrypted`. At send time, the system detects `source='remote'` and fetches a fresh JWT via `getCinnaAccessToken()`. This avoids stale tokens and leverages the existing token refresh mechanism
 - **Graceful degradation** — If the backend is unreachable during sync (network error, 4xx/5xx), the sync silently fails and existing remote agents remain unchanged
@@ -77,7 +78,7 @@ When remote agents are present, the agent selector dropdown groups agents into s
 - **No card pre-fetch** — Remote agents are synced with `cardUrl` but without pre-fetching the agent card. The card and protocol endpoint are auto-resolved on first message send; the result is cached so subsequent messages skip the card fetch
 - **Event-driven UI refresh** — After **every** sync — initial activation, the 5-minute periodic tick, **and** on-demand renderer-triggered syncs (`agent:sync-remote`: the Settings Refresh button, catalog install/uninstall refresh, bundle-update apply) — the main process broadcasts `agents:remote-sync-complete` to the renderer, which auto-invalidates the agents query cache for immediate UI updates. This single broadcast is the only refresh signal callers may rely on; renderer code must not invalidate `['agents']` directly before a sync (it would refetch the DB before the sync writes). Consumers that depend on freshly-synced fields (e.g. the catalog's bundle-update affordance reading `bundle_version`) only update because this fires on the on-demand path too — see [Bundle Updates](../bundles_catalog/bundle_updates_tech.md)
 - **Periodic sync** — A 5-minute interval timer runs while a Cinna user is active; it stops on deactivation
-- **Settings UI** — Remote agents show a "Remote" badge, hide the delete button, and hide the access token section (JWT is managed automatically). They live in the sidebar's "Profile {name}" group, separate from the Default group's local agents — see [Settings](../../ui/settings/settings.md)
+- **Settings UI** — Profile → Agents is the server visibility/sync list, including hidden rows. Agent-page Settings → Connection explains automatic profile JWT authentication without a token editor; its header offers eligible server Delete or consumer-bundle Uninstall. See [Settings](../../ui/settings/settings.md).
 
 ## Architecture Overview
 
@@ -115,12 +116,9 @@ Communication Flow:
     → createA2AClient → A2A stream → persisted transcript
   run:watch → independent sequenced live subscription
 
-Agent Selector (categorized):
-  useAgents() → group by source + remoteTargetType
-    → "My Agents" (remote, agent)
-    → "Shared with Me" (remote, app_mcp_route)
-    → "People" (remote, identity)
-    → "Local" (local)
+Desktop Navigation:
+  useAgents() → visible remote rows under active server domain → ExternalAgentPage
+  Profile → Agents → all remote rows, including hidden → visibility / sync
 ```
 
 ## Integration Points

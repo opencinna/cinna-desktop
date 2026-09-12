@@ -14,7 +14,7 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 - **Standing Grant** — one remembered decision: this agent may take this action on this resource without asking again. `{action, pattern, scope, decidedAt}`, stored in that agent's desktop state — `app-data/desktop.json` for a kit folder, a file under `<userData>/external-agents/` for a [bare](bare_agents.md) one, since the desktop writes nothing into an adopted folder
 - **Grant Scope** — how widely a grant's pattern reaches: `exact` (the resource character for character), `origin` (a URL prefix the desktop synthesised), `action` (the whole action, from an ask that named no resource). **Recorded, never inferred from the pattern's characters**
 - **Approvals** — [Claude](claude_engine.md) engine only: who answers an ask *before* the desktop does. **Automatic** (the default) puts Claude Code's own reviewer in front — the classifier a terminal `claude` runs with auto mode on — and the desktop's block is the backstop for what it declines; **Ask every time** brings every command, edit, write and fetch to the block. A per-agent choice, set on the Permissions tab, stored beside the grants for either kind of folder and never in a manifest; null is *no choice made* and reads as the default. There is no third value: the SDK's `bypassPermissions` and `dontAsk` would take the grants and the block out of the decision and are unreachable
-- **Permissions tab** — the agent page's fifth tab: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. For a Claude agent the profile paragraph gives way to the Approvals setting and its control, since the profile describes rules that are not in force on that engine. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
+- **Permissions tab** — a tab under the agent page's **Settings**: what the profile allows, what the manifest has overridden, and the list of standing grants with a per-row revoke. For a Claude agent the profile paragraph gives way to the Approvals setting and its control, since the profile describes rules that are not in force on that engine. Its examples name files the folder actually has — for a bare agent, "editing its own `AGENT.md`" rather than the manifest and `credentials/.env`, because two fictional examples out of three is how a reader comes to discount the third, and the third is the sentence about a command reaching anything they can
 
 ## User Stories / Flows
 
@@ -38,7 +38,7 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 3. A block that appeared and answered itself milliseconds later would be a widget the user cannot act on, in the middle of streaming text
 
 ### Reviewing what an agent may do
-1. The agent page's **Permissions** tab states the profile in plain words, names any part of it the folder's own manifest has replaced, and lists every standing grant newest first
+1. Open the agent page, choose **Settings → Permissions**. The tab states the profile in plain words, names any part of it the folder's own manifest has replaced, and lists every standing grant newest first
 2. Each row can be revoked; **Forget all** clears them. The agent asks again next time it needs it
 3. The tab carries a count badge, so a standing grant is discoverable without opening the tab
 
@@ -48,7 +48,7 @@ What a folder agent is allowed to do on the user's machine, who decides, and whe
 3. The block says "Allowed once — the rule could not be saved." They are asked again next time
 
 ### Choosing who approves, on Claude
-1. On a Claude agent's Permissions tab, the user reads one paragraph describing both settings — *Automatic*, which in testing approved everything it was shown including a force push and a change to the global git config, and *Ask every time* — and picks one from the **Approvals** select. No choice made shows as *Automatic*
+1. On a Claude agent's **Settings → Permissions** tab, the user reads one paragraph describing both settings — *Automatic*, which in testing approved everything it was shown including a force push and a change to the global git config, and *Ask every time* — and picks one from the **Approvals** select. No choice made shows as *Automatic*
 2. The change saves at once and the control stays on the pick for the whole round trip. A refused save (the agent is mid-turn) is one line under the control and the select shows the stored value again
 3. On *Automatic*, the next turn's routine commands run without a block; what the reviewer would decline reaches the grants and the block as on *Ask every time*. On a model without a reviewer the turn asks every time regardless and a notice in the transcript says why
 4. On *Ask every time*, every command, edit, write and fetch is a block — or silent, where a grant already covers it — exactly as on the other engine

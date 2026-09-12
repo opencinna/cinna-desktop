@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { render, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { LocalAgentDto } from '../../../../../shared/localAgents'
 
 /**
@@ -18,6 +18,9 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
  * already makes, so only those three calls are pinned.
  */
 
+let pageMode: 'chat' | 'settings' = 'settings'
+const setAgentPageMode = vi.fn((mode: 'chat' | 'settings') => { pageMode = mode })
+beforeEach(() => { pageMode = 'settings'; vi.clearAllMocks() })
 const setActiveView = vi.fn()
 const setPendingAgentId = vi.fn()
 const setSidebarTab = vi.fn()
@@ -25,6 +28,8 @@ vi.mock('../../../stores/ui.store', () => ({
   useUIStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       activeLocalAgentId: 'folder:alpha',
+      agentPageMode: pageMode,
+      setAgentPageMode,
       setActiveLocalAgentId: vi.fn(),
       pendingDraftAgentId: null,
       setPendingDraftAgentId: vi.fn(),
@@ -59,6 +64,8 @@ vi.mock('../../../hooks/useLocalAgents', () => ({
     ]
   })
 }))
+
+vi.mock('../../layout/ChatWorkspace', () => ({ ChatWorkspace: ({ agentId }: { agentId: string }) => createElement('textarea', { 'aria-label': `Chat with ${agentId}` }) }))
 
 const marker = (name: string) => () => createElement('div', { 'data-marker': name }, name)
 vi.mock('./RuntimePanel', () => ({ RuntimePanel: marker('runtime') }))
@@ -108,24 +115,25 @@ function renderPage(a: LocalAgentDto = agent()): ReturnType<typeof render> {
   return render(createElement(QueryClientProvider, { client }, createElement(LocalAgentPage)))
 }
 
-describe('LocalAgentPage — Start chat', () => {
-  it('switches to the chat view and hands the agent id to the pending-agent path', () => {
+describe('LocalAgentPage — chat and settings modes', () => {
+  it('opens the preselected composer below the header and runtime in chat mode', () => {
+    pageMode = 'chat'
     renderPage()
-    fireEvent.click(screen.getByRole('button', { name: /start chat/i }))
-    expect(setActiveView).toHaveBeenCalledWith('chat')
-    expect(setPendingAgentId).toHaveBeenCalledWith('folder:alpha')
+    expect(screen.getByText('runtime')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Settings' })).toBeTruthy()
+    expect(screen.getByRole('textbox', { name: 'Chat with folder:alpha' })).toBeTruthy()
+    expect(screen.queryByRole('tablist')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    expect(setAgentPageMode).toHaveBeenCalledWith('settings')
   })
 
-  it('moves the sidebar to Chats, so it does not stay on the agents list', () => {
+  it('returns from settings to the agent composer without switching to Chats', () => {
     renderPage()
     fireEvent.click(screen.getByRole('button', { name: /start chat/i }))
-    expect(setSidebarTab).toHaveBeenCalledWith('chats')
-  })
-
-  it('is enabled — this used to be a hard-coded `disabled` button', () => {
-    renderPage()
-    const button = screen.getByRole('button', { name: /start chat/i }) as HTMLButtonElement
-    expect(button.disabled).toBe(false)
+    expect(setAgentPageMode).toHaveBeenCalledWith('chat')
+    expect(setActiveView).not.toHaveBeenCalled()
+    expect(setPendingAgentId).not.toHaveBeenCalled()
+    expect(setSidebarTab).not.toHaveBeenCalled()
   })
 })
 

@@ -70,24 +70,11 @@ src/
 
 ## UI Layout
 
-```
-+------------------------------------------+
-|  TitleBar (40px, drag region)            |
-|  [traffic lights] [sidebar toggle]       |
-+------------+-----------------------------+
-|  Sidebar   |  MainArea                   |
-|  (240px)   |                             |
-| [+ New Chat]  Default: centered input   |
-|  ChatList  |    controls below input     |
-|            |    ([+] left, send right)   |
-|            |  Active chat: messages +    |
-|            |    input box at bottom      |
-|            |  Settings: provider cards   |
-|  ---------|                             |
-|  Settings  |                             |
-|  Theme     |                             |
-+------------+-----------------------------+
-```
+TopBar (permanent drag strip): traffic lights → sidebar toggle → Inbox → New Chat.
+
+Sidebar: Chats / Jobs / Notes / Agents tabs, selected list, and profile/status/interface controls in the footer. The sidebar can collapse while global top-bar actions remain available.
+
+MainArea routes chats, Settings, Inbox, tasks, jobs, notes and agent pages. ChatWorkspace supplies the dashboard/active-chat composer and embedded agent landing composer; agent pages switch between chat and Settings without replacing the mounted draft.
 
 ## Theming
 

@@ -181,3 +181,25 @@ describe('AgentCard readiness', () => {
     expect(api.test).toHaveBeenCalledWith('agent-1')
   })
 })
+
+
+describe('agent connection page', () => {
+  it('shows structured connection settings without duplicated skills or card actions', () => {
+    const data = agent({ skills: [{ id: 'summarize', name: 'Summarize documents' }], protocolInterfaceVersion: '0.3', protocolInterfaceUrl: 'https://agent.example/rpc' })
+    const { container } = render(createElement(AgentCard, { agent: data as never, connectionOnly: true }), { wrapper })
+    expect(screen.getByRole('heading', { name: 'Connection details' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Authentication' })).toBeTruthy()
+    expect(screen.getByText('https://agent.example/rpc')).toBeTruthy()
+    expect(screen.getByLabelText('Access Token')).toBeTruthy()
+    expect(screen.queryByText('Summarize documents')).toBeNull()
+    expect(screen.queryByText('Invoices')).toBeNull()
+    expect(container.querySelector('svg.lucide-chevron-down')).toBeNull()
+    expect(container.querySelector('svg.lucide-trash-2')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Test Connection' })).toBeTruthy()
+  })
+  it('uses profile authentication for Cinna agents without exposing a token editor', () => {
+    render(createElement(AgentCard, { agent: agent({ source: 'remote' }) as never, connectionOnly: true }), { wrapper })
+    expect(screen.getByText(/Uses your active Cinna profile/)).toBeTruthy()
+    expect(screen.queryByLabelText('Access Token')).toBeNull()
+  })
+})

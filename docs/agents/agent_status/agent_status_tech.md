@@ -21,7 +21,7 @@ Status sources own reported data and refresh policy independently of agent trans
 | Normative status vocabulary | `resources/cinna-kit-contract/templates/agent/scripts/update_status.py:40` — `STATUSES` |
 | IPC handlers (`agent-status:list`, `agent-status:get`) | `src/main/ipc/agent_status.ipc.ts:30` |
 | IPC handler registration | `src/main/ipc/index.ts` — `registerAgentStatusHandlers()` |
-| Remote-agent repository helpers | `src/main/db/agents.ts` — `listRemote()`, `getOwned()` (`:125`) |
+| Remote-agent repository helpers | `src/main/db/agents.ts` — `listRemote()`, `agentOverrideRepo.listForUser()`, `getOwned()` (`:125`) |
 | Typed domain error | `src/main/errors.ts` — `AgentStatusError`, `AgentStatusErrorCode` |
 | Logger scopes | `agent-status` (service), `local-agent-status` (`statusRefresh.ts:39`) |
 | Cinna JWT token | `src/main/auth/cinna-tokens.ts` — `getCinnaAccessToken(userId)` |
@@ -64,7 +64,7 @@ Status sources own reported data and refresh policy independently of agent trans
 | Live post-turn status pull | `src/renderer/src/hooks/useLiveRunWatch.ts` |
 | Overlay mount point | `src/renderer/src/App.tsx` |
 | UI state (`agentStatusOpen`, `agentStatusDetailId`, `pendingAgentId`) | `src/renderer/src/stores/ui.store.ts` |
-| Pending-agent effect + focus-return effect | `src/renderer/src/components/layout/MainArea.tsx` |
+| Pending-agent effect + focus-return effect | `src/renderer/src/components/layout/ChatWorkspace.tsx` |
 | CSS tokens (severity + overlay) | `src/renderer/src/assets/main.css` |
 
 ## Database Schema
@@ -228,6 +228,8 @@ The rows below are not decoration. Three claims **this document makes** — that
 Single-agent mutations capture the current profile object before IPC and discard late success, typed failure or rejected IPC after it changes. Batch mutations do the same before patching the cache or reporting an old reauthentication failure. This is mutation completion protection; it does not replace the existing list-query reset/focus lifecycle.
 
 `useLiveRunWatch` only requests status from live done/error events after chat/profile/sequence checks. Snapshot replay and synthetic closure settlement do not run that side effect. The main source decides whether an agent under the current profile has any status data at all.
+
+The remote batch join filters `agentRepo.listRemote(profileUserId)` by the cached row's enabled flag and the active profile's disabled `agent_overrides` before matching server snapshots by `remoteTargetId`. The filter also excludes hidden agents from stopped-environment fallback rows. `useAgentDesktopVisibility` invalidates `agent-status` after a successful visibility mutation so status surfaces follow the sidebar.
 
 ## Configuration
 

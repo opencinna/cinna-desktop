@@ -5,7 +5,7 @@ import { test, expect, type CinnaApp } from '../fixtures/app'
 import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
 
 /**
- * Settings → Local Agents → **Forget** an added agents folder.
+ * Settings → Agents → **Forget** an added agents folder.
  *
  * Forget used to run on one click of an unlabelled X, and what it does is not
  * obviously recoverable: it drops the `agents` row of every folder agent under
@@ -26,13 +26,13 @@ function treeOf(dir: string): string[] {
   return readdirSync(dir, { recursive: true }).map(String).sort()
 }
 
-/** Footer user menu → Settings → Local Agents. The trigger is the profile's generated name. */
+/** Footer user menu → Settings → Agents. The trigger is the profile's generated name. */
 async function openLocalAgentsSettings(cinna: CinnaApp): Promise<Locator> {
   const page = cinna.page
   const user = await page.evaluate(() => window.api.auth.getCurrent())
   await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
   await page.getByRole('button', { name: 'Settings', exact: true }).click()
-  await page.getByRole('button', { name: 'Local Agents', exact: true }).click()
+  await page.getByRole('button', { name: 'Agents', exact: true }).click()
   await expect(page.getByRole('heading', { name: 'Agent Folders' })).toBeVisible()
   // A `section` with no accessible name is not a `region`, so it is found by
   // the heading it holds.

@@ -1,0 +1,40 @@
+import { test, expect } from '../fixtures/app'
+
+test('agent sidebar section switch persists and updates the sidebar', async ({ cinna }) => {
+  await cinna.skipOnboarding()
+  const openFeatures = async () => {
+    const page = cinna.page
+    const user = await page.evaluate(() => window.api.auth.getCurrent())
+    await page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
+    await page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByRole('button', { name: 'Features', exact: true }).click()
+  }
+  await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await cinna.page.getByRole('button', { name: 'Add an agent', exact: true }).click()
+  await cinna.page.getByRole('button', { name: /A2A agent.*Agent Card URL/ }).click()
+  await cinna.page.getByLabel('Agent Card URL', { exact: true }).fill('https://agent.example.com')
+  await cinna.page.getByRole('button', { name: 'Save Agent', exact: true }).click()
+  await expect(cinna.page.getByRole('dialog', { name: 'Add A2A Agent' })).toBeHidden()
+  await expect(cinna.page.getByText('A2A agents', { exact: true })).toBeVisible()
+  await openFeatures()
+  const toggle = () => cinna.page.getByRole('switch', { name: 'Show sections in Agents sidebar' })
+  await expect(toggle()).toBeChecked()
+  await toggle().click()
+  await expect(toggle()).not.toBeChecked()
+  await expect.poll(() => cinna.page.evaluate(async () => (await window.api.settings.getAll()).showAgentSidebarSections)).toBe(false)
+  await cinna.page.getByRole('button', { name: 'Back', exact: true }).click()
+  await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await expect(cinna.page.getByRole('button', { name: 'A2A Agent', exact: true })).toBeVisible()
+  await expect(cinna.page.getByText('A2A agents', { exact: true })).toHaveCount(0)
+  await cinna.relaunch()
+  await openFeatures()
+  await expect(toggle()).not.toBeChecked()
+  // Clicking the text label must operate the same control.
+  await cinna.page.getByText('Show sections in Agents sidebar', { exact: true }).click()
+  await expect(toggle()).toBeChecked()
+  await expect.poll(() => cinna.page.evaluate(async () => (await window.api.settings.getAll()).showAgentSidebarSections)).toBe(true)
+  await cinna.page.getByRole('button', { name: 'Back', exact: true }).click()
+  await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
+  await expect(cinna.page.getByText('A2A agents', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: 'A2A Agent', exact: true })).toBeVisible()
+})

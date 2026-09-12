@@ -32,7 +32,7 @@ The same convention as the rest of this folder:
 
 ### Adopting one folder
 
-1. The Agents sidebar's **+** — now "Add an agent" — opens a choice: **New agent** (scaffold a kit folder, the flow that already existed) or **Add a folder**
+1. The Agents sidebar's **+** — now "Add an agent" — opens Add an agent: choose **Add a folder** for adoption; **New agent** scaffolds a kit folder, and the remaining choices connect external agents
 2. **Add a folder** opens a native directory picker in main. What was picked is walked, and the result previewed: nothing is registered yet and nothing has been written
 3. One folder found means the picked folder *is* the agent. The step shows a single **Name** field, prefilled from the first `# heading` in `AGENT.md` or the folder's own name, so Enter is a complete answer
 4. **Add agent** registers the folder as an external root, scans it, and lands the user on the new agent — adopting is a create in every sense the user cares about, so it obeys the same rule ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 3). There is no "Build it with…" step: nothing was scaffolded, so there is nothing to hand to an assistant
@@ -43,7 +43,7 @@ The same convention as the rest of this folder:
 2. A folder that is already an agent under *another* registered root is shown **ticked and disabled**, never filtered out: a list that silently loses the row the user came to add reads as the folder having been scanned wrong. On a first adopt every already-added row is one of those by definition, since the folder being picked is not registered and nothing under it can be its own
 3. If the walk stopped at its cap, the step says so above the list — "This is the first N folders found. Pick a folder closer to the agents to see the rest." — because every count under a silently truncated list is true of the wrong set
 4. **Add N agents** registers the *whole picked folder* as one root and marks the unticked folders hidden
-5. The sidebar groups the new agents under the picked folder's name, and the page opens on the first agent adopted
+5. The sidebar puts adopted agents in the picked root's position (with headings governed by the sidebar sections preference), and selects the first adopted agent. Creation/adoption preserves the current page mode; clicking its sidebar row explicitly returns to chat mode
 
 ### Coming back to a folder already added
 
@@ -62,7 +62,7 @@ Being the *same* external root is no longer among them; that is the re-selection
 
 ### Working with a bare agent
 
-1. Its page is the ordinary agent page with the manifest-shaped parts removed: no **Commands** tab, and two cards on **Overview** — its **Name**, then its folder's `Readme`, rendered read-only and absent altogether where the folder has no `README.md`. The **Runs with** panel is the same panel a kit agent gets, controls and all
+1. Selecting its sidebar row opens the ordinary chat landing. Choose **Settings** for runtime controls and the detail tabs, with the manifest-shaped parts removed: no **Commands** or **Schedules** tab, and two cards on **Overview** — its **Name**, then its folder's `Readme`, rendered read-only and absent altogether where the folder has no `README.md`. The **Runs with** panel is the same panel a kit agent gets, controls and all
 2. **Prompts** is `Instructions` alone (`AGENT.md`, the whole system prompt, editable in place like any other prompt document and rendered as markdown while it is being read)
 3. **Permissions** and **Folder** are unchanged: the permission profile is the same for every folder agent — with `AGENT.md` added to its identity-files list, so rewriting the file the agent *is* asks — and the Folder tab shows the bare findings
 4. **Open in <tool>**, **Start chat** and the ⋯ menu all behave as they do for a kit agent
@@ -77,7 +77,7 @@ Being the *same* external root is no longer among them; that is the re-selection
 
 1. **⋯ → Remove agent…** — the wording differs from a kit agent's "Delete agent…" because the outcome does
 2. The dialog offers two radio options: **Remove from the list only** (the default) and **Remove and move the folder to the Trash**. The recoverable one is first and selected
-3. Removing from the list marks the agent hidden. The folder is untouched, and there are two routes back, both of which the dialog names: re-picking the folder in **+ → Add a folder** reopens its list with this agent unticked, and Settings → Local Agents shows the count under that root, and that row's **Manage agents** dialog is where the user ticks which ones come back. Naming only a route that does not work is how a choice offered as the recoverable one becomes a dead end ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) — which is what this hint did while re-picking a registered folder was still refused
+3. Removing from the list marks the agent hidden. The folder is untouched, and there are two routes back, both of which the dialog names: re-picking the folder in **+ → Add a folder** reopens its list with this agent unticked, and Settings → Agents shows the count under that root, and that row's **Manage agents** dialog is where the user ticks which ones come back. Naming only a route that does not work is how a choice offered as the recoverable one becomes a dead end ([UX Rules](../../development/ui_guidelines/ux_rules.md), rule 5) — which is what this hint did while re-picking a registered folder was still refused
 4. The copy owns the half that cannot be undone: a job that uses the agent "will need it selected again even if you put the agent back". Removing drops the `agents` row and `job_agents` cascades with it; restoring re-creates the row under the same positional id, so chats re-bind, but the job's link does not come back
 
 ## Business Rules
@@ -304,7 +304,7 @@ Agents sidebar "+" ─► NewLocalAgentModal
                                                             hidden/displayName → bare state
                                                             scanExternalRoot · watchRoot
 
-Agent page "Runs with" ─► local-agent:set-runtime ─► desktop state (no stamp)
+Agent page Settings → "Runs with" ─► local-agent:set-runtime ─► desktop state (no stamp)
                                                     ─► agentRepo.setFolderLauncher
                                                        (the row's engine; no watcher
                                                         sees a bare agent's runtime)

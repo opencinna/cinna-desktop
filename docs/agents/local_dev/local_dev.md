@@ -102,6 +102,17 @@ Every phase also carries `tasks` — the per-step checklist the status modal ren
 3. An existing link that already points into the managed toolchain is refreshed — that is a version bump. **Any other file at that path is left strictly alone and reported**: it is someone's real install
 4. Everything the desktop spawns is unaffected either way; it always goes through the toolchain environment
 
+### Develop a Remote Agent
+
+1. Open a Cinna-synced agent from the Agents sidebar. When Local Development is ready and the agent passes development eligibility, its header offers **Develop**.
+2. Desktop asks the managed CLI for the account status and reuses the agent workspace reported there. Only a missing workspace triggers `agent sync`; Desktop then asks for status again. Existing local work is not force-resynced each time.
+3. Desktop resolves both paths to real paths and requires the reported agent directory to be strictly inside the account workspace. The account root itself and paths escaping through symlinks are refused.
+4. Desktop creates or reuses a **Develop <agent name>** command-line ACP connection running OpenCode inside that directory, with managed Cinna/Mutagen tools on its PATH. Preparation opens that connection's chat landing page without sending a prompt.
+
+Eligibility requires a remote `agent` target and target ID, excludes explicit `can_build: false` and foreign installs, and excludes consumer bundles while allowing publisher working copies. These metadata checks are not independent proof of developer-role entitlement; CLI/server access controls remain authoritative. Main rechecks profile, cached target identity and eligibility after asynchronous preparation stages. Concurrent calls for the same profile/agent share one preparation; failures remain on the source page.
+
+The header visibility check accepts any `ready` phase, but preparation additionally requires the CLI's **JSON workspace protocol**. A legacy-ready installation can show Develop and then receive an update/setup error; the service cannot safely infer paths from a CLI that does not report them. Reusing a connection is based on its generated name and exact canonical workspace directory, not a persisted remote-to-local mapping.
+
 ## Business Rules
 
 ### One entry point
@@ -228,7 +239,7 @@ Two surfaces result, and `ready` says which one it settled on:
 | Account token state | read from `cinna account status` | not visible; the desktop learns only that cinna-cli could read the workspace |
 | An expired token | refreshed in place with a fresh mint | needs **Repair**, which sets the workspace up again |
 
-Everything else works identically, and a `legacy` install really does create a real workspace. This is reported rather than hidden: Settings shows the one sentence about what the older cinna-cli cannot do, next to the version. A working badge that quietly could not refresh a token would be the worse failure.
+A `legacy` install really does create a workspace; the explicit Develop action additionally requires JSON workspace reporting. This is reported rather than hidden: Settings shows the one sentence about what the older cinna-cli cannot do, next to the version. A working badge that quietly could not refresh a token would be the worse failure.
 
 ### Progress is measured, not implied
 

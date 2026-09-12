@@ -3,35 +3,10 @@ import { createElement } from 'react'
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import type { JobDependencyStatus } from '../../../../shared/sync'
 
-/**
- * What the pending-dependency section says, where it sends the user, and when
- * it offers to send them anywhere at all.
- *
- * `JobDependencyStatus.kind` is `'agent'` for three sources that live on three
- * different settings pages, and it is the only thing the row rendered on. That
- * was right while every `'agent'` was a local A2A row: `resolveLocalAgent`
- * auto-creates a disabled shell with `source: 'local'`, and Settings → Agents
- * renders exactly `source === 'local' && protocol === 'a2a'`. A folder agent is
- * `source: 'folder'` and appears there under no circumstances, so the button
- * opened a page that could not contain the row it was about.
- *
- * `localId` is what tells them apart, and it was already on the DTO — a folder
- * agent's row id is `folder:<manifest id>`. It also answers the second
- * question: when nothing resolved there is no row on any page, so there is
- * nothing to open. That is the missing-workshop case, whose repair is copying a
- * directory onto this machine.
- *
- * The state side of this is settled separately, in `folderAgentApply.test.ts`:
- * a **missing** folder agent is `unavailable` (nothing in the app resolves a
- * directory that is not on the machine) and a **disabled** one is
- * `needs-setup`. That removes the dead button for the missing case at the
- * produce site. It does not remove it for the disabled case, which is what the
- * routing here is for — that row has a real id, renders amber, and was being
- * sent to a page it cannot appear on.
- */
+/** Setup links must reach the dependency's controls after A2A moves to the sidebar. */
 
 const deps = vi.hoisted(() => ({ current: [] as JobDependencyStatus[] }))
-const ui = vi.hoisted(() => ({ view: '' as string, menu: '' as string }))
+const ui = vi.hoisted(() => ({ view: '' as string, menu: '' as string, sidebarTab: '', externalAgentId: null as string | null }))
 
 vi.mock('../../hooks/useJobs', () => ({
   useJob: () => ({
@@ -61,6 +36,9 @@ vi.mock('../../stores/ui.store', () => ({
   useUIStore: (sel: (s: Record<string, unknown>) => unknown) =>
     sel({
       activeJobId: 'job-1',
+      setAgentPageMode: vi.fn(),
+      setActiveExternalAgentId: (id: string | null) => { ui.externalAgentId = id },
+      setSidebarTab: (tab: string) => { ui.sidebarTab = tab },
       setActiveView: (v: string) => {
         ui.view = v
       },
@@ -87,6 +65,8 @@ function renderWith(list: JobDependencyStatus[]): void {
   deps.current = list
   ui.view = ''
   ui.menu = ''
+  ui.sidebarTab = ''
+  ui.externalAgentId = null
   render(createElement(JobDetail))
 }
 
@@ -141,22 +121,19 @@ describe('the pending-dependency section heading', () => {
 })
 
 describe('the "Set up" button on a pending dependency', () => {
-  it('sends a folder agent to Local Agents, not to Agents', () => {
+  it('sends a folder agent to its runtime settings', () => {
     renderWith([dep({ localId: 'folder:6f1a-uuid' })])
     fireEvent.click(screen.getByRole('button', { name: /set up/i }))
-    // The destination first: Settings → Agents filters to
-    // `source === 'local' && protocol === 'a2a'`, so routing a folder agent
-    // there opens a list it is guaranteed not to be in.
     expect(ui.menu).toBe('local-agents')
     expect(ui.view).toBe('settings')
   })
 
-  it('still sends an auto-created local A2A shell to Agents', () => {
-    // The other arm's miss: `resolveLocalAgent` really does create this row, it
-    // really is on that page, and the route must not move with the folder one.
+  it('opens an auto-created A2A shell in the Agents sidebar', () => {
     renderWith([dep({ localId: 'nanoid123', label: 'Synced agent' })])
     fireEvent.click(screen.getByRole('button', { name: /set up/i }))
-    expect(ui.menu).toBe('agents')
+    expect(ui.view).toBe('external-agent')
+    expect(ui.sidebarTab).toBe('agents')
+    expect(ui.externalAgentId).toBe('nanoid123')
   })
 
   it('still sends an MCP provider to the connectors page', () => {

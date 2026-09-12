@@ -10,11 +10,12 @@ Phase 7b of Local Agents added the folder leg. Before it, this feature was Cinna
 
 - **Status snapshot** — The row every surface renders (`AgentStatusSnapshot`). Two producers:
   - *Remote*: the heartbeat an agent writes to `/app/workspace/docs/STATUS.md` inside its environment, parsed and cached by the backend on the `agent_environment` row and served over REST. Desktop consumes the cached snapshot; it never reads a remote agent's files.
-  - *Folder*: the agent folder's own `app-data/storage/STATUS.md` (path taken from the kit contract's `layout.agent.status_file`, never hard-coded), read and parsed locally by the same `readStatus` the folder scanner already used for the agents-list sub-line.
+  - *Folder*: the agent folder's own `app-data/storage/STATUS.md` (path taken from the kit contract's `layout.agent.status_file`, never hard-coded), read and parsed locally by the same `readStatus` the folder scanner uses for page status details.
 - **Severity** — Normalized level for a snapshot: `ok` · `info` · `warning` · `error` · `unknown` · `null`. Drives card tint, corner indicator, icon, sort order and the menu-bar dot.
 - **Severity derivation (folder agents only)** — A remote snapshot arrives with a severity already assigned. A folder agent writes a **free-form word** in its frontmatter (`state:` / `status:` / `health:`), so the desktop derives one. See the rules below — the mapping is anchored on the kit contract's own vocabulary, and an unreadable word never becomes green.
 - **`status_refresh_command`** — An optional manifest field on a folder agent naming the command that recomputes its status. Only the `/run:<name>` form — a reference into the agent's own `docs/CLI_COMMANDS.yaml` catalog — is executed. It runs as a subprocess in the agent folder under that agent's turn lock. <!-- nocheck -->
 - **Worst severity** — The highest-ranked severity across all snapshots, shown as a coloured dot on the sidebar-footer icon and painted into the menu-bar tray icon. A `null` severity is skipped.
+- **Desktop visibility** — Cinna agents disabled in Desktop are omitted from the status list, overlay and tray as well as the Agents sidebar. They remain in Settings → Profile → Agents for recovery. This filters the Desktop view; it does not stop or delete the server agent. Sidebar rows and agent page headers use type icons without readiness dots; the status overlay and footer/tray severity indicators remain.
 - **Batch list** — The cache-only, poll-safe list every surface consumes. It is the **union** of the folder leg (local disk) and the remote leg (one HTTP call). It runs **no** commands — see the polling rule below.
 - **Manual refresh** — An explicit refresh of one agent. The status data owner decides its meaning: a Cinna environment is refreshed; a folder agent runs its declared status command before the file is read.
 - **Re-read** — A folder agent's status without forcing anything: read `STATUS.md` off disk. Takes no lock, spawns nothing. This is what the post-turn pull and "Refresh all" use for a folder agent.
@@ -172,7 +173,7 @@ Renderer
                           a PANEL when nothing does
   TrayPanel / useTrayIcon same list; tray keeps strip above rows; same menu-bar dot
 
-  "Start chat" → setActiveView('chat') + setPendingAgentId(agentId) → MainArea
+  "Start chat" → setActiveView('chat') + setPendingAgentId(agentId) → ChatWorkspace
 ```
 
 ## Known Limitations
@@ -189,12 +190,12 @@ Stated as limitations rather than omitted:
 ## Integration Points
 
 - [Agents Home, Scanner & Folder Index](../local_agents/folder_index.md) — supplies the folder rows, the roots, and `readStatus` itself; the status file's location comes from the kit contract's `layout.agent.status_file`.
-- [Agents Tab & Agent Page](../local_agents/agents_tab.md) — the same `readStatus` output drives the agents-list sub-line and the page's Status card, which is why the `timestamp` fix shows up there too.
+- [Agents Tab & Agent Page](../local_agents/agents_tab.md) — the same `readStatus` output supplies the Status detail in the agent's Settings mode; sidebar rows now show names and type icons only.
 - [`/run:<name>` — Catalog Commands](../local_agents/commands.md) — a `status_refresh_command` *is* a catalog command: same parser, same subprocess, same per-agent turn lock (owner `'command'`), same output cap and ceiling.
 - [Kit Contract & Manifest Layer](../local_agents/kit_contract.md) — owns `status_refresh_command` in the manifest schema, the validator rule that a `/run:` reference must resolve, and the `update_status.py` template that defines the normative status vocabulary.
 - [The Agent Turn Runner](../local_agents/agent_turn.md) — the post-turn re-read hangs off the end of a folder-agent turn, and the turn lock it declines to take is that runner's.
 - [Remote Agents](../remote_agents/remote_agents.md) — the remote leg is keyed by the `remoteTargetId` written on each `agents` row during `agent:sync-remote`.
-- [Agents](../agents/agents.md) — "Start Chat" uses the existing `pendingAgentId` → `MainArea` → agent-preselect flow.
+- [Agents](../agents/agents.md) — "Start Chat" uses the existing `pendingAgentId` → `ChatWorkspace` → agent-preselect flow.
 - [Cinna Accounts](../../auth/cinna_accounts/cinna_accounts.md) — the remote leg authenticates per request; `reauth_required` reaches the overlay and the tray as a Re-authenticate affordance, in the shared overlay footer or tray strip when rows survive.
 - [Menu-Bar Tray](../../ui/tray/tray.md) — the third status surface; it shares the union, partial-failure rule and passive folder policy for Refresh all.
 - [UI — Settings / Theming](../../ui/settings/settings.md) — severity and overlay tokens live alongside the existing `--color-*` palette.

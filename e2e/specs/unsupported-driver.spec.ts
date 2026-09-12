@@ -82,13 +82,12 @@ test('an unknown driver survives restart, remains visible, and refuses UI and ma
       readiness: { state: 'invalid', reason: REASON },
       capabilities: { streaming: false, cancel: false, sessions: 'none', commands: 'none' } })
 
-    const user = await cinna.page.evaluate(() => window.api.auth.getCurrent())
-    await cinna.page.getByRole('button', { name: user?.displayName ?? 'User', exact: true }).click()
-    await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
     await cinna.page.getByRole('button', { name: 'Agents', exact: true }).click()
-    await expect(cinna.page.getByRole('heading', { level: 1, name: 'Agents', exact: true })).toBeVisible()
-    await expect(cinna.page.getByText(AGENT, { exact: true })).toBeVisible()
-    await cinna.page.getByRole('button', { name: 'Back', exact: true }).click()
+    await cinna.page.getByRole('button', { name: AGENT, exact: true }).click()
+    await expect(cinna.page.getByRole('heading', { level: 1, name: AGENT, exact: true })).toBeVisible()
+    await cinna.page.getByRole('button', { name: 'Settings', exact: true }).click()
+    await expect(cinna.page.getByRole('tabpanel').getByText(REASON, { exact: true })).toBeVisible()
+    await cinna.page.getByRole('button', { name: 'Chats', exact: true }).click()
     await cinna.page.getByText(TITLE, { exact: true }).click()
     const input = cinna.page.getByPlaceholder('Type a message...')
     await input.fill(DRAFT)

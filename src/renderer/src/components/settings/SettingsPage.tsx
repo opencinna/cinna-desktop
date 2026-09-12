@@ -17,14 +17,13 @@ import { CloudSyncSettingsSection } from './CloudSyncSettingsSection'
 const sectionTitles = {
   chats: 'Chat Modes',
   llm: 'AI Credentials',
-  agents: 'Agents',
-  'local-agents': 'Local Agents',
+  'local-agents': 'Agents',
   'local-dev': 'Local Development',
   mcp: 'MCP Providers',
   accounts: 'User Accounts',
   features: 'Features',
   development: 'Development',
-  'profile-agents': 'Profile Agents',
+  'profile-agents': 'Agents',
   'profile-chats': 'Chat Modes',
   'profile-llm': 'AI Credentials',
   'profile-catalog': 'Catalog',
@@ -41,11 +40,10 @@ export function SettingsPage(): React.JSX.Element {
         <h1 className="text-base font-semibold mb-4">{sectionTitles[settingsTab]}</h1>
         {settingsTab === 'chats' && <ChatModesSection key="chats" />}
         {settingsTab === 'llm' && <LLMSettingsSection key="llm" />}
-        {settingsTab === 'agents' && <AgentsSettingsSection key="agents" scope="default" />}
         {settingsTab === 'local-agents' && <LocalAgentsSettingsSection key="local-agents" />}
         {settingsTab === 'local-dev' && <LocalDevSettingsSection key="local-dev" />}
         {settingsTab === 'profile-agents' && (
-          <AgentsSettingsSection key="profile-agents" scope="profile" />
+          <AgentsSettingsSection key="profile-agents" />
         )}
         {settingsTab === 'profile-chats' && <ProfileChatModesSection key="profile-chats" />}
         {settingsTab === 'profile-llm' && <ProfileLLMSection key="profile-llm" />}

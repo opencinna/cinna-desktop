@@ -15,21 +15,23 @@
 - `src/main/db/schema.ts` — `agentOverrides` table; composite primary key `(userId, agentId)`.
 - `src/main/db/migrations/agent-overrides.ts` — table creation with documented absence of FK/cascade.
 - `src/main/services/agentService.ts` — `listMerged()`, `findAgent()`, `setEnabled()`. `agentService.list(userId)` removed.
-- `src/main/ipc/agent.ipc.ts` — `agent:list` calls `listMerged`; `agent:upsert` / `agent:delete` target Default scope; `agent:sync-remote` targets Profile scope; new `agent:set-enabled` channel.
+- `src/main/ipc/agent.ipc.ts` — `agent:list` calls `listMerged`; `agent:upsert` / `agent:delete` target Default scope; `agent:sync-remote` and `agent:delete-remote` target Profile scope; `agent:set-enabled` routes local rows versus profile overrides.
 - `src/main/ipc/agent_a2a.ipc.ts` — all agent lookups via `agentService.findAgent(default, profile, id)`.
 - `src/main/ipc/chatmode.ipc.ts`, `provider.ipc.ts`, `mcp.ipc.ts` — all use `getSettingsScopeUserId()`.
 - `src/main/ipc/chat.ipc.ts`, `agent_status.ipc.ts`, `llm.ipc.ts`, `auth.ipc.ts` (`auth:get-current`) — use `getProfileScopeUserId()`.
 
 ### Preload
-- `src/preload/index.ts` — `window.api.agents.setEnabled(agentId, enabled)`.
+- `src/preload/index.ts` — `window.api.agents.setEnabled(agentId, enabled)` and `deleteRemote(agentId)`.
 
 ### Renderer
 - `src/renderer/src/stores/ui.store.ts` — `SettingsMenu` includes `'profile-agents'`; `PROFILE_SCOPE_TABS` constant lists Profile-only tabs.
 - `src/renderer/src/components/layout/Sidebar.tsx` — renders Default + conditional Profile groups; auto-resets `settingsTab` via `useEffect` when Profile group disappears.
-- `src/renderer/src/components/settings/SettingsPage.tsx` — routes `'profile-agents'` to `<AgentsSettingsSection scope="profile" />`.
-- `src/renderer/src/components/settings/AgentsSettingsSection.tsx` — `scope: 'default' | 'profile'` prop; `DefaultAgentsSection` shows only local A2A agents, `ProfileAgentsSection` shows only Cinna-synced remote agents.
-- `src/renderer/src/components/settings/AgentCard.tsx` — toggle calls `useSetAgentEnabled` (optimistic), surfaces mutation error via `title` + danger ring.
+- `src/renderer/src/components/settings/SettingsPage.tsx` — routes `'profile-agents'` to `<AgentsSettingsSection />`; `local-agents` routes to `LocalAgentsSettingsSection`, with visible title Agents.
+- `src/renderer/src/components/settings/AgentsSettingsSection.tsx` — profile-only server-domain list of Cinna agents, including disabled rows; no default-scope A2A list or creation form.
+- `src/renderer/src/components/settings/AgentCard.tsx` — connection details on external agent pages; visibility is owned by `AgentsSettingsSection` and `ExternalAgentActionsMenu` through `useAgentDesktopVisibility`.
 - `src/renderer/src/hooks/useAgents.ts` — `useSetAgentEnabled()` with optimistic update, rollback `onError`, refetch `onSettled`.
+
+`src/renderer/src/hooks/useAgentDesktopVisibility.ts` snapshots the active profile and sidebar order before the optimistic update, invalidates status on success, and redirects only if the same profile and disabled agent page are still selected.
 
 ## Database Schema
 
@@ -45,7 +47,8 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 - `agent:list` — returns local agents from Default scope + remote agents from Profile scope, with `enabled` overlaid from overrides.
 - `agent:upsert` — Default scope only; rejects remote ids.
 - `agent:delete` — Default scope only; remote agents return inline `remote_immutable` error.
-- `agent:set-enabled` — new channel; payload `{ agentId, enabled }`. Routes by id prefix (`remote:` → override table, else local row).
+- `agent:delete-remote` — active-profile, server-owned deletion; verifies the cached target and removes its local row only after server success.
+- `agent:set-enabled` — payload `{ agentId, enabled }`. Routes by id prefix (`remote:` → override table, else local row).
 - `agent:sync-remote` — Profile scope (active Cinna user).
 - `chatmode:*`, `provider:*`, `mcp:*` — all Default scope.
 - `chat:*`, `agent-status:*`, `run:start` / `run:watch`, `auth:get-current` — Profile scope.
@@ -62,12 +65,12 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 
 - `Sidebar` (`src/renderer/src/components/layout/Sidebar.tsx`) — renders the two-group menu, holds the stale-tab guard `useEffect`.
 - `SettingsPage` (`src/renderer/src/components/settings/SettingsPage.tsx`) — title map + section routing per `settingsTab`.
-- `AgentsSettingsSection` (`src/renderer/src/components/settings/AgentsSettingsSection.tsx`) — switches between `DefaultAgentsSection` and `ProfileAgentsSection` based on `scope` prop.
-- `AgentCard` (`src/renderer/src/components/settings/AgentCard.tsx`) — toggle + error surface (red ring + tooltip on mutation error).
+- `AgentsSettingsSection` (`src/renderer/src/components/settings/AgentsSettingsSection.tsx`) — lists only profile-owned Cinna agents, with visibility controls, sync and reauthentication. Direct connections use the Agents sidebar and `ExternalAgentPage`.
+- `AgentCard` (`src/renderer/src/components/settings/AgentCard.tsx`) — structured connection fields, authentication and testing for A2A pages; header actions live in `ExternalAgentActionsMenu`.
 
 ## Configuration
 
-No new env vars or settings. The model is purely behavioral.
+`showAgentSidebarSections` is installation-wide (`src/shared/appSettings.ts`, `src/main/db/appSettings.ts`), defaults to true, and is independent of profile resource ownership. No new environment variables.
 
 ## Security
 

@@ -18,7 +18,8 @@ Connect an existing Claude workspace agent and environment to a Cinna chat. Clau
 3. Press **Add agent**. Main verifies the selected remote resources before saving the local configuration; the new agent opens in chat. Failed loading or saving retains the dialog and entered values; the Load workspace control keeps its width while loading.
 4. Send a message. The first turn creates a remote session; later ready turns reuse that exact session. The transcript shows authoritative message text and tool activity as they arrive.
 5. Answer a permission in the transcript or Inbox with **Allow once** or **Deny**. Continuation waits for both the remote acknowledgment and local durable settlement.
-6. Open an existing Managed entry to load and edit its configuration, or select **Start chat**. Saved agent/environment IDs appear immediately; loading the workspace verifies the available choices before Save becomes available. Saving a configuration revision makes previous session bindings incompatible; start a new chat for the changed configuration.
+6. Select an existing Managed sidebar entry to open its chat landing page. **Settings → Connection → Configure** opens configuration; **Start chat** returns to the preserved page draft. Saved agent/environment IDs appear immediately; loading the workspace verifies the available choices before Save becomes available. Saving a configuration revision makes previous session bindings incompatible; start a new chat for the changed configuration.
+7. **More actions → Delete agent** confirms removal of the Desktop connection. Existing chats and the remote Claude agent/environment remain. Enabled direct connections have no Disable action; previously disabled connections can be enabled again.
 
 ## Business Rules
 

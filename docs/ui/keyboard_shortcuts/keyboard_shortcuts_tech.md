@@ -13,7 +13,7 @@
 | File | Role |
 |------|------|
 | `src/renderer/src/components/chat/ChatInput.tsx` | `handleKeyDown` on the textarea. Handles popup navigation (`ArrowUp`/`ArrowDown`/`Enter`/`Tab`/`Escape` when a trigger popup is open), message send (`Enter` without `Shift`), and the double-`Escape` chord via `lastEscapeAt` ref + `DOUBLE_ESC_WINDOW_MS` (400 ms). Calls the optional `onDoubleEscape` prop when the chord fires. |
-| `src/renderer/src/components/layout/MainArea.tsx` | Wires `onDoubleEscape={() => setSelectedAgent(null)}` on the new-chat `ChatInput` instance only. The active-chat instance omits the prop so the chord is inert there. |
+| `src/renderer/src/components/layout/ChatWorkspace.tsx` | Wires `onDoubleEscape={() => setPendingAgentIds([])}` on the new-chat `ChatInput` instance only. The active-chat instance omits the prop so the chord is inert there. |
 | `src/renderer/src/components/logger/LogsOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `logsOpen`; `Escape` closes the overlay via `setLogsOpen(false)`. |
 | `src/renderer/src/components/agents/AgentStatusOverlay.tsx` | `useEffect` attaches a `window` `keydown` listener gated on `agentStatusOpen`; `Escape` back-navigates if `detailAgentId` is set, otherwise closes the overlay. |
 | `src/renderer/src/components/settings/ChatModeCard.tsx` | Inline `onKeyDown` on the mode-name input: `Enter` calls `e.currentTarget.blur()` to commit the edit. |
@@ -53,7 +53,7 @@
 2. `handleKeyDown` enters the `e.key === 'Escape' && onDoubleEscape` branch, calls `preventDefault`, reads `Date.now()`.
 3. First press: `now - lastEscapeAt.current` is larger than `DOUBLE_ESC_WINDOW_MS`, so `lastEscapeAt.current = now`.
 4. User presses `Esc` again within 400 ms: `now - lastEscapeAt.current <= DOUBLE_ESC_WINDOW_MS`, so `lastEscapeAt.current = 0` and `onDoubleEscape()` fires.
-5. `MainArea`'s callback runs `setSelectedAgent(null)`, clearing the agent chip and reverting the input's left slot back to the `AgentSelector` default.
+5. `ChatWorkspace`'s callback runs `setPendingAgentIds([])`, clearing the pending agent chips on the dashboard or embedded agent composer.
 
 ### Popup-ESC invalidation
 

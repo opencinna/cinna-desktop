@@ -28,7 +28,7 @@
 - `src/renderer/src/components/chat/ComposerPlusMenu.tsx` — the `[+]` composer menu; its **Chat mode** sub-view (`modeMenu` prop) lists the mode cards, and `activeModeColor` tints the button. Replaced the retired standalone `ChatConfigMenu`
 - `src/renderer/src/components/chat/ChatInput.tsx` — `modeColor` prop for dynamic border/background tint; `chatModeMenu` / `tildeModePopup` props carry the mode list and selection handlers; resolves the mode-owned MCP baseline once (`showsChatControls` + `baselineIds`) for the chips and the `[+]` picker
 - `src/renderer/src/hooks/useApplyChatMode.ts` — applies a mode to an existing chat (provider/model/modeId + baseline MCP replacement)
-- `src/renderer/src/components/layout/MainArea.tsx` — Mode selection state, auto-applies `defaultMode` on new-chat entry, renders the shared `sendErrorBanner` above the chat input in both new-chat and active-chat views
+- `src/renderer/src/components/layout/ChatWorkspace.tsx` — Mode selection state, auto-applies `defaultMode` on new-chat entry, renders the shared `sendErrorBanner` above the chat input in both new-chat and active-chat views
 - `src/renderer/src/hooks/useChatStream.ts` — On stream `error` events (LLM + agent), writes the error string into `chat.store.sendError` so the banner surfaces during active-chat sends, not just on the new-chat screen
 
 ## Database Schema
@@ -80,7 +80,7 @@
 - `src/renderer/src/hooks/useApplyChatMode.ts` — `useApplyChatMode()` returns `(chatId, mode | null)`: the active-chat mirror of `useNewChatFlow.startNewChat`. Resolves the model via the shared `resolveModel`, writes `modeId`/`providerId`/`modelId` through `useUpdateChat`, then replaces the baseline via `useSetChatMcpProviders` (fire-and-forget `mutate`, since the menu's select handlers don't await it — the mutation's `onError` logs failures under the `chat-mcp` scope). `null` clears `modeId` only and leaves the baseline alone, so detaching a preset doesn't strip the chat's tools
 - `ComposerPlusMenu` — the `[+]` menu anchored below the composer; its **Chat mode** sub-view renders mode cards with `getPreset()` for colors, checkmarks `modeMenu.activeId`, and calls `onSelectMode(isActive ? null : mode)` so clicking the active mode deselects it
 - `ChatInput` — Accepts optional `modeColor: ColorPreset | null`; when set, overrides the input wrapper's `borderColor` and `backgroundColor` via inline style. When `leftSlot` is provided for an active chat, renders it instead of `ChatControls`
-- `MainArea`:
+- `ChatWorkspace`:
   - `useDefaultChatMode()` provides the default mode; an effect keyed on `activeChatId` + `defaultMode?.id` calls `setActiveMode((current) => current ?? defaultMode)` so the default applies on every new-chat entry without overriding an explicit user selection
   - `handleNewChat` runs a pre-flight check (`hasDestination = !!selectedAgent || (!!effectiveProviderId && !!resolvedModelId)`) and writes a user-facing message into `chat.store.sendError` when no destination is determinable
   - Renders a shared `sendErrorBanner` element above the `ChatInput` in both the new-chat layout and the active-chat layout; the banner is sourced from `chat.store.sendError` so it covers stream-time errors too

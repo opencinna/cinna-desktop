@@ -89,6 +89,7 @@ async function openPermissions(cinna: CinnaApp, name: string): Promise<void> {
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(name)
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
   await page
     .getByRole('tablist', { name: 'Agent details' })
     .getByRole('tab', { name: /^Permissions/ })

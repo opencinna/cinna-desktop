@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Circle, MessageSquare } from 'lucide-react'
+import { MessageSquare, Settings } from 'lucide-react'
 import { useUIStore } from '../../../stores/ui.store'
 import {
   useAgentsHomeQuestion,
@@ -11,11 +11,12 @@ import {
   useStampAgentIdentity
 } from '../../../hooks/useLocalAgents'
 import { MANIFEST_FILE } from '../../../../../shared/kit/manifest'
-import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { describedAs } from '../../../utils/localAgents'
+import { ChatWorkspace } from '../../layout/ChatWorkspace'
 import { RuntimePanel } from './RuntimePanel'
 import { ReadinessStrip } from './ReadinessStrip'
 import { OpenInMenu } from './OpenInMenu'
+import { AgentTypeIcon } from '../AgentTypeIcon'
 import { AgentActionsMenu } from './AgentActionsMenu'
 import { DescriptionCard, ExamplePromptsCard } from './ManifestCards'
 import { BareNameCard, BareReadmeCard } from './BareAgentCards'
@@ -42,17 +43,6 @@ const TABS: { id: AgentPageTab; label: string }[] = [
   { id: 'folder', label: 'Folder' }
 ]
 
-/** Dot colour for a folder's readiness. Severity tokens, never a raw colour. */
-function readinessDot(agent: LocalAgentDto): { cls: string; title: string } {
-  switch (agent.readiness) {
-    case 'ok':
-      return { cls: 'text-[var(--color-success)]', title: 'Ready' }
-    case 'credentials_needed':
-      return { cls: 'text-[var(--color-warning)]', title: 'Credentials needed' }
-    default:
-      return { cls: 'text-[var(--color-danger)]', title: agent.readinessReason ?? 'Not ready' }
-  }
-}
 
 /**
  * A folder agent's page.
@@ -63,27 +53,21 @@ function readinessDot(agent: LocalAgentDto): { cls: string; title: string } {
  * the folder and useless as a control surface: the runtime picker was the
  * seventh card down. Everything that is information rather than a control now
  * lives under four tabs, and the readiness banner appears only when something
- * needs attention — the dot beside the name covers the rest.
+ * needs attention.
  *
  * Still a viewer over the folder on disk: every card names the file it reads,
  * the editable ones write straight back through the stamp guard, and there is
  * no state that survives deleting the folder.
  *
- * **Start chat** uses the exact mechanism the remote-agent status overlay
- * already uses (`AgentStatusOverlay`'s own "Start chat": `setActiveView('chat')`
- * + `pendingAgentId`, seeded into `pendingAgentIds` by `MainArea.tsx`), and it
- * moves the sidebar to Chats with it, exactly as the sidebar row's chat button
- * does (`LocalAgentsList.tsx`). Landing in a conversation with the agents list
- * still beside it left the sidebar pointing at a screen that is no longer on.
+ * Chat mode shares the header and runtime controls; details belong to Settings.
  */
 export function LocalAgentPage(): React.JSX.Element {
   const activeLocalAgentId = useUIStore((s) => s.activeLocalAgentId)
   const setActiveLocalAgentId = useUIStore((s) => s.setActiveLocalAgentId)
   const pendingDraftAgentId = useUIStore((s) => s.pendingDraftAgentId)
   const setPendingDraftAgentId = useUIStore((s) => s.setPendingDraftAgentId)
-  const setActiveView = useUIStore((s) => s.setActiveView)
-  const setPendingAgentId = useUIStore((s) => s.setPendingAgentId)
-  const setSidebarTab = useUIStore((s) => s.setSidebarTab)
+  const mode = useUIStore((s) => s.agentPageMode)
+  const setMode = useUIStore((s) => s.setAgentPageMode)
   /** Whether there is an agents folder at all — see the placeholder below. */
   const homeAccess = useAgentsHomeQuestion()
   const { data: agent, isLoading, error } = useLocalAgent(activeLocalAgentId)
@@ -193,7 +177,6 @@ export function LocalAgentPage(): React.JSX.Element {
   // Invariant 3 applies to stamping like every other write: the stamp handed
   // back is the one this render read, not one taken at click time.
   const manifestStamp = agent.stamps[MANIFEST_FILE] ?? null
-  const dot = readinessDot(agent)
   const description = describedAs(agent)
   const hasDescription = description !== ''
   const findings = agent.validation.errors.length + agent.validation.warnings.length
@@ -218,11 +201,7 @@ export function LocalAgentPage(): React.JSX.Element {
         <header className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <h1 className="flex items-center gap-2 text-xl font-semibold text-[var(--color-text)]">
-              <Circle
-                size={8}
-                className={`shrink-0 fill-current ${dot.cls}`}
-                aria-label={dot.title}
-              />
+              <AgentTypeIcon agent={{ source: 'folder' }} size={18} />
               <span className="truncate">{agent.name}</span>
             </h1>
             {hasDescription ? (
@@ -237,7 +216,7 @@ export function LocalAgentPage(): React.JSX.Element {
               agent.kind !== 'bare' && (
                 <button
                   type="button"
-                  onClick={() => setTab('overview')}
+                  onClick={() => { setMode('settings'); setTab('overview') }}
                   className="mt-0.5 text-xs text-[var(--color-text-muted)] transition-colors hover:text-[var(--color-text-secondary)]"
                 >
                   No description yet — add one under Overview.
@@ -253,26 +232,22 @@ export function LocalAgentPage(): React.JSX.Element {
             >
               {agent.path}
             </button>
+            {mode === 'chat' && <RuntimePanel agent={agent} compact />}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
             <OpenInMenu agent={agent} onError={setActionError} />
             <button
               type="button"
               onClick={() => {
-                setActiveView('chat')
-                setPendingAgentId(agent.id)
-                // The chat opens in the centre; the sidebar follows it, so the
-                // user is not left looking at the agents list beside a
-                // conversation it no longer relates to.
-                setSidebarTab('chats')
+                setMode(mode === 'settings' ? 'chat' : 'settings')
               }}
-              title={`Start a new chat with ${agent.name}`}
+              title={mode === 'settings' ? `Start a new chat with ${agent.name}` : 'Agent settings'}
               className="flex items-center gap-1.5 rounded-md bg-[var(--color-accent)] px-3 py-1.5
                 text-xs font-medium text-white
                 hover:bg-[var(--color-accent-hover)] transition-colors"
             >
-              <MessageSquare size={12} />
-              Start chat
+              {mode === 'settings' ? <MessageSquare size={12} /> : <Settings size={12} />}
+              {mode === 'settings' ? 'Start chat' : 'Settings'}
             </button>
             <AgentActionsMenu agent={agent} onError={setActionError} />
           </div>
@@ -294,7 +269,7 @@ export function LocalAgentPage(): React.JSX.Element {
           agent={agent}
           drafting={draft.isPending}
           draftNote={draftNote}
-          onShowDetails={() => setTab('folder')}
+          onShowDetails={() => { setMode('settings'); setTab('folder') }}
           onStampIdentity={
             manifestStamp
               ? () =>
@@ -316,8 +291,12 @@ export function LocalAgentPage(): React.JSX.Element {
           like any other; what differs is only where the answer is kept — its own
           state under `userData`, never a file in the adopted folder.
         */}
-        <RuntimePanel agent={agent} />
+        {mode === 'settings' && <RuntimePanel agent={agent} />}
 
+        <div hidden={mode === 'settings'}>
+          <ChatWorkspace key={agent.id} agentId={agent.id} embedded />
+        </div>
+        {mode === 'settings' && <>
         <nav
           role="tablist"
           aria-label="Agent details"
@@ -442,6 +421,7 @@ export function LocalAgentPage(): React.JSX.Element {
           {activeTab === 'permissions' && <PermissionsCard agent={agent} />}
           {activeTab === 'folder' && <FolderTab agent={agent} />}
         </div>
+        </>}
       </div>
     </div>
   )

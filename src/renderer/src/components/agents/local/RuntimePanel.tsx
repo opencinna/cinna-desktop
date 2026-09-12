@@ -446,7 +446,7 @@ function SecretsLine({
   )
 }
 
-export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Element {
+export function RuntimePanel({ agent, compact = false }: { agent: LocalAgentDto; compact?: boolean }): React.JSX.Element {
   const { data: providers } = useProviders()
   const { data: models, isError: modelsFailed } = useModels()
   const { data: defaultMode } = useDefaultChatMode()
@@ -701,7 +701,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
    */
   /**
    * **This machine's pinned credential wins over the default chat mode**, the
-   * same order `runtimeService.resolveDefault` applies. Settings → Local Agents
+   * same order `runtimeService.resolveDefault` applies. Settings → Agents
    * → Default AI credential writes `localAgentsDefaultCredentialId`, and a
    * panel that kept reading the chat mode alone would label an agent
    * `Default (OpenAI)` while the engine built it on the pinned Anthropic key —
@@ -1005,7 +1005,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
       if (!claudeTool) {
         return {
           /*
-            Names the remedy and where it is. Settings → Local Agents → Runtime
+            Names the remedy and where it is. Settings → Agents → Runtime
             now installs Claude Code — the vendor's own installer, behind a
             confirm that shows the command — so the sentence that used to stop
             at "not installed" can say what to do about it. It does not offer
@@ -1016,7 +1016,7 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
             This is still the only place the full explanation lives, since the
             Engine column was cut to "Not installed" to stop it truncating.
           */
-          text: 'Claude Agent needs Claude Code. Install it in Settings → Local Agents → Runtime.',
+          text: 'Claude Agent needs Claude Code. Install it in Settings → Agents → Runtime.',
           tone: DANGER
         }
       }
@@ -1470,6 +1470,32 @@ export function RuntimePanel({ agent }: { agent: LocalAgentDto }): React.JSX.Ele
         note: `Switched to ${WORK_COMPLEXITY_LABELS[tier]} — the tier “${nameOf(declaredModel)}” belongs to.`
       })
     }
+  }
+
+  if (compact) {
+    // Use the same resolved engine, credential and model as the settings controls.
+    const subscription = claudeAuth?.state === 'logged_in' &&
+      (claudeAuth.authMethod === 'claude.ai' || !!claudeAuth.subscriptionType)
+    const credentialMissing = !!declaredCredential && !selected
+    const label = unsupportedEngine ? `Unsupported runtime: ${unsupportedEngine}`
+      : engineUnknown ? 'Loading runtime…'
+      : onClaude ? `Claude Agent${subscription ? ' with subscription' : ''}`
+      : effectiveProvider && !credentialMissing ? `OpenCode with ${effectiveProvider.name}` : 'OpenCode'
+    const model = engineUnknown || unsupportedEngine ? null
+      : onClaude ? claudeModelForComplexity(declaredComplexity)
+      : !credentialMissing && modelsLoaded ? nameOf(choice.modelId) : null
+    const issue = unsupportedEngine ? 'Update required'
+      : engineUnknown ? null
+      : onClaude ? (claudeAuth?.state === 'logged_out' ? 'Sign-in required' : null)
+      : credentialMissing || (providers !== undefined && !effectiveProvider) ? 'AI credential needed'
+      : status?.tone === DANGER || status?.tone === WARN ? 'Setup needed' : null
+    const badge = 'max-w-full truncate rounded-md border border-[var(--color-border)] bg-[var(--color-bg-secondary)] px-2 py-0.5 text-[10px] text-[var(--color-text-secondary)]'
+    return <div role="group" aria-label="Runtime summary" className="mt-2 flex flex-wrap items-center gap-1.5">
+      <span className={badge} title={onClaude && claudeAuth?.state === 'logged_in'
+        ? `Claude Code${accountSuffix(claudeAuth.email, claudeAuth.subscriptionType)}` : label}>{label}</span>
+      {model && <span className={badge} title={`Model: ${model}`}>{model}</span>}
+      {issue && <span className={`${badge} !text-[var(--color-warning)]`} title={status?.text}>{issue}</span>}
+    </div>
   }
 
   return (

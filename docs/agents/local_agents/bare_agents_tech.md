@@ -107,6 +107,8 @@ The git channels are in [Agents Folder Updates](folder_updates.md).
 
 ## Renderer Components
 
+Bare agents use the same chat/settings shell as kit agents: sidebar row selection enters chat, Settings renders the runtime form and four tabs, and the hidden embedded composer retains drafts across mode switches. See [Agents Tab & Agent Page](agents_tab_tech.md).
+
 | Component | Renders |
 |---|---|
 | `NewLocalAgentModal` (`choose` step) | Two cards — New agent / Add a folder — and a reserved error line |

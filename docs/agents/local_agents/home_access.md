@@ -17,8 +17,8 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 ## User Stories / Flows
 
 ### First run on a Mac
-1. The user opens the **Agents** tab. That is what raises the question — the tab being open is what makes it worth interrupting for
-2. The agents list comes back with no roots and `needs_consent`, and the modal opens over it: what an agent folder is, the exact path, and the sentence that makes the next dialog legible — *"macOS will now ask whether Cinna may use your Documents folder. That is this one."*
+1. The user opens **Agents**, then chooses **+ → New agent** or the empty state's **Set one up**. Opening the tab alone does not ask for a folder; external connections do not need one
+2. With no roots and `needs_consent`, that folder action opens the modal: what an agent folder is, the exact path, and the sentence that makes the next dialog legible — *"macOS will now ask whether Cinna may use your Documents folder. That is this one."*
 3. **Create folder** makes the directory. The macOS prompt appears during that call and stays up until it is answered
 4. Allowed: the folder is acknowledged, the templates and `.cinna-kit/` copy go in, the root row is registered, and the lists refresh. The question does not come back
 5. Declined: the same dialog becomes the second question rather than an error — *"macOS did not let Cinna use that folder"*, the path it refused, and **Choose folder…**
@@ -30,9 +30,9 @@ The failure this replaced: `ensureHome` was on every read path that wanted the h
 
 ### The rest of the app while the question stands
 1. The sidebar list says *"Your agents need a folder"* with **Set one up** (or **Pick another folder** after a refusal), not "No agents yet" — the two states want different words and a different button
-2. The `+` raises the question instead of opening the Add-an-agent dialog, whose New agent card offers to scaffold into the folder that does not exist
+2. The `+` opens Add an agent. Only **New agent** requests the unavailable home; **Add a folder**, A2A, ACP and managed connections remain available without it
 3. The empty agent pane says the folder is missing rather than pointing at that `+`
-4. Settings → Local Agents shows the home's place in the **Agent Folders** list as a row naming the state and the path, carrying the button that resolves it
+4. Settings → Agents shows the home's place in the **Agent Folders** list as a row naming the state and the path, carrying the button that resolves it
 5. **Not now** is always available, and every one of those surfaces is a way back in
 
 ### An install that has been using the folder for months
@@ -67,9 +67,9 @@ For the same reason the *modal* treats any registered root as an answer. A user 
 
 ### The question is raised by demand, never by launch
 
-Main can answer "the folder does not exist yet" from the moment the app starts. A modal that acted on that would explain the agents folder to someone who is still signing in — the same out-of-nowhere interruption the macOS prompt was, only ours. Exactly one surface raises it: the Agents sidebar, whose presence means the user went looking for an agent.
+Main can answer "the folder does not exist yet" from the moment the app starts. A modal that acted on that would explain the agents folder to someone who is still signing in — the same out-of-nowhere interruption the macOS prompt was, only ours. The Agents sidebar's folder-setup button, its **New agent** choice and the application Settings row raise it explicitly. Connecting an external agent never requires folder consent.
 
-**Not now** is remembered for the window, because the surfaces that raise it do so from an effect that runs whenever the agents list has data, and that list refetches often — a watcher push invalidates it, a second consumer mounting fires the effect again. Without that memory the dialog would come back on its own, over whatever the user had moved on to. A *different* question — refused, having only been unexplained before — is still worth raising, and every surface keeps a button that reopens the one that was put away.
+**Not now** is remembered by the window's modal store. Explicit folder buttons call `reopen`, so a dismissed question remains reachable. The old mount-triggered raising hook has no production caller; list refetches alone do not raise a modal.
 
 ### A refusal is remembered for the process, and never on disk
 
@@ -98,14 +98,14 @@ A write can be refused on any platform — a read-only mount, a root-owned folde
 ## Architecture Overview
 
 ```
-Agents sidebar mounts
-      │  (list resolves: roots empty, homeAccess = needs_consent)
+Folder setup button / Add an agent → New agent
+      │  (roots empty, homeAccess = needs_consent)
       ▼
 agentsHome.store  ──►  AgentsHomeModal ──► local-agent:home-grant
       ▲                      │                     │
       │                      │                     ▼
 Settings row / list  ────────┘        agentsHomeService.prepare()
-empty state / +                          │
+empty state / New agent                  │
 (reopen)                                 ├─ homeAccessService.grant()  async mkdir → macOS prompt
                                          │        └─ EPERM → denied (remembered in memory)
                                          └─ ensureHome()  templates, .cinna-kit/, root row
@@ -118,7 +118,7 @@ local-agent:list ──► tryEnsureHome() ──► 'ready' | 'needs_consent' |
 ## Integration Points
 
 - [Agents Home, Scanner & Folder Index](folder_index.md) — owns the home, the roots and `ensureHome` itself; this doc is the gate in front of it
-- [Agents Tab & Agent Page](agents_tab.md) — the sidebar list, the `+`, the empty pane and the Settings → Local Agents row that report and resolve the question
+- [Agents Tab & Agent Page](agents_tab.md) — the sidebar list, the `+`, the empty pane and the Settings → Agents row that report and resolve the question
 - [Local Development](../local_dev/local_dev.md) — creates its account workspace under the home, and acknowledges the folder its own consent screen named
 - [The `cinna://connect` Link](../../auth/onboarding/connect_link.md) and [Onboarding](../../auth/onboarding/onboarding.md) — the two first-run surfaces that name the folder and must not create it
 - [Settings Scope](../../core/settings_scope/settings_scope.md) — the acknowledgement is default-scoped, like the home itself: it is a fact about the machine, not about whoever is signed in

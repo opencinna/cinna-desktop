@@ -70,7 +70,7 @@ Both halves are load-bearing.
 4. An agent that is *mid-turn* keeps the process it started with. That is the same guarantee the old deferral bought, now free: a running turn holds its process, and the replacement happens at the next one
 
 ### Choosing a runtime
-1. The “Runs with” panel on the agent page offers the credentials this app can actually call with, and — by default — **how hard the work is** rather than which model does it: Simple, Medium or Complex. The line under the picker names the model the chosen tier resolves to on the chosen credential, because the user is picking what gets billed
+1. Open the agent from the sidebar and select **Settings**. The “Runs with” panel offers the credentials this app can actually call with, and — by default — **how hard the work is** rather than which model does it: Simple, Medium or Complex. The line under the picker names the model the chosen tier resolves to on the chosen credential, because the user is picking what gets billed
 2. **Advanced** swaps the tier for the raw model list. It is remembered, but it is a preference and not a mode: the agent's *own runtime* decides which picker it opens on, since a panel showing a tier over a runtime that pins a model would misreport what the agent runs on. So the checkbox **converts** — a model becomes the tier it belongs to, a tier becomes the model it currently resolves to — and says in the status line what it did, because it is rewriting the runtime behind a control that only claims to change the view. A conversion with nothing to write still moves the view (the file keeps its tier and the line says which); a model that matches no complexity at all — a gateway's hand-written id — leaves the checkbox **ticked and disabled** with a standing line saying why, rather than a control that springs back under the pointer that just used it
 3. Both pickers stay disabled until the model registry has loaded — a network round trip per credential — because until then the panel cannot tell a model that belongs to another catalogue from one the registry has simply not listed yet, and cannot say what a tier resolves to at all
 4. The `Default (…)` option names the model *this credential* would run, resolved through the same chain the engine uses (see [A model is lent only where it can run](#a-model-is-lent-only-where-it-can-actually-run)), not the default chat mode's model regardless of credential
@@ -408,7 +408,7 @@ Carried honestly rather than implied as passing.
 ## Architecture Overview
 
 ```
-Agent page → “Runs with” panel        Settings → Local Agents
+Agent page → Settings → “Runs with” panel        Settings → Agents
   credential + model pickers,           Runtime status line + OpenCode path
   engine row (binary, not process)      Try again on `failed`
         │                                       │
@@ -456,7 +456,7 @@ A turn (see agent_turn.md)                     │
 - [The Claude Engine](claude_engine.md) — the second launcher: no credential, no generated config, the user's own login, and the approval mode set on every session
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the folder agents a config is generated from, the readiness that refuses one, the launcher the scanner records, and the per-agent turn lock
 - [Local Agent Permissions](permissions.md) — the profile this generator writes, entry by entry, and the desktop-held grants that answer an ask it produces
-- [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel, the Settings → Local Agents engine row, and the stamped `update-field` path a runtime write reuses
+- [Agents Tab & Agent Page](agents_tab.md) — the “Runs with” panel, the Settings → Agents engine row, and the stamped `update-field` path a runtime write reuses
 - [Kit Contract & Manifest Layer](kit_contract.md) — the `runtime` block in `cinna-agent.json`, the validator's secret pattern reused on the credential reference, and the templates whose HTML comments the prompt assembly strips
 - [Account-Provisioned Providers & Chat Modes](../../llm/account_provisioning/account_provisioning.md) — managed credentials are usable runtimes, and the background sync changes what a turn will generate with no hook anywhere
 - [Chat Modes](../../chat/chat_modes/chat_modes.md) — the default chat mode *is* the Default runtime

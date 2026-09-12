@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Keep a registered agents folder up to date with the repository it came from. If a root is a git working tree, Settings → Local Agents says which branch it is on, whether it is behind, what the missing commits are, and offers one action: **fast-forward**.
+Keep a registered agents folder up to date with the repository it came from. If a root is a git working tree, Settings → Agents says which branch it is on, whether it is behind, what the missing commits are, and offers one action: **fast-forward**.
 
 The shape this was built for is a team repository of agents — cloned once and then quietly left behind. It applies to a **workshop** root as much as to an [external](bare_agents.md) one; what decides whether the panel exists is whether the folder is a repository, not what kind of root it is.
 
@@ -17,7 +17,7 @@ The shape this was built for is a team repository of agents — cloned once and 
 
 ### Seeing that a folder is behind
 
-1. Settings → Local Agents lists the registered roots. Under a root that is a git working tree there is one extra line: the branch and its upstream — or, where the repository is **above** the registered folder, the branch and that repository's name, the upstream dropped to make room for it
+1. Settings → Agents lists the registered roots. Under a root that is a git working tree there is one extra line: the branch and its upstream — or, where the repository is **above** the registered folder, the branch and that repository's name, the upstream dropped to make room for it
 2. On open the state sentence comes from the **last** fetch — "Up to date as of the last check", or "N updates available" — because nothing has reached the network yet
 3. Under a root that is not a repository there is **nothing at all**
 
@@ -108,7 +108,7 @@ Each refusal sentence also leads with the action rather than the diagnosis ("Com
 ## Architecture Overview
 
 ```
-Settings → Local Agents → RootRepositoryDialog (opened from a folder row)
+Settings → Agents → RootRepositoryDialog (opened from a folder row)
    root.isGitRepo (from :roots-list)   ← looksLikeGitRepo, a stat walk in main
    useGitStatus(rootId)        ─► local-agent:git-status  {rootId, fetch:false}
    useCheckForUpdates()        ─► local-agent:git-status  {rootId, fetch:true}
@@ -161,6 +161,6 @@ Settings → Local Agents → RootRepositoryDialog (opened from a folder row)
 
 - [Bare Agents & External Roots](bare_agents.md) — the feature this was built beside: a repository of agents is exactly what an external root usually is, and it is why the whole picked folder becomes the root
 - [Agents Home, Scanner & Folder Index](folder_index.md) — the roots this reads, and the rescan an update ends with
-- [Agents Tab & Agent Page](agents_tab.md) — the Settings → Local Agents section the panel lives in
+- [Agents Tab & Agent Page](agents_tab.md) — the Settings → Agents section the panel lives in
 - [Shell Environment Resolution](../../development/shell_environment/shell_environment.md) — where `git` is found and what environment the child gets
 - [The Local Engine](engine.md) — an update that changes the agents calls `applyConfigChange`, the same way create and delete do

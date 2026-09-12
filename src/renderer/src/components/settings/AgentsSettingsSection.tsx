@@ -1,87 +1,49 @@
 import { useState } from 'react'
-import { Plus, RefreshCw, AlertTriangle } from 'lucide-react'
-import { AgentCard } from './AgentCard'
-import { CustomAgentModal } from '../agents/CustomAgentModal'
-import { RemoteAcpAgentCard } from './RemoteAcpAgentCard'
-import { A2AAgentForm } from './A2AAgentForm'
+import { RefreshCw, AlertTriangle } from 'lucide-react'
+import { AgentTypeIcon } from '../agents/AgentTypeIcon'
+import { useAgentDesktopVisibility } from '../../hooks/useAgentDesktopVisibility'
+import { useUIStore } from '../../stores/ui.store'
+import { serverLabel } from '../../utils/agentNavigation'
+import { unwrapIpcError } from '../../utils/ipcError'
 import { useAgents, useRemoteSyncStatus, useSyncRemoteAgents } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { useAuthStore } from '../../stores/auth.store'
 
-const REMOTE_SECTION_LABELS: Record<string, string> = {
-  agent: 'My Agents',
-  app_mcp_route: 'Shared with Me',
-  identity: 'People'
-}
-
 type RemoteAgent = NonNullable<ReturnType<typeof useAgents>['data']>[number]
 
-/**
- * Within the "My Agents" group (target_type='agent'), a row can be either
- * an agent the user authored themselves (publisher install or an
- * unpublished agent) or a bundle install obtained through the catalog. The
- * cinna-server `/external/agents` response carries `bundle_uuid` and
- * `is_publisher_install` under `metadata` so we can split them locally.
- */
-function isCatalogInstall(agent: RemoteAgent): boolean {
-  const meta = agent.remoteMetadata ?? null
-  if (!meta) return false
-  const bundleUuid = meta.bundle_uuid
-  const isPublisher = meta.is_publisher_install === true
-  return typeof bundleUuid === 'string' && bundleUuid.length > 0 && !isPublisher
-}
-
-interface Props {
-  /**
-   * 'default' — manually added A2A and ACP agents (settings → Default group).
-   * 'profile' — remote agents synced from the active Cinna account
-   *             (settings → Profile group).
-   */
-  scope?: 'default' | 'profile'
-}
-
-export function AgentsSettingsSection({ scope = 'default' }: Props): React.JSX.Element {
-  if (scope === 'profile') return <ProfileAgentsSection />
-  return <DefaultAgentsSection />
-}
-
-function DefaultAgentsSection(): React.JSX.Element {
-  const { data: agents } = useAgents()
-  const [showAdd, setShowAdd] = useState(false)
-  const [showAcp, setShowAcp] = useState(false)
-
-  const localAgents = (agents ?? []).filter(
-    (a) => a.source === 'local' && a.protocol === 'a2a'
-  )
-
-  return (
-    <div className="space-y-3">
-      {localAgents.map((agent) => (
-        <AgentCard key={agent.id} agent={agent} />
-      ))}
-
-      {(agents ?? []).filter((agent) => agent.acpTransport === 'websocket').map((agent) => <RemoteAcpAgentCard key={agent.id} agent={agent} />)}
-      {showAcp && <CustomAgentModal remote onClose={() => setShowAcp(false)} />}
-      <button type="button" onClick={() => setShowAcp(true)} className="w-full rounded-lg border border-dashed border-[var(--color-border)] px-3 py-2.5 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text)]">Add remote ACP agent</button>
-      {showAdd ? (
-        <A2AAgentForm onClose={() => setShowAdd(false)} />
-      ) : (
-        <button
-          onClick={() => setShowAdd(true)}
-          className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg
-            border border-dashed border-[var(--color-border)] text-[14px]
-            text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)]
-            hover:border-[var(--color-text-muted)] transition-colors"
-        >
-          <Plus size={14} />
-          Add A2A Agent
-        </button>
-      )}
+function AgentVisibilityRow({ agent }: { agent: RemoteAgent }): React.JSX.Element {
+  const visibility = useAgentDesktopVisibility()
+  const [error, setError] = useState<string | null>(null)
+  return <div className="px-4 py-3">
+    <div className="flex items-center gap-3">
+      <AgentTypeIcon agent={agent} size={16} />
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-xs font-medium">{agent.name}</div>
+        <p className="mt-0.5 truncate text-[11px] text-[var(--color-text-muted)]">{agent.enabled ? agent.description || 'Shown in Desktop' : 'Hidden from Desktop'}</p>
+      </div>
+      {agent.enabled && <button type="button" className="text-xs text-[var(--color-text-muted)]" onClick={() => {
+        const ui = useUIStore.getState()
+        ui.setActiveExternalAgentId(agent.id)
+        ui.setAgentPageMode('settings')
+        ui.setSidebarTab('agents')
+        ui.setActiveView('external-agent')
+      }}>Settings</button>}
+      <button type="button" disabled={visibility.isPending}
+        aria-label={`${agent.enabled ? 'Disable' : 'Enable'} ${agent.name} in Desktop App`}
+        onClick={() => {
+          setError(null)
+          visibility.setVisible(agent, !agent.enabled, (err) => setError(unwrapIpcError(err, 'Could not update agent.')))
+        }}
+        className="min-w-16 rounded-md border border-[var(--color-border)] px-2.5 py-1.5 text-xs text-[var(--color-accent)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50">
+        {agent.enabled ? 'Disable' : 'Enable'}
+      </button>
     </div>
-  )
+    {error && <p role="alert" className="mt-2 text-xs text-[var(--color-danger)]">{error}</p>}
+  </div>
 }
 
-function ProfileAgentsSection(): React.JSX.Element {
+/** Remote agents synced from the active Cinna account. */
+export function AgentsSettingsSection(): React.JSX.Element {
   const { data: agents } = useAgents()
   const syncRemote = useSyncRemoteAgents()
   const syncStatus = useRemoteSyncStatus()
@@ -102,27 +64,17 @@ function ProfileAgentsSection(): React.JSX.Element {
     syncRemote.mutate()
   }
 
-  const remoteAgents = (agents ?? []).filter((a) => a.source === 'remote')
+  const remoteAgents = (agents ?? []).filter((agent) => agent.source === 'remote')
+  const groups = remoteAgents.length > 0
+    ? [{ label: serverLabel(currentUser?.cinnaServerUrl), agents: remoteAgents }]
+    : []
 
-  // Group remote agents by target type
-  const remoteByType = remoteAgents.reduce<Record<string, typeof remoteAgents>>((acc, a) => {
-    const key = a.remoteTargetType ?? 'agent'
-    ;(acc[key] ??= []).push(a)
-    return acc
-  }, {})
-  const remoteTypeOrder = ['agent', 'app_mcp_route', 'identity']
-
-  if (!isCinnaUser) {
-    return (
-      <div className="text-[14px] text-[var(--color-text-muted)]">
-        Remote agents are available when signed in to a Cinna account.
-      </div>
-    )
-  }
+  if (!isCinnaUser) return <p className="text-xs text-[var(--color-text-muted)]">Connect a Cinna profile to manage its agents.</p>
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-2">
+      <p className="mb-4 text-xs leading-relaxed text-[var(--color-text-muted)]">Choose which agents from this Cinna server appear in Desktop. Hidden agents stay here so you can enable them again.</p>
+      {isCinnaUser && <div className="flex items-center justify-between mb-2">
         <span className="text-[12px] text-[var(--color-text-muted)]">
           Synced from your Cinna account
         </span>
@@ -134,9 +86,9 @@ function ProfileAgentsSection(): React.JSX.Element {
           <RefreshCw size={10} className={syncRemote.isPending ? 'animate-spin' : ''} />
           {syncRemote.isPending ? 'Syncing...' : 'Sync'}
         </button>
-      </div>
+      </div>}
 
-      {syncStatus.error && (
+      {isCinnaUser && syncStatus.error && (
         <div
           className="flex items-start gap-2 px-2.5 py-2 mb-2 rounded-md
             border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10
@@ -170,67 +122,14 @@ function ProfileAgentsSection(): React.JSX.Element {
         </div>
       )}
 
-      {remoteAgents.length === 0 ? (
-        <div className="text-[12px] text-[var(--color-text-muted)] py-2">
-          No remote agents found. Click Sync to fetch from your Cinna account.
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {remoteTypeOrder
-            .filter((type) => remoteByType[type]?.length)
-            .map((type) => {
-              const rows = remoteByType[type]
-              // For target_type='agent' split into "Created by me" vs
-              // "Installed from catalog" so the user can see at a glance
-              // which agents originate from a bundle install.
-              if (type === 'agent') {
-                const own = rows.filter((a) => !isCatalogInstall(a))
-                const installed = rows.filter(isCatalogInstall)
-                return (
-                  <div key={type} className="space-y-3">
-                    <div className="text-[12px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
-                      {REMOTE_SECTION_LABELS[type]}
-                    </div>
-                    {own.length > 0 && (
-                      <div>
-                        <div className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
-                          Created by me
-                        </div>
-                        <div className="space-y-2">
-                          {own.map((agent) => (
-                            <AgentCard key={agent.id} agent={agent} />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                    {installed.length > 0 && (
-                      <div>
-                        <div className="text-[12px] font-medium text-[var(--color-text-secondary)] mb-1.5 pl-1">
-                          Installed from catalog ({installed.length})
-                        </div>
-                        <div className="space-y-2">
-                          {installed.map((agent) => (
-                            <AgentCard key={agent.id} agent={agent} />
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                )
-              }
-              return (
-                <div key={type}>
-                  <div className="text-[12px] font-medium text-[var(--color-text-muted)] mb-1.5 pl-1">
-                    {REMOTE_SECTION_LABELS[type] ?? type}
-                  </div>
-                  <div className="space-y-2">
-                    {rows.map((agent) => (
-                      <AgentCard key={agent.id} agent={agent} />
-                    ))}
-                  </div>
-                </div>
-              )
-            })}
+      {groups.length === 0 ? <p className="py-4 text-xs text-[var(--color-text-muted)]">No agents found on this Cinna server. Click Sync to refresh.</p> : (
+        <div className="space-y-4">
+          {groups.map((group) => <section key={group.label}>
+            <h2 className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">{group.label}</h2>
+            <div className="divide-y divide-[var(--color-border)] overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-bg-secondary)]">
+              {group.agents.map((agent) => <AgentVisibilityRow key={agent.id} agent={agent} />)}
+            </div>
+          </section>)}
         </div>
       )}
     </div>

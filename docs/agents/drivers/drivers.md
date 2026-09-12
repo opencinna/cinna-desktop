@@ -46,10 +46,10 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 2. The renderer asks for that agent's readiness again, without waiting for the answer
 3. If the answer changed, the push re-reads the list. The next send is then refused with the reason, instead of failing the same way
 
-### Settings → Agents
-1. A hand-added A2A agent's card has a status dot. It is green when the agent is on and not refused, the refusal's colour when it is refused, and muted when the agent is off
-2. When the card is expanded, the reason sits beside **Test Connection**, with a warning glyph for something the user can fix (a token, a login, an install) and a cross for an agent that cannot be reached or does not validate. A failed test does not replace it, because the test's raw error ("fetch failed") said less than the reason did. Only a passing test shows *Connected* in its place
-3. Pressing Test Connection also re-checks readiness, so the dot and the composer follow the test the user just ran. A switched-off agent shows no reason at all
+### Agent page → Settings → Connection
+1. Select a hand-added A2A agent in the Agents sidebar, open Settings, then Connection. The sidebar row and page header use type icons without readiness dots.
+2. The reason sits beside **Test Connection**, with a warning glyph for something the user can fix (a token, a login, an install) and a cross for an agent that cannot be reached or does not validate. A failed test does not replace it, because the test's raw error ("fetch failed") says less than the reason. Only a passing test shows *Connected* in its place.
+3. Pressing Test Connection also rechecks readiness so this message and the composer follow the test. A disabled agent has no readiness reason; old disabled direct connections have an enable-only recovery action in the page header.
 
 ### The example prompts
 1. On the new-chat screen, the example prompt tags of a refused single agent are dimmed and inert, with the reason as their tooltip
@@ -190,7 +190,7 @@ The LLM coordinator is separate: model adapters and chatStreamingService call MC
 - [The ACP Engine Contract](../local_agents/acp_contract.md) — what each engine actually does over this protocol
 - [`/run:<name>` — Catalog Commands](../local_agents/commands.md) — decided on `capabilities.commands`, and never refused on readiness
 - [Local Agent Permissions](../local_agents/permissions.md) — *Always allow* is written by the ACP driver's `respond`, before the park is settled
-- [Agents](../agents/agents.md) — the Settings → Agents card that shows readiness beside Test Connection
+- [Agents](../agents/agents.md) — the agent-page Connection section that shows readiness beside Test Connection
 - [Cinna Re-authentication](../../auth/cinna_accounts/reauthentication.md) — the flow the composer's Re-authenticate runs
 - [Orchestrated Agents](../../chat/orchestrated_agents/orchestrated_agents.md) — the agent tool goes through `driverFor` too, and is never refused on readiness
 - [Database Migrations](../../development/migrations/migrations_llm.md) — the legacy-only driver backfill and routing-mirror retirement
