@@ -1,10 +1,7 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
-import { UnauthorizedError } from '@modelcontextprotocol/sdk/client/auth.js'
+import { Client, SSEClientTransport, StreamableHTTPClientTransport, UnauthorizedError, InsufficientScopeError, isCallToolResult } from '@modelcontextprotocol/client'
+import { StdioClientTransport } from '@modelcontextprotocol/client/stdio'
 import { McpProviderConfig, McpTool, McpConnection } from './types'
-import { ElectronOAuthProvider, OAuthStoredState } from './oauth-provider'
+import { ElectronOAuthProvider, McpReauthorizationRequiredError, OAuthStoredState } from './oauth-provider'
 import { encryptApiKey, decryptApiKey } from '../security/keystore'
 import { mcpProviderRepo } from '../db/mcpProviders'
 import { createLogger } from '../logger/logger'
@@ -25,6 +22,7 @@ const logger = createLogger('MCP')
 type AnyTransport = StdioClientTransport | SSEClientTransport | StreamableHTTPClientTransport
 
 interface InternalConnection extends McpConnection {
+  generation: number
   client?: Client
   transport?: AnyTransport
   oauthProvider?: ElectronOAuthProvider
@@ -37,7 +35,8 @@ function broadcastStatusChange(providerId: string, status: string): void {
   }
 }
 
-class MCPManager {
+export class MCPManager {
+  private generations = new Map<string, number>()
   private connections = new Map<string, InternalConnection>()
   /** Tail of each provider's task queue — see `enqueue()`. */
   private queues = new Map<string, Promise<unknown>>()
@@ -85,6 +84,7 @@ class MCPManager {
     status: McpConnection['status'],
     error?: string
   ): void {
+    if (this.isSuperseded(providerId, connection)) return
     connection.status = status
     if (error !== undefined) {
       connection.error = error
@@ -105,7 +105,9 @@ class MCPManager {
    * the map.
    */
   private isSuperseded(providerId: string, connection: InternalConnection): boolean {
-    return this.connections.get(providerId) !== connection
+    const row = mcpProviderRepo.getOwned(connection.config.userId, providerId)
+    return this.connections.get(providerId) !== connection || this.generations.get(providerId) !== connection.generation ||
+      !row || row.configRevision !== connection.config.configRevision
   }
 
   /**
@@ -126,27 +128,48 @@ class MCPManager {
     } catch {
       // Already closing/closed — nothing to salvage.
     }
+    if (this.connections.get(providerId) === connection && this.isSuperseded(providerId, connection)) {
+      this.connections.delete(providerId)
+      broadcastStatusChange(providerId, 'disconnected')
+    }
     logger.debug(reason, { providerId, providerName: connection.config.name })
   }
 
-  async connect(config: McpProviderConfig): Promise<McpConnection> {
-    return this.enqueue(config.id, () => this._connect(config))
+  private invalidate(providerId: string): number {
+    const next = (this.generations.get(providerId) ?? 0) + 1
+    this.generations.set(providerId, next)
+    const old = this.connections.get(providerId)
+    old?.oauthProvider?.cleanup()
+    // Invalidate before queueing; pending SDK requests must not hold Disconnect
+    // behind an abandoned browser flow or write tokens over a replacement.
+    void old?.client?.close().catch(() => {})
+    return next
   }
 
-  private async _connect(config: McpProviderConfig): Promise<McpConnection> {
-    // Disconnect existing if any. Calls the unqueued form — we hold the queue.
+  private assertCurrent(connection: InternalConnection): void {
+    if (this.isSuperseded(connection.config.id, connection)) throw new Error('The MCP connection or configuration changed. Connect again.')
+  }
+
+  private createClient(config: McpProviderConfig): Client {
+    return new Client({ name: 'cinna-desktop', version: '0.1.0' }, {
+      capabilities: {},
+      versionNegotiation: { mode: config.transportType === 'streamable-http' ? 'auto' : 'legacy', probe: { timeoutMs: 10_000, maxRetries: 0 } }
+    })
+  }
+
+  async connect(config: McpProviderConfig): Promise<McpConnection> {
+    const generation = this.invalidate(config.id)
+    return this.enqueue(config.id, () => this._connect(config, generation))
+  }
+
+  private async _connect(config: McpProviderConfig, generation: number): Promise<McpConnection> {
+    if (this.generations.get(config.id) !== generation) return { config, tools: [], status: 'disconnected' }
     await this._disconnect(config.id)
-
-    const connection: InternalConnection = {
-      config,
-      tools: [],
-      status: 'disconnected'
-    }
-
-    /** Set once `connection` is in the map, i.e. once supersession is meaningful. */
-    let registered = false
-
+    const connection: InternalConnection = { config, generation, tools: [], status: 'disconnected' }
+    if (this.generations.get(config.id) !== generation) return this.toPublic(connection)
+    this.connections.set(config.id, connection)
     try {
+      this.assertCurrent(connection)
       let transport: AnyTransport
 
       if (config.transportType === 'stdio') {
@@ -177,6 +200,7 @@ class MCPManager {
           providerId: config.id,
           dropped: droppedChildEnvNames(shellEnv, config.env)
         })
+        this.assertCurrent(connection)
         transport = new StdioClientTransport({
           command: config.command,
           args: config.args ?? [],
@@ -199,7 +223,7 @@ class MCPManager {
         if (!config.url) throw new Error('URL is required for streamable-http transport')
 
         // Build OAuth provider for streamable-http (supports DCR)
-        const storedState: OAuthStoredState = {}
+        const storedState: OAuthStoredState = { discovery: config.oauthDiscoveryState }
 
         // Restore persisted tokens
         if (config.authTokensEncrypted) {
@@ -214,34 +238,30 @@ class MCPManager {
         // Restore persisted client info
         if (config.clientInfo) {
           storedState.clientInfo = config.clientInfo as
-            import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationMixed
+            import('@modelcontextprotocol/client').StoredOAuthClientInformation
         }
 
         const oauthProvider = new ElectronOAuthProvider(storedState, {
-          onTokens: (tokens) => this.persistTokens(config.id, tokens),
-          onClientInfo: (clientInfo) => this.persistClientInfo(config.id, clientInfo)
+          assertCurrent: () => this.assertCurrent(connection),
+          save: (patch) => this.persistOAuth(connection, patch)
         })
 
         // Prepare callback server before connecting
-        await oauthProvider.prepareForAuth()
-
         connection.oauthProvider = oauthProvider
+        await oauthProvider.prepareForAuth()
         transport = new StreamableHTTPClientTransport(new URL(config.url), {
-          authProvider: oauthProvider
+          authProvider: oauthProvider, onInsufficientScope: 'throw'
         })
       } else {
         throw new Error(`Unknown transport type: ${config.transportType}`)
       }
 
-      const client = new Client(
-        { name: 'cinna-desktop', version: '0.1.0' },
-        { capabilities: {} }
-      )
+      this.assertCurrent(connection)
+      const client = this.createClient(config)
 
       connection.client = client
       connection.transport = transport
       this.connections.set(config.id, connection)
-      registered = true
 
       try {
         await client.connect(transport)
@@ -260,14 +280,12 @@ class MCPManager {
           logger.info(`${config.name}: awaiting OAuth authorization...`)
 
           // Wait for the callback in the background
-          this.handleOAuthCallback(config.id).catch((authErr) => {
+          this.handleOAuthCallback(config.id).catch(async (authErr) => {
             if (this.isSuperseded(config.id, connection)) {
-              logger.debug('oauth flow superseded, ignoring failure', {
-                providerId: config.id,
-                providerName: config.name
-              })
+              await this.discardSuperseded(connection, 'oauth flow superseded, ignoring failure', config.id)
               return
             }
+            await this.discardSuperseded(connection, 'OAuth failed; closing connection', config.id)
             logger.error(`OAuth failed for ${config.name}`, authErr)
             this.setStatus(config.id, connection, 'error', `OAuth failed: ${String(authErr)}`)
           })
@@ -277,7 +295,8 @@ class MCPManager {
         throw err
       }
 
-      // Connected successfully (no auth needed, or tokens were valid)
+      // Connected successfully (no auth needed, or tokens were valid).
+      this.assertCurrent(connection)
       const tools = await this.listToolsFromClient(client, config.id)
       connection.tools = tools
 
@@ -303,11 +322,9 @@ class MCPManager {
       if (connection.oauthProvider) {
         connection.oauthProvider.cleanup()
       }
-      // Same supersession check as above — covers `listTools()` failing because
-      // a concurrent disconnect closed the client under us. `registered` keeps
-      // pre-registration failures (bad URL, missing bearer token — the map has
-      // no entry for us yet) out of this branch so they still surface.
-      if (registered && this.isSuperseded(config.id, connection)) {
+      // A concurrent disconnect or configuration edit may close this client
+      // while connect or listTools is still awaiting a response.
+      if (this.isSuperseded(config.id, connection)) {
         await this.discardSuperseded(
           connection,
           'connect superseded, ignoring failure',
@@ -315,6 +332,7 @@ class MCPManager {
         )
         return this.toPublic(connection)
       }
+      await this.discardSuperseded(connection, 'connect failed; closing connection', config.id)
       this.setStatus(config.id, connection, 'error', String(err))
       logger.error(`Connect failed for ${config.name}`, err)
       return this.toPublic(connection)
@@ -358,18 +376,18 @@ class MCPManager {
     // Create a fresh transport — the old one is already started and can't be reused
     const freshTransport = new StreamableHTTPClientTransport(
       new URL(conn.config.url!),
-      { authProvider: conn.oauthProvider }
+      { authProvider: conn.oauthProvider, onInsufficientScope: 'throw' }
     )
+    await conn.client?.close()
+    this.assertCurrent(conn)
     conn.transport = freshTransport
 
     // Now reconnect with a fresh client + transport
-    const client = new Client(
-      { name: 'cinna-desktop', version: '0.1.0' },
-      { capabilities: {} }
-    )
+    const client = this.createClient(conn.config)
     conn.client = client
 
     await client.connect(freshTransport)
+    this.assertCurrent(conn)
 
     const tools = await this.listToolsFromClient(client, providerId)
     conn.tools = tools
@@ -397,27 +415,13 @@ class MCPManager {
     }))
   }
 
-  private persistTokens(
-    providerId: string,
-    tokens: import('@modelcontextprotocol/sdk/shared/auth.js').OAuthTokens
-  ): void {
-    try {
-      const encrypted = encryptApiKey(JSON.stringify(tokens))
-      mcpProviderRepo.setAuthTokens(providerId, encrypted)
-    } catch (err) {
-      logger.error(`Failed to persist OAuth tokens for ${providerId}`, err)
-    }
-  }
-
-  private persistClientInfo(
-    providerId: string,
-    clientInfo: import('@modelcontextprotocol/sdk/shared/auth.js').OAuthClientInformationMixed
-  ): void {
-    try {
-      mcpProviderRepo.setClientInfo(providerId, clientInfo as Record<string, unknown>)
-    } catch (err) {
-      logger.error(`Failed to persist client info for ${providerId}`, err)
-    }
+  private persistOAuth(connection: InternalConnection, patch: Parameters<import('./oauth-provider').OAuthProviderCallbacks['save']>[0]): void {
+    this.assertCurrent(connection)
+    const stored: Parameters<typeof mcpProviderRepo.saveOAuthState>[3] = {}
+    if ('tokens' in patch) stored.authTokensEncrypted = patch.tokens ? encryptApiKey(JSON.stringify(patch.tokens)) : null
+    if ('clientInfo' in patch) stored.clientInfo = patch.clientInfo ?? null
+    if ('discovery' in patch) stored.oauthDiscoveryState = patch.discovery ?? null
+    mcpProviderRepo.saveOAuthState(connection.config.userId, connection.config.id, connection.config.configRevision, stored)
   }
 
   private toPublic(conn: InternalConnection): McpConnection {
@@ -430,6 +434,7 @@ class MCPManager {
   }
 
   async disconnect(providerId: string): Promise<void> {
+    this.invalidate(providerId)
     return this.enqueue(providerId, () => this._disconnect(providerId))
   }
 
@@ -466,9 +471,7 @@ class MCPManager {
     // behind after a teardown (quit, sign-out, profile switch). Its queued
     // disconnect runs once that connect registers.
     const ids = new Set([...this.connections.keys(), ...this.queues.keys()])
-    for (const id of ids) {
-      await this.disconnect(id)
-    }
+    await Promise.all([...ids].map((id) => this.disconnect(id)))
   }
 
   getConnection(providerId: string): McpConnection | undefined {
@@ -496,23 +499,30 @@ class MCPManager {
     providerId: string,
     toolName: string,
     input: Record<string, unknown>
-  ): Promise<unknown> {
+  ): Promise<{ content: unknown; isError?: boolean }> {
     const conn = this.connections.get(providerId)
-    if (!conn || !conn.client) {
+    if (!conn || !conn.client || conn.status !== 'connected') {
       throw new Error(`MCP provider ${providerId} not connected`)
     }
 
     const started = Date.now()
     try {
+      this.assertCurrent(conn)
       const result = await conn.client.callTool({ name: toolName, arguments: input })
+      this.assertCurrent(conn)
+      if (!isCallToolResult(result)) throw new Error('The MCP server returned an unsupported tool result.')
       logger.debug('tool ok', {
         providerId,
         providerName: conn.config.name,
         tool: toolName,
         duration: Date.now() - started
       })
-      return result.content
+      return { content: result.content, isError: result.isError }
     } catch (err) {
+      if (err instanceof UnauthorizedError || err instanceof InsufficientScopeError || err instanceof McpReauthorizationRequiredError || conn.oauthProvider?.hasPersistenceFailure()) {
+        await this.discardSuperseded(conn, 'Tool authorization failed; closing connection', providerId)
+        this.setStatus(providerId, conn, 'error', 'Authorization needs attention. Connect again in MCP settings.')
+      }
       logger.error('tool failed', {
         providerId,
         providerName: conn.config.name,

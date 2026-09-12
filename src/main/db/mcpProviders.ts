@@ -66,8 +66,16 @@ export const mcpProviderRepo = {
       }
 
       if (existing) {
+        const endpointChanged = existing.transportType !== input.transportType || existing.url !== (input.url ?? null) ||
+          existing.authType !== (input.authType ?? existing.authType)
+        const changed = endpointChanged || existing.command !== (input.command ?? null) ||
+          JSON.stringify(existing.args) !== JSON.stringify(input.args ?? null) ||
+          JSON.stringify(existing.env) !== JSON.stringify(input.env ?? null) ||
+          existing.enabled !== (input.enabled ?? existing.enabled) || input.bearerTokenEncrypted !== undefined
         tx.update(mcpProviders)
           .set({
+            configRevision: existing.configRevision + (changed ? 1 : 0),
+            ...(endpointChanged ? { authTokensEncrypted: null, clientInfo: null, oauthDiscoveryState: null } : {}),
             name: input.name,
             transportType: input.transportType,
             command: input.command ?? null,
@@ -123,24 +131,14 @@ export const mcpProviderRepo = {
     return result.changes > 0
   },
 
-  /**
-   * Persist OAuth tokens without an ownership check — called from the manager
-   * during the OAuth callback, which already holds the provider handle. Keeps
-   * the write isolated so the manager doesn't touch Drizzle directly.
-   */
-  setAuthTokens(id: string, encrypted: Buffer): void {
-    getDb()
-      .update(mcpProviders)
-      .set({ authTokensEncrypted: encrypted })
-      .where(eq(mcpProviders.id, id))
-      .run()
-  },
-
-  setClientInfo(id: string, clientInfo: Record<string, unknown>): void {
-    getDb()
-      .update(mcpProviders)
-      .set({ clientInfo })
-      .where(eq(mcpProviders.id, id))
-      .run()
+  /** Captured configuration ownership is checked atomically with every OAuth write. */
+  saveOAuthState(userId: string, id: string, configRevision: number, patch: {
+    authTokensEncrypted?: Buffer | null
+    clientInfo?: Record<string, unknown> | null
+    oauthDiscoveryState?: import('@modelcontextprotocol/client').OAuthDiscoveryState | null
+  }): void {
+    const result = getDb().update(mcpProviders).set(patch)
+      .where(and(eq(mcpProviders.id, id), eq(mcpProviders.userId, userId), eq(mcpProviders.configRevision, configRevision))).run()
+    if (result.changes !== 1) throw new Error('The MCP configuration changed. Connect again.')
   }
 }

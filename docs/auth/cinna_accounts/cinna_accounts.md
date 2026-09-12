@@ -89,7 +89,7 @@ Account Creation (Cinna):
   Step: cinna-waiting         discoverCinnaEndpoints()  ────→ GET /.well-known/cinna-desktop
                               startCinnaOAuthFlow()     ────→ shell.openExternal(authorizeUrl)
                                                              User logs in + authorizes
-                              waitForOAuthCallback()   ←──── Redirect to localhost with code+client_id
+                              startOAuthCallback(state) ←── Redirect to bound loopback with code+client_id
                               Exchange code for tokens  ────→ POST /oauth/token
                               fetchCinnaUserInfo()      ────→ GET userinfo_endpoint
                               Insert user row (email as username, server display name)
@@ -111,7 +111,7 @@ In-place re-authentication (when the user clicks "Re-authenticate" in any of the
 
 - **[User Accounts](../user_accounts/user_accounts.md)** — Cinna accounts are a user type; same login/switch/delete flows, same data isolation
 - **[Resource Activation](../../core/resource_activation/resource_activation.md)** — Cinna users go through the same activation gate; providers load on activate
-- **[MCP Connections](../../mcp/connections/connections.md)** — Reuses `oauth-callback.ts` (local HTTP callback server + `findAvailablePort()`) for the OAuth redirect
+- **[MCP Connections](../../mcp/connections/connections.md)** — Reuses `oauth-callback.ts` (state-bound loopback listener `startOAuthCallback(state)`) for the OAuth redirect
 - **[Token Lifecycle](./token_lifecycle.md)** — Refresh/rotation between login and re-auth, and the orphan-refresh safeguards (per-account dedup, suspend/resume timer pausing, foreground-only polling)
 - **[Re-authentication](./reauthentication.md)** — In-place token swap when the session expires; preserves all local data
 - **Future: Cinna server features** — `getCinnaAccessToken()` provides the authenticated access token for any future API calls to the Cinna server

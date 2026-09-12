@@ -29,6 +29,9 @@ function toAuthType(value: string | null, providerId: string): 'oauth' | 'bearer
 export function mcpRowToConfig(row: McpProviderRow): McpProviderConfig {
   return {
     id: row.id,
+    userId: row.userId,
+    configRevision: row.configRevision,
+    oauthDiscoveryState: row.oauthDiscoveryState ?? undefined,
     name: row.name,
     transportType: row.transportType as 'stdio' | 'sse' | 'streamable-http',
     command: row.command ?? undefined,

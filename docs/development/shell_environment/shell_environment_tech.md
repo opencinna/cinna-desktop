@@ -35,7 +35,7 @@ Constants: `SENTINEL`, `RESOLVE_TIMEOUT_MS`, `MAX_OUTPUT_BYTES`, `PROBE_COMMAND`
 - `findExecutable(bin, entries, isExecutable, options)` — first candidate the injected probe accepts, else `null`. The probe is injected so the walk is testable without touching disk
 
 ### `src/main/shell/envMerge.ts`
-- `CHILD_ENV_ALLOWLIST` — `DEFAULT_INHERITED_ENV_VARS` (imported from `@modelcontextprotocol/sdk/client/stdio.js`, never copied) plus `EXTRA_INHERITED_ENV_VARS`
+- `CHILD_ENV_ALLOWLIST` — `DEFAULT_INHERITED_ENV_VARS` (imported from `@modelcontextprotocol/client/stdio`, never copied) plus `EXTRA_INHERITED_ENV_VARS`
 - `SESSION_ENV_VARS` — `SSH_AUTH_SOCK`, `DISPLAY`, `WAYLAND_DISPLAY`, `XAUTHORITY`, `DBUS_SESSION_BUS_ADDRESS`, `TMPDIR`
 - `WINDOWS_EXTRA_ENV_VARS` — `['PATHEXT']` on win32, empty elsewhere. Kept a separate constant because its justification is *not* the session group's
 - `REGRESSION_ONLY_ENV_VARS` — `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, `ALL_PROXY`, their lowercase forms, and `NODE_EXTRA_CA_CERTS`. **Not** part of `CHILD_ENV_ALLOWLIST` — they are applied in a second pass from a different source

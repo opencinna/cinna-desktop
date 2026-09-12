@@ -105,7 +105,6 @@ export class McpToolProvider implements ToolProvider {
     name: string,
     input: Record<string, unknown>
   ): Promise<ToolExecutionResult> {
-    const content = await mcpManager.callTool(this.providerId, name, input)
-    return { content }
+    return mcpManager.callTool(this.providerId, name, input)
   }
 }

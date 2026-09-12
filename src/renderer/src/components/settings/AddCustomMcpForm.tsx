@@ -102,7 +102,7 @@ export function AddCustomMcpForm({ onClose }: { onClose: () => void }): React.JS
         <button
           onClick={handleConnect}
           disabled={!canConnect || upsertMcp.isPending}
-          className="px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
+          className="min-w-[120px] px-3 py-1.5 rounded-md text-[14px] font-medium bg-[var(--color-accent)] hover:bg-[var(--color-accent-hover)] text-white transition-colors disabled:opacity-50"
         >
           {upsertMcp.isPending ? 'Connecting...' : 'Connect'}
         </button>

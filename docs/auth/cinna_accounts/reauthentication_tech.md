@@ -101,7 +101,7 @@ The handler returns the standard `{success, error}` discriminated union so rende
 ## Configuration
 
 - No new env vars, settings, or `app:set-theme`-style toggles. Behavior is fully driven by `users` row state
-- OAuth flow timing / abort handling is inherited from `cinna-oauth.ts` — re-auth uses the same browser callback infrastructure (`waitForOAuthCallback`, `findAvailablePort`) as initial registration
+- OAuth flow timing / abort handling is inherited from `cinna-oauth.ts` — re-auth uses the same browser callback infrastructure (`startOAuthCallback(state)`, with its already-bound loopback URL) as initial registration
 
 ## Security
 

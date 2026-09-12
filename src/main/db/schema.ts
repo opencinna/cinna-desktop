@@ -103,6 +103,8 @@ export const mcpProviders = sqliteTable('mcp_providers', {
   enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
   authTokensEncrypted: blob('auth_tokens_enc', { mode: 'buffer' }),
   clientInfo: text('client_info', { mode: 'json' }).$type<Record<string, unknown>>(),
+  oauthDiscoveryState: text('oauth_discovery_state', { mode: 'json' }).$type<import('@modelcontextprotocol/client').OAuthDiscoveryState>(),
+  configRevision: integer('config_revision').notNull().default(0),
   /**
    * How a remote (sse / streamable-http) server authenticates: `'oauth'` (DCR,
    * the historic default — also covers servers needing no auth at all, since

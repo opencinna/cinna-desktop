@@ -1,5 +1,7 @@
 export interface McpProviderConfig {
   id: string
+  userId: string
+  configRevision: number
   name: string
   transportType: 'stdio' | 'sse' | 'streamable-http'
   command?: string
@@ -17,6 +19,7 @@ export interface McpProviderConfig {
   authTokensEncrypted?: Buffer
   /** DCR client registration info (from DB) */
   clientInfo?: Record<string, unknown>
+  oauthDiscoveryState?: import('@modelcontextprotocol/client').OAuthDiscoveryState
   /** Encrypted static bearer token (from DB), used when `authType === 'bearer'` */
   bearerTokenEncrypted?: Buffer
 }

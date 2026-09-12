@@ -8,9 +8,9 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 
 - **MCP Provider** — A configured MCP server (persisted in DB) with transport type, connection details, and optional auth (OAuth tokens or a bearer token)
 - **MCP Connection** — A live client session to an MCP server, held in memory by MCPManager
-- **Transport** — How the client communicates: `stdio` (local process), `sse` (Server-Sent Events), or `streamable-http` (bidirectional HTTP)
+- **Transport** — How the client communicates: `stdio` (local process), `sse` (deprecated legacy Server-Sent Events), or `streamable-http` (the default for new remote servers)
 - **Tool** — A capability exposed by an MCP server (name, description, input schema), aggregated and passed to LLM adapters
-- **Auth Type** (`authType`) — How a remote (`sse`/`streamable-http`) server authenticates: `'oauth'` (DCR, the default — also covers servers needing no auth, since the OAuth-capable transport just never hits a 401) or `'bearer'` (a static token the user pastes in). Unused for `stdio`
+- **Auth Type** (`authType`) — How a remote (`sse`/`streamable-http`) server authenticates: `'oauth'` (DCR, the default — also covers servers needing no auth, since the OAuth-capable transport just never hits a 401) or `'bearer'` (a static token the user pastes in). Unused for `stdio`; legacy SSE supports a static bearer header or an unauthenticated connection, without the native OAuth flow
 - **OAuth DCR** — Dynamic Client Registration (RFC 7591) used for authenticating with remote MCP servers when `authType: 'oauth'`
 - **Bearer Token** — A static, user-supplied access token sent as `Authorization: Bearer <token>` on every request, for servers that don't support DCR. No browser round-trip, no `awaiting-auth` state — set once and it's used immediately, encrypted at rest like other credentials
 - **Registry** — A public catalog of MCP servers the user can browse to discover and one-click install — see [Registries](../registries/registries.md)
@@ -29,7 +29,7 @@ Manage connections to MCP (Model Context Protocol) servers — local stdio proce
 1. User clicks "Add Custom MCP", enters name and URL, and picks an authentication mode: **OAuth** (default) or **Bearer Token**
 2. **OAuth**: saves; system attempts connection. If the server requires OAuth, status becomes `awaiting-auth`, browser opens for authorization. After the user authorizes in browser, the OAuth callback completes, tokens are encrypted and persisted, and the connection resumes with the authenticated transport
 3. **Bearer Token**: user also pastes the server's access token. It's encrypted (`safeStorage`) and persisted immediately; the connection is made synchronously with an `Authorization: Bearer <token>` header — no browser round-trip, no `awaiting-auth` state
-4. Tools are listed once connected
+4. Tools are listed once connected. A connection failure leaves the saved provider available with its error and Reconnect action; it does not lose the server configuration.
 
 ### Editing an existing remote server's auth
 
@@ -52,13 +52,13 @@ See [MCP Registries](../registries/registries.md). The Connect button in the pic
 - The active auth mode is resolved from the provider's persisted config on **every** connect, including the automatic one at activation. A bearer-token server therefore never opens a browser at any point in its lifecycle — if one appears, the auth mode was lost on the way to the connection layer
 - On app quit, all connections are cleanly disconnected
 - OAuth tokens are encrypted via `safeStorage` and persisted; if still valid on next launch, no browser auth needed
-- DCR client info (client_id, client_secret) is persisted separately so re-registration isn't needed
+- Native public-client registration and discovered issuer metadata are persisted separately. The SDK can reuse valid registration and refresh tokens while checking they belong to the discovered authorization server
 - The OAuth redirect uses a temporary local HTTP server on `127.0.0.1` with a random port; redirect_uri changes each auth flow (DCR handles this automatically)
-- The callback server shuts down after receiving the callback or after a 2-minute timeout
+- The callback listener binds its OS-selected loopback port before publishing the redirect URL. It accepts only its exact GET path/Host and one matching state, rejects duplicate state/code/issuer parameters, and closes after the callback, cancellation or a 2-minute timeout. The browser page says to return to Cinna; it does not claim authorization succeeded before token exchange
 - Bearer tokens are encrypted via the same `safeStorage`-backed `encryptApiKey`/`decryptApiKey` helpers as OAuth tokens and API keys, stored in `mcp_providers.bearer_token_enc`
 - `authType` defaults to `'oauth'` for every provider (including pre-existing rows migrated forward and registry-installed providers) — Bearer Token is opt-in per server
 - A bearer-token connection never enters `awaiting-auth`: the token is static and known up front, so `client.connect()` either succeeds or fails straight to `error` (e.g. wrong/expired token → 401 surfaces as a connect error, not a re-auth prompt)
-- Switching a provider's `authType` doesn't clear the other auth mode's stored credentials (OAuth tokens/client info survive a switch to Bearer and vice versa) — harmless since the manager only reads the credential matching the active `authType`
+- Changing a provider's URL, transport or auth mode clears its stored OAuth tokens, client registration and discovery state. Credentials tied to one endpoint must not be reused at another. Renaming preserves them; bearer tokens retain their separate write-only, omit-to-preserve semantics.
 
 ### Stdio Environment
 
@@ -84,8 +84,17 @@ Also:
 - **The `env` map is the answer to "my server needs variable X".** It is a per-variable, per-server, explicit opt-in — deliberately not a global toggle
 - **The diagnostic**: on every stdio connect a debug log line names the variables the old behaviour would have passed and this rule drops. **Names only, never values.** When a server stops working for a reason that looks unrelated, that line is the one-minute diagnosis — see [Logger](../../development/logger/logger.md), scope `MCP`
 
+### Protocol negotiation and tool results
+
+- Streamable HTTP uses the SDK's automatic modern/legacy negotiation, including the fresh connection after OAuth. Discovery is bounded to 10 seconds with zero probe retries. A legacy method-not-found response can fall back to initialization; authentication errors, permission errors and server failures do not silently select another protocol.
+- Legacy SSE and stdio use legacy negotiation explicitly. SSE remains usable and is labelled **SSE (deprecated)** in the transport selector on a stdio card; selecting it switches that editor to URL/auth fields. Existing remote cards do not expose this selector.
+- Client ID Metadata Documents (CIMD) are unconfigured: no hosted native-client metadata URL is supplied or owned by this app. Dynamic Client Registration remains the implemented authorization flow.
+- Tool-level `isError` stays attached to the returned content. Deferred or other unsupported result shapes are rejected instead of being reported as successful empty output. MCP Tasks/resume support is not implemented here: the required official SDK lifecycle is unavailable for this conditional slice. The client advertises neither Tasks nor elicitation and starts no Tasks poller.
+- If a connected tool needs new authorization or broader scope, its connection fails with **Authorization needs attention. Connect again in MCP settings.** A tool call does not silently open a new browser flow or grant more scope.
+
 ### Connection Lifecycle & Concurrency
 
+- **Ownership survives every await.** Each connect/disconnect advances a generation before joining the per-provider queue. OAuth writes also require the captured user, provider and configuration revision in the database. A replaced or deleted configuration cannot receive late tokens, tools or status. Failed credential persistence remains fatal to that connection instead of being swallowed and retried as a new browser authorization.
 - **One live connection per provider.** Connect and disconnect requests for the same provider are serialized, so they never overlap — a double-clicked Reconnect, or a re-activation landing mid-handshake, cannot leave two live sessions behind. Different providers connect concurrently
 - **A superseded attempt is discarded silently.** When a newer connect or a disconnect replaces an attempt that is still waiting on the network, the abandoned attempt closes its own session and reports nothing: it does not set `error`, and it does not overwrite the surviving attempt's status. Only the surviving attempt reports. Users should never see a transient failure caused purely by an internal reconnect
 - **Genuine failures still surface.** Config errors that fail before a connection is established (missing URL, missing bearer token) and real network/auth failures always report `error` with the underlying message
@@ -115,16 +124,12 @@ Chat flow:
 
 ## OAuth DCR Flow (Remote Servers)
 
-1. MCPManager creates `ElectronOAuthProvider` and passes it to `StreamableHTTPClientTransport`
-2. On 401, SDK transport performs Dynamic Client Registration (RFC 7591)
-3. Provider opens system browser to the authorization URL via `shell.openExternal()`
-4. Temporary local HTTP server listens for the redirect callback
-5. Browser redirects to `http://127.0.0.1:{port}/oauth/callback?code=...`
-6. Callback server extracts code, displays success page, shuts down
-7. `transport.finishAuth(code)` exchanges code for tokens (PKCE throughout)
-8. Fresh Client reconnects through authenticated transport
-9. Tokens encrypted and persisted to `mcp_providers.auth_tokens_enc`
-10. DCR client info persisted to `mcp_providers.client_info`
+1. MCPManager creates `ElectronOAuthProvider` for Streamable HTTP with stored SDK token, registration and discovery state.
+2. The native public client declares `application_type: native` and `token_endpoint_auth_method: none`; a bound loopback listener and random state exist before authorization starts.
+3. The SDK handles authorization-server discovery, issuer checks, registration, PKCE and token refresh. Browser authorization opens through `shell.openExternal()` when needed during connection.
+4. The listener validates the callback and preserves its complete query parameters, including issuer and OAuth error fields, for `transport.finishAuth(searchParams)`.
+5. Token exchange and durable token/registration/discovery writes must still belong to the same configuration and live attempt. The in-memory state changes only after persistence succeeds.
+6. A fresh client and transport reconnect with the same automatic HTTP negotiation and list tools. Only then does the app report connected; the callback listener and verifier are cleared. A consumed or expired listener cannot start another authorization; a new connection is required.
 
 The flow is abandoned — with the connection left untouched — if the user disconnects the provider, signs out, or switches profile while the browser step is pending, or if the callback doesn't arrive within 2 minutes.
 

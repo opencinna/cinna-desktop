@@ -171,7 +171,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
               <label className="block text-[12px] text-[var(--color-text-muted)] mb-0.5">Transport</label>
               <select value={transportType} onChange={(e) => setTransportType(e.target.value)} className={inputClass}>
                 <option value="stdio">stdio</option>
-                <option value="sse">SSE</option>
+                <option value="sse">SSE (deprecated)</option>
                 <option value="streamable-http">Streamable HTTP</option>
               </select>
             </div>
@@ -257,7 +257,7 @@ export function MCPProviderCard({ provider }: MCPProviderCardProps): React.JSX.E
               <button
                 onClick={handleReconnect}
                 disabled={connectMcp.isPending}
-                className="px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
+                className="min-w-[120px] px-3 py-1.5 rounded-md text-[14px] font-medium border border-[var(--color-border)] text-[var(--color-text-muted)] hover:text-[var(--color-text)] transition-colors disabled:opacity-50"
               >
                 {connectMcp.isPending ? 'Connecting...' : 'Reconnect'}
               </button>

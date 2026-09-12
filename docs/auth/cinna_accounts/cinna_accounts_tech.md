@@ -15,7 +15,7 @@
 | IPC | `src/main/ipc/auth.ipc.ts` | Thin `auth:register` handler delegates to `authService.registerCinna()`; `auth:cinna-oauth-abort` calls `abortCinnaOAuthFlow()` |
 | Errors | `src/main/errors.ts` | `AuthError` with codes including `oauth_failed`, `missing_server_url` |
 | Keystore | `src/main/security/keystore.ts` | `encryptApiKey`/`decryptApiKey` — reused for Cinna tokens |
-| Callback | `src/main/mcp/oauth-callback.ts` | Reused `findAvailablePort()` + `waitForOAuthCallback()` — extended with `params` map |
+| Callback | `src/main/mcp/oauth-callback.ts` | Shared `startOAuthCallback(state)` binds before returning its redirect URL; validates state and preserves the `params` map, including `client_id` |
 
 ### Preload
 

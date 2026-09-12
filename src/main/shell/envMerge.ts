@@ -1,4 +1,4 @@
-import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/sdk/client/stdio.js'
+import { DEFAULT_INHERITED_ENV_VARS } from '@modelcontextprotocol/client/stdio'
 
 /**
  * Environment merging and narrowing, kept in its own Electron-free module so

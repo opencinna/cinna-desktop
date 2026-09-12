@@ -2,7 +2,7 @@ import crypto from 'node:crypto'
 import { shell, net } from 'electron'
 import os from 'node:os'
 import { app } from 'electron'
-import { findAvailablePort, waitForOAuthCallback } from '../mcp/oauth-callback'
+import { startOAuthCallback } from '../mcp/oauth-callback'
 import { createLogger } from '../logger/logger'
 import type { CinnaLocalDev } from '../../shared/localDevState'
 
@@ -122,15 +122,11 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
   logger.info(`Starting OAuth flow against ${serverUrl}`)
   const endpoints = await discoverCinnaEndpoints(serverUrl)
 
-  const port = await findAvailablePort()
-  const redirectUri = `http://127.0.0.1:${port}/oauth/callback`
-  logger.debug(`Local callback listening on port ${port}`)
-
   const codeVerifier = generateCodeVerifier()
   const codeChallenge = generateCodeChallenge(codeVerifier)
   const state = generateState()
 
-  const { promise, abort } = waitForOAuthCallback(port)
+  const { promise, abort, redirectUrl: redirectUri } = await startOAuthCallback(state)
   activeAbort = abort
 
   // Suppress unhandled rejection if abort fires before anyone awaits
@@ -148,16 +144,16 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
 
   const authorizeUrl = `${endpoints.authorization_endpoint}?${params.toString()}`
   logger.info('Opening browser for authorization', { authorizeUrl })
-  await shell.openExternal(authorizeUrl)
-
   let result: Awaited<typeof promise>
   try {
+    await shell.openExternal(authorizeUrl)
     result = await promise
     logger.debug('Received OAuth callback', { hasCode: !!result.code, state: result.state })
   } catch (err) {
     logger.error('OAuth callback failed or was aborted', { error: String(err) })
     throw err
   } finally {
+    abort()
     activeAbort = undefined
   }
 
@@ -166,6 +162,8 @@ export async function startCinnaOAuthFlow(serverUrl: string): Promise<CinnaOAuth
     logger.error('OAuth state mismatch', { expected: state, got: result.state })
     throw new Error('OAuth state mismatch — possible CSRF attack')
   }
+
+  if (result.params.error || !result.code) throw new Error('Cinna authorization was not completed.')
 
   // Server includes client_id as an extra query parameter in the callback URL
   const clientId = result.params.client_id

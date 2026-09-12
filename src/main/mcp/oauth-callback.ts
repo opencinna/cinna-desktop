@@ -1,120 +1,72 @@
 import http from 'node:http'
-import { URL } from 'node:url'
 
-const SUCCESS_HTML = `<!DOCTYPE html>
-<html><head><title>Authorization Complete</title>
-<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f0f0f;color:#e0e0e0}
-.box{text-align:center}.check{font-size:48px;margin-bottom:16px}h1{font-size:20px;margin:0 0 8px}p{color:#999;font-size:14px}</style>
-</head><body><div class="box"><div class="check">&#10003;</div><h1>Authorization successful</h1><p>You can close this tab and return to Cinna.</p></div></body></html>`
-
-const ERROR_HTML = (msg: string): string => `<!DOCTYPE html>
-<html><head><title>Authorization Failed</title>
-<style>body{font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f0f0f;color:#e0e0e0}
-.box{text-align:center}h1{font-size:20px;margin:0 0 8px;color:#ef4444}p{color:#999;font-size:14px}</style>
-</head><body><div class="box"><h1>Authorization failed</h1><p>${msg}</p></div></body></html>`
+const CALLBACK_HTML = `<!DOCTYPE html><html><head><title>Return to Cinna</title></head>
+<body><h1>Return to Cinna</h1><p>Continue in the app to check the authorization result. You can close this tab.</p></body></html>`
 
 export interface OAuthCallbackResult {
   code: string
-  state?: string
-  /** All query parameters from the callback URL (for extracting extra data like client_id) */
+  state: string
   params: Record<string, string>
+  /** Preserve issuer and all callback parameters for the SDK's validation. */
+  searchParams: URLSearchParams
 }
-
-/**
- * Starts a temporary local HTTP server to receive the OAuth authorization callback.
- * Returns a promise that resolves with the auth code when the callback is received.
- * The server is automatically shut down after receiving the callback or on timeout.
- */
-export function waitForOAuthCallback(port: number, timeoutMs = 120_000): {
+export interface OAuthCallbackListener {
   promise: Promise<OAuthCallbackResult>
   redirectUrl: string
   abort: () => void
-} {
-  let resolve: (result: OAuthCallbackResult) => void
-  let reject: (err: Error) => void
-  const promise = new Promise<OAuthCallbackResult>((res, rej) => {
-    resolve = res
-    reject = rej
-  })
-
-  const server = http.createServer((req, res) => {
-    const url = new URL(req.url ?? '/', `http://127.0.0.1:${port}`)
-
-    if (url.pathname !== '/oauth/callback') {
-      res.writeHead(404)
-      res.end('Not found')
-      return
-    }
-
-    const code = url.searchParams.get('code')
-    const error = url.searchParams.get('error')
-    const errorDescription = url.searchParams.get('error_description')
-    const state = url.searchParams.get('state') ?? undefined
-
-    if (error) {
-      res.writeHead(400, { 'Content-Type': 'text/html' })
-      res.end(ERROR_HTML(errorDescription || error))
-      cleanup()
-      reject(new Error(`OAuth error: ${error} - ${errorDescription || ''}`))
-      return
-    }
-
-    if (!code) {
-      res.writeHead(400, { 'Content-Type': 'text/html' })
-      res.end(ERROR_HTML('Missing authorization code'))
-      cleanup()
-      reject(new Error('OAuth callback missing authorization code'))
-      return
-    }
-
-    const params: Record<string, string> = {}
-    for (const [k, v] of url.searchParams.entries()) {
-      params[k] = v
-    }
-
-    res.writeHead(200, { 'Content-Type': 'text/html' })
-    res.end(SUCCESS_HTML)
-    cleanup()
-    resolve({ code, state, params })
-  })
-
-  const timeout = setTimeout(() => {
-    cleanup()
-    reject(new Error('OAuth callback timed out'))
-  }, timeoutMs)
-
-  function cleanup(): void {
-    clearTimeout(timeout)
-    server.close()
-  }
-
-  server.listen(port, '127.0.0.1')
-
-  return {
-    promise,
-    redirectUrl: `http://127.0.0.1:${port}/oauth/callback`,
-    abort: () => {
-      cleanup()
-      reject(new Error('OAuth flow aborted'))
-    }
-  }
+  isPending: () => boolean
 }
 
-/**
- * Find an available port for the OAuth callback server.
- */
-export function findAvailablePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = http.createServer()
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address()
-      if (addr && typeof addr === 'object') {
-        const port = addr.port
-        server.close(() => resolve(port))
-      } else {
-        server.close(() => reject(new Error('Could not find available port')))
-      }
+/** Bind once to an OS-selected loopback port before handing out its redirect URL. */
+export async function startOAuthCallback(expectedState: string, timeoutMs = 120_000): Promise<OAuthCallbackListener> {
+  let resolve!: (result: OAuthCallbackResult) => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<OAuthCallbackResult>((yes, no) => { resolve = yes; reject = no })
+  // Cleanup can precede the caller awaiting authorization (e.g. a public MCP server).
+  void promise.catch(() => {})
+  let settled = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let redirectUrl = ''
+  const finish = (error?: Error, result?: OAuthCallbackResult): void => {
+    if (settled) return
+    settled = true
+    clearTimeout(timer)
+    server.close()
+    server.closeAllConnections()
+    if (error) reject(error)
+    else if (result) resolve(result)
+  }
+  const server = http.createServer((req, res) => {
+    let url: URL
+    try { url = new URL(req.url ?? '/', redirectUrl) } catch {
+      res.writeHead(400); res.end('Invalid request'); return
+    }
+    if (req.method !== 'GET' || url.pathname !== '/oauth/callback' || req.headers.host !== new URL(redirectUrl).host) {
+      res.writeHead(404); res.end('Not found'); return
+    }
+    const params = url.searchParams
+    const valid = params.getAll('state').length === 1 && params.get('state') === expectedState &&
+      params.getAll('code').length <= 1 && params.getAll('iss').length <= 1
+    res.writeHead(valid ? 200 : 400, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store',
+      'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'" })
+    // No callback-controlled HTML and no success claim before token exchange.
+    res.end(CALLBACK_HTML, () => {
+      if (!valid) { finish(new Error('OAuth callback state or parameters did not match this connection.')); return }
+      finish(undefined, { code: params.get('code') ?? '', state: expectedState,
+        params: Object.fromEntries(params), searchParams: new URLSearchParams(params) })
     })
-    server.on('error', reject)
   })
+  await new Promise<void>((yes, no) => {
+    server.once('error', no)
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', no)
+      const address = server.address()
+      if (!address || typeof address === 'string') { server.close(); no(new Error('Could not bind OAuth callback')); return }
+      redirectUrl = `http://127.0.0.1:${address.port}/oauth/callback`
+      yes()
+    })
+  })
+  server.on('error', (error) => finish(error))
+  timer = setTimeout(() => finish(new Error('OAuth callback timed out')), timeoutMs)
+  return { promise, redirectUrl, isPending: () => !settled, abort: () => finish(new Error('OAuth flow aborted')) }
 }
