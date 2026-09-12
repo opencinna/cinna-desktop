@@ -113,7 +113,7 @@ Emitted from `chatTitleService` via `getMainWindow().webContents.send(CHAT_TITLE
 
 ## Renderer Components
 
-- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — Single section ("AI Functions") with one switch. Consumes `useAppSettings` for the current value, `useSetAppSetting` for writes (optimistic, with rollback). Shows an inline error message in `--color-danger` if the initial load fails.
+- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — The toggle is the first `SettingsToggleRow` in the "AI Functions" section, with its description behind the (?). Consumes `useAppSettings` for the current value, `useSetAppSetting` for writes (optimistic, with rollback). A failed initial load is reported once for the whole tab, in `--color-danger` as its last row, not under this toggle.
 - `src/renderer/src/components/layout/Sidebar.tsx` — New menu entry (`Sparkles` icon, label "Features"). No special scoping — Default group, between `accounts` and `development`.
 - `src/renderer/src/components/settings/SettingsPage.tsx` — `sectionTitles.features = 'Features'`; dispatches `<FeaturesSettingsSection key="features" />` when `settingsTab === 'features'`.
 

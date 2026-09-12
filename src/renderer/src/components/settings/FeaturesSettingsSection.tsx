@@ -1,5 +1,12 @@
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
+import {
+  SettingsButton,
+  SettingsRow,
+  SettingsRows,
+  SettingsSection,
+  SettingsToggleRow
+} from './SettingsLayout'
 
 /**
  * Features tab — opt-in toggles grouped by domain:
@@ -9,6 +16,12 @@ import { useHintsStore, hasHintProgress } from '../../stores/hints.store'
  *
  * All settings live in the installation-global `app_settings` KV store and
  * are read by the corresponding main-process feature service.
+ *
+ * **One `SettingsRows` list per section, one line per toggle.** Each toggle
+ * was its own bordered card with a paragraph under its label; a row that is
+ * only a label and a switch is a one-liner, and the paragraph is standing
+ * explanation, which lives behind the `(?)` beside the label rather than on
+ * the surface (ux_rules rule 12).
  */
 export function FeaturesSettingsSection(): React.JSX.Element {
   const { data: settings, isLoading, isError } = useAppSettings()
@@ -52,149 +65,89 @@ export function FeaturesSettingsSection(): React.JSX.Element {
 
   return (
     <div className="space-y-6">
-      <section>
-        <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-          AI Functions
-        </h2>
-        <div className="space-y-3">
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-            <ToggleRow
-              label="Auto-generate chat titles"
-              description="Generates a short title from your first message in a new chat. Uses your default chat mode’s AI credentials — consumes tokens."
-              checked={autoChatTitles}
-              disabled={disabled}
-              onToggle={toggleAutoChatTitles}
-              title={
-                autoChatTitles
-                  ? 'New chats will get a generated title from your first message'
-                  : 'Chats will keep the default "New Chat" name'
-              }
-              showError={isError}
-            />
-          </div>
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-            <ToggleRow
-              label="Prioritize ‘Account’ defaults over default profile"
-              description="When you’re signed in to a Cinna account, use the account’s default chat mode as the one that auto-applies on new chats — overriding your local default. Off by default: your local default wins, and the account default only applies when you have none."
-              checked={prioritizeAccountDefaults}
-              disabled={disabled}
-              onToggle={togglePrioritizeAccountDefaults}
-              title={
-                prioritizeAccountDefaults
-                  ? 'Account default chat mode takes precedence over your local default'
-                  : 'Your local default chat mode takes precedence'
-              }
-              showError={isError}
-            />
-          </div>
-        </div>
-      </section>
+      <SettingsSection title="AI Functions">
+        <SettingsRows>
+          <SettingsToggleRow
+            id="feature-auto-chat-titles"
+            label="Auto-generate chat titles"
+            description="Generates a short title from your first message in a new chat. Uses your default chat mode’s AI credentials — consumes tokens."
+            checked={autoChatTitles}
+            disabled={disabled}
+            onToggle={toggleAutoChatTitles}
+            title={
+              autoChatTitles
+                ? 'New chats will get a generated title from your first message'
+                : 'Chats will keep the default "New Chat" name'
+            }
+          />
+          <SettingsToggleRow
+            id="feature-prioritize-account-defaults"
+            label="Prioritize ‘Account’ defaults over default profile"
+            description="When you’re signed in to a Cinna account, use the account’s default chat mode as the one that auto-applies on new chats — overriding your local default. Off by default: your local default wins, and the account default only applies when you have none."
+            checked={prioritizeAccountDefaults}
+            disabled={disabled}
+            onToggle={togglePrioritizeAccountDefaults}
+            title={
+              prioritizeAccountDefaults
+                ? 'Account default chat mode takes precedence over your local default'
+                : 'Your local default chat mode takes precedence'
+            }
+          />
+        </SettingsRows>
+      </SettingsSection>
 
-      <section>
-        <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-          Interface
-        </h2>
-        <div className="space-y-3">
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-            <ToggleRow
-              label="Enable Tray Icon"
-              description="Show the menu-bar icon for agent status at a glance. Turn off to hide it without quitting the app."
-              checked={enableTrayIcon}
-              disabled={disabled}
-              onToggle={toggleEnableTrayIcon}
-              title={
-                enableTrayIcon ? 'Menu-bar tray icon is visible' : 'Menu-bar tray icon is hidden'
-              }
-              showError={isError}
-            />
-          </div>
-          <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-bg)] p-4">
-            <ToggleRow
-              label="Show hints"
-              description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
-              checked={showHints}
-              disabled={disabled}
-              onToggle={toggleShowHints}
-              title={showHints ? 'Hints are shown on the new-chat screen' : 'Hints are hidden'}
-              showError={isError}
-            />
-            {showHints && (
-              <div className="mt-3 pt-3 border-t border-[var(--color-border)] flex items-center justify-between gap-3">
-                <div className="text-[13px] text-[var(--color-text-muted)]">
-                  {canResetHints
-                    ? 'Some hints have stopped appearing because you’ve used what they teach.'
-                    : 'No hints have been retired yet.'}
-                </div>
-                <button
-                  type="button"
-                  onClick={resetHints}
-                  disabled={!canResetHints}
-                  className={`shrink-0 text-[13px] px-2.5 py-1 rounded-md border transition-colors ${
-                    canResetHints
-                      ? 'border-[var(--color-border)] text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] cursor-pointer'
-                      : 'border-[var(--color-border)] text-[var(--color-text-muted)] opacity-50 cursor-not-allowed'
-                  }`}
-                >
-                  Reset hints
-                </button>
+      <SettingsSection title="Interface">
+        <SettingsRows>
+          <SettingsToggleRow
+            id="feature-enable-tray-icon"
+            label="Enable Tray Icon"
+            description="Show the menu-bar icon for agent status at a glance. Turn off to hide it without quitting the app."
+            checked={enableTrayIcon}
+            disabled={disabled}
+            onToggle={toggleEnableTrayIcon}
+            title={
+              enableTrayIcon ? 'Menu-bar tray icon is visible' : 'Menu-bar tray icon is hidden'
+            }
+          />
+          <SettingsToggleRow
+            id="feature-show-hints"
+            label="Show hints"
+            description="Display rotating tips about shortcuts at the bottom of the new-chat screen. Tips you’ve clearly learned stop appearing on their own; turn this off once you know your way around."
+            checked={showHints}
+            disabled={disabled}
+            onToggle={toggleShowHints}
+            title={showHints ? 'Hints are shown on the new-chat screen' : 'Hints are hidden'}
+          />
+          {/* A row of its own under Show hints, in the same list: it is the one
+              verb the toggle above gives the user, and it only exists while
+              hints are on. */}
+          {showHints && (
+            <SettingsRow className="flex items-center justify-between gap-3">
+              {/* One line at 800px in both states: the longer sentence wrapped,
+                  and clicking Reset un-wrapped it and moved the button (rule 1). */}
+              <div className="min-w-0 text-[13px] text-[var(--color-text-muted)]">
+                {canResetHints ? 'Some hints are retired.' : 'No hints retired yet.'}
               </div>
-            )}
-          </div>
-        </div>
-      </section>
-    </div>
-  )
-}
-
-interface ToggleRowProps {
-  label: string
-  description: string
-  checked: boolean
-  disabled: boolean
-  onToggle: () => void
-  title: string
-  showError: boolean
-}
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  disabled,
-  onToggle,
-  title,
-  showError
-}: ToggleRowProps): React.JSX.Element {
-  return (
-    <div className="flex items-start gap-3">
-      <div className="flex-1">
-        <div className="text-[14px] font-medium text-[var(--color-text)]">{label}</div>
-        <div className="text-[13px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
-          {description}
-        </div>
-        {showError && (
-          <div className="text-[13px] text-[var(--color-danger)] mt-1.5">
-            Couldn’t load settings — try reopening this page.
-          </div>
-        )}
-      </div>
-      <button
-        type="button"
-        role="switch"
-        aria-checked={checked}
-        disabled={disabled}
-        onClick={onToggle}
-        title={title}
-        className={`relative w-9 h-5 rounded-full transition-colors shrink-0 mt-0.5 ${
-          checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
-        } ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
-      >
-        <div
-          className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-            checked ? 'left-[18px]' : 'left-0.5'
-          }`}
-        />
-      </button>
+              <SettingsButton onClick={resetHints} disabled={!canResetHints}>
+                Reset hints
+              </SettingsButton>
+            </SettingsRow>
+          )}
+          {/*
+            One failure, said once. Every switch on this tab reads the same
+            query, so the read error is one fact, and it is rendered only while
+            it is true, as the last row of the last list: a copy under each of
+            the four labels moved every centred switch down when it arrived
+            (ux_rules rule 1). Being last, this row lengthens the list and moves
+            nothing above it.
+          */}
+          {isError && (
+            <SettingsRow className="text-[13px] text-[var(--color-danger)]">
+              Couldn’t load settings — try reopening this page.
+            </SettingsRow>
+          )}
+        </SettingsRows>
+      </SettingsSection>
     </div>
   )
 }

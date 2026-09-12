@@ -409,7 +409,7 @@ Carried honestly rather than implied as passing.
 
 ```
 Agent page → “Runs with” panel        Settings → Local Agents
-  credential + model pickers,           engine binary row + engine path
+  credential + model pickers,           Runtime status line + OpenCode path
   engine row (binary, not process)      Try again on `failed`
         │                                       │
         ▼                                       ▼

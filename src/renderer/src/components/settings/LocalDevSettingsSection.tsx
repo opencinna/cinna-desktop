@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import { AlertTriangle, FolderOpen, Link2, Loader2, RefreshCw, TerminalSquare } from 'lucide-react'
+import { AlertTriangle, FolderOpen, Link2, Loader2, RefreshCw } from 'lucide-react'
 import { useLocalDev } from '../../hooks/useLocalDev'
 import { useLocalDevStore } from '../../stores/localDev.store'
 import { useAuthStore } from '../../stores/auth.store'
 import type { LocalDevAttentionReason } from '../../../../shared/localDevState'
+import { SettingsInfoTip } from './SettingsLayout'
 
 /**
  * Settings → Local Development.
@@ -73,29 +74,23 @@ export function LocalDevSettingsSection(): React.JSX.Element {
   return (
     <div className="space-y-6">
       <section>
-        <SectionTitle>Local development</SectionTitle>
-        <Card>
-          <div className="flex items-start gap-3">
-            <div className="mt-0.5 text-[var(--color-accent)]">
-              <TerminalSquare size={18} />
-            </div>
-            <div className="min-w-0 flex-1 space-y-1.5">
-              <div className="text-[14px] font-medium text-[var(--color-text)]">
-                Working on agents from this machine
-              </div>
-              <p className="text-[13px] text-[var(--color-text-muted)] leading-relaxed">
+        {/* The tab's standing explanation lives behind the (?) on its first
+            title (ux_rules rule 12). It used to be a card of its own, which left
+            a card with no control and no status once the paragraph moved. */}
+        <SectionTitle
+          info={
+            <SettingsInfoTip label="About local development">
+              <p>
                 Cinna installs uv, cinna-cli and Mutagen into its own data folder, and asks
                 cinna-cli to prepare an account workspace under your Agents Home. That is what lets
                 agent work happen on this machine without setting a terminal up yourself. Nothing is
                 installed system-wide and nothing is changed outside those two folders.
               </p>
-            </div>
-          </div>
-        </Card>
-      </section>
-
-      <section>
-        <SectionTitle>Status</SectionTitle>
+            </SettingsInfoTip>
+          }
+        >
+          Status
+        </SectionTitle>
         <Card>
           <div className="space-y-3">
             {state.phase === 'idle' && (
@@ -323,11 +318,20 @@ function clampPercent(percent: number): number {
   return Math.min(100, Math.max(0, Math.round(percent)))
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }): React.JSX.Element {
+function SectionTitle({
+  children,
+  info
+}: {
+  children: React.ReactNode
+  info?: React.ReactNode
+}): React.JSX.Element {
   return (
-    <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">
-      {children}
-    </h2>
+    <div className="mb-2 flex min-h-[26px] items-center gap-1.5">
+      <h2 className="text-[14px] font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
+        {children}
+      </h2>
+      {info}
+    </div>
   )
 }
 

@@ -80,7 +80,7 @@ Rotation is held when any of: hover, `busy`, `document.hidden`, a contextual hin
 
 - `src/renderer/src/components/ui/HintBar.tsx` — fixed-height strip, absolutely positioned at the bottom of the new-chat branch. Renders `segments` as text spans and `<kbd>` chips, crossfades on hint change (with a re-entry guard so a hint that changes away and back inside the fade window can't leave the bar blank), and exposes a hover-revealed `×` wired to `silence()`. `role="note"` with a stable label and no `aria-live`. Honors `prefers-reduced-motion` via Tailwind's `motion-reduce:` variant.
 - `src/renderer/src/components/layout/MainArea.tsx` — renders `<HintBar>` in the `!activeChatId` branch and adds bottom padding to the centered container when `useHintsEnabled()` is true, reserving the strip the bar overlays.
-- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — adds the **Show hints** `ToggleRow` to the Interface group, plus a **Reset hints** button that calls `reset()` and is disabled when `hasHintProgress()` is false.
+- `src/renderer/src/components/settings/FeaturesSettingsSection.tsx` — adds the **Show hints** `SettingsToggleRow` to the Interface list and, while hints are on, a row of its own under it: a one-line state ("Some hints are retired." / "No hints retired yet.") and a **Reset hints** `SettingsButton` that calls `reset()` and is disabled when `hasHintProgress()` is false. Both sentences fit one line at the 800px minimum, because the longer one used to wrap and clicking Reset un-wrapped it, moving the button out from under the pointer.
 
 ## Event Emission Sites
 

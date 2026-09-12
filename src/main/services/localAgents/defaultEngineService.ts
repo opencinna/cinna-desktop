@@ -156,6 +156,15 @@ async function settle(): Promise<AgentEngine | null> {
     if (setting() !== '') return null
     const claudeAvailable = claudeIn(await toolDetectionService.list())
     /**
+     * Detection is a login-shell probe and the picker is live while it runs.
+     * A runtime the user chose in that window is a decision already made, and
+     * the write below would have overwritten it with the machine's guess.
+     */
+    if (setting() !== '') {
+      logger.info('the default runtime was set while detection ran; keeping it')
+      return null
+    }
+    /**
      * An install with folder agents in it is not a fresh one, and its agents
      * have a runtime they have been running on. See the header: this is the
      * line that stops an upgrade from re-homing them.

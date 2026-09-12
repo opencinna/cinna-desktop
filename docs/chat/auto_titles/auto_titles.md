@@ -91,7 +91,7 @@ In all cases, the user-visible streaming flow is untouched.
 
 - Every user message incurs one `SELECT COUNT(*)` against `messages` for the early-out (sub-ms in SQLite).
 - A first-message send incurs one targeted `SELECT … LIMIT 1` for the message body plus one one-shot LLM call (typically << 1s).
-- Title generation uses the same provider/model the user pays for in their default chat mode. The Features-tab UI flags this to the user ("Uses your default chat mode's LLM provider — consumes tokens").
+- Title generation uses the same provider/model the user pays for in their default chat mode. The toggle's (?) tip on the Features tab says so ("Uses your default chat mode’s AI credentials — consumes tokens").
 - Log lines (`chat-title` scope) categorise outcomes by code so the logger overlay (Cmd+`) can show success/failure distribution without trawling.
 
 ## Architecture Overview

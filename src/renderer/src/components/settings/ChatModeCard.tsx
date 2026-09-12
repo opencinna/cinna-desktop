@@ -212,20 +212,6 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
                 </option>
               ))}
             </select>
-            {/*
-              Two lines of the 13px leading, and 13px rather than 12px: this is
-              status detail, which the settings scale sets at 13 (12 is for
-              paths and chips). Both reservations are the ones
-              `LocalAgentsSettingsSection`'s identical slot already carries, and
-              for the reason its comment records — every one of these sentences
-              wraps to two lines at the 800px minimum, so a one-line slot pulled
-              the Model select and everything under it up by ~17px the moment
-              the user fixed the mode by picking a working credential
-              (ux_rules rule 1).
-            */}
-            <p className="mt-1.5 min-h-[2.5rem] text-[13px] text-[var(--color-warning)]">
-              {inactive?.detail ?? ''}
-            </p>
           </div>
 
           {/* Model */}
@@ -282,6 +268,19 @@ export function ChatModeCard({ mode }: ChatModeCardProps): React.JSX.Element {
                 ))}
               </div>
             </div>
+          )}
+
+          {/*
+            Why this mode cannot run, rendered only while that is true and
+            **last** in the body: a message that exists only on failure is not
+            reserved for (an empty two-line slot here was padding between two
+            selects), and it never sits above a control — arriving here it
+            lengthens the card and moves nothing the user is about to pick
+            (ux_rules rules 1 and 12). 13px rather than 12px because this is
+            status detail, which the settings scale sets at 13.
+          */}
+          {inactive?.detail && (
+            <p className="text-[13px] text-[var(--color-warning)]">{inactive.detail}</p>
           )}
         </div>
       </AnimatedCollapse>

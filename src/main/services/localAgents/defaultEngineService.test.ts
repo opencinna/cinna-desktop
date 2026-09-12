@@ -25,10 +25,18 @@ vi.mock('../appSettingsService', () => ({
   }
 }))
 
-const machine = vi.hoisted(() => ({ claude: false, folderAgents: 0 }))
+const machine = vi.hoisted(() => ({
+  claude: false,
+  folderAgents: 0,
+  /** Held open by a test that needs detection to still be running. */
+  gate: null as Promise<void> | null
+}))
 vi.mock('./toolDetectionService', () => ({
   toolDetectionService: {
-    list: async () => [{ id: 'claude', available: machine.claude }],
+    list: async () => {
+      if (machine.gate) await machine.gate
+      return [{ id: 'claude', available: machine.claude }]
+    },
     snapshot: () => [{ id: 'claude', available: machine.claude }]
   }
 }))
@@ -50,6 +58,7 @@ beforeEach(() => {
   store.broken = false
   machine.claude = false
   machine.folderAgents = 0
+  machine.gate = null
 })
 
 describe('locking the default runtime', () => {
@@ -84,6 +93,22 @@ describe('locking the default runtime', () => {
     store.value = 'opencode'
     machine.claude = true
     expect(await (await service()).lockIfUnset()).toBeNull()
+    expect(store.value).toBe('opencode')
+  })
+
+  it('keeps a runtime the user picked while detection was still running', async () => {
+    // Detection is a login-shell probe and the picker is live meanwhile. The
+    // lock re-reads the setting after the await: a choice made in that window
+    // is a decision already made, not an empty slot to fill.
+    machine.claude = true
+    let release!: () => void
+    machine.gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const pending = (await service()).lockIfUnset()
+    store.value = 'opencode'
+    release()
+    expect(await pending).toBeNull()
     expect(store.value).toBe('opencode')
   })
 

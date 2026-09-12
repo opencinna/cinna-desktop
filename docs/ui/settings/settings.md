@@ -37,11 +37,12 @@ Settings screen for managing chat modes, agents (local A2A, folder agents and re
 
 ## Autonomous task concurrency
 
-Local Agents → Engine Settings exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path, disables while loading/saving and retains a reserved error slot. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).
+Local Agents → Runtime exposes **Autonomous task concurrency**, a device-wide integer from one to eight, default two. It limits separate autonomous-task and runner-agent admission queues; it does not cap all ordinary chat turns. Busy local agents wait cancelably for their lock. The control uses the existing app-settings read/write path and disables while loading or saving. Its explanation is behind the (?) beside its label. A read or save failure is rendered under the select only while one exists. See [autonomous configuration](../../jobs/tasks/autonomous_tasks_tech.md#configuration).
 
 ## Business Rules
 
 - Switching settings sections always resets the page — open forms, partial input, expanded cards are all discarded on navigation
+- **Explanation behind the (?), status under the control, nothing reserved for nothing** ([UX Rules](../../development/ui_guidelines/ux_rules.md), rules 1 and 12). What a setting is for sits in a tip beside its label, because a paragraph under every label pushed the controls below the fold on every visit after the first. Under a control there is either a one-line status that has something true to say in every state, reserved at exactly one line, or a message rendered only while it applies, last in its card, so its arrival moves nothing the user is about to click. An always-present slot that is empty in the healthy state is not a reservation: it read as padding, a card with the wrong bottom edge
 - Settings is entered from the profile dropdown ("Settings" item); there is no dedicated Settings button in the sidebar footer
 - A "Back" button replaces the chat list at the top of the sidebar while in settings view
 - The Interface popover (Console / Verbose / Theme toggles) remains accessible from the sidebar footer regardless of view — see [App Shell](../app_shell/app_shell.md)
@@ -103,4 +104,4 @@ Every section is rendered with a `key` equal to its tab id, which is what makes 
 - [Adapters](../../llm/adapters/adapters.md) — LLM settings section manages provider configuration consumed by the adapter layer
 - [MCP Connections](../../mcp/connections/connections.md) — MCP settings section manages server connections
 - [User Accounts](../../auth/user_accounts/user_accounts.md) — Accounts section manages local user profiles
-- [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) — The settings type scale and the settings section pattern, with the shared `SettingsLayout` primitives (`SettingsSection`, `SettingsCard`, `SettingsRows`, `SettingsStatusRow`, `settingsInputClass`) a new tab is built from — Local Agents is the first caller, and the older tabs match the same scale with their own markup; expandable card pattern, button layout rules, color system
+- [UI Guidelines](../../development/ui_guidelines/ui_guidelines_llm.md) — The settings type scale and the settings section pattern, with the shared `SettingsLayout` primitives (`SettingsSection`, `SettingsCard`, `SettingsRows`, `SettingsLabel` and its (?) tip, `SettingsToggleRow`, `SettingsStatusRow`, `settingsInputClass`) a new tab is built from — Local Agents, Features and Development are built on them, and the older tabs match the same scale with their own markup; expandable card pattern, button layout rules, color system

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { TaskConcurrencySetting } from './TaskConcurrencySetting'
 import { FolderOpen, FolderPlus, GitBranch, ListChecks, RefreshCw, X } from 'lucide-react'
 import { isCredentialActive, isCredentialUsable } from '../../../../shared/credentials'
@@ -245,7 +245,18 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
     binary?.state === 'ready' &&
     savedEnginePath !== binary.path
 
+  /**
+   * Set by Escape just before it blurs the field. `onBlur` runs `commitEnginePath`
+   * synchronously, in the same closure — with the value the user was typing,
+   * not the one `setEnginePath(savedEnginePath)` has only just scheduled — so
+   * without this Escape *saved* the half-typed path it was meant to throw away.
+   */
+  const discardingRef = useRef(false)
   const commitEnginePath = (): void => {
+    if (discardingRef.current) {
+      discardingRef.current = false
+      return
+    }
     const next = enginePath.trim()
     if (next === savedEnginePath) return
     setEnginePathError(null)
@@ -769,20 +780,26 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             }}
           />
           {/*
-            **What the selected runtime is doing**, in a slot one line high.
-            Reserved because it is filled in every settled state — a healthy
-            machine reads which binary was found — and one line because every
-            sentence above is written to fit at the 800px minimum (ux_rules
-            rules 1 and 12). The two messages main composes (a failed install,
-            a failed resolve) are the only ones that may run longer, and they
-            truncate with the full text in `title` rather than wrap, the way the
-            folder rows above do. Only the selected runtime is reported: the
-            OpenCode binary's state is not a fact about a machine running
-            Claude Agent (rule 9).
+            **What the selected runtime is doing**, in a slot exactly one line
+            high. Reserved because it is filled in every settled state — a
+            healthy machine reads which binary was found — and one line because
+            every sentence above is written to fit at the 800px minimum
+            (ux_rules rules 1 and 12).
+
+            The slot is `min-h-[1lh]` on the element that carries the text size
+            and leading, and the `<p>` inherits both: the reservation is then
+            the line by definition, where a rem value beside a 13px × relaxed
+            line was 18px under a 21px line and let the cards below move 3px
+            when the text landed. The two messages main composes (a failed
+            install, a failed resolve) are the only ones that may run longer,
+            and they truncate with the full text in `title` rather than wrap,
+            the way the folder rows above do. Only the selected runtime is
+            reported: the OpenCode binary's state is not a fact about a machine
+            running Claude Agent (rule 9).
           */}
-          <div className="mt-2 flex min-h-[1.125rem] items-start gap-3">
+          <div className="mt-2 flex min-h-[1lh] items-start gap-3 text-[13px] leading-relaxed">
             <p
-              className={`min-w-0 flex-1 truncate text-[13px] leading-relaxed ${
+              className={`min-w-0 flex-1 truncate ${
                 runtimeStatus.tone === 'warning'
                   ? 'text-[var(--color-warning)]'
                   : runtimeStatus.tone === 'danger'
@@ -799,14 +816,21 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               the control that resolves it). `|| isPending` is not belt and
               braces: pressing it moves the state to `resolving`, so a condition
               naming only `failed` would unmount the control on click.
+
+              A text action at the line's own size, not a bordered button: a
+              29px button arriving in a 21px line grew the row and moved the
+              cards below (rule 1). Accent-coloured and weighted so it does not
+              read as more of the sentence beside it (rule 11).
             */}
             {onOpenCode && (binary?.state === 'failed' || resolveBinary.isPending) && (
-              <SettingsButton
+              <button
+                type="button"
                 onClick={() => resolveBinary.mutate()}
                 disabled={resolveBinary.isPending}
+                className="shrink-0 text-[13px] font-medium text-[var(--color-accent)] hover:underline disabled:opacity-50 disabled:no-underline"
               >
                 {resolveBinary.isPending ? 'Looking…' : 'Try again'}
-              </SettingsButton>
+              </button>
             )}
           </div>
 
@@ -845,8 +869,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                   value: event.target.value
                 })
               }
-              // Credential names run long — the control is 379px at the 800px
-              // minimum and a 58-character name is cut mid-word with no ellipsis.
+              // Credential names run long — the control is 426px at the 800px
+              // minimum and a 65-character name is cut mid-word with no ellipsis.
               title={pinnedCredential?.name ?? defaultMode?.name ?? undefined}
               className={`${settingsInputClass} mt-1.5`}
             >
@@ -876,8 +900,9 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               empty in the healthy state is padding, not a reservation, and it
               read as a card with the wrong bottom edge (ux_rules rules 1 and
               12). Being last, its arrival lengthens the card and moves nothing
-              the user is about to click. The name is the user's, so the line
-              truncates with the full text in `title` rather than wrap.
+              the user is about to click. The name is the user's and can be any
+              length, so it is the part that truncates (full name in `title`);
+              the sentence that says what to do about it never is.
             */}
             {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
               /*
@@ -888,21 +913,27 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
                 reason. Saying otherwise told the user their agents were safely
                 running on the chat mode while every turn was about to fail.
               */
-              <p
-                className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]"
-                title={`${pinnedCredential.name} has no usable API key — agents pinned to it will not run.`}
-              >
-                {pinnedCredential.name} has no usable API key — agents pinned to it will not run.
+              <p className="mt-1.5 flex gap-1 text-[13px] text-[var(--color-warning)]">
+                <span className="min-w-0 truncate" title={pinnedCredential.name}>
+                  {pinnedCredential.name}
+                </span>
+                {/* Not the visual gap: flex drops whitespace-only nodes and `gap-1`
+                    spaces the spans. The space keeps the text one sentence for
+                    screen readers and getByText; keep both. */}
+                {' '}
+                <span className="shrink-0">
+                  has no usable API key — agents pinned to it will not run.
+                </span>
               </p>
             ) : pinnedCredential && !pinnedCredential.enabled ? (
-              <p
-                className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]"
-                title={`${pinnedCredential.name} is switched off — agents pinned to it will not run.`}
-              >
-                {pinnedCredential.name} is switched off — agents pinned to it will not run.
+              <p className="mt-1.5 flex gap-1 text-[13px] text-[var(--color-warning)]">
+                <span className="min-w-0 truncate" title={pinnedCredential.name}>
+                  {pinnedCredential.name}
+                </span>{' '}
+                <span className="shrink-0">is switched off — agents pinned to it will not run.</span>
               </p>
             ) : pinnedMissing ? (
-              <p className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]">
+              <p className="mt-1.5 text-[13px] text-[var(--color-warning)]">
                 Pinned credential is gone — agents use your default chat mode.
               </p>
             ) : null}
@@ -939,6 +970,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               if (event.key === 'Escape') {
                 setEnginePath(savedEnginePath)
                 setEnginePathError(null)
+                discardingRef.current = true
                 event.currentTarget.blur()
               }
             }}

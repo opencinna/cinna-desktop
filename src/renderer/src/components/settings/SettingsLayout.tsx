@@ -128,25 +128,80 @@ export function SettingsLabel({
   htmlFor?: string
   /** The explanation behind the `(?)`. Nothing that changes belongs here. */
   info?: ReactNode
-  /** The tip's accessible name. Derived from a string label when omitted. */
-  infoLabel?: string
-  children: ReactNode
-}): React.JSX.Element {
+} & (
+  | { children: string; infoLabel?: string }
+  /** A label that is not plain text has to name its own tip (ux_rules rule 10). */
+  | { children: ReactNode; infoLabel: string }
+)): React.JSX.Element {
   const label = (
     <label htmlFor={htmlFor} className="text-[14px] font-medium text-[var(--color-text)]">
       {children}
     </label>
   )
   if (info === undefined) return label
+  // The union guarantees a string label whenever `infoLabel` is absent.
+  const name = infoLabel !== undefined ? infoLabel : `About ${children as string}`
   return (
     <div className="flex items-center gap-1.5">
       {label}
-      <SettingsInfoTip
-        label={infoLabel ?? (typeof children === 'string' ? `About ${children}` : 'About this setting')}
-      >
-        {info}
-      </SettingsInfoTip>
+      <SettingsInfoTip label={name}>{info}</SettingsInfoTip>
     </div>
+  )
+}
+
+/**
+ * A one-line setting: the label, its `(?)`, and the switch the label names.
+ *
+ * Rows that are only a label and a switch belong in one {@link SettingsRows}
+ * list rather than a card each, and the sentence that says what the switch
+ * does is standing explanation, which lives behind the `(?)` (ux_rules rule
+ * 12). `id` is required so the label names the switch (rule 10); `title` is
+ * the branching state sentence the switch carries as a tooltip.
+ */
+export function SettingsToggleRow({
+  id,
+  label,
+  description,
+  checked,
+  disabled = false,
+  onToggle,
+  title
+}: {
+  id: string
+  label: string
+  /** The standing explanation, behind the `(?)` beside the label. */
+  description: ReactNode
+  checked: boolean
+  disabled?: boolean
+  onToggle: () => void
+  title: string
+}): React.JSX.Element {
+  return (
+    <SettingsRow className="flex items-center gap-3">
+      <div className="min-w-0 flex-1">
+        <SettingsLabel htmlFor={id} info={<p>{description}</p>}>
+          {label}
+        </SettingsLabel>
+      </div>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        disabled={disabled}
+        onClick={onToggle}
+        title={title}
+        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${
+          checked ? 'bg-[var(--color-accent)]' : 'bg-[var(--color-border)]'
+        } ${disabled ? 'cursor-not-allowed opacity-50' : ''}`}
+      >
+        <div
+          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
+            checked ? 'left-[18px]' : 'left-0.5'
+          }`}
+        />
+      </button>
+    </SettingsRow>
   )
 }
 
