@@ -1,3 +1,4 @@
+import type { TaskScript } from './taskScript'
 import type { TaskRuntimeInfo } from './taskRuntime'
 /**
  * The Task — the unit of work that outlives a chat view.
@@ -208,6 +209,8 @@ export interface TaskRemoteRef {
 
 /** One task, as every surface sees it. */
 export interface TaskDto {
+  /** Portable definition; execution checkpoints stay on the executing device. */
+  script?: TaskScript | null
   /** Device-local checkpoint state, absent on ordinary or remote tasks. */
   runtime?: TaskRuntimeInfo
   id: string

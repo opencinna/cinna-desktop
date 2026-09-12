@@ -46,7 +46,7 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- [Autonomous coordination](autonomous_tasks.md) supplies multi-turn execution, durable runner gates and specialist handback using existing [live attachment/replay](../../chat/messaging/live_runs.md). Script routing, schedules, manifest-driven handback, complete token accounting, protocol updates, managed/SSH drivers and the final kind-branch cleanup remain separate work.
+- [Autonomous coordination](autonomous_tasks.md) supplies multi-turn execution, durable runner gates and specialist handback using existing [live attachment/replay](../../chat/messaging/live_runs.md). [Script definitions](script_definitions.md) now validate, persist and sync, but graph execution remains unfinished. Schedules, manifest-driven handback, complete token accounting, protocol updates, managed/SSH drivers and the final kind-branch cleanup remain separate work.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.
@@ -63,6 +63,7 @@ Task writes → device sync and handoff export; activated profile / focus / wake
 
 ## Integration Points
 
+- [Script definitions](script_definitions.md) — portable agent aliases, validated graph/template data and the current execution boundary.
 - [Autonomous tasks](autonomous_tasks.md) — coordinator controls, local checkpoints, limits, queues and interruption recovery.
 - [Remote handoff and recovery](remote_handoff.md) — selected remote destination, durable uncertainty, shared jobs path and recovery controls.
 - [Technical details](tasks_tech.md) — schema, IPC and implementation entry points.

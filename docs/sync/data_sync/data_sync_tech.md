@@ -68,6 +68,8 @@
 ### Shared (`src/shared/`)
 - `shared/sync.ts` — cross-bridge types: `SyncState` (incl. `paused` = explicit user-pause on a trusted device, and `disconnected` = this device opted out of online sync), `SyncStatus`, `UnlockMethod`, `SyncDeviceInfo`, `SyncInitResult`, `SyncUnlockRequest`, `PairingOffer` (code + QR; no SAS), `PairingPollResult` (`{sas, done}`), `IncomingPairing` (auto-discovered request), `SyncEvent`, `SyncCollection` (five members — `task` is the fifth); plus the portable-dependency types `JobDepDescriptor` (agent variants: `remote`, `local`, `folder`), `JobSyncManifest`, `JobDependencyStatus`, `McpTransport`. No key material.
 
+Job payloads also carry nullable `router`, `script` and `budget`; task payloads carry `script` alongside their existing router/budget. The mappers preserve received script/budget data without current-version normalization, and unrelated edits retain it. Script agent aliases remain portable descriptors inside that payload: applying them neither resolves them nor creates agent rows. See [Script Definitions](../../jobs/tasks/script_definitions_tech.md) for strict local-authoring validation and execution refusal.
+
 ## Database Schema
 
 Defined in `db/migrations/sync.ts` (idempotent `CREATE TABLE IF NOT EXISTS`, slotted after notes/jobs). Not part of the Drizzle schema — main-process plumbing only.

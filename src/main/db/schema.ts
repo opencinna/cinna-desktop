@@ -1,3 +1,4 @@
+import type { TaskScript } from '../../shared/taskScript'
 import type { TaskRuntimeCheckpoint } from '../tasks/runtimeTypes'
 import { sqliteTable, text, integer, blob, primaryKey } from 'drizzle-orm/sqlite-core'
 import type { MessagePart } from '../../shared/messageParts'
@@ -446,6 +447,9 @@ export const jobs = sqliteTable('jobs', {
   title: text('title').notNull(),
   description: text('description'),
   prompt: text('prompt').notNull(),
+  router: text('router').$type<'coordinator' | 'script'>(),
+  script: text('script', { mode: 'json' }).$type<TaskScript>(),
+  budget: text('budget', { mode: 'json' }).$type<TaskBudget>(),
   agentId: text('agent_id'),
   modeId: text('mode_id'),
   cinnaAgentId: text('cinna_agent_id'),
@@ -665,6 +669,7 @@ export const tasks = sqliteTable('tasks', {
   artifacts: text('artifacts', { mode: 'json' }).$type<TaskArtifact[] | null>(),
   /** Read by the headless task runner in phase 6; carried across sync from here. */
   budget: text('budget', { mode: 'json' }).$type<TaskBudget | null>(),
+  script: text('script', { mode: 'json' }).$type<TaskScript>(),
   errorMessage: text('error_message'),
 
   createdAt: integer('created_at', { mode: 'timestamp' })

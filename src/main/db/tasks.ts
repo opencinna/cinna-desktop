@@ -1,3 +1,4 @@
+import type { TaskScript } from '../../shared/taskScript'
 import { nanoid } from 'nanoid'
 import { and, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
@@ -32,6 +33,7 @@ export interface TaskCreateInput {
   description?: string | null
   status?: TaskStatus
   priority?: TaskPriority
+  script?: TaskScript | null
   router?: TaskRouter
 
   origin?: TaskOrigin
@@ -83,6 +85,7 @@ export type TaskPatch = Partial<
     | 'status'
     | 'priority'
     | 'router'
+    | 'script'
     | 'executor'
     | 'executorDevice'
     | 'chatId'
@@ -151,6 +154,7 @@ export interface TaskSyncValues {
   status: TaskStatus
   priority: TaskPriority
   router: TaskRouter
+  script?: TaskScript | null
   origin: TaskOrigin
   executor: TaskExecutor
   executorDevice: string | null
@@ -274,6 +278,7 @@ export const taskRepo = {
       status: input.status ?? 'new',
       priority: input.priority ?? 'normal',
       router: input.router ?? 'direct',
+      script: input.script ?? null,
 
       origin: input.origin ?? 'local',
       executor: input.executor ?? 'desktop',
@@ -472,6 +477,7 @@ export const taskRepo = {
           status: values.status,
           priority: values.priority,
           router: values.router,
+          script: values.script ?? null,
           origin: values.origin,
           executor: values.executor,
           executorDevice: values.executorDevice,

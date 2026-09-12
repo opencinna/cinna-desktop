@@ -14,9 +14,11 @@ A task travels between the devices of one Cinna account as the fifth [app-sync](
 
 ## What travels and what does not
 
+[Script definitions](script_definitions_tech.md) travel as portable data. Sync preserves future versions and fields without resolving script aliases or creating agents; ordinary local Continue refuses a script-bearing task. Runtime checkpoints and conversations remain on the executing device.
+
 | Carried | Left behind |
 |---|---|
-| The work: title, goal, description, status, priority, router, origin, parent, handoff note, artifacts, budget, error message, and the `created`/`started`/`finished`/`deleted` timestamps — `createdAt` included, unlike a job's, because the page prints it and a replica stamping its own arrival would say every task in the user's history began the moment this device joined the account | **`chat_id`** — chats are not a synced collection, so an id from another device would name a row that does not exist here |
+| The work: title, goal, description, status, priority, router, origin, parent, handoff note, artifacts, budget, script definition, error message, and the `created`/`started`/`finished`/`deleted` timestamps — `createdAt` included, unlike a job's, because the page prints it and a replica stamping its own arrival would say every task in the user's history began the moment this device joined the account | **`chat_id`** — chats are not a synced collection, so an id from another device would name a row that does not exist here |
 | The claim: `executor` and `executor_device` — which is the whole point of it, since it is how the other device knows not to run this | **`assignee_agent_id`** — an `agents` row id is device-local. A portable descriptor travels in `assignee_ref` instead and is resolved on the way in |
 | The **remote binding** (`remote_adapter`, `remote_id`, `remote_key`, `remote_url`, `remote_state`), so a peer opens the same [bound task](remote_sync.md) rather than creating a second one | **`remote_synced_at`** and **`remote_dirty`** — per-device bookkeeping. A device that has never spoken to that service must not inherit a watermark saying it has, nor a list of fields *this* device still owes it |
 | `job_id` / `job_run_id`, carried as-is and tolerated as dangling: jobs sync, job runs do not, so a peer can name the job a task came from but never the run | |

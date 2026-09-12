@@ -1,3 +1,4 @@
+import { validateTaskScript } from '../tasks/scriptRouter'
 import { taskRuntimeRepo } from '../db/taskRuntimes'
 import { taskRunnerBridge } from './taskRunnerBridge'
 import { runtimeBudget } from '../tasks/runtimeBudget'
@@ -236,6 +237,7 @@ export function toTaskDto(
     status: parseTaskStatus(row.status),
     priority: parseTaskPriority(row.priority),
     router: parseTaskRouter(row.router),
+    script: row.script ?? null,
     origin: parseTaskOrigin(row.origin),
     executor: parseTaskExecutor(row.executor),
     executorDevice: row.executorDevice,
@@ -417,6 +419,9 @@ export const taskService = {
   create(userId: string, input: TaskCreateInput): TaskDto {
     const title = nonEmpty(input.title, 'Title')
     const goal = nonEmpty(input.goal, 'Goal')
+    const script = input.router === 'script' ? validateTaskScript(input.script) : null
+    if (input.script != null && input.router !== 'script') throw new TaskError('invalid_input', 'A script definition requires the script router.')
+    if (script && input.parentTaskId) throw new TaskError('nested_too_deep', 'A subtask cannot run a nested script.')
 
     if (input.parentTaskId) {
       const parent = taskRepo.getById(userId, input.parentTaskId)
@@ -432,6 +437,7 @@ export const taskService = {
 
     const row = taskRepo.create(userId, {
       ...input,
+      script,
       title,
       goal,
       // A task this device is about to run names the device, so a peer knows
@@ -475,7 +481,10 @@ export const taskService = {
     }
     // `router` is not in the list: it is how *this* app decides who answers in
     // the task's chat, and no remote has a field for it.
-    if (patch.router !== undefined) next.router = patch.router
+    if (patch.router !== undefined) {
+      if (patch.router !== task.router && (patch.router === 'script' || task.router === 'script')) throw new TaskError('invalid_input', 'A task’s script router is fixed when the task is created.')
+      next.router = patch.router
+    }
     if (Object.keys(next).length === 0) return this.getById(userId, taskId)
 
     const row = taskRepo.update(userId, taskId, dirtied(task, next, dirty))

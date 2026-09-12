@@ -66,6 +66,18 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); state.db?.close(); state.db = null })
 
 describe('desktop task start', () => {
+  it('refuses a future script router before model resolution or ordinary agent dispatch', async () => {
+    const task = makeTask()
+    state.db!.raw.prepare('UPDATE tasks SET router = ?, script = ? WHERE id = ?')
+      .run('future-script-router', JSON.stringify({ version: 5, steps: [] }), task.id)
+    await expect(taskExecutionService.start(SCOPE, task.id, TARGET)).rejects.toThrow('script runner')
+    expect(readiness).not.toHaveBeenCalled()
+    expect(modelConfig).not.toHaveBeenCalled()
+    expect(dispatch).not.toHaveBeenCalled()
+    expect(chatRepo.list('profile')).toEqual([])
+    expect(taskRepo.getById('profile', task.id)?.chatId).toBeNull()
+  })
+
   it('sends goal, description and handoff once in a new chat, retaining the task and provenance', async () => {
     const task = makeTask()
     const result = await taskExecutionService.start(SCOPE, task.id, TARGET)

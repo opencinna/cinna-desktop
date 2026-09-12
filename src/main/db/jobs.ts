@@ -1,3 +1,4 @@
+import type { JobRuntimeDefinition } from '../../shared/jobs'
 import { nanoid } from 'nanoid'
 import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 import { getDb } from './client'
@@ -25,7 +26,7 @@ export type JobRunRow = typeof jobRuns.$inferSelect
 export type JobType = 'local' | 'cinna_task'
 export type JobRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-export interface JobCreateInput {
+export interface JobCreateInput extends JobRuntimeDefinition {
   type: JobType
   title: string
   description?: string | null
@@ -38,7 +39,7 @@ export interface JobCreateInput {
   iconName?: string | null
 }
 
-export interface JobPatch {
+export interface JobPatch extends JobRuntimeDefinition {
   type?: JobType
   title?: string
   description?: string | null
@@ -118,6 +119,9 @@ export const jobsRepo = {
       title: input.title,
       description: input.description ?? null,
       prompt: input.prompt,
+      router: input.router ?? null,
+      script: input.script ?? null,
+      budget: input.budget ?? null,
       agentId: input.agentId ?? null,
       modeId: input.modeId ?? null,
       cinnaAgentId: input.cinnaAgentId ?? null,
@@ -269,6 +273,9 @@ export const jobsRepo = {
       title: values.title,
       description: values.description,
       prompt: values.prompt,
+      router: values.router ?? null,
+      script: values.script ?? null,
+      budget: values.budget ?? null,
       modeId: values.modeId,
       cinnaAgentId: values.cinnaAgentId,
       cinnaPriority: values.cinnaPriority,
@@ -291,6 +298,9 @@ export const jobsRepo = {
           title: row.title,
           description: row.description,
           prompt: row.prompt,
+          router: row.router,
+          script: row.script,
+          budget: row.budget,
           modeId: row.modeId,
           cinnaAgentId: row.cinnaAgentId,
           cinnaPriority: row.cinnaPriority,
@@ -380,7 +390,7 @@ export interface JobFolderPatch {
 }
 
 /** Decoded job row delivered by the sync engine (see `src/main/sync/collections.ts`). */
-export interface JobSyncValues {
+export interface JobSyncValues extends JobRuntimeDefinition {
   id: string
   type: string
   title: string

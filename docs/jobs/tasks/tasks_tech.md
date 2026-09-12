@@ -1,5 +1,7 @@
 # Tasks: Technical Details
 
+The [script definition contract](script_definitions_tech.md) describes the nullable `tasks.script` field, creation-time validation, fixed local script-router choice and sync preservation. Ordinary Continue refuses script-bearing tasks; a DAG executor is not part of this foundation.
+
 ## File Locations
 
 | Layer | Entry points |

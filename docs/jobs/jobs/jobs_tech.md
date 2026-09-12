@@ -2,6 +2,8 @@
 
 Task records and Inbox channels are documented in [Tasks: Technical Details](../tasks/tasks_tech.md); job attempts retain their own completion and refresh hooks.
 
+The [script definition contract](../tasks/script_definitions_tech.md) covers nullable job router/script/budget columns, shared create/update DTOs, local validation and raw sync preservation. Any explicit runtime definition is refused by the legacy local executor before run state is created; the ordinary routing/execution flow below applies only when these fields are null.
+
 ## File Locations
 
 ### Main process

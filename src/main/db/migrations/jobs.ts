@@ -46,6 +46,10 @@ export function migrateJobs(sqlite: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_job_runs_job_id ON job_runs(job_id);
   `)
 
+  for (const column of ['router', 'script', 'budget']) {
+    if (!hasColumn(sqlite, 'jobs', column)) sqlite.exec(`ALTER TABLE jobs ADD COLUMN ${column} TEXT`)
+  }
+
   // Track which chat (if any) was spawned by a Job run — lets the streaming
   // completion code flip the matching job_runs row without renderer cooperation.
   if (!hasColumn(sqlite, 'chats', 'originating_job_run_id')) {

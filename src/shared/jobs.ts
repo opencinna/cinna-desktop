@@ -1,3 +1,13 @@
+import type { TaskScript } from './taskScript'
+import type { TaskBudget } from './tasks'
+
+/** Null/omitted preserves the ordinary job's derived single-turn routing. */
+export interface JobRuntimeDefinition {
+  router?: 'coordinator' | 'script' | null
+  script?: TaskScript | null
+  budget?: TaskBudget | null
+}
+
 /**
  * Shared DTOs for the Jobs feature. Lives in `src/shared` so both main and
  * renderer can import them without crossing the preload typing boundary.
@@ -6,7 +16,7 @@
 export type JobType = 'local' | 'cinna_task'
 export type JobRunStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 
-export interface JobData {
+export interface JobData extends JobRuntimeDefinition {
   id: string
   userId: string
   type: JobType
@@ -144,7 +154,7 @@ export interface JobDetailData extends JobData {
   recentRuns: JobRunData[]
 }
 
-export interface JobCreateInputDto {
+export interface JobCreateInputDto extends JobRuntimeDefinition {
   type: JobType
   title: string
   description?: string | null
@@ -157,7 +167,7 @@ export interface JobCreateInputDto {
   iconName?: string | null
 }
 
-export interface JobPatchDto {
+export interface JobPatchDto extends JobRuntimeDefinition {
   type?: JobType
   title?: string
   description?: string | null

@@ -1,3 +1,4 @@
+import { jobRuntimeDefinition } from '../tasks/jobRuntimeDefinition'
 import { jobRunStatusForTask } from '../../shared/taskStatus'
 import { taskInputRequestRepo } from '../db/taskInputRequests'
 import {
@@ -233,7 +234,8 @@ export const jobService = {
 
   create(userId: string, input: JobCreateInput): JobRow {
     validateCreate(input)
-    const job = jobsRepo.create(userId, input)
+    const definition = jobRuntimeDefinition(input)
+    const job = jobsRepo.create(userId, { ...input, ...definition })
     // Seed the portable dependency manifest from initial state (mode only —
     // agents/MCPs are attached afterwards via setAgents/setMcpProviders).
     rebuildJobManifest(userId, job.id)
@@ -243,7 +245,9 @@ export const jobService = {
   },
 
   update(userId: string, jobId: string, patch: JobPatch): JobRow {
-    requireJob(userId, jobId)
+    const existing = requireJob(userId, jobId)
+    const changesRuntime = ['type', 'router', 'script', 'budget'].some((key) => Object.hasOwn(patch, key))
+    const normalized = changesRuntime ? { ...patch, ...jobRuntimeDefinition({ ...existing, ...patch }) } : patch
     if (patch.type && patch.type !== 'local' && patch.type !== 'cinna_task') {
       throw new JobError('invalid_input', `Unknown job type: ${patch.type}`)
     }
@@ -253,7 +257,7 @@ export const jobService = {
     if (patch.prompt !== undefined && !patch.prompt.trim()) {
       throw new JobError('invalid_input', 'Prompt is required')
     }
-    const ok = jobsRepo.update(userId, jobId, patch)
+    const ok = jobsRepo.update(userId, jobId, normalized)
     if (!ok) throw new JobError('not_found', 'Job not found')
     const updated = jobsRepo.getById(userId, jobId)
     if (!updated) throw new JobError('not_found', 'Job not found after update')
@@ -486,6 +490,11 @@ export const jobService = {
     const job = requireJob(userId, jobId)
     if (job.type !== 'local') {
       throw new JobError('unsupported_type', 'executeLocal called on non-local job')
+    }
+    // Definitions must never fall through to the legacy renderer-started turn.
+    if (job.router != null || job.script != null || job.budget != null) {
+      jobRuntimeDefinition(job)
+      throw new JobError('unsupported_type', 'This job requires the autonomous job executor.')
     }
 
     // **This is the block.** The `incompleteSetup` flag on the job DTO reports
@@ -738,6 +747,7 @@ export const jobService = {
     if (job.type !== 'cinna_task') {
       throw new JobError('unsupported_type', 'executeCinnaTask called on non-cinna job')
     }
+    if (job.router != null || job.script != null || job.budget != null) jobRuntimeDefinition(job)
     if (!job.cinnaAgentId) {
       throw new JobError('missing_dependency', 'Cinna agent is required to run this job')
     }

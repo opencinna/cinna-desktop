@@ -156,7 +156,9 @@ const LIMITS: Record<Category, number> = {
   // Phase 2: the `bare` prompt branch moved with the Claude wiring into
   // `agents/drivers/index.ts`.
   kind: 42,
-  jobType: 29,
+  // Phase 6 adds one validation guard: autonomous routing belongs to a local
+  // job. Phase 7's job-type cleanup moves this to the executor contract.
+  jobType: 30,
   providerType: 3,
   // **Zero from the day it was added.** Phase 4 replaced every read of
   // `orchestrated` with `chats.router` behind `src/shared/chatRouting.ts`; what
@@ -176,7 +178,7 @@ const LIMITS: Record<Category, number> = {
 }
 
 /** The sum of `LIMITS`, stated on its own so the headline number is greppable in a diff. */
-const LIMIT = 78
+const LIMIT = 79
 
 /**
  * Files where branching on kind is the job, not a leak. Still counted and

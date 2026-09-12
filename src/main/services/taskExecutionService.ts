@@ -56,7 +56,7 @@ export const taskExecutionService = {
       if (!canTransition(task.status, 'in_progress')) {
         throw new TaskError('invalid_transition', `A ${task.status} task cannot be started.`)
       }
-      if (task.router === 'script') throw new TaskError('invalid_input', 'This task needs its script runner.')
+      if (task.router === 'script' || task.script != null) throw new TaskError('invalid_input', 'This task needs its script runner.')
       if (task.chatId && runExecutionService.isRunning(task.chatId)) {
         throw new TaskError('invalid_input', 'This task already has a turn running. Stop it before starting another.')
       }

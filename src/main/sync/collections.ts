@@ -1,3 +1,5 @@
+import type { TaskScript } from '../../shared/taskScript'
+import type { JobRuntimeDefinition } from '../../shared/jobs'
 import { notesRepo, noteFoldersRepo } from '../db/notes'
 import { jobsRepo, jobFoldersRepo } from '../db/jobs'
 import { taskRepo } from '../db/tasks'
@@ -309,6 +311,9 @@ const jobMapper: CollectionMapper = {
           title: r.title,
           description: r.description ?? null,
           prompt: r.prompt,
+          router: r.router ?? null,
+          script: r.script ?? null,
+          budget: r.budget ?? null,
           type: r.type,
           colorPreset: r.colorPreset ?? null,
           iconName: r.iconName ?? null,
@@ -345,6 +350,9 @@ const jobMapper: CollectionMapper = {
       title: str(plaintext.title) || 'Untitled job',
       description: strOrNull(plaintext.description),
       prompt: str(plaintext.prompt),
+      router: strOrNull(plaintext.router) as JobRuntimeDefinition['router'],
+      script: (plaintext.script ?? null) as TaskScript | null,
+      budget: (plaintext.budget ?? null) as TaskBudget | null,
       modeId,
       cinnaAgentId: strOrNull(plaintext.cinnaAgentId),
       cinnaPriority: strOrNull(plaintext.cinnaPriority),
@@ -450,6 +458,7 @@ const taskMapper: CollectionMapper = {
         status: r.status,
         priority: r.priority,
         router: r.router,
+        script: r.script ?? null,
         origin: r.origin,
         executor: r.executor,
         executorDevice: r.executorDevice ?? null,
@@ -508,6 +517,7 @@ const taskMapper: CollectionMapper = {
       status: str(plaintext.status) as TaskStatus,
       priority: str(plaintext.priority) as TaskPriority,
       router: str(plaintext.router) as TaskRouter,
+      script: (plaintext.script ?? null) as TaskScript | null,
       origin: str(plaintext.origin) as TaskOrigin,
       executor: str(plaintext.executor) as TaskExecutor,
       executorDevice: strOrNull(plaintext.executorDevice),

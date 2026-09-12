@@ -121,6 +121,8 @@ export function migrateTasks(sqlite: Database.Database): void {
       ON task_input_requests(task_id);
   `)
 
+  if (!hasColumn(sqlite, 'tasks', 'script')) sqlite.exec('ALTER TABLE tasks ADD COLUMN script TEXT')
+
   // Legacy request rows remain unowned; new events carry exact root/invocation
   // identity so a late or parallel turn cannot settle a sibling's request.
   for (const column of ['root_run_id', 'invocation_id']) {
