@@ -330,20 +330,22 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
     if (selectedRuntime === null) return { text: '', tone: 'muted' }
     if (onOpenCode) {
       return {
+        // One line each at the 800px minimum (rule 12). Where the binary comes
+        // from when nothing is configured is the OpenCode path tip's to say.
         text:
           binary?.state === 'ready'
             ? `Ready — opencode ${binary.version ?? 'installed'}${
                 binary.source === 'path'
                   ? ', your own installation'
                   : binary.source === 'configured'
-                    ? ', the path set under OpenCode path below'
+                    ? ', from the OpenCode path below'
                     : ', downloaded by Cinna'
               }.`
             : binary?.state === 'resolving'
-              ? 'Downloading OpenCode. This happens once and takes about a minute.'
+              ? 'Downloading OpenCode — once only, about a minute.'
               : binary?.state === 'failed'
                 ? binary.error
-                : 'Not resolved yet — chatting with a folder agent resolves it. Cinna uses an opencode on your PATH if you have one, and downloads a verified copy if you do not.',
+                : 'Not resolved yet — the next agent chat resolves it.',
         tone: binary?.state === 'failed' ? 'danger' : 'muted'
       }
     }
@@ -352,14 +354,17 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
     if (tools === undefined) return { text: '', tone: 'muted' }
     if (!claudeTool) {
       return {
-        text: `Claude Agent is selected, but no Claude Code was found on this machine. Agents that name no runtime of their own will not run until it is installed.`,
+        // "Agents on it": the ones that name no runtime of their own, which is
+        // what the tip beside this control says the setting governs. Installing
+        // it is the button above, so the line does not repeat the remedy.
+        text: 'Claude Code not found — agents on it cannot run.',
         tone: 'warning'
       }
     }
     return {
       // The version, because it is the fact that makes the line diagnosable, and
       // "no API key", because that is the reason a user chose this runtime.
-      text: `Claude Code ${claudeTool.version ?? 'installed'} — turns run on your own Claude login, and spend no API key.`,
+      text: `Claude Code ${claudeTool.version ?? 'installed'} — your Claude login, no API key spent.`,
       tone: 'muted'
     }
   })()
@@ -695,7 +700,8 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         controls below the fold on every visit after the first (rule 2 — a page
         is a control surface first). What stays on the surface is everything
         that *changes*: which runtime is selected, which are installed, and every
-        warning about this machine, each in a slot that is always there.
+        warning about this machine — as a one-line status that is filled in
+        every state, or rendered only while it applies, last in its card.
       */}
       <SettingsSection
         title="Runtime"
@@ -763,22 +769,27 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             }}
           />
           {/*
-            **What the selected runtime is doing**, in a slot that is always two
-            lines high. Only the selected one is reported: the OpenCode binary's
-            state is not a fact about a machine running Claude Agent, and a row
-            per runtime was three states to read where one is in force
-            (ux_rules rule 9). A two-line reservation because every sentence
-            below wraps at the 800px minimum and none reaches three.
+            **What the selected runtime is doing**, in a slot one line high.
+            Reserved because it is filled in every settled state — a healthy
+            machine reads which binary was found — and one line because every
+            sentence above is written to fit at the 800px minimum (ux_rules
+            rules 1 and 12). The two messages main composes (a failed install,
+            a failed resolve) are the only ones that may run longer, and they
+            truncate with the full text in `title` rather than wrap, the way the
+            folder rows above do. Only the selected runtime is reported: the
+            OpenCode binary's state is not a fact about a machine running
+            Claude Agent (rule 9).
           */}
-          <div className="mt-2 flex min-h-[2.625rem] items-start gap-3">
+          <div className="mt-2 flex min-h-[1.125rem] items-start gap-3">
             <p
-              className={`min-w-0 flex-1 text-[13px] leading-relaxed ${
+              className={`min-w-0 flex-1 truncate text-[13px] leading-relaxed ${
                 runtimeStatus.tone === 'warning'
                   ? 'text-[var(--color-warning)]'
                   : runtimeStatus.tone === 'danger'
                     ? 'text-[var(--color-danger)]'
                     : 'text-[var(--color-text-muted)]'
               }`}
+              title={runtimeStatus.text || undefined}
             >
               {runtimeStatus.text}
             </p>
@@ -860,37 +871,41 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               ))}
             </select>
             {/*
-              Two lines of the 13px leading, reserved. Both warnings wrap at the
-              800px minimum, and a one-line slot moved everything below by
-              19.875px when the user cleared the warning by using the control
-              (ux_rules rule 1).
+              Rendered only when one applies, last in the card, and one line at
+              the 800px minimum. Nothing is reserved for it: a slot that is
+              empty in the healthy state is padding, not a reservation, and it
+              read as a card with the wrong bottom edge (ux_rules rules 1 and
+              12). Being last, its arrival lengthens the card and moves nothing
+              the user is about to click. The name is the user's, so the line
+              truncates with the full text in `title` rather than wrap.
             */}
-            <div className="mt-1.5 min-h-[2.5rem]">
-              {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
-                /*
-                  Not "agents fall back to your default chat mode" — they do not.
-                  `resolveDefault` falls through to the chat mode only when the
-                  pinned id resolves to no provider at all; a provider that exists
-                  but cannot make a call is returned *as* the runtime, with a
-                  reason. Saying otherwise told the user their agents were safely
-                  running on the chat mode while every turn was about to fail.
-                */
-                <p className="text-[13px] text-[var(--color-warning)]">
-                  {pinnedCredential.name} has no API key this app can use. Agents pinned to it will
-                  not run until it does — pick another credential here, or add a key to it.
-                </p>
-              ) : pinnedCredential && !pinnedCredential.enabled ? (
-                <p className="text-[13px] text-[var(--color-warning)]">
-                  {pinnedCredential.name} is switched off. Agents pinned to it will not run until
-                  you turn it back on in AI Credentials, or pick another credential here.
-                </p>
-              ) : pinnedMissing ? (
-                <p className="text-[13px] text-[var(--color-warning)]">
-                  The credential pinned here is no longer on this machine. Agents are using your
-                  default chat mode.
-                </p>
-              ) : null}
-            </div>
+            {pinnedCredential && !isCredentialUsable(pinnedCredential) ? (
+              /*
+                Not "agents fall back to your default chat mode" — they do not.
+                `resolveDefault` falls through to the chat mode only when the
+                pinned id resolves to no provider at all; a provider that exists
+                but cannot make a call is returned *as* the runtime, with a
+                reason. Saying otherwise told the user their agents were safely
+                running on the chat mode while every turn was about to fail.
+              */
+              <p
+                className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]"
+                title={`${pinnedCredential.name} has no usable API key — agents pinned to it will not run.`}
+              >
+                {pinnedCredential.name} has no usable API key — agents pinned to it will not run.
+              </p>
+            ) : pinnedCredential && !pinnedCredential.enabled ? (
+              <p
+                className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]"
+                title={`${pinnedCredential.name} is switched off — agents pinned to it will not run.`}
+              >
+                {pinnedCredential.name} is switched off — agents pinned to it will not run.
+              </p>
+            ) : pinnedMissing ? (
+              <p className="mt-1.5 truncate text-[13px] text-[var(--color-warning)]">
+                Pinned credential is gone — agents use your default chat mode.
+              </p>
+            ) : null}
           </div>
         </SettingsCard>
 
@@ -929,19 +944,19 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
             }}
             className={`${settingsInputClass} mt-1.5 font-mono`}
           />
-          {/* Every message this field can produce, below it, in a slot that is
-              always there: a save error arriving after a blur must not push the
-              next card down (ux_rules rule 12). */}
-          <div className="mt-1.5 min-h-[1.125rem]">
-            {enginePathError ? (
-              <p className="text-[13px] text-[var(--color-danger)]">{enginePathError}</p>
-            ) : enginePathPending ? (
-              <p className="text-[13px] text-[var(--color-warning)]">
-                Cinna will use this path the next time an agent runs. The line above still describes
-                the binary it found for the old one.
-              </p>
-            ) : null}
-          </div>
+          {/* Every message this field can produce, below it and last in the
+              card, rendered only while it exists: both are consequences of an
+              action, so their arrival lengthens the card under the control and
+              moves nothing above it. An always-present slot was empty in the
+              healthy state, which is padding, not a reservation (ux_rules
+              rules 1 and 12). */}
+          {enginePathError ? (
+            <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{enginePathError}</p>
+          ) : enginePathPending ? (
+            <p className="mt-1.5 text-[13px] text-[var(--color-warning)]">
+              Used from the next agent run. The status above is still the old path.
+            </p>
+          ) : null}
         </SettingsCard>
 
         {/* How many turns may run at once, whichever runtime runs them. */}
@@ -963,14 +978,20 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         }
       >
         <SettingsCard>
-          <div className="text-[14px] font-medium text-[var(--color-text)]">
-            Detected on this machine
+          <div className="mb-2.5">
+            <SettingsLabel
+              info={
+                <p>
+                  What else Cinna found installed globally, and the version each one reported. A
+                  row reading Not found is a tool this machine does not have — nothing here is
+                  installed for you. The runtimes an agent can run on are in the Runtime section
+                  above.
+                </p>
+              }
+            >
+              Detected on this machine
+            </SettingsLabel>
           </div>
-          <SettingsHint className="mt-0.5 mb-2.5">
-            What else Cinna found installed globally, and the version each one reported. A row
-            reading Not found is a tool this machine does not have — nothing here is installed for
-            you. The runtimes an agent can run on are in the Runtime section above.
-          </SettingsHint>
           {/*
             A table, not chips. Chips could only say "present", so a user
             checking *which* Claude Code or which uv the desktop had picked up
@@ -1033,11 +1054,17 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
         </SettingsCard>
 
         <SettingsCard>
-          <SettingsLabel htmlFor="local-agents-default-tool">Open agents with</SettingsLabel>
-          <SettingsHint className="mt-0.5 mb-2">
-            The agent page&apos;s Open-in button uses this tool. Picking a different one from its
-            menu makes that the default instead.
-          </SettingsHint>
+          <SettingsLabel
+            htmlFor="local-agents-default-tool"
+            info={
+              <p>
+                The agent page&apos;s Open-in button uses this tool. Picking a different one from
+                its menu makes that the default instead.
+              </p>
+            }
+          >
+            Open agents with
+          </SettingsLabel>
           <select
             id="local-agents-default-tool"
             value={defaultTool?.id ?? ''}
@@ -1045,7 +1072,7 @@ export function LocalAgentsSettingsSection(): React.JSX.Element {
               const next = event.target.value
               setDefaultTool(isLocalToolId(next) ? next : null)
             }}
-            className={settingsInputClass}
+            className={`${settingsInputClass} mt-1.5`}
           >
             <option value="">Ask each time</option>
             {launchable.map((tool) => (

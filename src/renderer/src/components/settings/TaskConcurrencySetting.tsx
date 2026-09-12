@@ -1,16 +1,25 @@
 import { useState } from 'react'
 import { useAppSettings, useSetAppSetting } from '../../hooks/useAppSettings'
 import { unwrapIpcError } from '../../utils/ipcError'
-import { SettingsCard, SettingsHint, SettingsLabel, settingsInputClass } from './SettingsLayout'
+import { SettingsCard, SettingsLabel, settingsInputClass } from './SettingsLayout'
 
 export function TaskConcurrencySetting(): React.JSX.Element {
   const settings = useAppSettings()
   const save = useSetAppSetting()
   const [error, setError] = useState<string | null>(null)
+  // A failure to read or to save is the only thing under the control, and it is
+  // rendered only while it exists, last in the card: a slot reserved for it was
+  // empty in the healthy state, which is padding rather than a reservation
+  // (ux_rules rules 1 and 12).
+  const message = error ?? (settings.isError ? 'The current limit could not be read.' : null)
   return <SettingsCard>
-    <SettingsLabel>Autonomous task concurrency</SettingsLabel>
-    <SettingsHint>Limit how many tasks and agent turns can run at once on this device. A busy agent waits until its current turn finishes.</SettingsHint>
-    <select aria-label="Autonomous task concurrency" className={`${settingsInputClass} mt-2`}
+    <SettingsLabel
+      htmlFor="task-runner-concurrency"
+      info={<p>Limit how many tasks and agent turns can run at once on this device. A busy agent waits until its current turn finishes.</p>}
+    >
+      Autonomous task concurrency
+    </SettingsLabel>
+    <select id="task-runner-concurrency" className={`${settingsInputClass} mt-1.5`}
       disabled={!settings.data || settings.isError || save.isPending} value={settings.data?.taskRunnerConcurrency ?? 2}
       onChange={(event) => {
         setError(null)
@@ -19,8 +28,8 @@ export function TaskConcurrencySetting(): React.JSX.Element {
       }}>
       {[1, 2, 3, 4, 5, 6, 7, 8].map((value) => <option key={value} value={value}>{value}</option>)}
     </select>
-    <div role="alert" className="min-h-[1.125rem] mt-1 text-[13px] text-[var(--color-danger)]">
-      {error ?? (settings.isError ? 'The current limit could not be read.' : null)}
-    </div>
+    {message && (
+      <div role="alert" className="mt-1.5 text-[13px] text-[var(--color-danger)]">{message}</div>
+    )}
   </SettingsCard>
 }

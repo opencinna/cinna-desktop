@@ -110,23 +110,51 @@ export function SettingsRow({
   return <div className={`px-4 py-3 ${className}`}>{children}</div>
 }
 
-/** The label above a control, and the sentence that says what it does. */
+/**
+ * The label above a control, with its explanation behind the `(?)` beside it.
+ *
+ * `info` is the standing prose — what the setting is for, what the choice
+ * means. It goes in a {@link SettingsInfoTip} rather than a paragraph under
+ * the label, because prose is read once and scrolled past on every visit after
+ * (ux_rules rule 12). The tip's accessible name is `infoLabel`, or
+ * "About <label>" when the label is a plain string.
+ */
 export function SettingsLabel({
   htmlFor,
+  info,
+  infoLabel,
   children
 }: {
   htmlFor?: string
+  /** The explanation behind the `(?)`. Nothing that changes belongs here. */
+  info?: ReactNode
+  /** The tip's accessible name. Derived from a string label when omitted. */
+  infoLabel?: string
   children: ReactNode
 }): React.JSX.Element {
-  return (
+  const label = (
     <label htmlFor={htmlFor} className="text-[14px] font-medium text-[var(--color-text)]">
       {children}
     </label>
   )
+  if (info === undefined) return label
+  return (
+    <div className="flex items-center gap-1.5">
+      {label}
+      <SettingsInfoTip
+        label={infoLabel ?? (typeof children === 'string' ? `About ${children}` : 'About this setting')}
+      >
+        {info}
+      </SettingsInfoTip>
+    </div>
+  )
 }
 
 /**
- * The hint under a label.
+ * One line of **live value** under a label — the folder path, what a choice
+ * currently resolves to. Never standing explanation: that goes behind the
+ * `(?)` ({@link SettingsLabel}'s `info`), so a card is a label, a control and
+ * at most one line of status (ux_rules rule 12).
  *
  * It sits **above** the control, so a message that arrives after the user acts
  * (a save error, a "takes effect on restart" note) can be rendered last and
@@ -389,7 +417,9 @@ export function useDialogChrome({
 }
 
 /**
- * The `(?)` beside a title or a label, and the paragraph behind it.
+ * The `(?)` beside a section title or a control's label, and the paragraph
+ * behind it. {@link SettingsSection} takes one through `info`, and so does
+ * {@link SettingsLabel}, which is the common case.
  *
  * **Why the prose moved in here.** A settings screen is read once and used many
  * times: the sentence that explains *why* a setting exists is exactly right on
@@ -402,8 +432,10 @@ export function useDialogChrome({
  * What stays outside it: anything that changes, and anything that is a
  * consequence rather than an explanation. A warning about *this machine's*
  * state, a save error, the version of a detected tool — those are facts the user
- * must not have to hunt for, and they keep their reserved slots on the surface.
- * A tip holds only the standing explanation, so nothing in it can move.
+ * must not have to hunt for, and they stay on the surface: as a one-line status
+ * that is filled in every state, or rendered only when they exist, last in the
+ * card (rule 12). A tip holds only the standing explanation, so nothing in it
+ * can move.
  *
  * Click to open, not hover: hover is not an affordance on a touchpad's first
  * pass (rule 11), and a popover that opens on hover cannot be read by anyone

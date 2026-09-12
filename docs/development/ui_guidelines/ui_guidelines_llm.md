@@ -69,7 +69,8 @@ Build a new tab from `src/renderer/src/components/settings/SettingsLayout.tsx`, 
 | `SettingsSection` | `<section>` + uppercase muted title + optional section-wide `action`, wrapping `space-y-3` |
 | `SettingsCard` | One setting: `rounded-lg border bg-[var(--color-bg)] p-4` |
 | `SettingsRows` / `SettingsRow` | A card holding a list of like things, `divide-y` rather than gapped |
-| `SettingsLabel` / `SettingsHint` | A control's label, and the sentence above it saying what it does |
+| `SettingsLabel` / `SettingsInfoTip` | A control's label, with its explanation behind the (?) beside it (`info` prop) |
+| `SettingsHint` | One line of live value under a label (a path, what a choice resolves to) — never standing prose |
 | `SettingsStatusRow` | A prerequisite as a dot + line + the one button that fixes it |
 | `SettingsButton` / `SettingsAddButton` / `SettingsIconButton` / `SettingsBadge` | Bordered secondary action, dashed Add, icon-only row action, tag |
 | `settingsInputClass` | The shared input/select shell |
@@ -79,7 +80,7 @@ Rules the primitives exist to enforce:
 - **Name the sections after what the user came to change**, not after the data model: Agent Folders, Engine Settings, Developer Tools. Two or three per tab is normal; a tab needing seven is really two tabs.
 - **A fact lives in the section that holds the control which changes it.** The engine's status sits above the engine path, not in a separate Readiness card three rows up — the user reading "not running" is one keystroke from the field that decides *which* binary starts.
 - **A section-wide verb (Rescan, Refresh) goes beside the section title**, as a labelled bordered button. It acts on everything in the section, so it belongs to the section, not to the first card; and a bare muted icon there is invisible until hovered (ux_rules rule 11).
-- **The hint goes above the control, messages below it.** A save error or an "applies on next start" note rendered under a field must sit in a slot that is always there (`min-h-[1.125rem]`), or it moves everything below as the user types (ux_rules rule 1).
+- **Explanation behind the (?), status below the control, nothing reserved for nothing.** What a setting is for goes in the `SettingsInfoTip` beside its label, not in a paragraph under it. Under the control there is either a one-line status that is filled in every state (`min-h-[1.125rem]`, copy that fits one line at 800px) or a message rendered only when it exists, last in the card. An empty `min-h` slot in the healthy state is wrong bottom padding, not a reservation (ux_rules rules 1 and 12). Rows that are only a label, a (?) and a switch go in one `SettingsRows` list, one line each.
 - **`SettingsSection` and the Expandable Card Pattern compose.** A section whose content is a list of configurable items (AI Credentials, MCP Providers) puts expandable cards inside the section; the two are not alternatives.
 
 ## Expandable Card Pattern
@@ -150,7 +151,7 @@ text-[13px] text-[var(--color-text)] focus:border-[var(--color-accent)] focus:ou
 
 The input's background is one step *up* from its card: on a `--color-bg` card use `bg-[var(--color-bg-secondary)]`; inside a `--color-bg-secondary` card (the expandable cards) use `bg-[var(--color-bg)]`. An input that matches its card has only its border to say it is an input.
 
-Labels: `text-[14px] font-medium text-[var(--color-text)]` (`SettingsLabel`), with the explanatory sentence under it at `text-[13px] text-[var(--color-text-muted)]` (`SettingsHint`). Inside a dense expandable card, a compact label — `block text-[12px] text-[var(--color-text-muted)] mb-0.5` — is the variant.
+Labels: `text-[14px] font-medium text-[var(--color-text)]` (`SettingsLabel`), with the explanation behind a `SettingsInfoTip` beside it and, where there is a live value to show, one line at `text-[13px] text-[var(--color-text-muted)]` (`SettingsHint`) under it. Inside a dense expandable card, a compact label — `block text-[12px] text-[var(--color-text-muted)] mb-0.5` — is the variant.
 
 ## Button Layout Rules
 
