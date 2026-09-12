@@ -210,6 +210,8 @@ const ALLOWLIST: string[] = [
  * A behavioural one moves into a driver.
  */
 const OWNERSHIP: { file: string; category: Category; count: number; why: string }[] = [
+  { file: 'src/main/services/customAgentService.ts', category: 'source', count: 1,
+    why: 'Command configuration, probes and private runtime state belong only to locally owned external rows; folder and synced rows retain their own authority.' },
   { file: 'src/main/db/agents.ts', category: 'source', count: 1,
     why: 'External runtime edits may update only a locally owned row; sync and folder ownership remain immutable.' },
   { file: 'src/main/tasks/jobDefinitionPolicy.ts', category: 'jobType', count: 2, why: 'selects the stored definition policy and its owning executor' },

@@ -33,7 +33,7 @@ The Inbox is one list of open questions and permissions belonging to tasks, answ
 
 ## Driver reply acceptance and commitment
 
-Transcript and Inbox answers use the same durable request settlement. A row already present in task_input_requests cannot fall back to live delivery when it is expired, foreign or otherwise refused. Rowless delivery remains limited to an ACP-origin park; an asynchronous binding never uses the missing-agent ACP fallback. Runner gates, next-message continuation and adapter-owned remote asks keep their existing routes.
+Transcript and Inbox answers use the same durable request settlement. A row already present in task_input_requests cannot fall back to live delivery when it is expired, foreign or otherwise refused. Rowless delivery remains limited to an ACP-origin park; a captured custom runtime is validated before delivery or missing-agent fallback, so deleted/reconfigured command agents cannot answer through the folder orphan path; an asynchronous binding never uses the missing-agent ACP fallback. Runner gates, next-message continuation and adapter-owned remote asks keep their existing routes.
 
 An async driver reply captures its original delivery binding and one registration token. Identical normalized permission decisions or full question answers join (remembered metadata does not alter that identity); an opposing answer receives answer_in_progress. Definitely unsent delivery can retry explicitly. Unknown acknowledgment returns uncertain with **Do not submit it again**; repeated attempts do not send another confirmation. Accepted-but-unrecorded delivery remains accepted_pending and retries only the local transaction, with that distinction in its reason.
 

@@ -21,6 +21,8 @@ export interface AsyncReplyBinding {
 /** Main-only registration handle; owner()/listForChat() never expose it. */
 export interface ReplyRegistration {
   token: object
+  /** Captured synchronous runtime admission; checked before legacy orphan fallback too. */
+  validate?(): void
   signal: AbortSignal
   origin: 'acp' | 'async'
   binding?: AsyncReplyBinding

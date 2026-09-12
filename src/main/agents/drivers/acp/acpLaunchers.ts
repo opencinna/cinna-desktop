@@ -56,6 +56,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { InitializeRequest, McpServer, NewSessionRequest } from '@agentclientprotocol/sdk'
+import type { CustomAgentConfig } from '../../../../shared/customAgents'
 import type { AgentReadiness } from '../../../../shared/agentDrivers'
 import type { ClaudeApproval } from '../../../../shared/engine'
 import type { LocalAgentKind } from '../../../../shared/localAgents'
@@ -77,11 +78,10 @@ export interface AcpAgentFolder {
   kind: LocalAgentKind
 }
 
-export interface AcpLaunchContext {
-  userId: string
-  agentId: string
-  folder: AcpAgentFolder
-}
+export type AcpLaunchContext = { userId: string; agentId: string; binding?: string } & (
+  | { folder: AcpAgentFolder; custom?: never }
+  | { folder?: never; custom: CustomAgentConfig }
+)
 
 /** What the session needs said to it once it exists, in the order given. */
 export interface AcpSessionSetup {
@@ -177,6 +177,7 @@ export function createOpencodeLauncher(deps: OpencodeLauncherDeps): AcpLauncher 
     id: 'opencode',
 
     async plan(ctx) {
+      if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }
       let binary: { path: string; version: string | null }
       try {
         binary = await deps.binary()
@@ -389,6 +390,7 @@ export function createClaudeLauncher(deps: ClaudeLauncherDeps): AcpLauncher {
     readiness,
 
     async plan(ctx) {
+      if (!ctx.folder) return { error: 'This launcher requires a local agent folder.' }
       const ready = await readiness()
       if (ready.state !== 'ok') return { error: ready.reason ?? 'This agent cannot run right now.' }
       const claudePath = await deps.claudePath()
@@ -507,16 +509,16 @@ function configDirName(agentId: string): string {
  * key, and `types.ts` promises it holds no secret.
  */
 function specKey(parts: readonly string[]): string {
-  return createHash('sha256').update(parts.join(' ')).digest('hex').slice(0, 32)
+  return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 32)
 }
 
 function envDigest(env: Record<string, string>): string {
   const hash = createHash('sha256')
   for (const name of Object.keys(env).sort()) {
     hash.update(name)
-    hash.update(' ')
+    hash.update('\0')
     hash.update(env[name])
-    hash.update(' ')
+    hash.update('\0')
   }
   return hash.digest('hex')
 }

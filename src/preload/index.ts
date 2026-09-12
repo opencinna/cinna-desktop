@@ -523,6 +523,13 @@ const api = {
     delete: (id: string): Promise<{ success: boolean }> => ipcRenderer.invoke('chatmode:delete', id)
   },
 
+  customAgents: {
+    configuration: (id: string): Promise<{ name: string; config: import('../shared/customAgents').CustomAgentConfig; grants: import('../shared/localAgentRequests').StoredPermissionGrant[] }> => ipcRenderer.invoke('custom-agent:configuration', id),
+    test: (input: { id?: string; config: import('../shared/customAgents').CustomAgentConfig }): Promise<import('../shared/customAgents').CustomAgentTestResult> => ipcRenderer.invoke('custom-agent:test', input),
+    save: (input: { id?: string; name?: string; config: import('../shared/customAgents').CustomAgentConfig; testToken: string }): Promise<{ id: string }> => ipcRenderer.invoke('custom-agent:save', input),
+    revokeGrant: (input: { id: string; key: string }): Promise<void> => ipcRenderer.invoke('custom-agent:revoke-grant', input)
+  },
+
   managedAgents: {
     configuration: (id: string): Promise<{ name: string; config: import('../shared/managedAgents').ManagedAgentConfig }> => ipcRenderer.invoke('managed-agent:configuration', id),
     choices: (input: { credentialId: string; workspaceId?: string }): Promise<import('../shared/managedAgents').ManagedAgentChoices> => ipcRenderer.invoke('managed-agent:choices', input),

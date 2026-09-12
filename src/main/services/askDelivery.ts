@@ -86,6 +86,10 @@ export function deliverAnswer(
     return { ok: false, reason: 'Chat not found', code: 'not_owned' }
   }
 
+  try { registration?.validate?.() } catch (error) {
+    return { ok: false, code: 'no_longer_waiting', reason: error instanceof Error ? error.message : ASK_NO_LONGER_WAITING }
+  }
+
   // The registry knows what was asked; the answer says what kind it is. A
   // permission answer posted to a question id would be delivered to the wrong
   // endpoint and refused by the engine — but only after the dialog that sent it

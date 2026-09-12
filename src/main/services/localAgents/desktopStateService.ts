@@ -349,10 +349,14 @@ function writeAtomically(path: string, contents: string): void {
   }
 }
 
-export const desktopStateService = {
-  /** Read the state, or the empty state when the file is absent or unusable. */
-  read(agentDir: string, kind: LocalAgentKind): DesktopState {
-    const path = desktopStatePath(agentDir, kind)
+/** External command state is keyed by captured ownership/configuration, never by a fake folder. */
+export interface ExternalRuntimeStateKey { ownerId: string; agentId: string; binding: string }
+export function externalRuntimeStatePath(key: ExternalRuntimeStateKey): string {
+  const digest = createHash('sha256').update(JSON.stringify([key.ownerId, key.agentId, key.binding])).digest('hex')
+  return join(externalStateRoot(), `runtime-${digest}.json`)
+}
+
+function readState(path: string): DesktopState {
     let text: string
     try {
       text = readFileSync(path, 'utf8')
@@ -369,6 +373,19 @@ export const desktopStateService = {
       logger.warn('desktop state is not valid JSON; using defaults', { path })
       return { ...EMPTY_STATE }
     }
+}
+
+export const desktopStateService = {
+  readExternal(key: ExternalRuntimeStateKey): DesktopState { return readState(externalRuntimeStatePath(key)) },
+  patchExternal(key: ExternalRuntimeStateKey, patch: Partial<DesktopState>): DesktopState {
+    const state = { ...this.readExternal(key), ...patch }
+    writeAtomically(externalRuntimeStatePath(key), `${JSON.stringify(state, null, 2)}\n`)
+    return state
+  },
+  /** Read the state, or the empty state when the file is absent or unusable. */
+  read(agentDir: string, kind: LocalAgentKind): DesktopState {
+    const path = desktopStatePath(agentDir, kind)
+    return readState(path)
   },
 
   /** Replace the state wholesale. Creates the containing directory if needed. */

@@ -142,24 +142,16 @@ function makeWorld(options: WorldOptions = {}): World {
   const deps: AcpDriverDeps = {
     pool: createAcpProcessPool({ start: startAcpConnection }),
     launcher: (id) => (id === launcher.id ? launcher : undefined),
-    readFolder: () => {
+    readRuntime: () => {
       if (options.folderThrows) throw new Error('the folder could not be read')
-      if (options.folder !== undefined) return options.folder
-      // The folder names the launcher the world was built for: the turn
-      // reconciles against the folder, so a world whose launcher and folder
-      // disagreed would be testing the reconcile rather than the launcher.
-      return { ...FOLDER, runtime: { engine: launcher.id } }
-    },
-    readSession: (chatId) => sessions.get(chatId) ?? null,
-    saveSession: ({ chatId, sessionId }) => {
-      saved.push(sessionId)
-      sessions.set(chatId, sessionId)
-    },
-    isGranted: () => options.granted === true,
-    rememberGrant: (_agentId, request) => {
-      if (options.grantWriteFails) return false
-      grants.push(request)
-      return true
+      const folder = options.folder !== undefined ? options.folder : { ...FOLDER, runtime: { engine: launcher.id } }
+      if (!folder) return null
+      return { type: 'folder', folder, validate() {},
+        readSession: (chatId) => sessions.get(chatId) ?? null,
+        saveSession: (chatId, sessionId) => { saved.push(sessionId); sessions.set(chatId, sessionId) },
+        isGranted: () => options.granted === true,
+        rememberGrant: (request) => { if (options.grantWriteFails) return false; grants.push(request); return true }
+      }
     },
     registerRequest: (input) => pendingRequests.register(input),
     resolveRequest: (requestId, resolution) =>
@@ -983,9 +975,11 @@ describe('a stop', () => {
           ]
         }
       },
-      deps: { turnCeilingMs: 60 }
+      deps: { turnCeilingMs: 650 }
     })
-    await w.run()
+    const running = w.run()
+    await askedFor(w) // The ceiling must expire a parked ask, not cancel initialization.
+    await running
     // Asserted on the stream rather than on `result.parts`: a decision written
     // while the turn is being torn down races the snapshot, which the OpenCode
     // runner's own golden recorded before this phase
@@ -1003,8 +997,10 @@ describe('a stop', () => {
     // The ceiling and the user's Stop share one grace: armed only by the abort,
     // a ceiling that the agent ignored would hold the agent's lock for the life
     // of the app — the exact failure the ceiling exists to prevent.
-    const w = world({ script: { prompt: { hang: true } }, deps: { turnCeilingMs: 50 } })
-    const result = await w.run()
+    const w = world({ script: { prompt: { hang: true } }, deps: { turnCeilingMs: 650 } })
+    const running = w.run()
+    await waitFor(() => w.fake.received('session/prompt').length === 1, 'the unresponsive prompt')
+    const result = await running
     expect(result.error?.message).toMatch(/stopped responding/)
     expect(w.pool.status(AGENT_ID).state).not.toBe('running')
   })
@@ -1193,8 +1189,8 @@ describeDriverContract(
           }
         }
       },
-      parks: () => ({
-        ...subject({
+      parks: () => {
+        const { w, turn } = subject({
           script: {
             prompt: {
               emit: [
@@ -1210,9 +1206,16 @@ describeDriverContract(
               ]
             }
           }
-        }).turn,
-        answer: { kind: 'permission', reply: 'once' } as const
-      }),
+        })
+        return {
+          ...turn,
+          answer: { kind: 'permission', reply: 'once' } as const,
+          answerRequest: async (requestId, resolution) => {
+            const owner = pendingRequests.owner(requestId)
+            return owner ? w.driver.respond({ requestId, ...owner }, resolution) : { delivered: false }
+          }
+        }
+      },
       session: () => {
         const w = world({ script: SAYS_HELLO })
         let readBySecond: string | null = null
@@ -1248,17 +1251,6 @@ describeDriverContract(
           return { driver: w.driver, row: ROW, grantsWritten: () => w.grants.length }
         })()
       })
-    }
-  },
-  {
-    knownViolations: {
-      // Inherited deliberately from both runners it replaces: an aborted turn
-      // returns the parts it collected with **no** `error` and no `canceled`
-      // task state, because a stop the user asked for is not a failure. The
-      // terminal event posted above the driver is what the renderer acts on.
-      // Whoever gives a run its own stop reason (phase 5's task states) is who
-      // deletes this entry.
-      'abort.reports': 'an aborted ACP turn reports parts with no error, like both runners before it'
     }
   }
 )

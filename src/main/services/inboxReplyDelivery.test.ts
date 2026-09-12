@@ -40,8 +40,8 @@ function deferred() {
   const promise = new Promise<AsyncRespondOutcome>((yes) => { resolve = yes })
   return { promise, resolve }
 }
-function park(delivery?: AsyncReplyBinding, id = 'ask') {
-  const handle = pendingRequests.register({ requestId: id, chatId: 'chat', agentId: 'agent', kind: 'permission', delivery,
+function park(delivery?: AsyncReplyBinding, id = 'ask', validate?: () => void) {
+  const handle = pendingRequests.register({ requestId: id, chatId: 'chat', agentId: 'agent', kind: 'permission', delivery, validate,
     request: { action: 'bash', resources: ['echo verified'], savable: [] } })
   inboxService.recordRunEvent(ctx, { type: 'needs_input', requestId: id, resume: 'reply', request: { kind: 'permission', action: 'bash', resources: ['echo verified'] } })
   return handle
@@ -72,6 +72,18 @@ describe('both reply surfaces through the real registry and SQLite', () => {
     expect(taskInputRequestRepo.getById('ask')?.status).toBe('answered')
   })
 
+  it.each(['inbox', 'transcript'] as const)('refuses a deleted custom command before ACP orphan delivery from %s', async (surface) => {
+    const handle = park(undefined, 'ask', () => { if (!state.agentExists) throw new Error('Captured command is gone') })
+    const resolved = vi.fn(); void handle.answered.then(resolved)
+    state.agentExists = false
+    const result = surface === 'inbox'
+      ? await inboxService.answer(USER, 'ask', { kind: 'permission', reply: 'always' })
+      : await inboxService.answerFromTranscript(USER, 'ask', { kind: 'permission', reply: 'always' })
+    expect(result).toMatchObject({ ok: false, reason: 'Captured command is gone' })
+    expect(resolved).not.toHaveBeenCalled()
+    expect(taskInputRequestRepo.getById('ask')?.resolution).not.toMatchObject({ kind: 'permission' })
+    expect(pendingRequests.owner('ask')).not.toBeNull()
+  })
   it('preserves the live ACP orphan answer and records an effective once-only grant', async () => {
     const handle = park(); state.agentExists = false
     expect(await inboxService.answerFromTranscript(USER, 'ask', { kind: 'permission', reply: 'always' })).toEqual({ ok: true, remembered: false })

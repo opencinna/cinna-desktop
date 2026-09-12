@@ -21,7 +21,6 @@ import { join } from 'node:path'
 import { engineBinaryService } from '../../engine/engineBinaryService'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
 import { a2aSessionRepo, type AgentRow } from '../../db/agents'
-import { getSettingsScopeUserId } from '../../auth/scope'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { localAgentService } from '../../services/localAgents/localAgentService'
 import { desktopStateService } from '../../services/localAgents/desktopStateService'
@@ -50,8 +49,10 @@ import { DEFAULT_CLAUDE_APPROVAL } from '../../../shared/engine'
 import type { AcpLauncherId, AgentDriverId } from '../../../shared/agentDrivers'
 import { createA2aDriver } from './a2aDriver'
 import { createAcpDriver, respondToAcpAsk, type AcpFolderView } from './acp/acpDriver'
-import { createAcpProcessPool } from './acp/acpProcessPool'
-import { startAcpConnection } from './acp/acpConnection'
+import { acpProcessPool } from './acp/acpPool'
+export { acpProcessPool } from './acp/acpPool'
+import { customAgentService } from '../../services/customAgentService'
+import type { AcpRuntimeView } from './acp/acpRuntime'
 import {
   createClaudeLauncher,
   createOpencodeLauncher,
@@ -133,37 +134,6 @@ function isGranted(
   return permissionGrantService.covers(agentDir, agentKind, request)
 }
 
-/**
- * Write a user's *Always allow* against the folder the ask came from.
- *
- * Lives here rather than in the IPC handler whose answer triggers it for two
- * reasons. This module is already the one place `localAgentService` and the
- * folder's own state are named together, so "which directory is this agent" is
- * answered once; and the alternative — reaching into the local-agent services
- * from `agent_a2a.ipc.ts` — pulls the whole folder stack (Electron `shell`, the
- * scaffolder, the watcher) into the chat IPC module's import graph.
- *
- * Returns whether the rule is on disk. False is a real answer, not an error:
- * the action the user approved still goes ahead, they are asked again next
- * time, and the block says so instead of claiming a rule that is not there.
- */
-function rememberGrant(agentId: string, request: LocalPermissionRequest): boolean {
-  try {
-    // The DTO, not just its path: where an agent's state lives is a property of
-    // the agent, and a probe of the folder for it can be wrong (see
-    // `desktopStatePath`).
-    const agent = localAgentService.get(getSettingsScopeUserId(), agentId)
-    permissionGrantService.remember(agent.path, agent.kind, request)
-    return true
-  } catch (err) {
-    logger.warn('could not remember a permission grant', {
-      agentId,
-      error: err instanceof Error ? err.message : String(err)
-    })
-    return false
-  }
-}
-
 /** Settle a parked ask in the pending-request registry. */
 function resolveRequest(
   requestId: string,
@@ -191,7 +161,6 @@ export const claudeAuthProbe = new ClaudeAuthProbe({
   env: async () => buildClaudeEnv({ shellEnv: await getShellEnv(), appVersion: app.getVersion() })
 })
 
-export const acpProcessPool = createAcpProcessPool({ start: startAcpConnection })
 
 /**
  * How this build runs a Node program, and where the Claude ACP adapter is.
@@ -266,6 +235,7 @@ function folderSystemPrompt(userId: string, agentId: string): string {
 }
 
 const acpLaunchers: Partial<Record<AcpLauncherId, AcpLauncher>> = {
+  custom: customAgentService.launcher,
   opencode: createOpencodeLauncher({
     // Through the service, which memoises per *configured path* and never
     // caches a failure — so a path the user has just fixed in Settings is tried
@@ -355,14 +325,23 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
   }
 }
 
+function readAcpRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null {
+  if (agent.source === 'local' && agent.driverConfig?.launcher === 'custom') return customAgentService.runtime(userId, agent)
+  const folder = readAcpFolder(userId, agent.id)
+  if (!folder) return null
+  return {
+    type: 'folder', folder, validate() {},
+    readSession: (chatId) => readSession(chatId, agent.id),
+    saveSession: (chatId, sessionId) => saveSession({ chatId, agentId: agent.id, agentDir: folder.path, agentKind: folder.kind, sessionId }),
+    isGranted: (request) => isGranted(folder.path, folder.kind, request),
+    rememberGrant: (request) => { permissionGrantService.remember(folder.path, folder.kind, request); return true }
+  }
+}
+
 export const acpDriver = createAcpDriver({
   pool: acpProcessPool,
   launcher: (id) => acpLaunchers[id],
-  readFolder: readAcpFolder,
-  readSession,
-  saveSession,
-  isGranted,
-  rememberGrant,
+  readRuntime: readAcpRuntime,
   registerRequest: (input) => pendingRequests.register(input),
   resolveRequest,
   withLock: (agentId, owner, fn, queuedSignal) => queuedSignal

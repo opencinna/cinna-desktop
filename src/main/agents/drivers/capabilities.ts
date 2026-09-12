@@ -81,6 +81,10 @@ export function capabilitiesFor(agent: CapabilityRow): AgentCapabilities {
  * pretended otherwise would put the composer and the turn into disagreement.
  */
 function acpCapabilities(launcher: string): AgentCapabilities {
+  if (launcher === 'custom') return {
+    ...folderCapabilities(), commands: 'none', cwd: false,
+    input: { permission: true, question: true, auth: false, elicitation: false }, auth: 'cli'
+  }
   return {
     ...folderCapabilities(),
     input: {

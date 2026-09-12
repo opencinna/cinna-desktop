@@ -331,3 +331,7 @@ where they were taken:
 
 Everything in those two documents that the ACP move retired is **marked as retired in place**, with
 what replaced it. Nothing unmarked there is stale.
+
+## Configured commands and startup cancellation
+
+The [custom launcher](../custom_agents/custom_agents.md) uses this same ACP connection for a user-selected local or SSH command. A standalone Test exchanges initialize and disposes the child without authentication, session creation or a prompt. Local spawn argv and cwd stay separate from the remote session cwd; stdout remains protocol-only. Turn Stop and the ceiling also cancel silent initialize/new/load/setup, retire startup processes and prevent a later prompt. User Stop now returns an explicit canceled result, including the existing folder driver; the former shared ACP abort-result exception is removed. A remote command that ignores prompt cancellation is disposed after the grace with a visible unconfirmed-remote-stop notice.

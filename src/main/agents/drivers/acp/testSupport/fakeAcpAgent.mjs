@@ -214,6 +214,7 @@ const app = agent({ name: 'fake-acp' })
       authMethods: []
     }))
   )
+  .onRequest('authenticate', handler('authenticate', 'authenticate', () => ({})))
   .onRequest(
     'session/new',
     handler('newSession', 'session/new', () => {
@@ -245,8 +246,17 @@ const app = agent({ name: 'fake-acp' })
     noteCancel(ctx.params?.sessionId)
   })
 
+// Optional test-only byte witness. Forward SDK output unchanged; never put
+// diagnostics or our own log records onto the protocol stream.
+const wireLog = process.env.FAKE_ACP_WIRE_LOG
+const output = wireLog ? new Writable({
+  write(chunk, encoding, done) {
+    appendFileSync(wireLog, chunk)
+    process.stdout.write(chunk, encoding, done)
+  }
+}) : process.stdout
 const connection = app.connect(
-  ndJsonStream(Writable.toWeb(process.stdout), Readable.toWeb(process.stdin))
+  ndJsonStream(Writable.toWeb(output), Readable.toWeb(process.stdin))
 )
 
 connection.closed.then(() => process.exit(script.exitOnClose ?? 0)).catch(() => process.exit(1))

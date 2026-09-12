@@ -13,6 +13,7 @@ import type { LocalAgentDto } from '../../../../../shared/localAgents'
 import { isCredentialActive } from '../../../../../shared/credentials'
 import { NewLocalAgentModal } from './NewLocalAgentModal'
 import { ManagedAgentModal } from '../ManagedAgentModal'
+import { CustomAgentModal } from '../CustomAgentModal'
 import { useAgents } from '../../../hooks/useAgents'
 import { useAuthStore } from '../../../stores/auth.store'
 
@@ -153,9 +154,11 @@ export function LocalAgentsList(): React.JSX.Element {
   const { data: providers } = useProviders()
   const [creating, setCreating] = useState(false)
   const [managed, setManaged] = useState<string | true | null>(null)
+  const [custom, setCustom] = useState<string | true | null>(null)
   const profileId = useAuthStore((state) => state.currentUser?.id)
   const { data: allAgents } = useAgents()
   const managedAgents = (allAgents ?? []).filter((agent) => agent.driver === 'managed')
+  const commandAgents = (allAgents ?? []).filter((agent) => agent.driver === 'acp' && agent.capabilities.cwd === false)
   const groups = useMemo(
     () => groupAgentsByRoot(data?.roots ?? [], data?.agents ?? []),
     [data]
@@ -216,6 +219,10 @@ export function LocalAgentsList(): React.JSX.Element {
       </div>
 
       <div className="flex-1 overflow-y-auto">
+        {commandAgents.length > 0 && <div className="px-1.5 py-1 space-y-px">
+          <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Command-line</div>
+          {commandAgents.map((agent) => <button key={agent.id} type="button" onClick={() => setCustom(agent.id)} className="w-full min-w-0 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]"><span className="block truncate text-xs text-[var(--color-text)]">{agent.name}</span><span className="block truncate text-[10px] text-[var(--color-text-muted)]">{agent.readiness?.reason ?? 'ACP command'}</span></button>)}
+        </div>}
         {managedAgents.length > 0 && <div className="px-1.5 py-1 space-y-px">
           <div className="px-2.5 pb-1 text-[10px] uppercase tracking-wide text-[var(--color-text-muted)]">Managed</div>
           {managedAgents.map((agent) => <button key={agent.id} type="button" onClick={() => setManaged(agent.id)} className="w-full min-w-0 rounded-md px-2.5 py-1.5 text-left hover:bg-[var(--color-bg-hover)]"><span className="block truncate text-xs text-[var(--color-text)]">{agent.name}</span><span className="block truncate text-[10px] text-[var(--color-text-muted)]">{agent.readiness?.reason ?? 'Claude workspace'}</span></button>)}
@@ -247,7 +254,7 @@ export function LocalAgentsList(): React.JSX.Element {
           </div>
         ) : total === 0 && groups.length <= 1 ? (
           <div className="px-2.5 py-6 text-center text-xs text-[var(--color-text-muted)]">
-            {managedAgents.length ? 'No folder agents yet' : 'No agents yet — click + to add one'}
+            {managedAgents.length + commandAgents.length ? 'No folder agents yet' : 'No agents yet — click + to add one'}
           </div>
         ) : (
           <div className="px-1.5 py-1 space-y-2">
@@ -286,10 +293,11 @@ export function LocalAgentsList(): React.JSX.Element {
         )}
       </div>
 
-      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onManaged={() => { setCreating(false); setManaged(true) }} onCreateFolder={() => {
+      {creating && <NewLocalAgentModal onClose={() => setCreating(false)} onManaged={() => { setCreating(false); setManaged(true) }} onCustom={() => { setCreating(false); setCustom(true) }} onCreateFolder={() => {
         if (homeAccess && homeAccess !== 'ready') { setCreating(false); useAgentsHomeStore.getState().reopen(homeAccess); return false }
         return true
       }} />}
+      {custom !== null && <CustomAgentModal key={`${profileId}:${custom}`} agentId={typeof custom === 'string' ? custom : undefined} onClose={() => setCustom(null)} />}
       {managed !== null && <ManagedAgentModal key={`${profileId}:${managed}`} agentId={typeof managed === 'string' ? managed : undefined} onClose={() => setManaged(null)} />}
     </div>
   )

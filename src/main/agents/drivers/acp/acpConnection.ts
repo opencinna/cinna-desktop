@@ -145,6 +145,8 @@ const EXIT_REPORT_GRACE_MS = 250
  * only way these paths get covered at all.
  */
 export interface AcpConnectionOptions {
+  /** Cancel a standalone initialize probe, disposing its process before rejection. */
+  signal?: AbortSignal
   /** Overrides {@link ACP_START_TIMEOUT_MS}. */
   startTimeoutMs?: number
   /** Overrides {@link PRE_BIND_WINDOW_MS}. */
@@ -270,6 +272,7 @@ export async function startAcpConnection(
   init: InitializeRequest,
   options: AcpConnectionOptions = {}
 ): Promise<AcpConnection> {
+  if (options.signal?.aborted) throw new Error('The command test was canceled.')
   const startTimeoutMs = options.startTimeoutMs ?? ACP_START_TIMEOUT_MS
   const preBindWindowMs = options.preBindWindowMs ?? PRE_BIND_WINDOW_MS
   const preBindLimit = options.preBindLimit ?? PRE_BIND_LIMIT
@@ -584,13 +587,17 @@ export async function startAcpConnection(
     timer.unref?.()
   })
 
-  type StartOutcome = { response: InitializeResponse } | { exit: AcpExit } | 'timeout'
+  let abortStart!: () => void
+  const aborted = new Promise<'aborted'>((resolve) => { abortStart = () => resolve('aborted') })
+  options.signal?.addEventListener('abort', abortStart, { once: true })
+  if (options.signal?.aborted) abortStart()
+  type StartOutcome = { response: InitializeResponse } | { exit: AcpExit } | 'timeout' | 'aborted'
   let outcome: StartOutcome
   try {
     outcome = await Promise.race<StartOutcome>([
       connection.agent.request('initialize', init).then((response) => ({ response })),
       exited.then((exit) => ({ exit })),
-      timeout
+      timeout, aborted
     ])
   } catch (err) {
     // The request lost its transport. Nine times in ten that is the process
@@ -601,8 +608,10 @@ export async function startAcpConnection(
     )
   } finally {
     clearTimeout(timer)
+    options.signal?.removeEventListener('abort', abortStart)
   }
 
+  if (outcome === 'aborted') return await failure('initialization was canceled')
   if (outcome === 'timeout') {
     return await failure(`did not answer initialize within ${startTimeoutMs} ms`)
   }

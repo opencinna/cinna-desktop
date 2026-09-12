@@ -1,3 +1,5 @@
+import { customAgentService } from '../services/customAgentService'
+import type { CustomAgentConfig } from '../../shared/customAgents'
 import { replyAnswerUncertainty } from '../services/replyAnswerClaims'
 import { chatRepo } from '../db/chats'
 import { inboxService } from '../services/inboxService'
@@ -20,6 +22,10 @@ import type { CliCommand } from '../../shared/cliCommands'
 const logger = createLogger('A2A')
 
 export function registerA2AHandlers(): void {
+  ipcHandle('custom-agent:configuration', (_event, id: string) => { userActivation.requireActivated(); return customAgentService.configuration(id) })
+  ipcHandle('custom-agent:test', (_event, input: { id?: string; config: CustomAgentConfig }) => { userActivation.requireActivated(); return customAgentService.test(input) })
+  ipcHandle('custom-agent:save', (_event, input: { id?: string; name?: string; config: CustomAgentConfig; testToken: string }) => { userActivation.requireActivated(); return customAgentService.save(input) })
+  ipcHandle('custom-agent:revoke-grant', (_event, input: { id: string; key: string }) => { userActivation.requireActivated(); customAgentService.revokeGrant(input.id, input.key) })
   ipcHandle('managed-agent:configuration', (_event, id: string) => {
     userActivation.requireActivated()
     return managedAgentService.configuration(id)

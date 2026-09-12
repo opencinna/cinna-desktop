@@ -6,7 +6,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 
 ## Core Concepts
 
-- **Driver** — `AgentDriver`: the transport-specific half of running an agent. There are three: `a2a` (hand-added or Cinna-synced remote agents), `acp` (local CLI agents over a child process), and `managed` (Claude workspace agents over SDK sessions/events). A folder engine is an ACP launcher, not a separate driver
+- **Driver** — `AgentDriver`: the transport-specific half of running an agent. There are three: `a2a` (hand-added or Cinna-synced remote agents), `acp` (folder engines or configured local/SSH commands over a child process), and `managed` (Claude workspace agents over SDK sessions/events). A folder engine is an ACP launcher, not a separate driver
 - **Driver id** — `agents.driver`, stored on every row. **`source` still says who owns a row** (`local` / `remote` / `folder`: whether sync may touch it, which settings tab lists it, whether it can be deleted). **`driver` says how the agent runs.** One column used to carry both, and they are separate concerns
 - **Capabilities** — what a driver can do for a given row: stream, cancel, keep a session, which asks it raises and how they are answered, whether a file can be attached, who authenticates the turn, where `/` commands come from, whether it runs in a folder. Answered from the row alone
 - **Agent readiness** — whether an agent can take a turn now. The answer is `ok`, or one of:
@@ -18,7 +18,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 - **Not known** — a readiness of `null`: never checked, or a check that could not tell. **It never refuses anything**
 - **Refusal** — the composer declining to send a message to the agent it goes straight to, because that agent's driver answered something other than `ok`
 - **Check again** — the composer's action on a refusal; the Settings card's **Test Connection** does the same. It is a check the user asked for, so it goes past every cache a probe keeps
-- **Launcher** — which engine an ACP agent runs: `driver_config.launcher`, one of `opencode` / `claude` / `gemini` / `codex`. **The launcher id is the engine name**, deliberately — it is what the folder's own `runtime.engine` says, and a second vocabulary would put the manifest and the row one translation table apart. Only the first two are built; an agent naming either of the others is refused in words, which is a far better failure than a value that reads as the default engine
+- **Launcher** — the ACP process definition in driver_config. Folder engines use opencode or claude; gemini and codex remain recognized but unimplemented. The custom launcher runs a user-configured executable/argv, including SSH, with separately captured state and no folder. See [Command-line Agents](../custom_agents/custom_agents.md)
 - **Reconcile** — the ACP driver re-reading its folder's engine at the start of every turn and taking the launcher from what it says now. It used to mean handing the turn to a *sibling driver*, and while that hand-off was missing a Claude agent on a stale row answered "try again in a moment" for ever
 
 ## User Stories / Flows
@@ -76,7 +76,7 @@ What is still allowed, and where, is enforced by a test, not by review — see [
 - the orchestrator's agent tool
 - the answer path
 
-It reads no folder and makes no network call. The ACP driver checks its folder itself when it runs a turn, and picks its launcher from what the folder says then.
+It reads no folder and makes no network call. The ACP driver captures a runtime when it runs: a fresh folder view or an owned custom command and state binding. Folder turns choose the launcher from what the folder says then.
 
 ### Remote acceptance and local continuation are separate
 

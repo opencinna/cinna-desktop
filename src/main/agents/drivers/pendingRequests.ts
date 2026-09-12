@@ -44,6 +44,7 @@ export type { RequestResolution }
 const logger = createLogger('local-agent-requests')
 
 interface Entry {
+  validate?(): void
   token: object
   controller: AbortController
   delivery?: AsyncReplyBinding
@@ -92,6 +93,7 @@ export const pendingRequests = {
     timeoutMs?: number
     /** Omitted only by the original synchronous ACP registration path. */
     delivery?: AsyncReplyBinding
+    validate?(): void
   }): { answered: Promise<RequestResolution>; cancel: () => void } {
     const existing = entries.get(input.requestId)
     if (existing) {
@@ -239,6 +241,7 @@ export const pendingRequests = {
     const isCurrent = (): boolean => entries.get(requestId) === entry && !entry.controller.signal.aborted
     return {
       token: entry.token,
+      validate: entry.validate,
       signal: entry.controller.signal,
       origin: entry.delivery ? 'async' : 'acp',
       binding: entry.delivery,

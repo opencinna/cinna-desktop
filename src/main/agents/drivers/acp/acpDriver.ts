@@ -59,7 +59,6 @@ import type {
 } from '@agentclientprotocol/sdk'
 import type { AgentRow } from '../../../db/agents'
 import type { RunAgentTurnResult } from '../../../services/a2aStreamingService'
-import type { LocalAgentKind } from '../../../../shared/localAgents'
 import type { RunEvent } from '../../../../shared/runEvents'
 import { describeQuestionAnswers } from '../../../../shared/localAgentRequests'
 import type {
@@ -77,6 +76,9 @@ import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } fro
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
 import { toElicitationContent, toInputQuestions } from './acpQuestions'
 import type { AcpConnection, AcpLauncherId, AcpProcessPool } from './types'
+
+import type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
+export type { AcpFolderView, AcpRuntimeView } from './acpRuntime'
 
 const logger = createLogger('acp-driver')
 
@@ -110,43 +112,12 @@ export const ACP_CANCEL_GRACE_MS = 3_000
 /** Shown when a folder agent's folder is gone — the runners' own sentence. */
 export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on disk.'
 
-/** The folder as it is on disk right now, reduced to what a turn decides on. */
-export interface AcpFolderView {
-  /** Fresh explicit kit handover to the task coordinator. */
-  coordinatorHandback?: boolean
-  name: string
-  slug: string
-  description: string
-  path: string
-  kind: LocalAgentKind
-  enabled: boolean
-  /** `LocalAgentReadiness`. A string, because the scanner's own view types it so. */
-  readiness: string
-  readinessReason: string | null
-  /** The runtime block the engine is read from — the manifest's, or a bare folder's state. */
-  runtime: { engine?: unknown } | null
-}
-
 export interface AcpDriverDeps {
   pool: AcpProcessPool
   /** The launcher for an engine, or undefined when this build has none. */
   launcher(id: AcpLauncherId): AcpLauncher | undefined
-  /** The folder, freshly read; null when it cannot be. Must not throw. */
-  readFolder(userId: string, agentId: string): AcpFolderView | null
-  /** The remembered session id for this (chat, agent), if any. */
-  readSession(chatId: string, agentId: string): string | null
-  /** Remember it, in both `desktop.json` and `a2a_sessions.context_id`. */
-  saveSession(input: {
-    chatId: string
-    agentId: string
-    agentDir: string
-    agentKind: LocalAgentKind
-    sessionId: string
-  }): void
-  /** True when this agent folder already holds a grant covering an ask. Must not throw. */
-  isGranted(agentDir: string, agentKind: LocalAgentKind, request: LocalPermissionRequest): boolean
-  /** Write an *Always allow* against the folder the ask came from. False when it is not on disk. */
-  rememberGrant(agentId: string, request: LocalPermissionRequest): boolean
+  /** Resolve and capture the actual folder or external command and its state. */
+  readRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null
   /** Park an ask in the pending-request registry. */
   registerRequest(input: {
     requestId: string
@@ -154,6 +125,7 @@ export interface AcpDriverDeps {
     agentId: string
     kind: 'permission' | 'question'
     request?: LocalPermissionRequest
+    validate?(): void
   }): { answered: Promise<RequestResolution>; cancel: () => void }
   /** Settle a parked ask; false when nothing waits on it. */
   resolveRequest(requestId: string, resolution: RequestResolution): boolean
@@ -170,6 +142,7 @@ function fail(message: string, raw?: string): RunAgentTurnResult {
 }
 
 export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
+  const parkedRuntimes = new Map<string, AcpRuntimeView>()
   const driver: AgentDriver = {
     id: 'acp',
 
@@ -179,7 +152,9 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
     async readiness(userId, agent, options): Promise<AgentReadiness | null> {
       try {
-        const folder = deps.readFolder(userId, agent.id)
+        const runtime = deps.readRuntime(userId, agent)
+        if (runtime?.type === 'external') { runtime.validate(); return await runtime.readiness(options) }
+        const folder = runtime?.folder ?? null
         const state = folderReadiness(folder)
         if (state.state !== 'ok') return state
         // The engine's own rungs, asked about the launcher the **folder** names
@@ -197,32 +172,24 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
           agentId: agent.id,
           error: err instanceof Error ? err.message : String(err)
         })
-        return { state: 'invalid', reason: ACP_FOLDER_NOT_FOUND }
+        return { state: 'invalid', reason: agent.driverConfig?.launcher === 'custom' && err instanceof Error ? err.message : ACP_FOLDER_NOT_FOUND }
       }
     },
 
     async run(userId, agent, input): Promise<RunAgentTurnResult> {
-      const folder = deps.readFolder(userId, agent.id)
-      if (!folder) return fail(ACP_FOLDER_NOT_FOUND)
-      if (!folder.enabled) {
-        return fail(`“${folder.name}” is switched off. Turn it back on to chat with it.`)
+      if (input.signal.aborted) return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
+      let runtime: AcpRuntimeView | null
+      try { runtime = deps.readRuntime(userId, agent); runtime?.validate(input.chatId) }
+      catch (error) { return fail(error instanceof Error ? error.message : 'This agent configuration is unavailable.') }
+      if (!runtime) return fail(ACP_FOLDER_NOT_FOUND)
+      const folder = runtime.type === 'folder' ? runtime.folder : null
+      const name = folder?.name ?? (runtime.type === 'external' ? runtime.name : agent.name)
+      const enabled = folder?.enabled ?? (runtime.type === 'external' && runtime.enabled)
+      if (!enabled) return fail(`“${name}” is switched off. Turn it back on to chat with it.`)
+      if (folder && (folder.readiness === 'invalid' || folder.readiness === 'contract_too_new')) {
+        return fail(folder.readinessReason ?? 'This agent’s folder is not in a state it can be run from.')
       }
-      if (folder.readiness === 'invalid' || folder.readiness === 'contract_too_new') {
-        return fail(
-          folder.readinessReason ?? 'This agent’s folder is not in a state it can be run from.'
-        )
-      }
-
-      // **Which engine, decided from the folder** — the reconcile the two
-      // folder drivers used to do by handing the turn to each other. With one
-      // driver it is a lookup, which is the whole point of the collapse.
-      //
-      // The row's own launcher is deliberately not consulted here. It is a
-      // cache of this same read, and every state where the folder cannot speak
-      // for itself — gone, unreadable, `contract_too_new` — was refused above,
-      // in the runners' own words. The one reader left for the stored value is
-      // `capabilities()`, which has only a row to go on.
-      const launcherId = launcherOfFolder(folder.runtime)
+      const launcherId = runtime.type === 'folder' ? launcherOfFolder(runtime.folder.runtime) : 'custom'
       const launcher = deps.launcher(launcherId)
       if (!launcher) {
         logger.warn('an agent names an engine this build cannot run', {
@@ -238,7 +205,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
       // sentence naming the remedy instead of queueing behind another chat's
       // turn to be told.
       const plan = await launcher
-        .plan({ userId, agentId: agent.id, folder })
+        .plan({ userId, agentId: agent.id, ...(runtime.type === 'folder' ? { folder: runtime.folder } : { custom: runtime.config, binding: runtime.binding }) })
         .catch((err: unknown) => {
           logger.warn('a launcher failed to plan a turn', {
             agentId: agent.id,
@@ -247,13 +214,14 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
           })
           return { error: 'This agent could not be started.' }
         })
+      if (input.signal.aborted) return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
       if (isRefusal(plan)) return fail(plan.error)
 
       try {
         if (input.queueWhenBusy) return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, folder, launcherId, plan, input }), input.signal)
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes }), input.signal)
         return await deps.withLock(agent.id, 'turn', () =>
-          runTurn(deps, { userId, agent, folder, launcherId, plan, input })
+          runTurn(deps, { userId, agent, runtime, launcherId, plan, input, parkedRuntimes })
         )
       } catch (err) {
         // `turnLock.acquire` throws rather than queueing, and its message is
@@ -267,12 +235,17 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
           chatId: input.chatId,
           error: message
         })
-        return fail(message, String(err))
+        return input.signal.aborted ? { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' } : fail(message, String(err))
       }
     },
 
     respond(ask: ParkedAsk, resolution: RequestResolution): RespondOutcome {
-      return respondToAcpAsk(deps, ask, resolution)
+      const runtime = parkedRuntimes.get(ask.requestId)
+      if (!runtime) return { delivered: false }
+      try { runtime.validate(ask.chatId) } catch { return { delivered: false } }
+      return respondToAcpAsk({ resolveRequest: deps.resolveRequest, rememberGrant: (_agentId, request) => {
+        try { return runtime.rememberGrant(request) } catch { return false }
+      } }, ask, resolution)
     }
   }
   return driver
@@ -283,7 +256,8 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 interface TurnContext {
   userId: string
   agent: AgentRow
-  folder: AcpFolderView
+  runtime: AcpRuntimeView
+  parkedRuntimes: Map<string, AcpRuntimeView>
   launcherId: AcpLauncherId
   plan: AcpLaunchPlan
   input: RunInput
@@ -312,7 +286,8 @@ interface AcpTurn {
 }
 
 async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentTurnResult> {
-  const { agent, folder, plan, input } = ctx
+  const { agent, runtime, plan, input } = ctx
+  const sessionCwd = runtime.type === 'folder' ? runtime.folder.path : runtime.config.cwd
   const chatId = input.chatId
   const stream = new AcpMessageStream({ launcher: ctx.launcherId })
   const accumulator = new StreamPartsAccumulator({
@@ -371,6 +346,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
    * unheard, and the turn would hold its lock for the life of the app. Which is
    * the failure the ceiling exists to prevent.
    */
+  const startupController = new AbortController()
+  let startingSession = true
   let requestCancel: () => void = () => {}
   const cancelRequested = new Promise<void>((resolve) => {
     requestCancel = resolve
@@ -407,6 +384,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     for (const [, cancel] of turn.parked) cancel()
     turn.parked.clear()
     if (sessionId) void connection?.cancel(sessionId).catch(() => {})
+    startupController.abort()
+    if (startingSession) { deps.pool.retire(agent.id); void connection?.dispose() }
     requestCancel()
   }
 
@@ -419,6 +398,10 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
   )
   ceiling.unref?.()
 
+  const startCanceled = cancelRequested.then(() => { throw new Error('The agent was stopped before its prompt started.') })
+  // The rejection is also observed when a completed turn never needed it.
+  void startCanceled.catch(() => {})
+  const duringStart = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, startCanceled])
   const release = deps.pool.hold(agent.id)
   const onAbort = (): void => askAgentToStop()
   input.signal.addEventListener('abort', onAbort, { once: true })
@@ -433,15 +416,17 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
      */
     if (input.signal.aborted) {
       logger.info('an ACP turn was stopped before it started', { agentId: agent.id, chatId })
-      return { text: '', parts: [], notices: [] }
+      return { text: '', parts: [], notices: [], taskState: 'canceled', stopReason: 'canceled' }
     }
 
     try {
-      connection = await deps.pool.acquire(agent.id, plan.spec, plan.init)
+      runtime.validate(chatId)
+      connection = await duringStart(deps.pool.acquire(agent.id, plan.spec, plan.init, startupController.signal))
+      try { runtime.validate(chatId) } catch (error) { deps.pool.retire(agent.id); throw error }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       logger.warn('an ACP agent’s process would not start', { agentId: agent.id, error: message })
-      return fail(startFailureMessage(ctx.launcherId, message), message)
+      return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(startFailureMessage(ctx.launcherId, message), message)
     }
 
     const handlers = {
@@ -468,7 +453,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
     }
 
-    const remembered = deps.readSession(chatId, agent.id)
+    const remembered = runtime.readSession(chatId)
     const canLoad = connection.initialized.agentCapabilities?.loadSession === true
     let unbind: (() => void) | undefined
 
@@ -481,10 +466,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       turn.replaying = true
       unbind = connection.bindSession(remembered, handlers)
       try {
-        await connection.loadSession({
+        runtime.validate(chatId)
+        await duringStart(connection.loadSession({
           sessionId: remembered,
-          ...newSessionParams(plan, folder.path)
-        })
+          ...newSessionParams(plan, sessionCwd)
+        }))
+        runtime.validate(chatId)
         sessionId = remembered
       } catch (err) {
         // **A remembered session is verified by use, not by a probe** — there
@@ -505,14 +492,17 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       }
     }
 
+    if (startupController.signal.aborted) throw new Error('The agent was stopped before its prompt started.')
     if (!sessionId) {
       try {
-        const created = await connection.newSession(newSessionParams(plan, folder.path))
+        runtime.validate(chatId)
+        const created = await duringStart(connection.newSession(newSessionParams(plan, sessionCwd)))
+        runtime.validate(chatId)
         sessionId = created.sessionId
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         logger.warn('an ACP session could not be created', { agentId: agent.id, error: message })
-        return fail(startFailureMessage(ctx.launcherId, message), message)
+        return input.signal.aborted ? finish(ctx, accumulator, sessionId, undefined) : fail(startFailureMessage(ctx.launcherId, message), message)
       }
       // Bound on the response, which is why the connection buffers what
       // arrived before the bind: `available_commands_update` lands in the same
@@ -536,8 +526,14 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
     reportedMode = null
 
     try {
-      await applySetup(connection, sessionId, plan)
+      runtime.validate(chatId)
+      await duringStart(applySetup(connection, sessionId, plan))
+      runtime.validate(chatId)
     } catch (err) {
+      if (input.signal.aborted || hitCeiling) {
+        unbind?.()
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
+      }
       // **A refusal, not a warning.** The launcher's setup is what makes the
       // desktop's own choices true: OpenCode's `mode` selects the agent
       // definition (without it the turn runs the engine's stock coding agent in
@@ -556,7 +552,6 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // A bare failure leaves it behind engine-side and mints another on every
       // retry, and the chat never gets a `contextId` to continue from.
       return finish(
-        deps,
         ctx,
         accumulator,
         sessionId,
@@ -577,10 +572,12 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         chatId
       })
       unbind?.()
-      return finish(deps, ctx, accumulator, sessionId, undefined)
+      return finish(ctx, accumulator, sessionId, undefined)
     }
 
     try {
+      runtime.validate(chatId)
+      startingSession = false
       const answer = await promptWithCancelGrace(
         deps,
         connection,
@@ -597,7 +594,8 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
           chatId,
           ceiling: hitCeiling
         })
-        return finish(deps, ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
+        if (runtime.type === 'external') emit(stream.note('The local command was closed without confirmation that the remote agent stopped. Check its remote workspace before starting more work.').message)
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
       }
       noteModeFallback(plan, reportedMode, stream, emit)
       noteForeignAuth(reportedAuth, stream, emit)
@@ -609,9 +607,9 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
         stopReason: answer.stopReason
       })
       if (input.signal.aborted || answer.stopReason === 'cancelled') {
-        return finish(deps, ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
+        return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined, undefined, false, !hitCeiling)
       }
-      return finish(deps, ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
+      return finish(ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       // Abort first, and the order is the point: a stop that lands mid-turn
@@ -619,20 +617,25 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       // call something the user did deliberately a failure.
       if (input.signal.aborted) {
         logger.info('an ACP turn was stopped by the user', { agentId: agent.id, chatId })
-        return finish(deps, ctx, accumulator, sessionId, undefined)
+        return finish(ctx, accumulator, sessionId, undefined)
       }
       if (hitCeiling) {
         logger.error('an ACP turn hit the ceiling without ending', { agentId: agent.id, chatId })
-        return finish(deps, ctx, accumulator, sessionId, ceilingMessage())
+        return finish(ctx, accumulator, sessionId, ceilingMessage())
       }
       logger.warn('an ACP turn failed', { agentId: agent.id, chatId, error: message })
-      return finish(deps, ctx, accumulator, sessionId, message)
+      return finish(ctx, accumulator, sessionId, message)
     } finally {
       unbind?.()
     }
+  } catch (error) {
+    if (input.signal.aborted) return finish(ctx, accumulator, sessionId, undefined)
+    return finish(ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : error instanceof Error ? error.message : 'The agent could not start.')
   } finally {
     clearTimeout(ceiling)
+    startupController.abort()
     input.signal.removeEventListener('abort', onAbort)
+    try { runtime.validate(chatId) } catch { deps.pool.retire(agent.id) }
     release()
     // Every exit releases what this turn parked on. A request left registered
     // keeps `isPending` true, so a persisted block goes on rendering as
@@ -831,7 +834,8 @@ async function answerPermission(
   world: AskWorld,
   params: RequestPermissionRequest
 ): Promise<RequestPermissionResponse> {
-  const { agent, folder, input } = ctx
+  const { agent, runtime, input } = ctx
+  try { runtime.validate(input.chatId) } catch { return { outcome: { outcome: 'cancelled' } } }
   const toolName = world.stream.toolName(params.toolCall.toolCallId)
   const request = toAcpPermissionRequest(ctx.launcherId, params, toolName)
 
@@ -851,7 +855,8 @@ async function answerPermission(
   // of streaming text.
   let granted = false
   try {
-    granted = deps.isGranted(folder.path, folder.kind, request)
+    runtime.validate(input.chatId)
+    granted = runtime.isGranted(request)
   } catch (err) {
     // An unreadable store means "ask the user" — the safe direction.
     logger.warn('could not read this agent’s permission grants', {
@@ -864,6 +869,7 @@ async function answerPermission(
   const requestId = mintAcpRequestId('permission')
   const handle = deps.registerRequest({
     requestId,
+    validate: () => ctx.runtime.validate(input.chatId),
     chatId: input.chatId,
     agentId: agent.id,
     kind: 'permission',
@@ -871,6 +877,7 @@ async function answerPermission(
     // grant to what was actually named, without a second parse.
     request
   })
+  ctx.parkedRuntimes.set(requestId, ctx.runtime)
   world.turn.parked.set(requestId, handle.cancel)
   world.emit(world.stream.askPermission(requestId, request).message)
   // After the registration and the block, so an answer posted the moment this
@@ -896,6 +903,7 @@ async function answerPermission(
 
   try {
     const resolution = await handle.answered
+    ctx.runtime.validate(input.chatId)
     // Before the decision line, so the renderer stops offering the block before
     // it reads what was decided.
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
@@ -932,6 +940,7 @@ async function answerPermission(
     return settle('No decision was recorded.', selected('reject'))
   } finally {
     world.turn.parked.delete(requestId)
+    ctx.parkedRuntimes.delete(requestId)
   }
 }
 
@@ -951,6 +960,7 @@ async function answerElicitation(
   params: CreateElicitationRequest
 ): Promise<CreateElicitationResponse> {
   const { agent, input } = ctx
+  try { ctx.runtime.validate(input.chatId) } catch { return { action: 'cancel' } }
   const form = toInputQuestions(params)
   if (!form) {
     // `decline` rather than `cancel`: declining tells the model the user
@@ -967,10 +977,12 @@ async function answerElicitation(
   const requestId = mintAcpRequestId('question')
   const handle = deps.registerRequest({
     requestId,
+    validate: () => ctx.runtime.validate(input.chatId),
     chatId: input.chatId,
     agentId: agent.id,
     kind: 'question'
   })
+  ctx.parkedRuntimes.set(requestId, ctx.runtime)
   world.turn.parked.set(requestId, handle.cancel)
   world.emit(world.stream.askQuestion(requestId, form.questions).message)
   if (world.turn.open) {
@@ -984,6 +996,7 @@ async function answerElicitation(
 
   try {
     const resolution = await handle.answered
+    ctx.runtime.validate(input.chatId)
     if (world.turn.open) input.onEvent?.({ type: 'input_resolved', requestId, resolution })
     if (resolution.kind === 'question') {
       // The old OpenCode runner's own sentence, now shared with the inbox,
@@ -1012,6 +1025,7 @@ async function answerElicitation(
     return { action: 'decline' }
   } finally {
     world.turn.parked.delete(requestId)
+    ctx.parkedRuntimes.delete(requestId)
   }
 }
 
@@ -1027,7 +1041,7 @@ async function answerElicitation(
  * resolve because the resolution has to carry `remembered` into the transcript.
  */
 export function respondToAcpAsk(
-  deps: Pick<AcpDriverDeps, 'rememberGrant' | 'resolveRequest'>,
+  deps: { rememberGrant(agentId: string, request: LocalPermissionRequest): boolean; resolveRequest: AcpDriverDeps['resolveRequest'] },
   ask: ParkedAsk,
   resolution: RequestResolution
 ): RespondOutcome {
@@ -1050,7 +1064,7 @@ export function respondToAcpAsk(
  * both say "allowed once" rather than claiming a rule that does not exist.
  */
 function rememberIfAlways(
-  deps: Pick<AcpDriverDeps, 'rememberGrant'>,
+  deps: { rememberGrant(agentId: string, request: LocalPermissionRequest): boolean },
   ask: ParkedAsk,
   resolution: RequestResolution
 ): RequestResolution {
@@ -1076,24 +1090,19 @@ function rememberIfAlways(
  * other driver behaves the same way.
  */
 function finish(
-  deps: AcpDriverDeps,
   ctx: TurnContext,
   accumulator: StreamPartsAccumulator,
   sessionId: string | null,
   error: string | undefined,
   /** The underlying detail, when the sentence above is not it. Kept apart, as `fail` keeps them. */
   raw?: string,
-  completed = false
+  completed = false,
+  canceled = ctx.input.signal.aborted
 ): RunAgentTurnResult {
   if (sessionId) {
     try {
-      deps.saveSession({
-        chatId: ctx.input.chatId,
-        agentId: ctx.agent.id,
-        agentDir: ctx.folder.path,
-        agentKind: ctx.folder.kind,
-        sessionId
-      })
+      ctx.runtime.validate(ctx.input.chatId)
+      ctx.runtime.saveSession(ctx.input.chatId, sessionId)
     } catch (err) {
       // Continuity is a convenience; losing it must not fail a turn that
       // otherwise worked.
@@ -1106,8 +1115,9 @@ function finish(
   const parts = accumulator.snapshotParts()
   const answer = accumulator.answerText()
   const note = completed && !error && !ctx.input.signal.aborted && ctx.input.handbackEligible &&
-    ctx.folder.kind === 'kit' && ctx.folder.coordinatorHandback ? readHandbackNote(answer) : null
+    ctx.runtime.type === 'folder' && ctx.runtime.folder.kind === 'kit' && ctx.runtime.folder.coordinatorHandback ? readHandbackNote(answer) : null
   return {
+    ...(canceled ? { taskState: 'canceled' as const, stopReason: 'canceled' as const } : {}),
     ...(note ? { handback: { note } } : {}),
     text: answer || parts.map((part) => part.text).join(''),
     parts,

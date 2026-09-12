@@ -6,8 +6,8 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). What the A
 
 ### Shared
 - `src/shared/agentDrivers.ts` — type-only plus one guard, so the renderer can import it (capabilities and readiness cross IPC on the agent DTO). Exports:
-  - `AgentDriverId` (`'a2a' | 'acp'`), `AGENT_DRIVER_IDS`, `isAgentDriverId()`, `FOLDER_AGENT_DRIVER`
-  - `AcpLauncherId` (`'opencode' | 'claude' | 'gemini' | 'codex'`), `ACP_LAUNCHER_IDS`, `isAcpLauncherId()`, `launcherConfig()`, `launcherOfConfig()` — the launcher lives here, and not beside the ACP code, because it is a **stored row value** and the row model may not import the ACP SDK
+  - `AgentDriverId` (`'a2a' | 'acp' | 'managed'`), `AGENT_DRIVER_IDS`, `isAgentDriverId()`, `FOLDER_AGENT_DRIVER`
+  - `AcpLauncherId` (`'opencode' | 'claude' | 'gemini' | 'codex' | 'custom'`), `ACP_LAUNCHER_IDS`, `isAcpLauncherId()`, `launcherConfig()`, `launcherOfConfig()` — the launcher lives here, and not beside the ACP code, because it is a **stored row value** and the row model may not import the ACP SDK
   - `AgentCapabilities` (`:32`)
   - `AgentReadinessState` (`:76`), `AgentReadiness` (`:85`)
   - `AGENT_READINESS_CHANGED_CHANNEL` (`:103`), `AgentReadinessChangedPayload` (`:106`)
@@ -29,10 +29,10 @@ Implementation reference for [Agent Drivers & Readiness](drivers.md). What the A
 - `a2aConnection.ts` — `rethrowAsReauthIfCinna401()` (`:41`), `resolveEndpointIfNeeded()` (`:66`), `resolveAccessToken()` (`:114`). Moved here from `agentService`; each decides by `capabilitiesFor(agent).cwd` / `.auth` rather than by `source`. `agentService.testAgent` and `listCliCommands` still use them for a card fetch
 - `a2aErrors.ts` — `authRejectionStatus(err)`: a 401 or 403 from either `A2aHttpError` or `AgentCardFetchError`. It is its own module so the A2A driver can classify a rejection without importing `a2aConnection.ts`, which names the keystore and the Cinna OAuth flow
 - `index.ts` — the production wiring and the resolver:
-  - `acpProcessPool` (exported, so `will-quit` can shut it down) and `startAcpConnection`
-  - `acpLaunchers` — `opencode` and `claude` only; `gemini` and `codex` have no entry, which is what makes the driver's refusal happen
+  - `acpProcessPool` re-exported from acp/acpPool.ts, shared by runtime and custom configuration lifecycle
+  - `acpLaunchers` — `opencode`, `claude` and `custom`; `gemini` and `codex` have no entry, which is what makes the driver's refusal happen
   - `claudeAuthProbe`, `electronNodeRuntime()`, `claudeAdapterEntry()`
-  - the private `readAcpFolder()`, `readSession` / `saveSession`, `isGranted` / `rememberGrant`
+  - the private readAcpRuntime/readAcpFolder, folder session/grant closures, and captured customAgentService.runtime
   - `acpDriver`, `drivers`, `driverFor()` and `respondToOrphanedAsk()`
 
   **It is the only file in this folder that imports Electron**, and the only one that names `engineBinaryService`, `localAgentService`, `desktopStateService` or `a2aSessionRepo`
@@ -146,17 +146,17 @@ Who writes the column:
 
 ### Capabilities per driver
 
-| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` | `managed` |
-|---|---|---|---|---| --- |
-| `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
-| `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` |
-| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` | `permission` |
-| `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` |
-| `attachments` | `cinna` | `none` | `none` | `none` | `none` |
-| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) |
-| `commands` | `card` | `card` | `catalog` | `catalog` | `none` |
-| `mcpInjection` | no | no | no | no | no |
-| `cwd` | no | no | yes | yes | no |
+| | `a2a`, Cinna-synced | `a2a`, hand-added | `acp`, launcher `opencode` | `acp`, launcher `claude` | `managed` | `acp`, launcher `custom` |
+|---|---|---|---|---| --- | --- |
+| `streaming` / `cancel` | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes | yes / yes |
+| `sessions` | `context` | `context` | `resumable` | `resumable` | `resumable` | `resumable` |
+| `input` (asks raised) | `question`, `auth` | `question`, `auth` | `permission` | `permission`, `question` | `permission` | `permission`, `question` |
+| `inputResume` | `next_message` | `next_message` | `reply` | `reply` | `reply` | `reply` |
+| `attachments` | `cinna` | `none` | `none` | `none` | `none` | `none` |
+| `auth` | `cinna` | `token` when one is stored, else `none` | `none` | `cli` | `token` (API credential) | `cli` |
+| `commands` | `card` | `card` | `catalog` | `catalog` | `none` | `none` |
+| `mcpInjection` | no | no | no | no | no | no |
+| `cwd` | no | no | yes | yes | no | no |
 
 **One driver, and still two answers, because a capability is about what the *engine* can do rather than about the protocol.** Both differences are measured and both move opposite to what a transport change would suggest: Claude **gains** questions (the adapter enables `AskUserQuestion` because the launcher declares `elicitation.form`) while OpenCode **loses** them (its `question` tool is not registered under `OPENCODE_CLIENT=acp`, and its ACP layer bridges none to `elicitation/create`). A launcher this build has no implementation for — `gemini`, `codex` — is described as a CLI-authenticated agent **with no question path**, because nothing here has run one and a capability that pretends otherwise would have the composer offer an answer widget for an ask that never arrives.
 
@@ -171,16 +171,16 @@ Capabilities read the **stored** launcher (`launcherOfRow`), because a row is al
 
 ### The `acp` driver (`acp/acpDriver.ts`)
 
-- **`run`** reads the folder (`readAcpFolder`), refuses on gone / switched off / `invalid` / `contract_too_new`, takes the launcher from `launcherOfFolder(folder.runtime)`, refuses a launcher this build does not have, asks the launcher to `plan()` — a refusal there is the turn's error — and only then takes the turn lock. Everything after the lock is [the turn](../local_agents/agent_turn_tech.md)
-- **The stored launcher is not consulted by `run` at all.** It is a cache of the same read, and every state where the folder cannot speak for itself was already refused above. The one reader left for it is `capabilities()`
-- **`readiness`** is `folderReadiness(readAcpFolder(…))`, then — only for an `ok` folder — the rungs of the launcher the **folder** names. Any throw becomes `invalid` with `ACP_FOLDER_NOT_FOUND`
+- **run** captures AcpRuntimeView through readRuntime: folder metadata/state closures or a locally owned custom command with validation and private state. Folder refusal and launcher reconciliation stay unchanged; external commands use custom. Both plan before taking the shared turn lock and use the same execution loop.
+- **Folder launcher selection** comes from the freshly read folder. Custom selection comes from owned configuration, with profile/configuration/chat guards; it does not pretend to have a folder.
+- **readiness** checks a folder and its launcher, or awaits the external runtime's check inside the never-throws boundary. Routine custom checks read cached latest state; explicit Test/Check again initializes a command. See [custom runtime details](../custom_agents/custom_agents_tech.md).
 - **`folderReadiness`**:
   - `null` → `invalid` with `ACP_FOLDER_NOT_FOUND`
   - `ok` → `ok`
   - the three folder states → that state, with the folder's `readinessReason` or a generic sentence
   - a readiness this build does not know → `invalid`, because it is not one this build can vouch for
-- **`respond`** calls `respondToAcpAsk`, which writes an *Always allow* **first** and then settles the park — the resolution has to carry `remembered` into the transcript, so the write cannot move after the resolve. An `always` becomes `once` with `remembered` taken from `rememberGrant`, or `remembered: false` when the store refused: the user allowed the action, so a failed write must not cancel it
-- **`respondToOrphanedAsk`** uses the same function with `rememberGrant: () => false`. An `always` for a row pruned mid-turn settles as `once`, `remembered: false` — there is no agent left to keep a rule beside
+- **respond** first finds and validates the runtime captured for that real parked request, then calls respondToAcpAsk, which writes an *Always allow* **first** and then settles the park — the resolution has to carry `remembered` into the transcript, so the write cannot move after the resolve. An `always` becomes `once` with `remembered` taken from `rememberGrant`, or `remembered: false` when the store refused: the user allowed the action, so a failed write must not cancel it
+- **`respondToOrphanedAsk`** uses the same function with `rememberGrant: () => false`. A folder-origin always for a row pruned mid-turn can settle as once, remembered false. Captured custom registration validation runs before this fallback and refuses deleted/reconfigured commands
 
 ### The launchers (`acp/acpLaunchers.ts`)
 - **`claudePath(options)`** — tool detection is memoized for the life of the app. A fresh check that finds no binary calls `toolDetectionService.refresh()` first, so a Claude Code installed a minute ago counts
@@ -388,7 +388,7 @@ ResolvedRuntime now calls its derived output launcher. It is not execution autho
 ## Captured asynchronous reply delivery
 
 - `src/main/agents/drivers/replyDelivery.ts`: AsyncReplyBinding owns validate/respondAsync/optional normalize. ReplyRegistration contains opaque token, AbortSignal, origin, binding, isCurrent and token-fenced release; these never appear in owner/list DTOs. The binding must preserve originating agent/credential/session identity and validate again inside future transport dispatch after any asynchronous credential work.
-- `src/main/agents/drivers/pendingRequests.ts`: register optionally captures delivery; absence is the synchronous ACP origin. Ordinary resolve refuses a non-rejected answer into an asynchronous registration. Replacement/cancel/timeout/clear invalidate the old token and signal. Async drop also settles its local barrier rejected without sending another remote answer; ACP drop preserves notification-only behavior and leaves its old answered promise unresolved.
+- `src/main/agents/drivers/pendingRequests.ts`: register optionally captures delivery; absence is the synchronous ACP origin. The optional synchronous validate callback captures external runtime authority and is checked before orphan fallback. Ordinary resolve refuses a non-rejected answer into an asynchronous registration. Replacement/cancel/timeout/clear invalidate the old token and signal. Async drop also settles its local barrier rejected without sending another remote answer; ACP drop preserves notification-only behavior and leaves its old answered promise unresolved.
 - `src/main/services/replyAnswerClaims.ts`: a WeakMap keyed by registration token owns sending/accepted_pending/uncertain. The signature uses normalized permission kind/reply or the full question answer; remembered is persistence metadata and does not change the remote decision or prevent an equivalent answer joining. Same answer joins the installed promise; opposing answer returns answer_in_progress. Definite not_sent clears the claim for explicit retry. Throws/unknown acknowledgment become uncertain and never resend. Accepted_pending retries validation and synchronous local commitment only. Cancellation settles the claim promptly even if the underlying remote promise remains unresolved; late responses cannot release a replacement.
 - `src/main/services/askDelivery.ts` — `deliverAnswerWithCommit`: validates captured profile/settings scope, chat, durable request/task and binding before dispatch and after acceptance. Async success is commit then release. The ACP branch calls existing deliverAnswer and commit in one synchronous stack; introducing an unconditional await would let resumed ACP cleanup expire the row first. Effective always becomes once with the actual remembered boolean in the durable resolution, matching the ACP park/stream outcome. Async normalization likewise carries remembered into the committed/released effective permission.
 - `src/main/services/inboxService.ts` — `answerFromTranscript`: an existing durable row always goes through answer, including refusal. Otherwise runner bridge gets its own route, then only rowless ACP can use live fallback. Remote-address and next-message routes retain their separate mechanisms.

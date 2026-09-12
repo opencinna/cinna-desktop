@@ -49,13 +49,14 @@ export const FOLDER_AGENT_DRIVER: AgentDriverId = 'acp'
  * run them — the driver refuses such an agent in words, which is a far better
  * failure than a value that reads as the default engine.
  */
-export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex'
+export type AcpLauncherId = 'opencode' | 'claude' | 'gemini' | 'codex' | 'custom'
 
 export const ACP_LAUNCHER_IDS: readonly AcpLauncherId[] = [
   'opencode',
   'claude',
   'gemini',
-  'codex'
+  'codex',
+  'custom'
 ]
 
 /** Whether a stored value names a launcher this build has a name for. */

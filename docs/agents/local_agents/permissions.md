@@ -264,3 +264,7 @@ Claude engine — the reviewer in front of all of the above
 - [Kit Contract & Manifest Layer](kit_contract.md) — `runtime.permissions` in the manifest schema, and `cloud_import_excludes` keeping `app-data/` out of a publication
 - [Local Agents Are Not Synced](local_only.md) — why a grant is machine-local by construction
 - Sub-doc: [Technical Details](permissions_tech.md)
+
+## Command-line ACP agents
+
+[Command-line agents](../custom_agents/custom_agents.md) use the same grant-pattern and once-only wire decision rules. Their remembered permissions live under the app’s external-agents state for the captured profile/owner/agent/configuration binding, rather than a local folder. Always writes there before resolving the ACP park; a failed grant write still allows once with remembered false. The command editor lists and revokes current-binding grants, including for disabled configurations. Reconfiguration or ownership changes invalidate captured answers and cannot reuse old grants.

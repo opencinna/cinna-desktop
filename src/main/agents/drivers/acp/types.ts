@@ -145,7 +145,7 @@ export interface AcpConnection {
 }
 
 /** Start a process and complete `initialize`. Rejects with a readable message on failure. */
-export type StartAcpConnection = (spec: AcpLaunchSpec, init: InitializeRequest) => Promise<AcpConnection>
+export type StartAcpConnection = (spec: AcpLaunchSpec, init: InitializeRequest, options?: { signal?: AbortSignal }) => Promise<AcpConnection>
 
 /** Where one agent's process is, for the agent page. */
 export type AcpProcessState =
@@ -161,7 +161,7 @@ export interface AcpProcessPool {
    * matches, else a fresh start. Concurrent calls for one agent share one start.
    * A process that exited is restarted here, on the next turn — never on its own.
    */
-  acquire(agentId: string, spec: AcpLaunchSpec, init: InitializeRequest): Promise<AcpConnection>
+  acquire(agentId: string, spec: AcpLaunchSpec, init: InitializeRequest, signal?: AbortSignal): Promise<AcpConnection>
   /** A turn is in progress on this agent: no reaping until the returned release runs. */
   hold(agentId: string): () => void
   /** Stop an agent's process — now if nothing holds it, else when the last hold releases. */

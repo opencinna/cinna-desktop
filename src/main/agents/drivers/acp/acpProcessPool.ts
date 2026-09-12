@@ -74,6 +74,7 @@ export interface AcpProcessPoolDeps {
 }
 
 interface Entry {
+  startSignal?: AbortSignal
   state: AcpProcessState
   /** The live process, if there is one. */
   conn?: AcpConnection
@@ -173,27 +174,30 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
   const acquire = (
     agentId: string,
     spec: AcpLaunchSpec,
-    init: InitializeRequest
+    init: InitializeRequest,
+    signal?: AbortSignal
   ): Promise<AcpConnection> => {
     const entry = entryFor(agentId)
     cancelReap(entry)
     entry.retireOnRelease = false
     // Concurrent turns on one agent share one start. Only the key decides: two
     // callers asking for the same key want the same process by definition.
-    if (entry.starting && entry.startKey === spec.key) return entry.starting
+    if (entry.starting && entry.startKey === spec.key && !entry.startSignal?.aborted) return entry.starting
 
     const run = (async (): Promise<AcpConnection> => {
       // A start already in flight for a *different* key still owns the entry;
       // let it finish rather than spawning a second process behind its back.
       if (entry.starting) await entry.starting.catch(() => undefined)
 
+      if (signal?.aborted) throw new Error('The ACP start was canceled.')
       if (entry.conn && (entry.key !== spec.key || !entry.conn.alive)) {
         await stopNow(agentId, entry, entry.key === spec.key ? 'not alive' : 'spec changed')
       }
       if (entry.conn) return entry.conn
 
       setState(agentId, entry, { state: 'starting' })
-      const conn = await deps.start(spec, init)
+      const conn = await (signal ? deps.start(spec, init, { signal }) : deps.start(spec, init))
+      if (signal?.aborted) { await conn.dispose(); throw new Error('The ACP start was canceled.') }
       entry.conn = conn
       entry.key = spec.key
       watch(agentId, entry, conn)
@@ -203,10 +207,12 @@ export function createAcpProcessPool(deps: AcpProcessPoolDeps): AcpProcessPool {
 
     entry.starting = run
     entry.startKey = spec.key
+    entry.startSignal = signal
     const done = (): void => {
       if (entry.starting === run) {
         entry.starting = undefined
         entry.startKey = undefined
+        entry.startSignal = undefined
       }
     }
     return run.then(

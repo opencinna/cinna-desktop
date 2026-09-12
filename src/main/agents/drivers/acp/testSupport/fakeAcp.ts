@@ -70,6 +70,8 @@ export interface FakeAcpScript {
   ignoreSigterm?: boolean
   exitOnClose?: number
   initialize?: FakeAcpHandlerScript
+  /** Explicitly log attempted authentication; probes must not invoke it. */
+  authenticate?: FakeAcpHandlerScript
   newSession?: FakeAcpHandlerScript & { sessionId?: string }
   loadSession?: FakeAcpHandlerScript
   setMode?: FakeAcpHandlerScript
