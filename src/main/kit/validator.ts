@@ -1,3 +1,4 @@
+import { isCoordinatorHandover } from '../../shared/kit/handovers'
 /**
  * A TypeScript port of `kit.py validate`: is this folder a coherent, cloud-ready
  * agent?
@@ -542,7 +543,14 @@ function checkHandovers(report: Report, manifest: CinnaAgentManifest, agentDir?:
       )
       return
     }
-    if (target === manifest.slug) {
+    if (raw.target_kind !== undefined && typeof raw.target_kind !== 'string') {
+      report.error('manifest.handovers.target_kind', `\`${label}.target_kind\` must be a string.`, MANIFEST_FILE)
+    }
+    if (raw.target_kind === 'coordinator' && target !== 'coordinator') {
+      report.error('manifest.handovers.coordinator_target', 'A coordinator handover must name target_slug coordinator.', MANIFEST_FILE)
+    }
+    const coordinator = isCoordinatorHandover(raw)
+    if (!coordinator && target === manifest.slug) {
       report.warn(
         'manifest.handovers.self',
         `\`${label}\` hands over to this same agent.`,
@@ -556,7 +564,7 @@ function checkHandovers(report: Report, manifest: CinnaAgentManifest, agentDir?:
         MANIFEST_FILE
       )
     }
-    if (agentDir) {
+    if (agentDir && !coordinator && raw.target_kind === undefined) {
       // Siblings live next to this folder. Only checkable when the parent reads.
       const sibling = join(agentDir, '..', target)
       try {

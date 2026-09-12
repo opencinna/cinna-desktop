@@ -39,6 +39,8 @@ export type { AgentCapabilities, AgentDriverId, AgentReadiness }
 
 /** One turn's input. The agent row and its owner are separate arguments. */
 export interface RunInput {
+  /** Main-owned coordinator handoff; never inferred from protocol text or metadata. */
+  handbackEligible?: boolean
   /** Internal autonomous admission; interactive turns keep immediate busy refusal. */
   queueWhenBusy?: boolean
   chatId: string

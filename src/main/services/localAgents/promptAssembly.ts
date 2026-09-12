@@ -1,3 +1,4 @@
+import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
  * The system prompt a folder agent runs on.
  *
@@ -119,29 +120,23 @@ export function listKnowledgeTopics(agentDir: string): string[] {
 /** The handover block, from the manifest's declared sibling delegations. */
 function handoverSection(manifest: CinnaAgentManifest): string | null {
   const handovers = Array.isArray(manifest.handovers) ? manifest.handovers : []
-  const usable = handovers.filter(
-    (handover) => typeof handover?.target_slug === 'string' && handover.target_slug !== ''
-  )
-  if (usable.length === 0) return null
-  const lines = usable.map((handover) => {
-    const description =
-      typeof handover.description === 'string' && handover.description.trim() !== ''
-        ? ` — ${handover.description.trim()}`
-        : ''
-    return `- \`${handover.target_slug}\`${description}`
-  })
-  return [
-    '## Handing over',
-    '',
-    'These sibling agents handle work that is not yours. When a request belongs to one of them, say so and name it rather than attempting it yourself.',
-    '',
-    ...lines
-  ].join('\n')
+  const siblings = handovers.filter((handover) => handover?.target_kind === undefined &&
+    typeof handover?.target_slug === 'string' && handover.target_slug !== '')
+  const coordinator = handovers.some(isCoordinatorHandover)
+  if (!siblings.length && !coordinator) return null
+  const sections = ['## Handing over', '']
+  if (siblings.length) {
+    sections.push('These sibling agents handle work that is not yours. When a request belongs to one of them, say so and name it rather than attempting it yourself.', '',
+      ...siblings.map((handover) => `- \`${handover.target_slug}\`${typeof handover.description === 'string' && handover.description.trim() ? ` — ${handover.description.trim()}` : ''}`))
+  }
+  if (coordinator) sections.push('',
+    'When a Cinna task coordinator has handed this task to you, you may return a note after completing your work: end your answer with a standalone `/handback <note>` line (at most 4000 characters). The note should say what you did, verified, and left open. This returns to that existing coordinator; it does not finish the whole task or authorize another agent. In an ordinary conversation this marker has no control effect. Ask any necessary human question before returning the task.')
+  return sections.join('\n')
 }
 
 /**
- * What only the desktop knows: that this is a conversation rather than a
- * scheduled run, and what this machine's rules are.
+ * What only the desktop knows: how this local turn receives requests and
+ * asks for human input, and what this machine's rules are.
  *
  * The last line is load-bearing. The same folder is also opened by a *builder*
  * — an assistant developing the agent, and later this app's own building mode —
@@ -153,7 +148,7 @@ function desktopContextSection(context: DesktopPromptContext): string {
   return [
     '## How you are running now',
     '',
-    'You are running locally, inside Cinna Desktop, in **conversation mode**: a person is talking to you and waiting for a reply. Answer them.',
+    'You are running locally, inside Cinna Desktop, in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
     `- Run scripts from the agent folder with \`uv run scripts/<name>.py\`, never a bare \`python\`.`,
     '- Write files only under `app-data/`. Everything else in this folder belongs to the person who built you, and may be open in their editor right now.',
@@ -259,7 +254,7 @@ function bareDesktopContextSection(context: DesktopPromptContext): string {
   return [
     '## How you are running now',
     '',
-    'You are running locally, inside Cinna Desktop, in **conversation mode**: a person is talking to you and waiting for a reply. Answer them.',
+    'You are running locally, inside Cinna Desktop, in **conversation mode**. Reply to the current request. It may come from a person or an unattended task; request human input through the available question or permission mechanism when needed, and do not assume a person is watching.',
     '',
     '- Your working directory is this agent folder. It belongs to the person who built you and may be open in their editor right now, so prefer reading over rewriting, and say what you changed.',
     '- Follow whatever the instructions above say about how to run this folder\'s own scripts and tools. Cinna Desktop imposes no convention of its own here.',

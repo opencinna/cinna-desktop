@@ -57,4 +57,4 @@ Captured profile/settings scope, device claim, saved graph and actual task/chat 
 
 `src/main/services/scriptRuntimeService.test.ts` covers graph execution, gates, ownership changes, stop/cleanup and recovery using real database state. Definition/persistence tests remain in `src/main/tasks/scriptRouter.test.ts` and `src/main/tasks/scriptDefinitionPersistence.test.ts`. Test presence documents coverage intent, not a claim that a particular full-suite or built-app validation run has passed.
 
-Schedules, manifest-triggered handback, complete token accounting and phase 7 protocol/new-driver cleanup remain separate work.
+Schedules, complete token accounting and phase 7 protocol/new-driver cleanup remain separate work.

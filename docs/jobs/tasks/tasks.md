@@ -46,7 +46,7 @@ A task is the durable record of work: its original goal, current status, assigne
 
 ## Current Completion Gaps
 
-- [Autonomous coordination](autonomous_tasks.md) supplies multi-turn execution, durable runner gates and specialist handback using existing [live attachment/replay](../../chat/messaging/live_runs.md). [Script execution](script_execution.md) runs validated graphs in isolated child conversations with durable gates and whole-script controls. Schedules, manifest-driven handback, complete token accounting, protocol updates, managed/SSH drivers and the final kind-branch cleanup remain separate work.
+- [Manifest handback](manifest_handback.md) supplies bounded kit-agent notes to the existing coordinator return. [Autonomous coordination](autonomous_tasks.md) supplies multi-turn execution, durable runner gates and specialist handback using existing [live attachment/replay](../../chat/messaging/live_runs.md). [Script execution](script_execution.md) runs validated graphs in isolated child conversations with durable gates and whole-script controls. Schedules, complete token accounting, protocol updates, managed/SSH drivers and the final kind-branch cleanup remain separate work.
 - Partial Inbox reads need an explicit completeness contract before locally available entries can remain current through a remote outage. Returning a local-only successful array would make the waiting count and re-run gate wrong.
 
 These are remaining implementation boundaries, not claims that the task runtime phase is complete.

@@ -101,6 +101,8 @@ Entry points:
 - `readCommandCatalog(agentDir, relPath?)` → `{commands, unreadable}`
 - `readMakefileTargets(agentDir)` → `Set<string>` (`.PHONY` and pattern rules excluded)
 
+Manifest handovers retain the existing slug schema. Contract 1.3 adds optional string target_kind without an enum; only the exact coordinator pair receives desktop handback meaning. The validator rejects a malformed known pair, preserves absent-kind sibling behavior and grants no authority to unknown strings. See [manifest handback](../../jobs/tasks/manifest_handback_tech.md) for main eligibility and the qualified older-tool compatibility boundary.
+
 Manifest checks: `checkIdentity()`, `checkString()`, `checkPrompts()`, `checkExamplePrompts()`, `checkRuntime()`, `checkCredentials()`, `checkSchedules()`, `checkHandovers()`, `checkPublications()`.
 
 `checkRuntime()` grades `runtime.complexity` as a **warning** in both of its cases — an unrecognised tier, and `model` plus `complexity` together — never an error, because an error here removes the folder from the engine rather than annotating it. See [Reading is tolerant, writing is strict](kit_contract.md#reading-is-tolerant-writing-is-strict).
@@ -187,7 +189,7 @@ cinna-core must be able to compute the identical value — see the handover's "S
 
 ## Configuration
 
-- **Contract version**: pinned at `1.2.0` in `resources/cinna-kit-contract/kit.json` and `VERSION`, and mirrored in `layout.json`'s `contract_version`. All three move together with the CHANGELOG entry and any schema change the bump describes; a scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. `1.1.0` added the optional `runtime.complexity` enum (`simple` | `medium` | `complex`), additively: a 1.0.0 folder is read and written unchanged, and a 1.0.0 tool ignores the key and reads `runtime.model` as before. `1.2.0` added optional `runtime.engine` the same way — and **deliberately without an enum**, since engines are expected to grow and a folder naming one this schema predates must still validate. See [The Claude Engine](claude_engine.md)
+- **Contract version**: pinned at `1.3.0` in `resources/cinna-kit-contract/kit.json` and `VERSION`, and mirrored in `layout.json`'s `contract_version`. All three move together with the CHANGELOG entry and any schema change the bump describes; a scaffolded folder records whatever this build bundles, which is what the scanner and agents-home tests assert rather than a pinned literal. `1.1.0` added the optional `runtime.complexity` enum (`simple` | `medium` | `complex`), additively: a 1.0.0 folder is read and written unchanged, and a 1.0.0 tool ignores the key and reads `runtime.model` as before. `1.2.0` added optional `runtime.engine` the same way — and **deliberately without an enum**, since engines are expected to grow and a folder naming one this schema predates must still validate. See [The Claude Engine](claude_engine.md)
 - **Contract refresh endpoints**: declared but unused in Phase 1 — `kit.json`'s `refresh` block names `base_url`, `/contract/version`, `/contract.tar.gz` and `install_dir: .cinna-kit`. A later phase implements the fetch and the atomic swap
 - **`STALE_TEMP_MS`**: 60 000 ms, in `src/main/kit/manifestIo.ts`
 - No environment variables, no app settings, no user-facing configuration

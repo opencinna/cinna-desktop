@@ -43,4 +43,4 @@ Inbox answer → binding and checkpoint checks → answer/step transaction → q
 - [Autonomous coordination](autonomous_tasks.md) — the other main-owned engine, sharing admission and task controls.
 - [Jobs](../jobs/jobs.md), [Tasks](tasks.md), [Inbox](inbox.md) and [live attachment](../../chat/messaging/live_runs.md) — existing entry, navigation and conversation surfaces.
 
-Schedules, manifest-driven handback, complete token accounting and the phase 7 protocol/driver cleanup remain outside this execution slice.
+[Manifest handback](manifest_handback.md) applies only to a coordinator-owned specialist; script steps never receive that eligibility. Schedules, complete token accounting and the phase 7 protocol/driver cleanup remain outside this execution slice.

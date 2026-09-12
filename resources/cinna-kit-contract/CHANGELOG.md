@@ -8,6 +8,25 @@ folder role moved, or a manifest field changed meaning; a tool whose major is
 older than the folder's must refuse to operate it and ask to be updated.
 **Minor** bumps are additive and safe to ignore. See "Compatibility" below.
 
+## 1.3.0 — explicit coordinator handback
+
+### Added
+
+- Optional `handovers[].target_kind`, deliberately without an enum. Only the
+  exact pair `target_kind: "coordinator"`, `target_slug: "coordinator"` enables
+  desktop return to the coordinator already owning a handed-off task.
+  An absent kind retains sibling-slug semantics, including a sibling literally
+  named `coordinator`. Unknown kinds grant no desktop handback authority.
+- An eligible kit agent may end its successful answer with `/handback <note>`.
+  The desktop consumes a bounded final answer line only for an already handed-off
+  owner after all questions are settled. Ordinary chats and delegates do not
+  acquire control from this text.
+
+Older desktop builds accept the additional key under the existing schema but
+still describe handovers as siblings; they do not activate this coordinator
+return. Existing folders need no restamp or automatic edit. External tooling
+support for the optional desktop role depends on that tool's implementation.
+
 ## 1.2.0 — engine
 
 Additive. A 1.0.0 or 1.1.0 folder is read and written unchanged by a 1.2.0 tool,

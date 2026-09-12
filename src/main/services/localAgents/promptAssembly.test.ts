@@ -172,6 +172,18 @@ describe('assembleAgentPrompt', () => {
     expect(prompt).toContain('Do not switch to the Builder role')
   })
 
+  it('describes coordinator return only for its explicit role, leaving plain coordinator as a sibling', () => {
+    const base = manifest()
+    const declared = assembleAgentPrompt(dir, { ...base, handovers: [{ target_slug: 'coordinator', target_kind: 'coordinator' }] }, CONTEXT)
+    expect(declared).toContain('/handback <note>')
+    expect(declared).toContain('existing coordinator')
+    for (const handover of [{ target_slug: 'coordinator' }, { target_slug: 'coordinator', target_kind: 'future-role' }]) {
+      expect(assembleAgentPrompt(dir, { ...base, handovers: [handover] }, CONTEXT)).not.toContain('/handback')
+    }
+    expect(declared).toContain('unattended task')
+    expect(declared).not.toContain('a person is talking to you and waiting')
+  })
+
   it('omits the handover block when the manifest declares none', () => {
     write('docs/WORKFLOW_PROMPT.md', '# A\n\nreal text')
     expect(assembleAgentPrompt(dir, manifest(), CONTEXT)).not.toContain('Handing over')

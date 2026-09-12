@@ -78,6 +78,7 @@ describe('autonomous coordinator runner', () => {
     expect(await inboxService.answer(USER, gate.id, { kind: 'question', answers: [['main']] })).toEqual({ ok: true })
     await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
     expect(driverRun).toHaveBeenCalledTimes(2)
+    expect(driverRun.mock.calls.find((call) => call[1].id === 'analyst')![2].handbackEligible).toBeUndefined()
     const writer = driverRun.mock.calls.find((call) => call[1].id === 'writer')![2].wireContent
     for (const phrase of ['Ship the feature', 'Analyst result', 'main', 'Use the analysis']) expect(writer).toContain(phrase)
     expect(stream).toHaveBeenCalledTimes(4)
@@ -89,6 +90,32 @@ describe('autonomous coordinator runner', () => {
     expect(rows.filter((row) => row.role === 'user').map((row) => row.content)).toEqual(['Ship the feature', 'main'])
     expect(taskInputRequestRepo.listOpenForTask(taskId)).toEqual([])
     expect(taskRunnersByChat.has(chatId)).toBe(false)
+  })
+
+  it('carries an authorized specialist handback note into the existing coordinator continuation', async () => {
+    stream.mockResolvedValueOnce(tool('handoff', { agent: 'Writer', note: 'Produce and verify the report' }))
+      .mockResolvedValueOnce(tool('finish', { summary: 'Done after review' }))
+    driverRun.mockResolvedValueOnce({ text: 'Report ready.\n/handback Verified report.md', parts: [{ kind: 'text', text: 'Report ready.' }],
+      notices: [], taskState: 'completed', handback: { note: 'Verified report.md' } })
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Ship the report' })
+    await vi.waitFor(() => expect(taskService.getById(USER, taskId).status).toBe('completed'))
+    expect(driverRun.mock.calls[0][2].handbackEligible).toBe(true)
+    expect(stream.mock.calls[1][0].messages.some((row) => row.content.includes('Agent-provided handback note: "Verified report.md"'))).toBe(true)
+    expect(chatRepo.listMessages(chatId).some((row) => row.content.includes('Agent-provided handback note: "Verified report.md"'))).toBe(true)
+  })
+
+  it('does not use a handback result to bypass a specialist’s durable question', async () => {
+    stream.mockResolvedValueOnce(tool('handoff', { agent: 'Writer', note: 'Confirm the branch' }))
+    driverRun.mockImplementationOnce(async (_owner, _row, input) => {
+      input.onEvent?.({ type: 'needs_input', requestId: 'branch', resume: 'next_message',
+        request: { kind: 'question', questions: [{ question: 'Which branch?', multiSelect: false, options: [] }] } })
+      return { text: '/handback Not ready', parts: [], notices: [], taskState: 'input-required', handback: { note: 'Not ready' } }
+    })
+    const { taskId } = taskRunnerService.start(scope, { chatId, goal: 'Ship the report' })
+    await vi.waitFor(() => expect(taskRuntimeRepo.get(USER, taskId)?.state).toBe('waiting'))
+    expect(stream).toHaveBeenCalledTimes(1)
+    expect(taskRuntimeRepo.get(USER, taskId)?.owner).toMatchObject({ kind: 'agent', agentId: 'writer' })
+    expect(chatRepo.listMessages(chatId).some((row) => row.content.includes('handed the task back'))).toBe(false)
   })
 
   it('bounds natural model continuations by owner turns instead of falsely completing', async () => {

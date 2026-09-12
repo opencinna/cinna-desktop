@@ -352,7 +352,7 @@ The folder already contains everything the agent needs to know; it is just sprea
 2. `Local/<slug>/scripts/README.md`, under "Your scripts"
 3. `Local/<slug>/credentials/README.md`, under "Your credentials", preceded by the never-read-the-secret-files rule
 4. The **list** of `.md` topics under `Local/<slug>/knowledge/`
-5. A handover block, from the manifest's declared sibling delegations
+5. A handover block separating legacy sibling hints from explicit [task-coordinator handback](../../jobs/tasks/manifest_handback.md) guidance. Main grants eligibility only to the current handed-off task owner; prompt text alone grants none
 6. The desktop context block
 
 Four rules shape it:

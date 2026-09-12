@@ -41,7 +41,7 @@ export function NoticeBlock({ content, live, defaultExpanded }: NoticeBlockProps
           text-xs text-[var(--color-text-muted)] max-w-full"
       >
         <Info size={12} className="shrink-0 mt-0.5" />
-        <span className="break-words">{content}</span>
+        <span className="min-w-0 [overflow-wrap:anywhere]">{content}</span>
       </div>
     )
   }
@@ -77,7 +77,7 @@ export function NoticeBlock({ content, live, defaultExpanded }: NoticeBlockProps
         transition-colors max-w-full text-left"
     >
       <Info size={12} className="shrink-0 mt-0.5" />
-      <span className="break-words">{content}</span>
+      <span className="min-w-0 [overflow-wrap:anywhere]">{content}</span>
     </button>
   )
 }

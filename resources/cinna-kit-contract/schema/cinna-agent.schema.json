@@ -347,7 +347,7 @@
       }
     },
     "handovers": {
-      "description": "Other agents this one may delegate to. Targets are slugs of sibling agents.",
+      "description": "Sibling agent hints, or an explicit desktop return to the current task coordinator.",
       "type": "array",
       "items": {
         "type": "object",
@@ -363,6 +363,10 @@
           "description": {
             "type": "string",
             "maxLength": 2000
+          },
+          "target_kind": {
+            "type": "string",
+            "description": "Optional host role. The exact pair target_kind=coordinator and target_slug=coordinator enables desktop coordinator handback. Unknown roles do not grant desktop execution authority."
           }
         }
       }

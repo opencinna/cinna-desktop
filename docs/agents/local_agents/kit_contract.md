@@ -24,6 +24,8 @@ The two are not a spectrum, and nothing here is relaxed to accommodate the other
 - **The contract is not loosened to make bare folders legal.** `AGENT.md` is not a manifest with fewer fields; it is not read by the schema, not versioned, and not part of `layout.json`. A folder either makes the manifest's promises or makes none of them
 - **The kit is what a folder gains by being scaffolded**, and this is the clearest statement of what that is worth: commands, credential slots, example prompts, publications, a content hash, a durable UUID identity, and a runtime **the folder itself carries** — one that travels with it to another machine or a Cinna instance. A bare folder has none of them; it still gets a runtime, but the desktop keeps that answer beside its own state rather than in the folder, so it does not travel. The trade is deliberate — the folder is somebody's existing repository, and asking it to be converted first is asking for a change nobody wanted
 
+Contract 1.3 adds an optional explicit coordinator role to manifest handovers. The exact target_kind/target_slug pair preserves a plain sibling named coordinator; it supports [desktop handback notes](../../jobs/tasks/manifest_handback.md), without certifying external kit.py/cinna-core behavior or rewriting existing folders.
+
 ## Core Concepts
 
 - **Kit Contract** — The bundled tree at `resources/cinna-kit-contract/`: `kit.json` (identity + version), `VERSION`, `CHANGELOG.md`, `schema/cinna-agent.schema.json`, `layout.json`, and the two template trees. Pinned at contract version `1.1.0`
@@ -187,7 +189,7 @@ No mtime, no inode, no size, no directory order, nothing machine-specific. Two m
 ## Architecture Overview
 
 ```
-resources/cinna-kit-contract/          (bundled, pinned at 1.2.0)
+resources/cinna-kit-contract/          (bundled, pinned at 1.3.0)
   kit.json  VERSION  CHANGELOG.md
   schema/cinna-agent.schema.json       <- the manifest rules
   layout.json                          <- the folder model as data

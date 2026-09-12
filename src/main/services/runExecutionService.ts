@@ -70,9 +70,14 @@ export const runExecutionService = {
     agentId?: string
     /** Internal runner admission. Never accepted from an IPC payload. */
     runnerTaskId?: string
+    /** Internal eligibility for the current handed-off owner's completed answer. */
+    handbackEligible?: boolean
     coordinator?: CoordinatorToolProvider
     inputOrigin?: 'user' | 'runner'
   }): RunHandle {
+    if (options.handbackEligible && (!options.runnerTaskId || !options.agentId || options.coordinator)) {
+      throw new Error('Handback requires a handed-off agent owned by a task runner.')
+    }
     if ((options.coordinator || options.inputOrigin === 'runner') && !options.runnerTaskId) {
       throw new Error('Coordinator tools require an owning task runner.')
     }
@@ -202,7 +207,8 @@ export const runExecutionService = {
       agentId: options.agentId,
       coordinator: options.coordinator,
       inputOrigin: options.inputOrigin,
-      runnerOwned: !!options.runnerTaskId
+      runnerOwned: !!options.runnerTaskId,
+      handbackEligible: options.handbackEligible
     }).catch((error) => {
       const message = error instanceof Error ? error.message : String(error)
       if (context) observe(context, { type: 'error', error: message })
@@ -216,6 +222,7 @@ export const runExecutionService = {
 }
 
 interface RunLifecycle {
+  handbackEligible?: boolean
   runnerOwned: boolean
   inputOrigin?: 'user' | 'runner'
   observe: RunObserver
@@ -291,6 +298,7 @@ async function resolveAndRun(
     inputOrigin: lifecycle.inputOrigin,
     includeToolResults: lifecycle.runnerOwned,
     queueWhenBusy: lifecycle.runnerOwned,
+    handbackEligible: lifecycle.handbackEligible,
     agentId: target.agentId,
     userContent,
     attachments,
@@ -318,6 +326,7 @@ function observeAsks(port: StreamPort, ctx: RunEventContext, observe: RunObserve
 }
 
 interface AgentTurnInput {
+  handbackEligible?: boolean
   queueWhenBusy?: boolean
   includeToolResults?: boolean
   inputOrigin?: 'user' | 'runner'
@@ -407,6 +416,7 @@ async function runAgentTurn(port: StreamPort, input: AgentTurnInput): Promise<vo
         fileIds,
         signal: io.signal,
         ...(input.queueWhenBusy ? { queueWhenBusy: true } : {}),
+        ...(input.handbackEligible ? { handbackEligible: true } : {}),
         onEvent: io.onEvent
       })
   )

@@ -1,3 +1,4 @@
+import { isCoordinatorHandover } from '../../../shared/kit/handovers'
 /**
  * Production wiring for the drivers, and the one resolver every caller uses.
  *
@@ -339,7 +340,8 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
       enabled: dto.enabled,
       readiness: dto.readiness,
       readinessReason: dto.readinessReason,
-      runtime: dto.runtime
+      runtime: dto.runtime,
+      coordinatorHandback: dto.kind === 'kit' && Array.isArray(dto.manifest.handovers) && dto.manifest.handovers.some(isCoordinatorHandover)
     }
   } catch (err) {
     logger.warn('a folder agent could not be read; keeping the launcher its row names', {

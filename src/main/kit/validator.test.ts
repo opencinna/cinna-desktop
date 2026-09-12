@@ -320,6 +320,18 @@ describe('validateAgentFolder — manifest errors', () => {
     )
   })
 
+  it('recognizes the explicit coordinator pair without treating it as a sibling folder', () => {
+    patchManifest(agentDir, (m) => { m.handovers = [{ target_slug: 'coordinator', target_kind: 'coordinator' }] })
+    let report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.errors).filter((code) => code.startsWith('manifest.handovers'))).toEqual([])
+    expect(codes(report.warnings)).not.toContain('manifest.handovers.target_missing')
+    patchManifest(agentDir, (m) => { m.handovers = [{ target_slug: 'coordinator' }] })
+    report = validateAgentFolder(agentDir, OPTIONS)
+    expect(codes(report.warnings)).toContain('manifest.handovers.target_missing')
+    patchManifest(agentDir, (m) => { m.handovers = [{ target_slug: 'writer', target_kind: 'coordinator' }] })
+    expectError(validateAgentFolder(agentDir, OPTIONS), 'manifest.handovers.coordinator_target')
+  })
+
   it('rejects a publication with no platform', () => {
     patchManifest(agentDir, (m) => {
       m.publications = [{ agent_id: 'a1' } as never]

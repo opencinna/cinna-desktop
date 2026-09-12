@@ -43,6 +43,8 @@ export interface AgentSchedule {
 /** Delegation to a sibling agent, by slug. */
 export interface AgentHandover {
   target_slug: string
+  /** Optional host role. Only the exact coordinator pair grants desktop handback. */
+  target_kind?: string
   description?: string
   [key: string]: unknown
 }

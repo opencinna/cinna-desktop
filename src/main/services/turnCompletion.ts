@@ -6,6 +6,8 @@ const logger = createLogger('turn-completion')
 
 /** A single turn's result, independent of the task that may own many turns. */
 export interface TurnOutcome {
+  /** Driver-authorized note from a successful handed-off agent answer. */
+  handback?: { note: string }
   control?: CoordinatorControl
   state: 'completed' | 'needs_input' | 'failed' | 'canceled' | 'budget'
   /** Final assistant text, or the stopped round's retained partial text. */

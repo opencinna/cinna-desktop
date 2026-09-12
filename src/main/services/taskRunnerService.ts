@@ -150,6 +150,7 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
         execution.handle = runExecutionService.start(scope, { chatId: next.chatId, content: next.prompt }, {
           runnerTaskId: taskId, coordinator, inputOrigin: next.promptOrigin,
           agentId: next.owner.kind === 'agent' ? next.owner.agentId : undefined,
+          handbackEligible: next.owner.kind === 'agent',
           observe: (context, event) => inboxService.recordRunEvent(context, event), onAccepted: assertCurrent
         })
         store(userId, taskId, { ...checkpoint(userId, taskId), lastRunId: execution.handle.id })
@@ -197,7 +198,8 @@ async function drive(userId: string, taskId: string, execution: Execution): Prom
           if (saved.owner.kind === 'agent') {
             taskService.setAssignee(userId, taskId, { kind: 'model', agentId: null, name: null })
             chatRepo.updateMeta(userId, next.chatId, { router: 'coordinator', providerId: saved.coordinator.providerId, modelId: saved.coordinator.modelId })
-            const notice = `${saved.owner.name} handed the task back to the coordinator.`
+            const note = outcome.handback?.note
+            const notice = `${saved.owner.name} handed the task back to the coordinator.${note ? `\nAgent-provided handback note: ${JSON.stringify(note)}` : ''}`
             messageRepo.saveTransition({ chatId: next.chatId, content: notice, sourceAgentId: saved.owner.agentId })
             // Transition rows are UI notices and are omitted from provider
             // history. Include this ownership change in the next wire turn.

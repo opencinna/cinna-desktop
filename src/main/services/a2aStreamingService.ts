@@ -194,6 +194,8 @@ export interface RunAgentTurnInput {
  *    orchestrated mode).
  */
 export interface RunAgentTurnResult {
+  /** Constructed only by a host driver, never spread from remote metadata. */
+  handback?: { note: string }
   text: string
   parts: MessagePart[]
   notices: AccumulatedNotice[]
@@ -591,7 +593,7 @@ export const a2aStreamingService = {
       // through the `catch`. Reporting `succeeded` for it is the same lie the
       // OpenAI adapter used to tell by resolving on abort: the run reads as a
       // job that finished, and nothing distinguishes it from one that did.
-      finish({ state, text: result.text })
+      finish({ state, text: result.text, ...(state === 'completed' && result.handback ? { handback: result.handback } : {}) })
       if (!canceled && state !== 'failed') {
         try {
           input.onCompleted?.()

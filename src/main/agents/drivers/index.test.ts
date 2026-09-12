@@ -27,6 +27,9 @@ import type { AgentRow } from '../../db/agents'
  */
 
 const state = vi.hoisted(() => ({
+  handovers: [] as unknown[],
+  kind: 'kit',
+  handbackPlans: [] as boolean[],
   runtime: { engine: 'opencode' } as { engine?: string } | null,
   readiness: 'ok',
   getThrows: false,
@@ -54,7 +57,8 @@ vi.mock('../../services/localAgents/localAgentService', () => ({
       return {
         name: 'A',
         path: '/agents/a',
-        kind: 'kit',
+        kind: state.kind,
+        manifest: { handovers: state.handovers },
         enabled: true,
         readiness: state.readiness,
         readinessReason: null,
@@ -99,7 +103,8 @@ vi.mock('./acp/acpLaunchers', async (importOriginal) => {
   const original = await importOriginal<typeof import('./acp/acpLaunchers')>()
   const marker = (id: string) => () => ({
     id,
-    plan: async () => {
+    plan: async (context: { folder: { coordinatorHandback?: boolean } }) => {
+      state.handbackPlans.push(context.folder.coordinatorHandback === true)
       state.ran.push(id)
       return { error: `refused by the ${id} launcher` }
     }
@@ -158,6 +163,7 @@ beforeEach(() => {
   state.getThrows = false
   state.gets = 0
   state.ran = []
+  state.handovers = []; state.kind = 'kit'; state.handbackPlans = []
 })
 
 describe('driverFor', () => {
@@ -174,6 +180,21 @@ describe('driverFor', () => {
     expect(driverFor(folderRow('opencode'))).toBe(driverFor(folderRow('claude')))
     // Not set: a folder row still runs on the ACP driver.
     expect(driverFor(folderRow(null)).id).toBe('acp')
+  })
+
+  it('reads the exact handback declaration afresh and never grants it to a bare folder', async () => {
+    state.handovers = [{ target_slug: 'coordinator' }]
+    await ranFor(folderRow('opencode'))
+    state.handovers = [{ target_slug: 'coordinator', target_kind: 'future-role' }]
+    await ranFor(folderRow('opencode'))
+    state.handovers = [{ target_slug: 'coordinator', target_kind: 'coordinator' }]
+    await ranFor(folderRow('opencode'))
+    state.handovers = []
+    await ranFor(folderRow('opencode'))
+    state.handovers = [{ target_slug: 'coordinator', target_kind: 'coordinator' }]
+    state.kind = 'bare'
+    await ranFor(folderRow('opencode'))
+    expect(state.handbackPlans).toEqual([false, false, true, false, false])
   })
 
   it('launches a folder agent that names no engine on OpenCode', async () => {

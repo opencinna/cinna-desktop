@@ -1,3 +1,4 @@
+import { readHandbackNote } from './handback'
 /**
  * The `acp` driver: every local CLI agent, over the Agent Client Protocol.
  *
@@ -111,6 +112,8 @@ export const ACP_FOLDER_NOT_FOUND = 'This agent’s folder could not be found on
 
 /** The folder as it is on disk right now, reduced to what a turn decides on. */
 export interface AcpFolderView {
+  /** Fresh explicit kit handover to the task coordinator. */
+  coordinatorHandback?: boolean
   name: string
   slug: string
   description: string
@@ -608,7 +611,7 @@ async function runTurn(deps: AcpDriverDeps, ctx: TurnContext): Promise<RunAgentT
       if (input.signal.aborted || answer.stopReason === 'cancelled') {
         return finish(deps, ctx, accumulator, sessionId, hitCeiling ? ceilingMessage() : undefined)
       }
-      return finish(deps, ctx, accumulator, sessionId, stopReasonError(answer.stopReason))
+      return finish(deps, ctx, accumulator, sessionId, stopReasonError(answer.stopReason), undefined, answer.stopReason === 'end_turn')
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       // Abort first, and the order is the point: a stop that lands mid-turn
@@ -1079,7 +1082,8 @@ function finish(
   sessionId: string | null,
   error: string | undefined,
   /** The underlying detail, when the sentence above is not it. Kept apart, as `fail` keeps them. */
-  raw?: string
+  raw?: string,
+  completed = false
 ): RunAgentTurnResult {
   if (sessionId) {
     try {
@@ -1101,7 +1105,10 @@ function finish(
   }
   const parts = accumulator.snapshotParts()
   const answer = accumulator.answerText()
+  const note = completed && !error && !ctx.input.signal.aborted && ctx.input.handbackEligible &&
+    ctx.folder.kind === 'kit' && ctx.folder.coordinatorHandback ? readHandbackNote(answer) : null
   return {
+    ...(note ? { handback: { note } } : {}),
     text: answer || parts.map((part) => part.text).join(''),
     parts,
     notices: accumulator.snapshotNotices(),

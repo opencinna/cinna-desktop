@@ -83,6 +83,7 @@ interface World {
   /** Every event the turn posted. */
   events: RunEvent[]
   run(overrides?: {
+    handbackEligible?: boolean
     signal?: AbortSignal
     chatId?: string
     onEvent?: (event: RunEvent) => void
@@ -180,6 +181,7 @@ function makeWorld(options: WorldOptions = {}): World {
     run: (overrides = {}) =>
       driver.run(USER_ID, ROW, {
         chatId: overrides.chatId ?? CHAT_ID,
+        handbackEligible: overrides.handbackEligible,
         wireContent: 'hello',
         signal: overrides.signal ?? new AbortController().signal,
         onEvent: overrides.onEvent ?? ((event) => void events.push(event))
@@ -297,6 +299,73 @@ describe('a turn', () => {
     expect(result.error?.message).toMatch(/model 'does-not-exist' not found/)
     // An error must not blank a partial answer.
     expect(result.text).toContain('Working on it')
+  })
+})
+
+describe('manifest-authorized coordinator handback', () => {
+  const answer = '/handback Verified app-data/report.md; no open work.'
+  const response = (sessionUpdate = 'agent_message_chunk', stopReason = 'end_turn'): FakeAcpScript => ({ prompt: {
+    emit: [{ kind: 'update', update: { sessionUpdate, content: { type: 'text', text: answer } } }],
+    response: { stopReason }
+  } })
+  it('returns a typed note only from an eligible completed kit assistant answer', async () => {
+    const w = world({ folder: { ...FOLDER, coordinatorHandback: true }, script: response() })
+    const result = await w.run({ handbackEligible: true })
+    expect(result.handback).toEqual({ note: 'Verified app-data/report.md; no open work.' })
+    expect(result.text).toBe(answer)
+  })
+  it.each([
+    [false, true, 'kit', 'end_turn'],
+    [true, false, 'kit', 'end_turn'],
+    [true, true, 'bare', 'end_turn'],
+    [true, true, 'kit', 'cancelled'],
+    [true, true, 'kit', 'max_tokens'],
+    [true, true, 'kit', 'future_stop_reason']
+  ] as const)('refuses eligibility=%s manifest=%s kind=%s ending=%s', async (eligible, declared, kind, stopReason) => {
+    const w = world({ folder: { ...FOLDER, kind, coordinatorHandback: declared }, script: response('agent_message_chunk', stopReason) })
+    expect((await w.run({ handbackEligible: eligible })).handback).toBeUndefined()
+  })
+  it('does not parse reasoning used as fallback display text', async () => {
+    const w = world({ folder: { ...FOLDER, coordinatorHandback: true }, script: response('agent_thought_chunk') })
+    const result = await w.run({ handbackEligible: true })
+    expect(result.text).toContain('/handback')
+    expect(result.handback).toBeUndefined()
+  })
+  it('keeps a streamed note as transcript data when the protocol turn fails', async () => {
+    const script = response()
+    script.prompt!.error = { code: -32603, message: 'Work failed' }
+    const w = world({ folder: { ...FOLDER, coordinatorHandback: true }, script })
+    const result = await w.run({ handbackEligible: true })
+    expect(result.text).toContain('/handback')
+    expect(result.error).toBeDefined()
+    expect(result.handback).toBeUndefined()
+  })
+  it('does not authorize a marker contained only in a tool result', async () => {
+    const w = world({ folder: { ...FOLDER, coordinatorHandback: true }, script: { prompt: {
+      emit: [{ kind: 'update', update: {
+        sessionUpdate: 'tool_call', toolCallId: 'read_result', title: 'Read report',
+        kind: 'read', status: 'completed',
+        content: [{ type: 'content', content: { type: 'text', text: answer } }]
+      } }]
+    } } })
+    const result = await w.run({ handbackEligible: true })
+    expect(result.error).toBeUndefined()
+    expect(result.handback).toBeUndefined()
+    expect(JSON.stringify(result.parts)).toContain('/handback')
+  })
+  it('does not authorize a marker replayed by session/load', async () => {
+    const w = world({ folder: { ...FOLDER, coordinatorHandback: true }, remembered: 'ses_old', script: {
+      loadSession: { emit: [{ kind: 'update', sessionId: 'ses_old', update: {
+        sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: answer }
+      } }] },
+      prompt: { emit: [{ kind: 'update', sessionId: 'ses_old', update: {
+        sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'Current work is ready.' }
+      } }] }
+    } })
+    const result = await w.run({ handbackEligible: true })
+    expect(w.fake.received('session/load')).toHaveLength(1)
+    expect(result.text).toBe('Current work is ready.')
+    expect(result.handback).toBeUndefined()
   })
 })
 

@@ -99,7 +99,7 @@ The authority is [Remote Task Adapters](remote_adapters.md): capability-gated op
 ## Current Gap List
 
 - Takeover and Continue remain separate actions. The remote Hand off picker uses the adapter directory; local Continue chooses an agent or model. An unresolved create can defer discovery until recovery because the remote identity is not yet safely correlated.
-- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. [Script execution](script_execution_tech.md) owns DAG steps through the same completion/admission seams. Schedules, manifest handback and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
+- The [autonomous runner](autonomous_tasks_tech.md) owns multi-turn execution and specialist handback above the shared one-turn executor. [Script execution](script_execution_tech.md) owns DAG steps through the same completion/admission seams. Schedules and complete token accounting remain separate; subsequent cleanup/protocol/new-driver work is not supplied by task synchronization.
 - A failed remote enumeration rejects the complete Inbox array, delaying new local entries too. Partial-result completeness must be carried explicitly before changing that policy.
 - Service-specific limitations, including recent-history bounds and the absence of a subscription, remain in the [Cinna mapping](cinna_adapter.md) and [remote coordination](remote_sync.md) documents.
 
