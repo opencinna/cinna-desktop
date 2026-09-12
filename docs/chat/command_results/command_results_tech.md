@@ -20,7 +20,7 @@
 
 | File | Role |
 |------|------|
-| `src/preload/index.ts` | No new bridge surface. The existing `agents.sendMessage` MessagePort stream carries `{type:'delta', kind:'command_result', text}` events alongside other deltas; `MessagePart` types in the preload already use the shared `ContentKind` union so consumers see the new kind without changes. |
+| `src/preload/index.ts` | No new bridge surface. The existing run:watch event envelope (or lower-level run:send port) carries `{type:'delta', kind:'command_result', text}` events alongside other deltas; `MessagePart` types in the preload already use the shared `ContentKind` union so consumers see the new kind without changes. |
 
 ### Renderer
 
@@ -39,7 +39,7 @@ No migration required. `command_result` joins the existing `assistant`-role row'
 
 ## IPC Channels
 
-No new channels. The existing `agent:send-message` MessagePort stream carries command_result deltas with this shape:
+No new channels. The shared run event vocabulary carries command_result deltas with this shape:
 
 | Field | Value |
 |-------|-------|

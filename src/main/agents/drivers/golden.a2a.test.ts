@@ -24,7 +24,7 @@
  * **The fake is `fetch`, not the SDK client** (`__golden__/a2a/fakeAgent.ts`
  * says why at length). The card fetch, the bearer header, the 401/403
  * intercept, the SSE tee, the SDK's JSON-RPC ids and its SSE parser all run for
- * real over real bytes. Replaced: `a2aSessionRepo` (in memory, with the real
+ * real over real bytes. Replaced: `agentSessionRepo` (in memory, with the real
  * merge rule), the logger, and `messageRepo` / `jobService` as **empty
  * objects** — `runAgentTurn` imports both and must call neither, since
  * persistence is its caller's job; a call would throw inside its `try` and show
@@ -61,7 +61,7 @@
  * | Mutation | Caught by |
  * |---|---|
  * | Drop the `status` onEvent in the `status-update` branch | 12 goldens (every scenario with a status-update frame) and the abort characterisation, which times out waiting for its first event |
- * | Skip `a2aSessionRepo.upsert` on the success path | 15 effects expectations and the contract's `session` clause — **no** `{ events, result }` golden, which is why effects are pinned separately |
+ * | Skip `agentSessionRepo.upsert` on the success path | 15 effects expectations and the contract's `session` clause — **no** `{ events, result }` golden, which is why effects are pinned separately |
  * | (phase 2, `a2aDriver.ts`) `respond` answers `delivered: true` | the contract's `respond.unknown` |
  * | (phase 2, `a2aDriver.ts`) readiness rethrows a card-fetch failure | the contract's `readiness.never_throws` |
  * | (phase 2, `capabilities.ts`) every row of a driver shares one capabilities object | the contract's `capabilities.stable` on all three drivers, and `auth_required_401` — the re-auth flag read the object that clause had edited |
@@ -79,7 +79,7 @@ vi.mock('../../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
 vi.mock('../../db/agents', () => ({
-  a2aSessionRepo: {
+  agentSessionRepo: {
     getByChatAndAgent: (chatId: string, agentId: string) => {
       if (!sessions.current) throw new Error('golden a2a: no session repo installed')
       return sessions.current.getByChatAndAgent(chatId, agentId)
@@ -364,9 +364,8 @@ function makeSubject(): DriverContractSubject {
       'transport 401 on message/stream (A2aHttpError, Cinna token)': fixtureTurn(fixtureOf('auth_required_401')),
       'network throw at the card fetch (ECONNREFUSED)': fixtureTurn(fixtureOf('network_refused')),
       'JSON-RPC error frame mid-stream': fixtureTurn(fixtureOf('stream_rpc_error')),
-      // Failures to the user that come back without `result.error` today —
-      // listed so the contract knows about them, and pinned as successes in
-      // `knownFailureViolations` below until they carry an error.
+      // Protocol-level failures must also carry result.error, including
+      // terminal failed tasks and non-streaming JSON-RPC errors.
       task_failed: fixtureTurn(fixtureOf('task_failed')),
       nonstreaming_rpc_error: fixtureTurn(fixtureOf('nonstreaming_rpc_error'))
     }),

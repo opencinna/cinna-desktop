@@ -46,16 +46,16 @@ Emission side: `acpMessages.ts` writes `PERMISSION_TOOL_NAME` into the ask part'
 - `__fixtures__/{opencode,claude}/*.json` — distilled from the spike recordings (which live outside this repository): a text turn, a tool call, a permission ask, a mode update, an MCP tool call, `available_commands`, a `session/load` replay, and the Claude adapter's tool-name metadata
 
 ### Main process — elsewhere
-- `src/main/agents/drivers/index.ts` — production wiring: `acpProcessPool` (exported, so `will-quit` can reach it), `acpLaunchers` (`opencode`, `claude`; no entry for `gemini` or `codex`), `acpDriver`, `driverFor`, `respondToOrphanedAsk`, `readAcpFolder`, `readSession` / `saveSession`, `isGranted` / `rememberGrant`, `electronNodeRuntime`, `claudeAdapterEntry`
+- `src/main/agents/drivers/index.ts` — production wiring: `acpProcessPool` (exported, so `will-quit` can reach it), `acpLaunchers` (opencode, claude, custom; no gemini/codex implementation), `acpDriver`, `driverFor`, `respondToOrphanedAsk`, readAcpRuntime/readAcpFolder and captured session/grant closures, `electronNodeRuntime`, `claudeAdapterEntry`
 - `src/main/index.ts` — `void acpProcessPool.shutdown()` on `will-quit`, **fired and not awaited**: Electron does not await that handler, so `shutdown` disposes every *running* process before its first `await` and only then waits out the starts in flight. A single pass that waited on each start before killing anything yielded on the first entry and left every running agent alive
 - `src/main/agents/drivers/pendingRequests.ts` — the module-level ask registry, unchanged. `REQUEST_PARK_TIMEOUT_MS` is 10 minutes
 - `src/main/agents/drivers/acp/claudePermissions.ts`, `claudeAuth.ts`, `claudeEnv.ts`, `claudeAgents.ts` — what survives of the Claude runner: the permission vocabulary, the login probe, the stripped child environment and the folder's own subagent definitions. All four are now launcher inputs
-- `src/main/ipc/agent_a2a.ipc.ts` — `agent:send-message` (the dispatch seam; `driverFor(agent)`), `agent:cancel-message`, `agent:answer-request` (shared durable Inbox commitment, then synchronous ACP response; a rowless ACP-origin park alone may use the orphan fallback), `agent:pending-requests`
+- `src/main/ipc/run.ipc.ts` and `src/main/services/runExecutionService.ts` own command/watch/cancel and dispatch. `src/main/ipc/agent_a2a.ipc.ts` retains agent answer, pending-request and session channels; custom registration validation precedes the folder orphan fallback.
 - `src/main/services/a2aStreamingService.ts` — the direct-chat wrapper every turn passes through, and the A2A implementation behind it. `RunAgentTurnInput` / `RunAgentTurnResult` are the shared shapes; its `catch` does not trust a driver to keep its own contract
 - `src/main/services/a2aAsMcpProvider.ts` — the orchestrated-tool call site: `driverFor(this.agent).run(…)`. A folder agent works as an orchestrated tool with no change of its own
 - `src/main/services/localAgents/turnLock.ts` — `withLock()`, `isLocked()`. `anyHeld()` still exists for the folder watcher; **no engine-level caller is left**
 - `src/main/services/localAgents/desktopStateService.ts` — the durable per-folder session copy and the permission grants
-- `src/main/db/agents.ts` — `a2aSessionRepo.getByChatAndAgent` / `upsert`; `agentSessionRepo` is the same object under a driver-neutral name
+- `src/main/db/agents.ts` — agentSessionRepo.getByChatAndAgent/upsert, the sole driver-neutral repository over the unchanged physical a2a_sessions table
 - `src/main/agents/streamPartsAccumulator.ts` — reused verbatim; the ACP translator only produces `MessageLike` / `PartLike` with its metadata keys
 - **Gone:** `services/agentTurn/{runner,localAgentTurnRunner,claudeAgentTurnRunner,engineEventBus,engineEvents,turnStream,sseParser,claudeMessages}.ts` and `agents/drivers/{folderDriver,opencodeDriver,claudeDriver}.ts`
 
@@ -82,7 +82,7 @@ Emission side: `acpMessages.ts` writes `PERMISSION_TOOL_NAME` into the ask part'
 
 **No new table and no new column.** Session continuity reuses `a2a_sessions` (seam 9): one row per `(chat, agent)`, and a folder agent's engine session id goes in **`context_id`**. Columns stay A2A-named on purpose — `agent:get-session` reads `context_id` to decide a chat is an agent chat, so a parallel table would mean teaching every existing reader about it. `task_id` and `task_state` are written `null` for a folder agent.
 
-Uniqueness is enforced in `a2aSessionRepo.upsert` by select-then-insert; there is no unique index.
+Uniqueness is enforced in `agentSessionRepo.upsert` by select-then-insert; there is no unique index.
 
 The second, durable copy is `sessions[chatId] = {sessionId, updatedAt}` in the agent folder's `app-data/desktop.json`, written through `desktopStateService.patch`. Invariant 1 makes the SQLite row a cache, so a failure to write the folder copy is logged and the turn continues (`src/main/agents/drivers/index.ts:145-158`).
 
@@ -90,7 +90,7 @@ The second, durable copy is `sessions[chatId] = {sessionId, updatedAt}` in the a
 
 | Channel | Signature | Notes |
 |---|---|---|
-| `agent:send-message` | `(AgentSendPayload)` + a MessagePort on `event.ports[0]` | Unchanged shape. The handler resolves `driverFor(agent)` and hands `streamToAgent` a bound `run`. Endpoint and token resolution live inside the A2A driver, so a folder agent never meets them |
+| run:start / run:watch | RunSendPayload command / owned chat watch | Main executor dispatches independently of the selected renderer view. Lower-level run:send remains available through the same executor. |
 | `agent:cancel-message` | `(requestId) → {success}` | Unchanged. Reaches the runner through the turn's `AbortSignal` |
 | `agent:answer-request` | `({requestId, reply?, answers?}) → {ok, reason?, remembered?}` | Activation-gated, chat-ownership checked **before** the request is consumed, and the answer shape validated against the engine's own enum. `remembered` is present only for a permission answered `always`, and says whether the grant reached disk — see [permissions_tech.md](permissions_tech.md#ordering-constraint-on-the-answer-path) for the synchronous-window constraint that makes writing it before `resolve()` safe |
 | `agent:pending-requests` | `(chatId) → {requestId, kind}[]` | New. Synchronous map read; returns `[]` for a chat the caller does not own |
@@ -106,7 +106,7 @@ Three properties of `agent:answer-request` are deliberate and each closes a spec
 
 ### `src/main/agents/drivers/acp/acpDriver.ts`
 
-`createAcpDriver(deps)` takes its whole world by injection — `pool`, `launcher(id)`, `readFolder`, `readSession`, `saveSession`, `isGranted`, `rememberGrant`, `registerRequest`, `resolveRequest`, `withLock`, plus `turnCeilingMs` / `cancelGraceMs` for tests — so the driver runs with no process, no database and no Electron.
+`createAcpDriver(deps)` takes its whole world by injection — `pool`, `launcher(id)`, readRuntime (captured metadata, validation, sessions and grants), `registerRequest`, `resolveRequest`, `withLock`, plus `turnCeilingMs` / `cancelGraceMs` for tests — so the driver runs with no process, no database and no Electron.
 
 | Method | Behaviour |
 |---|---|
@@ -212,7 +212,7 @@ These pin what the drivers and the renderer's stream handler **currently do**, n
 
 ### The driver contract
 
-`src/main/agents/drivers/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, called once at the bottom of `golden.a2a.test.ts` and once at the bottom of `acpDriver.test.ts`. Both subjects reach the driver through `driver.run(userId, row, input)`, the call production dispatches to, with the row and small world from `__golden__/driverWorld.ts`.
+`src/main/agents/drivers/__golden__/driverContract.ts` — `describeDriverContract(name, makeSubject, options)`, used by golden.a2a.test.ts, acpDriver.test.ts, customLauncher.contract.test.ts and managedDriver.contract.test.ts. Their subjects reach the driver through `driver.run(userId, row, input)`, the call production dispatches to, with the row and small world from `__golden__/driverWorld.ts`.
 
 What it asserts for every driver:
 
@@ -227,11 +227,11 @@ What it asserts for every driver:
 - `readiness` resolves — never rejects, never throws — with a state this build knows and a sentence when it is not `ok`, whatever its dependencies do
 - `respond` to an ask nothing is waiting on answers `{delivered: false}` and writes no grant
 
-**A clause a driver breaks is recorded, never bent.** `knownViolations: {clause: reason}` records one, and the clause passes only if it fails *the way the entry says*. Currently recorded on the A2A side: an aborted turn returns success rather than an error or a `canceled` state, an abort does not settle while the agent is silent (`runAgentTurn` passes its signal to neither the SDK nor `fetch`), and two failure scenarios come back as successes.
+**A clause a driver breaks must be explicit.** The old A2A failure/cancellation and ACP abort-result exceptions have been removed after fixes. A2A omits six live-park clauses because its next-message asks end a turn; folder ACP, custom ACP and Managed execute every common clause. Managed answers use the real asynchronous registration/acceptance/commit path; ACP answers use the captured synchronous driver runtime. Root request-id and done/error events belong to the wrapper, not the driver contract.
 
 ### Kind-branch ratchet and receiver-side events
 
 - `src/main/agents/kindBranches.test.ts` counts literal comparisons on an agent's `source`, `engine`, `kind`, job `type` and `providerType`, plus calls of the retired helpers. **Each category must equal its entry in `LIMITS`, not merely stay under it** — a change that removes branches lowers the limit in the same commit, so freed headroom cannot be spent later without a reviewer seeing it. `src/main/agents/drivers/` and four sync files are allowlisted; the count runs in Node, not shell `grep`. Full account: [Agent Drivers — Technical Details](../drivers/drivers_tech.md#the-kind-branch-ratchet)
-- `src/renderer/src/hooks/useChatStream.events.test.tsx` feeds every `RunEvent` variant through `useChatStream.handleRun` in an agent table and an LLM table, pinning exactly which chat-store fields each one moves
+- `src/renderer/src/hooks/useChatStream.events.test.tsx` feeds every `RunEvent` variant through `useRunEventHandler` in an agent table and an LLM table, pinning exactly which chat-store fields each one moves
 
 The old services/agentTurn directory is gone. The shared pending registry and A2A golden contract live under agents/drivers; the surviving Claude launcher helpers live under agents/drivers/acp. This is a module relocation with one registry identity, not a new answer-delivery protocol.

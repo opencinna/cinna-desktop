@@ -48,7 +48,7 @@ import {
   type AgentReadiness,
   type AgentReadinessChangedPayload
 } from '../shared/agentDrivers'
-import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../shared/ipcPayloads'
+import type { RunSendPayload } from '../shared/ipcPayloads'
 import type { ChatRouter } from '../shared/chatRouting'
 import { isRunEvent, type RunEvent } from '../shared/runEvents'
 import type { MessageAttachment, PendingAttachment } from '../shared/attachments'
@@ -592,34 +592,6 @@ const api = {
       agentId: string
     ): Promise<{ success: boolean; commands: CliCommand[]; error?: string }> =>
       ipcRenderer.invoke('agent:list-cli-commands', agentId),
-    sendMessage: (
-      agentId: string,
-      chatId: string,
-      content: string,
-      onEvent: (event: RunEvent) => void,
-      extras?: { attachments?: MessageAttachment[] }
-    ): void => {
-      const channel = new MessageChannel()
-      channel.port1.onmessage = (event) => {
-        // Guard at the IPC trust boundary: drop messages that don't match
-        // the contract instead of casting blindly. Logged so a regression
-        // surfaces in dev tools rather than as a silent no-op. Both send
-        // paths carry the same `RunEvent` vocabulary, so they share the
-        // guard and the message.
-        if (!isRunEvent(event.data)) {
-          console.warn('[preload] dropped off-contract run event', event.data)
-          return
-        }
-        onEvent(event.data)
-      }
-      const payload: AgentSendPayload = {
-        agentId,
-        chatId,
-        content,
-        attachments: extras?.attachments
-      }
-      ipcRenderer.postMessage('agent:send-message', payload, [channel.port2])
-    },
     cancelMessage: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('agent:cancel-message', requestId),
     /**
@@ -785,14 +757,9 @@ const api = {
   },
 
   /**
-   * The one send channel. Main reads `chats.router` and decides who answers —
-   * the renderer says only what the user typed, and (in a `human` chat) which
-   * agent they addressed.
-   *
-   * `agents.sendMessage` and `llm.sendMessage` below still work: main keeps both
-   * channels as forwards onto this one for one phase. Nothing new should use
-   * them, because picking a channel *is* deciding the routing, which is the
-   * decision this channel exists to take away from the composer.
+   * Main resolves the recipient from chats.router. The composer starts a run
+   * and independently watches its replayable events; send retains the generic
+   * single-port interface for callers that own the whole turn subscription.
    */
   run: {
     start: (payload: RunSendPayload): Promise<string> => ipcRenderer.invoke('run:start', payload),
@@ -842,27 +809,6 @@ const api = {
   },
 
   llm: {
-    sendMessage: (
-      chatId: string,
-      content: string,
-      onEvent: (event: RunEvent) => void,
-      extras?: { attachments?: MessageAttachment[] }
-    ): void => {
-      const channel = new MessageChannel()
-      channel.port1.onmessage = (event) => {
-        if (!isRunEvent(event.data)) {
-          console.warn('[preload] dropped off-contract run event', event.data)
-          return
-        }
-        onEvent(event.data)
-      }
-      const payload: LlmSendPayload = {
-        chatId,
-        content,
-        attachments: extras?.attachments
-      }
-      ipcRenderer.postMessage('llm:send-message', payload, [channel.port2])
-    },
     cancel: (requestId: string): Promise<{ success: boolean }> =>
       ipcRenderer.invoke('llm:cancel', requestId),
     /**

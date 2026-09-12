@@ -8,7 +8,7 @@ import { runExecutionService } from '../services/runExecutionService'
 import { createLogger } from '../logger/logger'
 import { postRunError } from './_streamPort'
 import { ipcHandle } from './_wrap'
-import type { AgentSendPayload, LlmSendPayload, RunSendPayload } from '../../shared/ipcPayloads'
+import type { RunSendPayload } from '../../shared/ipcPayloads'
 
 const logger = createLogger('run')
 
@@ -50,27 +50,6 @@ export function registerRunHandlers(): void {
   // and the MessagePort on event.ports — see CLAUDE.md.
   ipcMain.on('run:send', (event, payload: RunSendPayload) => {
     void dispatchRun(event.ports?.[0], payload)
-  })
-
-  // The two forwards. `agent:send-message` carried an explicit `agentId`; it is
-  // taken as the addressed agent, which is exactly what it meant in the one
-  // chat shape that used it (a direct chat's root — where the router reaches
-  // the same agent on its own, so the field changes nothing).
-  ipcMain.on('agent:send-message', (event, payload: AgentSendPayload) => {
-    void dispatchRun(event.ports?.[0], {
-      chatId: payload.chatId,
-      content: payload.content,
-      attachments: payload.attachments,
-      addressedAgentId: payload.agentId
-    })
-  })
-
-  ipcMain.on('llm:send-message', (event, payload: LlmSendPayload) => {
-    void dispatchRun(event.ports?.[0], {
-      chatId: payload.chatId,
-      content: payload.content,
-      attachments: payload.attachments
-    })
   })
 }
 

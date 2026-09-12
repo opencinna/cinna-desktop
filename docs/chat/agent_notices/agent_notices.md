@@ -69,7 +69,7 @@ Cinna agent → A2A TextPart with cinna.content_kind=notice
        └─ port.postMessage({type:'delta', kind:'notice', text})
             ↓
 Renderer:
-  useChatStream.handleRun → chat.store.appendDelta(text, 'notice')
+  useRunEventHandler → chat.store.appendDelta(text, 'notice')
     └─ streamingBlocks: TextBlock{ kind:'notice' }
          ↓
   MessageStream → NoticeBlock live (forced-expanded Info+text row)

@@ -30,7 +30,7 @@ vi.mock('../db/messages', () => ({
     touchChat: () => {}
   }
 }))
-vi.mock('../db/agents', () => ({ a2aSessionRepo: { getByChatAndAgent: () => undefined, upsert: () => {} } }))
+vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChatAndAgent: () => undefined, upsert: () => {} } }))
 vi.mock('./jobService', () => ({
   jobService: {
     reportRunCompletion: (_c: string, status: string, message?: string) =>

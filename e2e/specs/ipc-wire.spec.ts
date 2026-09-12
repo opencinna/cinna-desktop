@@ -58,8 +58,8 @@ test('A2 a fixed site shows a plain sentence with no channel or class name', asy
 
 /**
  * The single stream guard: every turn's `MessagePort` carries one `RunEvent`
- * union, and `src/preload/index.ts` filters it with `isRunEvent` on both send
- * paths before the renderer sees anything.
+ * union, and `src/preload/index.ts` filters it with `isRunEvent` on the generic
+ * `run.send` path before the renderer sees anything.
  *
  * ## What is real and what is stubbed
  *
@@ -81,7 +81,7 @@ test('A2 a fixed site shows a plain sentence with no channel or class name', asy
  *   an array, a bare part with no envelope, the retired `tool_subevent`
  *   nesting, a non-string `type`, and `toString` — a key every object inherits,
  *   so a guard written with `in` instead of an own-property check lets it by.
- * - `llm.sendMessage` and `agents.sendMessage` behave identically.
+ * - The generic `run.send` entry point enforces the guard across the real port.
  *
  * ## What it does not
  *
@@ -135,66 +135,44 @@ const WIRE: unknown[] = ON_CONTRACT.flatMap((event, i) =>
   i < OFF_CONTRACT.length ? [OFF_CONTRACT[i], event] : [event]
 )
 
-// `run.send` is the channel; the other two are the forwards it replaced, kept
-// for one phase (see `src/main/ipc/run.ipc.ts`). All three carry the same
-// vocabulary and the same preload guard, so all three are driven.
-for (const path of [
-  { api: 'run.send', channel: 'run:send' },
-  { api: 'llm.sendMessage', channel: 'llm:send-message' },
-  { api: 'agents.sendMessage', channel: 'agent:send-message' }
-] as const) {
-  test(`${path.api} delivers every RunEvent type and drops what is off contract`, async ({
-    cinna
-  }) => {
-    await cinna.skipOnboarding()
-    // The preload world's console reaches the page's console listener, with the
-    // dropped payload as its second argument.
-    const warnings: string[] = []
-    cinna.page.on('console', (message) => {
-      if (message.text().startsWith(PRELOAD_DROP)) warnings.push(message.text())
-    })
-
-    await cinna.electronApp.evaluate(
-      ({ ipcMain }, { channel, wire }) => {
-        ipcMain.removeAllListeners(channel)
-        ipcMain.on(channel, (event) => {
-          const port = event.ports[0]
-          port.start()
-          for (const message of wire) port.postMessage(message)
-        })
-      },
-      { channel: path.channel, wire: WIRE }
-    )
-
-    const delivered = await cinna.page.evaluate(
-      (channel) =>
-        new Promise<unknown[]>((resolve, reject) => {
-          const got: unknown[] = []
-          // A hang guard, not a wait: `done` is the last thing on the wire, so a
-          // guard that dropped it would otherwise hold the test to its timeout
-          // with nothing said about why.
-          const guard = setTimeout(
-            () => reject(new Error(`no done arrived; ${got.length} events delivered`)),
-            10_000
-          )
-          const onEvent = (event: RunEvent): void => {
-            got.push(event)
-            if (event.type === 'done') {
-              clearTimeout(guard)
-              resolve(got)
-            }
-          }
-          if (channel === 'run:send') window.api.run.send('e2e-chat', 'hello', onEvent)
-          else if (channel === 'llm:send-message')
-            window.api.llm.sendMessage('e2e-chat', 'hello', onEvent)
-          else window.api.agents.sendMessage('folder:e2e', 'e2e-chat', 'hello', onEvent)
-        }),
-      path.channel
-    )
-
-    expect(delivered).toEqual(ON_CONTRACT)
-    await expect.poll(() => warnings.length).toBe(OFF_CONTRACT.length)
-    expect(warnings.some((line) => line.includes('tool_subevent'))).toBe(true)
-    expect(warnings.some((line) => line.includes('toString'))).toBe(true)
+// Legacy per-driver send forwards are removed. Keep the actual generic port
+// witness: fixture-invalid traffic cannot be produced by a normal sender.
+test('run.send delivers every RunEvent type and drops what is off contract', async ({ cinna }) => {
+  await cinna.skipOnboarding()
+  // The preload world's console reaches the page's console listener, with the
+  // dropped payload as its second argument.
+  const warnings: string[] = []
+  cinna.page.on('console', (message) => {
+    if (message.text().startsWith(PRELOAD_DROP)) warnings.push(message.text())
   })
-}
+
+  await cinna.electronApp.evaluate(({ ipcMain }, wire) => {
+    ipcMain.removeAllListeners('run:send')
+    ipcMain.on('run:send', (event) => {
+      const port = event.ports[0]
+      port.start()
+      for (const message of wire) port.postMessage(message)
+    })
+  }, WIRE)
+
+  const delivered = await cinna.page.evaluate(() => new Promise<unknown[]>((resolve, reject) => {
+    const got: unknown[] = []
+    // A hang guard, not a wait: done is last, so dropping it must fail clearly.
+    const guard = setTimeout(
+      () => reject(new Error(`no done arrived; ${got.length} events delivered`)),
+      10_000
+    )
+    window.api.run.send('e2e-chat', 'hello', (event: RunEvent) => {
+      got.push(event)
+      if (event.type === 'done') {
+        clearTimeout(guard)
+        resolve(got)
+      }
+    })
+  }))
+
+  expect(delivered).toEqual(ON_CONTRACT)
+  await expect.poll(() => warnings.length).toBe(OFF_CONTRACT.length)
+  expect(warnings.some((line) => line.includes('tool_subevent'))).toBe(true)
+  expect(warnings.some((line) => line.includes('toString'))).toBe(true)
+})

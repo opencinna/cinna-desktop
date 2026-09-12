@@ -24,7 +24,7 @@ One place per kind of agent decides how that agent is reached, run, authenticate
 ## User Stories / Flows
 
 ### Sending to an agent that cannot take a turn
-1. The user opens a new chat with one agent (the routing badge reads *Direct A2A connection*), or a chat already bound to one
+1. The user opens a direct chat with one agent, or a human-routed chat addressed to that agent
 2. The agent list answers at once with whatever readiness is already known: `null` for an agent not checked yet. It also starts a background check for every enabled agent whose answer is missing or old
 3. The check comes back, say, `unreachable`. The answer changed, so main pushes it and the renderer re-reads the list
 4. The reason appears in the state's colour, followed by a separator and **Check again**. It sits on a line under the controls row that is kept for every composer sending straight to one agent, so it was already there and nothing moves. Send is disabled and described by the reason. Its tooltip is the raw error where the driver kept one
@@ -72,7 +72,7 @@ What is still allowed, and where, is enforced by a test, not by review — see [
 ### One dispatch point, and it reads the row
 
 `driverFor(agent)` picks the driver from `agents.driver`. A null, empty or unknown value resolves to an unsupported driver. The row stays visible with its raw identity, inert capabilities and a clear readiness refusal; it never falls through to another transport based on ownership. Run dispatch and the synchronous ACP answer branch use it:
-- the direct-chat handler
+- the main run executor
 - the orchestrator's agent tool
 - the answer path
 
@@ -86,11 +86,11 @@ Equivalent normalized answers join one claim. A conflicting answer refuses; unce
 
 Inbox and transcript share the durable answer path. ACP still writes its local grant, resolves its park and commits the request/task update synchronously before the continuation can run. A missing-agent fallback is restricted to an ACP-origin registration and cannot accept a captured asynchronous reply. The [Managed driver](../managed_agents/managed_agents.md) supplies captured session/thread/tool confirmation delivery and stops stream continuation at this barrier. It offers once or deny, never a standing grant; uncertain acknowledgment disables further UI decisions without accepting the request.
 
-### The row is a cache; the folder decides a folder agent's engine
+### The folder decides its launcher; external configuration owns its binding
 
-A folder row's `driver` is only what the scanner last read. The folder can name the other engine before a rescan catches up: the Runs-with panel or an assistant may have edited the manifest a moment ago. Dispatching on the stale value sends a Claude agent to the OpenCode runner. That runner cannot find the agent in the engine config and answers "try again in a moment" for ever. So a folder driver reads the folder at the start of every turn, and hands the turn to its sibling when the folder disagrees.
+A folder row always dispatches to ACP. Its stored launcher is a scanner cache: each turn re-reads the folder runtime and selects that launcher inside the same driver. A missing, invalid or unsupported folder refuses rather than guessing another engine. Historically separate OpenCode/Claude drivers had to hand off stale rows; that sibling-driver mechanism is gone.
 
-**The stored driver is kept whenever the folder cannot speak for itself**: it cannot be read, or it is `invalid` or `contract_too_new`. A manifest is unparseable for a moment every time an assistant saves it. Its runtime then reads as none, and none would hand a Claude agent to the default engine. Both runners refuse such a folder with the same sentence anyway, so nothing is gained by moving the turn.
+Custom commands instead capture their locally owned configuration and state authority. Managed sessions capture profile, agent and credential identity. Neither invents a folder or silently substitutes a new binding into existing work.
 
 ### The A2A pre-flight lives in one place
 
@@ -124,6 +124,9 @@ Every driver answers `readiness()` without throwing, and **null means "could not
 - **OpenCode** readiness is the folder's alone, and that launcher deliberately has no rungs of its own: whether the binary is resolved is not part of it, because the turn resolves it (downloading it if it must), and a list must never start a download to answer "can this agent run"
 - **Claude** — the launcher's rungs, asked about the engine the **folder** names rather than the one the row stores, so an agent just switched over in the Runtime card is answered about where it is going. The folder first, then whether a `claude` is installed, then whether it is logged in. Only a definite `logged_out` refuses. A login probe that could not answer never blocks, which is the same rule the runner applies before a turn
 
+- **Custom ACP** returns cached binding readiness on ordinary reads; explicit Test/Check again performs initialize only. A failed explicit check remains failed until a fresh success.
+- **Managed** checks local credential/configuration availability; discovery/save and the turn verify remote access.
+
 A failure reason is a short sentence that leads with what helps: the status, and where to fix it. It sits beside a disabled Send, cut to whatever width is left. The URL, the status and the network code go in `detail`, which only the tooltip shows. The raw error strings were shown on screen at first: "fetch failed", or a card URL cut off before the status that explained it.
 
 **For a synced agent, checking has side effects.** Its token comes from the Cinna session, and a check refreshes that session when it is near expiry — and clears it if the refresh is refused — exactly as a turn does. Skipping the refresh would be worse: an access token that had merely expired would read as `not_logged_in`, and the composer would refuse an agent that works.
@@ -132,7 +135,7 @@ A failure reason is a short sentence that leads with what helps: the status, and
 
 Each agent in the list carries whatever readiness is already known. Listing starts a background check for every **enabled** agent whose answer is missing or old. A switched-off or deleted agent's answer is forgotten, and an answer that arrives after its agent was forgotten is dropped rather than kept.
 
-- **An answer that does not refuse is kept until its TTL runs out.** The TTL is a minute for an agent reached over the network and ten seconds for one in a folder on this machine. A network agent's check is a card fetch, so checking on every list render would be a request per render. A folder read is cheap, and the state it reports (a credential typed into `.env`) is one the user fixes by hand and expects to see picked up without pressing anything
+- **An answer that does not refuse is kept until its TTL runs out.** The TTL is a minute for an agent reached over the network and ten seconds for one in a folder on this machine. An A2A network agent’s check is a card fetch, so checking on every list render would be a request per render. A folder read is cheap, and the state it reports (a credential typed into `.env`) is one the user fixes by hand and expects to see picked up without pressing anything
 - **A refusal is re-checked every time the list is read.** The fix happens outside this service — a re-auth, a credential, a server coming back — and each of those re-reads the list. Holding a refusal for its whole TTL kept Send disabled after the fix, with nothing scheduled to read the list again
 - **A refusal waits five seconds before it is re-checked.** A changed answer is pushed, and the push re-reads the list. An agent whose answer differs on every check — a proxy alternating 502 and 504, both in the reason — would otherwise loop check → push → list → check with nothing in between. *Check again* skips the wait
 - **A change is pushed only when it shows on screen.** `null` and `ok` look the same everywhere, so a first `ok` is not pushed: pushing it would make the list refetch once per agent on every launch, with nothing on screen to change. A refusal appearing, going away, or changing its state or reason is pushed. The renderer re-reads the list once per push, however many components are listening
@@ -143,7 +146,7 @@ Each agent in the list carries whatever readiness is already known. Listing star
 
 ### What the composer refuses, and what it deliberately does not
 
-- **It refuses only the agent the message goes straight to.** That is the bound agent of a chat that is not orchestrated, or a new chat's single agent when the routing badge says A2A. An agent attached as a tool of the local model is not refused: its failure comes back as a tool result the model can read and work around
+- **It refuses only the agent the message goes straight to.** That is the direct chat’s bound agent or the human router’s addressed agent. An agent attached as a tool of the local model is not refused: its failure comes back as a tool result the model can read and work around
 - **It refuses rather than just warning.** Sending to an agent the driver says cannot take a turn produces a failed turn the user then has to read, and the reason was already known
 - **A bare `/run:<name>` to an agent whose commands come from a folder catalog always runs,** refused or not. It is a script run in the folder on this machine, not a turn on the agent's engine, so the agent's readiness says nothing about whether it can run. The composer matches the same grammar main uses; a looser one would enable Send for text that main then passes to the engine
 - **`null` never refuses.** A check that has not run yet, or could not tell, never stops a working agent
@@ -165,41 +168,18 @@ Each agent in the list carries whatever readiness is already known. Listing star
 
 ## Architecture Overview
 
-```
-Renderer
-  useAgents ── agent:list ─────────────► agentService.listMerged
-     ▲                                     ├─ toDto: driver, capabilities, readiness = supported ? peek(id) : invalid
-     │                                     └─ agentReadinessService.kick(rows)
-     │                                            │ enabled only; one start per macrotask, ≤ 4 at once
-     │                                            ▼
-     │                                     driverFor(row).readiness(userId, row, {fresh?})
-     │                                        a2a → token + card fetch, 5 s bound
-     │                                        acp → folder, then the launcher the FOLDER names:
-     │                                                opencode → nothing further
-     │                                                claude   → install → login
-     │                                            │ a refusal arrived, left or changed?
-     └── agent:readiness-changed ◄────────────────┘ push; the renderer re-reads the list
+Renderer run.start → run:start → runExecutionService → router → AgentDriver or model/script service. Main observes and persists output; selected-chat run:watch delivers snapshots/live events to useRunEventHandler. Lower-level run.send uses the same executor with a caller-owned port.
 
-  ChatInput ── useComposerReadiness(directTarget, typed)
-     │  refusal → reason · Check again | Re-authenticate; Send disabled
-     │            (a bare /run: to a catalog agent → Send enabled)
-     └── Check again / Test Connection ── agent:check-readiness ── refresh(…, {fresh: true})
+| Supported external form | Driver / launcher | Session and authentication |
+|---|---|---|
+| Hand-added A2A | a2a | Remote context; optional stored token |
+| Cinna-synced agent | a2a | Remote context; account authentication |
+| OpenCode folder | acp / opencode | Resumable child session; folder/runtime credential configuration |
+| Claude folder | acp / claude | Resumable child session; existing CLI login |
+| Command-line / SSH | acp / custom | Resumable child session; captured command and external CLI/SSH configuration |
+| Claude Managed | managed | Credential-bound remote session; Anthropic API key |
 
-  Send ── agent:send-message ──► driverFor(agent)
-                                   ├─ resolveCommandRunner(capabilities.commands, …)
-                                   │     bare /run: to a catalog agent → commandService
-                                   └─ driver.run(userId, row, {chatId, wireContent, …})
-                                        a2a → pre-flight → runAgentTurn (+ tasks/cancel)
-                                        acp → read the folder → launcherOfFolder →
-                                                launcher.plan() (or a refusal, in a sentence)
-                                                → pool.acquire → session → prompt
-                                   ▼
-                                 a2aStreamingService.streamToAgent({run, port})
-
-  Orchestrator ── A2AAsMcpProvider.callTool ──► driverFor(agent).run(…)
-  agent:answer-request ─► Inbox durable commitment ─► captured reply / ACP respond
-                                               row gone → respondToOrphanedAsk
-```
+The LLM coordinator is separate: model adapters and chatStreamingService call MCP, agents and trusted coordinator controls through ToolProvider. Gemini/Codex ACP launchers and ACP HTTP remain unimplemented.
 
 ## Integration Points
 
@@ -226,4 +206,4 @@ Renderer
 
 Only migrations backfill a legacy null driver; there is no boot repair or read-time ownership fallback. Unknown non-null identities remain stored as written by the newer tool. Listing, editing and removal stay available, but readiness and execution refuse without opening a process or network request. A stale cached ready answer cannot override that refusal. This avoids interpreting a future driver as A2A or ACP merely because the row has familiar ownership.
 
-The remaining status, Job-execution and tool-provider behavioral ratchet work is separate. Relocating helpers and retiring compatibility fields does not remove those behavioral sites.
+The status, Job-execution and tool-provider seams are implemented; the behavioral ratchet is zero with explicit ownership/authoring pins. See [runtime history](../../development/agent_runtime/agent_runtime.md).

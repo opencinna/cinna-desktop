@@ -499,20 +499,9 @@ describe('run:send — refusals and the channels it replaced', () => {
     )
   })
 
-  it('routes agent:send-message through the same decision', async () => {
-    chatRow = { id: 'chat-1', router: 'human', agentId: null }
-    attached = ['a-1', 'a-2']
-    // The old channel named its agent; that becomes the addressing gesture.
-    await send({ agentId: 'a-2', chatId: 'chat-1', content: 'hello' }, 'agent:send-message')
-    expect(routedTo()).toBe('a-2')
-  })
-
-  it('routes llm:send-message through the same decision', async () => {
-    // …which means a chat whose router says an agent answers gets the agent,
-    // even on the channel that used to mean "the model".
-    await send({ chatId: 'chat-1', content: 'hello' }, 'llm:send-message')
-    expect(routedTo()).toBe('a-1')
-    expect(llmStream).not.toHaveBeenCalled()
+  it('does not register the retired agent/model send channels', () => {
+    expect(ipcOnHandlers.has('agent:send-message')).toBe(false)
+    expect(ipcOnHandlers.has('llm:send-message')).toBe(false)
   })
 })
 

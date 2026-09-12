@@ -3,7 +3,7 @@ import type { CustomAgentConfig } from '../../shared/customAgents'
 import { replyAnswerUncertainty } from '../services/replyAnswerClaims'
 import { chatRepo } from '../db/chats'
 import { inboxService } from '../services/inboxService'
-import { a2aSessionRepo } from '../db/agents'
+import { agentSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
@@ -135,7 +135,7 @@ export function registerA2AHandlers(): void {
   ipcHandle('agent:get-session', async (_event, chatId: string) => {
     userActivation.requireActivated()
     if (!chatRepo.getOwned(getProfileScopeUserId(), chatId)) return null
-    return a2aSessionRepo.getByChat(chatId) ?? null
+    return agentSessionRepo.getByChat(chatId) ?? null
   })
 
   ipcHandle('agent:cancel-message', async (_event, requestId: string) => {

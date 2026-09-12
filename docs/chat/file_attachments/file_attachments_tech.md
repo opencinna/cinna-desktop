@@ -4,7 +4,7 @@
 
 ### Shared (cross-process types)
 - `src/shared/attachments.ts` — `MessageAttachment` (id, filename, size, mimeType, `source?: 'cinna' | 'local'`), `PendingAttachment` (id = absolute path, `source: 'pending'`), `ComposerAttachment` union, `isPendingAttachment` narrow
-- `src/shared/ipcPayloads.ts` — `AgentSendPayload.attachments?: MessageAttachment[]`, `LlmSendPayload.attachments?: MessageAttachment[]`
+- `src/shared/ipcPayloads.ts` — `RunSendPayload.attachments?: MessageAttachment[]`
 
 ### Main process — DB
 - `src/main/db/schema.ts` — `messages.attachments` JSON column (`MessageAttachment[] | null`); `chatFiles` table (local-store metadata)
@@ -46,8 +46,8 @@
   - `files:remove` — accepts string (legacy Cinna-only) or `{ id, source }` (modern); delegates to `fileService.remove`
   - `files:download` — `basename(filename)` strips traversal; delegates to `fileService.downloadToPath`; `shell.showItemInFolder` after save
   - `files:download-task-attachment` — task-scoped Cinna download (unchanged)
-- `src/main/ipc/llm.ipc.ts` — `llm:send-message` forwards `attachments` to `prepareLlmSend`; `llm:get-model-capability` delegates to `providerService.getModelCapability`
-- `src/main/ipc/agent_a2a.ipc.ts` — `agent:send-message` derives `fileIds = attachments?.map(a => a.id)` and threads through `prepareAgentSend` + `streamToAgent`
+- src/main/services/runExecutionService.ts forwards attachments into the model admission path; src/main/ipc/llm.ipc.ts retains model capability lookup.
+- runExecutionService prepares agent attachments, resolves file IDs and invokes the driver through streamToAgent; capability checks decide the permitted scope.
 
 ### Preload
 - `src/preload/index.ts`:
@@ -60,7 +60,7 @@
   - `window.api.files.download({ fileId, filename, source? })`
   - `window.api.files.getPathForFile(file)` — wraps `webUtils.getPathForFile`; fire-and-forget `ipcRenderer.send('files:track-path', path)` as a side-effect so the path-guard allowlist auto-populates
   - `window.api.llm.getModelCapability({ providerId, modelId })`
-  - `window.api.llm.sendMessage(..., extras?: { attachments? })`
+  - `window.api.run.start({ ..., attachments })`; the lower-level `run.send` accepts the same payload
 
 ### Renderer
 - `src/renderer/src/stores/fileDownload.store.ts` — `useFileDownloadStore`: `downloadingIds: Set<string>`, `error`, `errorFileId`, `download(attachment)`. Passes `attachment.source ?? 'cinna'` to the download IPC
@@ -111,8 +111,8 @@ Index: `idx_chat_files_chat_id ON chat_files(chat_id)`. Migration is additive �
 | `files:download` | renderer → main | `{ fileId, filename, source? }` | `{ success: true, savedPath }` / `canceled: true` / `{ success: false, error, code? }` |
 | `files:download-task-attachment` | renderer → main | `{ taskId, attachmentId, filename }` | (same shape) |
 | `llm:get-model-capability` | renderer → main | `{ providerId, modelId }` | `ModelCapability` |
-| `llm:send-message` | renderer → main (MessagePort) | `LlmSendPayload` (incl. `attachments?`) | stream events via port |
-| `agent:send-message` | renderer → main (MessagePort) | `AgentSendPayload` (incl. `attachments?`) | stream events via port |
+| run:start | renderer → main invoke | RunSendPayload including attachments | run ID; output via independent run:watch |
+| run:send | renderer → main MessagePort | Same RunSendPayload | lower-level event port |
 
 ## Services & Key Methods
 

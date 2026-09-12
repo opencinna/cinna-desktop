@@ -12,12 +12,12 @@
 - `src/main/db/messages.ts` — `messageRepo` — centralized message persistence (user, assistant, tool_call, error messages + chat timestamp updates)
 - `src/main/db/chatMcp.ts` — `chatMcpRepo` — chat-MCP junction table (`replaceForChat()` runs in a transaction)
 - `src/main/services/chatService.ts` — `chatService` — chat CRUD orchestration, throws `ChatError` for missing rows
-- `src/main/services/messageRoutingService.ts` — `messageRoutingService` — single chokepoint for "user just sent a routed message": persists the user row (with `addressedAgentId` on the agent path) and fires background title generation. Called by both `agent:send-message` and `llm:send-message` so the side-effects stay consistent. `wireContent` is just the user content (the orchestrated announce prefix is prepended later, inside `chatStreamingService`)
+- `src/main/services/messageRoutingService.ts` — `messageRoutingService` — single chokepoint for "user just sent a routed message": persists the user row (with `addressedAgentId` on the agent path) and fires background title generation. Called by the shared main run executor for model and agent admission. `wireContent` is just the user content (the orchestrated announce prefix is prepended later, inside `chatStreamingService`)
 - `src/main/services/chatStreamingService.ts` — LLM tool-call loop only: receives the pre-assembled `wireContent`, rebuilds history from `messages`, drives the up-to-10-round tool-call loop, persists `assistant` / `tool_call` / `error` rows via `messageRepo`, fans out MessagePort events. **No longer persists the user message** — that happens up-stream in `messageRoutingService.prepareLlmSend`
 - `src/main/llm/factory.ts` — `createAdapter(type, apiKey, providerId)` + `isProviderType()` (extracted from `llm.ipc.ts`)
 - `src/main/ipc/chat.ipc.ts` — Thin `chat:*` handlers, all wrapped with `ipcHandle()` and gated by `userActivation.requireActivated()`, delegate to `chatService`
-- `src/main/ipc/run.ipc.ts` — `run:start` command and owned `run:watch` subscription; legacy `run:send` / `agent:send-message` / `llm:send-message` forwards share the executor. `src/main/ipc/llm.ipc.ts` retains model listing and `llm:cancel`.
-- `src/shared/ipcPayloads.ts` — `LlmSendPayload` / `AgentSendPayload` named-object types for the streaming channels (replacing the legacy positional-tuple style)
+- `src/main/ipc/run.ipc.ts` — `run:start` command and owned `run:watch` subscription; the lower-level run:send port route shares the executor; old agent/model forwards are removed. `src/main/ipc/llm.ipc.ts` retains model listing and `llm:cancel`.
+- `src/shared/ipcPayloads.ts` — RunSendPayload is the single routed send input; the old agent/model-specific payload types are removed
 - `src/main/errors.ts` — `ChatError` + `ChatErrorCode` (`not_found`, `not_configured`, `adapter_unavailable`, `not_activated`)
 
 ### Preload
@@ -65,7 +65,7 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 | `run:start` | invoke | Start a main-owned turn; returns run ID |
 | `run:watch` | postMessage + MessagePort | Snapshot and subsequent selected-chat run events |
 | `run:cancel-chat` | invoke | Cancel owned active chat, including before transport request ID |
-| `llm:send-message` | postMessage + MessagePort | Legacy forward through shared executor |
+| run:send | postMessage + MessagePort | Lower-level routed send through shared executor |
 | `llm:cancel` | invoke | Abort in-flight request |
 
 ## Services & Key Methods
@@ -78,7 +78,7 @@ DB location: `{userData}/cinna.db` (e.g., `~/Library/Application Support/cinna-d
 - `src/main/services/chatStreamingService.ts` — `chatStreamingService.stream({ userId, chatId, wireContent, port, onFinished? })`: validates ownership and configuration (throws `ChatError`), aggregates MCP tools, registers the `AbortController` in `activeAbortControllers`, fires the tool-call loop in the background (caller is not awaited), reports a typed outcome after persistence and closes the port on completion. The executor supplies `onFinished` to own finalization; a standalone caller retains default job reporting. The ten-round ceiling persists a `round_budget` error and reports `budget`. See [turn outcomes](turn_completion.md). `chatStreamingService.cancel(requestId)` aborts the controller. The user message is already persisted before this is called.
 - `src/main/llm/factory.ts:createAdapter(type, apiKey, providerId)` — Factory that instantiates the correct LLM adapter based on provider type. Used by `chatStreamingService` (via the registry) and `providerService` (for `test`/`testKey`).
 - `src/main/ipc/chat.ipc.ts` — Thin handlers: each `ipcHandle('chat:*', ...)` calls `userActivation.requireActivated()` then delegates to `chatService` with `getCurrentUserId()`.
-- `src/main/ipc/run.ipc.ts` — activated command/subscription boundary; renderer observation is independent of turn lifetime. The legacy native-port forwards stay available. Full [IPC contract](live_runs.md#architecture-and-ipc).
+- `src/main/ipc/run.ipc.ts` — activated command/subscription boundary; renderer observation is independent of turn lifetime. The generic run.send native-port entry remains available. Full [IPC contract](live_runs.md#architecture-and-ipc).
 
 ## Streaming Protocol
 

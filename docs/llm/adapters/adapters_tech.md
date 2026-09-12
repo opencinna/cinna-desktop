@@ -16,7 +16,7 @@
 - `src/main/db/llmProviders.ts` — `llmProviderRepo` — `list/getOwned/upsert/delete`, all scoped by `userId`. Providers no longer carry a `is_default` flag; the "default" concept moved to chat modes (see [Chat Modes](../../chat/chat_modes/chat_modes.md)).
 - `src/main/services/providerService.ts` — `providerService` — DTO mapping (`hasApiKey: boolean`, plus `baseUrl` for gateway/keyless rows), encryption via `encryptApiKey()`, registry sync on upsert/delete, `test()` and `testKey()` helpers, `listModels()` aggregator, and the two write-path guards (`type_immutable`, keyless-only `baseUrl`)
 - `src/main/services/chatStreamingService.ts` — Drives the centralized tool-call loop via `getAdapter()` from the registry
-- `src/main/ipc/llm.ipc.ts` — `llm:send-message` (MessagePort) delegates to `chatStreamingService.stream()`; `llm:cancel` delegates to `chatStreamingService.cancel()`
+- `src/main/ipc/llm.ipc.ts` — model execution is dispatched by runExecutionService to chatStreamingService; `llm:cancel` delegates to `chatStreamingService.cancel()`
 - `src/main/ipc/provider.ipc.ts` — Thin `provider:*` handlers wrapped by `ipcHandle()`, gated by `requireActivated()`, delegate to `providerService`. `provider:test` and `provider:test-key` catch errors and return `{ success: false, error }` for inline form display.
 - `src/main/errors.ts` — `ProviderError` + `ProviderErrorCode` (`not_found`, `unsupported_type`, `missing_api_key`, `not_activated`, `read_only`, `list_models_failed`, `invalid_host`, `type_immutable`)
 - `src/main/db/schema.ts` — `llmProviders` table definition

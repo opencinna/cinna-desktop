@@ -63,4 +63,4 @@ For `ipcMain.handle` handlers (request/response):
 
 For `ipcMain.on` handlers (MessagePort streaming):
 - Check `userActivation.isActivated()`, send error via port + close if not activated
-- Used in `llm:send-message` and `agent:send-message`
+- Used by shared runExecutionService admission

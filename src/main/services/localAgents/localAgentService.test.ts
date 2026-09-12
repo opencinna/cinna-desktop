@@ -70,7 +70,7 @@ const { localAgentService } = await import('./localAgentService')
 const { turnLock } = await import('./turnLock')
 const { isBlockedWriteError, isStaleWriteError } = await import('../../../shared/localAgents')
 const { jobsRepo, jobAgentRepo } = await import('../../db/jobs')
-const { a2aSessionRepo } = await import('../../db/agents')
+const { agentSessionRepo } = await import('../../db/agents')
 const { chatRepo } = await import('../../db/chats')
 const { rebuildJobManifest } = await import('../../sync/manifest')
 const { buildResolveIndex, manifestNeedsSetup } = await import('../../sync/resolvers')
@@ -1392,7 +1392,7 @@ describe('adopting an existing folder', () => {
     })
     const agentId = localAgentService.list(USER).agents.filter((a) => a.rootId === root.id)[0].id
     const chatId = chatRepo.create(USER, { title: 'With the bare agent' }).id
-    a2aSessionRepo.upsert({
+    agentSessionRepo.upsert({
       chatId,
       agentId,
       contextId: 'ses_engine_1',
@@ -1405,11 +1405,11 @@ describe('adopting an existing folder', () => {
 
     localAgentService.pickedAgentFolder(USER, outside)
     localAgentService.addAgentFolder(USER, { path: outside, relPaths: [] })
-    expect(a2aSessionRepo.getByChatAndAgent(chatId, agentId)).toBeUndefined()
+    expect(agentSessionRepo.getByChatAndAgent(chatId, agentId)).toBeUndefined()
 
     localAgentService.pickedAgentFolder(USER, outside)
     localAgentService.addAgentFolder(USER, { path: outside, relPaths: ['local_agents/alpha'] })
-    expect(a2aSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId).toBe('ses_engine_1')
+    expect(agentSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId).toBe('ses_engine_1')
   })
 
   it('changes nothing at all when one of the agents it would remove is busy', () => {
@@ -1708,7 +1708,7 @@ describe('removing a bare agent', () => {
     // engine session and the model has forgotten everything, ten seconds after
     // the user undid the removal that caused it.
     const chatId = chatRepo.create(USER, { title: 'With the bare agent' }).id
-    a2aSessionRepo.upsert({
+    agentSessionRepo.upsert({
       chatId,
       agentId: bareId,
       contextId: 'ses_engine_1',
@@ -1721,10 +1721,10 @@ describe('removing a bare agent', () => {
 
     const rootId = localAgentService.get(USER, bareId).rootId
     await localAgentService.delete(USER, { agentId: bareId, trashFolder: false })
-    expect(a2aSessionRepo.getByChatAndAgent(chatId, bareId)).toBeUndefined()
+    expect(agentSessionRepo.getByChatAndAgent(chatId, bareId)).toBeUndefined()
 
     localAgentService.restoreHiddenAgents(USER, rootId)
-    expect(a2aSessionRepo.getByChatAndAgent(chatId, bareId)?.contextId).toBe('ses_engine_1')
+    expect(agentSessionRepo.getByChatAndAgent(chatId, bareId)?.contextId).toBe('ses_engine_1')
   })
 
   it('puts back everything that was removed from one root’s list', async () => {

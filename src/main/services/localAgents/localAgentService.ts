@@ -37,7 +37,7 @@ import { execFile } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { basename, dirname, join, relative, sep } from 'node:path'
 import { shell } from 'electron'
-import { a2aSessionRepo, agentRepo, type FolderIndexEntry } from '../../db/agents'
+import { agentSessionRepo, agentRepo, type FolderIndexEntry } from '../../db/agents'
 import { jobAgentRepo, jobsRepo } from '../../db/jobs'
 import { rebuildJobManifest } from '../../sync/manifest'
 import { synthesizeFolderAgentMetadata } from './folderAgentMetadata'
@@ -478,7 +478,7 @@ function reseedEngineSessions(userId: string, root: AgentRootRow, agentDir: stri
   for (const [chatId, session] of entries) {
     if (typeof session?.sessionId !== 'string' || session.sessionId === '') continue
     try {
-      a2aSessionRepo.upsert({
+      agentSessionRepo.upsert({
         chatId,
         agentId,
         contextId: session.sessionId,

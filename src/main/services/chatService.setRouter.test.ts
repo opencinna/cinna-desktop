@@ -77,7 +77,7 @@ it('exposes main-run activity only on an owned chat and clears it when the turn 
 })
 const { chatRepo } = await import('../db/chats')
 const { chatOnDemandAgentRepo } = await import('../db/chatOnDemandAgent')
-const { a2aSessionRepo } = await import('../db/agents')
+const { agentSessionRepo } = await import('../db/agents')
 
 function seedAgent(id: string): void {
   holder
@@ -91,7 +91,7 @@ function seedAgent(id: string): void {
 /** A chat rooted on `a-1`, the shape `direct` means. */
 function directChat(): string {
   const chat = chatRepo.create(USER, { agentId: 'a-1' })
-  a2aSessionRepo.upsert({
+  agentSessionRepo.upsert({
     chatId: chat.id,
     agentId: 'a-1',
     contextId: 'ctx-1',
@@ -132,7 +132,7 @@ describe('chatService.setRouter', () => {
   it('keeps the agent’s session across the switch', () => {
     const chatId = directChat()
     chatService.setRouter(USER, chatId, 'human')
-    expect(a2aSessionRepo.getByChat(chatId)?.contextId).toBe('ctx-1')
+    expect(agentSessionRepo.getByChat(chatId)?.contextId).toBe('ctx-1')
   })
 
   it('refuses a move to coordinator when no model can be resolved', () => {

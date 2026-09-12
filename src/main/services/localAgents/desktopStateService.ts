@@ -33,7 +33,7 @@ const logger = createLogger('local-agent-state')
 
 /** One engine session, keyed by chat id. Mirrors `a2a_sessions` for folders. */
 export interface DesktopSessionState {
-  /** Engine session id — carried as `context_id` by `a2aSessionRepo`. */
+  /** Engine session id — carried as `context_id` by `agentSessionRepo`. */
   sessionId: string
   updatedAt: number
 }

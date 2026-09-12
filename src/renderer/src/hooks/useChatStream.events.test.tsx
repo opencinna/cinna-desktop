@@ -247,7 +247,7 @@ function resolved(requestId: string): RunInputResolvedEvent {
 }
 
 // ---------------------------------------------------------------------------
-// The agent path — `window.api.agents.sendMessage`
+// Agent events through the shared run projector.
 // ---------------------------------------------------------------------------
 
 const AGENT_TEXT: RunEvent = { type: 'delta', kind: 'text', text: 'Working on it' }
@@ -678,7 +678,7 @@ const AGENT_ROWS: Row<RunEvent>[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// The LLM path — `window.api.llm.sendMessage`
+// Model events through the same run projector.
 // ---------------------------------------------------------------------------
 
 const AGENT_CALL: RunEvent = {

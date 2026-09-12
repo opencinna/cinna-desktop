@@ -4,7 +4,7 @@
 
 ### Shared (main + renderer, pure)
 - `src/shared/chatRouting.ts` — the whole rule. `ChatRouter` (`'direct' | 'human' | 'coordinator'`), `CHAT_ROUTERS`, `DEFAULT_CHAT_ROUTER`, `isChatRouter`, `routerOf(chat)`, `routingOf(chat)`, `newChatRouter({ agentIds, mcpIds, coordinate? })`, `RunTarget`, `Addressing`, `RoutableChat`. No React, no I/O, no Electron — imported by main and the renderer so neither keeps its own copy of the sentence
-- `src/shared/ipcPayloads.ts` — `RunSendPayload` (`chatId`, `content`, `attachments?`, `addressedAgentId?`); `AgentSendPayload` / `LlmSendPayload` remain for the two forwarded channels
+- `src/shared/ipcPayloads.ts` — `RunSendPayload` (`chatId`, `content`, `attachments?`, `addressedAgentId?`); one payload serves start and lower-level send
 
 ### Main process
 - `src/main/ipc/run.ipc.ts` — `registerRunHandlers()`: activated `run:start` command, owned `run:watch`, chat cancellation and legacy native-port forwards; passes explicit scopes, observation and transactional acceptance callbacks to the shared executor.
@@ -42,7 +42,7 @@
 
 ### Tests worth reading before changing behaviour
 - `src/shared/chatRouting.test.ts` — the rule itself, including the stale-address and no-agents-left cases
-- `src/main/ipc/run.routing.test.ts` — who answers, the packet, the cursor, port ownership on a throw, and both forwarded channels reaching the same decision
+- `src/main/ipc/run.routing.test.ts` — who answers, the packet, the cursor, port ownership on a throw, and the absence of retired agent/model forwards
 - `src/main/services/threadContextService.test.ts` — packet contents, drops, cap, unknown cursor
 - `src/main/services/chatService.setRouter.test.ts` — every transition, the refusals, and the attached-agent ordering
 - `src/main/ipc/chat.router.test.ts` — router validation on both channels
@@ -65,9 +65,7 @@ Table: `chat_agent_cursors`
 
 ## IPC Channels
 
-- `run:start` — activated invoke with `RunSendPayload`, returning the run ID; main resolves the answerer. `run:watch` independently sends the owned chat’s snapshot and sequenced events over MessagePort. `run:send` remains the legacy combined send/port route. See [live-run IPC](../messaging/live_runs.md#architecture-and-ipc).
-- `agent:send-message` — forward onto `run:send`, mapping `agentId` → `addressedAgentId`. Retained until phase7 cleanup
-- `llm:send-message` — forward onto `run:send` with no address. Retained until phase7 cleanup
+- `run:start` — activated invoke with `RunSendPayload`, returning the run ID; main resolves the answerer. `run:watch` independently sends the owned chat’s snapshot and sequenced events over MessagePort. `run:send` remains the lower-level combined send/port route. See [live-run IPC](../messaging/live_runs.md#architecture-and-ipc).
 - `chat:set-router` — `(chatId: string, router: string) => { success: true }`. Validates via `isChatRouter` and throws `ChatError('invalid_router', …)` otherwise
 - `chat:update` — also accepts `router`, and validates it the same way, because a new chat sets several fields in one call
 - The normal Stop path uses owned `run:cancel-chat`, so a watch snapshot can be stopped before the protocol request ID arrives. Legacy `window.api.run.cancel` still invokes both protocol cancellation channels for an existing request ID.

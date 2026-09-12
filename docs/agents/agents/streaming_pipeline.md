@@ -93,7 +93,7 @@ On stream completion:
   - notices = accumulator.snapshotNotices()  # one entry per distinct notice part
   - For each notice: messageRepo.saveTransition({ chatId, content, sourceAgentId })
   - messageRepo.saveAssistant({ chatId, content: answer, parts })
-  - a2aSessionRepo.upsert(...) only for a successful, non-aborted exchange
+  - agentSessionRepo.upsert(...) only for a successful, non-aborted exchange
   - port.postMessage({ type: 'done', stopReason })   # 'canceled' if the request was aborted, else 'end_turn'
 
 Notices are persisted *before* the assistant message so transcript ordering

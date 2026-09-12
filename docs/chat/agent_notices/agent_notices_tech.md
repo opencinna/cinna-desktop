@@ -21,7 +21,7 @@
 
 | File | Role |
 |------|------|
-| `src/preload/index.ts` | No new bridge surface. The existing `agents.sendMessage` MessagePort stream carries `{type:'delta', kind:'notice', text}` events alongside other deltas. |
+| `src/preload/index.ts` | No new bridge surface. The existing run:watch event envelope (or lower-level run:send port) carries `{type:'delta', kind:'notice', text}` events alongside other deltas. |
 
 ### Renderer
 
@@ -38,7 +38,7 @@ No migration required. The `messages` table already supports `role: 'agent_trans
 
 ## IPC Channels
 
-No new channels. Existing `agent:send-message` MessagePort stream carries notice deltas with this shape:
+No new channels. The shared run event vocabulary carries notice deltas with this shape:
 
 | Field | Value |
 |-------|-------|

@@ -93,8 +93,8 @@ export interface PreparedSend {
  * Single chokepoint for "the user just sent a routed message" — owns
  * persistence of the user row and fires background title generation.
  *
- * Both streaming IPC handlers (`agent:send-message`, `llm:send-message`) go
- * through here so the side-effects stay consistent regardless of channel.
+ * runExecutionService prepares routed sends here so interactive and autonomous
+ * execution share the same persistence and title side effects.
  */
 export const messageRoutingService = {
   prepareAgentSend(input: PrepareAgentSendInput): PreparedSend {

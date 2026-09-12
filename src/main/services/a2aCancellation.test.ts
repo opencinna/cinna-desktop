@@ -4,7 +4,7 @@ import { expect, it, vi } from 'vitest'
 import type { A2AClient } from '@a2a-js/sdk/client'
 
 const session = vi.hoisted(() => ({ getByChatAndAgent: vi.fn(), upsert: vi.fn() }))
-vi.mock('../db/agents', () => ({ a2aSessionRepo: session }))
+vi.mock('../db/agents', () => ({ agentSessionRepo: session }))
 vi.mock('../db/messages', () => ({ messageRepo: {} }))
 vi.mock('./jobService', () => ({ jobService: {} }))
 vi.mock('../logger/logger', () => ({ createLogger: () => ({ debug() {}, info() {}, warn() {}, error() {} }) }))

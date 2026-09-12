@@ -46,7 +46,7 @@ vi.mock('../../engine/binaryResolver', () => ({
 vi.mock('../../engine/engineConfigSource', () => ({
   collectEngineConfigInput: async () => ({ providers: [], agents: [] })
 }))
-vi.mock('../../db/agents', () => ({ a2aSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
+vi.mock('../../db/agents', () => ({ agentSessionRepo: { getByChatAndAgent: vi.fn(), upsert: vi.fn() } }))
 vi.mock('../../auth/scope', () => ({ getSettingsScopeUserId: () => 'user-1' }))
 vi.mock('../../auth/cinna-oauth', () => ({ CinnaReauthRequired: class CinnaReauthRequired extends Error {} }))
 vi.mock('../../services/localAgents/localAgentService', () => ({

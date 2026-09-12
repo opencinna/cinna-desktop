@@ -107,16 +107,11 @@ UI Refresh Flow:
     → Renderer: agents list refetches automatically
 
 Communication Flow:
-  agent:send-message (MessagePort)
-    → Load agent from DB
-    → agent.source === 'remote'?
-      → YES: getCinnaAccessToken(userId) → JWT as accessToken
-      → NO:  decryptApiKey(agent.accessTokenEncrypted) → stored token
-    → endpointUrl missing AND source='remote'?
-      → YES: fetchAgentCard(cardUrl, JWT) → resolve protocol endpoint
-             → cache endpointUrl + protocolInterfaceUrl in agents table
-    → createA2AClient(endpointUrl, cardUrl, accessToken)
-    → Standard A2A streaming (identical to local agents)
+  run:start → main runExecutionService → A2A driver
+    → capabilities.auth selects Cinna JWT or stored token
+    → resolve/cache a missing Cinna protocol endpoint
+    → createA2AClient → A2A stream → persisted transcript
+  run:watch → independent sequenced live subscription
 
 Agent Selector (categorized):
   useAgents() → group by source + remoteTargetType

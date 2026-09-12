@@ -17,9 +17,9 @@ import type { RecordedRequest, SessionPatch, SessionRow } from './fakeAgent'
 export interface A2aEffects {
   /** Every HTTP request the turn made, in order. */
   requests: RecordedRequest[]
-  /** What `a2aSessionRepo.getByChatAndAgent` returned, per call. */
+  /** What `agentSessionRepo.getByChatAndAgent` returned, per call. */
   sessionReads: (SessionRow | null)[]
-  /** Every patch handed to `a2aSessionRepo.upsert`, verbatim. */
+  /** Every patch handed to `agentSessionRepo.upsert`, verbatim. */
   sessionUpserts: SessionPatch[]
   /** Every id `onTaskId` surfaced, in order — what a cancel would target. */
   taskIdsSurfaced: string[]

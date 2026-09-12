@@ -67,7 +67,7 @@ vi.mock('../db/chatOnDemandAgent', () => ({
 vi.mock('../services/chatStreamingService', () => ({
   chatStreamingService: { stream: vi.fn() }
 }))
-vi.mock('../db/agents', () => ({ a2aSessionRepo: { getByChat: vi.fn() } }))
+vi.mock('../db/agents', () => ({ agentSessionRepo: { getByChat: vi.fn() } }))
 
 vi.mock('../auth/activation', () => ({
   userActivation: { isActivated: () => true, requireActivated: () => undefined }

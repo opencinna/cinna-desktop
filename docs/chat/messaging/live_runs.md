@@ -32,7 +32,7 @@ Send → `run:start` → main executor → live hub → selected-chat `run:watch
 | `run:watch` | Activated MessagePort subscription for an owned chat. Starts with a snapshot, then sequenced event/accepted/closed envelopes. Port closure removes the subscriber without cancelling execution. |
 | `run:cancel-chat` | Activated invoke for an owned chat; cancels its main handle, including an early request remembered until the transport exists. |
 
-`run:send`, `agent:send-message`, `llm:send-message` and preload `run.send` remain compatibility paths through the same executor until the later cleanup phase. The normal renderer uses `run.start` plus one selected-chat watch, so it never applies both legacy port events and watch events to the same projection.
+run:send and preload run.send remain the lower-level caller-owned-port path through the same executor. The agent/model-specific send forwards and payload types are removed. The normal renderer uses run.start plus one selected-chat watch, so it never projects both direct port events and watch events for one turn.
 
 ## Implementation and Ownership
 

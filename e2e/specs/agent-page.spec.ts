@@ -41,8 +41,8 @@ test('a name alone creates an agent, and Delete agent moves its folder to the Tr
 
   await test.step('create from the name field with Enter', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
-    // A fresh `$HOME` has no agents folder, so opening the tab asks about it
-    // before anything is written there — see `answerAgentsFolder`.
+    // Set up the folder home explicitly before creating a folder agent;
+    // opening Agents alone also supports external agents without a home.
     await answerAgentsFolder(cinna)
     // The + opens a choice — scaffold a new agent, or point at a folder that
     // already is one — so the New agent form is one card in.
@@ -170,8 +170,8 @@ test('Copy prompt for another tool confirms inside the menu and copies a briefin
 
   await test.step('an agent created from the name field', async () => {
     await page.getByRole('button', { name: 'Agents', exact: true }).click()
-    // A fresh `$HOME` has no agents folder, so opening the tab asks about it
-    // before anything is written there — see `answerAgentsFolder`.
+    // Set up the folder home explicitly before creating a folder agent;
+    // opening Agents alone also supports external agents without a home.
     await answerAgentsFolder(cinna)
     // The + opens a choice — scaffold a new agent, or point at a folder that
     // already is one — so the New agent form is one card in.

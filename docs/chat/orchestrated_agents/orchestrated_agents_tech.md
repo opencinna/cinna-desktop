@@ -19,7 +19,7 @@
 - `src/main/db/migrations/messages.ts` — `ALTER TABLE messages ADD COLUMN tool_agent_id`
 - `src/main/db/chatOnDemandAgent.ts` — `chatOnDemandAgentRepo` (add/remove/list/listAgentIds/peekPending/clearPending). `list` orders by `created_at, agent_id`: without it SQLite returns composite-primary-key order — by a nanoid — which a `human` chat's "first attached answers" fallback made user-visible
 - `src/main/db/messages.ts` — `saveToolCall` accepts `toolAgentId` + `parts` (rich sub-thread payload on the tool_call row)
-- `src/main/db/agents.ts` — `a2aSessionRepo.getByChatAndAgent` / `upsert` (per-`(chat, agent)` continuity used by `runAgentTurn`)
+- `src/main/db/agents.ts` — `agentSessionRepo.getByChatAndAgent` / `upsert` (per-`(chat, agent)` continuity used by `runAgentTurn`)
 - `src/main/ipc/chat.ipc.ts` — `chat:on-demand-agent-{list,add,remove}` and `chat:set-router` handlers
 - `src/main/ipc/run.ipc.ts` → `src/main/services/runExecutionService.ts` — the shared executor resolves the answerer; `{ kind: 'model' }` is what reaches `chatStreamingService.stream` here
 - `src/main/mcp/manager.ts` — `getToolsForProviders` now tags tools `providerType: 'mcp'`
@@ -72,7 +72,7 @@ Column: `messages.tool_agent_id` (TEXT, nullable; see `src/main/db/migrations/me
 
 - `chat:set-router` — `(chatId, 'coordinator' | 'human' | 'direct') => { success: true }`; see [Chat Routing](../chat_routing/chat_routing_tech.md)
 
-All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `run:send` MessagePort stream carries a sub-turn's events wrapped in `child` (validated by `isRunEvent` at the contextBridge boundary in `src/preload/index.ts`). `llm:send-message` still reaches the same code as a forward, for one phase.
+All require `userActivation.requireActivated()` and use `getProfileScopeUserId()`. The `run:send` MessagePort stream carries a sub-turn's events wrapped in `child` (validated by `isRunEvent` at the contextBridge boundary in `src/preload/index.ts`). Normal renderer output uses run:start/watch; the lower-level run:send path shares the executor.
 
 ## Services & Key Methods
 
@@ -81,7 +81,7 @@ All require `userActivation.requireActivated()` and use `getProfileScopeUserId()
 - `buildAgentToolProviders(...)` (`a2aAsMcpProvider.ts`) — reads `chatOnDemandAgentRepo.listAgentIds`, resolves each via `agentService.findAgent`, skips unresolved/no-card-url with a warn, assigns collision-free slugs (id-derived suffix), constructs providers
 - `A2AAsMcpProvider.attribution` supplies the attached agent’s stable ID/name. Its `eventSink` wraps raw driver events once as `child { toolCallId, agentId, event }`. `getTools()` synthesizes the descriptor or fallback tool as before.
 - `A2AAsMcpProvider.callTool(name, input, opts)` — refuses re-entry if this agent already has an open next-message request in this chat, returning a tool error that directs the coordinator to wait for the human’s Inbox answer. Otherwise calls `driverFor(agent).run` with signal/events and returns compact content plus rich parts. Driver-owned endpoint/token and cancellation details stay behind that seam.
-- `runAgentTurn(input)` (`a2aStreamingService.ts`) — port-free A2A pump: creates client, streams via `StreamPartsAccumulator`, upserts `a2aSessionRepo`, returns `{ text, parts, notices, contextId, taskId, taskState, error? }` — a thrown failure returns empty `text` / `parts` / `notices` beside the `error`, **except** when the turn had already been stopped: then the throw is how the stop ended (a server dropping the connection after `tasks/cancel`), and what the accumulator streamed is returned so the stopped text is kept (golden `a2a/canceled_then_stream_error`); honors `signal`, forwards delta/status via `onEvent`, surfaces client/taskId via `onClient`/`onTaskId`
+- `runAgentTurn(input)` (`a2aStreamingService.ts`) — port-free A2A pump: creates client, streams via `StreamPartsAccumulator`, upserts `agentSessionRepo`, returns `{ text, parts, notices, contextId, taskId, taskState, error? }` — a thrown failure returns empty `text` / `parts` / `notices` beside the `error`, **except** when the turn had already been stopped: then the throw is how the stop ended (a server dropping the connection after `tasks/cancel`), and what the accumulator streamed is returned so the stopped text is kept (golden `a2a/canceled_then_stream_error`); honors `signal`, forwards delta/status via `onEvent`, surfaces client/taskId via `onClient`/`onTaskId`
 - `a2aStreamingService.streamToAgent(input)` — direct-A2A wrapper: registers the request for `cancel`, drives `runAgentTurn`, persists notices + assistant message, posts port events, reports job completion, which defers while durable next-message requests remain
 - `chatService.addOnDemandAgent(userId, chatId, agentId)` — `requireOwnedChat` + `agentService.findAgent` existence check, then `chatOnDemandAgentRepo.add`
 - `agentService.syncRemoteAgents` — merges `target.mcp` into `metadata.cinna_mcp` on the upsert

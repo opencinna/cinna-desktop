@@ -17,11 +17,11 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/
 | Domain | Repo | Service | IPC |
 |--------|------|---------|-----|
 | Users | `db/users.ts` (`userRepo`) | `services/authService.ts` | `ipc/auth.ipc.ts` |
-| Chats | `db/chats.ts` (`chatRepo`) + `db/messages.ts` (`messageRepo`) + `db/chatMcp.ts` (`chatMcpRepo`) | `services/chatService.ts` + `services/chatStreamingService.ts` | `ipc/chat.ipc.ts` + `ipc/llm.ipc.ts` |
+| Chats | `db/chats.ts` (`chatRepo`) + `db/messages.ts` (`messageRepo`) + `db/chatMcp.ts` (`chatMcpRepo`) | services/chatService.ts + services/runExecutionService.ts + streaming/live hub | ipc/chat.ipc.ts + ipc/run.ipc.ts; llm.ipc.ts for models/cancel |
 | Chat modes | `db/chatModes.ts` (`chatModeRepo`) | `services/chatModeService.ts` | `ipc/chatmode.ipc.ts` |
 | LLM providers | `db/llmProviders.ts` (`llmProviderRepo`) | `services/providerService.ts` (uses `llm/factory.ts` + `llm/registry.ts`) | `ipc/provider.ipc.ts` |
 | MCP providers | `db/mcpProviders.ts` (`mcpProviderRepo`) | `services/mcpService.ts` (uses `mcp/manager.ts`) | `ipc/mcp.ipc.ts` |
-| Agents | `db/agents.ts` (`agentRepo`, `a2aSessionRepo` — also exported as `agentSessionRepo`) | `services/agentService.ts` + `services/agentReadinessService.ts`; everything kind-specific in `agents/drivers/` | `ipc/agent.ipc.ts` + `ipc/agent_a2a.ipc.ts` |
+| Agents | `db/agents.ts` (`agentRepo`, `agentSessionRepo`; physical table a2a_sessions) | `services/agentService.ts` + `services/agentReadinessService.ts`; everything kind-specific in `agents/drivers/` | `ipc/agent.ipc.ts` + `ipc/agent_a2a.ipc.ts` |
 
 ## Layer Rules
 
@@ -50,11 +50,11 @@ Adapters (`llm/*.ts`, `mcp/manager.ts`, `agents/a2a-client.ts`, `agents/drivers/
 
 ### `agents/drivers/` — kind-specific agent logic
 - **Kind decisions live here.** Everything that depends on *what kind of agent* a row is — the turn, readiness, auth, attachments, commands, answering a parked ask — belongs in this folder. Code elsewhere asks `capabilitiesFor(row)` / `AgentDto.capabilities`, and `source` means ownership only. `src/main/agents/kindBranches.test.ts` pins what remains outside by exact count — see [Agent Drivers — Technical Details](../../agents/drivers/drivers_tech.md#the-kind-branch-ratchet)
-- **`drivers/index.ts` is the only file in the folder that imports Electron**, and the only one naming `engineBinaryService`, `localAgentService`, `desktopStateService` or `a2aSessionRepo`. Every driver takes its world by injection, so the driver contract runs it with fakes
+- **`drivers/index.ts` is the only file in the folder that imports Electron**, and the only one naming `engineBinaryService`, `localAgentService`, `desktopStateService` or `agentSessionRepo`. Driver implementations accept injected runtime dependencies; production wiring installs folder, custom and Managed state/auth authorities
 - **`capabilities.ts` and `driverOf.ts` are pure and import-light.** `agentService` (DTO mapping), `agentReadinessService` (TTL choice) and `scannerService` (the index row's `driver`) import only these two, so the service layer does not pull in the production wiring
 - **`a2aConnection.ts` imports no Electron directly, but reaches it** through `security/keystore` and `auth/cinna-oauth`. So `a2aDriver.ts` takes endpoint and token resolution and the `CinnaReauthRequired` predicate as deps, and `authRejectionStatus` is split out into `a2aErrors.ts`
 - **A service that needs a driver's answer has it installed from the IPC layer.** `agent.ipc.ts` installs `agentReadinessService`'s probe (`driverFor(row).readiness`) and its broadcast (`webContents.send`), so the service names neither the drivers' wiring nor Electron
-- **Callers that run or answer a turn import `driverFor` from `agents/drivers`** (`agent_a2a.ipc.ts`, `services/a2aAsMcpProvider.ts`). `ipc/local_tools.ipc.ts` imports `claudeAuthProbe` from the same module
+- **The main run executor, specialist provider and shared answer delivery use driverFor from agents/drivers** (runExecutionService, a2aAsMcpProvider and shared answer delivery). `ipc/local_tools.ipc.ts` imports `claudeAuthProbe` from the same module
 
 ### `agents/status/` — optional reported data
 

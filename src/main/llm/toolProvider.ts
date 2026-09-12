@@ -3,15 +3,17 @@
  *
  * Tool execution was historically hardwired to MCP (`mcpManager.callTool`).
  * `ToolProvider` decouples the orchestrator (`chatStreamingService`) from the
- * tool source so it can union real MCP tools with *emulated* MCP tools that
- * front a remote A2A agent (orchestrated mode — see `A2AAsMcpProvider`).
+ * tool source so it can combine MCP tools, attached agent drivers and trusted
+ * coordinator controls without deciding behavior from agent provenance.
  *
- * Two implementations:
+ * Implementations:
  *  - {@link McpToolProvider} — one per connected MCP provider, delegates to
  *    `mcpManager.callTool`.
- *  - `A2AAsMcpProvider` — one per attached agent, runs `runAgentTurn` and
+ *  - `A2AAsMcpProvider` — one per attached agent, dispatches its driver and
  *    returns the agent's compact text to the orchestrator while forwarding the
  *    full-fidelity `parts[]` + live stream events to the UI sub-thread.
+ *  - `CoordinatorToolProvider` — main-owned delegation, human gates and
+ *    completion controls; ordinary MCP results cannot acquire this authority.
  */
 import type { CoordinatorControl } from '../services/coordinatorToolProvider'
 import type { ToolDefinition } from './types'

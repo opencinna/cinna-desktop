@@ -58,7 +58,7 @@ Remote agents use deterministic IDs: `remote:{target_type}:{target_id}` — ensu
 | `agent:delete` | handle | `agentId` | Returns `{ success: false, error }` for `source='remote'` agents |
 | `agents:remote-sync-complete` | send (main→renderer) | — | Fired after **every** successful (or failed) remote sync — initial activation, the 5-minute periodic tick, **and** the on-demand `agent:sync-remote` IPC handler. The single refresh signal `useAgents` listens on |
 
-Existing channels (`agent:send-message`, `agent:test`, `agent:fetch-card`) work unchanged for remote agents — the JWT routing is handled internally.
+Shared run:start/watch and agent test/discovery work for remote agents; the A2A driver owns JWT routing.
 
 ## Services & Key Methods
 
@@ -84,7 +84,7 @@ Existing channels (`agent:send-message`, `agent:test`, `agent:fetch-card`) work 
   - `token` (a hand-added agent with a stored token) decrypts `agent.accessTokenEncrypted`
   - anything else returns `undefined`
 
-  It is used by the A2A driver's turn pre-flight and readiness check (so by `agent:send-message`, the orchestrator's agent tool and `agent:check-readiness`), and by `agentService.testAgent` behind `agent:test`.
+  It is used by the A2A driver's turn pre-flight and readiness check (so by main run dispatch, the orchestrator’s agent tool and `agent:check-readiness`), and by `agentService.testAgent` behind `agent:test`.
 - `resolveEndpointIfNeeded(userId, agent)` — When a synced agent has no cached `endpointUrl`, fetches the card to resolve the protocol endpoint, then caches `endpointUrl`, `protocolInterfaceUrl`, and `protocolInterfaceVersion` via `agentRepo.updateResolvedEndpoint()`. Subsequent messages use the cached endpoint. It returns `null` for a folder agent (`capabilities.cwd`), and a hand-added agent with no endpoint must be tested first.
 
 ### Activation — `src/main/auth/activation.ts`

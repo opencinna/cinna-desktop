@@ -6,10 +6,11 @@ Project-specific wire contract for every `MessagePort` that carries a turn. LLM-
 
 | Send path | Posts `RunEvent` from | Receiver |
 |-----------|-----------------------|----------|
-| `run:send` (legacy agent/model channels forward here) | Shared executor → agent/model streaming service and driver/accumulator events | Main observer, then optional `useChatStream.handleRun` subscriber |
+| run:start + run:watch | Shared executor → model/driver events → live hub | useLiveRunWatch → useRunEventHandler |
+| run:send | Same executor with a caller-owned port | Caller validates RunEvent |
 | Inbox next-message continuation | Same executor/services, without a renderer port | Main Inbox observer and persisted transcript |
 
-One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one renderer handler. `runExecutionService` owns the turn independently of its optional port; this is not an attach/replay API. See [shared lifetime and acceptance](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+One union (`RunEvent`, `src/shared/runEvents.ts`), one guard (`isRunEvent`), one renderer handler. `runExecutionService` owns the turn independently of its optional port; liveRunHub supplies separate snapshot/replay subscription semantics. See [shared lifetime and acceptance](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
 
 ### The overturned rule: "Distinct unions — never unify"
 
@@ -37,26 +38,26 @@ Do not re-split. A new protocol maps onto `RunEvent`; it does not get its own un
 | `AgentErrorEvent { code? }`, `LlmErrorEvent { errorDetail? }` | `error { code?, errorDetail? }` |
 | `postAgentError(port, msg, code?)`, `postLlmError(port, msg)` | `postRunError(port, msg, { code?, errorDetail? })` |
 | `isAgentStreamEvent`, `isLlmStreamEvent` | `isRunEvent` |
-| `useChatStream.handleAgent`, `handleLlm` | `useChatStream.handleRun` |
+| `useChatStream.handleAgent`, `handleLlm` | `useRunEventHandler` |
 
 **Persisted `messages.parts` did not change.** The Inbox separately stores continuation requests in `task_input_requests`; this paragraph describes transcript parts only. An ask is still stored as a `tool` part with a reserved name and a `per_` / `que_` id. The events are live-only, so every path that reads a transcript still recognises an ask by name and id (`src/shared/localAgentRequests.ts`) — a reloaded chat has no events to read.
 
 ## Variants
 
 - `request-id { requestId }` — first, exactly once, posted by the layer above the driver (`streamToAgent`, `chatStreamingService`). The id `cancel` takes
-- `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by A2A only. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records
+- `status { state: RunState, taskId?, contextId? }` — `RunState` = `submitted | working | needs_input | completed | failed | canceled | rejected | unknown`. Posted by drivers including A2A and Managed. The renderer ignores it; a `needs_input` state is always followed by its own event, and that is what the store records
 - `delta { kind: ContentKind, text, toolName?, toolInput?, toolId?, toolStream?, commandInvocation?, file? }` — already a true delta. Field meanings: [A2A Streaming Pipeline](../../agents/agents/streaming_pipeline.md#delta-event-payload-over-messageport)
 - `tool_use { id, name, input, provider?, providerType?: 'mcp' | 'agent' | 'coordinator', providerAgentId? }` — LLM path only, posted before the call resolves
 - `tool_result { id, result: unknown }`, `tool_error { id, error }` — pair with `tool_use` by `id`. Not the `tool_result` **content kind**, which is a `delta`
 - `needs_input { requestId, request: InputRequest, resume: 'reply' | 'next_message' }` — see the contract below
 - `input_resolved { requestId, resolution: RequestResolution }` — `RequestResolution` is declared in `src/shared/localAgentRequests.ts` because it crosses the wire; `pendingRequests.ts` re-exports it
 - `child { toolCallId, agentId, event: RunEvent }` — LLM path only: one event of an agent the LLM called as a tool, keyed by the orchestrator's tool-call id
-- `done { stopReason?: 'end_turn' | 'canceled' | 'budget' | 'error' }` — `canceled` whenever a stop ended the turn, on both paths and every exit: an LLM adapter rejecting mid-reply (the round's partial reply, unless only whitespace, is saved as an assistant message first, and any tool call the stop skipped gets a "not run" result row), an A2A turn whose result also carries an error — a stream that threw after the stop included, since `runAgentTurn` then still returns what streamed — which falls through to the normal ending and keeps it, and a runner that threw after the stop (nothing to keep). Otherwise `end_turn`. `budget` and `error` are declared and posted by nothing yet. The renderer's Stop clears no state of its own, so a stop that posted no terminal event would leave the chat streaming — see [Messaging tech — Cancellation](../../chat/messaging/messaging_tech.md#cancellation)
+- `done { stopReason?: 'end_turn' | 'canceled' | 'budget' | 'error' }` — `canceled` whenever a stop ended the turn, on both paths and every exit: an LLM adapter rejecting mid-reply (the round's partial reply, unless only whitespace, is saved as an assistant message first, and any tool call the stop skipped gets a "not run" result row), an A2A turn whose result also carries an error — a stream that threw after the stop included, since `runAgentTurn` then still returns what streamed — which falls through to the normal ending and keeps it, and a runner that threw after the stop (nothing to keep). Natural endings use end_turn; model round ceilings and Managed remote budgets use budget. Terminal error semantics are owned by the stream wrapper. The renderer's Stop clears no state of its own, so a stop that posted no terminal event would leave the chat streaming — see [Messaging tech — Cancellation](../../chat/messaging/messaging_tech.md#cancellation)
 - `error { error, code?, errorDetail? }` — `code` is a machine discriminator (`cinna_reauth_required`) so a surface branches without matching copy; `errorDetail` is the adapter detail behind a SystemMessage's "Details"
 
 `InputRequest`:
 
-- `permission { action, resources, callId? }` — OpenCode and Claude asks. `action` is the engine's own word (`bash`, `Bash`, `WebFetch`)
+- `permission { action, resources, callId?, allowRemember? }` — ACP and Managed asks; Managed sets allowRemember false. `action` is the engine's own word (`bash`, `Bash`, `WebFetch`)
 - `question { questions: InputQuestion[] }` — `InputQuestion` is `{ question, header?, multiSelect, options }`, the type `acpQuestions.ts:toInputQuestions` returns for a local agent. An A2A question is built from the status message's `text`-kind parts only, as one open question — with ‘What should the agent do next?’ when the agent sent no text — because A2A gives a question no structure <!-- nocheck -->
 - `auth { message, method?, url? }` — A2A `auth-required`; `message` falls back to `A2A_AUTH_REQUIRED_FALLBACK` when the status carries no text
 - `elicitation { message, schema }` — declared, posted by nothing yet
@@ -67,9 +68,9 @@ The table describes driver-originated events. Runner-owned durable questions als
 
 | | `resume: 'reply'` | `resume: 'next_message'` |
 |---|---|---|
-| Posted by | ACP permission/question parks | `runAgentTurn`, on status-update, streamed task or nonstreaming task responses |
+| Posted by | ACP permission/question and Managed permission parks | `runAgentTurn`, on status-update, streamed task or nonstreaming task responses |
 | Means | the run is parked **now**; the answer goes by id through `agent:answer-request`, and the address dies with the turn | the protocol ended the turn; the user's next message is the answer |
-| `requestId` | the engine's `per_*` / `que_*` id — the same id as the ask's `tool` part `toolId` | the A2A task id |
+| `requestId` | the driver's registration id — the same id as the ask's `tool` part `toolId` | the A2A task id |
 | Makes a block answerable | live transcript/Inbox reply controls | durable Inbox question; a typed chat message can also continue the owning agent |
 | Followed by `input_resolved` | when settled while the turn is open | never |
 
@@ -77,12 +78,12 @@ Rules, each pinned by a driver-contract clause (see [The driver contract](../../
 
 - **The part first, then `needs_input`.** The ask's block is streamed and its registration made before the event is posted, so an answer sent the instant the event arrives finds both. `park.needs_input` asserts it arrives before any answer
 - **One `needs_input` per ask**, not repeated on the way out (`park.needs_input`)
-- **One `input_resolved` per ask settled while the turn is open, after its `needs_input`** (`park.input_resolved`). An answer carries what was posted; a reject or a park timeout carries `{ kind: 'rejected' }` (`park.reject`, `park.timeout`). An ask the engine settles itself — answered from another window, or OpenCode echoing our own reply as `permission.v2.replied` — is reported once: `resolvedIds` dedupes, and `engineResolution` reads the resolution off the event, falling back to `rejected` for anything the desktop's vocabulary cannot state. Both runners post it **before** the decision line, so the block stops offering buttons before the transcript says what was decided
+- **One `input_resolved` per ask settled while the turn is open, after its `needs_input`** (`park.input_resolved`). An answer carries the effective posted decision; rejection or timeout carries `{ kind: 'rejected' }` (`park.reject`, `park.timeout`). ACP maps the captured local park once; Managed waits for remote acceptance and durable local commitment before releasing its barrier. The retired engine-specific notification translator is not part of this path.
 - **Teardown posts nothing.** The ACP driver holds an `open` flag and closes it before its `finally` sweeps what is parked, so an ask the turn's own ending settles gets no `input_resolved` — the terminal `done` or `error` already says nothing is parked
 - **A2A normalizes every task response path.** `status-update`, streamed `task` and nonstreaming `message/send` task responses post `status` and the matching `needs_input`. Input-required without text still produces an open question; auth-required produces the existing sign-in fallback.
 - **Protocol request identity is not Inbox occurrence identity.** The event carries the A2A task id; main derives a durable next-message address from chat, agent, invocation and protocol request. A child invocation adds its tool-call identity. Normal done/boot preserve those rows; reply parks expire. The Inbox never depends on replaying this live event list.
 
-## Receiver: `handleRun` and the Chat Store
+## Receiver: useRunEventHandler and the Chat Store
 
 - `delta` → `appendDelta` with every field; an LLM delta lands exactly where a bare text append would
 - `tool_result` / `tool_error` → resolve or fail the tool block, then `dropInputRequestsFor(id)`: a nested agent's asks end with its call
@@ -98,14 +99,14 @@ Store lifecycle (`src/renderer/src/stores/chat.store.ts`):
 Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an engine id, the id is **not** settled (`isSettledInputRequest`), and either the registry poll lists it (`useAgentRequests.isPending`) or the stream announced it as a `reply` ask (`isLiveInputRequest`).
 
 - **Settled wins over both**, because the poll lags the stream by up to a tick: a park that timed out, or an ask answered elsewhere, would otherwise keep offering buttons whose answer can only be refused
-- **The poll stays.** A reloaded renderer has no port and re-opens a prompt only because the main-process registry still holds it; an ask raised before this renderer subscribed never reaches it as an event
+- **The poll stays.** A reloaded renderer attaches a fresh watch; the registry poll also restores live request addresses independently of replay availability
 - `useAgentRequests`' answer functions also call `resolveInputRequest` optimistically, since the `input_resolved` echo has not arrived yet
 - `PermissionRequestBlock` always receives `requestId={part.toolId}`; `interactive` is the liveness above, and the block stays live while its own answer is in flight even after `interactive` turns false — the settle can land before the answer call returns
 - **A pending ask holds the transcript.** `MessageStream` passes `hold` to `useStickToBottom` while `inputRequests` has a `reply` entry with no `toolCallId` whose id is not settled, so a second ask arriving cannot scroll its own button under the pointer aimed at the first ([Transcript Scrolling](../../chat/conversation_ui/scroll_following.md)). Store-driven only: a block live from the poll alone does not hold
 
 ## Known Issues
 
-- **Nested asks have no control.** A nested (`child`) ask from an orchestrated folder agent is recorded in `inputRequests`, and the registry would take an answer by id, but no sub-thread renders a control for it — so it still ends at its park timeout
+- **Nested inline controls remain limited.** A child ask is recorded with its tool-call identity and is answerable through the durable Inbox while its driver is parked. Absence of a sub-thread control does not mean the request cannot be answered.
 - **Request blocks still change height under the pointer** in two cases the hold does not cover: an answered block's button row giving way to a shorter decision line, and a poll-only block turning live late — [Local Agent Permissions](../../agents/local_agents/permissions.md#known-issues-in-the-block)
 
 ## Sender Wiring
@@ -115,7 +116,7 @@ Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an
 | Streaming services | `services/a2aStreamingService.ts`, `services/chatStreamingService.ts` | each declares a `StreamPort` whose `postMessage` takes `RunEvent` |
 | Runner sink | `RunAgentTurnInput.onEvent` (`a2aStreamingService.ts`), `ToolCallOptions.onEvent` (`llm/toolProvider.ts`) | `(event: RunEvent) => void` |
 | Accumulator | `agents/streamPartsAccumulator.ts` | `DeltaPort.postMessage(RunDeltaEvent)` |
-| IPC pre-flight errors | `ipc/agent_a2a.ipc.ts`, `ipc/llm.ipc.ts` | `postRunError(port, msg, extras?)` in `ipc/_streamPort.ts` |
+| IPC pre-flight errors | `ipc/run.ipc.ts` | `postRunError(port, msg, extras?)` in `ipc/_streamPort.ts` |
 
 **Rule:** every outbound frame goes through a typed surface. Raw `port.postMessage({ … })` is forbidden.
 
@@ -124,7 +125,7 @@ Liveness of an ask's block (`MessageStream.renderRequestBlock`): the part has an
 
 ## Bridge
 
-- `preload/index.ts` — `agents.sendMessage` and `llm.sendMessage` both run `isRunEvent` in `channel.port1.onmessage`, `console.warn` `[preload] dropped off-contract run event` and drop anything else, and only then call `onEvent`
+- preload validates raw RunEvent on run.send and RunWatchMessage envelopes on run.watch; the latter carries snapshot/accepted/event/closed messages whose event payload uses the same vocabulary.
 - The guard checks the discriminator only, against `RUN_EVENT_TYPES` with `hasOwnProperty` — so `{ type: 'toString' }` is off-contract, and a retired `tool_subevent` is dropped. A recognised `type` with a wrong-shaped payload branches into its case, where the wrong values surface as visible errors rather than silently dropped events
 - Senders are typed too, so both ends must drift at once for an off-contract event to pass — defense in depth, not the primary mechanism
 
@@ -135,7 +136,7 @@ Three records are typed over `RunEvent['type']`, so a new variant fails the type
 1. Add the interface to `src/shared/runEvents.ts`, with JSDoc saying who posts it and when, and add it to the `RunEvent` union
 2. Add its `type` to `RUN_EVENT_TYPES` in the same file. It is a `Record<RunEvent['type'], true>`, so the typecheck fails until the guard lists it — a variant the guard does not know would be dropped in preload with only a console warning
 3. Emit it from the sender; `StreamPort` / `onEvent` typing enforces the shape
-4. Handle it in `useChatStream.handleRun`. An unhandled case falls through silently — that is the forward-compatibility contract — so decide it explicitly, and decide what it means inside a `child` as well
+4. Handle it in `useRunEventHandler`. An unhandled case falls through silently — that is the forward-compatibility contract — so decide it explicitly, and decide what it means inside a `child` as well
 5. Add a row to `src/renderer/src/hooks/useChatStream.events.test.tsx`. Its own `RUN_EVENT_TYPES` guard makes `npm run typecheck:web` fail until the type is listed, and a runtime check fails until an agent or LLM row exercises it
 6. Add an instance to `EVERY_VARIANT` in `src/shared/runEvents.test.ts`. It is typed `{ [T in RunEvent['type']]: Extract<RunEvent, { type: T }> }` and fed to `it.each`, so the typecheck fails until the new variant has one, and the guard is then tested against it
 7. If a driver posts it, the A2A golden `*.expected.json` files change: edit them on purpose, never regenerate blind (see [Golden streams](../../agents/local_agents/agent_turn_tech.md#golden-streams))

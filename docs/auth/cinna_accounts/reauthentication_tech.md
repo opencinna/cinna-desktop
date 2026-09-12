@@ -77,11 +77,9 @@ The handler returns the standard `{success, error}` discriminated union so rende
 
 - `auth:cinna-reauth` handler — Thin: calls `authService.reauthCinna(getProfileScopeUserId())`, wraps errors via `errorResponse()`
 
-### `src/main/ipc/agent_a2a.ipc.ts`
+### Driver and stream wrapper
 
-- `agent:send-message` listener — Two failure paths (`resolveEndpointIfNeeded`, `resolveAccessToken`) detect `err instanceof CinnaReauthRequired` and:
-  1. Use `CINNA_SESSION_EXPIRED_MESSAGE` as the user-facing copy
-  2. Pass `CINNA_REAUTH_REQUIRED_CODE` to both `postRunError(port, msg, { code })` (live wire) and `messageRepo.saveError({ chatId, short, code })` (persisted)
+The A2A driver catches CinnaReauthRequired from endpoint/token preflight and returns CINNA_SESSION_EXPIRED_MESSAGE with CINNA_REAUTH_REQUIRED_CODE. a2aStreamingService persists and emits that error through the shared main executor, live observer/watch and transcript; the IPC send handler no longer resolves credentials itself.
 
 ## Renderer Components
 

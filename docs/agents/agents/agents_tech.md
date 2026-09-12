@@ -11,12 +11,12 @@
 | Shared part types | `src/shared/messageParts.ts` — `ContentKind`, `MessagePart` (cross-process type contract) |
 | Agent service | `src/main/services/agentService.ts` — CRUD, card preview, test, endpoint resolution, access-token resolution, remote sync |
 | DB Repo (agents) | `src/main/db/agents.ts` — `agentRepo` (CRUD, `updateCardCache`, `updateResolvedEndpoint`, transactional `syncRemote`) |
-| DB Repo (sessions) | `src/main/db/agents.ts` — `a2aSessionRepo` (`getByChat`, `getByChatAndAgent`, `upsert`) |
+| DB Repo (sessions) | `src/main/db/agents.ts` — `agentSessionRepo` (`getByChat`, `getByChatAndAgent`, `upsert`) |
 | Errors | `src/main/errors.ts` — `AgentError` + `AgentErrorCode` (`not_found`, `unsupported_protocol`, `no_card_url`, `no_endpoint`, `remote_immutable`, `invalid_id`, `sync_reauth_required`, `sync_failed`) |
 | IPC handlers (CRUD) | `src/main/ipc/agent.ipc.ts` — thin handlers delegating to `agentService` |
 | IPC handlers (A2A protocol) | `src/main/ipc/agent_a2a.ipc.ts` — fetch-card, test, send-message (MessagePort), cancel-message, get-session. `send-message` is a thin controller — delegates persistence to `messageRoutingService` and the A2A pump to `a2aStreamingService` |
 | A2A streaming service | `src/main/services/a2aStreamingService.ts` — A2A client init, stream pump, session save, cancel registry |
-| Message routing service | `src/main/services/messageRoutingService.ts` — single chokepoint for user-message persistence + background title generation, used by both `agent:send-message` and `llm:send-message` |
+| Message routing service | `src/main/services/messageRoutingService.ts` — single chokepoint for user-message persistence + background title generation, used by runExecutionService for agent/model admission |
 | IPC wrap | `src/main/ipc/_wrap.ts` — `ipcHandle()` used by all `agent:*` channels |
 | IPC registration | `src/main/ipc/index.ts` — `registerAgentHandlers()` |
 | DB schema (agents) | `src/main/db/schema.ts` — `agents` table |
@@ -93,7 +93,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 | `agent:delete` | handle | `agentId: string` | `{ success }` |
 | `agent:fetch-card` | handle | `{ cardUrl, accessToken? }` | `{ success, card?, protocol?: { url, version }, error? }` |
 | `agent:test` | handle | `agentId: string` | `{ success, card?, error? }` — also updates DB cached metadata + protocol interface |
-| `agent:send-message` | on (MessagePort) | `AgentSendPayload = { agentId, chatId, content, attachments? }` (from `src/shared/ipcPayloads.ts`) | Events via port: `request-id`, `delta { kind, text, toolName? }`, `status`, `done`, `error`. See [Streaming Pipeline](streaming_pipeline.md) for delta payload details |
+| run:start / run:watch | invoke / MessagePort | RunSendPayload / owned chat | Main-owned execution plus independent snapshot/live event observation. Lower-level run:send uses the same executor. |
 | `agent:cancel-message` | handle | `requestId: string` | `{ success }` |
 | `agent:get-session` | handle | `chatId: string` | `{ id, chatId, agentId, contextId, taskId, taskState } \| null` |
 | `agent:check-readiness` | handle | `agentId: string` | `AgentReadiness \| null` — a fresh readiness check of one agent; `null` when it is not found. See [Agent Drivers](../drivers/drivers_tech.md#ipc-channels) |
@@ -132,13 +132,11 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 
 ### IPC A2A Handler — `src/main/ipc/agent_a2a.ipc.ts`
 
-- `registerA2AHandlers()` — Registers A2A protocol-specific channels (fetch-card, test, send-message, cancel-message, get-session).
-- `agent:send-message` handler — Thin streaming controller via `ipcMain.on` + MessagePort (cannot use `ipcHandle`). Verifies activation via `userActivation.isActivated()` (sends error to port if not). Loads owned chat + agent via repos. Resolves the agent's driver with `driverFor(agent)`; endpoint and token resolution happen inside the A2A driver's `run`, and a failure there is a turn error like any other. Then delegates the work to two services:
-  - `messageRoutingService.prepareAgentSend({ userId, chatId, agentId, userContent, attachments })` persists the user message (stamping `addressedAgentId`) and fires background title generation. Returns `{ wireContent, userMessageId }` where `wireContent === userContent`.
-  - `a2aStreamingService.streamToAgent({ run, chatId, agentId, port })` — `run` is the driver's turn bound to this message, or a `/run:` command in its place (see next section).
+- registerA2AHandlers retains agent discovery/test/session/answer/cancel and custom/Managed configuration handlers. Run dispatch belongs to src/main/ipc/run.ipc.ts and runExecutionService.
+- The executor resolves routing, prepares the user message once, chooses driverFor and supplies a bound run to streamToAgent. Folder catalog commands are intercepted by capability before driver.run; endpoint/token resolution stays inside A2A.
 - `agent:fetch-card` handler — Calls `agentService.fetchCardPreview()`, returns `{ success, card?, protocol?, error? }`.
 - `agent:test` handler — Calls `agentService.testAgent()`, which updates cached card metadata in DB.
-- `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `a2aSessionRepo.getByChat(chatId) ?? null`. Used by the renderer to detect agent chats and resolve the `agentId` for routing.
+- `agent:get-session` handler — Verifies chat ownership via `chatRepo.getOwned()`, returns `agentSessionRepo.getByChat(chatId) ?? null`. Returns continuity metadata; routing is resolved by main from the chat and addressed agent.
 - `agent:cancel-message` handler — Delegates to `a2aStreamingService.cancel(requestId)`.
 
 ### A2A Streaming Service — `src/main/services/a2aStreamingService.ts`
@@ -160,7 +158,7 @@ The `chats` table also has an `agent_id` column (migration: `src/main/db/migrati
 - `AgentSelector` — Bot icon button in chat input area. Dropdown lists enabled agents. Click to toggle selection. Hidden when no agents are enabled. When an agent is selected, the button expands into a chip showing the agent name + X dismiss button (expand-in/shrink-out CSS animations). Fires `onCollapsed` callback after the shrink animation completes (used to return focus to text input).
 - `AgentMentionPopup` — Popup rendered above the text input when user types `@`. Shows filtered enabled agents with name, protocol tag, and description. Supports keyboard navigation (Arrow keys, Enter/Tab to select, Escape to dismiss) and outside-click dismissal.
 - `ChatInput` — Exposes `ChatInputHandle` via `forwardRef`/`useImperativeHandle` with a `focus()` method. Contains `@`-mention detection: `findMentionToken()` walks backwards from cursor to find `@` preceded by whitespace or at start of input; extracts filter text. Manages mention popup state (open, filter, selected index). On agent selection, removes the `@...` token from input and calls `onSelectAgent`. The mention popup is only active on the new chat screen (`chatId === null`). For active agent chats, resolves the bound agent via `useChatDetail(chatId).agentId` + `useAgents()` lookup, and renders a read-only agent badge (Bot icon + name) in place of `ChatControls` (model/MCP selectors are hidden).
-- `MainArea` — Holds `selectedAgent` state and `chatInputRef` (ref to `ChatInputHandle`). Passes `onSelectAgent` to `ChatInput` and `onCollapsed={focusChatInput}` to `AgentSelector`. When agent is selected and user sends first message, creates chat, stores `agentId` on the chat row via `chat:update`, and routes through `window.api.agents.sendMessage()` instead of `window.api.llm.sendMessage()`. Resets agent selection after chat creation.
+- `MainArea` — Holds `selectedAgent` state and `chatInputRef` (ref to `ChatInputHandle`). Passes `onSelectAgent` to `ChatInput` and `onCollapsed={focusChatInput}` to `AgentSelector`. When agent is selected and user sends first message, creates chat, stores `agentId` on the chat row via `chat:update`, and starts the routed main run through window.api.run.start. Resets agent selection after chat creation.
 - **Routing a subsequent message is not the renderer's job.** `useSendMessage`, which looked up an A2A session and picked the agent channel over the LLM one, is gone: every send goes out on `run:send`, and main reads `chats.router` to decide who answers. The session lookup was one of five copies of that decision. See [Chat Routing](../../chat/chat_routing/chat_routing.md).
 
 ## Dependencies

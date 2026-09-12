@@ -5,7 +5,7 @@ import { isCoordinatorHandover } from '../../../shared/kit/handovers'
  * The drivers take their world by injection so they can be driven in a test
  * without a process, a port, a database or Electron. This module is where that
  * world is actually supplied — and it is the only file under `agents/drivers/`
- * that names `localAgentService`, `desktopStateService`, `a2aSessionRepo`, the
+ * that names `localAgentService`, `desktopStateService`, `agentSessionRepo`, the
  * engine's binary resolver or Electron, so the dependency direction stays
  * one-way and the test files stay free of them.
  *
@@ -20,7 +20,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { engineBinaryService } from '../../engine/engineBinaryService'
 import { collectEngineConfigInput } from '../../engine/engineConfigSource'
-import { a2aSessionRepo, type AgentRow } from '../../db/agents'
+import { agentSessionRepo, type AgentRow } from '../../db/agents'
 import { CinnaReauthRequired } from '../../auth/cinna-oauth'
 import { localAgentService } from '../../services/localAgents/localAgentService'
 import { desktopStateService } from '../../services/localAgents/desktopStateService'
@@ -71,7 +71,7 @@ const logger = createLogger('agent-driver')
 
 /** The remembered session id for this (chat, agent), if any. */
 function readSession(chatId: string, agentId: string): string | null {
-  return a2aSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId ?? null
+  return agentSessionRepo.getByChatAndAgent(chatId, agentId)?.contextId ?? null
 }
 
 /**
@@ -91,7 +91,7 @@ function saveSession(input: {
   agentKind: LocalAgentKind
   sessionId: string
 }): void {
-  a2aSessionRepo.upsert({
+  agentSessionRepo.upsert({
     chatId: input.chatId,
     agentId: input.agentId,
     contextId: input.sessionId,

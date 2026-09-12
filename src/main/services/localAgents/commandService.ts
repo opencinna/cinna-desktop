@@ -6,10 +6,9 @@
  *
  * ## Why this returns a turn result instead of a new shape
  *
- * `commandService` is never called through `AgentTurnRunner.runTurn` —
- * `/run:<name>` is intercepted *before* the runner is reached (see
- * `agent_a2a.ipc.ts`), specifically so `src/main/agents/drivers/**`, which
- * Phase 6's mutation audit hardened, stays untouched. But `streamToAgent`
+ * `runExecutionService` intercepts `/run:<name>` before the agent driver:
+ * a desktop catalog command is a local script rather than a model prompt.
+ * `streamToAgent`
  * downstream only knows how to persist and post one shape, so this module
  * produces that shape directly rather than inventing a second one the caller
  * would have to branch on.
@@ -413,8 +412,8 @@ export const commandService = {
     } catch (err) {
       // `turnLock.acquire` throws `LocalAgentError('turn_in_progress', …)` and
       // never queues — see the module header. `runForTurn`'s contract (like
-      // `AgentTurnRunner.runTurn`) is that it never throws, so this is caught
-      // here rather than left for the IPC handler to rediscover.
+      // the driver result contract) is that it never throws, so this is caught
+      // here rather than left for the execution service to rediscover.
       const message = err instanceof Error ? err.message : String(err)
       // The lock refusing is the *expected* outcome of an unlucky moment, not
       // a fault: `warn` is reserved for a start that genuinely failed.

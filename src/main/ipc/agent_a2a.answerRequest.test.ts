@@ -42,7 +42,7 @@ vi.mock('../services/inboxService', async () => {
 })
 vi.mock('../db/messages', () => ({ messageRepo: {} }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: vi.fn(() => ({ id: 'chat-1' })) } }))
-vi.mock('../db/agents', () => ({ a2aSessionRepo: {} }))
+vi.mock('../db/agents', () => ({ agentSessionRepo: {} }))
 vi.mock('../auth/activation', () => ({
   userActivation: { isActivated: () => true, requireActivated: () => undefined }
 }))

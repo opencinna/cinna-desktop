@@ -24,11 +24,11 @@ Same convention as [The Local Engine](engine.md) and [Agents Home, Scanner & Fol
 
 The desktop already had a port-free, caller-agnostic single-turn primitive whose output is exactly what a folder agent has to produce: compact `text` for an orchestrator LLM, full-fidelity `parts[]` for the UI, `notices`, and the session bookkeeping. So the ACP driver is not a second pipeline; it is a second implementation of one call signature, and every consumer downstream of it — the parts accumulator, the delta sink, the message repository, the session repository, the renderer — is reused verbatim.
 
-A shared main-owned executor now wraps the transport for both typed chat sends and Inbox continuations. It observes asks without requiring a renderer port, reserves one active turn per chat, and distinguishes message acceptance from turn completion. This does not change ACP’s live permission/question parks or add autonomous task orchestration; see [shared turn lifetime](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
+A shared main-owned executor now wraps the transport for both typed chat sends and Inbox continuations. It observes asks without requiring a renderer port, reserves one active turn per chat, and distinguishes message acceptance from turn completion. ACP parks remain live; the autonomous runner composes consecutive turns through the same executor; see [shared turn lifetime](../../chat/chat_routing/chat_routing_tech.md#shared-turn-lifetime-and-acceptance).
 
 ## Core Concepts
 
-- **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Two of them, `a2a` and `acp`, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
+- **Driver** — one agent turn, whatever kind of agent it is: the shared input in, the shared result out, and it **never throws**. Three transports, a2a/acp/managed, and `driverFor(agent)` is the one dispatch point ([Agent Drivers & Readiness](../drivers/drivers.md))
 - **Launcher** — the engine-specific half of an ACP turn: what to spawn, what to declare, what `session/new` carries, and what must be set on the session before the first prompt. It also answers with a **refusal** in place of a plan
 - **Process pool** — one child per agent, started by the turn that needs it, held for that turn's length, reaped after two minutes idle ([The Local Engine](engine.md))
 - **Session** — an ACP session id created against the agent's folder. One per (chat, agent), remembered so a conversation survives a restart
@@ -78,9 +78,9 @@ A shared main-owned executor now wraps the transport for both typed chat sends a
 
 ## Business Rules
 
-### One turn primitive, two implementations, one dispatch point
+### One turn contract and one dispatch point
 
-`AgentDriver.run` is a single method: take the shared input, return the shared result. There are two implementations — A2A, and ACP for every local CLI agent — and neither decides which agents it serves. `driverFor(agent)` reads `agents.driver` and nothing else.
+`AgentDriver.run` is a single method: take the shared input, return the shared result. A2A, ACP and Managed implement it; the registry selects the transport. This document scopes the ACP path to folder agents; [custom commands](../custom_agents/custom_agents.md) share it with captured external state. `driverFor(agent)` reads `agents.driver` and nothing else.
 
 **The row is a cache; the folder is the truth.** The dispatch point reads the row, so an A2A agent — which has no folder — never costs a filesystem hit on a turn. The ACP driver then reads the folder at the start of every turn and takes its **launcher** from what the folder's runtime says now. This used to be a reconcile *between drivers*: with one driver per engine, a Claude agent dispatched on a stale `opencode` row had to be handed across, and while that hand-off was missing such an agent answered "try again in a moment" for ever. With one driver it is a lookup, which is the point of the collapse.
 
@@ -241,51 +241,11 @@ The ceiling is the backstop for every door that has not been found yet. It turns
 
 ## Architecture Overview
 
-```
-User types in a folder-agent chat
-  │
-Renderer ── window.api ──▶ ipcMain.on('agent:send-message')   [thin controller]
-  │                          │ persist the user message (shared path)
-  │                          │ driverFor(agent)  ── on agents.driver
-  │                          ▼
-  │                        a2aStreamingService.streamToAgent({run})  [direct-chat wrapper,
-  │                          │                                        kind-agnostic]
-  │                          ▼
-  │                        driver.run(userId, row, input)
-  │      ┌───────────────────┴───────────────────────────────────┐
-  │      │ read the folder: exists / enabled / readiness         │
-  │      │ launcherOfFolder(runtime) → opencode | claude | …     │
-  │      │ launcher.plan()  → spec + init + session + setup      │
-  │      │                  or a refusal, in a sentence          │
-  │      │ ── withLock(agentId, 'turn') ──────────────────────── │
-  │      │    pool.acquire(agentId, spec, init) ────────────────▶│ spawn + initialize
-  │      │    session/load(remembered)  → replay DROPPED         │
-  │      │      or session/new({cwd, mcpServers, _meta})         │
-  │      │    session/set_mode · set_config_option (setup)       │
-  │      │    abort re-checked here                              │
-  │      │    session/prompt ────────────────────────────────────▶
-  │      │      session/update ──▶ AcpMessageStream.apply        │
-  │      │        cumulative message ──▶ StreamPartsAccumulator ──▶ onEvent sink
-  │      │      session/request_permission ──▶ grant? auto-allow │
-  │      │                                   else park + block   │
-  │      │      elicitation/create (Claude) ──▶ park + block     │
-  │      │    stopReason  |  abort → cancel grace  |  ceiling    │
-  │      └───────────────────┬───────────────────────────────────┘
-  │                          ▼
-  │                   RunAgentTurnResult { text, parts, notices, contextId, error? }
-  │                          │ persist assistant row + notices, save the session
-  ◀── MessagePort ───────────┘ post `done`, close the port
+User send → renderer run.start → run:start → runExecutionService → driverFor(agent) → ACP driver → fresh folder runtime → launcher plan → per-agent turn lock → pool initialize → session load/new → setup → prompt.
 
-In band, on the turn's own stream (wrapped in `child` when orchestrated):
-Driver ── park ──────────────▶ needs_input {resume:'reply'} ──▶ chat store inputRequests
-Driver ── settled, turn open ▶ input_resolved              ──▶ chat store settledInputRequestIds
-       (teardown sweep posts nothing)
+ACP notifications pass through AcpMessageStream and StreamPartsAccumulator into the main observer. Stream services persist the answer; liveRunHub delivers snapshots/events through the selected-chat run:watch subscription. useRunEventHandler projects them once. A coordinator specialist uses the same driver and wraps its events in child frames.
 
-Out of band, while the turn streams:
-Renderer ── agent:pending-requests (poll) ──▶ pendingRequests.listForChat
-Renderer ── agent:answer-request   ────────▶ driverFor(row).respond → grant written first,
-                                              then the blocked ACP request is answered
-```
+Permission/question → captured pending registration → tool part + needs_input → transcript/Inbox answer → owned runtime validation → grant/resolve/commit → input_resolved while the turn remains open. Stop and the turn ceiling cover setup as well as a pending prompt; leaving the view only detaches its watch.
 
 ## Integration Points
 

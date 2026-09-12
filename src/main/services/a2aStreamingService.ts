@@ -1,6 +1,6 @@
 import { nanoid } from 'nanoid'
 import { messageRepo } from '../db/messages'
-import { a2aSessionRepo } from '../db/agents'
+import { agentSessionRepo } from '../db/agents'
 import {
   createA2AClient,
   buildSendParams,
@@ -306,7 +306,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       streaming: supportsStreaming
     })
 
-    const session = a2aSessionRepo.getByChatAndAgent(chatId, agentId)
+    const session = agentSessionRepo.getByChatAndAgent(chatId, agentId)
     const sessionContextId = session?.contextId ?? undefined
     const sessionTaskId = session?.taskId ?? undefined
 
@@ -454,7 +454,7 @@ export async function runAgentTurn(input: A2ARunAgentTurnInput): Promise<RunAgen
       noticeCount: notices.length
     })
 
-    a2aSessionRepo.upsert({
+    agentSessionRepo.upsert({
       chatId,
       agentId,
       contextId: latestContextId ?? session?.contextId ?? null,

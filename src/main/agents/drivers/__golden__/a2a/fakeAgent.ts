@@ -1,5 +1,5 @@
 /**
- * A fake A2A agent at the **`fetch`** level, and a fake `a2aSessionRepo`.
+ * A fake A2A agent at the **`fetch`** level, and a fake `agentSessionRepo`.
  *
  * `runAgentTurn` never takes a transport as a parameter: `createA2AClient`
  * builds its fetch from the global `fetch` (`buildLoggingFetch(fetch)`, and
@@ -204,7 +204,7 @@ export interface FakeSessionRepo {
 }
 
 /**
- * In-memory `a2aSessionRepo` with the real one's merge rule: a `null` field in
+ * In-memory `agentSessionRepo` with the real one's merge rule: a `null` field in
  * a patch keeps what the row already had (`patch.x ?? existing.x`).
  */
 export function fakeSessionRepo(seed?: SessionPatch): FakeSessionRepo {

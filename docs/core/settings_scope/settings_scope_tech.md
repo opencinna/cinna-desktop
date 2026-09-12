@@ -48,7 +48,7 @@ All other tables (`llm_providers`, `mcp_providers`, `chat_modes`, `agents`, `cha
 - `agent:set-enabled` — new channel; payload `{ agentId, enabled }`. Routes by id prefix (`remote:` → override table, else local row).
 - `agent:sync-remote` — Profile scope (active Cinna user).
 - `chatmode:*`, `provider:*`, `mcp:*` — all Default scope.
-- `chat:*`, `agent-status:*`, `llm:send-message`, `auth:get-current` — Profile scope.
+- `chat:*`, `agent-status:*`, `run:start` / `run:watch`, `auth:get-current` — Profile scope.
 
 ## Services & Key Methods
 

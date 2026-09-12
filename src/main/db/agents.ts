@@ -781,10 +781,12 @@ export const agentOverrideRepo = {
 }
 
 /**
- * A2A session state is tied to a chat — callers must pre-verify chat
+ * Driver session state is tied to a chat — callers must pre-verify chat
  * ownership (via {@link chatRepo.getOwned}) before using these methods.
+ * The existing a2a_sessions table stores contextId as the driver's session ID;
+ * taskId and taskState retain their A2A meaning.
  */
-export const a2aSessionRepo = {
+export const agentSessionRepo = {
   getByChat(chatId: string): A2ASessionRow | undefined {
     return getDb()
       .select()
@@ -843,14 +845,3 @@ export const a2aSessionRepo = {
     }
   }
 }
-
-/**
- * The session a driver keeps with an agent for one chat — the same object as
- * {@link a2aSessionRepo}, under the name phase 2 of the agent runtime plan gives
- * it. Both names are exported for that phase; call sites move over later.
- *
- * The table keeps its name, `a2a_sessions`. `contextId` is the driver's primary
- * session id (an A2A context, an engine or CLI session); `taskId` and
- * `taskState` stay A2A's.
- */
-export const agentSessionRepo = a2aSessionRepo

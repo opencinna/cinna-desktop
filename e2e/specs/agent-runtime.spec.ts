@@ -101,7 +101,7 @@ async function seedCredentials(cinna: CinnaApp): Promise<void> {
 async function openAgentPage(cinna: CinnaApp): Promise<void> {
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  // Set up the default folder home explicitly if this sandbox needs one.
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)
@@ -199,7 +199,7 @@ test('changing the credential rewrites the manifest, says what it dropped, and d
 
   const page = cinna.page
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  // Set up the default folder home explicitly if this sandbox needs one.
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: AGENT, exact: true }).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(AGENT)

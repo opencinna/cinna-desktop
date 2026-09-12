@@ -126,7 +126,7 @@ Chat Flow — First Message (agent selection via Bot icon or @-mention):
   ChatInput (@-mention popup) ─┐
   AgentSelector (Bot icon)     ─┤→ selectedAgent → MainArea.handleNewChat()
                                 └→ chat:create + chat:update(agentId)
-                                └→ window.api.agents.sendMessage() → IPC (MessagePort)
+                                └→ run.start → main executor → run.watch (MessagePort)
                                    → agent_a2a.ipc.ts → createA2AClient() → External Agent
                                    → SSE events → StreamPartsAccumulator (per-part deltas, kind+toolName)
                                    → Deltas streamed back via MessagePort → chat.store → UI

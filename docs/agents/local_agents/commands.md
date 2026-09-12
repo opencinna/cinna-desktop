@@ -86,7 +86,7 @@ Agent page — Commands card "Run"          Chat composer "/" popup
   ▼                                          ▼
                           window.api.agents.*
                                   │
-Renderer ── window.api ──▶ ipcMain.on('agent:send-message')
+Renderer ── window.api ──▶ run:start → runExecutionService
                               │ persist user message (shared path)
                               │ driverFor(agent)
                               │ resolveCommandRunner(capabilities.commands, wireContent, …, driver.run)

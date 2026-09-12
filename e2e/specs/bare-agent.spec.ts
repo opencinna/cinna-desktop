@@ -78,7 +78,7 @@ async function stubTrash(cinna: CinnaApp): Promise<void> {
 async function openAddDialog(cinna: CinnaApp): Promise<void> {
   const { page } = cinna
   await page.getByRole('button', { name: 'Agents', exact: true }).click()
-  // A fresh `$HOME` has no agents folder, so the tab asks about it first.
+  // Set up the default folder home explicitly if this sandbox needs one.
   await answerAgentsFolder(cinna)
   await page.getByRole('button', { name: 'Add an agent', exact: true }).click()
   await expect(page.getByRole('dialog', { name: 'Add an agent' })).toBeVisible()

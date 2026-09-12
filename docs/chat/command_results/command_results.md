@@ -70,7 +70,7 @@ Main: StreamPartsAccumulator.ingest()
   └─ port.postMessage({type:'delta', kind:'command_result', text})
        ↓
 Renderer:
-  useChatStream.handleRun → chat.store.appendDelta(text, 'command_result')
+  useRunEventHandler → chat.store.appendDelta(text, 'command_result')
     └─ streamingBlocks: TextBlock{ kind:'command_result' }
          ↓
   MessageStream → CommandResultBlock (live, default-expanded, scrollable body)
