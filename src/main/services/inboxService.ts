@@ -8,7 +8,8 @@ import { agentRepo } from '../db/agents'
 import { routerOf } from '../../shared/chatRouting'
 import { taskRunnerBridge } from './taskRunnerBridge'
 import { taskService } from './taskService'
-import { deliverAnswer } from './askDelivery'
+import { deliverAnswer, deliverAnswerWithCommit } from './askDelivery'
+import { pendingRequests } from '../agents/drivers/pendingRequests'
 import { remoteInboxService } from './remoteInboxService'
 import { runExecutionService } from './runExecutionService'
 import { agentService } from './agentService'
@@ -414,6 +415,17 @@ export const inboxService = {
    *
    * Returns data, never throws (see {@link InboxAnswerResult}).
    */
+  /** Both answer surfaces use the same durable reply commitment. */
+  answerFromTranscript(userId: string, requestId: string, resolution: RequestResolution): InboxAnswerResult | Promise<InboxAnswerResult> {
+    if (taskInputRequestRepo.getById(requestId)) return this.answer(userId, requestId, resolution)
+    const runner = taskRunnerBridge.answer(userId, requestId, resolution)
+    if (runner) return runner
+    if (pendingRequests.registration(requestId)?.origin !== 'acp') {
+      return { ok: false, code: 'no_longer_waiting', reason: ASK_NO_LONGER_WAITING }
+    }
+    return deliverAnswer(userId, requestId, resolution)
+  },
+
   async answer(userId: string, requestId: string, resolution: RequestResolution): Promise<InboxAnswerResult> {
     if (remoteInboxService.isRemoteAddress(requestId)) {
       return remoteInboxService.answer(userId, requestId, resolution)
@@ -485,20 +497,31 @@ export const inboxService = {
       }
     }
 
-    const outcome = deliverAnswer(userId, requestId, resolution)
+    const validateDelivery = (): void => {
+      const currentTask = taskService.getById(userId, row.taskId)
+      if (!currentTask.runsHere || currentTask.executor !== 'desktop' ||
+        !['blocked', 'in_progress'].includes(currentTask.status)) throw new Error('This task is no longer running here.')
+      taskInputRequestRepo.assertReplyCurrent(userId, row)
+    }
+    const outcome = await deliverAnswerWithCommit(userId, requestId, resolution, (effective) => {
+      // Strict here: a remote acceptance must not release its park if the
+      // durable answer or aggregate task write fails.
+      validateDelivery()
+      taskInputRequestRepo.commitReply(userId, row, settledStatus(effective), effective, (taskId) => {
+        taskService.applyRunState(userId, taskId, taskInputRequestRepo.listOpenForTask(taskId).length ? 'needs_input' : 'working')
+      })
+    }, validateDelivery)
     if (!outcome.ok) {
       // The address is gone — the app restarted under it, the turn was
       // cancelled, the park timed out. The row says so, so the entry stops
       // offering a button whose only outcome is this same message.
-      if (outcome.code === 'no_longer_waiting') {
-        taskInputRequestRepo.settle(requestId, 'expired')
+      if (outcome.code === 'no_longer_waiting' && !pendingRequests.registration(requestId)) {
+        taskInputRequestRepo.settle(requestId, 'expired', null, { chatId: row.chatId, rootRunId: row.rootRunId ?? undefined, invocationId: row.invocationId ?? undefined, createdAt: row.createdAt })
         markAfterAskChange(userId, row.taskId)
       }
       return outcome
     }
 
-    taskInputRequestRepo.settle(requestId, settledStatus(resolution), resolution)
-    markAfterAskChange(userId, row.taskId)
     logger.info('an ask was answered from the inbox', {
       requestId,
       taskId: row.taskId,

@@ -34,6 +34,12 @@ vi.mock('electron', () => ({ ipcMain: { on: () => undefined, handle: () => undef
 vi.mock('../logger/logger', () => ({
   createLogger: () => ({ debug: () => {}, info: () => {}, warn: () => {}, error: () => {} })
 }))
+// These cases isolate ACP grant translation; durable ordering uses the real
+// Inbox/registry/database in inboxReplyDelivery.test.ts.
+vi.mock('../services/inboxService', async () => {
+  const { deliverAnswer } = await import('../services/askDelivery')
+  return { inboxService: { answerFromTranscript: deliverAnswer } }
+})
 vi.mock('../db/messages', () => ({ messageRepo: {} }))
 vi.mock('../db/chats', () => ({ chatRepo: { getOwned: vi.fn(() => ({ id: 'chat-1' })) } }))
 vi.mock('../db/agents', () => ({ a2aSessionRepo: {} }))
@@ -88,6 +94,7 @@ const owner = vi.fn((): unknown => ({
 }))
 vi.mock('../agents/drivers/pendingRequests', () => ({
   pendingRequests: {
+    registration: () => ({ origin: 'acp' }),
     owner: (...args: unknown[]) => owner(...(args as [])),
     listForChat: vi.fn(() => [])
   }

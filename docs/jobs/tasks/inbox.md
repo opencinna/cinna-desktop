@@ -31,10 +31,22 @@ The Inbox is one list of open questions and permissions belonging to tasks, answ
 
 **One remote ask has one in-flight answer per profile.** Identical resolutions join the pending operation. A different resolution receives a retryable refusal; otherwise two windows submitting Yes and No could both claim success although only Yes was sent. An answer-facing ten-second deadline returns an unavailable/confirmation-pending result while preserving that same raw operation. A retry during the pending interval does not resend it. The service does not persist a durable answer receipt after the operation settles; the adapter rereads the service's open asks on a subsequent attempt.
 
+## Driver reply acceptance and commitment
+
+Transcript and Inbox answers use the same durable request settlement. A row already present in task_input_requests cannot fall back to live delivery when it is expired, foreign or otherwise refused. Rowless delivery remains limited to an ACP-origin park; an asynchronous binding never uses the missing-agent ACP fallback. Runner gates, next-message continuation and adapter-owned remote asks keep their existing routes.
+
+An async driver reply captures its original delivery binding and one registration token. Identical normalized permission decisions or full question answers join (remembered metadata does not alter that identity); an opposing answer receives answer_in_progress. Definitely unsent delivery can retry explicitly. Unknown acknowledgment returns uncertain with **Do not submit it again**; repeated attempts do not send another confirmation. Accepted-but-unrecorded delivery remains accepted_pending and retries only the local transaction, with that distinction in its reason.
+
+The durable transaction rechecks the exact request/run/invocation/task/chat/agent binding and local active task ownership, then settles the effective answer and updates aggregate task state. An open sibling keeps the task blocked. Only a successful transaction releases an asynchronous park; rollback preserves it. ACP retains its synchronous grant/resolve/commit order so the immediately resumed continuation sees the durable answer before closeAsk/endTurn. Its grant semantics remain unchanged; the durable effective once resolution includes the actual remembered boolean, matching the park/stream result. Async normalization also preserves that metadata in the committed/released permission.
+
+Cancellation, replacement or expiry invalidates the claim. Dropping an asynchronous registration also rejects its local barrier; ACP's notification-only drop remains unchanged. Claims do not survive restart: ordinary driver reply rows expire rather than replay remote confirmations. This is shared machinery for a future Managed driver, not a delivered Managed account integration.
+
 ## Answer Outcomes
 
-- `ok: true` confirms a live/remote answer was delivered, or a next-message/runner answer was accepted and persisted. It does not promise the continued turn has finished. Remote task status stays unchanged because another session may still be waiting.
+- `ok: true` confirms a live/remote answer was delivered, or a next-message/runner answer was accepted and persisted. Durable driver replies also require local request/task commitment; async remote acceptance alone is insufficient. It does not promise the continued turn has finished. Remote task status stays unchanged because another session may still be waiting.
 - `no_longer_waiting`, `already_answered`, `not_here` and `not_owned` settle the rendered card.
+- `uncertain` preserves the card and reason; the claim will not resend an answer whose remote acceptance is unknown.
+- `answer_in_progress` refuses a conflicting answer while the original registration owns delivery.
 - `malformed` keeps it retryable: the answer or request address was invalid.
 - `unavailable` keeps it retryable: the service could not accept/confirm delivery, a deadline elapsed, or a different answer is already being sent. The reason travels as typed result data rather than a thrown IPC error code.
 

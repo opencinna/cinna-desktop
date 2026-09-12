@@ -3,6 +3,7 @@ import { createTestDatabase, type TestDatabase } from '../db/testSupport/nodeSql
 import { ASK_NO_LONGER_WAITING, type InboxAnswerResult } from '../../shared/inbox'
 import type { AgentDriver } from '../agents/drivers/driver'
 import type { AgentRow } from '../db/agents'
+import type { RequestResolution } from '../../shared/localAgentRequests'
 import type { RunEvent } from '../../shared/runEvents'
 import type { RemoteTaskAdapter } from '../tasks/adapters/adapter'
 import { RemoteTaskError } from '../tasks/adapters/adapter'
@@ -53,7 +54,12 @@ const deliverAnswer = vi.fn(
 )
 vi.mock('./askDelivery', () => ({
   deliverAnswer: (...args: [string, string, unknown]) =>
-    deliverAnswer(args[0] as string, args[1] as string)
+    deliverAnswer(args[0] as string, args[1] as string),
+  deliverAnswerWithCommit: (userId: string, requestId: string, resolution: RequestResolution, commit: (value: RequestResolution) => void, validate: () => void) => {
+    const result = deliverAnswer(userId, requestId)
+    if (result.ok) { validate(); commit(resolution) }
+    return result
+  }
 }))
 
 const toolRun = vi.hoisted(() => vi.fn<AgentDriver['run']>(async () => ({ text: 'Done', parts: [], notices: [] })))

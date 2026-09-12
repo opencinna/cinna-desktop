@@ -71,12 +71,20 @@ What is still allowed, and where, is enforced by a test, not by review — see [
 
 ### One dispatch point, and it reads the row
 
-`driverFor(agent)` picks the driver from `agents.driver`. A null, empty or unknown value resolves to an unsupported driver. The row stays visible with its raw identity, inert capabilities and a clear readiness refusal; it never falls through to another transport based on ownership. The three callers of `run` and `respond` all use it:
+`driverFor(agent)` picks the driver from `agents.driver`. A null, empty or unknown value resolves to an unsupported driver. The row stays visible with its raw identity, inert capabilities and a clear readiness refusal; it never falls through to another transport based on ownership. Run dispatch and the synchronous ACP answer branch use it:
 - the direct-chat handler
 - the orchestrator's agent tool
 - the answer path
 
 It reads no folder and makes no network call. The ACP driver checks its folder itself when it runs a turn, and picks its launcher from what the folder says then.
+
+### Remote acceptance and local continuation are separate
+
+The driver contract retains synchronous `respond` and adds optional `respondAsync`. An asynchronous park captures its delivery binding when registered; answering does not reconstruct a destination from renderer data or a newly edited agent row. Acceptance must be followed by durable local settlement before the parked continuation is released.
+
+Equivalent normalized answers join one claim. A conflicting answer refuses; uncertain acceptance never resends. If the service accepted but local commitment failed, retry records that same answer locally without another remote call. Cancellation or registration replacement invalidates the claim and prevents late completion from releasing another occurrence.
+
+Inbox and transcript share the durable answer path. ACP still writes its local grant, resolves its park and commits the request/task update synchronously before the continuation can run. A missing-agent fallback is restricted to an ACP-origin registration and cannot accept a captured asynchronous reply. These are common contracts for future drivers; no Managed driver or real Managed account call is implemented by this prerequisite.
 
 ### The row is a cache; the folder decides a folder agent's engine
 
@@ -189,7 +197,7 @@ Renderer
                                  a2aStreamingService.streamToAgent({run, port})
 
   Orchestrator ── A2AAsMcpProvider.callTool ──► driverFor(agent).run(…)
-  agent:answer-request ─────────────────────► driverFor(row).respond(ask, answer)
+  agent:answer-request ─► Inbox durable commitment ─► captured reply / ACP respond
                                                row gone → respondToOrphanedAsk
 ```
 

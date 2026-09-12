@@ -1,11 +1,11 @@
 import { chatRepo } from '../db/chats'
-import { taskRunnerBridge } from '../services/taskRunnerBridge'
+import { inboxService } from '../services/inboxService'
 import { a2aSessionRepo } from '../db/agents'
 import { type ProtocolResolution } from '../agents/a2a-client'
 import { agentService } from '../services/agentService'
 import { a2aStreamingService } from '../services/a2aStreamingService'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
-import { deliverAnswer, parseAnswerPayload } from '../services/askDelivery'
+import { parseAnswerPayload } from '../services/askDelivery'
 import type { AskAnswerPayload, InboxAnswerResult } from '../../shared/inbox'
 import { userActivation } from '../auth/activation'
 import { getProfileScopeUserId, getSettingsScopeUserId } from '../auth/scope'
@@ -154,7 +154,7 @@ export function registerA2AHandlers(): void {
       // because the inbox answers the same ask with the chat closed and the two
       // must not drift — above all on what *Always allow* means.
       const userId = getProfileScopeUserId()
-      return taskRunnerBridge.answer(userId, data.requestId, parsed) ?? deliverAnswer(userId, data.requestId, parsed)
+      return inboxService.answerFromTranscript(userId, data.requestId, parsed)
     }
   )
 

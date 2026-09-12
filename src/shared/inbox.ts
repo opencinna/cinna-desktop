@@ -85,6 +85,8 @@ export type InboxAnswerCode =
   | 'not_owned'
   | 'malformed'
   | 'unavailable'
+  | 'uncertain'
+  | 'answer_in_progress'
 
 /** An answer to an ask whose turn has since ended — a stale block, not a fault. */
 export const ASK_NO_LONGER_WAITING = 'This request is no longer waiting for an answer.'

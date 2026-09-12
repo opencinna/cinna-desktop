@@ -30,6 +30,7 @@
  * exactly once and can be resolved exactly once, from either side.
  */
 
+import type { AsyncReplyBinding, ReplyRegistration } from './replyDelivery'
 import { createLogger } from '../../logger/logger'
 import {
   REQUEST_PARK_TIMEOUT_MS,
@@ -43,6 +44,9 @@ export type { RequestResolution }
 const logger = createLogger('local-agent-requests')
 
 interface Entry {
+  token: object
+  controller: AbortController
+  delivery?: AsyncReplyBinding
   chatId: string
   agentId: string
   kind: 'permission' | 'question'
@@ -86,6 +90,8 @@ export const pendingRequests = {
      * app-wide stall this bounds depend on the call site.
      */
     timeoutMs?: number
+    /** Omitted only by the original synchronous ACP registration path. */
+    delivery?: AsyncReplyBinding
   }): { answered: Promise<RequestResolution>; cancel: () => void } {
     const existing = entries.get(input.requestId)
     if (existing) {
@@ -96,6 +102,8 @@ export const pendingRequests = {
       entries.delete(input.requestId)
     }
 
+    const token = {}
+    const controller = new AbortController()
     let settle!: (resolution: RequestResolution) => void
     const answered = new Promise<RequestResolution>((resolve) => {
       settle = (resolution) => {
@@ -104,6 +112,7 @@ export const pendingRequests = {
         // than a reply posted into a dead session.
         if (entries.get(input.requestId)?.settle !== settle) return
         entries.delete(input.requestId)
+        controller.abort()
         const timer = timers.get(input.requestId)
         if (timer) {
           clearTimeout(timer)
@@ -112,7 +121,7 @@ export const pendingRequests = {
         resolve(resolution)
       }
     })
-    entries.set(input.requestId, { ...input, settle })
+    entries.set(input.requestId, { ...input, token, controller, settle })
 
     // **The bound on an abandoned dialog.** The turn holds its per-agent lock
     // while parked, and `applyConfigChange` defers while *any* lock is held —
@@ -155,6 +164,8 @@ export const pendingRequests = {
   ): { chatId: string; agentId: string } | null {
     const entry = entries.get(requestId)
     if (!entry) return null
+    // Remote replies must pass acceptance and durable commitment first.
+    if (entry.delivery && resolution.kind !== 'rejected') return null
     if (entry.kind !== resolution.kind && resolution.kind !== 'rejected') {
       // A permission answer posted to a question id would be delivered to the
       // wrong endpoint and rejected by the engine — but only after the wrong
@@ -189,7 +200,11 @@ export const pendingRequests = {
   drop(requestId: string): void {
     const entry = entries.get(requestId)
     if (!entry) return
+    // Async acceptance is out-of-band; rejecting its local barrier never posts
+    // a second remote reply. ACP keeps its existing notification-only drop.
+    if (entry.delivery) { entry.settle({ kind: 'rejected' }); return }
     entries.delete(requestId)
+    entry.controller.abort()
     const timer = timers.get(requestId)
     if (timer) {
       clearTimeout(timer)
@@ -215,6 +230,25 @@ export const pendingRequests = {
     return entry
       ? { chatId: entry.chatId, agentId: entry.agentId, kind: entry.kind, request: entry.request }
       : null
+  },
+
+  /** Identity and delivery capability for main's common answer path. */
+  registration(requestId: string): ReplyRegistration | null {
+    const entry = entries.get(requestId)
+    if (!entry) return null
+    const isCurrent = (): boolean => entries.get(requestId) === entry && !entry.controller.signal.aborted
+    return {
+      token: entry.token,
+      signal: entry.controller.signal,
+      origin: entry.delivery ? 'async' : 'acp',
+      binding: entry.delivery,
+      isCurrent,
+      release: (resolution) => {
+        if (!isCurrent() || (resolution.kind !== entry.kind && resolution.kind !== 'rejected')) return false
+        entry.settle(resolution)
+        return true
+      }
+    }
   },
 
   /** What a chat is currently blocked on. Used to re-open the UI after a reload. */

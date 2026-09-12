@@ -104,7 +104,7 @@ export const taskInputRequestRepo = {
     requestId: string,
     status: Exclude<TaskInputRequestStatus, 'open'>,
     resolution: RequestResolution | null = null,
-    scope?: { chatId: string; rootRunId?: string; invocationId?: string }
+    scope?: { chatId: string; rootRunId?: string; invocationId?: string; createdAt?: Date }
   ): TaskInputRequestRow | undefined {
     const result = getDb()
       .update(taskInputRequests)
@@ -112,10 +112,43 @@ export const taskInputRequestRepo = {
       .where(and(eq(taskInputRequests.id, requestId), eq(taskInputRequests.status, 'open'),
         scope ? eq(taskInputRequests.chatId, scope.chatId) : undefined,
         scope ? scope.rootRunId ? eq(taskInputRequests.rootRunId, scope.rootRunId) : isNull(taskInputRequests.rootRunId) : undefined,
-        scope ? scope.invocationId ? eq(taskInputRequests.invocationId, scope.invocationId) : isNull(taskInputRequests.invocationId) : undefined))
+        scope ? scope.invocationId ? eq(taskInputRequests.invocationId, scope.invocationId) : isNull(taskInputRequests.invocationId) : undefined,
+        scope?.createdAt ? eq(taskInputRequests.createdAt, scope.createdAt) : undefined))
       .run()
     if (result.changes === 0) return undefined
     return this.getById(requestId)
+  },
+
+  assertReplyCurrent(userId: string, expected: TaskInputRequestRow): void {
+    const current = this.getById(expected.id)
+    const task = getDb().select().from(tasks).where(and(eq(tasks.id, expected.taskId), eq(tasks.userId, userId))).get()
+    if (!current || current.status !== 'open' || current.taskId !== expected.taskId ||
+      current.chatId !== expected.chatId || current.agentId !== expected.agentId ||
+      current.rootRunId !== expected.rootRunId || current.invocationId !== expected.invocationId ||
+      current.createdAt.getTime() !== expected.createdAt.getTime() ||
+      current.resume !== 'reply' || current.deliveryOwner !== 'driver' || !task || task.deletedAt ||
+      task.chatId !== expected.chatId || task.executor !== 'desktop') {
+      throw new Error('The request or its task changed before the answer could be recorded.')
+    }
+  },
+
+  /** Keep exact reply settlement and its aggregate task update in one transaction. */
+  commitReply(
+    userId: string,
+    expected: TaskInputRequestRow,
+    status: Exclude<TaskInputRequestStatus, 'open'>,
+    resolution: RequestResolution,
+    updateTask: (taskId: string) => void
+  ): void {
+    getDb().transaction(() => {
+      this.assertReplyCurrent(userId, expected)
+      const current = expected
+      const saved = this.settle(current.id, status, resolution, {
+        chatId: current.chatId, rootRunId: current.rootRunId ?? undefined, invocationId: current.invocationId ?? undefined, createdAt: current.createdAt
+      })
+      if (!saved) throw new Error('The request is no longer open.')
+      updateTask(current.taskId)
+    })
   },
 
   /** Every ask this profile is waiting on, newest first. The inbox. */

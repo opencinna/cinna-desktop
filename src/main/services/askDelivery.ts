@@ -1,8 +1,9 @@
+import { claimReplyAnswer } from './replyAnswerClaims'
 import { chatRepo } from '../db/chats'
 import { driverFor, respondToOrphanedAsk } from '../agents/drivers'
 import { agentService } from './agentService'
 import { pendingRequests } from '../agents/drivers/pendingRequests'
-import { getSettingsScopeUserId } from '../auth/scope'
+import { getSettingsScopeUserId, getProfileScopeUserId } from '../auth/scope'
 import { createLogger } from '../logger/logger'
 import type { PermissionReply, RequestResolution } from '../../shared/localAgentRequests'
 import { ASK_NO_LONGER_WAITING } from '../../shared/inbox'
@@ -69,6 +70,10 @@ export function deliverAnswer(
   requestId: string,
   resolution: RequestResolution
 ): InboxAnswerResult {
+  const registration = pendingRequests.registration(requestId)
+  if (registration?.origin === 'async') {
+    return { ok: false, code: 'unavailable', reason: 'This request requires remote confirmation through its active run.' }
+  }
   const owner = pendingRequests.owner(requestId)
   // An unknown request is the ordinary outcome of answering an ask whose turn
   // has since been cancelled — the user is looking at a stale block, or at an
@@ -113,7 +118,7 @@ export function deliverAnswer(
   const ask = { requestId, ...owner }
   const outcome = located
     ? driverFor(located.row).respond(ask, resolution)
-    : respondToOrphanedAsk(ask, resolution)
+    : registration?.origin === 'acp' ? respondToOrphanedAsk(ask, resolution) : { delivered: false }
 
   if (!outcome.delivered) {
     return { ok: false, reason: ASK_NO_LONGER_WAITING, code: 'no_longer_waiting' }
@@ -125,4 +130,41 @@ export function deliverAnswer(
     // could not be saved".
     ...(outcome.remembered !== undefined ? { remembered: outcome.remembered } : {})
   }
+}
+
+/** ACP commits synchronously; remote replies commit only after captured-owner acceptance. */
+export function deliverAnswerWithCommit(
+  userId: string,
+  requestId: string,
+  resolution: RequestResolution,
+  commit: (effectiveResolution: RequestResolution) => void,
+  validateDelivery: () => void = () => {}
+): InboxAnswerResult | Promise<InboxAnswerResult> {
+  const registration = pendingRequests.registration(requestId)
+  if (registration?.binding) {
+    const owner = pendingRequests.owner(requestId)
+    if (!owner || !registration.isCurrent()) return { ok: false, code: 'no_longer_waiting', reason: ASK_NO_LONGER_WAITING }
+    if (resolution.kind !== owner.kind) return { ok: false, code: 'malformed', reason: 'Malformed answer' }
+    const settingsUserId = getSettingsScopeUserId()
+    const validate = (): void => {
+      if (getProfileScopeUserId() !== userId || getSettingsScopeUserId() !== settingsUserId ||
+        !chatRepo.getOwned(userId, owner.chatId)) throw new Error('The conversation or profile changed.')
+      // The original binding validates agent, credential and session identity.
+      // A current row never selects a replacement destination for this answer.
+      validateDelivery()
+    }
+    return claimReplyAnswer({ registration, ask: { requestId, ...owner }, resolution, validate, commit })
+  }
+  try { validateDelivery() } catch (error) {
+    return { ok: false, code: 'unavailable', reason: error instanceof Error ? error.message : 'The request changed.' }
+  }
+  const outcome = deliverAnswer(userId, requestId, resolution)
+  if (!outcome.ok) return outcome
+  const effective = resolution.kind === 'permission' && resolution.reply === 'always'
+    ? { ...resolution, reply: 'once' as const, remembered: outcome.remembered === true } : resolution
+  // No await here: ACP's continuation can emit endTurn on the next microtask.
+  try { commit(effective) } catch (error) {
+    return { ok: false, code: 'unavailable', reason: error instanceof Error ? error.message : 'The answer could not be recorded.' }
+  }
+  return outcome
 }

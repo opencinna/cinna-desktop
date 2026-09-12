@@ -1,4 +1,7 @@
 import { createServer, type Server } from 'node:http'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { DESKTOP_STATE_FILE } from '../../src/shared/kit/manifest'
 import type { AddressInfo } from 'node:net'
 import type { FakeAcpScript } from '../../src/main/agents/drivers/acp/testSupport/fakeAcp'
 import { answerAgentsFolder, test, expect, type CinnaApp } from '../fixtures/app'
@@ -66,9 +69,9 @@ import { addAgentRoot, createFolderAgent } from '../fixtures/seed'
  *
  * ## What it does not
  *
- * The poll path (reload while parked), *Always allow* and its grant file
- * (`agent-permissions.spec.ts` covers the card; `acpDriver.test.ts` the grant
- * and the `allow_once` it is answered with), expiry, and abort.
+ * The poll path (reload while parked), expiry, and abort. A separate case below
+ * now covers Always allow through the actual transcript answer path, on-disk
+ * grant, exact durable ask settlement and read-only replay.
  */
 
 const AGENT = 'Report Builder'
@@ -288,6 +291,23 @@ async function decisions(cinna: CinnaApp): Promise<{ text: string; id: string }[
     )
 }
 
+/** Read only this fixture's durable reply rows after the agent has immediately ended its turn. */
+async function durableReplies(cinna: CinnaApp) {
+  const [chat] = await cinna.page.evaluate(() => window.api.chat.list())
+  if (!chat) throw new Error('Fixture chat was not created')
+  return cinna.electronApp.evaluate(({ app }, input) => {
+    if (app.getPath('userData') !== input.userData) throw new Error('Not the isolated test profile')
+    const requireFromApp = process.getBuiltinModule('node:module').createRequire(`${app.getAppPath()}/package.json`)
+    const Database = requireFromApp('better-sqlite3') as typeof import('better-sqlite3')
+    const db = new Database(`${app.getPath('userData')}/cinna.db`, { readonly: true, fileMustExist: true })
+    try {
+      return (db.prepare('SELECT id, status, resolution FROM task_input_requests WHERE chat_id = ? ORDER BY created_at')
+        .all(input.chatId) as { id: string; status: string; resolution: string | null }[])
+        .map(row => ({ ...row, resolution: row.resolution ? JSON.parse(row.resolution) : null }))
+    } finally { db.close() }
+  }, { userData: cinna.sandbox.userData, chatId: chat.id })
+}
+
 /** Restart, and open the chat from the sidebar by its first message. */
 async function reopenChat(cinna: CinnaApp, title: string): Promise<void> {
   await cinna.relaunch()
@@ -338,6 +358,36 @@ test('a folder agent asks permission mid-turn, the user allows it, and the trans
     await expect(replay.getByText('Done, the folder is gone.', { exact: true })).toBeVisible()
     await expect(replay.getByRole('button', { name: 'Allow once', exact: true })).toHaveCount(0)
   })
+})
+
+test('Always allow sends ACP once, saves the grant and durable answer before immediate completion, and replays remembered', async ({ cinna }) => {
+  const acp = await arrange(cinna, ASKS_PERMISSION)
+  const agent = (await cinna.page.evaluate(() => window.api.localAgents.list())).agents.find(row => row.name === AGENT)
+  if (!agent) throw new Error('Fixture folder agent was not indexed')
+  await sendToAgent(cinna, PERMISSION_PROMPT)
+  await expect(cinna.page.getByRole('button', { name: 'Always allow', exact: true })).toBeEnabled()
+  expect(acp.answers('session/request_permission')).toEqual([])
+  await cinna.page.getByRole('button', { name: 'Always allow', exact: true }).click()
+  await expect.poll(() => acp.answers('session/request_permission').map(entry => entry.result))
+    .toEqual([{ outcome: { outcome: 'selected', optionId: 'once' } }])
+  await expect(cinna.page.getByText('Done, the folder is gone.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByText('Allowed, and remembered for this agent.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0)
+  await expect.poll(() => decisions(cinna))
+    .toEqual([{ text: 'Allowed, and remembered for this agent.', id: 'per_acp_*' }])
+  const grants = JSON.parse(readFileSync(join(agent.path, DESKTOP_STATE_FILE), 'utf8')).permissionGrants
+  expect(Object.keys(grants)).toEqual(['bash::rm -rf build'])
+  expect(grants['bash::rm -rf build']).toMatchObject({ action: 'bash', pattern: 'rm -rf build', scope: 'exact', decidedAt: expect.any(Number) })
+  const rows = await durableReplies(cinna)
+  expect(rows).toEqual([{ id: expect.stringMatching(/^per_acp_/), status: 'answered',
+    resolution: { kind: 'permission', reply: 'once', remembered: true } }])
+  await reopenChat(cinna, PERMISSION_PROMPT)
+  await expect(cinna.page.getByText('Allowed, and remembered for this agent.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByText('Done, the folder is gone.', { exact: true })).toBeVisible()
+  await expect(cinna.page.getByRole('button', { name: 'Always allow', exact: true })).toHaveCount(0)
+  await expect(cinna.page.getByRole('button', { name: 'Allow once', exact: true })).toHaveCount(0)
+  expect(await durableReplies(cinna)).toEqual(rows)
+  expect(acp.answers('session/request_permission')).toHaveLength(1)
 })
 
 test('a folder agent asks a question mid-turn, the user answers it, and the answer is recorded with the turn', async ({
