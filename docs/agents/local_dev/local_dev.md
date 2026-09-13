@@ -22,14 +22,14 @@ Setup prepares the machine; an explicit build prompt or Develop action performs 
 | Term | Definition |
 |------|-----------|
 | **Reconciler** | `localDevService.reconcile(userId, force?)` — the **one setup** entry point. Idempotent and serialized; same-profile callers share a run, while another profile waits for the former run to drain |
-| **Managed toolchain** | uv, Mutagen and cinna-cli installed into `<userData>/localdev/`, version-stamped so an upgrade installs beside the old copy rather than swapping a running binary's file |
+| **Managed toolchain** | uv, Mutagen and cinna-cli installed into `<userData>/localdev/`. uv and Mutagen use versioned directories; cinna-cli uses a stable launcher and uv-managed environment that an update replaces in place |
 | **Pins** | The versions in play. uv is pinned by *this app*; cinna-cli and Mutagen versions arrive from the server's `local_dev` discovery block. The desktop pins the **bytes** of uv and Mutagen against digest tables in source |
 | **Account workspace** | `<AgentsHome>/Cloud/<host>/` — a cinna-cli-owned directory holding the account token and the context package. The reconciler checks `.cinna/account.json` for setup presence; the build guide separately reads a fixed allowlist of public Markdown documents |
 | **Setup command** | The single-use, fifteen-minute string the server returns from the setup-token mint. Passed to cinna-cli as one argv element and never logged |
 | **Consent** | A per-host yes/no, remembered — including the no. Stored as JSON in the `localDevConsent` app setting |
 | **Engine pre-fetch** | Making sure a usable `opencode` binary is on this machine before anyone needs one. Runs alongside the rest, resolves through the [engine](../local_agents/engine.md)'s own three sources, and is **best effort** — a failure is shown and `ready` is still reached |
 | **Build session** | A direct chat with an internal local builder bound to the active profile, account workspace and selected engine; see [Account Build Sessions](build_sessions.md) |
-| **Attention reason** | Which of four things is wrong (`token_expired`, `toolchain`, `workspace`, `network`), derived from a cinna-cli exit code or a typed toolchain error and never from a message string |
+| **Attention reason** | Which of four things is wrong (`token_expired`, `toolchain`, `workspace`, `network`), derived from a cinna-cli exit code, a typed toolchain error or a failed capability check, never by parsing a message string |
 
 ## The state union
 
@@ -128,9 +128,17 @@ The header visibility check accepts any `ready` phase, but preparation additiona
 ### Inspecting shared desktop tools
 
 1. **Default → Local Development** shows the managed cinna-cli executable path and the version that executable reports. An editable checkout can differ from a server pin or an older installation stamp; the readout must describe the executable, not the stamp. Missing installation and an installed executable with an unknown version are distinct states.
-2. **Developer Tools** on that page reports detected global tools and the bundled kit contract. Its Cinna row can name a PATH installation different from the desktop-managed CLI above it. OpenCode instead reports the engine resolver's actual binary, including a configured or downloaded copy.
+2. **Developer Tools** on that page reports detected tools and the bundled kit contract. When the managed Cinna CLI is installed, its row uses that executable's version and path and says **(managed)**; a newer shell `cinna` must not make the desktop appear compatible. Without a managed installation the row retains the detected tool result. OpenCode reports the engine resolver's actual binary, including a configured or downloaded copy.
 3. **OpenCode Path** below the table changes the installation-wide executable override. Runtime selection and Open agents with remain under Default → Agents → Runtime. See [engine configuration](../local_agents/engine_tech.md#configuration).
 4. **Profile → Local Development** renders workspace status, setup/repair, Open folder and the server's consent. It remounts on account changes so pending page controls do not carry over. The profile page never uses shared CLI presence as proof that this account's workspace is ready.
+
+### Updating the managed Cinna CLI
+
+1. Open **Settings → Default → Local Development → Developer Tools**. The Cinna CLI row shows the installed executable version and **Required by server** when the connected account's discovery advertises a target. **Refresh** rereads the managed executable, detected tools and current server target.
+2. **Update** is offered only when both managed and advertised versions are recognized and the advertised version is newer. The target is the connected server's release, not the latest PyPI release. Equal/older targets, unknown/missing installed versions, a local profile without a Cinna server, and an editable CLI checkout do not offer Update.
+3. Press Update to update the shared managed tooling. The disabled **Updating…** button spins and a status line remains visible; Refresh and another Update cannot overlap it. This is stage feedback, not a measured download percentage. Completion refreshes the readouts and says **Cinna CLI updated.** Discovery or installation errors stay inline, with Refresh or a later Update available to retry.
+4. Updating tools does not answer setup consent, prepare the Agents Home, create an account workspace or mint/refresh an account token. An unanswered or declined setup remains so. Setup and Repair retain their own explicit account actions under **Profile → Local Development**.
+5. An already-ready workspace is temporarily marked installing, then receives the updated CLI version/path/protocol. Failure instead marks the affected tool and requires toolchain attention; Repair can reinstall it. A profile switch prevents the old operation from publishing readiness to the new profile, while an already-started tool install may finish.
 
 ## Business Rules
 
@@ -191,11 +199,11 @@ Everything lives under `<userData>/localdev/`:
 | `uv-cache/` | `UV_CACHE_DIR` |
 | `state.json` | What was installed, so a no-op ensure is cheap |
 
-- **Version-stamped directory names are what make an upgrade safe**: a new pin installs beside the old one and no running process has its binary swapped underneath it. Reaping the old directory is deliberately not the installer's job
+- **uv and Mutagen use versioned directories**: a new pin installs beside their old copies; reaping old directories is deliberately not the installer's job. cinna-cli instead uses the stable `bin/cinna` launcher and `uv-tools/` environment, which `uv tool install` updates in place. The shared operation queue prevents setup and Update from mutating the toolchain together; it does not promise isolation for a CLI process already using that installation
 - **A desktop app that mutates a developer's machine outside its own data directory is a support problem forever.** Uninstalling Cinna should take the toolchain with it — and a pin only means something if this app owns the file, since a shared install is a version somebody else can move
 - The spawn environment leads `PATH` with the toolchain's `bin/` and the pinned Mutagen directory, then **appends** the login-shell `PATH` rather than dropping it: the user's `git`, `ssh` and `docker` still have to resolve. The base is the user's full [login-shell environment](../../development/shell_environment/shell_environment.md), not the narrowed child-inherit allowlist used for MCP servers — every process here is uv or our own CLI, and `cinna` spawned by the desktop should behave exactly as it does in the user's terminal, proxy settings and CA bundle included
 - **The parts that do not need each other install at once.** The only real dependency is `uv tool install cinna-cli` needing uv, so Mutagen's tens of megabytes download alongside uv's install and then alongside the cinna-cli one — arriving inside a wait that was happening anyway instead of after it. They write to different directories and publish through the same atomic rename, so concurrency costs nothing in safety; staging directory names carry a counter, because a pid and a millisecond cannot tell two installs started together apart
-- **A failure does not stop its siblings.** The run reports it at once and whatever else was downloading keeps going in the background, rather than throwing away bytes the user has already paid for — the next run joins that download instead of starting the megabytes again. Which is why the sweep of abandoned staging directories now **exempts the ones this process is still using**: a pass that swept before joining deleted the directory of the very download it was about to wait on, and the download then died at its own checksum with a missing-file error that reads like a corrupt release. What the survivor also costs is a late progress report from a run that has already failed, which the reconciler ignores — see *The status checklist*
+- **A failed toolchain branch does not cancel its sibling, and the installer waits for both before returning the failure.** The uv/cinna-cli branch and Mutagen branch drain together, so the next queued Update or reconcile cannot start writing or sweeping their shared toolchain root while either is still installing. Completed downloads remain available to the next run. The staging sweep also exempts directories this process is actively using: deleting a live staging directory previously made its download fail at checksum with a missing-file error that looked like a corrupt release. The separate best-effort engine prefetch can outlive a failed reconcile; its late progress is ignored once that run retires, and another engine caller can join its shared download — see *The engine, pre-fetched* and *The status checklist*
 - `state.json` is **only ever trusted to skip work**. It is written after a verified install and re-derived by an actual `--version` probe the moment it disagrees, so a stale or hand-edited file costs one probe and never a wrong answer. A `cinna` installed by an older build — or by a run that died before writing the stamp — is adopted if it reports the pinned version
 
 ### The engine, pre-fetched
@@ -249,11 +257,17 @@ A run that exits non-zero is an **outcome, not a rejection**: `runCinnaCli` neve
 
 ### The desktop asks the cinna-cli it was given what it can do
 
-The desktop does not choose the cinna-cli version — the server does, through `local_dev.cinna_cli_version` — so it can legitimately be handed one older than the surface this app prefers. That is not hypothetical: cinna-cli **0.3.0**, the version a real cinna-core pins today, has no `--json`, no `--no-input` and no `cinna account set-token`, and passing it those flags is a usage error that fails before the command does any work.
+The desktop does not choose the cinna-cli version — the server does, through `local_dev.cinna_cli_version` — so it can legitimately be handed one older than the surface this app prefers. That is not hypothetical: cinna-cli **0.3.0**, previously pinned by a real cinna-core deployment, has no `--json`, no `--no-input` and no `cinna account set-token`, and passing it those flags is a usage error that fails before the command does any work.
+
+The released JSON workspace protocol starts at **Cinna CLI 0.4.0**. Compatibility guidance names that minimum, the installed version (or that it is unknown), and **Default → Local Development**. If the server still advertises an older version, its administrator must advance that pin; reinstalling the same old release cannot add JSON support. The version is guidance: successful capability probes remain authoritative, including for editable builds.
 
 So before the first real invocation the desktop runs `--help` and reads what is there. `--help` and not a trial run, because 0.3.0 answers `1` to an unknown option, a missing workspace and a network failure alike — an exit code cannot tell "that flag does not exist" from "that would have worked".
 
-Two surfaces result, and `ready` says which one it settled on:
+Each help probe runs in a disposable writable temporary directory. cinna-cli initializes a log even for help; inheriting `/` from a Finder launch previously made a modern CLI fail and look legacy. Both help processes must finish before the directory is removed. A timeout, failed start, nonzero exit or empty help response is a failed check, not evidence that flags are absent, and failures are never cached. During setup this marks cinna-cli failed with toolchain attention, so **Repair** reinstalls rather than repeatedly trusting the same broken installation.
+
+**Check again** on the build page or its runtime details rereads the managed executable and bypasses the capability cache. It does not install tools or change consent. The button says **Checking…**, spins and blocks duplicate clicks for the check's duration, with a short minimum so immediate results register; errors retain the page and draft. Successful checks refresh the displayed CLI/protocol and build prerequisites. A failed explicit check reports its error without claiming a new protocol.
+
+Two successfully probed surfaces result, and `ready` says which one it settled on:
 
 | | `json` | `legacy` |
 |---|---|---|

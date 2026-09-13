@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { claudeModelForComplexity } from '../../shared/engine'
 import type { WorkComplexity } from '../../shared/modelFamilies'
 import type { AgentRow } from '../db/agents'
-const state = vi.hoisted(() => ({ profile: 'alice', workspace: '', phase: 'ready', reconcile: vi.fn(), warm: vi.fn(), openCodeModel: null as string | null, engine: 'claude', override: '', credential: '', complexity: 'complex', rows: [] as AgentRow[], execute: vi.fn(), reason: null as string | null }))
+const state = vi.hoisted(() => ({ profile: 'alice', workspace: '', phase: 'ready', protocol: 'json', cliVersion: '1.0', reconcile: vi.fn(), recheck: vi.fn(), warm: vi.fn(), openCodeModel: null as string | null, engine: 'claude', override: '', credential: '', complexity: 'complex', rows: [] as AgentRow[], execute: vi.fn(), reason: null as string | null }))
 vi.mock('../db/agents', () => ({ agentRepo: {
   list: () => state.rows,
   getOwned: (_owner: string, id: string) => state.rows.find((row) => row.id === id),
@@ -18,7 +18,7 @@ vi.mock('../db/agents', () => ({ agentRepo: {
 vi.mock('../engine/engineConfigSource', () => ({ getCachedEngineModels: () => [], collectEngineConfigInput: state.warm }))
 vi.mock('../db/users', () => ({ userRepo: { get: () => ({ cinnaServerUrl: `https://${state.profile}.example`, displayName: state.profile, username: state.profile }) } }))
 vi.mock('../auth/scope', () => ({ getProfileScopeUserId: () => state.profile, getSettingsScopeUserId: () => 'default' }))
-vi.mock('./localDevService', () => ({ localDevService: { getState: () => ({ phase: state.phase, detail: 'Account token could not be restored.', workspacePath: state.workspace, protocol: 'json', cliVersion: '1.0' }), executionContext: state.execute, reconcile: state.reconcile } }))
+vi.mock('./localDevService', () => ({ localDevService: { getState: () => ({ phase: state.phase, detail: 'Account token could not be restored.', workspacePath: state.workspace, protocol: state.protocol, cliVersion: state.cliVersion }), executionContext: state.execute, reconcile: state.reconcile, recheckCapabilities: state.recheck } }))
 vi.mock('../services/appSettingsService', () => ({ appSettingsService: { getAll: () => ({ localDevelopmentEngine: state.override, localDevelopmentCredentialId: state.credential, localDevelopmentComplexity: state.complexity }) } }))
 vi.mock('../services/localAgents/runtimeService', () => ({ runtimeService: { resolve: (input: { engine: string; credential?: string; complexity: WorkComplexity }) => ({ launcher: input.engine, credentialId: input.credential === 'missing' ? null : input.credential ?? null, modelId: input.engine === 'claude' ? claudeModelForComplexity(input.complexity) : state.openCodeModel, reason: state.reason }) } }))
 vi.mock('../services/localAgents/defaultEngineService', () => ({ defaultEngineService: { current: () => state.engine } }))
@@ -32,11 +32,50 @@ beforeEach(() => {
   writeFileSync(join(state.workspace, 'context/README.md'), 'Platform guide index')
   state.profile = 'alice'; state.engine = 'claude'; state.override = ''; state.credential = ''; state.complexity = 'complex'; state.rows = []; state.reason = null
   state.execute.mockReset().mockResolvedValue({})
-  state.phase = 'ready'; state.reconcile.mockReset(); state.openCodeModel = null; state.warm.mockReset().mockResolvedValue({ providers: [], agents: [] })
+  state.protocol = 'json'; state.cliVersion = '1.0'; state.phase = 'ready'; state.reconcile.mockReset(); state.recheck.mockReset(); state.openCodeModel = null; state.warm.mockReset().mockResolvedValue({ providers: [], agents: [] })
 })
 afterEach(() => rmSync(root, { recursive: true, force: true }))
 
 describe('development sessions', () => {
+  it('clears a saved chat’s legacy blocker only when its readiness check requests fresh capabilities', async () => {
+    await prepareDevelopmentSession(developmentContext())
+    state.protocol = 'legacy'
+    await expect(restoreDevelopmentContext(state.rows[0])).rejects.toThrow('JSON workspace support')
+    expect(state.recheck).not.toHaveBeenCalled()
+    state.recheck.mockImplementation(async () => { state.protocol = 'json' })
+    await expect(restoreDevelopmentContext(state.rows[0], { fresh: true })).resolves.toMatchObject({ blocker: null })
+    expect(state.recheck).toHaveBeenCalledExactlyOnceWith('alice')
+  })
+  it('preserves a failed chat capability check and rejects a profile switch during it', async () => {
+    await prepareDevelopmentSession(developmentContext())
+    state.recheck.mockRejectedValueOnce(new Error('Could not check Cinna CLI support.'))
+    await expect(restoreDevelopmentContext(state.rows[0], { fresh: true })).rejects.toThrow('Could not check Cinna CLI support')
+    state.recheck.mockImplementation(async () => { state.profile = 'bob' })
+    await expect(restoreDevelopmentContext(state.rows[0], { fresh: true })).rejects.toThrow('active Cinna account changed')
+  })
+
+  it('rechecks capabilities before reading the context on an explicit refresh', async () => {
+    state.protocol = 'legacy'
+    state.recheck.mockImplementation(async () => { state.protocol = 'json' })
+    const probe = vi.fn().mockResolvedValue({ blocker: null })
+    expect((await getDevelopmentSessionContext(probe)).blocker).toContain('JSON workspace support')
+    expect(state.recheck).not.toHaveBeenCalled()
+    expect((await getDevelopmentSessionContext(probe, true)).blocker).toBeNull()
+    expect(state.recheck).toHaveBeenCalledWith('alice')
+    expect(probe).toHaveBeenCalledOnce()
+  })
+  it('rejects an account switch during an explicit CLI recheck', async () => {
+    state.recheck.mockImplementation(async () => { state.profile = 'bob' })
+    await expect(getDevelopmentSessionContext(vi.fn(), true)).rejects.toThrow('active profile changed')
+  })
+  it('names the released minimum and installed CLI version when JSON is unavailable', () => {
+    state.protocol = 'legacy'; state.cliVersion = '0.3.0'
+    const context = developmentContext()
+    expect(context.setupTarget).toBe('local-dev')
+    expect(context.blocker).toContain('Cinna CLI 0.4.0 or later')
+    expect(context.blocker).toContain('Installed: 0.3.0')
+    expect(context.blocker).toContain('Default → Local Development')
+  })
   it('warms the OpenCode model catalogue when resuming a saved build after restart', async () => {
     state.engine = 'opencode'
     await prepareDevelopmentSession(developmentContext())
@@ -80,7 +119,7 @@ describe('development sessions', () => {
     await prepareDevelopmentSession(developmentContext())
     state.phase = 'idle'
     state.reconcile.mockImplementation(async () => { state.profile = 'bob'; state.phase = 'ready' })
-    await expect(restoreDevelopmentContext(state.rows[0])).rejects.toThrow('Cinna account, workspace, or build runtime changed')
+    await expect(restoreDevelopmentContext(state.rows[0])).rejects.toThrow('active Cinna account changed')
   })
   it('defaults building to Opus and resolves a lower chosen complexity', () => {
     expect(developmentContext()).toMatchObject({ complexity: 'complex', runtime: { launcher: 'claude', modelId: 'opus' } })

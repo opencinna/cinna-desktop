@@ -13,11 +13,14 @@ import { RuntimeChoiceButtons } from '../settings/RuntimeChoiceButtons'
 import { InstallRuntimeDialog } from '../settings/InstallRuntimeDialog'
 import { SettingsCard, SettingsLabel, SettingsSection, settingsDropdownRowClass, settingsInputClass } from '../settings/SettingsLayout'
 
-export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck }: {
+import { DevelopmentRecheckButton } from './DevelopmentRecheckButton'
+
+export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck, checking }: {
   data?: DevelopmentContext
   onOpenWorkspace: () => void
   onSetup: () => void
-  onCheck: () => void
+  onCheck: () => Promise<unknown> | void
+  checking?: boolean
 }): React.JSX.Element {
   const { data: settings } = useAppSettings()
   const save = useSetAppSetting()
@@ -55,7 +58,7 @@ export function DevelopmentSettings({ data, onOpenWorkspace, onSetup, onCheck }:
         </div>
         {selected === 'opencode' && <DevelopmentCredential />}
         {data && <p className="mt-3 text-[12px] text-[var(--color-text-muted)]">Runs with {DEVELOPMENT_RUNTIME_NAMES[data.runtime.launcher]}{data.runtime.modelId ? ` · ${data.runtime.modelId}` : ''}{data.runtime.launcher === 'codex' ? ` · ${codexEffortForComplexity(data.complexity)} effort` : ''}</p>}
-        {data?.blocker && <div className="mt-3 text-[13px]"><p className="text-[var(--color-danger)]">{data.blocker}</p><button type="button" onClick={onCheck} className="mt-2 font-medium text-[var(--color-accent)]">Check again</button></div>}
+        {data?.blocker && <div className="mt-3 text-[13px]"><p className="text-[var(--color-danger)]">{data.blocker}</p><div className="mt-2"><DevelopmentRecheckButton onCheck={onCheck} fetching={checking} /></div></div>}
         {(save.error || failure) && <p role="alert" className="mt-3 text-[13px] text-[var(--color-danger)]">{failure ?? unwrapIpcError(save.error, 'Could not save the build runtime. Try again.')}</p>}
       </SettingsCard>
     </SettingsSection>

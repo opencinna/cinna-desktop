@@ -28,6 +28,7 @@ import type { AgentRow } from '../../db/agents'
 
 const state = vi.hoisted(() => ({
   development: false,
+  restore: vi.fn(),
   developmentEngine: 'claude',
   developmentComplexity: 'complex',
   codexSettings: null as null | ((userId: string, agentId: string) => { effort: string }),
@@ -47,7 +48,7 @@ vi.mock('../../localdev/developmentSessionService', () => {
   return {
     isDevelopmentAgent: (row: AgentRow) => !!row?.driverConfig?.developmentProfileId,
     contextForDevelopmentAgent: context,
-    restoreDevelopmentContext: async () => context(),
+    restoreDevelopmentContext: async (row: AgentRow, options?: { fresh?: boolean }) => { state.restore(row, options); return context() },
     developmentAgentContext: () => state.development ? context() : null,
     developmentPlanKey: (key: string) => key
   }
@@ -196,6 +197,7 @@ async function ranFor(agent: AgentRow): Promise<string[]> {
 }
 
 beforeEach(() => {
+  state.restore.mockClear()
   state.development = false; state.developmentComplexity = 'complex'; state.developmentPaths = []
   state.runtime = { engine: 'opencode' }
   state.readiness = 'ok'
@@ -212,6 +214,17 @@ describe('driverFor', () => {
     expect(state.codexSettings?.('user-1', 'builder').effort).toBe(effort)
     expect(state.gets).toBe(0)
   })
+  it('forwards the chat readiness freshness flag through production builder runtime wiring', async () => {
+    state.development = true
+    const row: AgentRow = { ...folderRow('custom'), id: 'builder', source: 'local', enabled: true,
+      driverConfig: { launcher: 'custom', developmentProfileId: 'profile-1' } }
+    const driver = driverFor(row)
+    await driver.readiness('user-1', row, { fresh: true })
+    expect(state.restore).toHaveBeenLastCalledWith(row, { fresh: true })
+    await driver.readiness('user-1', row)
+    expect(state.restore).toHaveBeenLastCalledWith(row, undefined)
+  })
+
   it.each(['claude', 'codex', 'opencode'])('runs an account builder through its selected %s runtime in the CLI workspace', async (engine) => {
     state.development = true
     state.developmentEngine = engine

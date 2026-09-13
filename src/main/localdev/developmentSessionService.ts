@@ -14,6 +14,7 @@ import { isWithin } from '../services/localAgents/pathRules'
 import { DEFAULT_DEVELOPMENT_COMPLEXITY, isDevelopmentAgent, type DevelopmentContext } from '../../shared/developmentSession'
 export { isDevelopmentAgent } from '../../shared/developmentSession'
 import { isWorkComplexity } from '../../shared/modelFamilies'
+import { cliWorkspaceRequirement } from '../../shared/cinnaCli'
 
 const DOCUMENTS = ['CLAUDE.md', 'context/README.md', 'context/platform/README.md']
 
@@ -63,7 +64,7 @@ export function developmentContext(): DevelopmentContext {
     workspacePath: state.workspacePath, cliVersion: state.cliVersion, runtime, complexity, documents, instructions,
     setupTarget: state.protocol === 'json' ? 'runtime' : 'local-dev',
     blocker: state.protocol !== 'json'
-      ? 'Update local development tooling to a cinna-cli version with JSON workspace support.'
+      ? cliWorkspaceRequirement(state.cliVersion)
       : runtime.reason
   }
 }
@@ -83,8 +84,14 @@ export async function loadDevelopmentContext(): Promise<DevelopmentContext> {
 
 /** The public build-page snapshot and runtime prerequisite probe are one guarded service operation. */
 export async function getDevelopmentSessionContext(
-  probe: (engine: DevelopmentContext['runtime']['launcher']) => Promise<Pick<DevelopmentContext, 'blocker' | 'installTool'>>
+  probe: (engine: DevelopmentContext['runtime']['launcher']) => Promise<Pick<DevelopmentContext, 'blocker' | 'installTool'>>,
+  fresh = false
 ): Promise<DevelopmentContext> {
+  if (fresh) {
+    const profileId = getProfileScopeUserId()
+    await localDevService.recheckCapabilities(profileId)
+    if (getProfileScopeUserId() !== profileId) throw new Error('The active profile changed. Check again.')
+  }
   const context = await loadDevelopmentContext()
   const readiness = context.blocker ? { blocker: context.blocker } : await probe(context.runtime.launcher)
   const current = developmentContext()
@@ -106,13 +113,20 @@ export function contextForDevelopmentAgent(row: AgentRow): DevelopmentContext {
 }
 
 /** Startup restores the account asynchronously; neither probes nor turns should cache that as a failed setup. */
-export async function restoreDevelopmentContext(row: AgentRow): Promise<DevelopmentContext> {
+export async function restoreDevelopmentContext(row: AgentRow, options: { fresh?: boolean } = {}): Promise<DevelopmentContext> {
   const profileId = getProfileScopeUserId()
   if (row.driverConfig?.developmentProfileId === profileId) {
     const phase = localDevService.getState().phase
     // Reconcile joins an existing restoration and honors the saved consent.
     // A settled failure remains actionable rather than starting a retry loop.
     if (phase === 'idle' || phase === 'installing') await localDevService.reconcile(profileId)
+    if (getProfileScopeUserId() !== profileId) throw new Error('The active Cinna account changed. Check again.')
+    // Chat's explicit readiness check must retry the CLI probe too; list reads
+    // and ordinary turns retain the last successful capability snapshot.
+    if (options.fresh && localDevService.getState().phase === 'ready') {
+      await localDevService.recheckCapabilities(profileId)
+      if (getProfileScopeUserId() !== profileId) throw new Error('The active Cinna account changed. Check again.')
+    }
     // Resumed OpenCode chats need the same catalogue warmup as the start page.
     // Its empty process-local cache after restart is not a missing credential.
     await loadDevelopmentContext()

@@ -4,7 +4,7 @@
  *
  * ## One entry point
  *
- * {@link localDevService.reconcile} is the only way anything here happens, and
+ * {@link localDevService.reconcile} is the only workspace setup entry point, and
  * it is idempotent — the same rule the engine's `ensureRunning` follows, for
  * the same reason. It runs after a Cinna user is activated, after a re-auth,
  * when the machine wakes, and when the user presses Repair. Every step checks
@@ -58,6 +58,7 @@ import { userRepo } from '../db/users'
 import { appSettingsRepo } from '../db/appSettings'
 import { cinnaFetch } from '../services/cinna-http'
 import { clearEndpointCache, discoverCinnaEndpoints } from '../auth/cinna-oauth'
+import { cliWorkspaceRequirement } from '../../shared/cinnaCli'
 import { agentsHomeService } from '../services/localAgents/agentsHomeService'
 import { getLayout } from '../kit/contractStore'
 import { CinnaApiError, ToolchainError } from '../errors'
@@ -441,9 +442,19 @@ let activeRun: number | null = null
 let runGeneration = 0
 let profileUserId: string | null = null
 let profileGeneration = 0
-/** The tail of the serialized queue, including a request waiting for an old profile. */
+/** The latest reconciliation, including a request waiting for an old profile. */
 let inFlight: Promise<LocalDevState> | null = null
 let inFlightProfileGeneration: number | null = null
+/** Tool updates and workspace reconciliation share the same installation. */
+let operationTail: Promise<unknown> | null = null
+
+function enqueueOperation<T>(work: () => Promise<T> | T): Promise<T> {
+  const run = Promise.resolve(operationTail).catch(() => undefined).then(work).finally(() => {
+    if (operationTail === run) operationTail = null
+  })
+  operationTail = run
+  return run
+}
 
 class SupersededReconcile extends Error {}
 
@@ -969,8 +980,17 @@ async function reconcileOnce(
   // Asked once per (binary, version), before the first real invocation: a
   // server may pin a cinna-cli older than the protocol this app prefers, and
   // handing that one `--json` fails it before it does anything.
-  const caps = await probeCliCapabilities(cinnaBin, cliVersion, env)
-  assertCurrentRun(generation)
+  let caps: CliCapabilities
+  try {
+    caps = await probeCliCapabilities(cinnaBin, cliVersion, env)
+    assertCurrentRun(generation)
+  } catch (err) {
+    assertCurrentRun(generation)
+    const detail = err instanceof Error ? err.message : String(err)
+    markFailed(detail, 'cinna-cli')
+    setState({ phase: 'attention', reason: 'toolchain', detail })
+    return state
+  }
 
   // The agents home has to exist before its `Cloud/` can, and on macOS creating
   // it for the first time raises the Documents-folder prompt. `prepare` takes
@@ -1117,13 +1137,88 @@ async function reconcileOnce(
 }
 
 export const localDevService = {
+  /** Update shared managed tools; workspace setup and consent require their own action. */
+  updateCli(userId: string, targetVersion: string): Promise<void> {
+    selectProfile(userId)
+    const profile = profileGeneration
+    const assertProfile = (): void => {
+      if (profileGeneration !== profile || profileUserId !== userId) {
+        throw new Error('The active profile changed. Check the installed CLI version again.')
+      }
+    }
+    return enqueueOperation(async () => {
+      assertProfile()
+      const user = userRepo.get(userId)
+      if (user?.type !== 'cinna_user' || !user.cinnaServerUrl) {
+        throw new Error('Connect a Cinna server before updating the managed CLI.')
+      }
+      clearEndpointCache()
+      const localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
+      assertProfile()
+      if (localDev?.cinna_cli_version !== targetVersion || !localDev.mutagen_version) {
+        throw new Error('The server’s required CLI version changed during the update. Check for updates again.')
+      }
+      const pins = { cinnaCliVersion: targetVersion, mutagenVersion: localDev.mutagen_version }
+      const current = state
+      const generation = ++runGeneration
+      activeRun = generation
+      try {
+        if (current.phase === 'ready') {
+          markActive('cinna-cli', 'Updating…', 0)
+          setState({ phase: 'installing', step: 'Updating the managed Cinna CLI…' })
+        }
+        const result = await toolchain.ensure(pins)
+        assertProfile()
+        if (result.cliVersion !== targetVersion) {
+          throw new Error(`The managed Cinna CLI reports ${result.cliVersion} after updating to ${targetVersion}.`)
+        }
+        const env = await toolchain.toolchainEnv(pins)
+        assertProfile()
+        const cinnaBin = toolchain.paths(pins).cinnaBin
+        const caps = await probeCliCapabilities(cinnaBin, result.cliVersion, env, { fresh: true })
+        assertProfile()
+        if (current.phase === 'ready') {
+          markDone('cinna-cli', result.cliVersion)
+          setState({ ...current, cliVersion: result.cliVersion, cinnaBinPath: cinnaBin, protocol: caps.json ? 'json' : 'legacy' })
+        }
+      } catch (err) {
+        assertProfile()
+        if (current.phase === 'ready') {
+          const detail = err instanceof Error ? err.message : String(err)
+          markFailed(detail, err instanceof ToolchainError ? taskForTool(err.tool) : 'cinna-cli')
+          setState(err instanceof ToolchainError ? fromToolchainError(err) : { phase: 'attention', reason: 'toolchain', detail })
+        }
+        throw err
+      } finally {
+        if (activeRun === generation) activeRun = null
+      }
+    })
+  },
+
+  /** Re-read the installed binary and its capabilities without reinstalling or changing consent. */
+  async recheckCapabilities(userId: string): Promise<void> {
+    const current = state
+    const user = userRepo.get(userId)
+    if (current.phase !== 'ready' || profileUserId !== userId || !user?.cinnaServerUrl) {
+      throw new Error('Finish local development setup before checking CLI support.')
+    }
+    const localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
+    if (!localDev) throw new Error('This server does not support local development.')
+    const installed = await toolchain.installedCli()
+    if (!installed?.version) throw new Error('Could not read the managed Cinna CLI version. Repair local development in Settings.')
+    const env = await toolchain.toolchainEnv({ cinnaCliVersion: localDev.cinna_cli_version, mutagenVersion: localDev.mutagen_version })
+    const caps = await probeCliCapabilities(installed.path, installed.version, env, { fresh: true })
+    if (state !== current || profileUserId !== userId) throw new Error('Local development changed during the check. Try again.')
+    setState({ ...current, cliVersion: installed.version, cinnaBinPath: installed.path, protocol: caps.json ? 'json' : 'legacy' })
+  },
+
   /** Execution context for an explicitly requested agent development action. */
   async executionContext(userId: string) {
     const current = state
     const user = userRepo.get(userId)
     if (current.phase !== 'ready' || current.protocol !== 'json' || !user?.cinnaServerUrl ||
         current.workspacePath !== workspacePathFor(userId, new URL(user.cinnaServerUrl).host)) {
-      throw new Error('Set up local development in Settings before developing this agent. A cinna-cli with JSON workspace support is required.')
+      throw new Error(`Set up local development in Settings before developing this agent. ${cliWorkspaceRequirement(current.phase === 'ready' ? current.cliVersion : undefined)}`)
     }
     const localDev = (await discoverCinnaEndpoints(user.cinnaServerUrl)).local_dev
     if (!localDev?.cinna_cli_version || !localDev.mutagen_version) throw new Error('This server does not support local development.')
@@ -1156,15 +1251,12 @@ export const localDevService = {
     selectProfile(userId)
     const profile = profileGeneration
     if (inFlight && inFlightProfileGeneration === profile) return inFlight
-    const previous = inFlight
-    const run = Promise.resolve(previous)
-      .then(() => {
+    const run = enqueueOperation(() => {
         // Capture before waiting: B queued behind A must not revive after C
         // or sign-out has superseded it. Downloads already running drain first.
         if (profileGeneration !== profile || profileUserId !== userId) return state
         return runReconcile(userId, force)
-      })
-      .finally(() => {
+      }).finally(() => {
         if (inFlight === run) {
           inFlight = null
           inFlightProfileGeneration = null

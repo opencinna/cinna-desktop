@@ -139,9 +139,10 @@ vi.mock('../engine/binaryResolver', () => ({
     prefetchEngineBinary(onProgress)
 }))
 
+const capabilityProbe = vi.hoisted(() => vi.fn())
 vi.mock('./cliCapabilities', () => ({
   clearCliCapabilityCache: () => {},
-  probeCliCapabilities: async () => ({ version: '0.4.0', json: true, accountSetToken: true })
+  probeCliCapabilities: capabilityProbe
 }))
 
 /**
@@ -164,11 +165,12 @@ const ensure = vi.fn(
       }
     })
 )
+const repair = vi.fn((pins: ToolchainPins, onProgress?: ToolchainProgress) => ensure(pins, onProgress))
 
 vi.mock('./toolchain', () => ({
   toolchain: {
     ensure: (pins: ToolchainPins, onProgress?: ToolchainProgress) => ensure(pins, onProgress),
-    repair: (pins: ToolchainPins, onProgress?: ToolchainProgress) => ensure(pins, onProgress),
+    repair: (pins: ToolchainPins, onProgress?: ToolchainProgress) => repair(pins, onProgress),
     toolchainEnv: async () => ({}),
     paths: () => ({ cinnaBin: '/managed/bin/cinna' }),
     root: () => '/managed',
@@ -199,6 +201,7 @@ async function untilInstalling(): Promise<void> {
 
 beforeEach(() => {
   localDevService.clear()
+  capabilityProbe.mockReset().mockResolvedValue({ json: true, accountSetToken: true })
   vi.mocked(cinnaFetch).mockClear()
   vi.mocked(runCinnaCli).mockClear()
   vi.mocked(agentsHomeService.prepare).mockClear()
@@ -210,11 +213,56 @@ beforeEach(() => {
   install = undefined as never
   nextStatusToken = 'valid'
   ensure.mockClear()
+  repair.mockClear()
   prefetchEngineBinary.mockClear()
   engineEnsure.mockClear()
 })
 
 describe('what the renderer is told', () => {
+  it('rechecks a legacy result using the installed CLI without reinstalling the workspace', async () => {
+    capabilityProbe.mockResolvedValueOnce({ json: false, accountSetToken: false })
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    expect(await run).toMatchObject({ phase: 'ready', protocol: 'legacy' })
+    const installs = ensure.mock.calls.length
+    await localDevService.recheckCapabilities('u1')
+    expect(capabilityProbe).toHaveBeenLastCalledWith('/managed/bin/cinna', '0.4.0', {}, { fresh: true })
+    expect(localDevService.getState()).toMatchObject({ phase: 'ready', protocol: 'json' })
+    expect(ensure).toHaveBeenCalledTimes(installs)
+  })
+
+  it('marks a failed CLI probe as a toolchain failure so Repair reinstalls it', async () => {
+    capabilityProbe.mockRejectedValueOnce(new Error('Could not check Cinna CLI support (exit code 1).'))
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    expect(await run).toMatchObject({
+      phase: 'attention', reason: 'toolchain', detail: 'Could not check Cinna CLI support (exit code 1).',
+      tasks: expect.arrayContaining([expect.objectContaining({ id: 'cinna-cli', status: 'failed' })])
+    })
+    expect(agentsHomeService.prepare).not.toHaveBeenCalled()
+    install = undefined as never
+    const fixed = localDevService.reconcile('u1', true)
+    await untilInstalling()
+    expect(repair).toHaveBeenCalledOnce()
+    install.finish(installed)
+    expect(await fixed).toMatchObject({ phase: 'ready', protocol: 'json' })
+  })
+
+  it('does not publish a recheck after the active profile has been cleared', async () => {
+    const run = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    await run
+    capabilityProbe.mockImplementationOnce(async () => {
+      localDevService.clear()
+      return { json: true, accountSetToken: true }
+    })
+    await expect(localDevService.recheckCapabilities('u1')).rejects.toThrow('changed during the check')
+    expect(localDevService.getState().phase).toBe('idle')
+  })
+
   it('puts the checklist in every push, not only in getState', async () => {
     const run = localDevService.reconcile('u1')
     await untilInstalling()
@@ -424,6 +472,101 @@ describe('what the renderer is told', () => {
   })
 })
 
+
+describe('managed CLI updates without workspace setup', () => {
+  it.each([false, undefined])('preserves saved consent %s and never prepares a workspace', async (consent) => {
+    consentStore.set('localDevConsent', JSON.stringify({ 'cinna.example.com': consent }))
+    await localDevService.reconcile('u1')
+    const before = localDevService.getState()
+    const savedConsent = consentStore.get('localDevConsent')
+    const update = localDevService.updateCli('u1', '0.4.0')
+    await untilInstalling()
+    install.finish(installed)
+    await update
+    expect(consentStore.get('localDevConsent')).toBe(savedConsent)
+    expect(localDevService.getState()).toEqual(before)
+    expect(agentsHomeService.prepare).not.toHaveBeenCalled()
+    expect(cinnaFetch).not.toHaveBeenCalled()
+    expect(runCinnaCli).not.toHaveBeenCalled()
+    expect(prefetchEngineBinary).not.toHaveBeenCalled()
+    expect(ensure).toHaveBeenCalledExactlyOnceWith({ cinnaCliVersion: '0.4.0', mutagenVersion: '9.9.9' }, undefined)
+  })
+
+  it('refreshes an already-ready context after draining reconciliation without repeating account work', async () => {
+    capabilityProbe.mockResolvedValueOnce({ json: false, accountSetToken: false })
+    const reconcile = localDevService.reconcile('u1')
+    await untilInstalling()
+    const firstInstall = install
+    const update = localDevService.updateCli('u1', '0.4.0')
+    expect(ensure).toHaveBeenCalledOnce()
+    firstInstall.finish({ ...installed, cliVersion: '0.3.0' })
+    await reconcile
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2))
+    const accountCalls = vi.mocked(runCinnaCli).mock.calls.length
+    expect(localDevService.getState().phase).toBe('installing')
+    install.finish(installed)
+    await update
+    expect(localDevService.getState()).toMatchObject({ phase: 'ready', cliVersion: '0.4.0', protocol: 'json', workspacePath: join(agentsHome, 'Cloud', 'cinna.example.com') })
+    expect(capabilityProbe).toHaveBeenLastCalledWith('/managed/bin/cinna', '0.4.0', {}, { fresh: true })
+    expect(runCinnaCli).toHaveBeenCalledTimes(accountCalls)
+    expect(agentsHomeService.prepare).toHaveBeenCalledOnce()
+  })
+
+  it('drains an update before another profile installs and never publishes the old context', async () => {
+    consentStore.set('localDevConsent', JSON.stringify({ 'cinna.example.com': false, 'u2.example.com': true }))
+    await localDevService.reconcile('u1')
+    const update = localDevService.updateCli('u1', '0.4.0')
+    const rejected = expect(update).rejects.toThrow('active profile changed')
+    await untilInstalling()
+    const firstInstall = install
+    const next = localDevService.reconcile('u2')
+    expect(ensure).toHaveBeenCalledOnce()
+    firstInstall.finish(installed)
+    await rejected
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(2))
+    expect(capabilityProbe).not.toHaveBeenCalled()
+    install.finish(installed)
+    expect(await next).toMatchObject({ phase: 'ready', workspacePath: join(agentsHome, 'Cloud', 'u2.example.com') })
+  })
+
+  it('skips an update queued for a profile that has been cleared', async () => {
+    const reconcile = localDevService.reconcile('u1')
+    await untilInstalling()
+    const update = localDevService.updateCli('u1', '0.4.0')
+    const rejected = expect(update).rejects.toThrow('active profile changed')
+    localDevService.clear()
+    install.finish(installed)
+    await Promise.all([reconcile, rejected])
+    expect(ensure).toHaveBeenCalledOnce()
+    expect(localDevService.getState().phase).toBe('idle')
+  })
+
+  it('rejects a changed server target before touching shared tools', async () => {
+    await expect(localDevService.updateCli('u1', '0.5.0')).rejects.toThrow('required CLI version changed')
+    expect(ensure).not.toHaveBeenCalled()
+  })
+
+  it('retires readiness on an update probe failure and allows Repair to reinstall', async () => {
+    const reconcile = localDevService.reconcile('u1')
+    await untilInstalling()
+    install.finish(installed)
+    await reconcile
+    install = undefined as never
+    capabilityProbe.mockRejectedValueOnce(new Error('The updated CLI could not start.'))
+    const update = localDevService.updateCli('u1', '0.4.0')
+    const rejected = expect(update).rejects.toThrow('could not start')
+    await untilInstalling()
+    install.finish(installed)
+    await rejected
+    expect(localDevService.getState()).toMatchObject({ phase: 'attention', reason: 'toolchain' })
+    install = undefined as never
+    const fixed = localDevService.reconcile('u1', true)
+    await untilInstalling()
+    expect(repair).toHaveBeenCalledOnce()
+    install.finish(installed)
+    expect(await fixed).toMatchObject({ phase: 'ready' })
+  })
+})
 
 describe('profile ownership of reconciliation', () => {
   it('drains A installation before starting B and never prepares A after the switch', async () => {

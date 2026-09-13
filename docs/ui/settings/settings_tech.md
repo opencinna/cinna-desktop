@@ -25,7 +25,7 @@
 - `src/renderer/src/components/settings/RootRepositoryDialog.tsx` — The Repository dialog opened from an Agent Folders row: remote, branches, head commit, Check and Update; see [Agents Folder Updates](../../agents/local_agents/folder_updates.md)
 - `src/renderer/src/components/settings/LocalDevSettingsSection.tsx` — Shared managed CLI readout and Add to PATH; see [Local Development](../../agents/local_dev/local_dev.md)
 - `src/renderer/src/components/settings/ProfileLocalDevSettingsSection.tsx` — Every account phase, workspace setup/repair/opening and shared server consent; keyed by account ID
-- `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — Global tools table, resolved engine OpenCode row, contract version and `OpenCodeSettingsFields`
+- `src/renderer/src/components/settings/DeveloperToolsSettingsSection.tsx` — Shared tools table with managed Cinna precedence and Update, resolved engine OpenCode row, contract version and `OpenCodeSettingsFields`
 - `src/renderer/src/components/settings/OpenCodeSettingsFields.tsx` — Installation-wide executable override; independent dirty/empty draft, inline failure, Escape discard
 - `src/renderer/src/components/settings/TaskConcurrencySetting.tsx` — Default → Agents → Tasks row; device-wide admission limit
 - `src/renderer/src/components/settings/ProfileChatModesSection.tsx` — Account-provisioned chat modes (Profile scope), off the same `useChatModes` hook as the Default tab
@@ -55,7 +55,7 @@
 - `src/renderer/src/hooks/useLocalAgents.ts` — Roots and folder agents: list, rescan, add/remove root, restore hidden, and the git status/check/update hooks
 - `src/renderer/src/hooks/useLocalTools.ts` — Detected assistants and editors, the default-tool value and `openIn`
 - `src/renderer/src/hooks/useEngine.ts` — Read-only engine binary state and explicit resolution/retry
-- `src/renderer/src/hooks/useLocalDev.ts` — Main-owned `LocalDevState`, the independent `managed-local-dev-cli` query refetched on phase changes, and PATH mutation with rejected IPC errors converted to inline refusals
+- `src/renderer/src/hooks/useLocalDev.ts` — Main-owned `LocalDevState`, the independent `managed-local-dev-cli` query refetched on phase changes, PATH mutation with rejected IPC errors converted to inline refusals, and profile-keyed `useCinnaCliUpdate` / shared-key `useUpdateCinnaCli`
 - `src/renderer/src/hooks/useCatalog.ts` — Bundle catalog listing and install/uninstall
 - `src/renderer/src/hooks/useSync.ts` — Cloud Sync state and device pairing
 
@@ -117,6 +117,14 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 - Local state `showAddRemoteMcp` toggles inline `AddRemoteMcpForm`
 - "Add Local MCP" button directly creates a disabled stdio provider via `useUpsertMcpProvider()`
 
+### Managed Cinna CLI controls
+
+`DeveloperToolsSettingsSection` overlays the detected `cinna` row with `useManagedLocalDevCli` path/version/source whenever a managed installation is returned; nullable version stays unknown rather than borrowing the shell version. Without managed data it retains the detection result. `useCinnaCliUpdate` keys by profile ID with 60-second staleness and no retries. Refresh triggers detection, managed inspection and update-query refetch together. `useUpdateCinnaCli` invalidates update status, managed CLI, local tools and development context on settlement.
+
+`useIsMutating({ mutationKey: ['update-cinna-cli'] })` supplies shared pending state. Refresh disables during its queries or an update; Update disables during update or local-development installation. The row renders the advertised server target and a spinning **Updating…** action, with status/error text below the table. These are stage indicators, not download percentages. Service eligibility, serialized tool writes, consent preservation and profile checks live in [Local Development technical details](../../agents/local_dev/local_dev_tech.md#managed-cli-updates-and-fresh-checks).
+
+Build compatibility recovery calls `setSettingsMenu('local-dev')` then `setActiveView('settings')`, selecting Default tools even if Profile setup was previously selected. Its separate account-setup action uses `profile-local-dev`; runtime blockers stay in build details. `DevelopmentRecheckButton` shares `SettingsButton`, including `aria-busy`, and invokes the fresh context path from both build surfaces; see [Build Sessions renderer](../../agents/local_dev/build_sessions_tech.md#renderer-components).
+
 ### Agent page settings
 
 `src/renderer/src/components/agents/ExternalAgentPage.tsx` owns the page's Overview/Connection tab and shared chat/settings mode. A2A/Cinna uses `AgentCard connectionOnly` for visible structured fields, authentication and connection testing. ACP and Managed agents use Configure to open their existing dialogs. Agent-wide disable/delete/uninstall actions belong to `ExternalAgentActionsMenu` in the page header. This page mode is independent of `settingsTab`; hiding its composer preserves mounted state, and the session draft store also restores content after navigating away and remounting. App-settings tab changes still unmount their previous section. See [Shared chat workspace](../app_shell/app_shell_tech.md#shared-chat-workspace).
@@ -125,7 +133,7 @@ Thin shell — looks the title up in `sectionTitles`, then conditionally renders
 
 `SettingsRows insetDividers` adds 16 px horizontal group padding and removes child horizontal padding, aligning row dividers with their content. Features AI Functions/Interface and Agents Runtime/Tasks use it; root lists retain their existing full-width dividers. `settingsDropdownRowClass` puts compact selectors in the rightmost 33% column; `settingsControlRowClass` divides label and text input evenly. These are layout primitives, not new persistence behavior.
 
-Default → Agents keeps default-runtime choice buttons and the selected-runtime status arrangement. Credential and Open agents with selectors occupy the right column in subsequent Runtime rows, with the auto-open checkbox below its selector. Task concurrency has its own Tasks section. Add an agents folder is a compact secondary button beside Rescan in the Agent Folders heading. Shared `SettingsButton` styling also governs Repair, Reset consent and Add to PATH. Its `ambient-button` class opts enabled, visible secondary actions into the Shell scheduler; the scheduler owns eligibility and at-most-one selection. See [Appearance technical details](../appearance/appearance_tech.md).
+Default → Agents keeps default-runtime choice buttons and the selected-runtime status arrangement. Credential and Open agents with selectors occupy the right column in subsequent Runtime rows, with the auto-open checkbox below its selector. Task concurrency has its own Tasks section. Add an agents folder is a compact secondary button beside Rescan in the Agent Folders heading. Shared `SettingsButton` styling also governs Repair, Reset consent, Add to PATH, CLI Update and build Check again. Its optional `aria-busy` passes pending state to assistive technology. `aria-disabled` provides the same unavailable appearance while retaining keyboard focus, and the shared click handler suppresses invocation when it is true. Composer readiness actions use that option with the same sizing/background/border, a refresh icon and short pending feedback; see [Readiness presentation](../../agents/drivers/drivers_tech.md#readiness-and-renderer-behavior). Native `disabled` remains available to other callers. Its `ambient-button` class opts enabled, visible secondary actions into the Shell scheduler; the scheduler owns eligibility and at-most-one selection. See [Appearance technical details](../appearance/appearance_tech.md).
 
 ## Database Schema
 
@@ -137,7 +145,7 @@ The section preference adds an installation-wide `app_settings` key, not a profi
 
 ## Security
 
-Local Development placement does not change consent storage: `localDevConsent` remains installation-wide JSON keyed by server host. `localdev:get-managed-cli` is an ungated read-only path/version probe; account actions and Add to PATH still require activation. Account state/action reply ownership is enforced by the [local-development lifecycle](../../agents/local_dev/local_dev_tech.md#services--key-methods). Connection fields reuse existing typed preload APIs. The A2A modal accepts a token for main-process storage; saved secret values are not loaded into its fields. Cinna rows retain profile-scoped ownership and expose visibility controls only for server-provided agents. Agent-page connection tooltips display only host, auth method/presence and credential names; see [Routing details](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
+Local Development placement does not change consent storage: `localDevConsent` remains installation-wide JSON keyed by server host. `localdev:get-managed-cli` is an ungated read-only path/version probe; account actions, CLI update discovery/installation and Add to PATH still require activation. Update resolves the active server target in main and cannot answer setup consent or create account workspaces. Account state/action reply ownership is enforced by the [local-development lifecycle](../../agents/local_dev/local_dev_tech.md#services--key-methods). Connection fields reuse existing typed preload APIs. The A2A modal accepts a token for main-process storage; saved secret values are not loaded into its fields. Cinna rows retain profile-scoped ownership and expose visibility controls only for server-provided agents. Agent-page connection tooltips display only host, auth method/presence and credential names; see [Routing details](../../chat/chat_routing/chat_routing_tech.md#connection-detail-lookup).
 
 ## IPC Channels
 

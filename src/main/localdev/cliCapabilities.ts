@@ -19,7 +19,8 @@
  * option, to a missing workspace and to a network failure alike, so a trial
  * invocation cannot distinguish "this flag does not exist" from "that would
  * have worked but the server is down" — and the trial would have side effects.
- * `--help` is free, has none, and is the one output whose shape is a promise.
+ * `--help` does not change the account workspace. The CLI still initializes its
+ * log, so the probe gives it a disposable writable working directory.
  *
  * ## What "legacy" costs
  *
@@ -35,6 +36,9 @@
 
 import { createLogger } from '../logger/logger'
 import { runCinnaCli } from './cliRunner'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const logger = createLogger('cinna-cli-caps')
 
@@ -55,9 +59,6 @@ export interface CliCapabilities {
   accountSetToken: boolean
 }
 
-/** What a binary that answers nothing is assumed to support: the old surface. */
-const LEGACY: CliCapabilities = { json: false, accountSetToken: false }
-
 /**
  * Keyed by binary path **and** version, because the path is stable across
  * upgrades — `<localdev>/bin/cinna` is what `uv tool install` rewrites in
@@ -69,59 +70,67 @@ const cache = new Map<string, CliCapabilities>()
 async function helpText(
   bin: string,
   args: string[],
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  cwd: string
 ): Promise<string> {
   const outcome = await runCinnaCli({
     bin,
     args: [...args, '--help'],
     logArgs: [...args, '--help'],
     env,
+    cwd,
     timeoutMs: PROBE_TIMEOUT_MS,
     // `--help` is plain text, so nothing here is the JSON protocol; the runner
     // simply files every line as unparseable noise, which is correct and why
     // the text has to come from somewhere else.
     captureStdout: true
   })
+  if (outcome.exitCode !== 0 || outcome.timedOut || !outcome.stdout.trim()) {
+    throw new Error(`Could not check Cinna CLI support (${outcome.timedOut ? 'the check timed out' : outcome.exitCode === null ? 'the CLI could not start' : `exit code ${outcome.exitCode}`}). Try Check again or repair local development in Settings.`)
+  }
   return outcome.stdout
 }
 
 /**
  * Ask a cinna-cli what it supports. Cached per (binary, version).
  *
- * A probe that cannot run at all answers {@link LEGACY} rather than throwing:
- * assuming the smaller surface degrades a working install into a reduced one,
- * while assuming the larger surface turns a reduced install into a broken one.
+ * A failed probe is an error, not evidence of an older CLI, and is never cached.
  */
 export async function probeCliCapabilities(
   bin: string,
   version: string,
-  env: NodeJS.ProcessEnv
+  env: NodeJS.ProcessEnv,
+  options: { fresh?: boolean } = {}
 ): Promise<CliCapabilities> {
   const key = `${bin}@${version}`
   const cached = cache.get(key)
-  if (cached) return cached
+  if (cached && !options.fresh) return cached
+  if (options.fresh) cache.delete(key)
 
-  let capabilities = LEGACY
+  // Even subcommand --help initializes cinna.log in cwd. Finder-launched apps
+  // may inherit /, which is not writable. Keep probes in a disposable directory.
+  const cwd = await mkdtemp(join(tmpdir(), 'cinna-capabilities-'))
   try {
-    const [setupHelp, accountHelp] = await Promise.all([
-      helpText(bin, ['account', 'setup'], env),
-      helpText(bin, ['account'], env)
+    const results = await Promise.allSettled([
+      helpText(bin, ['account', 'setup'], env, cwd),
+      helpText(bin, ['account'], env, cwd)
     ])
-    capabilities = {
-      json: setupHelp.includes('--json'),
+    // Both processes must finish before their working directory is removed.
+    const [setup, account] = results
+    if (setup.status === 'rejected') throw setup.reason
+    if (account.status === 'rejected') throw account.reason
+    const capabilities = {
+      json: setup.value.includes('--json'),
       // The subcommand listing, not a substring of prose: `cinna account
       // --help` prints one line per command.
-      accountSetToken: /^\s*set-token\b/m.test(accountHelp)
+      accountSetToken: /^\s*set-token\b/m.test(account.value)
     }
-  } catch (err) {
-    logger.warn('could not probe cinna-cli capabilities; assuming the older surface', {
-      error: String(err)
-    })
+    logger.info('cinna-cli capabilities', { version, ...capabilities })
+    cache.set(key, capabilities)
+    return capabilities
+  } finally {
+    await rm(cwd, { recursive: true, force: true }).catch(() => undefined)
   }
-
-  logger.info('cinna-cli capabilities', { version, ...capabilities })
-  cache.set(key, capabilities)
-  return capabilities
 }
 
 /** Drop the cache — Repair reinstalls, and may install a different version. */

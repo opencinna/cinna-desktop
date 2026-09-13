@@ -71,7 +71,7 @@ import { driverOfRow } from './driverOf'
 import { unsupportedDriver } from './unsupportedDriver'
 import { createManagedDriver } from './managed/managedDriver'
 import { managedAgentService } from '../../services/managedAgentService'
-import type { AgentDriver, ParkedAsk, RespondOutcome } from './driver'
+import type { AgentDriver, ParkedAsk, RespondOutcome, ReadinessOptions } from './driver'
 
 const logger = createLogger('agent-driver')
 
@@ -384,9 +384,9 @@ function readAcpFolder(userId: string, agentId: string): AcpFolderView | null {
   }
 }
 
-async function readAcpRuntime(userId: string, agent: AgentRow): Promise<AcpRuntimeView | null> {
+async function readAcpRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): Promise<AcpRuntimeView | null> {
   if (isDevelopmentAgent(agent)) {
-    const context = await restoreDevelopmentContext(agent)
+    const context = await restoreDevelopmentContext(agent, options)
     const state = customAgentService.runtime(userId, agent)
     return {
       ...state, type: 'folder',

@@ -10,8 +10,10 @@ import { LocalDevTaskList } from './LocalDevTaskList'
 import { DevelopmentRuntimeBadges } from './DevelopmentRuntimeBadges'
 import { BuildGuideModal } from './BuildGuideModal'
 import { DevelopmentSettings } from './DevelopmentSettings'
+import { DevelopmentRecheckButton } from './DevelopmentRecheckButton'
 import { ComposerWarning } from '../chat/ComposerWarning'
 import { AmbientGrid } from '../ui/AmbientGrid'
+import { SettingsButton } from '../settings/SettingsLayout'
 
 const actionClass = 'ambient-button inline-flex items-center justify-center gap-2 rounded-md border border-[var(--color-border)] px-3 py-2 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] disabled:opacity-50 transition-colors'
 const EXAMPLES = [
@@ -27,13 +29,13 @@ export function LocalDevelopmentPage(): React.JSX.Element {
 }
 
 function DevelopmentWorkspace(): React.JSX.Element {
-  const { state, user, context, data, ready, blocker, error, busy, send, repairWorkspace, openWorkspace, openInstance } = useDevelopmentWorkspace()
+  const { state, user, context, data, ready, blocker, error, busy, send, repairWorkspace, checkWorkspace, openWorkspace, openInstance } = useDevelopmentWorkspace()
   const [guideOpen, setGuideOpen] = useState(false)
   const settingsOpen = useLocalDevStore((s) => s.pageMode === 'settings')
   const setSettingsOpen = (open: boolean): void => useLocalDevStore.getState().setPageMode(open ? 'settings' : 'chat')
-  const openSettings = (runtime: boolean): void => {
+  const openSettings = (runtime: boolean, tools = false): void => {
     if (runtime) { setSettingsOpen(true); return }
-    useUIStore.getState().setSettingsMenu('profile-local-dev')
+    useUIStore.getState().setSettingsMenu(tools ? 'local-dev' : 'profile-local-dev')
     useUIStore.getState().setActiveView('settings')
   }
   return (
@@ -58,7 +60,7 @@ function DevelopmentWorkspace(): React.JSX.Element {
           <button type="button" className={actionClass} aria-haspopup="dialog" onClick={() => setGuideOpen(true)}><BookOpen size={14} /> Build guide</button>
         </div>
       </header>
-      {settingsOpen && <DevelopmentSettings data={data} onCheck={() => void context.refetch()} onOpenWorkspace={() => void openWorkspace()} onSetup={() => openSettings(false)} />}
+      {settingsOpen && <DevelopmentSettings data={data} onCheck={checkWorkspace} checking={context.isFetching} onOpenWorkspace={() => void openWorkspace()} onSetup={() => openSettings(false)} />}
       <div hidden={settingsOpen} className={`${settingsOpen ? 'hidden' : 'flex'} mx-auto w-full max-w-5xl flex-1 flex-col`}>
         <main className="flex flex-1 flex-col justify-center min-w-0 px-6 py-6 sm:px-8">
           <div className="mx-auto w-full max-w-2xl">
@@ -76,8 +78,8 @@ function DevelopmentWorkspace(): React.JSX.Element {
                 {state.phase === 'attention' && <button type="button" disabled={busy} className={actionClass} onClick={() => void repairWorkspace()}><RefreshCw size={13} /> {busy ? 'Retrying…' : 'Retry setup'}</button>}
                 {state.phase === 'ready' && <>
                   {data?.installTool && <RuntimeInstallAction tool={data.installTool} onDone={() => void context.refetch()} />}
-                  <button type="button" className={actionClass} onClick={() => openSettings(!!data && data.setupTarget !== 'local-dev')}>{data && data.setupTarget !== 'local-dev' ? 'Open Runtime settings' : 'Local Development settings'}</button>
-                  <button type="button" disabled={context.isFetching} className={actionClass} onClick={() => void context.refetch()}><RefreshCw size={13} /> Check again</button>
+                  <SettingsButton onClick={() => openSettings(!!data && data.setupTarget !== 'local-dev', true)}><Settings2 size={13} />{data && data.setupTarget !== 'local-dev' ? 'Open Runtime settings' : 'Local Development settings'}</SettingsButton>
+                  <DevelopmentRecheckButton fetching={context.isFetching} onCheck={checkWorkspace} />
                 </>}
                 {!['ready', 'installing', 'attention'].includes(state.phase) && <button type="button" className={actionClass} onClick={() => openSettings(false)}>Set up local development</button>}
               </div>

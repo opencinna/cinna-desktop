@@ -60,6 +60,10 @@ export function useDevelopmentWorkspace() {
 
   const blocker = data?.blocker ?? (context.error ? unwrapIpcError(context.error, 'Could not check the build workspace.') : null)
   const repairWorkspace = (): Promise<void> => runAction(() => useLocalDevStore.getState().repair())
+  const checkWorkspace = (): Promise<void> => runAction(async () => {
+    await window.api.localDev.sessionContext(true)
+    await queryClient.invalidateQueries({ queryKey: ['local-development-context'] })
+  })
   const openWorkspace = (): Promise<void> => runAction(async () => {
     const result = await window.api.localDev.openWorkspace()
     if (!result.ok) throw new Error('Could not open the workspace folder.')
@@ -73,5 +77,5 @@ export function useDevelopmentWorkspace() {
       if (mounted.current) setError(unwrapIpcError(err, 'Could not open the Cinna server.'))
     }
   }
-  return { state, user, context, data, ready, blocker, error, busy, send, repairWorkspace, openWorkspace, openInstance }
+  return { state, user, context, data, ready, blocker, error, busy, send, repairWorkspace, checkWorkspace, openWorkspace, openInstance }
 }

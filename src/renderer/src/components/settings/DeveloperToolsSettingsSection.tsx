@@ -1,20 +1,31 @@
 import { RefreshCw } from 'lucide-react'
+import { useIsMutating } from '@tanstack/react-query'
 import { OpenCodeSettingsFields } from './OpenCodeSettingsFields'
 import { isRuntimeToolId } from '../../../../shared/localTools'
 import { useLocalAgents } from '../../hooks/useLocalAgents'
 import { useEngineBinary } from '../../hooks/useEngine'
 import { useLocalTools, useRefreshLocalTools } from '../../hooks/useLocalTools'
 import { SettingsButton, SettingsCard, SettingsLabel, SettingsSection } from './SettingsLayout'
+import { useCinnaCliUpdate, useLocalDev, useManagedLocalDevCli, useUpdateCinnaCli } from '../../hooks/useLocalDev'
+import { unwrapIpcError } from '../../utils/ipcError'
 
-/** Globally detected tools, shown in Settings → Local Development. */
+/** Shared developer tools, shown in Default → Local Development. */
 export function DeveloperToolsSettingsSection(): React.JSX.Element {
   const { data: tools } = useLocalTools()
   const { data: agents } = useLocalAgents()
   const { data: binary } = useEngineBinary()
   const refreshTools = useRefreshLocalTools()
+  const managedCli = useManagedLocalDevCli()
+  const cliUpdate = useCinnaCliUpdate()
+  const updateCli = useUpdateCinnaCli()
+  const updating = useIsMutating({ mutationKey: ['update-cinna-cli'] }) > 0
+  const localDev = useLocalDev()
+  const refreshing = refreshTools.isPending || cliUpdate.isFetching || managedCli.isFetching
   const contractVersion = agents?.roots.find((root) => root.isDefault)?.contractVersion ?? null
   // Runtime availability is reported beside its picker in Settings → Agents.
-  const otherTools = (tools ?? []).filter(
+  const otherTools = (tools ?? []).map((tool) => tool.id === 'cinna' && managedCli.data
+    ? { ...tool, available: true, version: managedCli.data.version, path: managedCli.data.path, source: 'managed' as const }
+    : tool).filter(
     (tool) => !isRuntimeToolId(tool.id) && tool.id !== 'opencode'
   )
 
@@ -31,12 +42,12 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
       title="Developer Tools"
       action={
         <SettingsButton
-          onClick={() => refreshTools.mutate()}
-          disabled={refreshTools.isPending}
+          onClick={() => { refreshTools.mutate(); void cliUpdate.refetch(); void managedCli.refetch() }}
+          disabled={refreshing || updating}
           title="Detect again after installing something"
           aria-label="Refresh detected tools"
         >
-          <RefreshCw size={13} className={refreshTools.isPending ? 'animate-spin' : undefined} />
+          <RefreshCw size={13} className={refreshing ? 'animate-spin' : undefined} />
           Refresh
         </SettingsButton>
       }
@@ -46,9 +57,9 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
           <SettingsLabel
             info={
               <p>
-                What else Cinna found installed globally, and the version each one reported. A
+                Installed tools and the version each one reported. Cinna CLI shows the desktop-managed copy when installed; Update installs the version advertised by your connected Cinna server. A
                 row reading Not found is a tool this machine does not have — nothing here is
-                installed for you. The runtimes an agent can run on are under Agents → Runtime.
+                installed until you request it. The runtimes an agent can run on are under Agents → Runtime.
               </p>
             }
           >
@@ -74,7 +85,7 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
               {otherTools.map((tool) => (
                 <tr key={tool.id} className="border-t border-[var(--color-border)]">
                   <td className="truncate px-2.5 py-1.5 text-[var(--color-text)]" title={tool.path ?? undefined}>
-                    {tool.label}
+                    {tool.label}{tool.id === 'cinna' && tool.source === 'managed' && <span className="ml-1 text-[11px] text-[var(--color-text-muted)]">(managed)</span>}
                   </td>
                   {/*
                     `cleanVersion` keeps an unrecognised `--version` line up
@@ -82,22 +93,31 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
                     cell carries its own title rather than borrowing the
                     row's, which holds the path.
                   */}
-                  <td className="truncate px-2.5 py-1.5" title={tool.version ?? undefined}>
-                    {!tool.available ? (
-                      <span className="text-[var(--color-text-muted)]">Not found</span>
-                    ) : tool.version ? (
-                      <span className="font-mono text-[12px] text-[var(--color-text-secondary)]">
-                        {tool.version}
-                      </span>
-                    ) : (
-                      // Installed, but nothing to ask or nothing usable came
-                      // back — an `.app` with no CLI shim, or a probe that
-                      // failed. Not the same answer as Not found, and the
-                      // table must not blur the two.
-                      <span className="text-[var(--color-text-muted)]">
-                        {tool.source === 'app-bundle' ? 'Installed (app)' : 'Installed'}
-                      </span>
-                    )}
+                  <td className="px-2.5 py-1.5" title={tool.version ?? undefined}>
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      {!tool.available ? (
+                        <span className="text-[var(--color-text-muted)]">Not found</span>
+                      ) : tool.version ? (
+                        <span className="max-w-full truncate font-mono text-[12px] text-[var(--color-text-secondary)]">
+                          {tool.version}
+                        </span>
+                      ) : (
+                        // Installed, but nothing to ask or nothing usable came
+                        // back — an `.app` with no CLI shim, or a probe that
+                        // failed. Not the same answer as Not found, and the
+                        // table must not blur the two.
+                        <span className="text-[var(--color-text-muted)]">
+                          {tool.source === 'app-bundle' ? 'Installed (app)' : 'Installed'}
+                        </span>
+                      )}
+                      {tool.id === 'cinna' && (cliUpdate.data?.updateAvailable || updating) && (
+                        <SettingsButton onClick={() => updateCli.mutate()} disabled={updating || localDev.phase === 'installing'} title={`Update the managed Cinna CLI to ${cliUpdate.data?.targetVersion ?? 'the server’s required version'}`}>
+                          {updating && <RefreshCw size={13} className="animate-spin" />}
+                          {updating ? 'Updating…' : 'Update'}
+                        </SettingsButton>
+                      )}
+                    </div>
+                    {tool.id === 'cinna' && cliUpdate.data?.targetVersion && <p className="mt-1 text-[11px] text-[var(--color-text-muted)]">Required by server: {cliUpdate.data.targetVersion}</p>}
                   </td>
                 </tr>
               ))}
@@ -129,6 +149,9 @@ export function DeveloperToolsSettingsSection(): React.JSX.Element {
             </tbody>
           </table>
         </div>
+        {updating && <p role="status" className="mt-2 text-[13px] text-[var(--color-text-secondary)]">{localDev.phase === 'installing' ? localDev.step : 'Updating Cinna CLI…'}</p>}
+        {updateCli.isSuccess && !updating && <p role="status" className="mt-2 text-[13px] text-[var(--color-success)]">Cinna CLI updated.</p>}
+        {(updateCli.error || cliUpdate.error) && <p role="alert" className="mt-2 text-[13px] text-[var(--color-danger)]">{unwrapIpcError(updateCli.error ?? cliUpdate.error, 'Could not check for Cinna CLI updates. Try Refresh.')}</p>}
         {binary?.state === 'failed' && (
           <p className="mt-1.5 text-[13px] text-[var(--color-danger)]">{binary.error}</p>
         )}

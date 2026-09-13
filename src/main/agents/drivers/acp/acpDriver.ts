@@ -71,7 +71,7 @@ import { createLogger } from '../../../logger/logger'
 import { capabilitiesFor } from '../capabilities'
 import { launcherOfFolder } from '../driverOf'
 import type { AgentEngine } from '../../../../shared/engine'
-import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput } from '../driver'
+import type { AgentDriver, ParkedAsk, RespondOutcome, RunInput, ReadinessOptions } from '../driver'
 import { AcpMessageStream } from './acpMessages'
 import { isRefusal, newSessionParams, type AcpLaunchPlan, type AcpLauncher } from './acpLaunchers'
 import { mintAcpRequestId, pickPermissionOption, toAcpPermissionRequest } from './acpPermissions'
@@ -120,7 +120,7 @@ export interface AcpDriverDeps {
   /** The launcher for an engine, or undefined when this build has none. */
   launcher(id: AcpLauncherId): AcpLauncher | undefined
   /** Resolve and capture the actual folder or external command and its state. */
-  readRuntime(userId: string, agent: AgentRow): AcpRuntimeView | null | Promise<AcpRuntimeView | null>
+  readRuntime(userId: string, agent: AgentRow, options?: ReadinessOptions): AcpRuntimeView | null | Promise<AcpRuntimeView | null>
   /** Park an ask in the pending-request registry. */
   registerRequest(input: {
     requestId: string
@@ -193,7 +193,7 @@ export function createAcpDriver(deps: AcpDriverDeps): AgentDriver {
 
     async readiness(userId, agent, options): Promise<AgentReadiness | null> {
       try {
-        const runtime = await deps.readRuntime(userId, agent)
+        const runtime = await deps.readRuntime(userId, agent, options)
         if (runtime?.type === 'external') { runtime.validate(); return await runtime.readiness(options) }
         const folder = runtime?.folder ?? null
         const state = folderReadiness(folder)

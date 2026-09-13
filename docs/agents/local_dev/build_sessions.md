@@ -27,8 +27,8 @@ Give a signed-in Cinna user one place to describe an agent and start building it
 ### Fixing a prerequisite
 
 1. Healthy composers show no connection-success panel or empty warning space. A genuine workspace/runtime problem appears in a warning panel above the input, with the full reason and recovery actions; unresolved prerequisites disable sending and suggested prompts.
-2. **Retry setup** repairs a workspace in an attention state. Missing Claude/Codex can open the existing install dialog. Runtime or Local Development settings take the user to the relevant remedy; a legacy CLI requires tooling with JSON workspace support.
-3. Fix the prerequisite and use **Check again**. A failed preparation leaves the page and draft intact. Readiness warnings in existing chats use the same panel above their input, including Check again or Cinna re-authentication where applicable.
+2. **Retry setup** repairs setup in an attention state; a capability-probe failure is toolchain attention and Repair reinstalls the tools. Missing Claude/Codex can open the existing install dialog. A legacy CLI blocker names **Cinna CLI 0.4.0 or later**, the installed version and **Default → Local Development**, where the managed CLI can be updated to the connected server's advertised version. If that pin is still older, the server administrator must update it. Runtime blockers open the build runtime details; account setup remains under Profile.
+3. Fix the prerequisite and use **Check again** on the build page or its runtime details. It rereads the managed executable and its help capabilities before checking the selected runtime; refreshing a cached build context alone would preserve a stale legacy result. It installs nothing and changes no consent. The disabled **Checking…** control spins while the request runs, with at least 600 ms of feedback for an immediate result. Errors retain the page and draft; success clears resolved blockers. Readiness warnings in existing chats use the same warning panel above their input, including their own Check again or Cinna re-authentication actions where applicable. A saved build chat's **Check again** also rereads the managed CLI capabilities when its owning account is active and the workspace is ready; a stale legacy result must not survive an explicit check merely because the conversation already exists.
 
 ### Inspecting the guide and choosing the assistant
 
@@ -42,7 +42,7 @@ Give a signed-in Cinna user one place to describe an agent and start building it
 
 1. Open the previous build conversation. Runtime readiness waits for any idle/installing account restoration instead of treating an unfinished startup check as a broken setup.
 2. OpenCode also loads its model catalogue before resolving the build model; an empty process cache after restart is not proof that the credential lacks a suitable model.
-3. A settled setup failure remains actionable. Probes do not continuously restart failed setup. A changed profile, workspace or effective engine refuses the saved builder with an instruction to start a new build session.
+3. A settled setup failure remains actionable. Ordinary list reads and turns reuse the last successful capability snapshot; they do not repeatedly probe CLI help or restart failed setup. Explicit **Check again** in the saved chat refreshes capabilities after any startup restoration has reached ready. A failed check keeps its actual error, and switching accounts during it refuses the old result. A changed profile, workspace or effective engine refuses the saved builder with an instruction to start a new build session.
 4. Stop remains responsive while runtime restoration or launch planning is pending. Shared preparation may finish for other callers, but its late result cannot launch the canceled turn.
 
 ## Business Rules

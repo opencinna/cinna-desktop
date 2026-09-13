@@ -299,24 +299,31 @@ export function SettingsButton({
   disabled,
   title,
   'aria-label': ariaLabel,
+  'aria-busy': ariaBusy,
+  'aria-disabled': ariaDisabled,
   children
 }: {
   onClick: () => void
   disabled?: boolean
   title?: string
   'aria-label'?: string
+  'aria-busy'?: boolean
+  /** Keep a temporarily unavailable action focusable while it completes. */
+  'aria-disabled'?: boolean
   children: ReactNode
 }): React.JSX.Element {
   return (
     <button
       type="button"
-      onClick={onClick}
+      onClick={() => { if (!ariaDisabled) onClick() }}
       disabled={disabled}
       title={title}
       aria-label={ariaLabel}
+      aria-busy={ariaBusy}
+      aria-disabled={ariaDisabled}
       className="ambient-button inline-flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--color-border)]
         bg-[var(--color-bg-secondary)] px-2.5 py-1 text-[13px] font-medium text-[var(--color-text)]
-        transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+        transition-colors hover:bg-[var(--color-bg-hover)] disabled:cursor-not-allowed disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
     >
       {children}
     </button>

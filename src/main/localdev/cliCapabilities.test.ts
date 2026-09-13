@@ -1,4 +1,4 @@
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it } from 'vitest'
@@ -121,13 +121,31 @@ describe('probeCliCapabilities', () => {
     expect(caps.accountSetToken).toBe(false)
   })
 
-  it('assumes the older surface when the binary will not run', async () => {
-    // The safe direction. A reduced install still works; assuming `--json` on a
-    // cinna-cli without it fails every command before it starts.
-    expect(await probeCliCapabilities(join(root, 'absent'), '0.0.0', process.env)).toEqual({
-      json: false,
-      accountSetToken: false
-    })
+  it('reports a failed probe instead of claiming the CLI is too old, and retries the same version', async () => {
+    const bin = fakeCli('cinna-failed', MODERN_SETUP_HELP, MODERN_ACCOUNT_HELP)
+    writeFileSync(bin, '#!/bin/sh\necho "log directory is not writable" >&2\nexit 1\n')
+    await expect(probeCliCapabilities(bin, '0.4.1', process.env)).rejects.toThrow('Could not check Cinna CLI support (exit code 1)')
+    fakeCli('cinna-failed', MODERN_SETUP_HELP, MODERN_ACCOUNT_HELP)
+    expect((await probeCliCapabilities(bin, '0.4.1', process.env)).json).toBe(true)
+  })
+
+  it('gives CLI logging a writable cwd independent of the desktop launch directory, then cleans it up', async () => {
+    const bin = fakeCli('cinna-logging', MODERN_SETUP_HELP, MODERN_ACCOUNT_HELP)
+    const record = join(root, 'probe-cwd')
+    const script = readFileSync(bin, 'utf8').replace('#!/bin/sh', '#!/bin/sh\n[ "$PWD" = "$DESKTOP_CWD" ] && exit 7\npwd > "$CINNA_TEST_RECORD"\n: > cinna.log || exit 8')
+    writeFileSync(bin, script)
+    expect((await probeCliCapabilities(bin, '0.4.0', { ...process.env, DESKTOP_CWD: process.cwd(), CINNA_TEST_RECORD: record })).json).toBe(true)
+    const cwd = readFileSync(record, 'utf8').trim()
+    expect(cwd).toContain('cinna-capabilities-')
+    expect(existsSync(cwd)).toBe(false)
+  })
+
+  it('bypasses a cached legacy result on an explicit recheck', async () => {
+    const bin = fakeCli('cinna-refresh', LEGACY_SETUP_HELP, LEGACY_ACCOUNT_HELP)
+    expect((await probeCliCapabilities(bin, '0.4.1', process.env)).json).toBe(false)
+    fakeCli('cinna-refresh', MODERN_SETUP_HELP, MODERN_ACCOUNT_HELP)
+    expect((await probeCliCapabilities(bin, '0.4.1', process.env)).json).toBe(false)
+    expect((await probeCliCapabilities(bin, '0.4.1', process.env, { fresh: true })).json).toBe(true)
   })
 
   it('caches per binary and version, and re-asks when the version changes', async () => {

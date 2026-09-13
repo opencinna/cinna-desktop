@@ -51,6 +51,24 @@ beforeEach(() => {
 })
 
 describe('Local Development entry', () => {
+  it.each([false, true])('actually rechecks CLI capabilities and clears the blocker (runtime settings: %s)', async (settingsOpen) => {
+    sessionContext.mockResolvedValue({ ...context, setupTarget: 'local-dev', blocker: 'Cinna CLI needs JSON support.' })
+    renderPage()
+    await screen.findByText('Cinna CLI needs JSON support.')
+    if (settingsOpen) fireEvent.click(screen.getByRole('button', { name: 'Settings' }))
+    sessionContext.mockResolvedValue(context)
+    fireEvent.click(screen.getByRole('button', { name: 'Check again' }))
+    await waitFor(() => expect(sessionContext).toHaveBeenCalledWith(true))
+    await waitFor(() => expect(screen.queryByText('Cinna CLI needs JSON support.')).toBeNull())
+  })
+  it('opens Default local development settings for a CLI compatibility blocker', async () => {
+    sessionContext.mockResolvedValue({ ...context, setupTarget: 'local-dev', blocker: 'Cinna CLI 0.4.0 or later is required. Installed: 0.3.0.' })
+    useUIStore.setState({ settingsTab: 'profile-local-dev' })
+    renderPage()
+    fireEvent.click(await screen.findByRole('button', { name: 'Local Development settings' }))
+    expect(useUIStore.getState().settingsTab).toBe('local-dev')
+    expect(useUIStore.getState().activeView).toBe('settings')
+  })
   it('restores the draft after navigating away and remounting the page', async () => {
     const first = renderPage()
     fireEvent.change(await screen.findByRole('textbox'), { target: { value: 'Build my helper later' } })

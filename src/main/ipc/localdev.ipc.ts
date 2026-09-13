@@ -8,6 +8,7 @@ import { localDevService } from '../localdev/localDevService'
 import { toolchain } from '../localdev/toolchain'
 import type { LocalDevState } from '../../shared/localDevState'
 import { ipcHandle } from './_wrap'
+import { checkCinnaCliUpdate, updateCinnaCli } from '../localdev/cliUpdateService'
 
 /**
  * Active-profile local development and shared desktop tool inspection.
@@ -24,9 +25,9 @@ import { ipcHandle } from './_wrap'
  * of these is something the UI renders rather than something it catches.
  */
 export function registerLocalDevHandlers(): void {
-  ipcHandle('localdev:session-context', async (): Promise<DevelopmentContext> => {
+  ipcHandle('localdev:session-context', async (_event, fresh?: boolean): Promise<DevelopmentContext> => {
     userActivation.requireActivated()
-    return getDevelopmentSessionContext(developmentRuntimeBlocker)
+    return getDevelopmentSessionContext(developmentRuntimeBlocker, fresh === true)
   })
   ipcHandle('localdev:prepare-session', async (_event, expected: Pick<DevelopmentContext, 'profileId' | 'workspacePath' | 'serverUrl' | 'runtime' | 'complexity'>) => {
     userActivation.requireActivated()
@@ -52,6 +53,14 @@ export function registerLocalDevHandlers(): void {
   ipcHandle('localdev:get-state', async (): Promise<LocalDevState> => localDevService.getState())
   // Installed desktop tools belong to the machine, even without an active account.
   ipcHandle('localdev:get-managed-cli', async () => toolchain.installedCli())
+  ipcHandle('localdev:check-cli-update', async () => {
+    userActivation.requireActivated()
+    return checkCinnaCliUpdate()
+  })
+  ipcHandle('localdev:update-cli', async () => {
+    userActivation.requireActivated()
+    return updateCinnaCli()
+  })
 
   ipcHandle('localdev:consent', async (_event, host: string, accepted: boolean) => {
     userActivation.requireActivated()

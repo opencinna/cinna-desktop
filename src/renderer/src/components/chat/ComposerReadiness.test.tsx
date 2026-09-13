@@ -1,6 +1,6 @@
-import { render, screen, fireEvent } from '@testing-library/react'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import { createElement } from 'react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 /**
  * The pure half of the composer's readiness refusal: which typed text is a
@@ -10,7 +10,11 @@ import { describe, expect, it, vi } from 'vitest'
 
 ;(window as unknown as { api: unknown }).api = {}
 
-const { isCatalogCommand, RefusableExamplePrompts } = await import('./ComposerReadiness')
+import type { ComposerReadiness } from './ComposerReadiness'
+
+afterEach(() => vi.useRealTimers())
+
+const { isCatalogCommand, RefusableExamplePrompts, ComposerReadinessWarning } = await import('./ComposerReadiness')
 
 const folder = { capabilities: { commands: 'catalog' } } as never
 const remote = { capabilities: { commands: 'card' } } as never
@@ -73,5 +77,33 @@ describe('RefusableExamplePrompts', () => {
     expect(screen.getByText('Summarise invoices')).toBe(before)
     rerender(gate(null))
     expect(screen.getByText('Summarise invoices')).toBe(before)
+  })
+})
+
+describe('composer recheck feedback', () => {
+  it('shows the refresh icon and holds immediate checks for 600 ms without losing focus or duplicating requests', async () => {
+    vi.useFakeTimers()
+    const run = vi.fn()
+    const readiness: ComposerReadiness = {
+      refusal: { state: 'invalid', reason: 'Update local development tooling.' },
+      blocksSend: true,
+      text: 'Update local development tooling.',
+      title: null,
+      action: { label: 'Check again', pendingLabel: 'Checking…', pending: false, run }
+    }
+    render(<ComposerReadinessWarning readiness={readiness} reasonId="reason" />)
+    const button = screen.getByRole('button', { name: 'Check again' })
+    expect(button.querySelector('svg')?.classList.contains('lucide-refresh-cw')).toBe(true)
+    button.focus()
+    fireEvent.click(button)
+    await act(async () => { await vi.advanceTimersByTimeAsync(599) })
+    expect(screen.getByRole('button', { name: 'Checking…' })).toBe(button)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    expect(button.querySelector('svg')?.classList.contains('animate-spin')).toBe(true)
+    expect(document.activeElement).toBe(button)
+    fireEvent.click(button)
+    expect(run).toHaveBeenCalledOnce()
+    await act(async () => { await vi.advanceTimersByTimeAsync(1) })
+    expect(screen.getByRole('button', { name: 'Check again' }).getAttribute('aria-busy')).toBe('false')
   })
 })

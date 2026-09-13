@@ -50,6 +50,7 @@ import { ENGINE_BINARY_CHANNEL } from '../shared/engine'
 import { CINNA_REAUTH_REQUIRED_CHANNEL, type ReauthRequiredEvent } from '../shared/cinnaErrors'
 import { CONNECT_INTENT_CHANNEL, type ConnectIntent } from '../shared/connectIntent'
 import { LOCAL_DEV_STATE_CHANNEL, type LocalDevState, type ManagedLocalDevCli } from '../shared/localDevState'
+import type { CinnaCliUpdate } from '../shared/cinnaCli'
 import type { RemoteAgentMetadata, BundleVersionInfo } from '../shared/agentMetadata'
 import type { CliCommand } from '../shared/cliCommands'
 import {
@@ -1218,11 +1219,13 @@ const api = {
    * rejection would lose the reason on the way over.
    */
   localDev: {
-    sessionContext: (): Promise<DevelopmentContext> => ipcRenderer.invoke('localdev:session-context'),
+    sessionContext: (fresh = false): Promise<DevelopmentContext> => ipcRenderer.invoke('localdev:session-context', fresh),
     prepareSession: (context: Pick<DevelopmentContext, 'profileId' | 'workspacePath' | 'serverUrl' | 'runtime' | 'complexity'>): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:prepare-session', context),
     developAgent: (agentId: string): Promise<{ agentId: string }> => ipcRenderer.invoke('localdev:develop-agent', agentId),
     getState: (): Promise<LocalDevState> => ipcRenderer.invoke('localdev:get-state'),
     getManagedCli: (): Promise<ManagedLocalDevCli | null> => ipcRenderer.invoke('localdev:get-managed-cli'),
+    checkCliUpdate: (): Promise<CinnaCliUpdate> => ipcRenderer.invoke('localdev:check-cli-update'),
+    updateCli: (): Promise<void> => ipcRenderer.invoke('localdev:update-cli'),
     /** Answer the per-host consent prompt. `false` is remembered too. */
     consent: (host: string, accepted: boolean): Promise<LocalDevState> =>
       ipcRenderer.invoke('localdev:consent', host, accepted),

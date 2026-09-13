@@ -1,6 +1,7 @@
-import { useEffect } from 'react'
-import { Loader2 } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2, RefreshCw } from 'lucide-react'
 import { ComposerWarning } from './ComposerWarning'
+import { SettingsButton } from '../settings/SettingsLayout'
 import { useCheckAgentReadiness } from '../../hooks/useAgents'
 import { useCinnaReauth } from '../../hooks/useAuth'
 import { unwrapIpcError } from '../../utils/ipcError'
@@ -164,6 +165,27 @@ export function useComposerReadiness(target: AgentData | null, typed: string): C
   }
 }
 
+/** Match settings actions while retaining focus until a warning clears. */
+function ReadinessActionButton({ action }: { action: ReadinessAction }): React.JSX.Element {
+  const [feedback, setFeedback] = useState(false)
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => () => { if (timer.current !== null) clearTimeout(timer.current) }, [])
+  const pending = action.pending || feedback
+  const isCheck = action.label === 'Check again'
+  return <SettingsButton aria-disabled={pending || undefined} aria-busy={pending}
+    onClick={() => {
+      if (action.pending || timer.current !== null) return
+      // Keep an unchanged, immediate answer visibly checking, without delaying recovery.
+      setFeedback(true)
+      timer.current = setTimeout(() => { timer.current = null; setFeedback(false) }, 600)
+      action.run()
+    }}>
+    {isCheck ? <RefreshCw size={13} className={pending ? 'animate-spin' : undefined} />
+      : pending && <Loader2 size={13} className="animate-spin" />}
+    {pending ? action.pendingLabel : action.label}
+  </SettingsButton>
+}
+
 /** A complete, actionable warning above the input, hidden when ready. */
 export function ComposerReadinessWarning({ readiness, reasonId }: {
   readiness: ComposerReadiness
@@ -172,12 +194,7 @@ export function ComposerReadinessWarning({ readiness, reasonId }: {
   const { refusal, text, title, action } = readiness
   if (!refusal || !text || !action) return null
   return <ComposerWarning className="mb-3" tone={readinessSeverity(refusal)} action={
-    <button type="button" aria-disabled={action.pending || undefined}
-      onClick={() => { if (!action.pending) action.run() }}
-      className="inline-flex items-center justify-center gap-1.5 rounded-md border border-[var(--color-border)] px-3 py-1.5 text-xs font-medium text-[var(--color-text)] hover:bg-[var(--color-bg-hover)] aria-disabled:cursor-default">
-      {action.pending && <Loader2 size={12} className="animate-spin" />}
-      {action.pending ? action.pendingLabel : action.label}
-    </button>
+    <ReadinessActionButton key={reasonId + action.label} action={action} />
   }>
     <p id={reasonId} title={title ?? undefined}>{text}</p>
   </ComposerWarning>

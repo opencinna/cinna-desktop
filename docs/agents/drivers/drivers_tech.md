@@ -10,6 +10,7 @@
 - Execution: `src/main/services/runExecutionService.ts`, `src/main/services/liveRunHub.ts`, `src/main/services/messageRoutingService.ts`, `src/main/services/a2aAsMcpProvider.ts`; custom configuration `src/main/services/customAgentService.ts`.
 - Readiness/CRUD: `src/main/services/agentReadinessService.ts`, `src/main/services/agentService.ts`, `src/main/db/agents.ts`, `src/main/ipc/agent.ipc.ts`.
 - IPC/preload: `src/main/ipc/run.ipc.ts`, `src/main/ipc/agent_a2a.ipc.ts`, `src/preload/index.ts`.
+- Readiness presentation: `src/renderer/src/components/chat/ComposerReadiness.tsx` owns the warning action; `src/renderer/src/components/settings/SettingsLayout.tsx` supplies its shared `SettingsButton`.
 - Renderer: `src/renderer/src/hooks/useChatStream.ts` (useRunEventHandler and send command), `src/renderer/src/hooks/useLiveRunWatch.ts` (selected-chat subscription), `src/renderer/src/hooks/useAgents.ts` (readiness), `src/renderer/src/hooks/useAgentRequests.ts`, `src/renderer/src/components/chat/ChatInput.tsx`.
 
 ## Database Schema
@@ -80,6 +81,10 @@ The official SDK owns sessions/events HTTP/SSE. The driver reconciles complete h
 agentReadinessService holds main-memory cached results, schedules enabled rows without blocking list responses, discards superseded checks and broadcasts visible changes. A2A probes card/auth with a deadline; OpenCode uses folder readiness without downloading on a list read; Claude and Codex add installed/login rungs. Managed validates local credential/configuration availability. Custom ordinary reads return its latest binding-keyed check or null; only explicit Test/Check again initializes a command.
 
 The composer refuses the directly addressed agent on an established refusal and retains the draft. Null never refuses. Bare catalog commands remain eligible independently of model readiness. Tool specialists report failure through their tool result. Cinna reauthentication is selected by capabilities.auth, not source. useAgents invalidates with cancelRefetch false so multiple mounted listeners do not restart the same fetch.
+
+`ComposerReadinessWarning` renders `ReadinessActionButton`, keyed by reason ID plus action label. It reuses `SettingsButton` sizing/background/border; **Check again** shows a 13 px `RefreshCw` at rest and spins it while pending. Other readiness actions retain their own pending label and use a 13 px `Loader2`. Pending is `action.pending || feedback`: a local 600 ms timer makes an immediate unchanged result visible, while the mutation's pending flag keeps a slower operation spinning beyond that interval. A resolved warning unmounts immediately rather than waiting for the timer.
+
+The action sets `aria-busy` and focus-preserving `aria-disabled`. `SettingsButton` suppresses clicks while aria-disabled, and the action additionally guards `action.pending` and its timer ref, preventing duplicates even before a rerender. The timer is cleared on unmount; changing the keyed action resets its feedback. `src/renderer/src/components/chat/ComposerReadiness.test.tsx` covers the refresh icon, immediate-result interval, busy/spinning state, retained keyboard focus and duplicate suppression.
 
 ## The Kind-Branch Ratchet
 
